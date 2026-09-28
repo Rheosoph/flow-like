@@ -1,7 +1,10 @@
 "use client";
 
 import { useId, useRef } from "react";
-import type { OfflineWritesConfig } from "../../../lib/device-management/deployment";
+import {
+	type OfflineWritesConfig,
+	removesOfflineBuffering,
+} from "../../../lib/device-management/deployment";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 
@@ -28,9 +31,12 @@ function retainRowKeys<T>(values: T[], previous: KeyedRow<T>[]): KeyedRow<T>[] {
 
 export function DeviceOfflineWritesFields({
 	value,
+	previous,
 	onChange,
 }: {
 	value: OfflineWritesConfig | null;
+	/** Buffering of the placement being updated; removing any of it needs an empty queue. */
+	previous?: OfflineWritesConfig | null;
 	onChange: (value: OfflineWritesConfig | null) => void;
 }) {
 	const id = useId();
@@ -57,7 +63,16 @@ export function DeviceOfflineWritesFields({
 				When enabled, selected writes are accepted on the device and replayed in
 				order when the cloud is available. Workflow Write State reports pending
 				cloud replay. Conflicts or denied access block the queue for review.
+				Buffering requires a placement with one replica.
 			</p>
+			{removesOfflineBuffering(previous, value) && (
+				<p role="alert" className="text-sm">
+					This update stops buffering writes the placement buffers today. Queued
+					writes replay only while their tables and directories stay buffered,
+					so the update is sent only after the device reports an empty offline
+					queue.
+				</p>
+			)}
 			{value && (
 				<>
 					<div className="space-y-2">

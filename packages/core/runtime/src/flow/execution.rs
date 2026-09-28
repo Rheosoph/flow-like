@@ -338,9 +338,41 @@ impl ExecutorPaymentAuth {
     }
 }
 
+/// API credentials installed by an executor after verifying its dispatch token.
+/// Kept outside payloads and variables so workflow data cannot replace them.
+#[derive(Clone)]
+pub struct ExecutorApiAuth {
+    token: String,
+    api_url: String,
+}
+
+impl ExecutorApiAuth {
+    pub fn new(token: String, api_url: String) -> Self {
+        Self { token, api_url }
+    }
+
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    pub fn api_url(&self) -> &str {
+        &self.api_url
+    }
+}
+
+impl std::fmt::Debug for ExecutorApiAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExecutorApiAuth")
+            .field("token", &"[REDACTED]")
+            .field("api_url", &self.api_url)
+            .finish()
+    }
+}
+
 #[derive(Clone)]
 pub struct Run {
     pub executor_payment_auth: Option<ExecutorPaymentAuth>,
+    pub executor_api_auth: Option<ExecutorApiAuth>,
     pub id: String,
     pub app_id: String,
     /// Server-backed app ID used for hosted-model usage attribution.
@@ -871,6 +903,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 #[derive(Clone)]
 pub struct RunMeta {
     pub executor_payment_auth: Option<ExecutorPaymentAuth>,
+    pub executor_api_auth: Option<ExecutorApiAuth>,
     pub run_id: String,
     pub app_id: String,
     pub model_usage_app_id: Option<String>,
@@ -1167,6 +1200,7 @@ impl InternalRun {
         let resources = Arc::new(resources::RunResources::default());
         let run = Run {
             executor_payment_auth: None,
+            executor_api_auth: None,
             id: run_id.clone(),
             app_id: app_id.to_string(),
             model_usage_app_id: Some(app_id.to_string()),
@@ -1379,6 +1413,7 @@ impl InternalRun {
             // Cached immutable fields from Run
             meta: RunMeta {
                 executor_payment_auth: None,
+                executor_api_auth: None,
                 run_id: run_id.clone(),
                 app_id: app_id.to_string(),
                 model_usage_app_id: Some(app_id.to_string()),
@@ -1427,6 +1462,11 @@ impl InternalRun {
     pub async fn set_executor_payment_auth(&mut self, auth: ExecutorPaymentAuth) {
         self.run.lock().await.executor_payment_auth = Some(auth.clone());
         self.meta.executor_payment_auth = Some(auth);
+    }
+
+    pub async fn set_executor_api_auth(&mut self, auth: ExecutorApiAuth) {
+        self.run.lock().await.executor_api_auth = Some(auth.clone());
+        self.meta.executor_api_auth = Some(auth);
     }
 
     pub fn set_cancellation_token(&mut self, token: CancellationToken) {
@@ -2359,6 +2399,16 @@ mod tests {
     use flow_like_storage::Path;
     use flow_like_types::{async_trait, intercom::BufferedInterComHandler, tokio};
 
+    #[test]
+    fn executor_api_auth_debug_redacts_the_token() {
+        let auth = ExecutorApiAuth::new("signed-secret".into(), "https://api.example".into());
+        let debug = format!("{auth:?}");
+        assert!(!debug.contains("signed-secret"));
+        assert!(debug.contains("[REDACTED]"));
+        assert_eq!(auth.token(), "signed-secret");
+        assert_eq!(auth.api_url(), "https://api.example");
+    }
+
     struct NoopLogic;
 
     const SCOPED_VARIABLE_ID: &str = "shared-variable";
@@ -2729,6 +2779,53 @@ mod tests {
                 Some(run.channel.clone()),
             )
             .await
+        }
+
+        #[tokio::test]
+        async fn executor_api_auth_propagates_without_replacing_the_run_token() {
+            let (state, mut run) = run_with_overrides(false, false, false).await;
+            assert!(run.meta.executor_api_auth.is_none());
+            assert!(run.run.lock().await.executor_api_auth.is_none());
+            assert!(
+                context_for_run(&state, &run)
+                    .await
+                    .executor_api_auth
+                    .is_none()
+            );
+            run.token = Some("user-pat".into());
+            run.set_executor_api_auth(ExecutorApiAuth::new(
+                "signed-executor-token".into(),
+                "https://signed-api.example".into(),
+            ))
+            .await;
+            assert_eq!(run.token.as_deref(), Some("user-pat"));
+
+            let context = context_for_run(&state, &run).await;
+            let child = context.create_sub_context(&context.node).await;
+            let locked_run_context = ExecutionContext::new(
+                run.nodes.clone(),
+                &Arc::downgrade(&run.run),
+                &state,
+                &context.node,
+                &run.variables,
+                &run.cache,
+                LogLevel::Debug,
+                run.board.stage.clone(),
+                run.profile.clone(),
+                run.callback.clone(),
+                run.completion_callbacks.clone(),
+                None,
+                run.token.clone(),
+                run.oauth_tokens.clone(),
+                Some(run.channel.clone()),
+            )
+            .await;
+            assert_eq!(locked_run_context.token.as_deref(), Some("user-pat"));
+            for context in [context, child, locked_run_context] {
+                let auth = context.executor_api_auth.as_ref().unwrap();
+                assert_eq!(auth.token(), "signed-executor-token");
+                assert_eq!(auth.api_url(), "https://signed-api.example");
+            }
         }
 
         #[tokio::test]

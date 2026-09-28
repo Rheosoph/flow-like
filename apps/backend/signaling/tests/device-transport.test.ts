@@ -33,12 +33,13 @@ async function credential(
 	participant: string,
 	epoch = 1,
 	lifetime = 300,
+	account = "owner",
 ) {
 	const now = Math.floor(Date.now() / 1000);
 	return new SignJWT({
 		iss: "flow-like",
 		aud: DEVICE_SIGNALING_AUDIENCE,
-		sub: role === "device" ? "device" : "owner",
+		sub: role === "device" ? "device" : account,
 		typ: "device_signaling",
 		scope: DEVICE_SIGNALING_SCOPE,
 		device_id: "device",
@@ -101,8 +102,9 @@ async function connection(
 	participant: string,
 	epoch = 1,
 	lifetime = 300,
+	account = "owner",
 ) {
-	const token = await credential(role, participant, epoch, lifetime);
+	const token = await credential(role, participant, epoch, lifetime, account);
 	const socket = new WebSocket(`ws://127.0.0.1:${port}/ws/devices`, {
 		protocols: [DEVICE_SIGNALING_PROTOCOL, `flowlike.jwt.${token}`],
 		headers: role === "controller" ? { Origin: origin } : {},
@@ -352,7 +354,15 @@ test("bursts beyond the frame budget are throttled in order and never close the 
 		const server = await replica();
 		const device = await connection(server.port, "device", "device");
 		const controller = await connection(server.port, "controller", "uploader");
-		const bystander = await connection(server.port, "controller", "bystander");
+		// Device replies are budgeted per account, so the bystander is another user.
+		const bystander = await connection(
+			server.port,
+			"controller",
+			"bystander",
+			1,
+			300,
+			"grantee",
+		);
 		const burst = 300;
 		for (let index = 0; index < burst; index++)
 			controller.socket.send(indexed("device", index));

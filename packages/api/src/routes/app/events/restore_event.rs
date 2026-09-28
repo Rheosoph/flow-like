@@ -274,6 +274,8 @@ pub async fn restore_event(
     let mut restored = plan.restored.clone();
     preserve_event_config_secrets(&mut restored, &live);
 
+    crate::teams::management::validate_event_type(&state, Some(&live), &restored).await?;
+
     validate_event_schedule(&state, &restored)
         .await
         .map_err(|error| match error {

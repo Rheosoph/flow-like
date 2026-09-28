@@ -1,0 +1,58 @@
+// Address reservations survive deletion so old senders cannot reach a different app.
+// Addresses of deleted events turn `quarantined` and are released after 30 days.
+model InboundMailAddress {
+  address   String @id
+  appId     String
+  eventId   String
+  kind      String
+  active    Boolean @default(true)
+  createdAt BigInt
+  updatedAt BigInt
+
+  @@index([appId, eventId])
+}
+
+// Ciphertext contains transport metadata. Expiry clears it while retaining deduplication IDs.
+// Cleanup moves rows to a settled status, so the status/expiry index skips cleaned rows.
+model InboundMailDelivery {
+  id          String @id
+  messageId   String
+  appId       String
+  eventId     String
+  status      String
+  envelope    String?
+  objects     String?
+  attempts    Int @default(0)
+  nextAttempt BigInt
+  lease       String?
+  receivedAt  BigInt
+  expiresAt   BigInt
+  runId       String
+
+  @@index([status, nextAttempt])
+  @@index([status, expiresAt])
+  @@index([messageId])
+}
+
+// Request IDs of mail sent by flows; a repeated ID within a day replays the stored response.
+model MailAutomationSend {
+  id         String  @id
+  appId      String
+  status     String
+  lease      String?
+  leaseUntil BigInt
+  response   String?
+  createdAt  BigInt
+  expiresAt  BigInt
+
+  @@index([expiresAt])
+}
+
+// Daily counters for outbound recipients and alias edits, keyed by scope, subject and UTC day.
+model MailAutomationQuota {
+  id        String @id
+  count     BigInt
+  expiresAt BigInt
+
+  @@index([expiresAt])
+}

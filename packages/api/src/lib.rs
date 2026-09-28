@@ -45,6 +45,7 @@ pub use devices::certificates::spawn_sweeper as spawn_device_certificate_sweeper
 pub mod error;
 pub(crate) mod instances;
 pub mod mail;
+pub mod mail_ingress;
 pub mod model_tier;
 pub mod notification_images;
 pub mod package_license;
@@ -67,6 +68,7 @@ pub mod storage_identity;
 #[cfg(feature = "storage-queue")]
 mod storage_queue;
 pub mod stripe_connect;
+pub mod teams;
 pub mod telemetry;
 pub mod usage_accounting;
 pub mod usage_limits;
@@ -203,7 +205,10 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/usage", routes::usage::routes())
         .nest("/registry", routes::registry::routes())
         .nest("/audit", routes::audit::routes())
-        .nest("/sink", routes::sink::routes())
+        .nest(
+            "/sink",
+            routes::sink::routes(state.mail_automation.max_bytes),
+        )
         .nest("/aliases", routes::alias::routes())
         .nest("/telemetry", routes::telemetry::routes())
         .nest("/flowscript", routes::flowscript::routes())

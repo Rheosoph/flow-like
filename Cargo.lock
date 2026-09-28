@@ -1728,8 +1728,11 @@ name = "aws-mail-ingress"
 version = "0.1.0"
 dependencies = [
  "flow-like-mail-ingress",
+ "flow-like-secrets",
  "lambda_runtime 1.1.2",
+ "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -8305,6 +8308,7 @@ dependencies = [
  "hyper-util",
  "image",
  "ipnetwork",
+ "jsonschema",
  "jsonwebtoken",
  "k8s-openapi",
  "kube 0.98.0",
@@ -8340,6 +8344,7 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid 1.23.1",
  "webp",
+ "zip 8.5.1",
  "zstd",
 ]
 
@@ -8647,6 +8652,7 @@ dependencies = [
  "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
+ "futures 0.3.32",
  "schemars 1.2.1",
  "serde",
  "urlencoding",
@@ -9611,6 +9617,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tracing",
  "tracing-subscriber",

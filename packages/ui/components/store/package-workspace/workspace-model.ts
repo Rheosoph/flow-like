@@ -45,6 +45,12 @@ export interface WorkspaceAccessInput {
 	hasLocal: boolean;
 	/** The host is still resolving a checkout, so `hasLocal` may flip to true. */
 	localPending?: boolean;
+	/**
+	 * The checkout still carries a template id (`com.example.*`) the caller does
+	 * not maintain. Whoever published it first owns it, so the host's "choose an
+	 * id" notice outranks the id-taken banner.
+	 */
+	placeholderId?: boolean;
 	auth: WorkspaceAuthState;
 	remote: {
 		status: WorkspaceRemoteStatus;
@@ -103,6 +109,7 @@ export function workspaceAccess({
 	packageId,
 	hasLocal,
 	localPending = false,
+	placeholderId = false,
 	auth,
 	remote,
 }: WorkspaceAccessInput): WorkspaceAccess {
@@ -112,6 +119,9 @@ export function workspaceAccess({
 	const sessionExpired: WorkspaceAccess = hasLocal
 		? { mode: "local", banner: "session_expired" }
 		: { mode: "session_expired" };
+	const idTaken: WorkspaceAccess = placeholderId
+		? { mode: "local_only" }
+		: { mode: "local", banner: "id_taken" };
 	const permission = remote.permission ?? 0;
 
 	if (localPending) return { mode: "loading" };
@@ -142,11 +152,9 @@ export function workspaceAccess({
 	}
 	if (auth === "signed_out") return { mode: "local", banner: "signed_out" };
 	if (remote.status === "forbidden") {
-		return hasLocal
-			? { mode: "local", banner: "id_taken" }
-			: { mode: "not_found" };
+		return hasLocal ? idTaken : { mode: "not_found" };
 	}
-	if (hasLocal) return { mode: "local", banner: "id_taken" };
+	if (hasLocal) return idTaken;
 	return { mode: "redirect", href: packageStoreHref({ id: packageId }) };
 }
 

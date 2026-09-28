@@ -1,4 +1,5 @@
 use super::provider::{DATABRICKS_PROVIDER_ID, DatabricksProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
@@ -8,7 +9,6 @@ use flow_like::flow::{
 use flow_like_types::{
     JsonSchema, Value, async_trait,
     json::{Map, json},
-    reqwest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -222,9 +222,9 @@ impl NodeLogic for ExecuteDatabricksSqlNode {
             body["schema"] = json!(schema);
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)

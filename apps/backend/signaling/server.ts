@@ -23,18 +23,17 @@ import {
 	replicaIdentifier,
 } from "./device-frames";
 import {
-	CONTROLLER_BUDGET,
 	CONTROLLER_OUTBOX_LIMITS,
 	ConnectionRateLimiter,
 	ConnectionSlots,
-	DEVICE_AGGREGATE_BUDGET,
 	DEVICE_OUTBOX_LIMITS,
-	DEVICE_PARTICIPANT_BUDGET,
 	DiscardCounter,
-	type FrameBudgetLimits,
 	FrameBudgets,
 	ManagementOutbox,
+	SenderShares,
 	connectionSlotsFor,
+	managementFrameBudgets,
+	soleAccount,
 } from "./limits";
 import {
 	type SignalRedisClient,
@@ -156,6 +155,7 @@ function onSubMessage(raw: string, ch: string) {
 			deliverManagementFrame(
 				relayed.topic,
 				JSON.stringify(relayed.frame),
+				`participant:${relayed.frame.from}`,
 				null,
 			);
 		return;
@@ -328,6 +328,7 @@ function inc(topic: string, delta: 1 | -1) {
 type WSData = {
 	management: DeviceTransportAdmission | null;
 	outbox: ManagementOutbox | null;
+	senderShares: SenderShares | null;
 	subscribed: Set<string>;
 	allowedTopic: string | null;
 	slots: string[];
@@ -369,23 +370,33 @@ function noStoreResponse(body: string, status: number, extraHeaders = {}) {
 	});
 }
 
-function frameBudgetsFor(
+/** Only this replica's controller sockets reveal a participant's account. */
+function targetAccount(
 	admission: DeviceTransportAdmission,
 	target: string,
-): [string, FrameBudgetLimits][] {
-	const device = `${admission.deviceId}:${admission.deviceAuthEpoch}`;
-	return admission.role === "device"
-		? [
-				[`device:${device}`, DEVICE_AGGREGATE_BUDGET],
-				[`device:${device}:to:${target}`, DEVICE_PARTICIPANT_BUDGET],
-			]
-		: [[`controller:${device}:${admission.subject}`, CONTROLLER_BUDGET]];
+): string | null {
+	if (admission.role !== "device") return null;
+	const inbox = deviceInbox({
+		...admission,
+		role: "controller",
+		participantId: target,
+	});
+	return soleAccount(
+		Array.from(
+			managementInboxes.get(inbox) ?? [],
+			(socket) => socket.data.management?.subject,
+		),
+	);
 }
 
-/** Local delivery. A congested device keeps its socket; the sender pays instead. */
+/**
+ * Local delivery. A congested device keeps its socket and the frame is refused;
+ * its sender is closed only when it is among those filling the device's buffer.
+ */
 function deliverManagementFrame(
 	topic: string,
 	text: string,
+	contributor: string,
 	sender: Socket | null,
 ) {
 	for (const recipient of managementInboxes.get(topic) ?? []) {
@@ -394,12 +405,17 @@ function deliverManagementFrame(
 			MANAGEMENT_SEND_BUFFER_BYTES
 		) {
 			recipient.send(text);
+			recipient.data.senderShares?.add(contributor, text.length);
 			continue;
 		}
 		if (recipient.data.management?.role === "device") {
-			discardedFrames.add("device-congested");
-			if (sender?.data.management?.role === "controller")
-				sender.close(1013, "Device transport is congested");
+			const flooding =
+				sender?.data.management?.role === "controller" &&
+				recipient.data.senderShares?.isTopContributor(contributor) === true;
+			discardedFrames.add(
+				flooding ? "device-congested-sender-closed" : "device-congested",
+			);
+			if (flooding) sender?.close(1013, "Device transport is congested");
 		} else {
 			discardedFrames.add("controller-congested");
 			recipient.close(1013, "Management transport is congested");
@@ -444,7 +460,12 @@ async function relayManagementFrame(
 			ws.close(1013, "Signaling temporarily unavailable");
 			return;
 		}
-		deliverManagementFrame(routed.topic, text, ws);
+		deliverManagementFrame(
+			routed.topic,
+			text,
+			`account:${admission.subject}`,
+			ws,
+		);
 	} catch {
 		ws.close(1013, "Signaling temporarily unavailable");
 	}
@@ -468,7 +489,11 @@ function openManagement(ws: Socket, admission: DeviceTransportAdmission) {
 	ws.data.outbox = new ManagementOutbox(
 		(frame, now) =>
 			frameBudgets.reserve(
-				frameBudgetsFor(admission, frame.target),
+				managementFrameBudgets(
+					admission,
+					frame.target,
+					targetAccount(admission, frame.target),
+				),
 				frame.bytes,
 				now,
 			),
@@ -477,6 +502,7 @@ function openManagement(ws: Socket, admission: DeviceTransportAdmission) {
 			: CONTROLLER_OUTBOX_LIMITS,
 	);
 	if (admission.role === "device") {
+		ws.data.senderShares = new SenderShares();
 		const replaced = deviceSockets.get(inbox);
 		deviceSockets.set(inbox, ws);
 		replaced?.close(4000, "Replaced by a newer device connection");
@@ -579,6 +605,7 @@ const server = serve<WSData>({
 				data: {
 					management,
 					outbox: null,
+					senderShares: null,
 					subscribed: new Set<string>(),
 					allowedTopic: authorization.allowedTopic,
 					slots: slotKeys,

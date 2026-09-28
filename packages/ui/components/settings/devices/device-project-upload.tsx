@@ -1,19 +1,32 @@
 "use client";
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
 	type ArtifactProgress,
 	ArtifactUploadError,
+	type PendingArtifactTransfer,
 	type PreparedProjectArtifact,
 	type ProjectArtifactAssets,
 	abortProjectArtifact,
+	abortRefusalSettles,
+	forgetArtifactTransfer,
 	parseProjectArtifactAssets,
+	pendingArtifactTransfers,
 	prepareProjectArtifact,
 	projectFilesFromSelection,
+	rememberArtifactTransfer,
 	selectedProjectAssetFiles,
 	uploadProjectArtifact,
 } from "../../../lib/device-management/artifacts";
-import { prepareOnlineMetadata } from "../../../lib/device-management/online-metadata";
+import {
+	DEPLOYMENT_CONFIG_BYTES,
+	type InstalledProject,
+	deploymentPinBytes,
+} from "../../../lib/device-management/deployment";
 import { prepareOnlineDependencies } from "../../../lib/device-management/online-dependencies";
+import {
+	type ApprovedOnlineMetadata,
+	prepareOnlineMetadata,
+} from "../../../lib/device-management/online-metadata";
 import {
 	type PreparedDesktopProject,
 	desktopExportCommands,
@@ -32,19 +45,15 @@ export function DeviceProjectUpload({
 	onInstalled,
 	projectId,
 	accountSubject,
+	deviceId,
 }: {
 	connected: boolean;
 	projectId?: string;
 	accountSubject?: string;
+	/** Enables resuming or aborting this browser's unfinished uploads after a reload. */
+	deviceId?: string;
 	run: <T>(operation: (call: ManagementCall) => Promise<T>) => Promise<T>;
-	onInstalled: (identity: {
-		project_id: string;
-		project_path: string;
-		revision?: string;
-		source: "offline" | "online";
-		assets?: ProjectArtifactAssets;
-		online_metadata_sha256?: string;
-	}) => void;
+	onInstalled: (identity: InstalledProject) => void;
 }) {
 	const backend = useBackend();
 	const id = useId();
@@ -62,10 +71,39 @@ export function DeviceProjectUpload({
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string>();
 	const [path, setPath] = useState<string>();
+	const [pending, setPending] = useState<PendingArtifactTransfer[]>([]);
 	const alive = useRef(true);
 	const abort = useRef(new AbortController());
 	const inputVersion = useRef(0);
 	const desktopSnapshot = useRef<PreparedDesktopProject | undefined>(undefined);
+	const approvedMetadata = useRef(
+		new WeakMap<PreparedProjectArtifact, ApprovedOnlineMetadata>(),
+	);
+	const confirmedTransfers = useRef(new Set<string>());
+	const refreshPending = useCallback(() => {
+		setPending(
+			deviceId && project ? pendingArtifactTransfers(deviceId, project) : [],
+		);
+	}, [deviceId, project]);
+	useEffect(() => refreshPending(), [refreshPending]);
+	function adoptPrepared(
+		artifact: PreparedProjectArtifact,
+		approved?: ApprovedOnlineMetadata,
+	) {
+		if (approved) approvedMetadata.current.set(artifact, approved);
+		setPrepared(artifact);
+		setTransferId(
+			deviceId
+				? pendingArtifactTransfers(
+						deviceId,
+						artifact.descriptor.project_id,
+					).find(
+						(transfer) =>
+							transfer.manifest_sha256 === artifact.descriptor.manifest_sha256,
+					)?.transfer_id
+				: undefined,
+		);
+	}
 	useEffect(() => {
 		if (projectId || !connected) return;
 		let active = true;
@@ -141,7 +179,7 @@ export function DeviceProjectUpload({
 					}
 					desktopSnapshot.current = exported;
 					setAssets(exported.assets);
-					setPrepared(exported.artifact);
+					adoptPrepared(exported.artifact, metadata);
 				} else {
 					const exported = await prepareOnlineDependencies(
 						metadata.app,
@@ -152,7 +190,7 @@ export function DeviceProjectUpload({
 					);
 					if (alive.current) {
 						setAssets(exported.assets);
-						setPrepared(exported.artifact);
+						adoptPrepared(exported.artifact, metadata);
 					}
 				}
 			} else {
@@ -171,7 +209,7 @@ export function DeviceProjectUpload({
 				}
 				desktopSnapshot.current = exported;
 				setAssets(exported.assets);
-				setPrepared(exported.artifact);
+				adoptPrepared(exported.artifact);
 			}
 		} catch (error) {
 			if (alive.current)
@@ -211,7 +249,7 @@ export function DeviceProjectUpload({
 				assets,
 			);
 			if (alive.current && version === inputVersion.current)
-				setPrepared(artifact);
+				adoptPrepared(artifact);
 		} catch (error) {
 			if (alive.current && version === inputVersion.current)
 				setError(
@@ -223,8 +261,41 @@ export function DeviceProjectUpload({
 			if (alive.current && version === inputVersion.current) setBusy(false);
 		}
 	}
+	/** `confirmed` means the device reported this transfer, so it certainly holds staging space. */
+	function remember(transfer: string, confirmed: boolean) {
+		if (confirmed) {
+			if (confirmedTransfers.current.has(transfer)) return;
+			confirmedTransfers.current.add(transfer);
+		}
+		if (!deviceId || !prepared) return;
+		rememberArtifactTransfer(deviceId, {
+			transfer_id: transfer,
+			project_id: prepared.descriptor.project_id,
+			manifest_sha256: prepared.descriptor.manifest_sha256,
+			confirmed,
+		});
+		refreshPending();
+	}
+	function isConfirmed(transfer: string) {
+		return (
+			confirmedTransfers.current.has(transfer) ||
+			(deviceId !== undefined &&
+				pendingArtifactTransfers(deviceId).some(
+					(entry) => entry.transfer_id === transfer && entry.confirmed,
+				))
+		);
+	}
+	function forget(id: string) {
+		if (deviceId) forgetArtifactTransfer(deviceId, id);
+	}
 	async function upload() {
 		if (!prepared || busy) return;
+		const approved = approvedMetadata.current.get(prepared);
+		if (prepared.descriptor.source === "online" && !approved) {
+			setError("Prepare this online project again before uploading it.");
+			return;
+		}
+		const resumed = transferId;
 		setBusy(true);
 		setError(undefined);
 		abort.current = new AbortController();
@@ -234,14 +305,17 @@ export function DeviceProjectUpload({
 					prepared,
 					request: call,
 					transferId,
+					confirmed: resumed ? isConfirmed(resumed) : undefined,
 					signal: abort.current.signal,
 					onProgress: (value) => {
+						remember(value.transferId, true);
 						if (alive.current) {
 							setProgress(value);
 							setTransferId(value.transferId);
 						}
 					},
 				});
+				forget(result.transfer_id);
 				if (alive.current && result.project_path) {
 					setPath(result.project_path);
 					setTransferId(undefined);
@@ -251,22 +325,23 @@ export function DeviceProjectUpload({
 						revision: prepared.descriptor.manifest_sha256,
 						source: prepared.descriptor.source ?? "offline",
 						assets,
-						online_metadata_sha256:
-							prepared.descriptor.source === "online"
-								? JSON.parse(
-										new TextDecoder().decode(prepared.manifest),
-									).files.find(
-										(file: { path: string; sha256: string }) =>
-											file.path ===
-											`apps/${prepared.descriptor.project_id}/online-metadata.json`,
-									)?.sha256
-								: undefined,
+						...(approved
+							? {
+									online_metadata_sha256: approved.sha256,
+									online_catalog: approved.catalog,
+								}
+							: {}),
 					});
 					await desktopSnapshot.current?.release();
 					desktopSnapshot.current = undefined;
 				}
 			});
 		} catch (error) {
+			// A begin whose reply was lost still holds device staging space until it is aborted.
+			if (error instanceof ArtifactUploadError) {
+				if (error.transferId) remember(error.transferId, false);
+				else if (resumed) forget(resumed);
+			}
 			if (alive.current) {
 				if (error instanceof ArtifactUploadError)
 					setTransferId(error.transferId);
@@ -275,9 +350,56 @@ export function DeviceProjectUpload({
 				);
 			}
 		} finally {
-			if (alive.current) setBusy(false);
+			if (alive.current) {
+				refreshPending();
+				setBusy(false);
+			}
 		}
 	}
+	/** Frees device staging space; a settling refusal means nothing is left to abort. */
+	async function discard(ids: string[]) {
+		if (busy || !connected || !ids.length) return;
+		setBusy(true);
+		setError(undefined);
+		const failures: string[] = [];
+		try {
+			await run(async (call) => {
+				for (const id of ids) {
+					try {
+						await abortProjectArtifact(call, project, id);
+					} catch (error) {
+						if (!abortRefusalSettles(error, isConfirmed(id))) {
+							failures.push(
+								error instanceof Error
+									? error.message
+									: `Aborting transfer ${id} was not confirmed.`,
+							);
+							continue;
+						}
+					}
+					forget(id);
+					if (alive.current && id === transferId) {
+						setTransferId(undefined);
+						setProgress(undefined);
+					}
+				}
+			});
+		} catch (error) {
+			failures.push(
+				error instanceof Error ? error.message : "Transfer abort failed.",
+			);
+		} finally {
+			if (alive.current) {
+				refreshPending();
+				if (failures.length) setError(failures.join(" "));
+				setBusy(false);
+			}
+		}
+	}
+	const unfinished = pending.filter(
+		(transfer) => transfer.transfer_id !== transferId,
+	);
+	const pinBytes = prepared ? deploymentPinBytes(assets) : 0;
 	return (
 		<details className="rounded border p-3">
 			<summary className="cursor-pointer font-medium">
@@ -479,6 +601,16 @@ export function DeviceProjectUpload({
 									starting the service.
 								</p>
 							)}
+						{pinBytes > DEPLOYMENT_CONFIG_BYTES - 2048 && (
+							<p role="alert" className="mt-2 text-xs">
+								Bit and node-package pins of this project need{" "}
+								{pinBytes.toLocaleString()} of the{" "}
+								{DEPLOYMENT_CONFIG_BYTES.toLocaleString()} bytes a remote
+								deployment configuration can carry, so remote deployment will
+								likely fail. Remove Bits or node packages the project no longer
+								uses.
+							</p>
+						)}
 					</div>
 				)}
 				<div className="flex flex-wrap gap-2">
@@ -498,45 +630,43 @@ export function DeviceProjectUpload({
 							<Button
 								variant="outline"
 								disabled={!connected}
-								onClick={() => {
-									setBusy(true);
-									void run((call) =>
-										abortProjectArtifact(call, project, transferId),
-									)
-										.then(() => {
-											if (alive.current) {
-												setTransferId(undefined);
-												setProgress(undefined);
-											}
-										})
-										.catch((error) => {
-											if (alive.current)
-												setError(
-													error instanceof Error
-														? error.message
-														: "Transfer abort was not confirmed.",
-												);
-										})
-										.finally(() => {
-											if (alive.current) setBusy(false);
-										});
-								}}
+								onClick={() => void discard([transferId])}
 							>
 								Abort device transfer
 							</Button>
 							<Button
 								variant="outline"
+								disabled={!connected}
 								onClick={() => {
 									setTransferId(undefined);
 									setProgress(undefined);
-									setError(undefined);
+									void discard([transferId]);
 								}}
 							>
-								Use a new transfer
+								Abort and use a new transfer
 							</Button>
 						</>
 					)}
 				</div>
+				{unfinished.length > 0 && !busy && (
+					<div className="space-y-2 rounded border p-2 text-xs">
+						<p>
+							{unfinished.length} unfinished upload
+							{unfinished.length === 1 ? "" : "s"} of this project from earlier
+							sessions still reserve device staging space until they expire.
+						</p>
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={!connected}
+							onClick={() =>
+								void discard(unfinished.map((transfer) => transfer.transfer_id))
+							}
+						>
+							Abort unfinished uploads
+						</Button>
+					</div>
+				)}
 				{progress && (
 					<p className="text-xs">
 						{progress.phase}: {progress.completedFiles}/{progress.totalFiles}{" "}

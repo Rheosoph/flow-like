@@ -1,15 +1,17 @@
 use crate::{
-    enrollment::{DeviceSession, unix_time},
+    enrollment::{DeviceSession, api_status, unix_time},
     state::StateStore,
     telemetry::TelemetryStore,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use flow_like_device_crypto::archive::{ArchivePins, ArchivePosition, seal_archive};
 use flow_like_device_protocol::*;
+use reqwest::StatusCode;
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 use std::{
+    future::Future,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -203,37 +205,97 @@ pub(crate) fn read_from_store(
         .unwrap_or_else(|| Ok(json!({"available":false})))
 }
 
-fn seal_one(root: &Path, device: &DeviceSession, scope: &str, kind: &str) -> Result<()> {
-    let store = StateStore::open(&root.join("management.sqlite"))?;
-    let telemetry = TelemetryStore::open(root)?;
-    store.connection.execute_batch("BEGIN IMMEDIATE")?;
-    let result = (|| -> Result<()> {
-        let (compact,cursor,sequence,previous):(String,u64,u64,Option<String>)=store.connection.query_row("SELECT policy_jws,telemetry_cursor,sequence,manifest_digest FROM archive_rosters WHERE scope=?1 AND kind=?2",params![scope,kind],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
-        let now = unix_time()?;
-        let roster = verify_archive_roster(&compact, &device.manifest().owner_invitation_key, now)?;
-        validate_current(&store, device.manifest(), &roster, now)?;
-        let pending: u64 = store.connection.query_row(
-            "SELECT COUNT(*) FROM archive_outbox WHERE uploaded=0",
-            [],
-            |r| r.get(0),
-        )?;
-        ensure!(pending < 256, "Archive outbox is full");
-        let sample = telemetry.read(
-            if scope == "device" { None } else { Some(scope) },
-            kind,
-            cursor,
-            100,
-        )?;
-        if sample["records"].as_array().is_none_or(|r| r.is_empty()) {
-            return Ok(());
+/// A segment's encoded bundle must stay below the hub's transfer bound even with
+/// the maximum recipient roster, so the plaintext budget leaves room for it.
+const SEGMENT_PLAINTEXT_BYTES: usize = 48 * 1024;
+const MAX_SEGMENT_BYTES: usize = 90 * 1024;
+const SEGMENTS_PER_STREAM_PASS: usize = 16;
+const UPLOADS_PER_STREAM_PASS: usize = 16;
+const PENDING_PER_STREAM: u64 = 32;
+const PENDING_SEGMENTS: u64 = 512;
+const RETAINED_UPLOADED_SEGMENTS: i64 = 256;
+const PUBLISH_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Waiting for a re-signed roster, a current policy or outbox capacity is
+/// expected; any other sealing failure is a fault that stalls the stream.
+#[derive(Debug)]
+struct PublicationPaused(anyhow::Error);
+
+impl std::fmt::Display for PublicationPaused {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{:#}", self.0)
+    }
+}
+
+impl std::error::Error for PublicationPaused {}
+
+fn paused(error: anyhow::Error) -> anyhow::Error {
+    if error.downcast_ref::<rusqlite::Error>().is_some() {
+        error
+    } else {
+        PublicationPaused(error).into()
+    }
+}
+
+/// Reads whole records after `cursor` until the serialized budget is reached.
+/// The first record is always included so a small budget still progresses.
+fn collect_records(
+    telemetry: &TelemetryStore,
+    placement: Option<&str>,
+    kind: &str,
+    cursor: u64,
+    budget: usize,
+) -> Result<(Vec<Value>, u64)> {
+    let mut records = Vec::new();
+    let mut size = 0usize;
+    let mut next = cursor;
+    loop {
+        let page = telemetry.read(placement, kind, next, 100)?;
+        let Some(page) = page["records"].as_array().filter(|page| !page.is_empty()) else {
+            return Ok((records, next));
+        };
+        for record in page {
+            let bytes = serde_json::to_vec(record)?.len() + 1;
+            if !records.is_empty() && size + bytes > budget {
+                return Ok((records, next));
+            }
+            size += bytes;
+            next = record["sequence"]
+                .as_u64()
+                .context("Telemetry record has no sequence")?;
+            records.push(record.clone());
         }
-        let next = sample["next"]
-            .as_u64()
-            .context("Missing telemetry cursor")?;
+    }
+}
+
+/// Seals the next segment of one stream; false when it is caught up.
+fn seal_one(
+    telemetry: &TelemetryStore,
+    device: &DeviceSession,
+    scope: &str,
+    kind: &str,
+) -> Result<bool> {
+    let store = &telemetry.store;
+    telemetry.transaction(|| {
+        let (compact,cursor,sequence,previous,dropped):(String,u64,u64,Option<String>,u64)=store.connection.query_row("SELECT policy_jws,telemetry_cursor,sequence,manifest_digest,dropped FROM archive_rosters WHERE scope=?1 AND kind=?2",params![scope,kind],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
+        let now = unix_time()?;
+        let roster = verify_archive_roster(&compact, &device.manifest().owner_invitation_key, now)
+            .map_err(|error| paused(error.into()))?;
+        validate_current(store, device.manifest(), &roster, now).map_err(paused)?;
+        let (stream_pending, pending): (u64, u64) = store.connection.query_row(
+            "SELECT COALESCE(SUM(scope=?1 AND kind=?2),0),COUNT(*) FROM archive_outbox WHERE uploaded=0",
+            params![scope, kind],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if stream_pending >= PENDING_PER_STREAM || pending >= PENDING_SEGMENTS {
+            return Err(paused(anyhow!(
+                "Archive outbox is full for {scope}/{kind}: {stream_pending} stream and {pending} device segments await upload"
+            )));
+        }
+        let placement = (scope != "device").then_some(scope);
         let sequence = sequence
             .checked_add(1)
             .context("Archive sequence exhausted")?;
-        let archive_id = uuid::Uuid::new_v4().to_string();
         let pins = ArchivePins {
             device_id: device.manifest().device_id.clone(),
             scope: scope.into(),
@@ -241,38 +303,170 @@ fn seal_one(root: &Path, device: &DeviceSession, scope: &str, kind: &str) -> Res
             owner_invitation_key: device.manifest().owner_invitation_key.clone(),
             device_signing_key: device.telemetry_signer().public_key(),
         };
-        let bundle = seal_archive(
-            &pins,
-            &compact,
-            &device.telemetry_signer(),
-            ArchivePosition {
-                archive_id: archive_id.clone(),
-                sequence,
-                previous_manifest_digest: previous,
-            },
-            &serde_json::to_vec(&sample)?,
-            now,
-        )?;
-        let encoded = serde_json::to_string(&bundle)?;
-        ensure!(
-            encoded.len() <= 90 * 1024,
-            "Archive segment exceeds cloud transfer bound"
-        );
-        store.connection.execute("INSERT INTO archive_outbox(archive_id,scope,kind,sequence,bundle_json,created_at) VALUES(?1,?2,?3,?4,?5,?6)",params![archive_id,scope,kind,sequence,encoded,now])?;
-        store.connection.execute("UPDATE archive_rosters SET telemetry_cursor=?3,sequence=?4,manifest_digest=?5 WHERE scope=?1 AND kind=?2",params![scope,kind,next,sequence,compact_digest(&bundle.manifest_jws)])?;
-        store.connection.execute("DELETE FROM archive_outbox WHERE archive_id IN (SELECT archive_id FROM archive_outbox WHERE uploaded=1 ORDER BY created_at DESC LIMIT -1 OFFSET 256)",[])?;
-        Ok(())
-    })();
-    match result {
-        Ok(()) => {
-            store.connection.execute_batch("COMMIT")?;
-            Ok(())
+        let mut budget = SEGMENT_PLAINTEXT_BYTES;
+        loop {
+            let (records, next) = collect_records(telemetry, placement, kind, cursor, budget)?;
+            if records.is_empty() && dropped == 0 {
+                return Ok(false);
+            }
+            let count = records.len();
+            let mut segment = json!({"records":records,"next":next});
+            // The gap is part of the signed plaintext, so readers can tell missing
+            // history from a quiet period.
+            if dropped > 0 {
+                segment["gap"] = json!({"after":cursor,"dropped":dropped});
+            }
+            let archive_id = uuid::Uuid::new_v4().to_string();
+            let bundle = seal_archive(
+                &pins,
+                &compact,
+                &device.telemetry_signer(),
+                ArchivePosition {
+                    archive_id: archive_id.clone(),
+                    sequence,
+                    previous_manifest_digest: previous.clone(),
+                },
+                &serde_json::to_vec(&segment)?,
+                now,
+            )?;
+            let encoded = serde_json::to_string(&bundle)?;
+            if encoded.len() > MAX_SEGMENT_BYTES {
+                ensure!(
+                    count > 1,
+                    "Archive segment for {scope}/{kind} is {} bytes, above the {MAX_SEGMENT_BYTES} byte cloud transfer bound",
+                    encoded.len()
+                );
+                budget /= 2;
+                continue;
+            }
+            store.connection.execute("INSERT INTO archive_outbox(archive_id,scope,kind,sequence,bundle_json,created_at) VALUES(?1,?2,?3,?4,?5,?6)",params![archive_id,scope,kind,sequence,encoded,now])?;
+            store.connection.execute("UPDATE archive_rosters SET telemetry_cursor=?3,sequence=?4,manifest_digest=?5,dropped=0 WHERE scope=?1 AND kind=?2",params![scope,kind,next,sequence,compact_digest(&bundle.manifest_jws)])?;
+            store.connection.execute("DELETE FROM archive_outbox WHERE rowid IN (SELECT rowid FROM archive_outbox WHERE uploaded=1 ORDER BY rowid DESC LIMIT -1 OFFSET ?1)",[RETAINED_UPLOADED_SEGMENTS])?;
+            return Ok(true);
         }
-        Err(error) => {
-            let _ = store.connection.execute_batch("ROLLBACK");
-            Err(error)
+    })
+}
+
+fn seal_streams(telemetry: &TelemetryStore, device: &DeviceSession) -> Result<()> {
+    let streams: Vec<(String, String)> = telemetry
+        .store
+        .connection
+        .prepare("SELECT scope,kind FROM archive_rosters ORDER BY scope,kind")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    for (scope, kind) in streams {
+        for _ in 0..SEGMENTS_PER_STREAM_PASS {
+            match seal_one(telemetry, device, &scope, &kind) {
+                Ok(true) => (),
+                Ok(false) => break,
+                Err(error) if error.is::<PublicationPaused>() => {
+                    tracing::debug!(scope = %scope, kind = %kind, "Archive publication paused pending policy or outbox capacity: {error:#}");
+                    break;
+                }
+                Err(error) => {
+                    tracing::warn!(scope = %scope, kind = %kind, "Archive sealing failed; this stream retries next pass: {error:#}");
+                    break;
+                }
+            }
         }
     }
+    Ok(())
+}
+
+type PendingStream = ((String, String), Vec<(String, u64, String)>);
+
+/// The hub accepts only the next sequence of each stream, so every stream
+/// uploads in its own sequence order and a stuck stream never blocks others.
+fn pending_segments(store: &StateStore) -> Result<Vec<PendingStream>> {
+    let streams: Vec<(String, String)> = store
+        .connection
+        .prepare(
+            "SELECT DISTINCT scope,kind FROM archive_outbox WHERE uploaded=0 ORDER BY scope,kind",
+        )?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    let mut statement = store.connection.prepare("SELECT archive_id,sequence,bundle_json FROM archive_outbox WHERE uploaded=0 AND scope=?1 AND kind=?2 ORDER BY sequence LIMIT ?3")?;
+    streams
+        .into_iter()
+        .map(|stream| -> Result<PendingStream> {
+            let segments = statement
+                .query_map(params![stream.0, stream.1, UPLOADS_PER_STREAM_PASS], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?
+                .collect::<Result<_, _>>()?;
+            Ok((stream, segments))
+        })
+        .collect()
+}
+
+/// A rejected segment only holds back its own stream. Any other failure means the
+/// hub is unreachable or refuses the device, so the remaining streams wait for the
+/// next pass instead of each waiting out a request timeout.
+fn ends_upload_phase(error: &anyhow::Error) -> bool {
+    !matches!(
+        api_status(error),
+        Some(
+            StatusCode::BAD_REQUEST
+                | StatusCode::CONFLICT
+                | StatusCode::PAYLOAD_TOO_LARGE
+                | StatusCode::UNPROCESSABLE_ENTITY
+        )
+    )
+}
+
+async fn upload_pending<F, Fut>(
+    store: &mut StateStore,
+    cancel: &CancellationToken,
+    mut upload: F,
+) -> Result<()>
+where
+    F: FnMut(EncryptedArchive) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    let streams = pending_segments(store)?;
+    for ((scope, kind), segments) in streams {
+        for (id, sequence, encoded) in segments {
+            let bundle: EncryptedArchive = match serde_json::from_str(&encoded) {
+                Ok(bundle) => bundle,
+                Err(error) => {
+                    tracing::warn!(scope = %scope, kind = %kind, sequence, archive_id = %id, "Pending archive segment cannot be decoded; this stream stops uploading: {error}");
+                    break;
+                }
+            };
+            let result =
+                tokio::select! {_=cancel.cancelled()=>return Ok(()),result=upload(bundle)=>result};
+            match result {
+                Ok(()) => {
+                    store.connection.execute(
+                        "UPDATE archive_outbox SET uploaded=1 WHERE archive_id=?1",
+                        [id],
+                    )?;
+                }
+                Err(error) if ends_upload_phase(&error) => {
+                    tracing::warn!(scope = %scope, kind = %kind, sequence, "Archive upload failed; every stream retries next pass: {error:#}");
+                    return Ok(());
+                }
+                Err(error) => {
+                    tracing::warn!(scope = %scope, kind = %kind, sequence, "Archive segment rejected; this stream retries next pass: {error:#}");
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn publish_pass(
+    root: &Path,
+    device: &DeviceSession,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    let mut telemetry = TelemetryStore::open(root)?;
+    seal_streams(&telemetry, device)?;
+    upload_pending(&mut telemetry.store, cancel, |bundle| async move {
+        device.upload_archive(&bundle).await
+    })
+    .await
 }
 
 pub async fn publish(
@@ -280,32 +474,23 @@ pub async fn publish(
     device: Arc<DeviceSession>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let mut tick = tokio::time::interval(Duration::from_secs(30));
+    let mut tick = tokio::time::interval(PUBLISH_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut failures = 0u32;
     loop {
         tokio::select! {_=cancel.cancelled()=>return Ok(()),_=tick.tick()=>()}
-        let store = StateStore::open(&root.join("management.sqlite"))?;
-        let scopes: Vec<(String, String)> = store
-            .connection
-            .prepare("SELECT scope,kind FROM archive_rosters")?
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<Result<_, _>>()?;
-        for (scope, kind) in scopes {
-            if seal_one(&root, &device, &scope, &kind).is_err() {
-                tracing::debug!("Archive publication paused pending policy or outbox capacity");
+        match publish_pass(&root, &device, &cancel).await {
+            Ok(()) => failures = 0,
+            Err(error) => {
+                failures = failures.saturating_add(1);
+                tracing::warn!(
+                    failures,
+                    "Archive publication pass failed; retrying with backoff: {error:#}"
+                );
+                if !crate::telemetry::back_off(&cancel, PUBLISH_INTERVAL, failures).await {
+                    return Ok(());
+                }
             }
-        }
-        let pending:Vec<(String,String)>=store.connection.prepare("SELECT archive_id,bundle_json FROM archive_outbox WHERE uploaded=0 ORDER BY created_at,sequence LIMIT 8")?.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<Result<_,_>>()?;
-        for (id, encoded) in pending {
-            let bundle: EncryptedArchive = serde_json::from_str(&encoded)?;
-            let result = tokio::select! {_=cancel.cancelled()=>return Ok(()),result=device.upload_archive(&bundle)=>result};
-            if result.is_err() {
-                break;
-            }
-            store.connection.execute(
-                "UPDATE archive_outbox SET uploaded=1 WHERE archive_id=?1",
-                [id],
-            )?;
         }
     }
 }
@@ -314,6 +499,249 @@ pub async fn publish(
 mod tests {
     use super::*;
     use flow_like_device_crypto::archive::open_archive;
+
+    fn device_logs_roster(root: &Path) -> Result<(DeviceSession, ArchivePins, [u8; 32])> {
+        let owner = SigningKey::generate();
+        let device = DeviceSession::test_session(
+            "https://example.test/api/v1".into(),
+            "device".into(),
+            SigningKey::generate(),
+        )
+        .test_with_invitation_key(owner.public_key());
+        let store = StateStore::open(&root.join("management.sqlite"))?;
+        let now = unix_time()?;
+        let seed = [78; 32];
+        let roster = ArchiveRoster {
+            version: 1,
+            device_id: "device".into(),
+            scope: "device".into(),
+            project_id: None,
+            kind: ArchiveKind::Logs,
+            policy_version: 1,
+            previous_policy_digest: None,
+            management_policy_digest: None,
+            recipients: vec![ArchiveRecipient {
+                recipient_id: "owner-key".into(),
+                user_id: "owner".into(),
+                public_key: x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(seed))
+                    .to_bytes(),
+            }],
+            issued_at: now,
+            expires_at: now + 300,
+        };
+        apply_policy(
+            &store,
+            device.manifest(),
+            &sign_archive_roster(&roster, &owner)?,
+            now,
+        )?;
+        let pins = ArchivePins {
+            device_id: "device".into(),
+            scope: "device".into(),
+            kind: ArchiveKind::Logs,
+            owner_invitation_key: owner.public_key(),
+            device_signing_key: device.telemetry_signer().public_key(),
+        };
+        Ok((device, pins, seed))
+    }
+
+    #[test]
+    fn sealing_catches_up_in_bounded_segments_and_signs_eviction_gaps() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().canonicalize()?;
+        let (device, pins, seed) = device_logs_roster(&root)?;
+        let telemetry = TelemetryStore::open(&root)?;
+        for index in 0..400 {
+            telemetry.append(
+                None,
+                "log",
+                &json!({"message":format!("{index}-{}", "x".repeat(300))}),
+            )?;
+        }
+        seal_streams(&telemetry, &device)?;
+        let open = |encoded: &str| -> Result<Value> {
+            Ok(serde_json::from_slice(&open_archive(
+                &pins,
+                &serde_json::from_str(encoded)?,
+                "owner-key",
+                &seed,
+            )?)?)
+        };
+        let segments: Vec<String> = telemetry
+            .store
+            .connection
+            .prepare("SELECT bundle_json FROM archive_outbox ORDER BY sequence")?
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        assert!(segments.len() > 1);
+        let mut records = 0;
+        for encoded in &segments {
+            assert!(encoded.len() <= MAX_SEGMENT_BYTES);
+            let segment = open(encoded)?;
+            assert!(segment.get("gap").is_none());
+            records += segment["records"].as_array().unwrap().len();
+        }
+        assert_eq!(records, 400);
+        assert!(!seal_one(&telemetry, &device, "device", "log")?);
+        let cursor: u64 = telemetry.store.connection.query_row(
+            "SELECT telemetry_cursor FROM archive_rosters WHERE scope='device' AND kind='log'",
+            [],
+            |r| r.get(0),
+        )?;
+        telemetry.store.connection.execute(
+            "UPDATE archive_rosters SET dropped=7 WHERE scope='device' AND kind='log'",
+            [],
+        )?;
+        assert!(seal_one(&telemetry, &device, "device", "log")?);
+        let latest: String = telemetry.store.connection.query_row(
+            "SELECT bundle_json FROM archive_outbox ORDER BY sequence DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )?;
+        let gap = open(&latest)?;
+        assert_eq!(gap["gap"], json!({"after":cursor,"dropped":7}));
+        assert!(gap["records"].as_array().unwrap().is_empty());
+        let dropped: u64 = telemetry.store.connection.query_row(
+            "SELECT dropped FROM archive_rosters WHERE scope='device' AND kind='log'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(dropped, 0);
+        assert!(!seal_one(&telemetry, &device, "device", "log")?);
+        let tampered = telemetry.append(None, "log", &json!({"message":"tampered"}))?;
+        telemetry.store.connection.execute(
+            "UPDATE telemetry_records SET ciphertext=zeroblob(64) WHERE sequence=?1",
+            [tampered],
+        )?;
+        let fault = seal_one(&telemetry, &device, "device", "log").unwrap_err();
+        assert!(!fault.is::<PublicationPaused>());
+        Ok(())
+    }
+
+    #[test]
+    fn uploads_follow_each_stream_sequence_after_the_clock_steps_back() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let store = StateStore::open(&directory.path().join("management.sqlite"))?;
+        for (id, scope, sequence, created_at, uploaded) in [
+            ("a2", "placement", 2, 100, 0),
+            ("a1", "placement", 1, 200, 0),
+            ("b3", "device", 3, 50, 0),
+            ("b2", "device", 2, 40, 1),
+        ] {
+            store.connection.execute(
+                "INSERT INTO archive_outbox(archive_id,scope,kind,sequence,bundle_json,created_at,uploaded) VALUES(?1,?2,'log',?3,'{}',?4,?5)",
+                params![id, scope, sequence, created_at, uploaded],
+            )?;
+        }
+        let order: Vec<(String, Vec<String>)> = pending_segments(&store)?
+            .into_iter()
+            .map(|((scope, _), segments)| {
+                (scope, segments.into_iter().map(|(id, _, _)| id).collect())
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                ("device".to_owned(), vec!["b3".to_owned()]),
+                (
+                    "placement".to_owned(),
+                    vec!["a1".to_owned(), "a2".to_owned()]
+                ),
+            ]
+        );
+        Ok(())
+    }
+
+    async fn api_failure(status: u16) -> anyhow::Error {
+        let response = reqwest::Response::from(
+            axum::http::Response::builder()
+                .status(status)
+                .body(String::new())
+                .unwrap(),
+        );
+        crate::enrollment::response_json::<Value>(response)
+            .await
+            .unwrap_err()
+    }
+
+    #[tokio::test]
+    async fn a_rejected_stream_never_blocks_others_but_an_unreachable_hub_ends_the_pass()
+    -> Result<()> {
+        for status in [400, 409, 413, 422] {
+            assert!(!ends_upload_phase(&api_failure(status).await));
+        }
+        for status in [401, 402, 403, 429, 500, 503] {
+            assert!(ends_upload_phase(&api_failure(status).await));
+        }
+        assert!(ends_upload_phase(&anyhow!("error sending request")));
+        let directory = tempfile::tempdir()?;
+        let mut store = StateStore::open(&directory.path().join("management.sqlite"))?;
+        for (id, scope, sequence) in [
+            ("a1", "a", 1),
+            ("a2", "a", 2),
+            ("b1", "b", 1),
+            ("c1", "c", 1),
+            ("c2", "c", 2),
+            ("d1", "d", 1),
+            ("e1", "e", 1),
+        ] {
+            let bundle = if id == "b1" {
+                "{corrupt".to_owned()
+            } else {
+                serde_json::to_string(&EncryptedArchive {
+                    roster_jws: "roster".into(),
+                    manifest_jws: id.into(),
+                    ciphertext: "ciphertext".into(),
+                    recipient_keys: Vec::new(),
+                })?
+            };
+            store.connection.execute(
+                "INSERT INTO archive_outbox(archive_id,scope,kind,sequence,bundle_json,created_at) VALUES(?1,?2,'log',?3,?4,0)",
+                params![id, scope, sequence, bundle],
+            )?;
+        }
+        let mut attempts = Vec::new();
+        upload_pending(&mut store, &CancellationToken::new(), |bundle| {
+            attempts.push(bundle.manifest_jws.clone());
+            async move {
+                match bundle.manifest_jws.as_str() {
+                    "a1" => Err(api_failure(409).await),
+                    "d1" => Err(anyhow!("error sending request: connection refused")),
+                    _ => Ok(()),
+                }
+            }
+        })
+        .await?;
+        assert_eq!(attempts, ["a1", "c1", "c2", "d1"]);
+        let uploaded: Vec<String> = store
+            .connection
+            .prepare("SELECT archive_id FROM archive_outbox WHERE uploaded=1 ORDER BY archive_id")?
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        assert_eq!(uploaded, ["c1", "c2"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_failing_publication_pass_backs_off_instead_of_ending_the_publisher() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let device = Arc::new(DeviceSession::test_session(
+            "https://example.test/api/v1".into(),
+            "device".into(),
+            SigningKey::generate(),
+        ));
+        let cancel = CancellationToken::new();
+        let publisher = tokio::spawn(publish(
+            directory.path().join("missing"),
+            device,
+            cancel.clone(),
+        ));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!publisher.is_finished());
+        cancel.cancel();
+        publisher.await??;
+        Ok(())
+    }
 
     #[test]
     fn retained_segments_are_encrypted_and_pause_after_membership_change() -> Result<()> {
@@ -355,8 +783,8 @@ mod tests {
             &json!({"message":"retained-private-message"}),
         )?;
         TelemetryStore::open(&root)?.append(None,"message",&json!({"version":1,"kind":"operation","source_id":"structured-operation-fixture","state":"completed"}))?;
-        seal_one(&root, &device, "device", "log")?;
-        seal_one(&root, &device, "device", "log")?;
+        seal_one(&TelemetryStore::open(&root)?, &device, "device", "log")?;
+        seal_one(&TelemetryStore::open(&root)?, &device, "device", "log")?;
         let bundles: i64 =
             store
                 .connection
@@ -404,7 +832,11 @@ mod tests {
         let policy = sign_management_policy(&policy, &owner)?;
         store.accept_management_policy(&policy, &owner.public_key(), "device", now)?;
         TelemetryStore::open(&root)?.append(None, "log", &json!({"message":"later"}))?;
-        assert!(seal_one(&root, &device, "device", "log").is_err());
+        assert!(
+            seal_one(&TelemetryStore::open(&root)?, &device, "device", "log")
+                .unwrap_err()
+                .is::<PublicationPaused>()
+        );
         roster.policy_version = 2;
         roster.previous_policy_digest = Some(compact_digest(&compact));
         roster.management_policy_digest = Some(compact_digest(&policy));
@@ -414,7 +846,7 @@ mod tests {
             &sign_archive_roster(&roster, &owner)?,
             now,
         )?;
-        seal_one(&root, &device, "device", "log")?;
+        seal_one(&TelemetryStore::open(&root)?, &device, "device", "log")?;
         assert_eq!(
             store
                 .connection

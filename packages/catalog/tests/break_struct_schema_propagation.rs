@@ -22,7 +22,8 @@ use std::time::SystemTime;
 
 use flow_like::flow::board::Board;
 use flow_like::flow::node::{Node, NodeLogic};
-use flow_like::flow::pin::{PinType, is_open_object_schema};
+use flow_like::flow::pin::{PinType, ValueType, is_open_object_schema, schemas_are_compatible};
+use flow_like::flow::variable::VariableType;
 use flow_like_catalog::CatalogBuilder;
 use flow_like_storage::object_store::path::Path;
 
@@ -48,11 +49,20 @@ fn empty_board() -> Board {
 }
 
 fn place(board: &mut Board, logics: &HashMap<String, Arc<dyn NodeLogic>>, node_name: &str) -> Node {
+    place_as(board, logics, node_name, node_name)
+}
+
+fn place_as(
+    board: &mut Board,
+    logics: &HashMap<String, Arc<dyn NodeLogic>>,
+    node_name: &str,
+    id: &str,
+) -> Node {
     let mut node = logics
         .get(node_name)
         .unwrap_or_else(|| panic!("`{node_name}` is in the catalog"))
         .get_node();
-    node.id = node_name.to_string();
+    node.id = id.to_string();
     board.nodes.insert(node.id.clone(), node.clone());
     node
 }
@@ -155,6 +165,93 @@ fn field_pins(board: &Board, node_id: &str) -> Vec<String> {
         .collect();
     fields.sort();
     fields
+}
+
+#[flow_like_types::tokio::test]
+async fn inbound_email_attachment_paths_reach_file_nodes_through_nested_structs() {
+    let logics = catalog();
+    let mut board = empty_board();
+    place(&mut board, &logics, "events_inbound_email");
+    place_as(&mut board, &logics, "struct_break", "email_fields");
+    place(&mut board, &logics, "array_get");
+    place_as(&mut board, &logics, "struct_break", "attachment_fields");
+    place(&mut board, &logics, "read_to_string");
+
+    connect(
+        &mut board,
+        ("events_inbound_email", "email"),
+        ("email_fields", "struct_in"),
+    );
+    settle(&mut board, &logics).await;
+    assert_eq!(board.nodes["email_fields"].error, None);
+    assert_eq!(
+        pin_named(&board, "email_fields", "__break_struct_field__subject").data_type,
+        VariableType::String,
+    );
+    let attachments = pin_named(&board, "email_fields", "__break_struct_field__attachments");
+    assert_eq!(attachments.data_type, VariableType::Struct);
+    assert_eq!(attachments.value_type, ValueType::Array);
+
+    connect(
+        &mut board,
+        ("email_fields", "__break_struct_field__attachments"),
+        ("array_get", "array_in"),
+    );
+    connect(
+        &mut board,
+        ("array_get", "element"),
+        ("attachment_fields", "struct_in"),
+    );
+    settle(&mut board, &logics).await;
+    assert_eq!(board.nodes["attachment_fields"].error, None);
+    assert_eq!(
+        field_pins(&board, "attachment_fields"),
+        vec!["content_type", "filename", "path", "size"],
+    );
+    let path_name = "__break_struct_field__path";
+    let path = pin_named(&board, "attachment_fields", path_name);
+    let reader = pin_named(&board, "read_to_string", "path");
+    assert_eq!(path.data_type, VariableType::Struct);
+    assert_eq!(path.value_type, ValueType::Normal);
+    let path_schema = path
+        .schema
+        .as_deref()
+        .expect("derived path declares a schema");
+    let reader_schema = reader.schema.as_deref().expect("reader requires FlowPath");
+    assert!(schemas_are_compatible(
+        Some(path_schema),
+        Some(reader_schema)
+    ));
+    let paths = pin_named(&board, "events_inbound_email", "attachments");
+    assert_eq!(paths.value_type, ValueType::Array);
+    let paths_schema = paths
+        .schema
+        .as_deref()
+        .expect("attachment paths declare a schema");
+    assert!(schemas_are_compatible(
+        Some(paths_schema),
+        Some(reader_schema)
+    ));
+
+    let path_id = path.id.clone();
+    let reader_id = reader.id.clone();
+    connect(
+        &mut board,
+        ("attachment_fields", path_name),
+        ("read_to_string", "path"),
+    );
+    board.cleanup();
+    settle(&mut board, &logics).await;
+    let path = pin_named(&board, "attachment_fields", path_name);
+    assert_eq!(path.id, path_id);
+    assert!(path.connected_to.contains(&reader_id));
+    assert!(
+        pin_named(&board, "read_to_string", "path")
+            .depends_on
+            .contains(&path_id)
+    );
+    assert_eq!(board.nodes["email_fields"].error, None);
+    assert_eq!(board.nodes["attachment_fields"].error, None);
 }
 
 /// `Get File Input Files -> Get Element -> Break Struct`, the shape the regression was reported on.

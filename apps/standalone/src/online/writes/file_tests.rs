@@ -138,7 +138,7 @@ fn fixture(root: &Path, cloud: Arc<Cloud>, scheme: &str) -> (FileOverlay, Arc<Ca
         inner: ReadCache::new(cloud, cache.clone()),
         queue,
         authorize: Arc::new(move || {
-            if authorized_cache.is_revoked() {
+            if authorized_cache.is_revoked()? {
                 authorized_queue.quarantine("Revoked test authorization")?;
             }
             authorized_queue.check_authorized()

@@ -64,6 +64,7 @@ hostile tenants per execution.
 
 - [Configuration](/self-hosting/docker-compose/configuration/) explains environment variables and public URLs.
 - [Storage](/self-hosting/docker-compose/storage/) covers RustFS, signing endpoints and external storage.
+- [Inbound email](/self-hosting/docker-compose/mail/) adds Postfix for inbound email events.
 - [Scaling](/self-hosting/docker-compose/scaling/) separates active capacity from warm reserves.
 - [Monitoring](/self-hosting/docker-compose/monitoring/) describes collection and alert delivery.
 - [Troubleshooting](/self-hosting/docker-compose/troubleshooting/) covers admission, storage and recovery failures.

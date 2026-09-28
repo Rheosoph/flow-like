@@ -18,6 +18,8 @@ use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
 const MAX_ENROLLMENT_BINDING_ATTEMPTS: usize = 64;
+/// Longest signaling admission the device API issues, plus five seconds of slack.
+pub(crate) const ADMISSION_SECONDS: i64 = 305;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -119,15 +121,65 @@ pub(crate) fn http_client() -> Result<Client> {
         .build()?)
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("Device API returned HTTP {0}")]
-struct ApiStatus(StatusCode);
+/// Devices API code for a proof or time-window failure. It is not a revocation.
+pub const DEVICE_PROOF_INVALID: &str = "DEVICE_PROOF_INVALID";
+const MAX_ERROR_BODY_BYTES: usize = 16 * 1024;
+
+#[derive(Debug)]
+struct ApiStatus {
+    status: StatusCode,
+    code: Option<String>,
+}
+
+impl std::fmt::Display for ApiStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "Device API returned HTTP {}", self.status)?;
+        if let Some(code) = &self.code {
+            write!(formatter, " ({code})")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ApiStatus {}
+
+async fn status_error(mut response: reqwest::Response) -> anyhow::Error {
+    let status = response.status();
+    let mut body = Vec::new();
+    while body.len() <= MAX_ERROR_BODY_BYTES {
+        match response.chunk().await {
+            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+            _ => break,
+        }
+    }
+    ApiStatus {
+        status,
+        code: error_code(&body),
+    }
+    .into()
+}
+
+fn error_code(body: &[u8]) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Body {
+        error: Coded,
+    }
+    #[derive(Deserialize)]
+    struct Coded {
+        code: String,
+    }
+    let code = serde_json::from_slice::<Body>(body).ok()?.error.code;
+    (!code.is_empty()
+        && code.len() <= 64
+        && code.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+    .then_some(code)
+}
 
 pub(crate) async fn response_json<T: DeserializeOwned>(
     mut response: reqwest::Response,
 ) -> Result<T> {
     if !response.status().is_success() {
-        return Err(ApiStatus(response.status()).into());
+        return Err(status_error(response).await);
     }
     let mut bytes = Zeroizing::new(Vec::new());
     while let Some(chunk) = response.chunk().await? {
@@ -141,7 +193,27 @@ pub(crate) async fn response_json<T: DeserializeOwned>(
 }
 
 pub(crate) fn api_status(error: &anyhow::Error) -> Option<StatusCode> {
-    error.downcast_ref::<ApiStatus>().map(|error| error.0)
+    error.downcast_ref::<ApiStatus>().map(|error| error.status)
+}
+
+/// The `error.code` of a failed device API response, when the server sent one.
+pub fn api_error_code(error: &anyhow::Error) -> Option<&str> {
+    error.downcast_ref::<ApiStatus>()?.code.as_deref()
+}
+
+/// A proof or time-window failure is transient; it usually means the device clock is skewed.
+pub fn device_proof_rejected(error: &anyhow::Error) -> bool {
+    api_status(error) == Some(StatusCode::UNAUTHORIZED)
+        && api_error_code(error) == Some(DEVICE_PROOF_INVALID)
+}
+
+/// Only a 403, or a 401 that is not a proof failure, confirms that the API denied this device.
+pub fn is_access_denied(error: &anyhow::Error) -> bool {
+    match api_status(error) {
+        Some(StatusCode::FORBIDDEN) => true,
+        Some(StatusCode::UNAUTHORIZED) => !device_proof_rejected(error),
+        _ => false,
+    }
 }
 
 /// Explicit development export from a caller-supplied local binary.
@@ -520,6 +592,21 @@ fn remember_binding(record: &mut RegistrationRecord, binding: String) -> Result<
     Ok(())
 }
 
+fn forget_rejected_binding(
+    record: &mut RegistrationRecord,
+    binding: &str,
+    previous: Option<String>,
+) {
+    if let Some(position) = record
+        .attempted_bindings
+        .iter()
+        .rposition(|value| value == binding)
+    {
+        record.attempted_bindings.remove(position);
+    }
+    record.binding_jws = previous;
+}
+
 fn ensure_binding_capacity(record: &RegistrationRecord) -> Result<()> {
     let unrecorded_previous = usize::from(
         record
@@ -689,21 +776,37 @@ pub async fn enroll(state_dir: &Path, package_dir: &Path) -> Result<DeviceReceip
         },
         &keys.auth,
     )?;
+    let previous_binding = record.binding_jws.clone();
     remember_binding(&mut record, binding_jws.clone())?;
     store.update_registration(&record)?;
-    let receipt: DeviceReceipt = response_json(
+    let redeemed: Result<DeviceReceipt> = response_json(
         client
             .post(endpoint)
             .json(&RedeemEnrollmentRequest {
                 enrollment_token: package.enrollment_token.clone(),
                 manifest_jws: package.manifest_jws.clone(),
-                binding_jws,
+                binding_jws: binding_jws.clone(),
                 proof_jws,
             })
             .send()
             .await?,
     )
-    .await?;
+    .await;
+    let receipt = match redeemed {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            // A 4xx is returned before registration commits, so this binding can never be
+            // the registered one. Reclaiming its slot stops replaced challenges from
+            // exhausting the recorded attempts. A proxy's 408 may follow a committed request.
+            if api_status(&error).is_some_and(|status| {
+                status.is_client_error() && status != StatusCode::REQUEST_TIMEOUT
+            }) {
+                forget_rejected_binding(&mut record, &binding_jws, previous_binding);
+                store.update_registration(&record)?;
+            }
+            return Err(error.context("Redeem enrollment"));
+        }
+    };
     check_receipt(&record, &keys.identity(), &receipt)?;
     record.receipt = Some(receipt.clone());
     record.connection_status = "enrolled".into();
@@ -732,6 +835,29 @@ pub async fn recover_registration(state_dir: &Path) -> Result<DeviceReceipt> {
 struct SessionLease {
     token: Zeroizing<String>,
     expires_at: i64,
+}
+
+/// The lease runs on the device clock from its relative lifetime, measured from before the
+/// request, so a skewed clock neither rejects a valid lease nor extends it.
+fn local_lease_expiry(response: &DeviceTokenResponse, requested_at: i64, now: i64) -> Result<i64> {
+    ensure!(
+        response.token_type == "DPoP" && response.expires_in > 60 && response.expires_in <= 600,
+        "Invalid device session lease: token type {:?}, lifetime {}s (expected DPoP, 61..=600s)",
+        response.token_type,
+        response.expires_in
+    );
+    let lifetime = i64::try_from(response.expires_in)?;
+    let skew = response
+        .expires_at
+        .saturating_sub(lifetime)
+        .saturating_sub(now);
+    if skew.abs() > PROOF_CLOCK_SKEW_SECONDS {
+        tracing::warn!(
+            skew_seconds = skew,
+            "The device clock differs from the device API; enable time synchronization, because proofs outside a few seconds of API time are rejected"
+        );
+    }
+    Ok(requested_at + lifetime)
 }
 
 /// Session tokens stay in memory. Every request receives its own proof of possession.
@@ -848,11 +974,21 @@ impl DeviceSession {
         .await?;
         let now = unix_time()?;
         ensure!(
-            response.device_auth_epoch == self.auth_epoch
-                && response.expires_at > now + 30
-                && response.expires_at <= now + 305
-                && response.signaling_urls.len() <= 4,
-            "Invalid signaling admission"
+            response.device_auth_epoch == self.auth_epoch,
+            "Signaling admission has device auth epoch {}, expected {}",
+            response.device_auth_epoch,
+            self.auth_epoch
+        );
+        ensure!(
+            response.expires_at > now + 30
+                && response.expires_at <= now + ADMISSION_SECONDS + MAX_CLOCK_SKEW_SECONDS,
+            "Signaling admission expires at {} but the device clock reads {now}; check time synchronization",
+            response.expires_at
+        );
+        ensure!(
+            response.signaling_urls.len() <= 4,
+            "Signaling admission lists {} endpoints; at most 4 are accepted",
+            response.signaling_urls.len()
         );
         for endpoint in &response.signaling_urls {
             let url = url::Url::parse(endpoint)?;
@@ -1038,17 +1174,10 @@ impl DeviceSession {
                     .await?,
             )
             .await?;
-            ensure!(
-                response.token_type == "DPoP"
-                    && response.expires_in > 60
-                    && response.expires_in <= 600
-                    && response.expires_at > unix_time()? + 60
-                    && response.expires_at <= unix_time()? + 605,
-                "Invalid device session lease"
-            );
+            let expires_at = local_lease_expiry(&response, now, unix_time()?)?;
             *lease = Some(SessionLease {
                 token: Zeroizing::new(std::mem::take(&mut response.access_token)),
-                expires_at: response.expires_at,
+                expires_at,
             });
         }
         let token = &lease.as_ref().context("Missing session lease")?.token;
@@ -1081,7 +1210,7 @@ impl DeviceSession {
             ) {
                 *self.lease.lock().await = None;
             }
-            return Err(ApiStatus(response.status()).into());
+            return Err(status_error(response).await);
         }
         let status: DeviceStatus = response_json(response).await?;
         ensure!(
@@ -1120,44 +1249,53 @@ pub async fn maintain_presence_with_session(
             uptime_seconds: started.elapsed().as_secs(),
         };
         let result = tokio::select! { _ = cancel.cancelled() => return Ok(()), result = session.heartbeat(&heartbeat) => result };
-        let mut store = StateStore::open(&state_dir.join("management.sqlite"))?;
-        let mut record = store
-            .registration()?
-            .context("Device registration disappeared")?;
-        let wait = match result {
+        let (status, wait) = match &result {
             Ok(()) => {
-                record.last_contact_at = Some(unix_time()?);
-                record.connection_status = "connected".into();
                 delay = 2;
-                60
+                ("connected", 60)
             }
             Err(error) => {
-                record.connection_status = if matches!(
-                    api_status(&error),
-                    Some(StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
-                ) {
+                if device_proof_rejected(error) {
+                    tracing::warn!(
+                        "Device presence proof was rejected, most likely because the device clock is skewed; enable time synchronization. Retrying: {error:#}"
+                    );
+                } else {
+                    tracing::warn!("Device presence unavailable: {error:#}");
+                }
+                let wait = delay;
+                delay = (delay * 2).min(60);
+                let status = if is_access_denied(error) {
                     "access_denied"
                 } else {
                     "disconnected"
-                }
-                .into();
-                tracing::warn!("Device presence unavailable: {error}");
-                let wait = delay;
-                delay = (delay * 2).min(60);
-                wait
+                };
+                (status, wait)
             }
         };
-        store.update_registration(&record)?;
-        if record.connection_status == "access_denied" {
+        if let Err(error) = record_presence(&state_dir, status) {
+            tracing::warn!("Device presence state could not be saved: {error:#}");
+        }
+        if status == "access_denied" {
             tracing::warn!(
                 "Device access was denied; use recover-enrollment to recheck its registration"
             );
             return Ok(());
         }
-        drop(store);
         let jitter = u64::from(OsRng.next_u32() % 10);
         tokio::select! { _ = cancel.cancelled() => return Ok(()), _ = tokio::time::sleep(Duration::from_secs(wait + jitter)) => {} }
     }
+}
+
+fn record_presence(state_dir: &Path, status: &str) -> Result<()> {
+    let mut store = StateStore::open(&state_dir.join("management.sqlite"))?;
+    let mut record = store
+        .registration()?
+        .context("Device registration disappeared")?;
+    if status == "connected" {
+        record.last_contact_at = Some(unix_time()?);
+    }
+    record.connection_status = status.into();
+    store.update_registration(&record)
 }
 
 #[cfg(test)]
@@ -1493,6 +1631,95 @@ mod tests {
         substituted = receipt;
         substituted.identity.management_key = [43; 32];
         assert!(check_receipt(&restored, &identity, &substituted).is_err());
+    }
+
+    #[test]
+    fn rejected_redemptions_release_their_binding_slot_but_keep_uncertain_ones() {
+        let (mut record, identity, receipt) = registration_fixture();
+        let previous = record.binding_jws.clone();
+        for attempt in 0..(MAX_ENROLLMENT_BINDING_ATTEMPTS * 2) {
+            let binding = format!("rejected.binding.{attempt}");
+            let before = record.binding_jws.clone();
+            ensure_binding_capacity(&record).unwrap();
+            remember_binding(&mut record, binding.clone()).unwrap();
+            forget_rejected_binding(&mut record, &binding, before);
+        }
+        assert_eq!(record.binding_jws, previous);
+        assert_eq!(record.attempted_bindings, vec![previous.clone().unwrap()]);
+        check_receipt(&record, &identity, &receipt).unwrap();
+        remember_binding(&mut record, "uncertain.binding".into()).unwrap();
+        assert!(
+            record
+                .attempted_bindings
+                .contains(previous.as_ref().unwrap())
+        );
+        assert_eq!(record.binding_jws.as_deref(), Some("uncertain.binding"));
+    }
+
+    fn status(status: StatusCode, body: &str) -> anyhow::Error {
+        ApiStatus {
+            status,
+            code: error_code(body.as_bytes()),
+        }
+        .into()
+    }
+
+    #[test]
+    fn proof_failures_are_transient_and_only_confirmed_denials_stop_presence() {
+        let proof = status(
+            StatusCode::UNAUTHORIZED,
+            r#"{"error":{"code":"DEVICE_PROOF_INVALID","message":"Proof time window"}}"#,
+        );
+        assert!(device_proof_rejected(&proof));
+        assert!(!is_access_denied(&proof));
+        assert_eq!(api_error_code(&proof), Some(DEVICE_PROOF_INVALID));
+        assert!(proof.to_string().contains("DEVICE_PROOF_INVALID"));
+        let context = proof.context("Renew device admission");
+        assert!(device_proof_rejected(&context));
+        for (code, body) in [
+            (StatusCode::UNAUTHORIZED, r#"{"error":{"code":"UNAUTHORIZED"}}"#),
+            (StatusCode::UNAUTHORIZED, "not json"),
+            (StatusCode::FORBIDDEN, r#"{"error":{"code":"DEVICE_PROOF_INVALID"}}"#),
+        ] {
+            let error = status(code, body);
+            assert!(is_access_denied(&error), "{code} {body}");
+            assert!(!device_proof_rejected(&error));
+        }
+        assert!(!is_access_denied(&status(StatusCode::BAD_GATEWAY, "")));
+        assert!(!is_access_denied(&anyhow::anyhow!("connection reset")));
+        for body in [
+            r#"{"error":{"code":""}}"#,
+            r#"{"error":{"code":"has space"}}"#,
+            r#"{"error":"flat"}"#,
+        ] {
+            assert_eq!(error_code(body.as_bytes()), None);
+        }
+        assert_eq!(
+            error_code(format!(r#"{{"error":{{"code":"{}"}}}}"#, "A".repeat(65)).as_bytes()),
+            None
+        );
+    }
+
+    #[test]
+    fn session_leases_use_their_relative_lifetime_on_a_skewed_clock() {
+        let lease = |expires_in: u64, expires_at: i64| DeviceTokenResponse {
+            access_token: "token".into(),
+            token_type: "DPoP".into(),
+            expires_in,
+            expires_at,
+        };
+        let now = 10_000;
+        for server_offset in [-600, -10, 0, 10, 600] {
+            assert_eq!(
+                local_lease_expiry(&lease(600, now + server_offset + 600), now - 1, now).unwrap(),
+                now - 1 + 600
+            );
+        }
+        assert!(local_lease_expiry(&lease(60, now + 60), now, now).is_err());
+        assert!(local_lease_expiry(&lease(601, now + 601), now, now).is_err());
+        let mut bearer = lease(600, now + 600);
+        bearer.token_type = "Bearer".into();
+        assert!(local_lease_expiry(&bearer, now, now).is_err());
     }
 
     #[test]

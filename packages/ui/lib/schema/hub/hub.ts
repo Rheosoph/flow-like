@@ -28,7 +28,10 @@ export interface IHub {
 	/** Standalone device enrollment and inventory availability. */
 	standalone?: {
 		enabled: boolean;
-		telemetry_tiers?: Record<string, { max_bytes: number; retention_seconds: number }>;
+		telemetry_tiers?: Record<
+			string,
+			{ max_bytes: number; retention_seconds: number }
+		>;
 		release_trust?: {
 			manifest_url: string;
 			public_keys: string[];
@@ -112,6 +115,10 @@ export interface ISupportedSinks {
 	telegram?: boolean;
 	/** Email/IMAP polling */
 	email?: boolean;
+	/** Email received at an address issued by the server */
+	inbound_email?: boolean;
+	/** Microsoft Teams bot webhook */
+	teams?: boolean;
 	[property: string]: any;
 }
 

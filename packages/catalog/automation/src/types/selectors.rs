@@ -6,8 +6,11 @@ pub enum SelectorKind {
     #[default]
     Css,
     Xpath,
+    /// Visible text contained in the element; script, style and head content is ignored.
     Text,
     TextExact,
+    /// ARIA role, optionally filtered by accessible name: `button`, `button|Sign in`
+    /// (case-insensitive substring), `button|=Sign in` (exact) or `button|/^sign/i` (regex).
     Role,
     TestId,
     AriaLabel,
@@ -15,6 +18,8 @@ pub enum SelectorKind {
     AltText,
     Title,
     Image,
+    /// Element ref from the latest Browser Snapshot, such as `e12`.
+    Ref,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -62,6 +67,23 @@ impl Selector {
         }
     }
 
+    pub fn element_ref(value: impl Into<String>) -> Self {
+        Self {
+            kind: SelectorKind::Ref,
+            value: value.into(),
+            confidence: Some(1.0),
+            scope: None,
+        }
+    }
+
+    /// Treats `e12` / `ref=e12` as a snapshot ref and anything else as CSS.
+    pub fn from_css_or_ref(value: &str) -> Self {
+        match normalize_ref(value) {
+            Some(reference) => Self::element_ref(reference),
+            None => Self::css(value),
+        }
+    }
+
     pub fn test_id(value: impl Into<String>) -> Self {
         Self {
             kind: SelectorKind::TestId,
@@ -80,6 +102,23 @@ impl Selector {
         self.scope = Some(scope.into());
         self
     }
+}
+
+/// Accepts `e12`, `ref=e12`, `[ref=e12]` and `@e12`; returns the bare ref.
+pub fn normalize_ref(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let trimmed = trimmed
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(trimmed)
+        .trim();
+    let bare = trimmed
+        .strip_prefix("ref=")
+        .or_else(|| trimmed.strip_prefix('@'))
+        .unwrap_or(trimmed);
+    let digits = bare.strip_prefix('e')?;
+    (!digits.is_empty() && digits.len() <= 9 && digits.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| bare.to_string())
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default)]
@@ -192,4 +231,35 @@ pub enum SelectorSource {
     Xpath,
     Css,
     Image,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ref_values_are_normalized() {
+        assert_eq!(normalize_ref("e12").as_deref(), Some("e12"));
+        assert_eq!(normalize_ref(" ref=e3 ").as_deref(), Some("e3"));
+        assert_eq!(normalize_ref("[ref=e7]").as_deref(), Some("e7"));
+        assert_eq!(normalize_ref("@e1").as_deref(), Some("e1"));
+        assert_eq!(normalize_ref("e"), None);
+        assert_eq!(normalize_ref("e1a"), None);
+        assert_eq!(normalize_ref("#e12"), None);
+        assert_eq!(Selector::from_css_or_ref("e5").kind, SelectorKind::Ref);
+        assert_eq!(Selector::from_css_or_ref("div.e5").kind, SelectorKind::Css);
+    }
+
+    #[test]
+    fn selector_kind_serde_names_are_stable() {
+        let kinds = [
+            (SelectorKind::Css, "Css"),
+            (SelectorKind::TextExact, "TextExact"),
+            (SelectorKind::Image, "Image"),
+            (SelectorKind::Ref, "Ref"),
+        ];
+        for (kind, name) in kinds {
+            assert_eq!(flow_like_types::json::to_value(&kind).unwrap(), name);
+        }
+    }
 }

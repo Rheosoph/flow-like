@@ -480,9 +480,22 @@ impl NodeLogic for CopilotServerClientStartNode {
             CopilotLogLevel::Debug => LogLevel::Debug,
         };
 
+        let cli_url = match vetted_cli_url(context.execution_environment(), &config.url).await {
+            Ok(cli_url) => cli_url,
+            Err(e) => {
+                let error_msg = format!("Refused remote Copilot endpoint: {e}");
+                context.log_message(&error_msg, FlowLogLevel::Error);
+                context
+                    .set_pin_value("error_message", json::json!(error_msg))
+                    .await?;
+                context.activate_exec_pin("error").await?;
+                return Ok(());
+            }
+        };
+
         let client = match Client::builder()
             .use_stdio(false)
-            .cli_url(config.url.clone())
+            .cli_url(cli_url)
             .log_level(log_level)
             .build()
         {
@@ -539,6 +552,49 @@ impl NodeLogic for CopilotServerClientStartNode {
             "GitHub Copilot integration requires the 'execute' feature"
         ))
     }
+}
+
+/// The SDK dials `host:port` (or a bare port on localhost) itself, outside the
+/// egress guard. Server-side the endpoint is resolved and vetted here and the
+/// SDK is handed the vetted address, so it cannot re-resolve elsewhere.
+#[cfg(feature = "execute")]
+async fn vetted_cli_url(
+    environment: flow_like::flow::execution::ExecutionEnvironment,
+    url: &str,
+) -> flow_like_types::Result<String> {
+    use flow_like::flow::execution::{ExecutionEnvironment, egress};
+
+    if environment != ExecutionEnvironment::Server {
+        return Ok(url.to_string());
+    }
+    let authority = url.trim();
+    let authority = authority
+        .split_once("://")
+        .map_or(authority, |(_, rest)| rest);
+    let authority = authority.split('/').next().unwrap_or_default();
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !host.trim().is_empty() => (host.trim(), port),
+        Some((_, port)) => ("localhost", port),
+        None => ("localhost", authority),
+    };
+    let port: u16 = port.trim().parse().map_err(|_| {
+        flow_like_types::anyhow!("Copilot server URL '{url}' does not end in a valid port")
+    })?;
+    let addrs =
+        egress::resolve_socket_addrs(environment, host.trim_matches(['[', ']']), port).await?;
+    Ok(preferred_addr(&addrs).to_string())
+}
+
+/// The SDK dials only the one address it is handed, without falling back to
+/// the others the name resolved to, so IPv4 (reachable from nearly every
+/// executor) wins over an IPv6 answer listed first.
+#[cfg(feature = "execute")]
+fn preferred_addr(addrs: &[std::net::SocketAddr]) -> std::net::SocketAddr {
+    addrs
+        .iter()
+        .find(|addr| addr.is_ipv4())
+        .unwrap_or(&addrs[0])
+        .to_owned()
 }
 
 #[crate::register_node]
@@ -633,5 +689,58 @@ impl NodeLogic for CopilotClientStopNode {
         Err(flow_like_types::anyhow!(
             "GitHub Copilot integration requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::{preferred_addr, vetted_cli_url};
+    use flow_like::flow::execution::ExecutionEnvironment;
+    use std::net::SocketAddr;
+
+    #[test]
+    fn copilot_endpoints_prefer_an_ipv4_address() {
+        let v6: SocketAddr = "[2001:db8::1]:3000".parse().unwrap();
+        let v4: SocketAddr = "203.0.113.9:3000".parse().unwrap();
+        assert_eq!(preferred_addr(&[v6, v4]), v4);
+        assert_eq!(preferred_addr(&[v6]), v6);
+    }
+
+    #[tokio::test]
+    async fn server_side_copilot_endpoints_are_vetted_and_pinned() {
+        for url in [
+            "tcp://localhost:3000",
+            "3000",
+            ":3000",
+            "169.254.169.254:80",
+            "[::1]:3000",
+            "tcp://127.0.0.1:3000/rpc",
+            "example.com:not-a-port",
+        ] {
+            assert!(
+                vetted_cli_url(ExecutionEnvironment::Server, url)
+                    .await
+                    .is_err(),
+                "{url} must be refused server-side"
+            );
+        }
+        assert_eq!(
+            vetted_cli_url(ExecutionEnvironment::Server, "tcp://203.0.113.9:3000/rpc")
+                .await
+                .unwrap(),
+            "203.0.113.9:3000"
+        );
+        assert_eq!(
+            vetted_cli_url(ExecutionEnvironment::Server, "[2001:db8::1]:3000")
+                .await
+                .unwrap(),
+            "[2001:db8::1]:3000"
+        );
+        assert_eq!(
+            vetted_cli_url(ExecutionEnvironment::Local, "localhost:3000")
+                .await
+                .unwrap(),
+            "localhost:3000"
+        );
     }
 }

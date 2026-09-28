@@ -1,13 +1,21 @@
-use crate::types::artifacts::{ArtifactRef, ArtifactType};
+use crate::types::artifacts::ArtifactRef;
+#[cfg(feature = "execute")]
+use crate::types::artifacts::ArtifactType;
 use crate::types::handles::AutomationSession;
+use crate::types::screen_frame::ScreenFrame;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     variable::VariableType,
 };
-use flow_like_catalog_core::{FlowPath, NodeImage};
+use flow_like_catalog_core::NodeImage;
+#[cfg(feature = "execute")]
+use flow_like_catalog_core::FlowPath;
+#[cfg(feature = "execute")]
 use flow_like_storage::object_store::ObjectStoreExt;
-use flow_like_types::{async_trait, create_id, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::create_id;
+use flow_like_types::{async_trait, json::json};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -25,10 +33,10 @@ impl NodeLogic for ComputerScreenshotNode {
         let mut node = Node::new(
             "computer_screenshot",
             "Screenshot",
-            "Takes a screenshot of the screen, window, or region",
+            "Takes a screenshot of the primary display, a chosen display, or a region of one display. Frame maps image pixels back to the desktop coordinates the mouse nodes use",
             "Automation/Computer/Capture",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("computer", "screenshot");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -57,7 +65,7 @@ impl NodeLogic for ComputerScreenshotNode {
         node.add_input_pin(
             "capture_type",
             "Capture Type",
-            "What to capture: full screen, specific display, or region",
+            "full: the primary display only. display: the display at Display Index. region: a rectangle of one display",
             VariableType::String,
         )
         .set_options(
@@ -74,15 +82,28 @@ impl NodeLogic for ComputerScreenshotNode {
         node.add_input_pin(
             "display_index",
             "Display Index",
-            "Index of display for display or region capture",
+            "Display for display capture and pixel-space region capture: index from List Displays, -1 = primary",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(0)));
 
         node.add_input_pin(
+            "region_space",
+            "Region Space",
+            "pixels: region is in screenshot pixels of the display at Display Index (Retina displays have twice as many pixels as desktop units). desktop: region is in desktop input coordinates, like the mouse nodes, and may be on any display",
+            VariableType::String,
+        )
+        .set_options(
+            flow_like::flow::pin::PinOptions::new()
+                .set_valid_values(vec!["pixels".to_string(), "desktop".to_string()])
+                .build(),
+        )
+        .set_default_value(Some(json!("pixels")));
+
+        node.add_input_pin(
             "region_x",
             "Region X",
-            "X coordinate of region (when capture_type=region)",
+            "Left edge of the region (capture_type=region), in Region Space units",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(0)));
@@ -90,7 +111,7 @@ impl NodeLogic for ComputerScreenshotNode {
         node.add_input_pin(
             "region_y",
             "Region Y",
-            "Y coordinate of region",
+            "Top edge of the region, in Region Space units",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(0)));
@@ -98,7 +119,7 @@ impl NodeLogic for ComputerScreenshotNode {
         node.add_input_pin(
             "region_width",
             "Region Width",
-            "Width of region",
+            "Width of the region, in Region Space units",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(100)));
@@ -106,7 +127,7 @@ impl NodeLogic for ComputerScreenshotNode {
         node.add_input_pin(
             "region_height",
             "Region Height",
-            "Height of region",
+            "Height of the region, in Region Space units",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(100)));
@@ -137,13 +158,20 @@ impl NodeLogic for ComputerScreenshotNode {
         )
         .set_schema::<NodeImage>();
 
+        node.add_output_pin(
+            "frame",
+            "Frame",
+            "Desktop rectangle and pixel size of the screenshot; converts image pixels to mouse coordinates",
+            VariableType::Struct,
+        )
+        .set_schema::<ScreenFrame>();
+
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use flow_like_storage::object_store::PutPayload;
-        use xcap::Monitor;
 
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -151,74 +179,27 @@ impl NodeLogic for ComputerScreenshotNode {
         session.ensure_active(context).await?;
         let capture_type: String = context.evaluate_pin("capture_type").await?;
         let display_index: i64 = context.evaluate_pin("display_index").await?;
-        let region_x: i64 = context.evaluate_pin("region_x").await?;
-        let region_y: i64 = context.evaluate_pin("region_y").await?;
-        let region_width: i64 = context.evaluate_pin("region_width").await?;
-        let region_height: i64 = context.evaluate_pin("region_height").await?;
+        let region_space: String = context
+            .evaluate_pin("region_space")
+            .await
+            .unwrap_or_else(|_| "pixels".to_string());
+        let region = (
+            context.evaluate_pin::<i64>("region_x").await?,
+            context.evaluate_pin::<i64>("region_y").await?,
+            context.evaluate_pin::<i64>("region_width").await?,
+            context.evaluate_pin::<i64>("region_height").await?,
+        );
 
-        let image = {
-            let monitors = Monitor::all()
-                .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
-
-            match capture_type.as_str() {
-                "display" => {
-                    let monitor = monitors.get(display_index as usize).ok_or_else(|| {
-                        flow_like_types::anyhow!("Display index {} not found", display_index)
-                    })?;
-                    crate::types::screen_match::capture_monitor(&monitor)
-                        .map_err(|e| flow_like_types::anyhow!("Failed to capture display: {}", e))?
-                }
-                "region" => {
-                    let monitor = monitors.get(display_index as usize).ok_or_else(|| {
-                        flow_like_types::anyhow!("Display index {} not found", display_index)
-                    })?;
-                    let full_image = crate::types::screen_match::capture_monitor(&monitor)
-                        .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
-
-                    let img_w = full_image.width();
-                    let img_h = full_image.height();
-                    if region_x < 0
-                        || region_y < 0
-                        || region_width <= 0
-                        || region_height <= 0
-                        || region_x
-                            .checked_add(region_width)
-                            .is_none_or(|end| end > img_w as i64)
-                        || region_y
-                            .checked_add(region_height)
-                            .is_none_or(|end| end > img_h as i64)
-                    {
-                        return Err(flow_like_types::anyhow!(
-                            "Capture region must fit within the selected display's screenshot pixels"
-                        ));
-                    }
-                    let (x, y, w, h) = (
-                        region_x as u32,
-                        region_y as u32,
-                        region_width as u32,
-                        region_height as u32,
-                    );
-
-                    let cropped = image::imageops::crop_imm(&full_image, x, y, w, h);
-                    cropped.to_image()
-                }
-                _ => {
-                    let monitor = monitors
-                        .iter()
-                        .find(|m| m.is_primary().unwrap_or(false))
-                        .or_else(|| monitors.first())
-                        .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-                    crate::types::screen_match::capture_monitor(&monitor)
-                        .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?
-                }
-            }
-        };
-
-        let mut buffer = Vec::new();
-        let encoder = image::codecs::png::PngEncoder::new(&mut buffer);
-        image
-            .write_with_encoder(encoder)
-            .map_err(|e| flow_like_types::anyhow!("Failed to encode screenshot: {}", e))?;
+        let (image, frame, buffer) = tokio::task::spawn_blocking(move || {
+            let (image, frame) =
+                capture_screenshot(&capture_type, display_index, &region_space, region)?;
+            let mut buffer = Vec::new();
+            image
+                .write_with_encoder(image::codecs::png::PngEncoder::new(&mut buffer))
+                .map_err(|e| flow_like_types::anyhow!("Failed to encode screenshot: {}", e))?;
+            flow_like_types::Ok((image, frame, buffer))
+        })
+        .await??;
 
         let artifact_id = create_id();
         let path = format!("artifacts/screenshots/{}.png", artifact_id);
@@ -257,6 +238,7 @@ impl NodeLogic for ComputerScreenshotNode {
         context.set_pin_value("session_out", json!(session)).await?;
         context.set_pin_value("screenshot", json!(artifact)).await?;
         context.set_pin_value("image", json!(node_image)).await?;
+        context.set_pin_value("frame", json!(frame)).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
@@ -267,5 +249,69 @@ impl NodeLogic for ComputerScreenshotNode {
         Err(flow_like_types::anyhow!(
             "Computer automation requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(feature = "execute")]
+fn capture_screenshot(
+    capture_type: &str,
+    display_index: i64,
+    region_space: &str,
+    (x, y, width, height): (i64, i64, i64, i64),
+) -> flow_like_types::Result<(image::RgbaImage, ScreenFrame)> {
+    use crate::types::screen_frame::{capture_display, capture_input_region};
+    match capture_type {
+        "full" => capture_display(-1),
+        "display" => capture_display(display_index),
+        "region" => {
+            if width <= 0 || height <= 0 {
+                return Err(flow_like_types::anyhow!(
+                    "Capture region size {}x{} must be positive",
+                    width,
+                    height
+                ));
+            }
+            match region_space {
+                "desktop" => capture_input_region(
+                    None,
+                    i32::try_from(x)?,
+                    i32::try_from(y)?,
+                    u32::try_from(width)?,
+                    u32::try_from(height)?,
+                ),
+                "pixels" => {
+                    let (full, frame) = capture_display(display_index)?;
+                    let fits = x >= 0
+                        && y >= 0
+                        && x.checked_add(width)
+                            .is_some_and(|end| end <= full.width() as i64)
+                        && y.checked_add(height)
+                            .is_some_and(|end| end <= full.height() as i64);
+                    if !fits {
+                        return Err(flow_like_types::anyhow!(
+                            "Capture region {}x{} at ({}, {}) must fit the {}x{} screenshot pixels of display {}; set Region Space to desktop for mouse coordinates",
+                            width,
+                            height,
+                            x,
+                            y,
+                            full.width(),
+                            full.height(),
+                            display_index
+                        ));
+                    }
+                    let (x, y, width, height) = (x as u32, y as u32, width as u32, height as u32);
+                    let cropped = image::imageops::crop_imm(&full, x, y, width, height).to_image();
+                    Ok((cropped, frame.crop(x, y, width, height)?))
+                }
+                other => Err(flow_like_types::anyhow!(
+                    "Unknown region space '{}'; use pixels or desktop",
+                    other
+                )),
+            }
+        }
+        other => Err(flow_like_types::anyhow!(
+            "Unknown capture type '{}'; use full, display or region",
+            other
+        )),
     }
 }

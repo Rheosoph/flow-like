@@ -90,12 +90,17 @@ impl StateStore {
     }
     pub fn claim_replica(&self, id: &str, slot: u8, revision: u64, intent: u64) -> Result<bool> {
         ensure!(slot < 32, "Invalid replica slot");
-        let changed=self.connection.execute("INSERT INTO placement_replicas(placement_id,slot,config_revision,intent_revision,observed_state) SELECT id,?2,?3,?4,'starting' FROM placements WHERE id=?1 AND config_revision=?3 AND intent_revision=?4 AND desired_state='running' AND desired_replicas>?2 ON CONFLICT(placement_id,slot) DO UPDATE SET config_revision=excluded.config_revision,intent_revision=excluded.intent_revision,observed_state='starting',last_error=NULL WHERE placement_replicas.process_id IS NULL",params![id,slot,revision,intent])?;
-        if changed == 1 {
-            self.aggregate_replicas(id)?;
-        }
-        Ok(changed == 1)
+        self.with_rollout_transaction(|| {
+            let changed=self.connection.execute("INSERT INTO placement_replicas(placement_id,slot,config_revision,intent_revision,observed_state) SELECT id,?2,?3,?4,'starting' FROM placements WHERE id=?1 AND config_revision=?3 AND intent_revision=?4 AND desired_state='running' AND desired_replicas>?2 ON CONFLICT(placement_id,slot) DO UPDATE SET config_revision=excluded.config_revision,intent_revision=excluded.intent_revision,observed_state='starting',last_error=NULL WHERE placement_replicas.process_id IS NULL",params![id,slot,revision,intent])?;
+            if changed == 1 {
+                self.aggregate_replicas(id)?;
+            }
+            Ok(changed == 1)
+        })
     }
+    /// The replica row and the placement summary commit together. An error
+    /// leaves both unchanged, so a dropped worker never leaves its PID behind to
+    /// block the slot's next claim.
     pub fn record_replica(
         &self,
         id: &str,
@@ -115,8 +120,10 @@ impl StateStore {
                 ),
             "Replica process requires a live state"
         );
-        ensure!(self.connection.execute("UPDATE placement_replicas SET observed_state=?5,process_id=?6,last_error=?7 WHERE placement_id=?1 AND slot=?2 AND config_revision=?3 AND intent_revision=?4",params![id,slot,revision,intent,state.as_str(),pid,error])?==1,"Replica observation is stale");
-        self.aggregate_replicas(id)
+        self.with_rollout_transaction(|| {
+            ensure!(self.connection.execute("UPDATE placement_replicas SET observed_state=?5,process_id=?6,last_error=?7 WHERE placement_id=?1 AND slot=?2 AND config_revision=?3 AND intent_revision=?4",params![id,slot,revision,intent,state.as_str(),pid,error])?==1,"Replica observation is stale");
+            self.aggregate_replicas(id)
+        })
     }
     pub fn replica_is_current(
         &self,
@@ -136,15 +143,47 @@ impl StateStore {
         intent: u64,
         pid: u32,
     ) -> Result<bool> {
-        let changed=self.connection.execute("UPDATE placement_replicas SET observed_state='running',applied_revision=?3,last_error=NULL WHERE placement_id=?1 AND slot=?2 AND config_revision=?3 AND intent_revision=?4 AND process_id=?5 AND observed_state='starting' AND EXISTS(SELECT 1 FROM placements p WHERE p.id=?1 AND p.config_revision=?3 AND p.intent_revision=?4 AND p.desired_state='running' AND p.desired_replicas>?2)",params![id,slot,revision,intent,pid])?;
-        if changed == 1 {
-            self.aggregate_replicas(id)?;
-        }
-        Ok(changed == 1)
+        self.with_rollout_transaction(|| {
+            let changed=self.connection.execute("UPDATE placement_replicas SET observed_state='running',applied_revision=?3,last_error=NULL WHERE placement_id=?1 AND slot=?2 AND config_revision=?3 AND intent_revision=?4 AND process_id=?5 AND observed_state='starting' AND EXISTS(SELECT 1 FROM placements p WHERE p.id=?1 AND p.config_revision=?3 AND p.intent_revision=?4 AND p.desired_state='running' AND p.desired_replicas>?2)",params![id,slot,revision,intent,pid])?;
+            if changed == 1 {
+                self.aggregate_replicas(id)?;
+            }
+            Ok(changed == 1)
+        })
     }
+    /// Recomputes the placement summary and writes it only when it changed, so the
+    /// supervisor's per-tick call never contends for the database write lock.
     pub fn aggregate_replicas(&self, id: &str) -> Result<()> {
-        let row:Option<(String,u64,u64,u8)>=self.connection.query_row("SELECT desired_state,config_revision,intent_revision,desired_replicas FROM placements WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
-        let Some((desired, revision, intent, count)) = row else {
+        let row: Option<AggregateRow> = self
+            .connection
+            .query_row(
+                "SELECT desired_state,config_revision,intent_revision,desired_replicas,observed_state,process_id,last_error,applied_revision FROM placements WHERE id=?1",
+                [id],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            desired,
+            revision,
+            intent,
+            count,
+            stored_state,
+            stored_pid,
+            stored_error,
+            stored_applied,
+        )) = row
+        else {
             return Ok(());
         };
         let replicas = self.list_replicas(id)?;
@@ -209,10 +248,29 @@ impl StateStore {
         };
         let pid = live.first().and_then(|r| r.process_id);
         let error = current.iter().find_map(|r| r.last_error.as_deref());
-        self.connection.execute("UPDATE placements SET observed_state=?2,process_id=?3,last_error=?4,applied_revision=CASE WHEN ?5 THEN config_revision ELSE applied_revision END WHERE id=?1",params![id,state.as_str(),pid,error,ready==count as usize])?;
+        let all_ready = ready == count as usize;
+        if stored_state == state.as_str()
+            && stored_pid == pid
+            && stored_error.as_deref() == error
+            && (!all_ready || stored_applied == Some(revision))
+        {
+            return Ok(());
+        }
+        self.connection.execute("UPDATE placements SET observed_state=?2,process_id=?3,last_error=?4,applied_revision=CASE WHEN ?5 THEN config_revision ELSE applied_revision END WHERE id=?1",params![id,state.as_str(),pid,error,all_ready])?;
         Ok(())
     }
 }
+
+type AggregateRow = (
+    String,
+    u64,
+    u64,
+    u8,
+    String,
+    Option<u32>,
+    Option<String>,
+    Option<u64>,
+);
 
 #[cfg(test)]
 mod tests {
@@ -289,6 +347,51 @@ mod tests {
         assert!(store.set_replica_count("service", 1, 4).is_err());
         Ok(())
     }
+    #[test]
+    fn unchanged_summary_is_not_rewritten_while_another_writer_holds_the_lock() -> Result<()> {
+        let (dir, store) = fixture()?;
+        let path = dir.path().join("management.sqlite");
+        assert!(store.claim_replica("service", 0, 1, 1)?);
+        let reader = StateStore::open_with_busy_timeout(&path, std::time::Duration::ZERO)?;
+        let writer = rusqlite::Connection::open(&path)?;
+        writer.execute_batch("BEGIN IMMEDIATE")?;
+        reader.aggregate_replicas("service")?;
+        assert!(
+            reader
+                .record_replica("service", 0, 1, 1, ObservedState::Starting, Some(100), None)
+                .is_err()
+        );
+        writer.execute_batch("ROLLBACK")?;
+        reader.record_replica("service", 0, 1, 1, ObservedState::Starting, Some(100), None)?;
+        let record = reader.get_placement("service")?.unwrap();
+        assert_eq!(record.process_id, Some(100));
+        assert_eq!(record.observed_state, ObservedState::Starting);
+        Ok(())
+    }
+
+    #[test]
+    fn failed_summary_write_keeps_the_process_id_out_so_the_slot_restarts() -> Result<()> {
+        let (dir, store) = fixture()?;
+        assert!(store.claim_replica("service", 0, 1, 1)?);
+        let schema = rusqlite::Connection::open(dir.path().join("management.sqlite"))?;
+        schema.execute_batch(
+            "CREATE TRIGGER fail_summary BEFORE UPDATE OF process_id ON placements BEGIN SELECT RAISE(ABORT,'summary write failed'); END",
+        )?;
+        assert!(
+            store
+                .record_replica("service", 0, 1, 1, ObservedState::Starting, Some(100), None)
+                .is_err()
+        );
+        assert_eq!(store.list_replicas("service")?[0].process_id, None);
+        schema.execute_batch("DROP TRIGGER fail_summary")?;
+        assert!(store.claim_replica("service", 0, 1, 1)?);
+        store.record_replica("service", 0, 1, 1, ObservedState::Starting, Some(101), None)?;
+        let record = store.get_placement("service")?.unwrap();
+        assert_eq!(record.process_id, Some(101));
+        assert_eq!(record.replicas[0].process_id, Some(101));
+        Ok(())
+    }
+
     #[test]
     fn readiness_requires_exact_slot_process_and_current_intent() -> Result<()> {
         let (_dir, mut store) = fixture()?;

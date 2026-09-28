@@ -20,6 +20,8 @@ pub mod capabilities;
 pub mod types;
 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
+pub mod agent;
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub mod browser;
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub mod computer;

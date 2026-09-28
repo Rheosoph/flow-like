@@ -19,13 +19,30 @@ use super::workflow_sdk::{
     workflow_predraft_context_preflight_with_lease,
 };
 use super::workflow_state::{WorkflowToolLoopSnapshot, WorkflowToolLoopState};
-use flow_like::flow::copilot::{tool_spec::RESEARCH_AGENT_TOOL, workflow_tool_result_succeeded};
+use flow_like::flow::copilot::{
+    tool_spec::{RESEARCH_AGENT_TOOL, find_home_tool_spec},
+    workflow_tool_result_succeeded,
+};
 use flow_like_types::tokio_util::sync::CancellationToken;
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex as StdMutex},
     time::Duration,
 };
+
+/// Claude Code spills MCP results above its default size to a file the agent cannot Read, which
+/// would hide complete Home layouts. 500,000 characters is Claude Code's hard ceiling.
+const MAX_RESULT_SIZE_META_KEY: &str = "anthropic/maxResultSizeChars";
+const HOME_TOOL_MAX_RESULT_SIZE_CHARS: u64 = 500_000;
+
+fn home_tool_result_size_meta() -> rmcp::model::Meta {
+    let mut meta = rmcp::model::Meta::new();
+    meta.0.insert(
+        MAX_RESULT_SIZE_META_KEY.to_string(),
+        HOME_TOOL_MAX_RESULT_SIZE_CHARS.into(),
+    );
+    meta
+}
 
 #[derive(Clone)]
 struct FlowPilotMcpServer {
@@ -62,11 +79,16 @@ impl FlowPilotMcpServer {
             _ => serde_json::json!({ "type": "object", "properties": {} }),
         };
 
-        rmcp::model::Tool::new(
+        let mcp_tool = rmcp::model::Tool::new(
             tool.name.clone(),
             tool.description.clone(),
             rmcp::model::object(schema),
-        )
+        );
+        if find_home_tool_spec(&tool.name).is_some() {
+            mcp_tool.with_meta(home_tool_result_size_meta())
+        } else {
+            mcp_tool
+        }
     }
 }
 
@@ -470,9 +492,7 @@ pub(super) fn register_mcp_active_handler(
 }
 
 pub(super) fn is_recoverable_platform_mutation(tool_name: &str) -> bool {
-    use flow_like::flow::copilot::tool_spec::{
-        ToolApprovalSpec, find_global_tool_spec, find_home_tool_spec,
-    };
+    use flow_like::flow::copilot::tool_spec::{ToolApprovalSpec, find_global_tool_spec};
 
     find_global_tool_spec(tool_name)
         .or_else(|| find_home_tool_spec(tool_name))
@@ -732,5 +752,41 @@ impl Drop for FlowPilotMcpBridge {
         if let Some(server_task) = self.server_task.take() {
             server_task.abort();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FlowPilotMcpServer, HOME_TOOL_MAX_RESULT_SIZE_CHARS, MAX_RESULT_SIZE_META_KEY};
+
+    fn advertised_max_result_size(name: &str) -> Option<u64> {
+        let tool = FlowPilotMcpServer::to_mcp_tool(&copilot_sdk::Tool::new(name));
+        serde_json::to_value(&tool)
+            .expect("serialize MCP tool")
+            .get("_meta")
+            .and_then(|meta| meta.get(MAX_RESULT_SIZE_META_KEY))
+            .and_then(serde_json::Value::as_u64)
+    }
+
+    #[test]
+    fn home_tools_advertise_the_claude_code_result_size_ceiling() {
+        for name in [
+            "get_home_context",
+            "validate_home_layout",
+            "apply_home_layout",
+        ] {
+            assert_eq!(
+                advertised_max_result_size(name),
+                Some(HOME_TOOL_MAX_RESULT_SIZE_CHARS),
+                "{name} must declare {MAX_RESULT_SIZE_META_KEY}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_home_tools_keep_the_default_result_size() {
+        let tool = FlowPilotMcpServer::to_mcp_tool(&copilot_sdk::Tool::new("emit_ui"));
+        assert!(tool.meta.is_none());
+        assert_eq!(advertised_max_result_size("emit_ui"), None);
     }
 }

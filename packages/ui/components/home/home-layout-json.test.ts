@@ -2,6 +2,7 @@ import { describe, expect, it, spyOn } from "bun:test";
 import {
 	MAX_HOME_LAYOUT_BYTES,
 	MAX_HOME_WIDGET_CLASS_NAME_BYTES,
+	MAX_HOME_WIDGET_CSS_BYTES,
 } from "./home-layout";
 import {
 	formatHomeLayoutJson,
@@ -119,6 +120,22 @@ describe("home layout JSON transfer", () => {
 		);
 	});
 
+	it("keeps widget CSS verbatim through export and import", () => {
+		const styled = structuredClone(layout);
+		styled.widgets[0].appearance.css =
+			":root {\n\tbackground: red;\n}\nh2::after { content: '!'; }";
+		expect(parseHomeLayoutJson(serializeHomeLayout(styled))).toEqual({
+			ok: true,
+			layout: styled,
+		});
+		const blank = structuredClone(styled);
+		blank.widgets[0].appearance.css = " \n ";
+		const parsed = parseHomeLayoutJson(JSON.stringify(blank));
+		expect(parsed.ok && parsed.layout.widgets[0].appearance).not.toHaveProperty(
+			"css",
+		);
+	});
+
 	it("rejects a pasted layout that cannot fit the save limit", () => {
 		const oversized = structuredClone(layout);
 		oversized.widgets[0].config.body = "x".repeat(MAX_HOME_LAYOUT_BYTES);
@@ -164,6 +181,14 @@ describe("home layout JSON transfer", () => {
 					);
 				},
 				error: `Widget 1 appearance className must not exceed ${MAX_HOME_WIDGET_CLASS_NAME_BYTES} bytes.`,
+			},
+			{
+				update: (value) => {
+					value.widgets[0].appearance.css = "p".repeat(
+						MAX_HOME_WIDGET_CSS_BYTES + 1,
+					);
+				},
+				error: `Widget 1 appearance css must not exceed ${MAX_HOME_WIDGET_CSS_BYTES} bytes.`,
 			},
 			{
 				update: (value) => {

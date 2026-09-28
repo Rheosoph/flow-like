@@ -2,6 +2,7 @@ use super::{
     graph::{graph_error_message, graph_get_json, graph_get_paginated_values},
     provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
 };
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -281,7 +282,7 @@ impl NodeLogic for ListOutlookMailFoldersNode {
 
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, provider.api_url("/me/mailFolders"))
             .await
         {
@@ -414,7 +415,7 @@ impl NodeLogic for ListOutlookMessagesNode {
         }
         let url = reqwest::Url::parse_with_params(&base_url, query_params)?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, url.to_string()).await {
             Ok(values) => {
                 let messages = values.iter().filter_map(parse_message).collect::<Vec<_>>();
@@ -505,7 +506,7 @@ impl NodeLogic for GetOutlookMessageNode {
 
         let url = provider.api_url(&format!("/me/messages/{}", message_id));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_json(&client, &provider, url).await {
             Ok(body) => {
                 if let Some(message) = parse_message(&body) {
@@ -610,7 +611,7 @@ impl NodeLogic for GetOutlookMessageAttachmentsNode {
             urlencoding::encode(&message.id)
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, url).await {
             Ok(values) => {
                 let attachments = values
@@ -939,9 +940,9 @@ impl NodeLogic for SendOutlookMessageNode {
 
         let url = provider.api_url("/me/sendMail");
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&message_payload)
@@ -1080,7 +1081,7 @@ impl NodeLogic for ListOutlookCalendarEventsNode {
             )?
         };
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, url.to_string()).await {
             Ok(values) => {
                 let events = values
@@ -1194,7 +1195,7 @@ impl NodeLogic for ListOutlookContactsNode {
         }
         let url = reqwest::Url::parse_with_params(&provider.api_url("/me/contacts"), query_params)?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, url.to_string()).await {
             Ok(values) => {
                 let contacts = values.iter().filter_map(parse_contact).collect::<Vec<_>>();
@@ -1415,9 +1416,9 @@ impl NodeLogic for CreateOutlookCalendarEventNode {
 
         let url = provider.api_url("/me/events");
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&event_payload)
@@ -1603,9 +1604,9 @@ impl NodeLogic for UpdateOutlookCalendarEventNode {
 
         let url = provider.api_url(&format!("/me/events/{}", event_id));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .patch(&url)
+            .patch(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&event_payload)
@@ -1703,9 +1704,9 @@ impl NodeLogic for DeleteOutlookCalendarEventNode {
 
         let url = provider.api_url(&format!("/me/events/{}", event_id));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .delete(&url)
+            .delete(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -1794,9 +1795,9 @@ impl NodeLogic for GetOutlookCalendarEventNode {
 
         let url = provider.api_url(&format!("/me/events/{}", event_id));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -1933,9 +1934,9 @@ impl NodeLogic for RsvpOutlookCalendarEventNode {
             "sendResponse": send_response
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&payload)
@@ -2051,9 +2052,9 @@ impl NodeLogic for ForwardOutlookCalendarEventNode {
             "comment": comment
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&payload)

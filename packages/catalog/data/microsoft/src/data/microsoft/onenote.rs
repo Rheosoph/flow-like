@@ -2,13 +2,14 @@ use super::{
     graph::{graph_error_message, graph_get_paginated_values},
     provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
 };
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -142,7 +143,7 @@ impl NodeLogic for ListNotebooksNode {
 
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(
             &client,
             &provider,
@@ -235,9 +236,9 @@ impl NodeLogic for CreateNotebookNode {
             "displayName": display_name
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url("/me/onenote/notebooks"))
+            .post(&provider.api_url("/me/onenote/notebooks"))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -338,7 +339,7 @@ impl NodeLogic for ListSectionsNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let notebook_id: String = context.evaluate_pin("notebook_id").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(
             &client,
             &provider,
@@ -438,9 +439,9 @@ impl NodeLogic for CreateSectionNode {
             "displayName": display_name
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url(&format!("/me/onenote/notebooks/{}/sections", notebook_id)))
+            .post(&provider.api_url(&format!("/me/onenote/notebooks/{}/sections", notebook_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -541,7 +542,7 @@ impl NodeLogic for ListPagesNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let section_id: String = context.evaluate_pin("section_id").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(
             &client,
             &provider,
@@ -652,9 +653,9 @@ impl NodeLogic for CreatePageNode {
             title, content
         );
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url(&format!("/me/onenote/sections/{}/pages", section_id)))
+            .post(&provider.api_url(&format!("/me/onenote/sections/{}/pages", section_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/xhtml+xml")
             .body(html_content)
@@ -752,9 +753,9 @@ impl NodeLogic for GetPageContentNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let page_id: String = context.evaluate_pin("page_id").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(provider.api_url(&format!("/me/onenote/pages/{}/content", page_id)))
+            .get(&provider.api_url(&format!("/me/onenote/pages/{}/content", page_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -837,9 +838,9 @@ impl NodeLogic for DeletePageNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let page_id: String = context.evaluate_pin("page_id").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .delete(provider.api_url(&format!("/me/onenote/pages/{}", page_id)))
+            .delete(&provider.api_url(&format!("/me/onenote/pages/{}", page_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;

@@ -1,11 +1,12 @@
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json, reqwest};
+use flow_like_types::{Value, async_trait, json::json};
 
 use super::ConfluencePage;
 
@@ -118,7 +119,7 @@ impl NodeLogic for GetPageChildrenNode {
             return Err(flow_like_types::anyhow!("Page ID is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let children = if provider.is_cloud {
             // Cloud v2 API
@@ -126,7 +127,7 @@ impl NodeLogic for GetPageChildrenNode {
                 .confluence_api_url(&format!("/pages/{}/children?limit={}", page_id, limit));
 
             let response = client
-                .get(&url)
+                .get(&url)?
                 .header("Authorization", provider.auth_header())
                 .send()
                 .await?;
@@ -159,7 +160,7 @@ impl NodeLogic for GetPageChildrenNode {
             }
 
             let response = client
-                .get(&url)
+                .get(&url)?
                 .header("Authorization", provider.auth_header())
                 .send()
                 .await?;
@@ -285,14 +286,14 @@ impl NodeLogic for GetPageAncestorsNode {
             return Err(flow_like_types::anyhow!("Page ID is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let ancestors = if provider.is_cloud {
             // Cloud v2 API
             let url = provider.confluence_api_url(&format!("/pages/{}/ancestors", page_id));
 
             let response = client
-                .get(&url)
+                .get(&url)?
                 .header("Authorization", provider.auth_header())
                 .send()
                 .await?;
@@ -320,7 +321,7 @@ impl NodeLogic for GetPageAncestorsNode {
                 provider.confluence_rest_api_url(&format!("/content/{}?expand=ancestors", page_id));
 
             let response = client
-                .get(&url)
+                .get(&url)?
                 .header("Authorization", provider.auth_header())
                 .send()
                 .await?;

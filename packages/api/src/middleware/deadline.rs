@@ -157,6 +157,20 @@ use Methods as M;
 /// First match wins. Observed maxima are from the API EMF request logs,
 /// 2026-09-14 09:00Z to 2026-09-15 16:00Z.
 const RULES: &[Rule] = &[
+    rule(M::POST, "/api/v1/execution/events", Data),
+    rule(M::POST, "/api/v1/execution/apps/{app_id}/teams/send", Data),
+    rule(M::PUT, "/api/v1/apps/{app_id}/events/{event_id}/teams", Job),
+    rule(
+        M::DELETE,
+        "/api/v1/apps/{app_id}/events/{event_id}/teams",
+        Job,
+    ),
+    rule(
+        M::POST,
+        "/api/v1/apps/{app_id}/events/{event_id}/teams/rotate",
+        Job,
+    ),
+    rule(M::DELETE, "/api/v1/apps/{app_id}/events/{event_id}", Job),
     // Observed max 826.7 s; runs one provider request to its reserved deadline, then settles.
     rule(M::POST, "/api/v1/maintenance/hosted-ai/{id}", HostedWorker),
     // Mirrors multi-GB model files behind an SSE progress stream; known up to 900 s.
@@ -240,6 +254,14 @@ const RULES: &[Rule] = &[
     rule(M::ANY, "/r/*", Dispatch),
     // Observed max 7.3 s; tool calls collect results for up to 120 s.
     rule(M::POST, "/m/*", Dispatch),
+    // Mail sends wait for provider acceptance; replies also load the original message.
+    rule(M::POST, "/api/v1/execution/apps/{app_id}/mail/send", Data),
+    rule(M::POST, "/api/v1/execution/apps/{app_id}/mail/reply", Data),
+    rule(M::POST, "/api/v1/apps/{app_id}/mail/send", Data),
+    rule(M::POST, "/api/v1/apps/{app_id}/mail/reply", Data),
+    // Ingest stores each recipient's copy with a 120 s upload budget; dispatch stops at 60 s.
+    rule(M::POST, "/api/v1/sink/mail/ingest", Job),
+    rule(M::POST, "/api/v1/sink/mail/dispatch", Data),
     // Observed POST /sink/trigger/async max 3.0 s; HTTP sinks wait up to 120 s.
     rule(M::ANY, "/api/v1/sink/trigger/*", Dispatch),
     // Observed max 33.4 s; the deletion pass budget reaches 270 s.
@@ -494,6 +516,37 @@ mod tests {
 
     /// (method, full route template, expected class, observed max seconds).
     const CASES: &[(&str, &str, DeadlineClass, Option<f64>)] = &[
+        ("POST", "/api/v1/execution/events", Data, None),
+        (
+            "POST",
+            "/api/v1/execution/apps/{app_id}/teams/send",
+            Data,
+            None,
+        ),
+        (
+            "PUT",
+            "/api/v1/apps/{app_id}/events/{event_id}/teams",
+            Job,
+            None,
+        ),
+        (
+            "DELETE",
+            "/api/v1/apps/{app_id}/events/{event_id}/teams",
+            Job,
+            None,
+        ),
+        (
+            "POST",
+            "/api/v1/apps/{app_id}/events/{event_id}/teams/rotate",
+            Job,
+            None,
+        ),
+        (
+            "DELETE",
+            "/api/v1/apps/{app_id}/events/{event_id}",
+            Job,
+            None,
+        ),
         (
             "POST",
             "/api/v1/maintenance/hosted-ai/{id}",
@@ -603,7 +656,7 @@ mod tests {
         (
             "DELETE",
             "/api/v1/apps/{app_id}/events/{event_id}",
-            Write,
+            Job,
             None,
         ),
         ("GET", "/api/v1/apps/{app_id}/events", Read, Some(3.0)),
@@ -651,6 +704,23 @@ mod tests {
             None,
         ),
         ("GET", "/api/v1/sink/schedules", Read, None),
+        (
+            "POST",
+            "/api/v1/execution/apps/{app_id}/mail/send",
+            Data,
+            None,
+        ),
+        (
+            "POST",
+            "/api/v1/execution/apps/{app_id}/mail/reply",
+            Data,
+            None,
+        ),
+        ("POST", "/api/v1/apps/{app_id}/mail/send", Data, None),
+        ("POST", "/api/v1/apps/{app_id}/mail/reply", Data, None),
+        ("POST", "/api/v1/sink/mail/ingest", Job, None),
+        ("POST", "/api/v1/sink/mail/dispatch", Data, None),
+        ("GET", "/api/v1/sink/mail/recipients/{address}", Read, None),
         ("GET", "/api/v1/execution/poll", Data, None),
         ("DELETE", "/api/v1/execution/run/{run_id}", Data, None),
         ("GET", "/api/v1/execution/run/{run_id}", Read, None),

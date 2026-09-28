@@ -3,6 +3,7 @@ use super::{
     provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
 };
 use chrono::{DateTime, Utc};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -180,7 +181,7 @@ impl NodeLogic for ListCalendarsNode {
 
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, provider.api_url("/me/calendars"))
             .await
         {
@@ -286,9 +287,9 @@ impl NodeLogic for CreateCalendarNode {
             "color": color
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url("/me/calendars"))
+            .post(&provider.api_url("/me/calendars"))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -418,7 +419,7 @@ impl NodeLogic for ListEventsNode {
             ],
         )?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, url.to_string()).await {
             Ok(values) => {
                 let events: Vec<CalendarEvent> = values.iter().filter_map(parse_event).collect();
@@ -597,9 +598,9 @@ impl NodeLogic for CreateEventNode {
             request_body["onlineMeetingProvider"] = json!("teamsForBusiness");
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url("/me/calendar/events"))
+            .post(&provider.api_url("/me/calendar/events"))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -695,9 +696,9 @@ impl NodeLogic for DeleteEventNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let event_id: String = context.evaluate_pin("event_id").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .delete(provider.api_url(&format!("/me/events/{}", event_id)))
+            .delete(&provider.api_url(&format!("/me/events/{}", event_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -847,9 +848,9 @@ impl NodeLogic for FindMeetingTimesNode {
             "meetingDuration": format!("PT{}M", duration_minutes)
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url("/me/findMeetingTimes"))
+            .post(&provider.api_url("/me/findMeetingTimes"))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -1000,9 +1001,9 @@ impl NodeLogic for GetScheduleNode {
             "availabilityViewInterval": interval_minutes
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url("/me/calendar/getSchedule"))
+            .post(&provider.api_url("/me/calendar/getSchedule"))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -1158,9 +1159,9 @@ impl NodeLogic for UpdateEventNode {
             });
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .patch(provider.api_url(&format!("/me/events/{}", event_id)))
+            .patch(&provider.api_url(&format!("/me/events/{}", event_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)

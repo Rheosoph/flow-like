@@ -3,6 +3,7 @@ import {
 	MAX_HOME_LAYOUT_BYTES,
 	MAX_HOME_WIDGETS,
 	MAX_HOME_WIDGET_CLASS_NAME_BYTES,
+	MAX_HOME_WIDGET_CSS_BYTES,
 	homeLayoutByteLength,
 	normalizeHomeLayout,
 } from "./home-layout";
@@ -53,7 +54,7 @@ function textLimitError(
 	return bytes > maximum ? `${label} must not exceed ${maximum} bytes.` : null;
 }
 
-function persistenceError(layout: IHomeLayout) {
+export function homeLayoutPersistenceError(layout: IHomeLayout) {
 	const layoutError =
 		textLimitError(layout.title, "Layout title", 256) ??
 		textLimitError(layout.description, "Layout description", 2000);
@@ -82,6 +83,11 @@ function persistenceError(layout: IHomeLayout) {
 				widget.appearance.className,
 				`${prefix} appearance className`,
 				MAX_HOME_WIDGET_CLASS_NAME_BYTES,
+			) ??
+			textLimitError(
+				widget.appearance.css,
+				`${prefix} appearance css`,
+				MAX_HOME_WIDGET_CSS_BYTES,
 			);
 		if (widgetError) return widgetError;
 	}
@@ -168,7 +174,7 @@ export function parseHomeLayoutJson(source: string): HomeLayoutJsonResult {
 			};
 		}
 
-		const validationError = persistenceError(layout);
+		const validationError = homeLayoutPersistenceError(layout);
 		if (validationError) return { ok: false, error: validationError };
 
 		return { ok: true, layout };

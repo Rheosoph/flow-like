@@ -18,8 +18,26 @@ pub enum AutomationCapability {
 
 pub fn required_capabilities(name: &str) -> Vec<AutomationCapability> {
     use AutomationCapability::*;
-    if name == "browser_start_driver" {
-        return vec![Browser, ApplicationLaunch];
+    match name {
+        "browser_start_driver" => return vec![Browser, ApplicationLaunch],
+        "computer_mouse_triple_click"
+        | "computer_mouse_down"
+        | "computer_mouse_up"
+        | "computer_cursor_position"
+        | "computer_hold_key"
+        | "computer_key_chord" => return vec![InputControl],
+        "computer_type_secret" => return vec![Clipboard, InputControl],
+        "computer_wait_screen_stable"
+        | "computer_wait_screen_change"
+        | "computer_ocr"
+        | "computer_find_text"
+        | "computer_zoom" => return vec![ScreenCapture],
+        "computer_click_text" => return vec![InputControl, ScreenCapture],
+        "computer_capture_state" => return vec![ScreenCapture, Accessibility],
+        "computer_click_element" | "computer_use_agent" => {
+            return vec![InputControl, ScreenCapture, Accessibility];
+        }
+        _ => {}
     }
     if name.starts_with("browser_") || name == "fingerprint_match" {
         return vec![Browser];
@@ -75,14 +93,6 @@ pub fn required_capabilities(name: &str) -> Vec<AutomationCapability> {
         | "rpa_wait_for_color"
         | "rpa_locate_template"
         | "rpa_locate_color" => vec![ScreenCapture],
-        // Plans choose their action kinds at runtime.
-        "rpa_execute_actions" | "llm_execute_actions" | "automation_execute_plan" => vec![
-            Browser,
-            InputControl,
-            ScreenCapture,
-            Accessibility,
-            WindowManagement,
-        ],
         _ => vec![],
     }
 }
@@ -116,6 +126,79 @@ mod tests {
             required_capabilities("vision_click_template")
                 .contains(&AutomationCapability::InputControl)
         );
+    }
+
+    #[test]
+    fn new_desktop_nodes_request_exactly_their_os_permissions() {
+        use AutomationCapability::*;
+        for (name, expected) in [
+            ("computer_mouse_triple_click", vec![InputControl]),
+            ("computer_mouse_down", vec![InputControl]),
+            ("computer_mouse_up", vec![InputControl]),
+            ("computer_cursor_position", vec![InputControl]),
+            ("computer_hold_key", vec![InputControl]),
+            ("computer_key_chord", vec![InputControl]),
+            ("computer_type_secret", vec![Clipboard, InputControl]),
+            ("computer_wait_screen_stable", vec![ScreenCapture]),
+            ("computer_wait_screen_change", vec![ScreenCapture]),
+            ("computer_ocr", vec![ScreenCapture]),
+            ("computer_find_text", vec![ScreenCapture]),
+            ("computer_zoom", vec![ScreenCapture]),
+            ("computer_click_text", vec![InputControl, ScreenCapture]),
+            ("computer_capture_state", vec![ScreenCapture, Accessibility]),
+            (
+                "computer_click_element",
+                vec![InputControl, ScreenCapture, Accessibility],
+            ),
+            (
+                "computer_use_agent",
+                vec![InputControl, ScreenCapture, Accessibility],
+            ),
+            ("computer_screenshot", vec![ScreenCapture]),
+            ("vision_get_pixel_color", vec![ScreenCapture]),
+        ] {
+            assert_eq!(required_capabilities(name), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn unknown_ids_request_nothing() {
+        for name in [
+            "rpa_execute_actions",
+            "llm_execute_actions",
+            "automation_execute_plan",
+        ] {
+            assert!(required_capabilities(name).is_empty(), "{name}");
+        }
+        assert_eq!(
+            required_capabilities("browser_execute_plan"),
+            vec![AutomationCapability::Browser]
+        );
+    }
+
+    #[test]
+    fn registered_desktop_nodes_never_fall_into_the_window_catch_all_by_accident() {
+        const WINDOW_NODES: [&str; 6] = [
+            "computer_list_windows",
+            "computer_get_active_window",
+            "computer_find_window_by_title",
+            "computer_focus_window",
+            "computer_window_operation",
+            "computer_wait_for_window",
+        ];
+        for logic in crate::get_catalog() {
+            let name = logic.get_node().name;
+            if !name.starts_with("computer_") {
+                continue;
+            }
+            let capabilities = required_capabilities(&name);
+            if capabilities == vec![AutomationCapability::WindowManagement] {
+                assert!(
+                    WINDOW_NODES.contains(&name.as_str()),
+                    "{name} maps to window management only by the computer_ fallback; give it an explicit capability mapping"
+                );
+            }
+        }
     }
 }
 

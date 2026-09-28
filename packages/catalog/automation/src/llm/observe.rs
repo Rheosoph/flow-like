@@ -1,3 +1,9 @@
+use super::{COORDINATE_SPACE, add_screenshot_pins};
+#[cfg(feature = "execute")]
+use super::{
+    ModelView, SubmitTool, call_tool, missing_tool_call, parse_tool_args, require_screenshot,
+    vision_history,
+};
 use flow_like::{
     bit::Bit,
     flow::{
@@ -10,12 +16,6 @@ use flow_like::{
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
 use flow_like_types::{async_trait, json};
-#[cfg(feature = "execute")]
-use rig::completion::{Completion, Message, ToolDefinition};
-#[cfg(feature = "execute")]
-use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
-#[cfg(feature = "execute")]
-use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -24,8 +24,11 @@ pub struct ScreenObservation {
     pub description: String,
     pub app_context: String,
     pub interactive_elements: Vec<ObservedElement>,
+    #[serde(default)]
     pub text_content: Vec<String>,
+    #[serde(default)]
     pub notable_features: Vec<String>,
+    #[serde(default)]
     pub possible_actions: Vec<String>,
 }
 
@@ -36,49 +39,74 @@ pub struct ObservedElement {
     pub approximate_location: String,
     pub is_interactive: bool,
     pub current_state: Option<String>,
+    /// Center x: desktop input coordinates when a frame was connected, otherwise screenshot
+    /// pixels. Absent when the model gave no point on the screenshot.
+    #[serde(default)]
+    pub x: Option<i32>,
+    /// Center y, in the same space as `x`.
+    #[serde(default)]
+    pub y: Option<i32>,
 }
 
 #[cfg(feature = "execute")]
-#[derive(Debug, Serialize, Deserialize)]
-struct ObserveScreenTool {
-    parameters: flow_like_types::Value,
+const OBSERVE_TOOL: &str = "submit_observation";
+#[cfg(feature = "execute")]
+const DESCRIBE_TOOL: &str = "submit_element_description";
+
+#[cfg(feature = "execute")]
+#[derive(Debug, Deserialize)]
+struct ObservationArgs {
+    description: String,
+    app_context: String,
+    interactive_elements: Vec<ObservedElementArgs>,
+    #[serde(default)]
+    text_content: Vec<String>,
+    #[serde(default)]
+    notable_features: Vec<String>,
+    #[serde(default)]
+    possible_actions: Vec<String>,
 }
 
 #[cfg(feature = "execute")]
-#[derive(Debug)]
-struct ObserveScreenError(String);
-
-#[cfg(feature = "execute")]
-impl std::fmt::Display for ObserveScreenError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Observe screen error: {}", self.0)
-    }
+#[derive(Debug, Deserialize)]
+struct ObservedElementArgs {
+    element_type: String,
+    description: String,
+    approximate_location: String,
+    is_interactive: bool,
+    current_state: Option<String>,
+    x: Option<f64>,
+    y: Option<f64>,
 }
 
 #[cfg(feature = "execute")]
-impl std::error::Error for ObserveScreenError {}
-
-#[cfg(feature = "execute")]
-impl Tool for ObserveScreenTool {
-    const NAME: &'static str = "submit_observation";
-    type Error = ObserveScreenError;
-    type Args = flow_like_types::Value;
-    type Output = flow_like_types::Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Submit screen observation".to_string(),
-            parameters: self.parameters.clone(),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        Ok(args)
-    }
-
-    fn name(&self) -> String {
-        Self::NAME.to_string()
+fn to_observation(args: ObservationArgs, view: &ModelView) -> ScreenObservation {
+    let interactive_elements = args
+        .interactive_elements
+        .into_iter()
+        .map(|element| {
+            let point = element
+                .x
+                .zip(element.y)
+                .and_then(|(x, y)| view.point_from_model(x, y).ok());
+            ObservedElement {
+                element_type: element.element_type,
+                description: element.description,
+                approximate_location: element.approximate_location,
+                is_interactive: element.is_interactive,
+                current_state: element.current_state,
+                x: point.map(|(x, _)| x),
+                y: point.map(|(_, y)| y),
+            }
+        })
+        .collect();
+    ScreenObservation {
+        description: args.description,
+        app_context: args.app_context,
+        interactive_elements,
+        text_content: args.text_content,
+        notable_features: args.notable_features,
+        possible_actions: args.possible_actions,
     }
 }
 
@@ -103,7 +131,7 @@ impl NodeLogic for LLMObserveScreenNode {
         );
         node.set_flowscript_name("automation.llm", "observeScreen");
         node.add_icon("/flow/icons/bot-search.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.set_scores(
             NodeScores::new()
@@ -127,12 +155,7 @@ impl NodeLogic for LLMObserveScreenNode {
         .set_schema::<Bit>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
-        node.add_input_pin(
-            "screenshot",
-            "Screenshot",
-            "Base64-encoded screenshot",
-            VariableType::String,
-        );
+        add_screenshot_pins(&mut node, "Screenshot", true);
 
         node.add_input_pin(
             "focus_area",
@@ -162,7 +185,9 @@ impl NodeLogic for LLMObserveScreenNode {
         node.add_output_pin(
             "elements",
             "Elements",
-            "List of observed elements",
+            &format!(
+                "Observed elements. Optional x/y is the element's center in {COORDINATE_SPACE}"
+            ),
             VariableType::Struct,
         )
         .set_schema::<ObservedElement>()
@@ -175,18 +200,13 @@ impl NodeLogic for LLMObserveScreenNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_model_provider::history::{
-            Content, ContentType, History, HistoryMessage, ImageUrl as HistoryImageUrl,
-            MessageContent, Role,
-        };
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let model_bit: Bit = context.evaluate_pin("model").await?;
-        let screenshot: String = context.evaluate_pin("screenshot").await?;
         let focus_area: String = context.evaluate_pin("focus_area").await.unwrap_or_default();
+        let screenshot = require_screenshot(context).await?;
 
-        let tool_params = json::json!({
+        let parameters = json::json!({
             "type": "object",
             "properties": {
                 "description": { "type": "string", "description": "Overall description of what's on screen" },
@@ -200,7 +220,9 @@ impl NodeLogic for LLMObserveScreenNode {
                             "description": { "type": "string", "description": "What the element is for" },
                             "approximate_location": { "type": "string", "description": "Where on screen (top-left, center, etc.)" },
                             "is_interactive": { "type": "boolean" },
-                            "current_state": { "type": "string", "description": "enabled, disabled, selected, etc." }
+                            "current_state": { "type": "string", "description": "enabled, disabled, selected, etc." },
+                            "x": { "type": "number", "description": "X pixel of the element center in the screenshot" },
+                            "y": { "type": "number", "description": "Y pixel of the element center in the screenshot" }
                         },
                         "required": ["element_type", "description", "approximate_location", "is_interactive"]
                     }
@@ -212,89 +234,34 @@ impl NodeLogic for LLMObserveScreenNode {
             "required": ["description", "app_context", "interactive_elements"]
         });
 
-        let prompt = if focus_area.is_empty() {
+        let request = if focus_area.is_empty() {
             "Observe this screen comprehensively. Identify all interactive elements, text content, and possible actions.".to_string()
         } else {
-            format!(
-                "Observe this screen, focusing especially on: {}",
-                focus_area
-            )
+            format!("Observe this screen, focusing especially on: {focus_area}")
         };
-
-        let content_parts = vec![
-            Content::Image {
-                content_type: ContentType::ImageUrl,
-                image_url: HistoryImageUrl {
-                    url: format!("data:image/png;base64,{}", screenshot),
-                    detail: None,
-                    media_type: Some("image/png".to_string()),
-                    additional_params: None,
-                },
-            },
-            Content::Text {
-                content_type: ContentType::Text,
-                text: prompt.clone(),
-            },
-        ];
-
-        let history = History::new(
-            "".to_string(),
-            vec![HistoryMessage {
-                role: Role::User,
-                content: MessageContent::Contents(content_parts),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                annotations: None,
-            }],
-        );
+        let instructions = format!("{request}\n\n{}", screenshot.view.coordinate_hint());
 
         let preamble = "You are a screen observation expert. Analyze screenshots thoroughly to identify all UI elements, their purposes, states, and possible interactions. Be comprehensive but precise.";
 
-        let agent_builder = model_bit
-            .agent(context, &Some(history))
-            .await?
-            .preamble(preamble)
-            .tool(ObserveScreenTool {
-                parameters: tool_params,
-            })
-            .tool_choice(ToolChoice::Required);
+        let arguments = call_tool(
+            context,
+            &model_bit,
+            vision_history(&[&screenshot.image], &instructions),
+            preamble,
+            SubmitTool {
+                name: OBSERVE_TOOL,
+                description: "Submit screen observation",
+                parameters,
+            },
+        )
+        .await?
+        .ok_or_else(|| missing_tool_call(OBSERVE_TOOL))?;
 
-        let agent = agent_builder.build();
-
-        let response = agent
-            .completion(prompt, Vec::<Message>::new())
-            .await
-            .map_err(|e| anyhow!("LLM completion failed: {}", e))?
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to send request: {}", e))?;
-
-        let mut result: Option<ScreenObservation> = None;
-        for content in response.choice {
-            if let AssistantContent::ToolCall(ToolCall {
-                function: ToolFunction {
-                    name, arguments, ..
-                },
-                ..
-            }) = content
-                && name == "submit_observation"
-            {
-                result = Some(json::from_value(arguments)?);
-            }
-        }
-
-        let observation = result.unwrap_or(ScreenObservation {
-            description: "Could not observe screen".to_string(),
-            app_context: "Unknown".to_string(),
-            interactive_elements: vec![],
-            text_content: vec![],
-            notable_features: vec![],
-            possible_actions: vec![],
-        });
+        let observation =
+            to_observation(parse_tool_args(OBSERVE_TOOL, &arguments)?, &screenshot.view);
 
         context
-            .set_pin_value("observation", json::json!(observation.clone()))
+            .set_pin_value("observation", json::json!(observation))
             .await?;
         context
             .set_pin_value("description", json::json!(observation.description))
@@ -326,36 +293,6 @@ pub struct ElementDescription {
     pub accessibility_info: Option<String>,
 }
 
-#[cfg(feature = "execute")]
-#[derive(Debug, Serialize, Deserialize)]
-struct DescribeElementTool {
-    parameters: flow_like_types::Value,
-}
-
-#[cfg(feature = "execute")]
-impl Tool for DescribeElementTool {
-    const NAME: &'static str = "submit_element_description";
-    type Error = ObserveScreenError;
-    type Args = flow_like_types::Value;
-    type Output = flow_like_types::Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Submit element description".to_string(),
-            parameters: self.parameters.clone(),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        Ok(args)
-    }
-
-    fn name(&self) -> String {
-        Self::NAME.to_string()
-    }
-}
-
 #[crate::register_node]
 #[derive(Default)]
 pub struct LLMDescribeElementNode {}
@@ -377,7 +314,7 @@ impl NodeLogic for LLMDescribeElementNode {
         );
         node.set_flowscript_name("automation.llm", "describeElement");
         node.add_icon("/flow/icons/bot-search.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()
@@ -401,16 +338,21 @@ impl NodeLogic for LLMDescribeElementNode {
         .set_schema::<Bit>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
+        add_screenshot_pins(&mut node, "Screenshot", true);
+
         node.add_input_pin(
-            "screenshot",
-            "Screenshot",
-            "Base64-encoded screenshot",
-            VariableType::String,
+            "x",
+            "X",
+            &format!("X coordinate of the element, in {COORDINATE_SPACE}"),
+            VariableType::Integer,
         );
 
-        node.add_input_pin("x", "X", "X coordinate of element", VariableType::Integer);
-
-        node.add_input_pin("y", "Y", "Y coordinate of element", VariableType::Integer);
+        node.add_input_pin(
+            "y",
+            "Y",
+            &format!("Y coordinate of the element, in {COORDINATE_SPACE}"),
+            VariableType::Integer,
+        );
 
         node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
 
@@ -436,19 +378,25 @@ impl NodeLogic for LLMDescribeElementNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_model_provider::history::{
-            Content, ContentType, History, HistoryMessage, ImageUrl as HistoryImageUrl,
-            MessageContent, Role,
-        };
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let model_bit: Bit = context.evaluate_pin("model").await?;
-        let screenshot: String = context.evaluate_pin("screenshot").await?;
         let x: i64 = context.evaluate_pin("x").await?;
         let y: i64 = context.evaluate_pin("y").await?;
+        let screenshot = require_screenshot(context).await?;
 
-        let tool_params = json::json!({
+        let (model_x, model_y) = i32::try_from(x)
+            .ok()
+            .zip(i32::try_from(y).ok())
+            .and_then(|(x, y)| screenshot.view.point_to_model(x, y))
+            .ok_or_else(|| {
+                let (width, height) = screenshot.view.size();
+                anyhow!(
+                    "Point ({x}, {y}) lies outside the screenshot (sent to the model at {width}x{height}); x/y must be in {COORDINATE_SPACE}"
+                )
+            })?;
+
+        let parameters = json::json!({
             "type": "object",
             "properties": {
                 "element_type": { "type": "string", "description": "Type of element (button, input, text, image, etc.)" },
@@ -461,83 +409,31 @@ impl NodeLogic for LLMDescribeElementNode {
             "required": ["element_type", "visual_description", "purpose", "current_state"]
         });
 
-        let content_parts = vec![
-            Content::Image {
-                content_type: ContentType::ImageUrl,
-                image_url: HistoryImageUrl {
-                    url: format!("data:image/png;base64,{}", screenshot),
-                    detail: None,
-                    media_type: Some("image/png".to_string()),
-                    additional_params: None,
-                },
-            },
-            Content::Text {
-                content_type: ContentType::Text,
-                text: format!("Describe the UI element at coordinates ({}, {}).", x, y),
-            },
-        ];
-
-        let history = History::new(
-            "".to_string(),
-            vec![HistoryMessage {
-                role: Role::User,
-                content: MessageContent::Contents(content_parts),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                annotations: None,
-            }],
+        let (width, height) = screenshot.view.size();
+        let instructions = format!(
+            "Describe the UI element at pixel ({model_x}, {model_y}) of this {width}x{height} screenshot (origin at the top-left corner)."
         );
 
         let preamble = "You are a UI element expert. Given coordinates on a screenshot, identify and describe the element at or near that location.";
 
-        let agent_builder = model_bit
-            .agent(context, &Some(history))
-            .await?
-            .preamble(preamble)
-            .tool(DescribeElementTool {
-                parameters: tool_params,
-            })
-            .tool_choice(ToolChoice::Required);
+        let arguments = call_tool(
+            context,
+            &model_bit,
+            vision_history(&[&screenshot.image], &instructions),
+            preamble,
+            SubmitTool {
+                name: DESCRIBE_TOOL,
+                description: "Submit element description",
+                parameters,
+            },
+        )
+        .await?
+        .ok_or_else(|| missing_tool_call(DESCRIBE_TOOL))?;
 
-        let agent = agent_builder.build();
-
-        let response = agent
-            .completion(
-                format!("Describe element at ({}, {})", x, y),
-                Vec::<Message>::new(),
-            )
-            .await
-            .map_err(|e| anyhow!("LLM completion failed: {}", e))?
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to send request: {}", e))?;
-
-        let mut result: Option<ElementDescription> = None;
-        for content in response.choice {
-            if let AssistantContent::ToolCall(ToolCall {
-                function: ToolFunction {
-                    name, arguments, ..
-                },
-                ..
-            }) = content
-                && name == "submit_element_description"
-            {
-                result = Some(json::from_value(arguments)?);
-            }
-        }
-
-        let element = result.unwrap_or(ElementDescription {
-            element_type: "unknown".to_string(),
-            visual_description: "Could not identify element".to_string(),
-            purpose: "Unknown".to_string(),
-            current_state: "Unknown".to_string(),
-            text_content: None,
-            accessibility_info: None,
-        });
+        let element: ElementDescription = parse_tool_args(DESCRIBE_TOOL, &arguments)?;
 
         context
-            .set_pin_value("element", json::json!(element.clone()))
+            .set_pin_value("element", json::json!(element))
             .await?;
         context
             .set_pin_value("description", json::json!(element.visual_description))
@@ -553,5 +449,47 @@ impl NodeLogic for LLMDescribeElementNode {
         Err(flow_like_types::anyhow!(
             "LLM processing requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+    use crate::types::screen_frame::ScreenFrame;
+
+    #[test]
+    fn observation_without_optional_lists_parses_and_maps_points() {
+        let arguments = json::json!({
+            "description": "Login form",
+            "app_context": "Browser",
+            "interactive_elements": [
+                { "element_type": "button", "description": "Sign in", "approximate_location": "center", "is_interactive": true, "x": 100, "y": 50.5 },
+                { "element_type": "link", "description": "Help", "approximate_location": "bottom", "is_interactive": true, "x": 5000, "y": 10 },
+                { "element_type": "text", "description": "Title", "approximate_location": "top", "is_interactive": false }
+            ]
+        });
+        let args: ObservationArgs = parse_tool_args(OBSERVE_TOOL, &arguments).unwrap();
+        let frame = ScreenFrame::new(None, (0, 0, 800, 600), (1600, 1200)).unwrap();
+        let observation = to_observation(args, &ModelView::new(frame.resized(800, 600).unwrap()));
+        let points: Vec<_> = observation
+            .interactive_elements
+            .iter()
+            .map(|e| (e.x, e.y))
+            .collect();
+        assert_eq!(
+            points,
+            vec![(Some(100), Some(51)), (None, None), (None, None)]
+        );
+        assert!(observation.text_content.is_empty() && observation.possible_actions.is_empty());
+    }
+
+    #[test]
+    fn element_description_without_optional_fields_parses() {
+        let element: ElementDescription = parse_tool_args(
+            DESCRIBE_TOOL,
+            &json::json!({"element_type": "button", "visual_description": "blue", "purpose": "submit", "current_state": "enabled"}),
+        )
+        .unwrap();
+        assert!(element.text_content.is_none());
     }
 }

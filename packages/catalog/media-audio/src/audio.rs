@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path, sync::OnceLock};
+use std::{collections::HashMap, path::Path};
 
 #[cfg(feature = "local-stt")]
 use flow_like::models::stt::{LocalSttModel, LocalTranscriptionRequest};
@@ -8,7 +8,9 @@ use flow_like::{
     bit::{Bit, BitTypes, LLMParameters, VLMParameters},
     flow::{
         board::Board,
-        execution::{LogLevel, context::ExecutionContext},
+        execution::{
+            ExecutionEnvironment, LogLevel, context::ExecutionContext, egress::GuardedHttpClient,
+        },
         node::{Node, NodeLogic, NodeScores},
         pin::PinOptions,
         variable::VariableType,
@@ -352,11 +354,6 @@ struct MultipartFile {
     file_name: String,
     mime_type: String,
     bytes: Vec<u8>,
-}
-
-fn shared_http_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(reqwest::Client::new)
 }
 
 fn media_scores() -> NodeScores {
@@ -929,7 +926,7 @@ async fn read_json_response(
 }
 
 async fn tts_openai_like(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &TextToSpeechRequest,
     default_model: &str,
@@ -970,7 +967,7 @@ async fn tts_openai_like(
         let api_key = get_required_param(provider, "api_key")?;
         body.insert("model".to_string(), json!(deployment));
         client
-            .post(format!(
+            .post(&format!(
                 "{}/openai/deployments/{}/audio/speech?api-version={}",
                 endpoint.trim_end_matches('/'),
                 provider
@@ -978,7 +975,7 @@ async fn tts_openai_like(
                     .clone()
                     .unwrap_or_else(|| deployment.clone()),
                 api_version
-            ))
+            ))?
             .header("api-key", api_key)
             .header("Content-Type", "application/json")
             .json(&Value::Object(body))
@@ -990,7 +987,7 @@ async fn tts_openai_like(
             .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
         let api_key = get_required_param(provider, "api_key")?;
         client
-            .post(format!("{}/audio/speech", endpoint.trim_end_matches('/')))
+            .post(&format!("{}/audio/speech", endpoint.trim_end_matches('/')))?
             .bearer_auth(api_key)
             .header("Content-Type", "application/json")
             .json(&Value::Object(body))
@@ -1007,7 +1004,7 @@ async fn tts_openai_like(
 }
 
 async fn stt_openai_like(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &SpeechToTextRequest,
     default_model: &str,
@@ -1061,13 +1058,13 @@ async fn stt_openai_like(
             .unwrap_or_else(|| "2025-04-01-preview".to_string());
         let api_key = get_required_param(provider, "api_key")?;
         client
-            .post(format!(
+            .post(&format!(
                 "{}/openai/deployments/{}/{}?api-version={}",
                 endpoint.trim_end_matches('/'),
                 deployment,
                 path,
                 api_version
-            ))
+            ))?
             .header("api-key", api_key)
             .multipart(form)
             .send()
@@ -1078,7 +1075,7 @@ async fn stt_openai_like(
             .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
         let api_key = get_required_param(provider, "api_key")?;
         client
-            .post(format!("{}/{}", endpoint.trim_end_matches('/'), path))
+            .post(&format!("{}/{}", endpoint.trim_end_matches('/'), path))?
             .bearer_auth(api_key)
             .multipart(form)
             .send()
@@ -1090,7 +1087,7 @@ async fn stt_openai_like(
 }
 
 async fn tts_xai(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &TextToSpeechRequest,
 ) -> flow_like_types::Result<GeneratedAudio> {
@@ -1124,7 +1121,7 @@ async fn tts_xai(
     merge_options(&mut body, &req.provider_options);
 
     let response = client
-        .post(format!("{}/tts", endpoint.trim_end_matches('/')))
+        .post(&format!("{}/tts", endpoint.trim_end_matches('/')))?
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
         .json(&Value::Object(body))
@@ -1140,7 +1137,7 @@ async fn tts_xai(
 }
 
 async fn stt_xai(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &SpeechToTextRequest,
 ) -> flow_like_types::Result<TranscriptionResult> {
@@ -1166,7 +1163,7 @@ async fn stt_xai(
     };
     let form = multipart_body(fields, file)?;
     let response = client
-        .post(format!("{}/stt", endpoint.trim_end_matches('/')))
+        .post(&format!("{}/stt", endpoint.trim_end_matches('/')))?
         .bearer_auth(api_key)
         .multipart(form)
         .send()
@@ -1177,7 +1174,7 @@ async fn stt_xai(
 }
 
 async fn tts_together(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &TextToSpeechRequest,
 ) -> flow_like_types::Result<GeneratedAudio> {
@@ -1218,7 +1215,7 @@ async fn tts_together(
 }
 
 async fn stt_together(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &SpeechToTextRequest,
 ) -> flow_like_types::Result<TranscriptionResult> {
@@ -1241,7 +1238,7 @@ async fn stt_together(
 }
 
 async fn tts_huggingface(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &TextToSpeechRequest,
 ) -> flow_like_types::Result<GeneratedAudio> {
@@ -1274,7 +1271,7 @@ async fn tts_huggingface(
     }
 
     let response = client
-        .post(url)
+        .post(&url)?
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
         .json(&Value::Object(body))
@@ -1289,7 +1286,7 @@ async fn tts_huggingface(
 }
 
 async fn stt_huggingface(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &SpeechToTextRequest,
 ) -> flow_like_types::Result<TranscriptionResult> {
@@ -1313,7 +1310,7 @@ async fn stt_huggingface(
     let mut parameters = flow_like_types::json::Map::new();
     merge_options(&mut parameters, &req.provider_options);
 
-    let mut request = client.post(url).bearer_auth(api_key);
+    let mut request = client.post(&url)?.bearer_auth(api_key);
     if parameters.is_empty() {
         request = request
             .header("Content-Type", &req.mime_type)
@@ -1333,7 +1330,7 @@ async fn stt_huggingface(
 }
 
 async fn tts_openrouter(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &TextToSpeechRequest,
 ) -> flow_like_types::Result<GeneratedAudio> {
@@ -1360,7 +1357,7 @@ async fn tts_openrouter(
     merge_options(&mut body, &req.provider_options);
 
     let response = client
-        .post(format!("{}/audio/speech", endpoint.trim_end_matches('/')))
+        .post(&format!("{}/audio/speech", endpoint.trim_end_matches('/')))?
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
         .json(&Value::Object(body))
@@ -1375,7 +1372,7 @@ async fn tts_openrouter(
 }
 
 async fn stt_openrouter(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &SpeechToTextRequest,
 ) -> flow_like_types::Result<TranscriptionResult> {
@@ -1418,10 +1415,10 @@ async fn stt_openrouter(
     merge_options(&mut body, &req.provider_options);
 
     let response = client
-        .post(format!(
+        .post(&format!(
             "{}/chat/completions",
             endpoint.trim_end_matches('/')
-        ))
+        ))?
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
         .json(&Value::Object(body))
@@ -1432,7 +1429,7 @@ async fn stt_openrouter(
 }
 
 async fn tts_mistral(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &TextToSpeechRequest,
 ) -> flow_like_types::Result<GeneratedAudio> {
@@ -1455,7 +1452,7 @@ async fn tts_mistral(
     merge_options(&mut body, &req.provider_options);
 
     let response = client
-        .post(format!("{}/audio/speech", endpoint.trim_end_matches('/')))
+        .post(&format!("{}/audio/speech", endpoint.trim_end_matches('/')))?
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
         .json(&Value::Object(body))
@@ -1478,7 +1475,7 @@ async fn tts_mistral(
 }
 
 async fn stt_mistral(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &SpeechToTextRequest,
 ) -> flow_like_types::Result<TranscriptionResult> {
@@ -1501,7 +1498,7 @@ async fn stt_mistral(
 }
 
 async fn tts_google_ai_studio(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &TextToSpeechRequest,
 ) -> flow_like_types::Result<GeneratedAudio> {
@@ -1536,11 +1533,11 @@ async fn tts_google_ai_studio(
     merge_options(&mut config, &req.provider_options);
 
     let response = client
-        .post(format!(
+        .post(&format!(
             "{}/models/{}:generateContent",
             endpoint.trim_end_matches('/'),
             model_id
-        ))
+        ))?
         .header("x-goog-api-key", api_key)
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -1566,7 +1563,7 @@ async fn tts_google_ai_studio(
 }
 
 async fn stt_google_ai_studio(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &SpeechToTextRequest,
 ) -> flow_like_types::Result<TranscriptionResult> {
@@ -1581,11 +1578,11 @@ async fn stt_google_ai_studio(
         .unwrap_or_else(|| "Transcribe this audio. Return only the transcript text.".to_string());
 
     let response = client
-        .post(format!(
+        .post(&format!(
             "{}/models/{}:generateContent",
             endpoint.trim_end_matches('/'),
             model_id
-        ))
+        ))?
         .header("x-goog-api-key", api_key)
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -1624,7 +1621,7 @@ fn vertex_endpoint(provider: &ModelProvider, location: &str) -> String {
 }
 
 async fn tts_vertex(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &TextToSpeechRequest,
 ) -> flow_like_types::Result<GeneratedAudio> {
@@ -1662,13 +1659,13 @@ async fn tts_vertex(
     merge_options(&mut config, &req.provider_options);
 
     let response = client
-        .post(format!(
+        .post(&format!(
             "{}/projects/{}/locations/{}/publishers/google/models/{}:generateContent",
             endpoint.trim_end_matches('/'),
             project_id,
             location,
             model_id
-        ))
+        ))?
         .header(AUTHORIZATION.as_str(), authorization)
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -1694,7 +1691,7 @@ async fn tts_vertex(
 }
 
 async fn stt_vertex(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &SpeechToTextRequest,
 ) -> flow_like_types::Result<TranscriptionResult> {
@@ -1712,13 +1709,13 @@ async fn stt_vertex(
         .unwrap_or_else(|| "Transcribe this audio. Return only the transcript text.".to_string());
 
     let response = client
-        .post(format!(
+        .post(&format!(
             "{}/projects/{}/locations/{}/publishers/google/models/{}:generateContent",
             endpoint.trim_end_matches('/'),
             project_id,
             location,
             model_id
-        ))
+        ))?
         .header(AUTHORIZATION.as_str(), authorization)
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -1747,10 +1744,11 @@ async fn stt_vertex(
 }
 
 async fn generate_speech_with_provider(
+    environment: ExecutionEnvironment,
     provider: &ModelProvider,
     req: &TextToSpeechRequest,
 ) -> flow_like_types::Result<GeneratedAudio> {
-    let client = shared_http_client();
+    let client = &GuardedHttpClient::new(environment)?;
     match provider.provider_name.as_str() {
         PROVIDER_OPENAI => {
             tts_openai_like(
@@ -1788,10 +1786,11 @@ async fn generate_speech_with_provider(
 }
 
 async fn transcribe_with_provider(
+    environment: ExecutionEnvironment,
     provider: &ModelProvider,
     req: &SpeechToTextRequest,
 ) -> flow_like_types::Result<TranscriptionResult> {
-    let client = shared_http_client();
+    let client = &GuardedHttpClient::new(environment)?;
     match provider.provider_name.as_str() {
         PROVIDER_OPENAI => {
             stt_openai_like(
@@ -2566,7 +2565,9 @@ impl NodeLogic for TextToSpeechNode {
         );
 
         crate::ensure_vertex_credentials_explicit(context, &provider)?;
-        let audio = generate_speech_with_provider(&provider, &request).await?;
+        let audio =
+            generate_speech_with_provider(context.execution_environment(), &provider, &request)
+                .await?;
         let extension = extension_from_mime(audio.mime_type.as_deref(), &request.output_format);
         let path = output_path_for_audio(context, &output_path, &extension).await?;
         path.put(context, audio.bytes, false).await?;
@@ -2897,7 +2898,8 @@ impl NodeLogic for SpeechToTextNode {
         );
 
         crate::ensure_vertex_credentials_explicit(context, &provider)?;
-        let result = transcribe_with_provider(&provider, &request).await?;
+        let result =
+            transcribe_with_provider(context.execution_environment(), &provider, &request).await?;
         let message = HistoryMessage::from_string(Role::User, &result.text);
         let history = History::new(
             provider

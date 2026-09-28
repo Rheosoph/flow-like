@@ -147,6 +147,29 @@ jobs:
       - name: Start the image and require readiness
         run: bash apps/backend/signaling/tests/image-smoke.sh "signaling-smoke:${GITHUB_SHA}"
 
+  web-image:
+    name: Web images export device cryptography
+    needs: validate
+    # Publication builds these recipes on push; for pull requests this is the only
+    # gate on the device-crypto stage's Rust, clang and wasm-bindgen toolchain.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          persist-credentials: false
+      # Both recipes share their build stages, so the second build reuses the first's layers.
+      - name: Build each web recipe through its static export and require the bundle
+        run: |
+          for recipe in apps/backend/docker-compose/web/Dockerfile apps/backend/kubernetes/web/Dockerfile; do
+            tag="web-smoke:${GITHUB_SHA}"
+            DOCKER_BUILDKIT=1 docker build --file "$recipe" --target builder --tag "$tag" .
+            docker run --rm --entrypoint sh "$tag" -c \
+              'test -s out/device-crypto/flow_like_device_crypto_bg.wasm && test -s out/device-crypto/flow_like_device_crypto.js' \
+              || { echo "${recipe} exported no device-crypto bundle under out/device-crypto." >&2; exit 1; }
+          done
+
   matrix:
     name: Select release images
     needs: [native-deps, signaling-image, compiler-checks]

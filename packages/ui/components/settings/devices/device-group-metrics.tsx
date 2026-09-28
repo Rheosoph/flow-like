@@ -8,7 +8,8 @@ import type { DeviceAccountScope } from "../../../lib/device-management/storage"
 import {
 	GroupMetricsReader,
 	type ManagementCall,
-	acknowledgeGroupTelemetry,
+	acknowledgeGroupTelemetryThrough,
+	applyTelemetryPolicy,
 	digestText,
 	readTelemetryChunks,
 } from "../../../lib/device-management/telemetry";
@@ -228,29 +229,11 @@ export function DeviceGroupMetrics({
 			const policy_jws = await withPassword(secret, (bytes) =>
 				module.signTelemetryRoster(roster, bytes, invitationVault),
 			);
-			const position = await readTelemetryChunks(call, {
-				type: "telemetry_read",
+			const sequence = await applyTelemetryPolicy(call, {
 				scope,
-				sequence: 0,
-				welcome: false,
-			});
-			const sequence = position.latest + 1;
-			const command = {
-				type: "telemetry_policy",
-				scope,
-				sequence,
 				policy_jws,
 				key_packages: keyPackages,
-			};
-			if (new TextEncoder().encode(JSON.stringify(command)).length > 13_000)
-				throw new Error(
-					"This membership change is too large for one management message. Add fewer readers at once.",
-				);
-			const response = await call(command);
-			if (response.state !== "completed")
-				throw new Error(
-					"Group admission was rejected. Reload the current roster before retrying.",
-				);
+			});
 			if (alive.current) {
 				setJoinSequence(String(sequence));
 				setPackages("");
@@ -454,13 +437,11 @@ export function DeviceGroupMetrics({
 									disabled={busy || !acknowledged}
 									onClick={() =>
 										void execute(async (_reader, call) => {
-											await acknowledgeGroupTelemetry(
-												call,
-												scope,
-												last.sequence,
-												last.envelopeDigest,
-											);
+											await acknowledgeGroupTelemetryThrough(call, scope, last);
 											if (alive.current) {
+												setRequest(
+													`Deliveries through sequence ${last.sequence} were removed from the device.`,
+												);
 												setLast(undefined);
 												setAcknowledged(false);
 											}

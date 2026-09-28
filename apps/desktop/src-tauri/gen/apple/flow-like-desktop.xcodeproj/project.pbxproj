@@ -797,7 +797,7 @@
 				OTHER_LDFLAGS = "-lz";
 				PRODUCT_BUNDLE_IDENTIFIER = com.flow-like.app;
 				PRODUCT_NAME = "Flow Like";
-				RUSTUP_TOOLCHAIN = 1.97.1;
+				RUSTUP_TOOLCHAIN = "beta-2026-09-27";
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) FLOW_LIKE_INTENTS_HOST FLOW_LIKE_SHORTCUTS_HOST";
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/flow-like-desktop/flow-like-desktop_iOS-Bridging-Header.h";
@@ -874,7 +874,7 @@
 				OTHER_LDFLAGS = "-lz";
 				PRODUCT_BUNDLE_IDENTIFIER = com.flow-like.app;
 				PRODUCT_NAME = "Flow Like";
-				RUSTUP_TOOLCHAIN = 1.97.1;
+				RUSTUP_TOOLCHAIN = "beta-2026-09-27";
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) FLOW_LIKE_INTENTS_HOST FLOW_LIKE_SHORTCUTS_HOST";
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/flow-like-desktop/flow-like-desktop_iOS-Bridging-Header.h";

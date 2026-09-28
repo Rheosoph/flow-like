@@ -5,6 +5,7 @@ use super::{
     },
     provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
 };
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -12,7 +13,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::FlowPath;
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -136,7 +137,7 @@ impl NodeLogic for ListOneDriveItemsNode {
             provider.api_url(&format!("/me/drive/root:{}:/children", folder_path))
         };
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, url).await {
             Ok(values) => {
                 let items: Vec<OneDriveItem> = values.iter().filter_map(parse_item).collect();
@@ -224,7 +225,7 @@ impl NodeLogic for GetOneDriveItemNode {
         let item_path: String = context.evaluate_pin("item_path").await?;
         let item_path = normalize_graph_path(&item_path);
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_json(
             &client,
             &provider,
@@ -321,9 +322,9 @@ impl NodeLogic for DownloadOneDriveFileNode {
         let item_path: String = context.evaluate_pin("item_path").await?;
         let item_path = normalize_graph_path(&item_path);
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(provider.api_url(&format!("/me/drive/root:{}:/content", item_path)))
+            .get(&provider.api_url(&format!("/me/drive/root:{}:/content", item_path)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -469,7 +470,7 @@ impl NodeLogic for UploadOneDriveFileNode {
         };
         let destination_path = normalize_graph_path(&destination_path);
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match upload_flow_path_to_drive(
             context,
             &client,
@@ -604,9 +605,9 @@ impl NodeLogic for CreateOneDriveFolderNode {
             provider.api_url(&format!("/me/drive/root:{}:/children", parent_path))
         };
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -704,9 +705,9 @@ impl NodeLogic for DeleteOneDriveItemNode {
         let item_path: String = context.evaluate_pin("item_path").await?;
         let item_path = normalize_graph_path(&item_path);
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .delete(provider.api_url(&format!("/me/drive/root:{}", item_path)))
+            .delete(&provider.api_url(&format!("/me/drive/root:{}", item_path)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -811,7 +812,7 @@ impl NodeLogic for MoveOneDriveItemNode {
         let item_path = normalize_graph_path(&item_path);
 
         // First get the destination folder ID
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let dest_url = if destination_path.trim().is_empty() {
             provider.api_url("/me/drive/root")
         } else {
@@ -820,7 +821,7 @@ impl NodeLogic for MoveOneDriveItemNode {
         };
 
         let dest_response = client
-            .get(&dest_url)
+            .get(&dest_url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -850,7 +851,7 @@ impl NodeLogic for MoveOneDriveItemNode {
         }
 
         let response = client
-            .patch(provider.api_url(&format!("/me/drive/root:{}", item_path)))
+            .patch(&provider.api_url(&format!("/me/drive/root:{}", item_path)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -969,7 +970,7 @@ impl NodeLogic for CopyOneDriveItemNode {
         let item_path = normalize_graph_path(&item_path);
 
         // Get destination folder ID
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let dest_url = if destination_path.trim().is_empty() {
             provider.api_url("/me/drive/root")
         } else {
@@ -978,7 +979,7 @@ impl NodeLogic for CopyOneDriveItemNode {
         };
 
         let dest_response = client
-            .get(&dest_url)
+            .get(&dest_url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -1015,7 +1016,7 @@ impl NodeLogic for CopyOneDriveItemNode {
         }
 
         let response = client
-            .post(provider.api_url(&format!("/me/drive/root:{}:/copy", item_path)))
+            .post(&provider.api_url(&format!("/me/drive/root:{}:/copy", item_path)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -1102,7 +1103,7 @@ impl NodeLogic for SearchOneDriveNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let query: String = context.evaluate_pin("query").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.api_url(&format!(
             "/me/drive/root/search(q='{}')",
             urlencoding::encode(&query)

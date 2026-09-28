@@ -1,11 +1,12 @@
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 use super::ConfluenceUser;
@@ -106,7 +107,7 @@ impl NodeLogic for AddConfluenceCommentNode {
             return Err(flow_like_types::anyhow!("Comment body is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let (url, request_body) = if provider.is_cloud {
             // Cloud API v2
@@ -139,7 +140,7 @@ impl NodeLogic for AddConfluenceCommentNode {
         };
 
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Content-Type", "application/json")
             .json(&request_body)

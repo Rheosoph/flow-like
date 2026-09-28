@@ -5,7 +5,7 @@ use super::utils::{
 };
 use crate::data::path::FlowPath;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::{LogLevel, context::ExecutionContext, egress::GuardedHttpClient},
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
@@ -490,8 +490,16 @@ impl NodeLogic for DownloadNotionFileNode {
             return Ok(());
         };
 
-        let client = reqwest::Client::new();
-        let response = client.get(&url).send().await;
+        let request = match GuardedHttpClient::new(context.execution_environment())
+            .and_then(|client| client.get(&url))
+        {
+            Ok(request) => request,
+            Err(err) => {
+                log_and_error(context, err.to_string()).await?;
+                return Ok(());
+            }
+        };
+        let response = request.send().await;
         match response {
             Ok(resp) => {
                 if !resp.status().is_success() {

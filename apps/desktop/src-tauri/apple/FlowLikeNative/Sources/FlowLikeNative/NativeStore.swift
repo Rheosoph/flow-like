@@ -52,19 +52,20 @@ public struct NativeStore: Sendable {
 
     @discardableResult public func publish(_ data: Data) throws -> NativeSnapshot {
         guard data.count <= 2_097_152 else { throw NativeIntegrationError.oversized }
-        var snapshot = try JSONDecoder().decode(NativeSnapshot.self, from: data)
-        guard snapshot.isCurrent else { throw NativeIntegrationError.expired }
-        snapshot.customWidgets = NativeCustomWidget.normalize(snapshot.customWidgets, apps: snapshot.apps)
-        for section in snapshot.sections.indices {
-            for item in snapshot.sections[section].items.indices {
-                snapshot.sections[section].items[item].icon = snapshot.sections[section].items[item].icon?.normalized()
+        let incoming = try JSONDecoder().decode(NativeSnapshot.self, from: data)
+        guard incoming.isCurrent else { throw NativeIntegrationError.expired }
+        return try withLock { directory in
+            let previous = self.catalog()
+            var snapshot = incoming.retainingLastGood(from: previous)
+            snapshot.customWidgets = NativeCustomWidget.normalize(snapshot.customWidgets, apps: snapshot.apps)
+            for section in snapshot.sections.indices {
+                for item in snapshot.sections[section].items.indices {
+                    snapshot.sections[section].items[item].icon = snapshot.sections[section].items[item].icon?.normalized()
+                }
             }
-        }
-        let sanitized = try JSONEncoder().encode(snapshot)
-        guard sanitized.count <= 2_097_152 else { throw NativeIntegrationError.oversized }
-        try withLock { directory in
-            let previousScope = self.persistedScope()
-            if previousScope != snapshot.scope {
+            let sanitized = try JSONEncoder().encode(snapshot)
+            guard sanitized.count <= 2_097_152 else { throw NativeIntegrationError.oversized }
+            if previous?.scope != snapshot.scope {
                 try? FileManager.default.removeItem(at: directory.appendingPathComponent("actions.json"))
                 try? FileManager.default.removeItem(at: directory.appendingPathComponent("action-results.json"))
                 try NativeAppIconStore(directory: directory).clear()
@@ -76,8 +77,8 @@ public struct NativeStore: Sendable {
             try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
                                                  ofItemAtPath: directory.appendingPathComponent("snapshot.json").path)
             #endif
+            return snapshot
         }
-        return snapshot
     }
 
     public func clear() throws {

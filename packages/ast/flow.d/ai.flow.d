@@ -985,6 +985,33 @@ declare namespace ai {
         function bedrock({ region?: string, endpoint?: string, apiKey?: string, modelId?: string }): Struct;
 
         /**
+         * Builds a model Bit for the existing model and agent nodes and checks provider availability
+         * @node ai_generative_build_claude_code @alias aiGenerativeBuildClaudeCode
+         * @param modelId (optional) — Model identifier offered by this provider
+         * @param contextLength (optional) — Context window in tokens for the selected model
+         * @param executable (optional) — Optional absolute path to the installed Claude CLI on this desktop
+         * @returns model — Model Bit compatible with Invoke Model and Agent from Model
+         * @returns available — The execution host can currently access this provider
+         * @returns unavailableReason — Readiness error, empty when available
+         * @impure has side effects / drives control flow
+         */
+        function claudeCode({ modelId?: string, contextLength?: int, executable?: string }): { model: Struct, available: bool, unavailableReason: string };
+
+        /**
+         * Builds a model Bit for the existing model and agent nodes and checks provider availability
+         * @node ai_generative_build_codex @alias aiGenerativeBuildCodex
+         * @param modelId (optional) — Model identifier offered by this provider
+         * @param contextLength (optional) — Context window in tokens for the selected model
+         * @param accessToken (optional) — ChatGPT access token; leave empty on desktop to use the Codex CLI login
+         * @param accountId (optional) — Optional ChatGPT account identifier
+         * @returns model — Model Bit compatible with Invoke Model and Agent from Model
+         * @returns available — The execution host can currently access this provider
+         * @returns unavailableReason — Readiness error, empty when available
+         * @impure has side effects / drives control flow
+         */
+        function codex({ modelId?: string, contextLength?: int, accessToken?: string, accountId?: string }): { model: Struct, available: bool, unavailableReason: string };
+
+        /**
          * Prepares a Bit for Cohere's API using the supplied credentials
          * @node ai_generative_build_cohere @alias aiGenerativeBuildCohere
          * @param endpoint (optional) — Cohere API endpoint (override for private deployments)
@@ -1029,6 +1056,20 @@ declare namespace ai {
         function gemini({ endpoint?: string, apiKey?: string, modelId?: string }): Struct;
 
         /**
+         * Builds a model Bit for the existing model and agent nodes and checks provider availability
+         * @node ai_generative_build_github_copilot @alias aiGenerativeBuildGithubCopilot
+         * @param modelId (optional) — Model identifier offered by this provider
+         * @param contextLength (optional) — Context window in tokens for the selected model
+         * @param accessToken (optional) — GitHub token authorized for Copilot; required unless a Copilot API token is supplied
+         * @param apiKey (optional) — Optional already exchanged Copilot token
+         * @returns model — Model Bit compatible with Invoke Model and Agent from Model
+         * @returns available — The execution host can currently access this provider
+         * @returns unavailableReason — Readiness error, empty when available
+         * @impure has side effects / drives control flow
+         */
+        function githubCopilot({ modelId?: string, contextLength?: int, accessToken?: string, apiKey?: string }): { model: Struct, available: bool, unavailableReason: string };
+
+        /**
          * Prepares a Bit for Groq's API using the supplied endpoint and key
          * @node ai_generative_build_groq @alias aiGenerativeBuildGroq
          * @param endpoint (optional) — Groq-compatible API endpoint
@@ -1070,6 +1111,20 @@ declare namespace ai {
          * @impure has side effects / drives control flow
          */
         function lmstudio({ endpoint?: string, modelId?: string }): Struct;
+
+        /**
+         * Builds a model Bit for the existing model and agent nodes and checks provider availability
+         * @node ai_generative_build_microsoft_copilot @alias aiGenerativeBuildMicrosoftCopilot
+         * @param modelId (optional) — Model identifier offered by this provider
+         * @param contextLength (optional) — Context window in tokens for the selected model
+         * @param accessToken (optional) — Delegated Microsoft Graph token authorized for Microsoft 365 Copilot Chat
+         * @param timezone (optional) — Timezone used by Copilot, for example UTC
+         * @returns model — Model Bit compatible with Invoke Model and Agent from Model
+         * @returns available — The execution host can currently access this provider
+         * @returns unavailableReason — Readiness error, empty when available
+         * @impure has side effects / drives control flow
+         */
+        function microsoftCopilot({ modelId?: string, contextLength?: int, accessToken?: string, timezone?: string }): { model: Struct, available: bool, unavailableReason: string };
 
         /**
          * Prepares a Bit for the MiniMax API using the provided credentials

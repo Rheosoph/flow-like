@@ -83,6 +83,25 @@ pub(crate) fn ensure_connected_app_direct_event_allowed(
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route(
+            "/{event_id}/teams",
+            get(crate::teams::management::get)
+                .put(crate::teams::management::setup)
+                .delete(crate::teams::management::disconnect),
+        )
+        .route(
+            "/{event_id}/teams/package",
+            get(crate::teams::management::package),
+        )
+        .route(
+            "/{event_id}/teams/rotate",
+            post(crate::teams::management::rotate),
+        )
+        .route(
+            "/{event_id}/email-address",
+            get(crate::mail_ingress::address::get_address)
+                .put(crate::mail_ingress::address::update_alias),
+        )
         .route("/", get(get_events::get_events))
         .route(
             "/{event_id}",

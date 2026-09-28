@@ -45,6 +45,7 @@ export const SINK_TYPES = [
 	"rss",
 	"mqtt",
 	"email",
+	"inbound_email",
 	"http",
 ] as const;
 
@@ -58,6 +59,7 @@ export const SINK_TYPE_LABELS: Record<ServiceSinkType, string> = {
 	rss: "RSS Feeds",
 	mqtt: "MQTT",
 	email: "Email",
+	inbound_email: "Server Email",
 	http: "HTTP Webhooks",
 };
 
@@ -68,6 +70,7 @@ export const SINK_TYPE_DESCRIPTIONS: Record<ServiceSinkType, string> = {
 	github: "GitHub webhooks and actions",
 	rss: "RSS/Atom feed polling",
 	mqtt: "MQTT message broker events",
-	email: "Inbound email processing",
+	email: "IMAP mailbox polling",
+	inbound_email: "Receive custom email addresses through SES or Postfix",
 	http: "Generic HTTP webhooks",
 };

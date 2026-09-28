@@ -121,7 +121,6 @@ async fn authoritative_enrollment_and_replay() {
                 &cancelled.enrollment_id,
                 &cancelled.enrollment_id,
                 "challenge",
-                "nonce-hash",
                 now + 60,
                 now
             )
@@ -129,17 +128,35 @@ async fn authoritative_enrollment_and_replay() {
             .is_err()
     );
 
-    repository
-        .challenge(
-            &manifest.enrollment_id,
-            &manifest.enrollment_id,
-            "challenge",
-            "nonce-hash",
-            now + 60,
-            now,
-        )
-        .await
-        .unwrap();
+    assert_eq!(
+        repository
+            .challenge(
+                &manifest.enrollment_id,
+                &manifest.enrollment_id,
+                "challenge",
+                now + 60,
+                now,
+            )
+            .await
+            .unwrap(),
+        ("challenge".to_string(), now + 60)
+    );
+    // Repeating the request, as an enrollment token holder without the
+    // bootstrap key can, returns the outstanding challenge instead of replacing it.
+    assert_eq!(
+        repository
+            .challenge(
+                &manifest.enrollment_id,
+                &manifest.enrollment_id,
+                "replacement",
+                now + 90,
+                now + 1,
+            )
+            .await
+            .unwrap(),
+        ("challenge".to_string(), now + 60)
+    );
+    let nonce_hash = compact_digest(&super::super::challenge_nonce("challenge"));
     let first = receipt(manifest);
     assert!(
         repository
@@ -147,7 +164,7 @@ async fn authoritative_enrollment_and_replay() {
                 &first,
                 &manifest.enrollment_id,
                 "challenge",
-                "wrong-nonce",
+                "wrong-nonce-hash",
                 now + 60,
                 4
             )
@@ -171,7 +188,7 @@ async fn authoritative_enrollment_and_replay() {
             candidate,
             &manifest.enrollment_id,
             "challenge",
-            "nonce-hash",
+            &nonce_hash,
             now + 60,
             4,
         )
@@ -221,7 +238,8 @@ async fn authoritative_enrollment_and_replay() {
     assert!(
         uses.iter()
             .filter_map(|result| result.as_ref().err())
-            .all(|error| error.status() == axum::http::StatusCode::UNAUTHORIZED)
+            .all(|error| error.status() == axum::http::StatusCode::UNAUTHORIZED
+                && error.public_code() == super::super::DEVICE_PROOF_INVALID)
     );
     assert!(
         repository
@@ -275,10 +293,9 @@ async fn authoritative_enrollment_and_replay() {
             guard.commit().await.unwrap();
         }
     );
-    assert_eq!(
-        waited.err().unwrap().status(),
-        axum::http::StatusCode::UNAUTHORIZED
-    );
+    let waited = waited.err().unwrap();
+    assert_eq!(waited.status(), axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(waited.public_code(), super::super::DEVICE_PROOF_INVALID);
     repository
         .authorize_proof(
             &manifest.device_id,
@@ -333,12 +350,12 @@ async fn authoritative_enrollment_and_replay() {
             &expired.enrollment_id,
             "expired-jwt",
             "expired-challenge",
-            "nonce",
             now + 60,
             now,
         )
         .await
         .unwrap();
+    let expired_nonce = compact_digest(&super::super::challenge_nonce("expired-challenge"));
     db.execute_raw(sql(
         r#"UPDATE "DeviceChallenge" SET "expiresAt" = $1 WHERE "enrollmentId" = $2"#,
         [(now - 1).into(), expired.enrollment_id.clone().into()],
@@ -351,7 +368,7 @@ async fn authoritative_enrollment_and_replay() {
                 &receipt(&expired),
                 "expired-jwt",
                 "expired-challenge",
-                "nonce",
+                &expired_nonce,
                 now + 60,
                 4
             )
@@ -378,7 +395,6 @@ async fn authoritative_enrollment_and_replay() {
                 &expired.enrollment_id,
                 "expired-jwt",
                 "fresh-challenge",
-                "nonce",
                 now + 60,
                 now
             )
@@ -416,6 +432,85 @@ async fn authoritative_enrollment_and_replay() {
         .await
         .unwrap();
 
+    // Create-then-cancel loops are bounded per day, and abandoned packages with
+    // their challenges are pruned after the grace period.
+    db.execute_unprepared(r#"INSERT INTO "User" (id,status) VALUES ('churn','ACTIVE')"#)
+        .await
+        .unwrap();
+    let mut abandoned = Vec::new();
+    for index in 0..4 {
+        let package = template("churn");
+        let jwt = format!("churn-{index}");
+        repository
+            .create_enrollment(&package, &jwt, 1, 1)
+            .await
+            .unwrap();
+        repository
+            .challenge(
+                &package.enrollment_id,
+                &jwt,
+                &format!("churn-challenge-{index}"),
+                now + 60,
+                now,
+            )
+            .await
+            .unwrap();
+        repository
+            .cancel_enrollment("churn", &package.enrollment_id)
+            .await
+            .unwrap();
+        abandoned.push(package.enrollment_id);
+    }
+    let limited = repository
+        .create_enrollment(&template("churn"), "churn-limited", 1, 1)
+        .await
+        .unwrap_err();
+    assert_eq!(limited.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        limited
+            .public_message()
+            .is_some_and(|message| message.contains("4 per day"))
+    );
+    let lapsed = now - ABANDONED_ENROLLMENT_GRACE_SECONDS - 1;
+    db.execute_raw(sql(
+        r#"UPDATE "DeviceEnrollment" SET "expiresAt" = $1, "createdAt" = $1 WHERE "ownerId" = 'churn'"#,
+        [lapsed.into()],
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        prune_abandoned_enrollments(&db, DbDialect::Postgres, now)
+            .await
+            .unwrap(),
+        4
+    );
+    for id in &abandoned {
+        assert!(repository.enrollment(id).await.is_err());
+    }
+    let challenges = db
+        .query_one_raw(sql(
+            r#"SELECT COUNT(*) AS count FROM "DeviceChallenge" WHERE id LIKE 'churn-challenge-%'"#,
+            [],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "count")
+        .unwrap();
+    assert_eq!(challenges, 0);
+    assert_eq!(
+        repository
+            .enrollment(&manifest.enrollment_id)
+            .await
+            .unwrap()
+            .status,
+        "consumed"
+    );
+    repository
+        .create_enrollment(&template("churn"), "churn-after-prune", 1, 1)
+        .await
+        .unwrap();
+
     db.execute_unprepared(r#"UPDATE "User" SET status = 'SUSPENDED' WHERE id = 'owner'"#)
         .await
         .unwrap();
@@ -433,4 +528,25 @@ async fn authoritative_enrollment_and_replay() {
         .await
         .unwrap();
     admin.close().await.unwrap();
+}
+
+#[test]
+fn only_device_proofs_report_a_lapse_during_the_database_wait_as_clock_skew() {
+    let lapsed = chrono::Utc::now().timestamp() - 1;
+    let proof = require_live_proof(lapsed).unwrap_err();
+    assert_eq!(proof.status(), axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(proof.public_code(), super::super::DEVICE_PROOF_INVALID);
+    let enrollment = require_live(lapsed).unwrap_err();
+    assert_eq!(
+        enrollment.status(),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_ne!(enrollment.public_code(), super::super::DEVICE_PROOF_INVALID);
+    assert!(
+        enrollment
+            .public_message()
+            .is_some_and(|message| !message.contains("clock"))
+    );
+    let live = chrono::Utc::now().timestamp() + 60;
+    assert!(require_live(live).is_ok() && require_live_proof(live).is_ok());
 }

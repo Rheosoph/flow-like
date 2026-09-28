@@ -16,15 +16,24 @@ Parameters:
     Description: Existing rule after which to insert this rule. Empty inserts first. This rule stops further processing of matching mail.
   ApiBaseUrl:
     Type: String
-    AllowedPattern: 'https://[^ ]+'
+    AllowedPattern: 'https://[^\s"\\]+'
   ApiRoleName:
     Type: String
-    Description: IAM role name used by the API. The stack attaches permission to read and decrypt the received MIME objects.
-  SinkTriggerJwt:
+    Description: IAM role name used by the API. The stack attaches permission to read, decrypt, and delete the received MIME objects.
+  SecretPrefix:
     Type: String
-    NoEcho: true
-    Description: Service sink JWT with inbound_email in its allowed sink_types.
-    MinLength: 32
+    Description: Dedicated SSM path of this gateway, such as /flow-like/prod-mail. Store the registered inbound_email sink token as the SecureString SINK_TRIGGER_JWT below it before deploying; the stack writes MAIL_INGRESS_CONFIG next to it.
+    AllowedPattern: '(/[a-zA-Z0-9_.-]+)+'
+  SecretKmsKeyArn:
+    Type: String
+    Default: ''
+    Description: KMS key ARN encrypting the SINK_TRIGGER_JWT parameter. Empty allows any key in this account and Region, still limited to decrypting that parameter through SSM.
+    AllowedPattern: '(arn:[a-z-]+:kms:[a-z0-9-]+:[0-9]{12}:key/[a-zA-Z0-9-]+)?'
+  BootstrapVersion:
+    Type: String
+    Default: '1'
+    Description: Change after rotating the sink token or changing ApiBaseUrl so new Lambda environments load the parameters.
+    AllowedPattern: '[a-zA-Z0-9._-]{1,64}'
   RawRetentionDays:
     Type: Number
     Default: 1
@@ -43,6 +52,7 @@ Parameters:
 Conditions:
   HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, '']]
   HasPreviousReceiptRule: !Not [!Equals [!Ref AfterReceiptRule, '']]
+  HasSecretKmsKey: !Not [!Equals [!Ref SecretKmsKeyArn, '']]
 
 Resources:
   MailKey:
@@ -145,7 +155,7 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Action: ['s3:GetObject', 's3:GetObjectVersion']
+            Action: ['s3:GetObject', 's3:GetObjectVersion', 's3:DeleteObject']
             Resource: !Sub '${MailBucket.Arn}/${RawPrefix}*'
           - Effect: Allow
             Action: kms:Decrypt
@@ -199,6 +209,34 @@ Resources:
               - Effect: Allow
                 Action: sqs:SendMessage
                 Resource: !GetAtt FailedReceipts.Arn
+        - PolicyName: GatewayParameters
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${GatewayConfig}
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SecretPrefix}/SINK_TRIGGER_JWT
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !If
+                  - HasSecretKmsKey
+                  - !Ref SecretKmsKeyArn
+                  - !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.${AWS::URLSuffix}
+                    kms:EncryptionContext:PARAMETER_ARN: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SecretPrefix}/SINK_TRIGGER_JWT
+  GatewayConfig:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub ${SecretPrefix}/MAIL_INGRESS_CONFIG
+      Type: String
+      Description: Mail ingress routing settings. The sink token is a separate SecureString.
+      Value: !Sub
+        - '{"api_base_url":"${ApiBaseUrl}","bucket":"${MailBucket}","prefix":"${RawPrefix}","topic_arn":"${ReceiptTopic}","dispatch_rule_arn":"${DispatchRuleArn}"}'
+        - DispatchRuleArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-mail-dispatch
   MailIngress:
     Type: AWS::Serverless::Function
     Metadata:
@@ -215,12 +253,8 @@ Resources:
       ReservedConcurrentExecutions: 5
       Environment:
         Variables:
-          API_BASE_URL: !Ref ApiBaseUrl
-          SINK_TRIGGER_JWT: !Ref SinkTriggerJwt
-          INBOUND_MAIL_BUCKET: !Ref MailBucket
-          INBOUND_MAIL_PREFIX: !Ref RawPrefix
-          MAIL_SNS_TOPIC_ARN: !Ref ReceiptTopic
-          MAIL_DISPATCH_RULE_ARN: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-mail-dispatch
+          SECRET_PREFIX: !Ref SecretPrefix
+          BOOTSTRAP_VERSION: !Ref BootstrapVersion
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt FailedReceipts.Arn
@@ -302,13 +336,16 @@ Resources:
 Outputs:
   InboundMailDomain:
     Value: !Ref ReceiptDomain
-    Description: Set INBOUND_MAIL_DOMAIN on the API.
+    Description: Set as domain in the API's MAIL_CONFIG.
   InboundMailBucket:
     Value: !Ref MailBucket
-    Description: Set INBOUND_MAIL_BUCKET on the API built with its SES feature.
+    Description: Set as bucket in the API's MAIL_CONFIG. The API needs its SES feature.
   InboundMailPrefix:
     Value: !Ref RawPrefix
-    Description: Set INBOUND_MAIL_PREFIX on the API.
+    Description: Set as prefix in the API's MAIL_CONFIG.
+  SinkTokenParameter:
+    Value: !Sub ${SecretPrefix}/SINK_TRIGGER_JWT
+    Description: SecureString holding the registered inbound_email sink token.
   ReceivingMxTarget:
     Value: !Sub inbound-smtp.${AWS::Region}.amazonaws.com
     Description: MX target for the verified receiving domain. SES receiving must be available in this region.

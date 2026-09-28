@@ -1,0 +1,24 @@
+model TeamsBotConnection {
+  id        String @id
+  appId     String
+  eventId   String @unique
+  data      String
+  revision  Int @default(0)
+  // Counts against the app's Flow-Like-managed bot quota (managed and not disconnected).
+  managed   Boolean @default(false)
+  updatedAt BigInt
+
+  @@index([appId])
+}
+
+// Encrypted conversation, delivery and interaction records. Versions fence concurrent callbacks.
+model TeamsBotState {
+  id           String @id
+  connectionId String
+  data         String
+  revision     Int @default(0)
+  expiresAt    BigInt
+
+  @@index([connectionId])
+  @@index([expiresAt])
+}

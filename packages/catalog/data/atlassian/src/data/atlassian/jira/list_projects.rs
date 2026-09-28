@@ -1,12 +1,13 @@
 use super::{JiraProject, parse_jira_project};
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json, reqwest};
+use flow_like_types::{Value, async_trait, json::json};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -125,7 +126,7 @@ impl NodeLogic for ListJiraProjectsNode {
         let start_at: i64 = context.evaluate_pin("start_at").await?;
         let query: String = context.evaluate_pin("query").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         // Build URL with query parameters
         let mut url = provider.jira_api_url("/project/search");
@@ -145,7 +146,7 @@ impl NodeLogic for ListJiraProjectsNode {
         context.log_message("Fetching Jira projects", LogLevel::Debug);
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/json")
             .send()

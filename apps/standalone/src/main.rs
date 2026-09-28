@@ -211,17 +211,39 @@ async fn main() -> Result<()> {
             | Commands::ServiceUnit
             | Commands::ServiceStatus
     ) {
-        let state_dir = std::path::absolute(&selected_state_dir)?;
+        let state_dir = resolve_service_state_dir(&selected_state_dir)?;
+        let legacy_state_dir = std::path::absolute(&selected_state_dir)?;
         let executable = std::env::current_exe()?;
+        let executable = executable.as_path();
         match cli.command {
             Commands::InstallService => {
                 ensure!(
                     cfg!(feature = "runtime"),
                     "Service installation requires a binary built with the runtime feature"
                 );
-                let unit =
-                    flow_like_standalone::service::install_user_service(&executable, &state_dir)
-                        .await?;
+                let unit = match flow_like_standalone::service::install_user_service(
+                    executable, &state_dir,
+                )
+                .await
+                {
+                    Ok(unit) => unit,
+                    Err(error)
+                        if legacy_state_dir != state_dir
+                            && flow_like_standalone::service::user_service_status(
+                                executable,
+                                &legacy_state_dir,
+                            )
+                            .await
+                            .is_ok_and(|status| status.installed) =>
+                    {
+                        return Err(error.context(format!(
+                            "The installed service names the unresolved state path {}, which automatic updates reject; run uninstall-service, then install-service to record {}",
+                            legacy_state_dir.display(),
+                            state_dir.display()
+                        )));
+                    }
+                    Err(error) => return Err(error),
+                };
                 println!(
                     "{}",
                     serde_json::json!({"service":"installed","unit":unit,"state_dir":state_dir,"startup":flow_like_standalone::service::service_startup()})
@@ -229,8 +251,11 @@ async fn main() -> Result<()> {
             }
             Commands::UninstallService => {
                 let removed =
-                    flow_like_standalone::service::uninstall_user_service(&executable, &state_dir)
-                        .await?;
+                    with_legacy_state_dir(&state_dir, &legacy_state_dir, |state| async move {
+                        flow_like_standalone::service::uninstall_user_service(executable, &state)
+                            .await
+                    })
+                    .await?;
                 println!(
                     "{}",
                     serde_json::json!({"service":if removed {"removed"} else {"not_installed"},"state_dir":state_dir})
@@ -238,13 +263,15 @@ async fn main() -> Result<()> {
             }
             Commands::ServiceUnit => print!(
                 "{}",
-                flow_like_standalone::service::user_service_definition(&executable, &state_dir)?
+                flow_like_standalone::service::user_service_definition(executable, &state_dir)?
             ),
             Commands::ServiceStatus => println!(
                 "{}",
                 serde_json::to_string(
-                    &flow_like_standalone::service::user_service_status(&executable, &state_dir)
-                        .await?
+                    &with_legacy_state_dir(&state_dir, &legacy_state_dir, |state| async move {
+                        flow_like_standalone::service::user_service_status(executable, &state).await
+                    })
+                    .await?
                 )?
             ),
             _ => unreachable!(),
@@ -497,6 +524,9 @@ async fn main() -> Result<()> {
                 "This binary was built without the runtime feature"
             );
             drop(store);
+            if let Err(error) = release::update::collect_garbage(&state_dir) {
+                tracing::warn!("Leftover update files were not removed: {error:#}");
+            }
             flow_like_standalone::certificates::collect_unused(&state_dir)?;
             let session = enrollment::DeviceSession::load(&state_dir)?.map(std::sync::Arc::new);
             let boot_id = flow_like_standalone::host::boot_id()?;
@@ -505,94 +535,112 @@ async fn main() -> Result<()> {
             let cancel = CancellationToken::new();
             let signal = tokio::spawn(supervisor::shutdown_signal(cancel.clone()));
             let presence_cancel = cancel.child_token();
-            let presence = session.clone().map(|session| {
-                tokio::spawn(enrollment::maintain_presence_with_session(
+            let mut background = Vec::new();
+            if let Some(device) = &session {
+                background.push(spawn_background(
+                    "device presence",
+                    &cancel,
+                    enrollment::maintain_presence_with_session(
+                        state_dir.clone(),
+                        device.clone(),
+                        presence_cancel.clone(),
+                    ),
+                ));
+                let management = flow_like_standalone::management::ManagementService::new(
                     state_dir.clone(),
-                    session,
-                    presence_cancel.clone(),
-                ))
-            });
-            let management = session.clone().map(|session| {
-                flow_like_standalone::management::ManagementService::new(
-                    state_dir.clone(),
-                    session,
+                    device.clone(),
                     boot_id.clone(),
-                )
-            });
-            let transport = management.map(|management| {
-                let device = session
-                    .as_ref()
-                    .expect("management has an enrolled device")
-                    .clone();
-                tokio::spawn(flow_like_standalone::transport::run(
-                    device,
-                    management,
-                    cancel.child_token(),
-                ))
-            });
-            let fleet = session.clone().map(|device| {
-                tokio::spawn(flow_like_standalone::fleet::publish(
+                );
+                background.push(spawn_background(
+                    "management transport",
+                    &cancel,
+                    flow_like_standalone::transport::run(
+                        device.clone(),
+                        management,
+                        cancel.child_token(),
+                    ),
+                ));
+                background.push(spawn_background(
+                    "fleet publisher",
+                    &cancel,
+                    flow_like_standalone::fleet::publish(
+                        state_dir.clone(),
+                        device.clone(),
+                        boot_id.clone(),
+                        cancel.child_token(),
+                    ),
+                ));
+                background.push(spawn_background(
+                    "certificate inventory publisher",
+                    &cancel,
+                    flow_like_standalone::certificate_inventory::publish(
+                        state_dir.clone(),
+                        device.clone(),
+                        cancel.child_token(),
+                    ),
+                ));
+            }
+            background.push(spawn_background(
+                "certificate renewal",
+                &cancel,
+                flow_like_standalone::certificate_issuers::run(
                     state_dir.clone(),
-                    device,
-                    boot_id.clone(),
                     cancel.child_token(),
-                ))
-            });
-            let certificate_inventory = session.clone().map(|device| {
-                tokio::spawn(flow_like_standalone::certificate_inventory::publish(
-                    state_dir.clone(),
-                    device,
-                    cancel.child_token(),
-                ))
-            });
-            let certificate_renewal = tokio::spawn(flow_like_standalone::certificate_issuers::run(
-                state_dir.clone(),
-                cancel.child_token(),
+                ),
             ));
-            let acme = tokio::spawn(flow_like_standalone::acme::run(
-                state_dir.clone(),
-                cancel.child_token(),
+            background.push(spawn_background(
+                "ACME renewal",
+                &cancel,
+                flow_like_standalone::acme::run(state_dir.clone(), cancel.child_token()),
             ));
-            let metrics = tokio::spawn(flow_like_standalone::telemetry::sample(
-                state_dir.clone(),
-                cancel.child_token(),
+            background.push(spawn_background(
+                "telemetry sampler",
+                &cancel,
+                flow_like_standalone::telemetry::sample(state_dir.clone(), cancel.child_token()),
             ));
-            let secrets = tokio::spawn(flow_like_standalone::secrets::publish(
-                state_dir.clone(),
-                cancel.child_token(),
+            background.push(spawn_background(
+                "secret publisher",
+                &cancel,
+                flow_like_standalone::secrets::publish(state_dir.clone(), cancel.child_token()),
             ));
-            let shared_telemetry = session.clone().map(|device| {
-                tokio::spawn(flow_like_standalone::telemetry_groups::publish_live(
-                    state_dir.clone(),
-                    device,
-                    cancel.child_token(),
-                ))
-            });
-            let archives = session.clone().map(|device| {
-                tokio::spawn(flow_like_standalone::archives::publish(
-                    state_dir.clone(),
-                    device,
-                    cancel.child_token(),
-                ))
-            });
-            let reboot = {
+            if let Some(device) = &session {
+                background.push(spawn_background(
+                    "live telemetry publisher",
+                    &cancel,
+                    flow_like_standalone::telemetry_groups::publish_live(
+                        state_dir.clone(),
+                        device.clone(),
+                        cancel.child_token(),
+                    ),
+                ));
+                background.push(spawn_background(
+                    "archive publisher",
+                    &cancel,
+                    flow_like_standalone::archives::publish(
+                        state_dir.clone(),
+                        device.clone(),
+                        cancel.child_token(),
+                    ),
+                ));
+            }
+            {
                 let root = state_dir.clone();
                 let boot = boot_id.clone();
                 let stop = cancel.clone();
-                tokio::spawn(async move {
+                background.push(spawn_background("reboot watcher", &cancel, async move {
                     flow_like_standalone::host::watch_reboot(&root, &boot, stop).await
-                })
-            };
-            let update = session.as_ref().map(|device| {
+                }));
+            }
+            if let Some(device) = &session {
                 let root = state_dir.clone();
                 let boot = boot_id.clone();
                 let run = run_id.clone();
                 let id = device.manifest().device_id.clone();
                 let stop = cancel.clone();
-                tokio::spawn(async move {
+                background.push(spawn_background("update watcher", &cancel, async move {
                     flow_like_standalone::host::watch_update(&root, &id, &boot, &run, stop).await
-                })
-            });
+                }));
+            }
             let result = supervisor::run_with_session_and_ready(
                 &state_dir,
                 &std::env::current_exe()?,
@@ -613,38 +661,14 @@ async fn main() -> Result<()> {
             .await;
             cancel.cancel();
             presence_cancel.cancel();
-            if let Some(transport) = transport {
-                let _ = transport.await;
-            }
-            let _ = certificate_renewal.await;
-            let _ = acme.await;
-            let _ = metrics.await;
-            if let Some(fleet) = fleet {
-                let _ = fleet.await;
-            }
-            if let Some(inventory) = certificate_inventory {
-                let _ = inventory.await;
-            }
-            let _ = secrets.await;
-            if let Some(archives) = archives {
-                let _ = archives.await;
-            }
-            if let Some(shared) = shared_telemetry {
-                let _ = shared.await;
-            }
-            let _ = reboot.await;
-            if let Some(update) = update {
-                let _ = update.await;
-            }
-            if let Some(presence) = presence {
-                match presence.await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => tracing::error!("Device presence stopped: {error}"),
-                    Err(error) => tracing::error!("Device presence task failed: {error}"),
+            for task in background {
+                if let Err(error) = task.await {
+                    tracing::error!("Background task monitor ended abnormally: {error}");
                 }
             }
             signal.abort();
             result?;
+            // Failed host requests exit non-zero so the service manager restarts the workloads.
             flow_like_standalone::host::dispatch_reboot(&state_dir, &boot_id).await?;
             flow_like_standalone::host::dispatch_update(&state_dir, &boot_id).await?;
         }
@@ -793,6 +817,108 @@ async fn run_child(
     anyhow::bail!("Standalone workload credential channels currently require Unix")
 }
 
+trait TaskOutcome {
+    fn failure(self) -> Option<String>;
+}
+
+impl TaskOutcome for () {
+    fn failure(self) -> Option<String> {
+        None
+    }
+}
+
+impl<E: std::fmt::Display> TaskOutcome for std::result::Result<(), E> {
+    fn failure(self) -> Option<String> {
+        self.err().map(|error| format!("{error:#}"))
+    }
+}
+
+/// Report a background task as soon as it fails or stops before agent shutdown.
+fn spawn_background<F>(
+    name: &'static str,
+    shutdown: &CancellationToken,
+    task: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: TaskOutcome + Send + 'static,
+{
+    let shutdown = shutdown.clone();
+    let task = tokio::spawn(task);
+    tokio::spawn(async move {
+        match task.await.map(TaskOutcome::failure) {
+            Ok(Some(error)) => tracing::error!(task = name, "Background task failed: {error}"),
+            Ok(None) if !shutdown.is_cancelled() => {
+                tracing::error!(task = name, "Background task stopped before agent shutdown")
+            }
+            Ok(None) => {}
+            Err(error) => tracing::error!(task = name, "Background task panicked: {error}"),
+        }
+    })
+}
+
+/// Resolve symlinks like `prepare_state_dir`, so installed units match update verification.
+/// Missing trailing components are kept so inspection never creates the directory.
+fn resolve_service_state_dir(selected: &Path) -> Result<PathBuf> {
+    let absolute = std::path::absolute(selected)?;
+    let mut existing = absolute.as_path();
+    let mut missing = Vec::new();
+    loop {
+        match existing.canonicalize() {
+            Ok(resolved) => {
+                return Ok(missing
+                    .iter()
+                    .rev()
+                    .fold(resolved, |path, part| path.join(part)));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(existing.file_name().with_context(|| {
+                    format!(
+                        "State directory {} must not end with a parent-directory component",
+                        absolute.display()
+                    )
+                })?);
+                existing = existing.parent().with_context(|| {
+                    format!(
+                        "State directory {} has no existing ancestor",
+                        absolute.display()
+                    )
+                })?;
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Resolve state directory {}", absolute.display()));
+            }
+        }
+    }
+}
+
+/// Units installed before state paths were canonicalized name the unresolved absolute path.
+/// Service operations verify the definition before changing anything, so the retry is safe.
+async fn with_legacy_state_dir<T, F, Fut>(
+    canonical: &Path,
+    legacy: &Path,
+    operation: F,
+) -> Result<T>
+where
+    F: Fn(PathBuf) -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    match operation(canonical.to_path_buf()).await {
+        Err(error) if legacy != canonical => {
+            operation(legacy.to_path_buf())
+                .await
+                .map_err(|legacy_error| {
+                    error.context(format!(
+                        "Retrying with the unresolved state path {} also failed: {legacy_error:#}",
+                        legacy.display()
+                    ))
+                })
+        }
+        result => result,
+    }
+}
+
 fn resolve_state_dir(state_override: Option<&Path>, env_file: Option<&Path>) -> Result<PathBuf> {
     // Clap has already selected the explicit argument over the process variable.
     // Explicit files are still validated; automatic files cannot override either.
@@ -905,5 +1031,81 @@ mod tests {
         assert_eq!(std::env::var_os(STATE_DIRECTORY_VARIABLE), previous_state);
         assert!(!directory.path().join("file-state").exists());
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn service_state_directory_matches_the_canonical_runtime_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().canonicalize()?;
+        let real = root.join("real");
+        std::fs::create_dir_all(real.join("state"))?;
+        std::os::unix::fs::symlink(&real, root.join("linked"))?;
+        let state = directory.path().join("linked").join("state");
+        let runtime = supervisor::prepare_state_dir(&state)?;
+        assert_eq!(runtime, real.join("state"));
+        assert_eq!(resolve_service_state_dir(&state)?, runtime);
+        assert_eq!(
+            resolve_service_state_dir(Path::new(&format!("{}/", state.display())))?,
+            runtime
+        );
+        let missing = directory
+            .path()
+            .join("linked")
+            .join("missing")
+            .join("state");
+        assert_eq!(
+            resolve_service_state_dir(&missing)?,
+            real.join("missing").join("state")
+        );
+        assert!(!real.join("missing").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_service_definitions_remain_manageable() -> Result<()> {
+        let canonical = Path::new("/mnt/data/state");
+        let legacy = Path::new("/srv/state/");
+        let installed = |state: PathBuf| async move {
+            ensure!(state == legacy, "Existing service unit differs");
+            Ok(state)
+        };
+        assert_eq!(
+            with_legacy_state_dir(canonical, legacy, installed).await?,
+            legacy
+        );
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        let failing = |_: PathBuf| async {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err::<(), _>(anyhow::anyhow!("systemctl failed"))
+        };
+        assert!(
+            with_legacy_state_dir(canonical, canonical, failing)
+                .await
+                .is_err()
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let error = with_legacy_state_dir(canonical, legacy, failing)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("/srv/state/"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn background_outcomes_distinguish_failures_from_shutdown() {
+        assert_eq!(().failure(), None);
+        assert_eq!(Ok::<(), anyhow::Error>(()).failure(), None);
+        let failure = Err::<(), _>(anyhow::anyhow!("database is locked").context("Sample metrics"))
+            .failure()
+            .unwrap();
+        assert!(failure.contains("Sample metrics") && failure.contains("database is locked"));
+        let shutdown = CancellationToken::new();
+        shutdown.cancel();
+        assert!(
+            spawn_background("test", &shutdown, async { Ok::<(), anyhow::Error>(()) })
+                .await
+                .is_ok()
+        );
     }
 }

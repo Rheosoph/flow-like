@@ -17,7 +17,8 @@ use axum::{
 };
 use flow_like_types::Value;
 use flow_like_types::channel::{CHANNEL_TRANSPORT_HTTP, ChannelPush, ChannelPushKind, now_unix};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
+use sea_orm::{ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::sea_query::Expr;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -488,11 +489,18 @@ async fn reply(
         }
     };
 
-    let mut active: channel::ActiveModel = row.into();
-    active.status = Set(ChannelMessageStatus::Responded);
-    active.value = Set(Some(body.value.to_string()));
-    active.update(&state.db).await.map_err(db_error("reply"))?;
-    Ok(PushResponse::accepted())
+    // The conditional write makes the first reply win across API instances.
+    let changed = Channel::update_many()
+        .col_expr(channel::Column::Status, Expr::value(ChannelMessageStatus::Responded))
+        .col_expr(channel::Column::Value, Expr::value(body.value.to_string()))
+        .filter(channel::Column::Id.eq(row.id))
+        .filter(channel::Column::ChannelId.eq(channel_id))
+        .filter(channel::Column::Sub.eq(&claims.sub))
+        .filter(channel::Column::Status.eq(ChannelMessageStatus::Pending))
+        .filter(channel::Column::ExpiresAt.gte(now_unix()))
+        .exec(&state.db).await.map_err(db_error("reply"))?;
+    if changed.rows_affected == 1 { Ok(PushResponse::accepted()) }
+    else { Ok(PushResponse::rejected("This request was already answered")) }
 }
 
 async fn inbound(

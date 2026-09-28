@@ -1,3 +1,8 @@
+use super::add_screenshot_pins;
+#[cfg(feature = "execute")]
+use super::{
+    SubmitTool, call_tool, missing_tool_call, parse_tool_args, require_screenshot, vision_history,
+};
 use flow_like::{
     bit::Bit,
     flow::{
@@ -7,15 +12,7 @@ use flow_like::{
         variable::VariableType,
     },
 };
-#[cfg(feature = "execute")]
-use flow_like_types::anyhow;
 use flow_like_types::{async_trait, json};
-#[cfg(feature = "execute")]
-use rig::completion::{Completion, Message, ToolDefinition};
-#[cfg(feature = "execute")]
-use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
-#[cfg(feature = "execute")]
-use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -25,53 +22,13 @@ pub struct ScreenClassification {
     pub app_name: Option<String>,
     pub state: String,
     pub visible_elements: Vec<String>,
+    #[serde(default)]
     pub suggested_actions: Vec<String>,
     pub confidence: f64,
 }
 
 #[cfg(feature = "execute")]
-#[derive(Debug, Serialize, Deserialize)]
-struct ClassifyScreenTool {
-    parameters: flow_like_types::Value,
-}
-
-#[cfg(feature = "execute")]
-#[derive(Debug)]
-struct ClassifyScreenError(String);
-
-#[cfg(feature = "execute")]
-impl std::fmt::Display for ClassifyScreenError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Classify screen error: {}", self.0)
-    }
-}
-
-#[cfg(feature = "execute")]
-impl std::error::Error for ClassifyScreenError {}
-
-#[cfg(feature = "execute")]
-impl Tool for ClassifyScreenTool {
-    const NAME: &'static str = "submit_classification";
-    type Error = ClassifyScreenError;
-    type Args = flow_like_types::Value;
-    type Output = flow_like_types::Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Submit the screen classification result".to_string(),
-            parameters: self.parameters.clone(),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        Ok(args)
-    }
-
-    fn name(&self) -> String {
-        Self::NAME.to_string()
-    }
-}
+const TOOL: &str = "submit_classification";
 
 #[crate::register_node]
 #[derive(Default)]
@@ -94,7 +51,7 @@ impl NodeLogic for LLMClassifyScreenNode {
         );
         node.set_flowscript_name("automation.llm", "classifyScreen");
         node.add_icon("/flow/icons/bot-search.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()
@@ -118,12 +75,7 @@ impl NodeLogic for LLMClassifyScreenNode {
         .set_schema::<Bit>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
-        node.add_input_pin(
-            "screenshot",
-            "Screenshot",
-            "Base64-encoded screenshot",
-            VariableType::String,
-        );
+        add_screenshot_pins(&mut node, "Screenshot", false);
 
         node.add_input_pin(
             "expected_states",
@@ -164,21 +116,16 @@ impl NodeLogic for LLMClassifyScreenNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_model_provider::history::{
-            Content, ContentType, History, HistoryMessage, ImageUrl as HistoryImageUrl,
-            MessageContent, Role,
-        };
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let model_bit: Bit = context.evaluate_pin("model").await?;
-        let screenshot: String = context.evaluate_pin("screenshot").await?;
         let expected_states: String = context
             .evaluate_pin("expected_states")
             .await
             .unwrap_or_default();
+        let screenshot = require_screenshot(context).await?;
 
-        let tool_params = json::json!({
+        let parameters = json::json!({
             "type": "object",
             "properties": {
                 "screen_type": { "type": "string", "description": "Type of screen (e.g., login, dashboard, form, error, loading)" },
@@ -199,89 +146,34 @@ impl NodeLogic for LLMClassifyScreenNode {
             "required": ["screen_type", "state", "visible_elements", "confidence"]
         });
 
-        let prompt = if expected_states.is_empty() {
+        let instructions = if expected_states.is_empty() {
             "Analyze this screenshot and classify the screen type and current state.".to_string()
         } else {
             format!(
-                "Analyze this screenshot and classify into one of these states: {}",
-                expected_states
+                "Analyze this screenshot and classify into one of these states: {expected_states}"
             )
         };
 
-        let content_parts = vec![
-            Content::Image {
-                content_type: ContentType::ImageUrl,
-                image_url: HistoryImageUrl {
-                    url: format!("data:image/png;base64,{}", screenshot),
-                    detail: None,
-                    media_type: Some("image/png".to_string()),
-                    additional_params: None,
-                },
-            },
-            Content::Text {
-                content_type: ContentType::Text,
-                text: prompt.clone(),
-            },
-        ];
-
-        let history = History::new(
-            "".to_string(),
-            vec![HistoryMessage {
-                role: Role::User,
-                content: MessageContent::Contents(content_parts),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                annotations: None,
-            }],
-        );
-
         let preamble = "You are a screen analysis expert. Analyze screenshots to identify the type of screen, its current state, and visible UI elements. Be precise and thorough.";
 
-        let agent_builder = model_bit
-            .agent(context, &Some(history))
-            .await?
-            .preamble(preamble)
-            .tool(ClassifyScreenTool {
-                parameters: tool_params,
-            })
-            .tool_choice(ToolChoice::Required);
+        let arguments = call_tool(
+            context,
+            &model_bit,
+            vision_history(&[&screenshot.image], &instructions),
+            preamble,
+            SubmitTool {
+                name: TOOL,
+                description: "Submit the screen classification result",
+                parameters,
+            },
+        )
+        .await?
+        .ok_or_else(|| missing_tool_call(TOOL))?;
 
-        let agent = agent_builder.build();
-
-        let response = agent
-            .completion(prompt, Vec::<Message>::new())
-            .await
-            .map_err(|e| anyhow!("LLM completion failed: {}", e))?
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to send request: {}", e))?;
-
-        let mut result: Option<ScreenClassification> = None;
-        for content in response.choice {
-            if let AssistantContent::ToolCall(ToolCall {
-                function: ToolFunction {
-                    name, arguments, ..
-                },
-                ..
-            }) = content
-                && name == "submit_classification"
-            {
-                result = Some(json::from_value(arguments)?);
-            }
-        }
-
-        let classification = result.unwrap_or(ScreenClassification {
-            screen_type: "unknown".to_string(),
-            app_name: None,
-            state: "unknown".to_string(),
-            visible_elements: vec![],
-            suggested_actions: vec![],
-            confidence: 0.0,
-        });
+        let classification: ScreenClassification = parse_tool_args(TOOL, &arguments)?;
 
         context
-            .set_pin_value("classification", json::json!(classification.clone()))
+            .set_pin_value("classification", json::json!(classification))
             .await?;
         context
             .set_pin_value("screen_type", json::json!(classification.screen_type))
@@ -300,5 +192,20 @@ impl NodeLogic for LLMClassifyScreenNode {
         Err(flow_like_types::anyhow!(
             "LLM processing requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classification_without_optional_fields_parses() {
+        let classification: ScreenClassification = parse_tool_args(
+            TOOL,
+            &json::json!({"screen_type": "login", "state": "idle", "visible_elements": [], "confidence": 0.8}),
+        )
+        .unwrap();
+        assert!(classification.app_name.is_none() && classification.suggested_actions.is_empty());
     }
 }

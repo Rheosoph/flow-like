@@ -340,6 +340,7 @@ const ELEMENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Clone)]
 pub struct ExecutionContext {
     pub executor_payment_auth: Option<super::ExecutorPaymentAuth>,
+    pub executor_api_auth: Option<super::ExecutorApiAuth>,
     pub id: Arc<str>,
     pub run: Weak<Mutex<Run>>,
     pub nodes: Arc<AHashMap<String, Arc<InternalNode>>>,
@@ -461,6 +462,7 @@ impl ExecutionContext {
 
         let (
             executor_payment_auth,
+            executor_api_auth,
             run_id,
             stream_state,
             log_spill_threshold,
@@ -473,6 +475,7 @@ impl ExecutionContext {
                 let run = run.lock().await;
                 (
                     run.executor_payment_auth.clone(),
+                    run.executor_api_auth.clone(),
                     run.id.clone(),
                     run.stream_state,
                     run.log_spill_threshold,
@@ -483,6 +486,7 @@ impl ExecutionContext {
                 )
             }
             None => (
+                None,
                 None,
                 "".to_string(),
                 false,
@@ -500,6 +504,7 @@ impl ExecutionContext {
         };
         ExecutionContext {
             executor_payment_auth,
+            executor_api_auth,
             id,
             run_id,
             elements,
@@ -608,6 +613,7 @@ impl ExecutionContext {
         }
         ExecutionContext {
             executor_payment_auth: run_meta.executor_payment_auth.clone(),
+            executor_api_auth: run_meta.executor_api_auth.clone(),
             id,
             run_id: run_meta.run_id.clone(),
             elements: run_meta.elements.clone(),
@@ -782,6 +788,7 @@ impl ExecutionContext {
         }
         ExecutionContext {
             executor_payment_auth: self.executor_payment_auth.clone(),
+            executor_api_auth: self.executor_api_auth.clone(),
             id,
             run: self.run.clone(),
             elements: self.elements.clone(),

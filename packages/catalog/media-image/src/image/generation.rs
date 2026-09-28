@@ -4,7 +4,9 @@ use flow_like::{
     bit::{Bit, BitTypes, LLMParameters, VLMParameters},
     flow::{
         board::Board,
-        execution::{LogLevel, context::ExecutionContext},
+        execution::{
+            ExecutionEnvironment, LogLevel, context::ExecutionContext, egress::GuardedHttpClient,
+        },
         node::{Node, NodeLogic, NodeScores},
         pin::{PinOptions, ValueType},
         variable::VariableType,
@@ -686,9 +688,9 @@ async fn read_error_response(response: reqwest::Response) -> flow_like_types::Re
     Ok(parsed)
 }
 
-async fn download_url(client: &reqwest::Client, url: &str) -> flow_like_types::Result<Vec<u8>> {
+async fn download_url(client: &GuardedHttpClient, url: &str) -> flow_like_types::Result<Vec<u8>> {
     let response = client
-        .get(url)
+        .get(url)?
         .send()
         .await
         .map_err(reqwest::Error::without_url)?;
@@ -704,12 +706,12 @@ async fn download_url(client: &reqwest::Client, url: &str) -> flow_like_types::R
 }
 
 async fn download_generated_url(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     url: &str,
     metadata: Value,
 ) -> flow_like_types::Result<GeneratedImage> {
     let response = client
-        .get(url)
+        .get(url)?
         .send()
         .await
         .map_err(reqwest::Error::without_url)?;
@@ -763,12 +765,11 @@ mod download_tests {
         )
     }
 
-    fn test_client() -> reqwest::Client {
-        reqwest::Client::builder()
-            .no_proxy()
-            .timeout(Duration::from_secs(2))
-            .build()
-            .unwrap()
+    fn test_client() -> GuardedHttpClient {
+        GuardedHttpClient::configured(ExecutionEnvironment::Local, |builder| {
+            builder.no_proxy().timeout(Duration::from_secs(2))
+        })
+        .unwrap()
     }
 
     async fn download_errors(url: &str) -> [flow_like_types::Error; 2] {
@@ -795,6 +796,21 @@ mod download_tests {
         for error in download_errors("ftp://example.com/image?token=download-secret").await {
             assert_redacted(&error);
             assert!(error.downcast_ref::<reqwest::Error>().is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn server_downloads_refuse_the_host_plane_without_leaking_signed_urls() {
+        let client = GuardedHttpClient::new(ExecutionEnvironment::Server).unwrap();
+        let url = "http://169.254.169.254/latest/meta-data/?token=download-secret";
+        for error in [
+            download_url(&client, url).await.unwrap_err(),
+            download_generated_url(&client, url, json!({}))
+                .await
+                .unwrap_err(),
+        ] {
+            assert_redacted(&error);
+            assert!(error.to_string().contains("refused"), "{error}");
         }
     }
 
@@ -847,7 +863,7 @@ mod download_tests {
 }
 
 async fn image_from_url_or_data(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     url: &str,
     metadata: Value,
     fallback_mime: Option<&str>,
@@ -868,7 +884,7 @@ async fn image_from_url_or_data(
 }
 
 async fn generated_images_from_data_array(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     value: &Value,
     provider_label: &str,
     fallback_mime: Option<&str>,
@@ -925,7 +941,7 @@ fn parse_openai_images(value: &Value) -> flow_like_types::Result<Vec<(String, Va
 }
 
 async fn generate_openai_like(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &ImageGenerationRequest,
     azure: bool,
@@ -992,7 +1008,7 @@ async fn generate_openai_like(
             api_version
         );
         client
-            .post(url)
+            .post(&url)?
             .header("api-key", api_key)
             .header("Content-Type", "application/json")
             .json(&Value::Object(body))
@@ -1004,7 +1020,7 @@ async fn generate_openai_like(
         let api_key = get_required_param(provider, "api_key")?;
         let url = format!("{}/images/generations", endpoint.trim_end_matches('/'));
         client
-            .post(url)
+            .post(&url)?
             .bearer_auth(api_key)
             .header("Content-Type", "application/json")
             .json(&Value::Object(body))
@@ -1114,7 +1130,7 @@ fn google_imagen_body(req: &ImageGenerationRequest, vertex: bool) -> Value {
 }
 
 async fn generate_google_ai_studio(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &ImageGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedImage>> {
@@ -1140,7 +1156,7 @@ async fn generate_google_ai_studio(
     let url = format!("{}/models/{}:predict", endpoint, model_id);
 
     let response = client
-        .post(url)
+        .post(&url)?
         .header("x-goog-api-key", api_key)
         .header("Content-Type", "application/json")
         .json(&google_imagen_body(req, false))
@@ -1152,7 +1168,7 @@ async fn generate_google_ai_studio(
 }
 
 async fn generate_gcp_vertex(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &ImageGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedImage>> {
@@ -1180,7 +1196,7 @@ async fn generate_gcp_vertex(
     );
 
     let response = client
-        .post(url)
+        .post(&url)?
         .header(AUTHORIZATION.as_str(), authorization)
         .header("Content-Type", "application/json")
         .json(&google_imagen_body(req, true))
@@ -1192,7 +1208,7 @@ async fn generate_gcp_vertex(
 }
 
 async fn generate_xai(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &ImageGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedImage>> {
@@ -1213,10 +1229,10 @@ async fn generate_xai(
     merge_options(&mut body, &req.provider_options);
 
     let response = client
-        .post(format!(
+        .post(&format!(
             "{}/images/generations",
             endpoint.trim_end_matches('/')
-        ))
+        ))?
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
         .json(&Value::Object(body))
@@ -1228,7 +1244,7 @@ async fn generate_xai(
 }
 
 async fn generate_together(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &ImageGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedImage>> {
@@ -1263,10 +1279,10 @@ async fn generate_together(
     merge_options(&mut body, &req.provider_options);
 
     let response = client
-        .post(format!(
+        .post(&format!(
             "{}/images/generations",
             endpoint.trim_end_matches('/')
-        ))
+        ))?
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
         .json(&Value::Object(body))
@@ -1284,7 +1300,7 @@ async fn generate_together(
 }
 
 async fn generate_huggingface(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &ImageGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedImage>> {
@@ -1322,7 +1338,7 @@ async fn generate_huggingface(
     merge_options(&mut parameters, &req.provider_options);
 
     let response = client
-        .post(url)
+        .post(&url)?
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -1382,7 +1398,7 @@ fn collect_openrouter_images(value: &Value, images: &mut Vec<(String, Value)>) {
 }
 
 async fn generate_openrouter(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &ImageGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedImage>> {
@@ -1420,10 +1436,10 @@ async fn generate_openrouter(
     merge_options(&mut body, &req.provider_options);
 
     let response = client
-        .post(format!(
+        .post(&format!(
             "{}/chat/completions",
             endpoint.trim_end_matches('/')
-        ))
+        ))?
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
         .json(&Value::Object(body))
@@ -1516,7 +1532,7 @@ fn collect_mistral_file_refs(value: &Value, refs: &mut Vec<(String, Option<Strin
 }
 
 async fn generate_mistral(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &ImageGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedImage>> {
@@ -1539,7 +1555,7 @@ async fn generate_mistral(
     merge_options(&mut body, &req.provider_options);
 
     let response = client
-        .post(format!("{}/conversations", endpoint.trim_end_matches('/')))
+        .post(&format!("{}/conversations", endpoint.trim_end_matches('/')))?
         .bearer_auth(&api_key)
         .header("Content-Type", "application/json")
         .json(&Value::Object(body))
@@ -1556,11 +1572,11 @@ async fn generate_mistral(
     let mut images = Vec::with_capacity(refs.len());
     for (file_id, mime_type, metadata) in refs {
         let response = client
-            .get(format!(
+            .get(&format!(
                 "{}/files/{}/content",
                 endpoint.trim_end_matches('/'),
                 file_id
-            ))
+            ))?
             .bearer_auth(&api_key)
             .send()
             .await?;
@@ -1589,7 +1605,7 @@ async fn generate_mistral(
 }
 
 async fn generate_aws_bedrock(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &ImageGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedImage>> {
@@ -1643,7 +1659,7 @@ async fn generate_aws_bedrock(
         model_id
     );
     let response = client
-        .post(url)
+        .post(&url)?
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
@@ -1682,6 +1698,7 @@ async fn generate_aws_bedrock(
 }
 
 async fn generate_with_provider(
+    environment: ExecutionEnvironment,
     provider: &ModelProvider,
     req: &ImageGenerationRequest,
     options: &ImageGenerationProviderOptions,
@@ -1692,7 +1709,7 @@ async fn generate_with_provider(
     if matches!(options, ImageGenerationProviderOptions::StableDiffusion(_)) {
         bail!("stable-diffusion.cpp image options require a stable-diffusion.cpp provider");
     }
-    let client = reqwest::Client::new();
+    let client = GuardedHttpClient::new(environment)?;
     match provider.provider_name.as_str() {
         PROVIDER_OPENAI => {
             generate_openai_like(&client, provider, req, get_bool_param(provider, "is_azure")).await
@@ -2490,8 +2507,13 @@ impl NodeLogic for GenerateImageNode {
         )
         .await?;
         crate::ensure_vertex_credentials_explicit(context, &provider)?;
-        let generated =
-            generate_with_provider(&provider, &request, &typed_provider_options).await?;
+        let generated = generate_with_provider(
+            context.execution_environment(),
+            &provider,
+            &request,
+            &typed_provider_options,
+        )
+        .await?;
         let total = generated.len();
         if total == 0 {
             bail!("Image provider returned no generated images");

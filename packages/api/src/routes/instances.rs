@@ -1,7 +1,7 @@
 use crate::{devices, error::ApiError, instances, state::AppState};
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, Path, Request, State},
     http::{HeaderMap, HeaderValue},
     middleware::{Next, from_fn},
     response::Response,
@@ -48,14 +48,12 @@ pub fn routes() -> Router<AppState> {
         .layer(from_fn(no_store))
 }
 
+/// Takes the raw request so the device proof is verified before the body is buffered.
 async fn offline_replay(
     State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<flow_like_device_protocol::OfflineReplayRequest>,
+    request: Request,
 ) -> Result<Json<flow_like_device_protocol::OfflineReplayResponse>, ApiError> {
-    Ok(Json(
-        instances::offline::replay(&state, &headers, request).await?,
-    ))
+    Ok(Json(instances::offline::replay(&state, request).await?))
 }
 
 async fn project_token(

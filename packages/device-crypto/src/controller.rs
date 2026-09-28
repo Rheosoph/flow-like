@@ -567,7 +567,8 @@ pub fn verify_device_receipt(
 ) -> Result<flow_like_device_protocol::OnboardingManifest> {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use flow_like_device_protocol::{
-        EnrollmentBinding, OnboardingManifest, compact_digest, verify_binding, verify_manifest,
+        EnrollmentBinding, MAX_ASSERTION_TTL_SECONDS, OnboardingManifest, PROOF_CLOCK_SKEW_SECONDS,
+        compact_digest, verify_binding, verify_manifest,
     };
     ensure!(
         receipt.manifest_jws == expected_manifest
@@ -591,6 +592,18 @@ pub fn verify_device_receipt(
         &manifest.bootstrap_key,
         unsigned_binding.issued_at,
     )?;
+    // The bootstrap key only speaks for the device during its enrollment window.
+    let earliest = manifest
+        .issued_at
+        .saturating_sub(MAX_ASSERTION_TTL_SECONDS + PROOF_CLOCK_SKEW_SECONDS);
+    ensure!(
+        binding.issued_at >= earliest && binding.expires_at <= manifest.expires_at,
+        "Device identity binding was signed outside its onboarding window (binding {}..{}, manifest {}..{})",
+        binding.issued_at,
+        binding.expires_at,
+        manifest.issued_at,
+        manifest.expires_at
+    );
     for authority in [
         &manifest.bootstrap_key,
         &manifest.controller_key,
@@ -895,6 +908,93 @@ mod tests {
                 .public_bundle(),
             fresh.public_bundle
         );
+    }
+
+    #[test]
+    fn device_receipts_require_a_binding_signed_inside_the_enrollment_window() {
+        use flow_like_device_protocol::{
+            DeviceIdentity, DeviceReceipt, EnrollmentBinding, OnboardingManifest, compact_digest,
+            sign_binding,
+        };
+        let password = b"a memorable local password";
+        let vaults = create_onboarding_vaults(password).unwrap();
+        let mut controller = unlock_controller_vault(
+            &vaults.controller.public_bundle.device_id,
+            password,
+            &vaults.controller.vault,
+        )
+        .unwrap();
+        let bootstrap = SigningKey::generate();
+        let manifest = OnboardingManifest {
+            version: 1,
+            enrollment_id: "enrollment".into(),
+            device_id: "registered-device".into(),
+            owner_id: "owner".into(),
+            name: "test device".into(),
+            api_base_url: "https://example.com/api/v1".into(),
+            bootstrap_key: bootstrap.public_key(),
+            controller_key: vaults.controller.public_bundle.controller_key.clone(),
+            owner_invitation_key: vaults.invitation.public_key.clone(),
+            issued_at: 10_000,
+            expires_at: 10_000 + 86_400,
+        };
+        let completed = controller
+            .complete_onboarding(&manifest, password, &vaults.invitation.vault)
+            .unwrap();
+        let identity = DeviceIdentity {
+            auth_key: SigningKey::generate().public_key(),
+            management_key: x25519_dalek::x25519(random_key(), x25519_dalek::X25519_BASEPOINT_BYTES),
+            telemetry_key: SigningKey::generate().public_key(),
+        };
+        let receipt = |issued_at: i64| DeviceReceipt {
+            enrollment_id: manifest.enrollment_id.clone(),
+            device_id: manifest.device_id.clone(),
+            owner_id: manifest.owner_id.clone(),
+            name: manifest.name.clone(),
+            identity: identity.clone(),
+            manifest_jws: completed.manifest_jws.clone(),
+            binding_jws: sign_binding(
+                &EnrollmentBinding {
+                    version: 1,
+                    enrollment_id: manifest.enrollment_id.clone(),
+                    device_id: manifest.device_id.clone(),
+                    identity: identity.clone(),
+                    manifest_digest: compact_digest(&completed.manifest_jws),
+                    challenge_id: "challenge".into(),
+                    challenge_nonce: "enrollment-window-test-random-nonce".into(),
+                    issued_at,
+                    expires_at: issued_at + 60,
+                },
+                &bootstrap,
+            )
+            .unwrap(),
+            registered_at: issued_at,
+            auth_epoch: 1,
+        };
+        for issued_at in [manifest.issued_at - 30, 50_000, manifest.expires_at - 60] {
+            assert_eq!(
+                verify_device_receipt(
+                    &receipt(issued_at),
+                    &completed.manifest_jws,
+                    &manifest.controller_key
+                )
+                .unwrap(),
+                manifest
+            );
+        }
+        for issued_at in [
+            manifest.issued_at - 3_600,
+            manifest.expires_at - 59,
+            manifest.expires_at + 365 * 86_400,
+        ] {
+            let error = verify_device_receipt(
+                &receipt(issued_at),
+                &completed.manifest_jws,
+                &manifest.controller_key,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("onboarding window"), "{error}");
+        }
     }
 
     #[test]

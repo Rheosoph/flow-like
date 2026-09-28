@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 /// Allowed sink types that can be registered
 const ALLOWED_SINK_TYPES: &[&str] = &[
-    "cron", "discord", "telegram", "github", "rss", "mqtt", "email", "http",
+    "cron", "discord", "telegram", "github", "rss", "mqtt", "email", "inbound_email", "http",
 ];
 
 #[derive(Debug, Deserialize)]

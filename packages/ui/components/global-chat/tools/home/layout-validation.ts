@@ -1,3 +1,4 @@
+import postcss, { type Root, type Rule } from "postcss";
 import { stableStringify } from "../../../../lib/stable-stringify";
 import { HOME_ACCENTS } from "../../../home/home-appearance";
 import {
@@ -119,35 +120,66 @@ function classSegments(token: string): string[] {
 	return segments;
 }
 
-/** Layout-owned utilities have no effect; sibling arbitrary variants select outside the widget. */
+const ELEMENT_VARIANTS = new Set([
+	"before",
+	"after",
+	"first-letter",
+	"first-line",
+	"marker",
+	"selection",
+	"placeholder",
+	"file",
+	"backdrop",
+	"*",
+	"**",
+]);
+
+function targetsOtherElement(variant: string) {
+	if (ELEMENT_VARIANTS.has(variant)) return true;
+	return variant.startsWith("[&") && /[_>]|::/.test(variant.slice(2));
+}
+
+/** Layout-owned utilities do nothing on the surface; fixed and sibling variants leave the widget. */
 function outOfScopeClass(token: string) {
 	const variants = classSegments(token);
 	const utility = (variants.pop() ?? "").replace(/^!?-?/, "").replace(/!$/, "");
 	return (
-		LAYOUT_OWNED_UTILITY.test(utility) ||
+		utility === "fixed" ||
+		(LAYOUT_OWNED_UTILITY.test(utility) &&
+			!variants.some(targetsOtherElement)) ||
 		variants.some((variant) => variant.startsWith("[") && /[~+]/.test(variant))
 	);
 }
 
-/** Normalization drops a non-string className, so the raw candidate must be checked. */
-function validateRawClassNameType(
+const RAW_STYLING_FIELDS = [
+	{
+		field: "className",
+		code: "home_widget_class_name_type_invalid",
+		message:
+			"Use a string of space-separated Tailwind CSS v4 classes, or omit className.",
+	},
+	{
+		field: "css",
+		code: "home_widget_css_type_invalid",
+		message: "Use a plain CSS stylesheet string, or omit css.",
+	},
+] as const;
+
+/** Normalization drops non-string styling fields, so the raw candidate must be checked. */
+function validateRawStylingTypes(
 	rawWidget: unknown,
 	path: string,
 	issues: HomeToolIssue[],
 ) {
-	const raw =
+	const appearance =
 		objectRecord(rawWidget) && objectRecord(rawWidget.appearance)
-			? rawWidget.appearance.className
+			? rawWidget.appearance
 			: undefined;
-	if (raw === undefined || typeof raw === "string") return;
-	issues.push(
-		issue(
-			"error",
-			"home_widget_class_name_type_invalid",
-			path,
-			"Use a space-separated string of Tailwind classes, or omit className.",
-		),
-	);
+	for (const { field, code, message } of RAW_STYLING_FIELDS) {
+		const raw = appearance?.[field];
+		if (raw === undefined || typeof raw === "string") continue;
+		issues.push(issue("error", code, `${path}.appearance.${field}`, message));
+	}
 }
 
 function validateClassNameScope(
@@ -162,7 +194,210 @@ function validateClassNameScope(
 			"warning",
 			"home_widget_class_name_out_of_scope",
 			path,
-			`These classes have no effect or reach outside the widget: ${[...tokens].join(", ")}. The layout controls position, grid span, height, and self-alignment; z-index and sibling variants (~, +) are not supported.`,
+			`These classes have no effect or reach outside the widget: ${[...tokens].join(", ")}. The layout owns the surface's position, grid span, height and self-alignment, so absolute, relative, sticky, static, z-*, col-*/row-* span/start/end and self-* do nothing on the surface; use them only behind variants that target other elements, such as before:, after:, *: or [&_span]:. fixed escapes the widget with or without a variant, and sibling variants (~, +) reach neighboring widgets.`,
+		),
+	);
+}
+
+const GLOBAL_CSS_AT_RULE =
+	/^(?:property|font-face|counter-style|font-palette-values|page|import)$/i;
+const LAYOUT_OWNED_CSS_PROPERTY =
+	/^(?:position|inset(?:-.+)?|top|right|bottom|left|z-index|grid-(?:area|column|row)(?:-.+)?|(?:align|justify|place)-self|order|(?:min-|max-)?(?:width|height))$/i;
+// Mirrors safeScopedCss: :root always, html and body only as a bare or compound selector.
+const WIDGET_ROOT_SELECTOR = /^(?::root|(?:html|body)(?=$|[.#:[]))/;
+
+const LEGACY_PSEUDO_ELEMENT =
+	/^:(?:before|after|first-line|first-letter)(?![\w-])/i;
+
+/** Indexes of selector characters outside brackets, parentheses, strings, and escapes. */
+function* topLevelIndexes(selector: string) {
+	let depth = 0;
+	let quote = "";
+	for (let index = 0; index < selector.length; index++) {
+		const char = selector[index];
+		if (char === "\\") {
+			index++;
+			continue;
+		}
+		if (quote) {
+			if (char === quote) quote = "";
+			continue;
+		}
+		if (char === '"' || char === "'") quote = char;
+		else if (char === "(" || char === "[") depth++;
+		else if (char === ")" || char === "]") depth--;
+		else if (depth === 0) yield index;
+	}
+}
+
+/** First combinator after the leading compound selector. */
+function leadingCombinator(selector: string) {
+	for (const index of topLevelIndexes(selector)) {
+		if (!/[\s>+~]/.test(selector[index])) continue;
+		const next = selector.slice(index).trimStart()[0];
+		return next === "+" || next === "~" || next === ">" ? next : " ";
+	}
+	return null;
+}
+
+function hasPseudoElement(selector: string) {
+	for (const index of topLevelIndexes(selector)) {
+		if (selector[index] !== ":") continue;
+		if (
+			selector[index + 1] === ":" ||
+			LEGACY_PSEUDO_ELEMENT.test(selector.slice(index))
+		)
+			return true;
+	}
+	return false;
+}
+
+/** :root::before and :root::after are decoration layers inside the clipped surface. */
+function targetsWidgetSurface(selector: string) {
+	return (
+		WIDGET_ROOT_SELECTOR.test(selector) &&
+		!leadingCombinator(selector) &&
+		!hasPseudoElement(selector)
+	);
+}
+
+function isWidgetSurfaceRule(rule: Rule) {
+	return rule.selectors.some((selector) =>
+		targetsWidgetSurface(selector.trim()),
+	);
+}
+
+/** Selectors that start at the widget surface and step to its siblings leave the widget. */
+function reachesSiblingWidgets(rule: Rule) {
+	const parent = rule.parent;
+	const nested = parent?.type === "rule" && isWidgetSurfaceRule(parent as Rule);
+	return rule.selectors.some((raw) => {
+		const selector = raw.trim();
+		if (nested && /^[+~]/.test(selector)) return true;
+		const fromRoot =
+			WIDGET_ROOT_SELECTOR.test(selector) ||
+			(nested && selector.startsWith("&"));
+		const combinator = fromRoot ? leadingCombinator(selector) : null;
+		return combinator === "+" || combinator === "~";
+	});
+}
+
+function cssScopeProblems(root: Root) {
+	const problems = new Set<string>();
+	root.walkAtRules((atRule) => {
+		if (GLOBAL_CSS_AT_RULE.test(atRule.name)) problems.add(`@${atRule.name}`);
+	});
+	root.walkRules((rule) => {
+		if (reachesSiblingWidgets(rule)) problems.add(rule.selector.trim());
+		if (!isWidgetSurfaceRule(rule)) return;
+		rule.each((node) => {
+			if (node.type === "decl" && LAYOUT_OWNED_CSS_PROPERTY.test(node.prop))
+				problems.add(`${node.prop} on :root`);
+		});
+	});
+	root.walkDecls(/^position$/i, (declaration) => {
+		if (/^fixed$/i.test(declaration.value.trim()))
+			problems.add("position: fixed");
+	});
+	return [...problems];
+}
+
+const TAILWIND_AT_RULE =
+	/^(?:apply|tailwind|theme|variant|custom-variant|utility|config|plugin|source|reference|screen)$/i;
+const TAILWIND_FUNCTION = /(?<![\w-])(theme|--alpha|--spacing)\(/gi;
+
+function tailwindSyntax(root: Root) {
+	const found = new Set<string>();
+	const addFunctions = (value: string) => {
+		for (const [, name] of value.matchAll(TAILWIND_FUNCTION))
+			found.add(`${name.toLowerCase()}()`);
+	};
+	root.walkAtRules((atRule) => {
+		if (TAILWIND_AT_RULE.test(atRule.name))
+			found.add(`@${atRule.name.toLowerCase()}`);
+		addFunctions(atRule.params);
+	});
+	root.walkDecls((declaration) => addFunctions(declaration.value));
+	return [...found];
+}
+
+const WRAPPED_COLOR_VARIABLE =
+	/\b(hsla?|rgba?|oklch|oklab|lab|lch)\(\s*var\(\s*(--[\w-]+)/gi;
+
+function wrappedColorVariables(root: Root) {
+	const found = new Set<string>();
+	root.walkDecls((declaration) => {
+		for (const [, color, variable] of declaration.value.matchAll(
+			WRAPPED_COLOR_VARIABLE,
+		))
+			found.add(`${color.toLowerCase()}(var(${variable}))`);
+	});
+	return [...found];
+}
+
+const CSS_CHECKS = [
+	{
+		code: "home_widget_css_out_of_scope",
+		find: cssScopeProblems,
+		message: (found: string) =>
+			`These parts of the CSS reach outside the widget or fight the layout: ${found}. + and ~ after :root style neighboring widgets; @property, @font-face, @counter-style and @page are document-wide and @import is removed; the layout owns position, inset, z-index, grid placement, order, width and height on :root itself, so put them on :root::before, :root::after or inner elements; position: fixed escapes the widget from any rule.`,
+	},
+	{
+		code: "home_widget_css_tailwind_syntax",
+		find: tailwindSyntax,
+		message: (found: string) =>
+			`This CSS uses Tailwind-only syntax that does nothing here: ${found}. appearance.css is plain CSS; put utilities in appearance.className and use var(--primary) or color-mix() for colors.`,
+	},
+	{
+		code: "home_widget_css_wrapped_color_variable",
+		find: wrappedColorVariables,
+		message: (found: string) =>
+			`These declarations wrap a color variable in a color function: ${found}. Theme and --home-* variables already hold complete colors, so the wrapped value is invalid; use var(--primary) directly or color-mix(in oklab, var(--primary) 30%, transparent).`,
+	},
+] as const;
+
+function validateWidgetCss(
+	css: string | undefined,
+	path: string,
+	issues: HomeToolIssue[],
+) {
+	if (!css) return;
+	let root: Root;
+	try {
+		root = postcss.parse(css);
+	} catch (error) {
+		issues.push(
+			issue(
+				"warning",
+				"home_widget_css_invalid",
+				path,
+				`This CSS does not parse (${error instanceof Error ? error.message : "syntax error"}). Only complete rules outside the broken block will apply.`,
+			),
+		);
+		return;
+	}
+	for (const { code, find, message } of CSS_CHECKS) {
+		const found = find(root);
+		if (found.length > 0)
+			issues.push(issue("warning", code, path, message(found.join(", "))));
+	}
+}
+
+function removedStylingIssues(
+	widget: IHomeWidget,
+	index: number,
+	current: IHomeWidget | undefined,
+): HomeToolIssue[] {
+	if (!current) return [];
+	return RAW_STYLING_FIELDS.filter(
+		({ field }) =>
+			current.appearance[field]?.trim() && !widget.appearance[field]?.trim(),
+	).map(({ field }) =>
+		issue(
+			"warning",
+			"home_widget_styling_removed",
+			`$.widgets[${index}].appearance.${field}`,
+			`The current widget has appearance.${field} and this layout drops it. Copy the current value unless the user asked to remove that styling.`,
 		),
 	);
 }
@@ -174,7 +409,7 @@ function validateWidget(
 	issues: HomeToolIssue[],
 ) {
 	const path = `$.widgets[${index}]`;
-	validateRawClassNameType(rawWidget, `${path}.appearance.className`, issues);
+	validateRawStylingTypes(rawWidget, path, issues);
 	if (!HOME_WIDGET_TYPES.has(widget.type)) {
 		issues.push(
 			issue(
@@ -240,6 +475,7 @@ function validateWidget(
 		`${path}.appearance.className`,
 		issues,
 	);
+	validateWidgetCss(widget.appearance.css, `${path}.appearance.css`, issues);
 	issues.push(
 		...validateKnownHomeWidgetConfig(
 			widget.type,
@@ -305,14 +541,11 @@ export function validateHomeLayoutCandidate(
 		objectRecord(value) && Array.isArray(value.widgets) ? value.widgets : [];
 	parsed.layout.widgets.forEach((widget, index) => {
 		const widgetIssues: HomeToolIssue[] = [];
+		const current = currentById.get(widget.id);
 		validateWidget(widget, rawWidgets[index], index, widgetIssues);
 		issues.push(
-			...preserveFutureWidgetValues(
-				widgetIssues,
-				widget,
-				index,
-				currentById.get(widget.id),
-			),
+			...preserveFutureWidgetValues(widgetIssues, widget, index, current),
+			...removedStylingIssues(widget, index, current),
 		);
 	});
 	const valid = !issues.some((entry) => entry.severity === "error");

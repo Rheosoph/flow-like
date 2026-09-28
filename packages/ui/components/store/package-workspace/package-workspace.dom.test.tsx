@@ -509,6 +509,67 @@ describe("PackageWorkspace while a stored session is renewed", () => {
 	);
 });
 
+describe("A checkout whose id someone else published", () => {
+	const TAKEN_TITLE = "This id is taken on the registry";
+	const PLACEHOLDER_NOTICE =
+		"Placeholder id — choose your own before publishing";
+
+	async function mountCheckout(placeholderId: boolean) {
+		const { render, PackageWorkspace } = await prepare(true);
+		const { calls, fetcher } = recordingFetcher(async () =>
+			registryEntry(PackagePermissionBits.User),
+		);
+		await render(
+			<PackageWorkspace
+				packageId={PACKAGE_ID}
+				fetcher={fetcher}
+				auth={SIGNED_IN}
+				local={{
+					overview: {
+						main: placeholderId ? <p>{PLACEHOLDER_NOTICE}</p> : undefined,
+					},
+					manifest: <p>Manifest editor</p>,
+					placeholderId,
+				}}
+			/>,
+		);
+		await until(() => tabs().length > 0, "the checkout tabs");
+		return calls;
+	}
+
+	test(
+		"a real id shows the id-taken banner with Open Manifest",
+		async () => {
+			const calls = await mountCheckout(false);
+
+			expect(
+				host.querySelector(`[aria-label="${TAKEN_TITLE}"]`),
+			).not.toBeNull();
+			expect(button("Open Manifest")).toBeDefined();
+			expect(host.textContent).toContain("ID taken");
+			expect(ownerOnlyCalls(calls)).toEqual([]);
+		},
+		COLD_IMPORT_TIMEOUT_MS,
+	);
+
+	test(
+		"a template placeholder id keeps the host's notice and shows no id-taken state",
+		async () => {
+			const calls = await mountCheckout(true);
+
+			expect(host.textContent).toContain(PLACEHOLDER_NOTICE);
+			expect(host.querySelector(`[aria-label="${TAKEN_TITLE}"]`)).toBeNull();
+			expect(button("Open Manifest")).toBeUndefined();
+			expect(host.textContent).not.toContain("ID taken");
+			expect(tabs()).toContain("manifest");
+			expect(tabs()).not.toContain("listing");
+			expect(ownerOnlyCalls(calls)).toEqual([]);
+			expect(navigation.replace).not.toHaveBeenCalled();
+		},
+		COLD_IMPORT_TIMEOUT_MS,
+	);
+});
+
 describe("Listing after publish", () => {
 	test(
 		"the fix button targets a field the form renders and moves focus to it",

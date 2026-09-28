@@ -172,7 +172,7 @@ impl NodeLogic for MatchFingerprintNode {
             })
             .collect();
 
-        while start.elapsed() < timeout {
+        loop {
             for selector in &selectors_to_try {
                 context.check_cancelled()?;
                 if crate::browser::selector::find(&driver, selector)
@@ -197,6 +197,9 @@ impl NodeLogic for MatchFingerprintNode {
                 }
             }
 
+            if start.elapsed() >= timeout {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 

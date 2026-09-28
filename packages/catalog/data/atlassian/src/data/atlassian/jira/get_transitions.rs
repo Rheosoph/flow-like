@@ -1,11 +1,12 @@
 use crate::data::atlassian::provider::AtlassianProvider;
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json, reqwest};
+use flow_like_types::{Value, async_trait, json::json};
 
 use super::{JiraTransition, parse_jira_transitions};
 
@@ -82,11 +83,11 @@ impl NodeLogic for GetJiraTransitionsNode {
             return Err(flow_like_types::anyhow!("Issue key is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.jira_api_url(&format!("/issue/{}/transitions", issue_key));
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;

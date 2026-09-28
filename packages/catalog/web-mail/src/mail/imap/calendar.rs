@@ -1,5 +1,7 @@
 #[cfg(feature = "execute")]
 use chrono::{DateTime, NaiveDateTime, Utc};
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -7,7 +9,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 #[cfg(feature = "execute")]
-use flow_like_types::{anyhow, async_trait, json::json, reqwest};
+use flow_like_types::{anyhow, async_trait, json::json};
 #[cfg(not(feature = "execute"))]
 use flow_like_types::{async_trait, json::json};
 #[cfg(feature = "execute")]
@@ -399,12 +401,15 @@ impl NodeLogic for ImapSubscribeCalendarNode {
         let start_date: Option<DateTime<Utc>> = context.evaluate_pin("start_date").await.ok();
         let end_date: Option<DateTime<Utc>> = context.evaluate_pin("end_date").await.ok();
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
+        let client = GuardedHttpClient::configured(context.execution_environment(), |builder| {
+            builder.timeout(std::time::Duration::from_secs(30))
+        })?;
 
-        let response = match client.get(&url).send().await {
+        let sent = match client.get(&url) {
+            Ok(request) => request.send().await.map_err(flow_like_types::Error::from),
+            Err(err) => Err(err),
+        };
+        let response = match sent {
             Ok(resp) => resp,
             Err(e) => {
                 context

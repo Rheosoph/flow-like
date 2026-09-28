@@ -1,11 +1,12 @@
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 /// Confluence label
@@ -121,14 +122,14 @@ impl NodeLogic for GetLabelsNode {
             return Err(flow_like_types::anyhow!("Page ID is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let labels = if provider.is_cloud {
             // Cloud v2 API
             let url = provider.confluence_api_url(&format!("/pages/{}/labels", page_id));
 
             let response = client
-                .get(&url)
+                .get(&url)?
                 .header("Authorization", provider.auth_header())
                 .send()
                 .await?;
@@ -155,7 +156,7 @@ impl NodeLogic for GetLabelsNode {
             let url = provider.confluence_rest_api_url(&format!("/content/{}/label", page_id));
 
             let response = client
-                .get(&url)
+                .get(&url)?
                 .header("Authorization", provider.auth_header())
                 .send()
                 .await?;
@@ -282,7 +283,7 @@ impl NodeLogic for AddLabelNode {
             return Err(flow_like_types::anyhow!("Label is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let url = provider.confluence_rest_api_url(&format!("/content/{}/label", page_id));
         let body = json!([{
@@ -291,7 +292,7 @@ impl NodeLogic for AddLabelNode {
         }]);
 
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Content-Type", "application/json")
             .json(&body)
@@ -408,7 +409,7 @@ impl NodeLogic for RemoveLabelNode {
             return Err(flow_like_types::anyhow!("Label is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let url = provider.confluence_rest_api_url(&format!(
             "/content/{}/label/{}",
@@ -417,7 +418,7 @@ impl NodeLogic for RemoveLabelNode {
         ));
 
         let response = client
-            .delete(&url)
+            .delete(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;

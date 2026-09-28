@@ -431,9 +431,16 @@ impl Modify for SecurityAddon {
         crate::routes::app::events::get_event::get_event,
         crate::routes::app::events::upsert_event::upsert_event,
         crate::routes::app::events::delete_event::delete_event,
+        crate::teams::management::get,
+        crate::teams::management::setup,
+        crate::teams::management::disconnect,
+        crate::teams::management::rotate,
+        crate::teams::management::package,
         crate::routes::app::events::get_event_versions::get_event_versions,
         crate::routes::app::events::get_event_timeline::get_event_timeline,
         crate::routes::app::events::get_event_runs::get_event_runs,
+        crate::mail_ingress::address::get_address,
+        crate::mail_ingress::address::update_alias,
         crate::routes::app::events::restore_event::restore_event,
         crate::routes::app::events::validate_event::validate_event,
         crate::routes::app::events::setup_event::setup_event,
@@ -470,6 +477,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::comments::remove_comment::remove_comment,
         // Notifications routes
         crate::routes::app::notifications::create_notification,
+        crate::routes::app::mail::send_mail,
+        crate::routes::app::mail::reply_mail,
         // Cache routes
         crate::routes::app::cache::read_cache_entry,
         crate::routes::app::cache::cache_entry_exists,
@@ -560,6 +569,9 @@ impl Modify for SecurityAddon {
         // Execution routes
         crate::routes::execution::progress::report_progress,
         crate::routes::execution::progress::push_events,
+        crate::teams::runtime::send,
+        crate::routes::app::mail::executor_send_mail,
+        crate::routes::app::mail::executor_reply_mail,
         crate::routes::execution::progress::poll_status,
         crate::routes::execution::progress::get_run_status,
         crate::routes::execution::cancel::cancel_run,
@@ -591,7 +603,11 @@ impl Modify for SecurityAddon {
         crate::routes::sink::trigger::trigger_http,
         crate::routes::sink::trigger::trigger_telegram,
         crate::routes::sink::trigger::trigger_discord,
+        crate::teams::runtime::incoming,
         crate::routes::sink::trigger::trigger_service,
+        crate::mail_ingress::recipient,
+        crate::mail_ingress::ingest,
+        crate::mail_ingress::dispatch,
         crate::routes::sink::trigger::get_cron_sinks,
         crate::routes::sink::trigger::get_sink_configs,
         crate::routes::sink::management::list_sinks,
@@ -904,6 +920,18 @@ impl Modify for SecurityAddon {
         crate::routes::app::data::presign_data_access::PresignDataAccessResponse,
         // App notifications
         crate::routes::app::notifications::CreateNotificationParams,
+        crate::routes::app::mail::SendMailRequest,
+        crate::routes::app::mail::ReplyMailRequest,
+        crate::routes::app::mail::MailSessionSchema,
+        crate::routes::app::mail::MailMessageRefSchema,
+        crate::routes::app::mail::SendMailResponse,
+        crate::mail_ingress::address::AddressView,
+        crate::mail_ingress::address::AliasUpdate,
+        crate::mail_ingress::IngestRequest,
+        crate::mail_ingress::S3Source,
+        crate::mail_ingress::IngestResponse,
+        crate::mail_ingress::RecipientResponse,
+        crate::mail_ingress::DispatchResponse,
         crate::routes::app::notifications::CreateNotificationResponse,
         // Admin governance scores
         crate::routes::admin::governance::list_scores::AppScoreItem,
@@ -1010,6 +1038,12 @@ impl Modify for SecurityAddon {
         crate::routes::app::events::restore_event::RestoreEventResponse,
         crate::routes::app::events::validate_event::VersionQuery,
         crate::routes::app::events::upsert_event::EventUpsertBody,
+        crate::teams::AuthMode,
+        crate::teams::management::TeamsConnectionView,
+        crate::teams::management::TeamsSetupRequest,
+        crate::teams::management::TeamsPackage,
+        crate::teams::runtime::TeamsSendRequest,
+        crate::teams::runtime::TeamsSendResponse,
         crate::routes::app::events::setup_event::SetupEventRequest,
         crate::routes::app::events::setup_event::SetupEventResponse,
         crate::routes::app::events::prerun_event::PrerunEventQuery,
@@ -1516,6 +1550,93 @@ mod tests {
         }
     }
 
+    #[test]
+    fn teams_bot_paths_are_documented() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        for (path, method, operation) in [
+            (
+                "/apps/{app_id}/events/{event_id}/teams",
+                "get",
+                "get_teams_bot",
+            ),
+            (
+                "/apps/{app_id}/events/{event_id}/teams",
+                "put",
+                "setup_teams_bot",
+            ),
+            (
+                "/apps/{app_id}/events/{event_id}/teams",
+                "delete",
+                "disconnect_teams_bot",
+            ),
+            (
+                "/apps/{app_id}/events/{event_id}/teams/rotate",
+                "post",
+                "rotate_teams_bot_secret",
+            ),
+            (
+                "/apps/{app_id}/events/{event_id}/teams/package",
+                "get",
+                "download_teams_app_package",
+            ),
+            (
+                "/sink/trigger/teams/{connection_id}",
+                "post",
+                "receive_teams_activity",
+            ),
+            (
+                "/execution/apps/{app_id}/teams/send",
+                "post",
+                "send_teams_message",
+            ),
+        ] {
+            assert_eq!(
+                spec.pointer(&format!(
+                    "/paths/{}/{method}/operationId",
+                    path.replace('/', "~1")
+                ))
+                .and_then(Value::as_str),
+                Some(operation),
+                "{method} {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn mail_paths_are_documented() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        for (path, method) in [
+            ("/apps/{app_id}/events/{event_id}/email-address", "get"),
+            ("/apps/{app_id}/events/{event_id}/email-address", "put"),
+            ("/apps/{app_id}/mail/send", "post"),
+            ("/apps/{app_id}/mail/reply", "post"),
+            ("/execution/apps/{app_id}/mail/send", "post"),
+            ("/execution/apps/{app_id}/mail/reply", "post"),
+            ("/sink/mail/recipients/{address}", "get"),
+            ("/sink/mail/ingest", "post"),
+            ("/sink/mail/dispatch", "post"),
+        ] {
+            assert!(
+                spec.pointer(&format!("/paths/{}/{method}", path.replace('/', "~1")))
+                    .is_some(),
+                "missing OpenAPI operation {method} {path}"
+            );
+        }
+        for path in [
+            "/apps/{app_id}/mail/send",
+            "/execution/apps/{app_id}/mail/reply",
+        ] {
+            assert!(
+                spec.pointer(&format!(
+                    "/paths/{}/post/responses/429/headers/Retry-After",
+                    path.replace('/', "~1")
+                ))
+                .is_some(),
+                "{path} documents no Retry-After header"
+            );
+        }
+    }
+
     /// The admin dashboard, the app audit page and the SDKs read these shapes.
     #[test]
     fn audit_paths_are_documented() {
@@ -1606,5 +1727,31 @@ mod tests {
                     .iter()
                     .any(|parameter| parameter.get("name") == Some(&Value::from("type"))))
         );
+        for (path, name) in [
+            ("/store/explore", "dev"),
+            ("/store/explore/search", "dev"),
+            ("/store/explore/search", "verified"),
+            ("/admin/explore/preview", "dev"),
+            ("/admin/explore/preview", "signed_in"),
+        ] {
+            let schema = spec
+                .pointer(&format!(
+                    "/paths/{}/get/parameters",
+                    path.replace('/', "~1")
+                ))
+                .and_then(Value::as_array)
+                .and_then(|parameters| {
+                    parameters
+                        .iter()
+                        .find(|parameter| parameter.get("name") == Some(&Value::from(name)))
+                })
+                .and_then(|parameter| parameter.get("schema"))
+                .map(Value::to_string)
+                .unwrap_or_else(|| panic!("{path} documents no '{name}' parameter"));
+            assert!(
+                schema.contains("\"boolean\"") && !schema.contains("\"string\""),
+                "{path} documents '{name}' as {schema}"
+            );
+        }
     }
 }

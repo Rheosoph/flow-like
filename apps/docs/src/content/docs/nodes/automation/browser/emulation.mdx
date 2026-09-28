@@ -1,0 +1,30 @@
+---
+title: "Emulation Node Catalog"
+description: "Automation/Browser/Emulation Flow-Like node category with 3 generated node references."
+sidebar:
+  order: 0
+  label: "Emulation"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Emulation nodes, Automation/Browser/Emulation, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Automation/Browser/Emulation"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Emulation Node Catalog\",\"description\":\"Automation/Browser/Emulation Flow-Like node category with 3 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/automation/browser/emulation/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Automation/Browser/Emulation\",\"keywords\":\"Emulation nodes, Automation/Browser/Emulation, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Automation/Browser/Emulation"}
+	label="Emulation"
+	nodes={nodesByCategory["Automation/Browser/Emulation"] ?? []}
+	client:load
+/>

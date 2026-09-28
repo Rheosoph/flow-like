@@ -1,8 +1,10 @@
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{io, time::Duration};
 
+pub mod cache;
 pub mod lmtp;
 pub mod ses;
 
@@ -101,12 +103,18 @@ impl ApiClient {
     }
 
     pub async fn dispatch(&self) -> Result<()> {
+        let body = b"{}";
         let response = self
             .client
             .post(self.base.join("api/v1/sink/mail/dispatch")?)
             .timeout(Duration::from_secs(75))
             .bearer_auth(&self.token)
-            .json(&serde_json::json!({}))
+            .header("content-type", "application/json")
+            .header(
+                "x-amz-content-sha256",
+                format!("{:x}", Sha256::digest(body)),
+            )
+            .body(body.as_slice())
             .send()
             .await?;
         if !response.status().is_success() {
@@ -142,11 +150,19 @@ impl IngestApi for ApiClient {
     }
 
     async fn ingest(&self, request: &IngestRequest) -> Result<()> {
+        // CloudFront OAC requires the payload hash for Lambda URL POSTs.
+        // Hash the same serialized bytes that reqwest sends on the wire.
+        let body = serde_json::to_vec(request)?;
         let response = self
             .client
             .post(self.base.join("api/v1/sink/mail/ingest")?)
             .bearer_auth(&self.token)
-            .json(request)
+            .header("content-type", "application/json")
+            .header(
+                "x-amz-content-sha256",
+                format!("{:x}", Sha256::digest(&body)),
+            )
+            .body(body)
             .send()
             .await?;
         // This status is the API's durable-acceptance contract. Never treat a
@@ -191,5 +207,58 @@ mod tests {
             )
             .delivery_id
         );
+    }
+
+    #[tokio::test]
+    async fn posts_hash_the_exact_wire_body_for_cloudfront_oac() {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for (path, status) in [("ingest", "202 Accepted"), ("dispatch", "200 OK")] {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                assert_eq!(line, format!("POST /api/v1/sink/mail/{path} HTTP/1.1\r\n"));
+                let mut headers = std::collections::HashMap::new();
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).await.unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    let (key, value) = line.trim_end().split_once(':').unwrap();
+                    headers.insert(key.to_ascii_lowercase(), value.trim().to_string());
+                }
+                let length: usize = headers["content-length"].parse().unwrap();
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).await.unwrap();
+                assert_eq!(headers["authorization"], "Bearer scoped-token");
+                assert_eq!(headers["content-type"], "application/json");
+                assert_eq!(
+                    headers["x-amz-content-sha256"],
+                    format!("{:x}", Sha256::digest(&body))
+                );
+                let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                if path == "ingest" {
+                    assert_eq!(body["recipients"][0], "bcc@example.test");
+                } else {
+                    assert_eq!(body, serde_json::json!({}));
+                }
+                reader.get_mut().write_all(format!("HTTP/1.1 {status}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}").as_bytes()).await.unwrap();
+            }
+        });
+        let client = ApiClient::new(&base, "scoped-token".into()).unwrap();
+        client
+            .ingest(&IngestRequest::postfix(
+                b"Subject: test\r\n\r\nbody",
+                "sender@example.test",
+                "bcc@example.test",
+            ))
+            .await
+            .unwrap();
+        client.dispatch().await.unwrap();
+        server.await.unwrap();
     }
 }

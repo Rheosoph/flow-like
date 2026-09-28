@@ -50,7 +50,10 @@ export type FrameBudgetLimits = {
 	bytesPerSecond: number;
 };
 
-/** What a device may send to one controller participant. */
+/**
+ * What a device may send to one controller account, or to one participant
+ * whose account this replica cannot see.
+ */
 export const DEVICE_PARTICIPANT_BUDGET: FrameBudgetLimits = {
 	frames: 256,
 	framesPerSecond: 64,
@@ -172,6 +175,97 @@ export class FrameBudgets {
 
 	get size(): number {
 		return this.budgets.size;
+	}
+}
+
+export type BudgetedAdmission = {
+	role: "device" | "controller";
+	deviceId: string;
+	deviceAuthEpoch: number;
+	subject: string;
+};
+
+/**
+ * Keys a frame's budgets by account wherever the account is known, so opening
+ * more sockets never buys an account a larger share of a device.
+ */
+export function managementFrameBudgets(
+	admission: BudgetedAdmission,
+	target: string,
+	targetAccount: string | null,
+): [string, FrameBudgetLimits][] {
+	const device = `device:${admission.deviceId}:${admission.deviceAuthEpoch}`;
+	if (admission.role === "controller")
+		return [
+			[
+				`controller:${admission.deviceId}:${admission.deviceAuthEpoch}:${admission.subject}`,
+				CONTROLLER_BUDGET,
+			],
+		];
+	return [
+		[device, DEVICE_AGGREGATE_BUDGET],
+		[
+			targetAccount === null
+				? `${device}:to:${target}`
+				: `${device}:to-account:${targetAccount}`,
+			DEVICE_PARTICIPANT_BUDGET,
+		],
+	];
+}
+
+/** The one account behind a set of sockets, or null when there is none or several. */
+export function soleAccount(
+	subjects: Iterable<string | undefined>,
+): string | null {
+	let account: string | null = null;
+	for (const subject of subjects) {
+		if (subject === undefined || (account !== null && account !== subject))
+			return null;
+		account = subject;
+	}
+	return account;
+}
+
+const SENDER_SHARE_HALF_LIFE_MS = 2_000;
+const MAX_TRACKED_SENDERS = 64;
+
+/**
+ * Recently delivered bytes per sender for one recipient socket, decaying with
+ * the buffer they filled. Congestion then penalizes the senders filling the
+ * buffer instead of whichever frame happens to cross its threshold.
+ */
+export class SenderShares {
+	private readonly shares = new Map<string, { bytes: number; at: number }>();
+
+	constructor(private readonly halfLifeMs = SENDER_SHARE_HALF_LIFE_MS) {}
+
+	private decayed(share: { bytes: number; at: number }, now: number): number {
+		return share.bytes * 2 ** (-Math.max(0, now - share.at) / this.halfLifeMs);
+	}
+
+	add(sender: string, bytes: number, now = Date.now()) {
+		const share = this.shares.get(sender);
+		this.shares.set(sender, {
+			bytes: (share ? this.decayed(share, now) : 0) + bytes,
+			at: now,
+		});
+		if (this.shares.size > MAX_TRACKED_SENDERS)
+			for (const [key, entry] of this.shares)
+				if (this.decayed(entry, now) < 1) this.shares.delete(key);
+	}
+
+	/** True when the sender holds at least half of the largest recent share. */
+	isTopContributor(sender: string, now = Date.now()): boolean {
+		const own = this.shares.get(sender);
+		if (!own) return false;
+		let largest = 0;
+		for (const share of this.shares.values())
+			largest = Math.max(largest, this.decayed(share, now));
+		return this.decayed(own, now) * 2 >= largest;
+	}
+
+	get size(): number {
+		return this.shares.size;
 	}
 }
 

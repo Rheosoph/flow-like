@@ -6,6 +6,7 @@ import {
 	type NativeWidgetPageDefinition,
 	nativeWidgetScope,
 	nativeWidgetShell,
+	nativeWidgetTarget,
 	normalizeNativeWidgetDefinition,
 	readNativeWidgetDefinitions,
 	saveNativeWidgetDefinitions,
@@ -426,6 +427,44 @@ describe("native persisted content boundary", () => {
 					...content(),
 					page: { ...content().page, fetch: "https://external.example" },
 				},
+				definition,
+				now.getTime(),
+			),
+		).toBe(false);
+	});
+	test("fingerprints what a widget shows, not how it is labelled", () => {
+		const target = nativeWidgetTarget(definition);
+		expect(target).toMatch(/^[0-9a-f]{16}$/);
+		expect(
+			nativeWidgetTarget({
+				...definition,
+				title: "Renamed",
+				accent: "teal",
+				refreshMinutes: 60,
+				updatedAt: "2026-09-14T00:00:00.000Z",
+			}),
+		).toBe(target);
+		expect(nativeWidgetTarget({ ...definition, containerId: "card" })).not.toBe(
+			target,
+		);
+		expect(nativeWidgetTarget({ ...definition, path: "/other" })).not.toBe(
+			target,
+		);
+		expect(nativeWidgetShell(definition, now).target).toBe(target);
+	});
+	test("accepts the pending marker only on placeholders without content", () => {
+		const shell = { ...nativeWidgetShell(definition, now), pending: true };
+		expect(isNativeWidgetContent(shell, definition, now.getTime())).toBe(true);
+		expect(
+			isNativeWidgetContent(
+				{ ...content(), pending: true },
+				definition,
+				now.getTime(),
+			),
+		).toBe(false);
+		expect(
+			isNativeWidgetContent(
+				{ ...shell, pending: "yes" },
 				definition,
 				now.getTime(),
 			),

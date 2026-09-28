@@ -1,8 +1,6 @@
 import {
 	ChatInterface,
 	CronJobConfig,
-	DEFAULT_CHAT_AI_DISCLOSURE,
-	DEFAULT_CHAT_THEME_CSS,
 	DaemonConfig,
 	DeeplinkConfig,
 	DiscordConfig,
@@ -16,76 +14,26 @@ import {
 	TelegramConfig,
 	UserMailConfig,
 } from "@flow-like/flow-like-ui";
+import { InboundEmailConfig } from "@flow-like/flow-like-ui/components/interfaces/configs/inbound-email";
+import { TeamsConfig } from "@flow-like/flow-like-ui/components/interfaces/configs/teams";
+import { EVENT_DEFINITIONS } from "@flow-like/flow-like-ui/lib/event-definitions";
 import { createId } from "@paralleldrive/cuid2";
 
 export const EVENT_CONFIG: IEventMapping = {
+	events_inbound_email: {
+		...EVENT_DEFINITIONS.events_inbound_email,
+		configInterfaces: { inbound_email: InboundEmailConfig },
+		useInterfaces: {},
+	},
 	events_chat: {
+		...EVENT_DEFINITIONS.events_chat,
 		configInterfaces: {
 			simple_chat: SimpleChatConfig,
 			discord: DiscordConfig,
 			telegram: TelegramConfig,
+			teams: TeamsConfig,
 		},
-		useInterfaces: {
-			simple_chat: ChatInterface,
-		},
-		configs: {
-			simple_chat: {
-				allow_file_upload: true,
-				allow_voice_input: false,
-				ai_disclosure: DEFAULT_CHAT_AI_DISCLOSURE,
-				background_image: "",
-				custom_css: DEFAULT_CHAT_THEME_CSS,
-				voice: {
-					mode: "disabled",
-					invoke: "manual",
-					variant: "conservative",
-					size: "md",
-					playback: "text",
-					max_duration: 300,
-					auto_stop: false,
-				},
-				history_elements: 5,
-				tools: [],
-				default_tools: [],
-				example_messages: [],
-			},
-			discord: {
-				sink_type: "discord",
-				token: "",
-				bot_name: "Flow-Like Bot",
-				bot_description: "",
-				intents: ["Guilds", "GuildMessages", "MessageContent"],
-				channel_whitelist: [],
-				channel_blacklist: [],
-				respond_to_mentions: true,
-				respond_to_dms: true,
-				command_prefix: "!",
-			},
-			telegram: {
-				sink_type: "telegram",
-				bot_token: "",
-				bot_name: "Flow-Like Bot",
-				bot_description: "",
-				chat_whitelist: [],
-				chat_blacklist: [],
-				respond_to_mentions: true,
-				respond_to_private: true,
-				command_prefix: "/",
-			},
-		},
-		defaultEventType: "simple_chat",
-		eventTypes: ["simple_chat", "discord", "telegram"],
-		withSink: ["discord", "telegram"],
-		sinkAvailability: {
-			discord: {
-				availability: "local",
-				description: "Requires persistent connection to Discord",
-			},
-			telegram: {
-				availability: "local",
-				description: "Requires persistent connection to Telegram",
-			},
-		},
+		useInterfaces: { simple_chat: ChatInterface },
 	},
 	events_mail: {
 		configInterfaces: {

@@ -351,6 +351,49 @@ describe("workspaceAccess", () => {
 		});
 	});
 
+	describe("a template placeholder id outranks id_taken", () => {
+		const placeholder = (remote: Partial<WorkspaceAccessInput["remote"]>) =>
+			access({
+				packageId: "com.example.simple-math",
+				hasLocal: true,
+				placeholderId: true,
+				remote,
+			});
+
+		test("taken by someone else (403 or no maintainer bit) → local_only, no banner", () => {
+			for (const remote of [
+				{ status: "forbidden" as const },
+				{ permission: undefined },
+				{ permission: User | Buyer },
+			]) {
+				expect(placeholder(remote)).toEqual({ mode: "local_only" });
+			}
+		});
+
+		test("a maintained placeholder id still opens the owner shell", () => {
+			expect(placeholder({ permission: Owner })).toEqual({
+				mode: "full",
+				isOwner: true,
+				isMaintainer: true,
+			});
+		});
+
+		test("auth and reachability banners are unaffected", () => {
+			expect(placeholder({ status: "error" })).toEqual({
+				mode: "local",
+				banner: "registry_unavailable",
+			});
+			expect(
+				access({
+					hasLocal: true,
+					placeholderId: true,
+					auth: "signed_out",
+					remote: { status: "forbidden" },
+				}),
+			).toEqual({ mode: "local", banner: "signed_out" });
+		});
+	});
+
 	describe("rule 9: no maintainer bit, no checkout → store page", () => {
 		test("no access row (permission undefined)", () => {
 			expect(access({ remote: { permission: undefined } })).toEqual({

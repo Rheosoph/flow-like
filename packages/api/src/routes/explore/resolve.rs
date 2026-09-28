@@ -487,10 +487,10 @@ fn slide(item: ResolvedItem, doc: Option<&PlacementItemDoc>) -> ResolvedSlide {
     }
 }
 
-/// Collection members in display order: pinned or hand-picked items, then the rule's results.
-fn collection_refs<'a>(
+/// Collection members in display order: pinned or hand-picked items, then `rule_items` for a rule collection.
+pub fn collection_refs<'a>(
     placement: &'a PlacementDoc,
-    hydrated: &'a Hydrated,
+    rule_items: &'a [(ItemKind, String)],
 ) -> Vec<(ItemKind, &'a str)> {
     let mut refs: Vec<(ItemKind, &str)> = placement
         .items
@@ -505,7 +505,7 @@ fn collection_refs<'a>(
             ..
         }
     ) {
-        for (kind, id) in hydrated.rule_items(&placement.id) {
+        for (kind, id) in rule_items {
             if *kind != ItemKind::Collection && !refs.contains(&(*kind, id.as_str())) {
                 refs.push((*kind, id.as_str()));
             }
@@ -599,7 +599,10 @@ impl Selector<'_> {
         else {
             return None;
         };
-        let picked = self.pick(collection_refs(placement, self.hydrated));
+        let picked = self.pick(collection_refs(
+            placement,
+            self.hydrated.rule_items(&placement.id),
+        ));
         let shortfall = picked.shortfall(COLLECTION_ITEMS_MIN);
         let (apps, packages) = kind_counts(&picked.items);
         Some((

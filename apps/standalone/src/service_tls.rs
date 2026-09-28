@@ -17,6 +17,8 @@ use crate::{
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Unauthenticated peers must prove they speak TLS quickly before a pending slot is spent on them.
+const CLIENT_HELLO_TIMEOUT: Duration = Duration::from_secs(2);
 
 struct CachedIdentity {
     revision: u64,
@@ -130,8 +132,15 @@ impl ServiceTlsProvider for ManagedTls {
 
     fn accept(&self, stream: TcpStream) -> ServiceTlsFuture<'_, BoxedServiceIo> {
         Box::pin(async move {
-            let acceptor = tokio_rustls::TlsAcceptor::from(self.configuration().await?);
-            let stream = tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(stream))
+            let hello = tokio::time::timeout(
+                CLIENT_HELLO_TIMEOUT,
+                tokio_rustls::LazyConfigAcceptor::new(rustls::server::Acceptor::default(), stream),
+            )
+            .await
+            .context("Placement TLS client hello timed out")?
+            .context("Placement TLS client hello was invalid")?;
+            let config = self.configuration().await?;
+            let stream = tokio::time::timeout(HANDSHAKE_TIMEOUT, hello.into_stream(config))
                 .await
                 .context("Placement TLS handshake timed out")?
                 .context("Placement TLS handshake failed")?;
@@ -295,6 +304,14 @@ mod tests {
         assert!(
             tls.accept(stream).await.is_err(),
             "managed TLS never accepts plaintext HTTP"
+        );
+        let _silent = TcpStream::connect(address).await?;
+        let (stream, _) = listener.accept().await?;
+        let started = Instant::now();
+        assert!(tls.accept(stream).await.is_err());
+        assert!(
+            started.elapsed() < HANDSHAKE_TIMEOUT,
+            "a silent client loses its handshake slot at the client hello deadline"
         );
         tls.cached.lock().await.as_mut().unwrap().not_after = crate::enrollment::unix_time()?;
         assert!(

@@ -562,7 +562,7 @@ fn policy_shape(
 }
 
 fn current(issued: i64, expires: i64, now: i64) -> Result<()> {
-    if issued > now.saturating_add(5) || expires <= now {
+    if issued > now.saturating_add(crate::MAX_CLOCK_SKEW_SECONDS) || expires <= now {
         return Err(ProtocolError::InvalidTime);
     }
     Ok(())
@@ -840,5 +840,49 @@ mod tests {
         assert!(verify_telemetry_roster(&signed, &signer.public_key(), 200).is_err());
         cert.management_key = [0; 32];
         assert!(sign_controller_certificate(&cert, &signer).is_err());
+    }
+
+    #[test]
+    fn issued_times_tolerate_bounded_clock_skew_but_expiry_stays_strict() {
+        let signer = SigningKey::generate();
+        let certificate = |issued_at: i64| {
+            sign_controller_certificate(
+                &ControllerCertificate {
+                    version: 1,
+                    device_id: "device".into(),
+                    grant_id: "owner".into(),
+                    session_id: "session".into(),
+                    management_key: x25519_dalek::x25519(
+                        [7; 32],
+                        x25519_dalek::X25519_BASEPOINT_BYTES,
+                    ),
+                    issued_at,
+                    expires_at: issued_at + MANAGEMENT_SESSION_SECONDS,
+                },
+                &signer,
+            )
+            .unwrap()
+        };
+        let now = 1_000;
+        let key = signer.public_key();
+        assert!(verify_controller_certificate(&certificate(now + 60), &key, now).is_ok());
+        assert!(
+            verify_controller_certificate(
+                &certificate(now + crate::MAX_CLOCK_SKEW_SECONDS),
+                &key,
+                now
+            )
+            .is_ok()
+        );
+        assert!(
+            verify_controller_certificate(
+                &certificate(now + crate::MAX_CLOCK_SKEW_SECONDS + 1),
+                &key,
+                now
+            )
+            .is_err()
+        );
+        let expired = certificate(now - MANAGEMENT_SESSION_SECONDS);
+        assert!(verify_controller_certificate(&expired, &key, now).is_err());
     }
 }

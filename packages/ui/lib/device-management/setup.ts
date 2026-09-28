@@ -1,5 +1,6 @@
 import type { IApiState } from "../../state/backend-state/api-state";
 import type { IProfile } from "../../types";
+import { ApiResponseError } from "../api-error";
 import { loadDeviceCrypto, unbase64url, withPassword } from "./crypto";
 import {
 	type ReleaseConfig,
@@ -9,11 +10,14 @@ import {
 	validateStandalonePackageSelection,
 	verifyReleaseManifest,
 } from "./package";
-import { saveAccountRecovery } from "./recovery";
+import { saveAccountRecovery, sealedControllerBackup } from "./recovery";
 import {
 	type DeviceAccountScope,
+	type DeviceStoragePersistence,
 	type LocalDeviceVault,
 	addDeviceVault,
+	deviceApiBase,
+	requestPersistentDeviceStorage,
 } from "./storage";
 import type { BrowserController, OnboardingManifest } from "./types";
 
@@ -58,11 +62,15 @@ export function assertEnrollmentTemplate(
 		);
 }
 
+/** `limit` means the hub refused another account backup because this account holds its maximum. */
+export type AccountBackupOutcome = "saved" | "local_only" | "limit";
+
 export async function prepareDevicePackage(input: DeviceSetupInput): Promise<{
 	package: Blob;
 	backup: Blob;
 	deviceId: string;
-	accountBackup?: "saved" | "local_only";
+	accountBackup?: AccountBackupOutcome;
+	storage: DeviceStoragePersistence;
 }> {
 	input.signal?.throwIfAborted();
 	const verifiedRelease = await verifyReleaseManifest(
@@ -90,7 +98,7 @@ export async function prepareDevicePackage(input: DeviceSetupInput): Promise<{
 				password,
 				Uint8Array.from(prepared.controller.vault),
 			);
-			const apiBase = `${input.scope.apiOrigin.replace(/\/$/u, "")}/api/v1`;
+			const apiBase = deviceApiBase(input.scope);
 			const response = await input.api.fetch<{
 				enrollment_token: string;
 				manifest: OnboardingManifest;
@@ -147,21 +155,17 @@ export async function prepareDevicePackage(input: DeviceSetupInput): Promise<{
 				manifestJws: completed.manifest_jws,
 				grantId: "owner",
 			};
-			const backup = new Blob(
-				[
-					JSON.stringify({
-						version: 1,
-						apiOrigin: input.scope.apiOrigin,
-						...record,
-						controllerVault: Array.from(record.controllerVault),
-						invitationVault: Array.from(record.invitationVault ?? []),
-					}),
-				],
-				{ type: "application/json" },
+			const backup = await sealedControllerBackup(
+				input.scope,
+				record,
+				input.password,
+				module,
 			);
+			if (input.signal?.aborted) throw new Error("Device setup cancelled.");
+			const storage = await requestPersistentDeviceStorage();
 			await addDeviceVault(input.scope, record);
 			exported = true;
-			let accountBackup: "saved" | "local_only" | undefined;
+			let accountBackup: AccountBackupOutcome | undefined;
 			if (input.backupToAccount) {
 				try {
 					await saveAccountRecovery({
@@ -174,8 +178,11 @@ export async function prepareDevicePackage(input: DeviceSetupInput): Promise<{
 						crypto: module,
 					});
 					accountBackup = "saved";
-				} catch {
-					accountBackup = "local_only";
+				} catch (error) {
+					accountBackup =
+						error instanceof ApiResponseError && error.status === 429
+							? "limit"
+							: "local_only";
 				}
 			}
 			return {
@@ -183,6 +190,7 @@ export async function prepareDevicePackage(input: DeviceSetupInput): Promise<{
 				backup,
 				deviceId: record.deviceId,
 				accountBackup,
+				storage,
 			};
 		});
 	} catch (error) {

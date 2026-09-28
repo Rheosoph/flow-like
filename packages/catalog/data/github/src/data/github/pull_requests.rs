@@ -3,13 +3,14 @@ use super::{
     list_pull_requests::{GitHubPullRequest, parse_pr},
     provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider},
 };
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -197,9 +198,9 @@ impl NodeLogic for GetGitHubPullRequestNode {
 
         let url = provider.api_url(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -455,9 +456,9 @@ impl NodeLogic for CreateGitHubPullRequestNode {
             request_body["body"] = json!(body);
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -673,9 +674,9 @@ impl NodeLogic for UpdateGitHubPullRequestNode {
             request_body["maintainer_can_modify"] = json!(maintainer_can_modify);
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .patch(&url)
+            .patch(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -908,9 +909,9 @@ impl NodeLogic for MergeGitHubPullRequestNode {
             request_body["commit_message"] = json!(commit_message);
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .put(&url)
+            .put(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -1103,9 +1104,9 @@ impl NodeLogic for ListGitHubPullRequestFilesNode {
             page.max(1)
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -1284,9 +1285,9 @@ impl NodeLogic for ListGitHubPullRequestReviewsNode {
             page.max(1)
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -1513,9 +1514,9 @@ impl NodeLogic for CreateGitHubPullRequestReviewNode {
             request_body["comments"] = comments;
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)

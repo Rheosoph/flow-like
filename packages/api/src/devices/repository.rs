@@ -4,6 +4,7 @@ use crate::{
 };
 use flow_like_device_protocol::{
     DeviceIdentity, DeviceReceipt, DeviceRegistrationStatus, DeviceStatus, OnboardingManifest,
+    compact_digest,
 };
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction, QueryResult,
@@ -14,11 +15,28 @@ fn sql(query: &str, values: impl IntoIterator<Item = Value>) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Postgres, query, values)
 }
 
+pub(super) fn expired_authorization() -> ApiError {
+    super::device_proof_invalid("Device authorization expired while waiting for the database")
+}
+
+fn lapsed(expires_at: i64) -> bool {
+    expires_at <= chrono::Utc::now().timestamp()
+}
+
+/// Owner sessions and enrollment tokens are not device proofs, so a lapse
+/// during a slow database wait is reported as retryable, never as clock skew.
 fn require_live(expires_at: i64) -> Result<(), ApiError> {
-    if expires_at <= chrono::Utc::now().timestamp() {
-        return Err(ApiError::unauthorized(
-            "Device authorization expired while waiting for the database",
-        ));
+    if lapsed(expires_at) {
+        return Err(ApiError::service_unavailable(format!(
+            "Authorization valid until {expires_at} expired while waiting for the database; retry the request"
+        )));
+    }
+    Ok(())
+}
+
+fn require_live_proof(expires_at: i64) -> Result<(), ApiError> {
+    if lapsed(expires_at) {
+        return Err(expired_authorization());
     }
     Ok(())
 }
@@ -77,7 +95,10 @@ pub(crate) fn device(row: QueryResult) -> Result<Device, ApiError> {
     })
 }
 
-pub(crate) async fn active_account<C: ConnectionTrait>(db: &C, owner: &str) -> Result<(), ApiError> {
+pub(crate) async fn active_account<C: ConnectionTrait>(
+    db: &C,
+    owner: &str,
+) -> Result<(), ApiError> {
     let row = db
         .query_one_raw(sql(
             r#"SELECT id FROM "User" WHERE id = $1 AND status = 'ACTIVE'"#,
@@ -90,7 +111,10 @@ pub(crate) async fn active_account<C: ConnectionTrait>(db: &C, owner: &str) -> R
     Ok(())
 }
 
-pub(crate) async fn current_device<C: ConnectionTrait>(db: &C, id: &str) -> Result<Device, ApiError> {
+pub(crate) async fn current_device<C: ConnectionTrait>(
+    db: &C,
+    id: &str,
+) -> Result<Device, ApiError> {
     db.query_one_raw(sql(
         r#"SELECT * FROM "ManagedDevice" WHERE id = $1"#,
         [id.into()],
@@ -120,6 +144,39 @@ pub(crate) async fn lock_active_device(
     Ok(current)
 }
 
+/// Unredeemed packages stay inspectable for a week after they lapse.
+const ABANDONED_ENROLLMENT_GRACE_SECONDS: i64 = 7 * 86_400;
+const ABANDONED_ENROLLMENT_BATCH: u64 = 128;
+const ENROLLMENT_CREATION_WINDOW_SECONDS: i64 = 86_400;
+
+/// Cancelled and expired enrollments never become devices, so they and their
+/// challenges are removed after a grace period. Consumed enrollments remain as
+/// the manifest trust record of their device.
+pub(crate) async fn prune_abandoned_enrollments(
+    db: &DatabaseConnection,
+    dialect: DbDialect,
+    now: i64,
+) -> Result<u64, ApiError> {
+    let cutoff = now - ABANDONED_ENROLLMENT_GRACE_SECONDS;
+    retry_transaction(db, dialect, None, &RetryPolicy::default(), move |tx| {
+        Box::pin(async move {
+            let ids = tx.query_all_raw(sql(&format!(r#"SELECT id FROM "DeviceEnrollment" WHERE status IN ('pending','cancelled') AND "expiresAt" < $1 ORDER BY "expiresAt", id LIMIT {ABANDONED_ENROLLMENT_BATCH}"#), [cutoff.into()])).await?
+                .into_iter()
+                .map(|row| row.try_get::<String>("", "id"))
+                .collect::<Result<Vec<_>, _>>()?;
+            if ids.is_empty() {
+                return Ok(0);
+            }
+            let placeholders = (1..=ids.len()).map(|index| format!("${index}")).collect::<Vec<_>>().join(",");
+            let values = ids.iter().map(|id| Value::from(id.clone())).collect::<Vec<_>>();
+            tx.execute_raw(sql(&format!(r#"DELETE FROM "DeviceChallenge" WHERE "enrollmentId" IN ({placeholders})"#), values.clone())).await?;
+            let cutoff_index = ids.len() + 1;
+            Ok(tx.execute_raw(sql(&format!(r#"DELETE FROM "DeviceEnrollment" WHERE id IN ({placeholders}) AND status IN ('pending','cancelled') AND "expiresAt" < ${cutoff_index}"#), values.into_iter().chain([cutoff.into()]))).await?.rows_affected())
+        })
+    })
+    .await
+}
+
 pub(crate) async fn consume_proof(
     tx: &DatabaseTransaction,
     id: &str,
@@ -130,7 +187,9 @@ pub(crate) async fn consume_proof(
     let inserted = tx.execute_raw(sql(r#"INSERT INTO "DeviceProofReplay" ("deviceId", "authEpoch", "proofId", "expiresAt") VALUES ($1, $2, $3, $4) ON CONFLICT ("deviceId", "authEpoch", "proofId") DO NOTHING"#,
         [id.into(), (epoch as i64).into(), proof_id.into(), expires_at.into()])).await?.rows_affected();
     if inserted != 1 {
-        return Err(ApiError::unauthorized("Device proof was already used"));
+        return Err(super::device_proof_invalid(format!(
+            "Device proof {proof_id} was already used"
+        )));
     }
     // Proofs last at most 60 seconds. Keep an additional minute before removing
     // a bounded batch, including when different API replicas have clock skew.
@@ -193,6 +252,14 @@ impl Repository<'_> {
                 if pending >= max_pending as i64 || devices + pending >= max_devices as i64 {
                     return Err(ApiError::too_many_requests("Device enrollment limit reached"));
                 }
+                // Cancelled and lapsed packages are retained until pruning, so creation
+                // is bounded too: at most two full fleets' worth of packages per day.
+                let daily_limit = 2 * (i64::from(max_devices) + i64::from(max_pending));
+                let recent = tx.query_one_raw(sql(r#"SELECT COUNT(*) AS count FROM "DeviceEnrollment" WHERE "ownerId" = $1 AND "createdAt" > $2"#,
+                    [template.owner_id.clone().into(), (now - ENROLLMENT_CREATION_WINDOW_SECONDS).into()])).await?.ok_or_else(|| ApiError::internal("Missing recent enrollment count"))?.try_get::<i64>("", "count")?;
+                if recent >= daily_limit {
+                    return Err(ApiError::too_many_requests(format!("Device enrollment packages are limited to {daily_limit} per day; {recent} were created in the last 24 hours")));
+                }
                 tx.execute_raw(sql(r#"INSERT INTO "DeviceEnrollment" (id, "deviceId", "ownerId", "jwtId", manifest, status, "expiresAt", "createdAt") VALUES ($1,$2,$3,$4,$5,'pending',$6,$7)"#,
                     [template.enrollment_id.into(),template.device_id.into(),template.owner_id.into(),jwt_id.into(),json.into(),template.expires_at.into(),template.issued_at.into()])).await?;
                 require_live(template.expires_at)?;
@@ -201,21 +268,21 @@ impl Repository<'_> {
         }).await
     }
 
+    /// Returns the outstanding challenge while it is unexpired, otherwise stores
+    /// `challenge_id` and returns it. The locked enrollment row serializes both.
     pub async fn challenge(
         &self,
         enrollment_id: &str,
         jwt_id: &str,
         challenge_id: &str,
-        nonce_hash: &str,
         expires_at: i64,
         now: i64,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(String, i64), ApiError> {
         let enrollment_id = enrollment_id.to_owned();
         let jwt_id = jwt_id.to_owned();
         let challenge_id = challenge_id.to_owned();
-        let nonce_hash = nonce_hash.to_owned();
         retry_transaction(self.db,self.dialect,None,&RetryPolicy::default(),move |tx| {
-            let enrollment_id=enrollment_id.clone(); let jwt_id=jwt_id.clone(); let challenge_id=challenge_id.clone(); let nonce_hash=nonce_hash.clone();
+            let enrollment_id=enrollment_id.clone(); let jwt_id=jwt_id.clone(); let challenge_id=challenge_id.clone();
             Box::pin(async move {
                 let changed=tx.execute_raw(sql(r#"UPDATE "DeviceEnrollment" SET status = status WHERE id = $1 AND "jwtId" = $2 AND status = 'pending' AND "expiresAt" > $3"#,
                     [enrollment_id.clone().into(),jwt_id.into(),now.into()])).await?.rows_affected();
@@ -223,10 +290,19 @@ impl Repository<'_> {
                 let record=tx.query_one_raw(sql(r#"SELECT * FROM "DeviceEnrollment" WHERE id = $1"#,[enrollment_id.clone().into()])).await?.ok_or(ApiError::NOT_FOUND).and_then(enrollment)?;
                 active_account(tx,&record.manifest.owner_id).await?;
                 require_live(expires_at.min(record.manifest.expires_at))?;
+                if let Some(outstanding)=tx.query_one_raw(sql(r#"SELECT id,"nonceHash","expiresAt" FROM "DeviceChallenge" WHERE "enrollmentId" = $1 AND "expiresAt" > $2"#,
+                    [enrollment_id.clone().into(),now.into()])).await? {
+                    let id=outstanding.try_get::<String>("","id")?;
+                    // Challenges stored before nonces were derived cannot be reissued.
+                    if outstanding.try_get::<String>("","nonceHash")? == compact_digest(&super::challenge_nonce(&id)) {
+                        return Ok((id,outstanding.try_get("","expiresAt")?));
+                    }
+                }
+                let nonce_hash=compact_digest(&super::challenge_nonce(&challenge_id));
                 tx.execute_raw(sql(r#"INSERT INTO "DeviceChallenge" ("enrollmentId",id,"nonceHash","expiresAt") VALUES ($1,$2,$3,$4) ON CONFLICT ("enrollmentId") DO UPDATE SET id = EXCLUDED.id, "nonceHash" = EXCLUDED."nonceHash", "expiresAt" = EXCLUDED."expiresAt""#,
-                    [enrollment_id.into(),challenge_id.into(),nonce_hash.into(),expires_at.into()])).await?;
+                    [enrollment_id.into(),challenge_id.clone().into(),nonce_hash.into(),expires_at.into()])).await?;
                 require_live(expires_at.min(record.manifest.expires_at))?;
-                Ok(())
+                Ok((challenge_id,expires_at))
             })
         }).await
     }
@@ -293,7 +369,7 @@ impl Repository<'_> {
                 let proof_id = proof_id.clone();
                 Box::pin(async move {
                     let mut device = lock_active_device(tx, &id, epoch).await?;
-                    require_live(expires_at)?;
+                    require_live_proof(expires_at)?;
                     consume_proof(tx, &id, epoch, &proof_id, expires_at).await?;
                     if heartbeat {
                         let now = chrono::Utc::now()
@@ -306,7 +382,7 @@ impl Repository<'_> {
                         .await?;
                         device.status.last_seen_at = Some(now);
                     }
-                    require_live(expires_at)?;
+                    require_live_proof(expires_at)?;
                     Ok(device)
                 })
             },

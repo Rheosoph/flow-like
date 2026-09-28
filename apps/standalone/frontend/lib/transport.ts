@@ -30,6 +30,10 @@ export function createServiceRequest(
 				throw new Error(
 					"The service access token was rejected. Unlock the service again.",
 				);
+			if (response.status === 413)
+				throw new Error(
+					"The request exceeds the service's size limit. Remove large attachments and try again.",
+				);
 			if (response.status === 429)
 				throw new Error(
 					"This service is busy. Try again when the current request finishes.",

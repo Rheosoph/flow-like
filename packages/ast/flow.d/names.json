@@ -1178,6 +1178,24 @@
     "class": null,
     "category": "AI/Generative/Provider"
   },
+  "ai_generative_build_claude_code": {
+    "qualified": "ai::provider::claudeCode",
+    "namespace": "ai.provider",
+    "alias": "claudeCode",
+    "flat": "aiGenerativeBuildClaudeCode",
+    "receiver": null,
+    "class": null,
+    "category": "AI/Generative/Provider"
+  },
+  "ai_generative_build_codex": {
+    "qualified": "ai::provider::codex",
+    "namespace": "ai.provider",
+    "alias": "codex",
+    "flat": "aiGenerativeBuildCodex",
+    "receiver": null,
+    "class": null,
+    "category": "AI/Generative/Provider"
+  },
   "ai_generative_build_cohere": {
     "qualified": "ai::provider::cohere",
     "namespace": "ai.provider",
@@ -1214,6 +1232,15 @@
     "class": null,
     "category": "AI/Generative/Provider"
   },
+  "ai_generative_build_github_copilot": {
+    "qualified": "ai::provider::githubCopilot",
+    "namespace": "ai.provider",
+    "alias": "githubCopilot",
+    "flat": "aiGenerativeBuildGithubCopilot",
+    "receiver": null,
+    "class": null,
+    "category": "AI/Generative/Provider"
+  },
   "ai_generative_build_groq": {
     "qualified": "ai::provider::groq",
     "namespace": "ai.provider",
@@ -1246,6 +1273,15 @@
     "namespace": "ai.provider",
     "alias": "lmstudio",
     "flat": "aiGenerativeBuildLmstudio",
+    "receiver": null,
+    "class": null,
+    "category": "AI/Generative/Provider"
+  },
+  "ai_generative_build_microsoft_copilot": {
+    "qualified": "ai::provider::microsoftCopilot",
+    "namespace": "ai.provider",
+    "alias": "microsoftCopilot",
+    "flat": "aiGenerativeBuildMicrosoftCopilot",
     "receiver": null,
     "class": null,
     "category": "AI/Generative/Provider"
@@ -2681,6 +2717,15 @@
     "class": null,
     "category": "Automation/Browser/Navigation"
   },
+  "browser_block_urls": {
+    "qualified": "browser::blockUrls",
+    "namespace": "browser",
+    "alias": "blockUrls",
+    "flat": "browserBlockUrls",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Emulation"
+  },
   "browser_clear_console_logs": {
     "qualified": "browser::clearConsoleLogs",
     "namespace": "browser",
@@ -2717,6 +2762,15 @@
     "class": null,
     "category": "Automation/Browser/Interact"
   },
+  "browser_click_at_point": {
+    "qualified": "browser::clickAtPoint",
+    "namespace": "browser",
+    "alias": "clickAtPoint",
+    "flat": "browserClickAtPoint",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Interact"
+  },
   "browser_close": {
     "qualified": "browser::close",
     "namespace": "browser",
@@ -2734,6 +2788,15 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Browser"
+  },
+  "browser_count_elements": {
+    "qualified": "browser::countElements",
+    "namespace": "browser",
+    "alias": "countElements",
+    "flat": "browserCountElements",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Extract"
   },
   "browser_double_click": {
     "qualified": "browser::doubleClick",
@@ -2779,6 +2842,24 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Browser"
+  },
+  "browser_fill_form": {
+    "qualified": "browser::fillForm",
+    "namespace": "browser",
+    "alias": "fillForm",
+    "flat": "browserFillForm",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Input"
+  },
+  "browser_find_elements": {
+    "qualified": "browser::findElements",
+    "namespace": "browser",
+    "alias": "findElements",
+    "flat": "browserFindElements",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Snapshot"
   },
   "browser_forward": {
     "qualified": "browser::forward",
@@ -2843,6 +2924,15 @@
     "class": null,
     "category": "Automation/Browser/Snapshot"
   },
+  "browser_get_element_state": {
+    "qualified": "browser::getElementState",
+    "namespace": "browser",
+    "alias": "getElementState",
+    "flat": "browserGetElementState",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Extract"
+  },
   "browser_get_html": {
     "qualified": "browser::getHtml",
     "namespace": "browser",
@@ -2869,6 +2959,15 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Browser/Observe"
+  },
+  "browser_get_page_text": {
+    "qualified": "browser::getPageText",
+    "namespace": "browser",
+    "alias": "getPageText",
+    "flat": "browserGetPageText",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Extract"
   },
   "browser_get_session_storage": {
     "qualified": "browser::getSessionStorage",
@@ -2933,6 +3032,15 @@
     "class": null,
     "category": "Automation/Browser"
   },
+  "browser_list_elements": {
+    "qualified": "browser::listElements",
+    "namespace": "browser",
+    "alias": "listElements",
+    "flat": "browserListElements",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Extract"
+  },
   "browser_list_tabs": {
     "qualified": "browser::listTabs",
     "namespace": "browser",
@@ -2949,6 +3057,15 @@
     "flat": "browserLoadCookies",
     "receiver": null,
     "class": null,
+    "category": "Automation/Browser/Auth"
+  },
+  "browser_load_storage_state": {
+    "qualified": "browser::loadStorageState",
+    "namespace": "browser",
+    "alias": "loadStorageState",
+    "flat": "browserLoadStorageState",
+    "receiver": "session",
+    "class": "AutomationSession",
     "category": "Automation/Browser/Auth"
   },
   "browser_new_page": {
@@ -2978,6 +3095,15 @@
     "class": null,
     "category": "Automation/Browser/Input"
   },
+  "browser_print_pdf": {
+    "qualified": "browser::printPdf",
+    "namespace": "browser",
+    "alias": "printPdf",
+    "flat": "browserPrintPdf",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Capture"
+  },
   "browser_reload": {
     "qualified": "browser::reload",
     "namespace": "browser",
@@ -3005,6 +3131,15 @@
     "class": null,
     "category": "Automation/Browser/Auth"
   },
+  "browser_save_storage_state": {
+    "qualified": "browser::saveStorageState",
+    "namespace": "browser",
+    "alias": "saveStorageState",
+    "flat": "browserSaveStorageState",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Auth"
+  },
   "browser_screenshot": {
     "qualified": "browser::screenshot",
     "namespace": "browser",
@@ -3030,6 +3165,15 @@
     "flat": "browserScrollIntoView",
     "receiver": null,
     "class": null,
+    "category": "Automation/Browser/Interact"
+  },
+  "browser_scroll_page": {
+    "qualified": "browser::scrollPage",
+    "namespace": "browser",
+    "alias": "scrollPage",
+    "flat": "browserScrollPage",
+    "receiver": "session",
+    "class": "AutomationSession",
     "category": "Automation/Browser/Interact"
   },
   "browser_select_option": {
@@ -3068,6 +3212,24 @@
     "class": null,
     "category": "Automation/Browser/Files"
   },
+  "browser_set_emulation": {
+    "qualified": "browser::setEmulation",
+    "namespace": "browser",
+    "alias": "setEmulation",
+    "flat": "browserSetEmulation",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Emulation"
+  },
+  "browser_set_extra_headers": {
+    "qualified": "browser::setExtraHeaders",
+    "namespace": "browser",
+    "alias": "setExtraHeaders",
+    "flat": "browserSetExtraHeaders",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Emulation"
+  },
   "browser_set_local_storage": {
     "qualified": "browser::setLocalStorage",
     "namespace": "browser",
@@ -3077,6 +3239,15 @@
     "class": null,
     "category": "Automation/Browser/Storage"
   },
+  "browser_set_navigation_policy": {
+    "qualified": "browser::setNavigationPolicy",
+    "namespace": "browser",
+    "alias": "setNavigationPolicy",
+    "flat": "browserSetNavigationPolicy",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Navigation"
+  },
   "browser_set_session_storage": {
     "qualified": "browser::setSessionStorage",
     "namespace": "browser",
@@ -3085,6 +3256,15 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Browser/Storage"
+  },
+  "browser_snapshot": {
+    "qualified": "browser::snapshot",
+    "namespace": "browser",
+    "alias": "snapshot",
+    "flat": "browserSnapshot",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Snapshot"
   },
   "browser_start_console_observer": {
     "qualified": "browser::startConsoleObserver",
@@ -3131,6 +3311,15 @@
     "class": null,
     "category": "Automation/Browser/Files"
   },
+  "browser_type_secret": {
+    "qualified": "browser::typeSecret",
+    "namespace": "browser",
+    "alias": "typeSecret",
+    "flat": "browserTypeSecret",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Input"
+  },
   "browser_type_text": {
     "qualified": "browser::typeText",
     "namespace": "browser",
@@ -3176,6 +3365,15 @@
     "class": null,
     "category": "Automation/Browser/Wait"
   },
+  "browser_wait_for_condition": {
+    "qualified": "browser::waitForCondition",
+    "namespace": "browser",
+    "alias": "waitForCondition",
+    "flat": "browserWaitForCondition",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Wait"
+  },
   "browser_wait_for_download": {
     "qualified": "browser::waitForDownload",
     "namespace": "browser",
@@ -3202,6 +3400,15 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Browser"
+  },
+  "browser_zoom_screenshot": {
+    "qualified": "browser::zoomScreenshot",
+    "namespace": "browser",
+    "alias": "zoomScreenshot",
+    "flat": "browserZoomScreenshot",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Browser/Capture"
   },
   "bytes_concat": {
     "qualified": "bytes::concat",
@@ -3419,6 +3626,15 @@
     "class": null,
     "category": "Automation/Computer/Accessibility"
   },
+  "computer_capture_state": {
+    "qualified": "computer::captureState",
+    "namespace": "computer",
+    "alias": "captureState",
+    "flat": "computerCaptureState",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Capture"
+  },
   "computer_capture_window": {
     "qualified": "computer::captureWindow",
     "namespace": "computer",
@@ -3427,6 +3643,24 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Computer/Window"
+  },
+  "computer_click_element": {
+    "qualified": "computer::clickElement",
+    "namespace": "computer",
+    "alias": "clickElement",
+    "flat": "computerClickElement",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Mouse"
+  },
+  "computer_click_text": {
+    "qualified": "computer::clickText",
+    "namespace": "computer",
+    "alias": "clickText",
+    "flat": "computerClickText",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Vision"
   },
   "computer_clipboard_get_image": {
     "qualified": "computer::clipboardGetImage",
@@ -3464,6 +3698,15 @@
     "class": null,
     "category": "Automation/Computer/Clipboard"
   },
+  "computer_cursor_position": {
+    "qualified": "computer::cursorPosition",
+    "namespace": "computer",
+    "alias": "cursorPosition",
+    "flat": "computerCursorPosition",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Mouse"
+  },
   "computer_find_accessibility_element": {
     "qualified": "computer::findAccessibilityElement",
     "namespace": "computer",
@@ -3472,6 +3715,15 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Computer/Accessibility"
+  },
+  "computer_find_text": {
+    "qualified": "computer::findText",
+    "namespace": "computer",
+    "alias": "findText",
+    "flat": "computerFindText",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Vision"
   },
   "computer_find_window_by_title": {
     "qualified": "computer::findWindowByTitle",
@@ -3526,6 +3778,24 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Computer/Display"
+  },
+  "computer_hold_key": {
+    "qualified": "computer::holdKey",
+    "namespace": "computer",
+    "alias": "holdKey",
+    "flat": "computerHoldKey",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Keyboard"
+  },
+  "computer_key_chord": {
+    "qualified": "computer::keyChord",
+    "namespace": "computer",
+    "alias": "keyChord",
+    "flat": "computerKeyChord",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Keyboard"
   },
   "computer_key_press": {
     "qualified": "computer::keyPress",
@@ -3590,6 +3860,15 @@
     "class": null,
     "category": "Automation/Computer/Mouse"
   },
+  "computer_mouse_down": {
+    "qualified": "computer::mouseDown",
+    "namespace": "computer",
+    "alias": "mouseDown",
+    "flat": "computerMouseDown",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Mouse"
+  },
   "computer_mouse_drag": {
     "qualified": "computer::mouseDrag",
     "namespace": "computer",
@@ -3608,6 +3887,24 @@
     "class": null,
     "category": "Automation/Computer/Mouse"
   },
+  "computer_mouse_triple_click": {
+    "qualified": "computer::mouseTripleClick",
+    "namespace": "computer",
+    "alias": "mouseTripleClick",
+    "flat": "computerMouseTripleClick",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Mouse"
+  },
+  "computer_mouse_up": {
+    "qualified": "computer::mouseUp",
+    "namespace": "computer",
+    "alias": "mouseUp",
+    "flat": "computerMouseUp",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Mouse"
+  },
   "computer_natural_mouse_move": {
     "qualified": "computer::naturalMouseMove",
     "namespace": "computer",
@@ -3616,6 +3913,15 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Computer/Mouse"
+  },
+  "computer_ocr": {
+    "qualified": "computer::ocr",
+    "namespace": "computer",
+    "alias": "ocr",
+    "flat": "computerOcr",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Vision"
   },
   "computer_screenshot": {
     "qualified": "computer::screenshot",
@@ -3635,6 +3941,24 @@
     "class": null,
     "category": "Automation/Computer/Mouse"
   },
+  "computer_type_secret": {
+    "qualified": "computer::typeSecret",
+    "namespace": "computer",
+    "alias": "typeSecret",
+    "flat": "computerTypeSecret",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Keyboard"
+  },
+  "computer_use_agent": {
+    "qualified": "computer::useAgent",
+    "namespace": "computer",
+    "alias": "useAgent",
+    "flat": "computerUseAgent",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Agent"
+  },
   "computer_wait": {
     "qualified": "computer::wait",
     "namespace": "computer",
@@ -3653,6 +3977,24 @@
     "class": null,
     "category": "Automation/Computer/Window"
   },
+  "computer_wait_screen_change": {
+    "qualified": "computer::waitScreenChange",
+    "namespace": "computer",
+    "alias": "waitScreenChange",
+    "flat": "computerWaitScreenChange",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Wait"
+  },
+  "computer_wait_screen_stable": {
+    "qualified": "computer::waitScreenStable",
+    "namespace": "computer",
+    "alias": "waitScreenStable",
+    "flat": "computerWaitScreenStable",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Wait"
+  },
   "computer_window_operation": {
     "qualified": "computer::manageWindow",
     "namespace": "computer",
@@ -3661,6 +4003,15 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Computer/Window"
+  },
+  "computer_zoom": {
+    "qualified": "computer::zoom",
+    "namespace": "computer",
+    "alias": "zoom",
+    "flat": "computerZoom",
+    "receiver": "session",
+    "class": "AutomationSession",
+    "category": "Automation/Computer/Capture"
   },
   "construct_array": {
     "qualified": "array::construct",
@@ -8225,6 +8576,24 @@
     "class": "EmailRef",
     "category": "Email/IMAP"
   },
+  "email_platform_reply": {
+    "qualified": "email::replyPlatform",
+    "namespace": "email",
+    "alias": "replyPlatform",
+    "flat": "emailPlatformReply",
+    "receiver": "session",
+    "class": "MailSession",
+    "category": "Email"
+  },
+  "email_platform_send": {
+    "qualified": "email::sendPlatform",
+    "namespace": "email",
+    "alias": "sendPlatform",
+    "flat": "emailPlatformSend",
+    "receiver": "session",
+    "class": "MailSession",
+    "category": "Email"
+  },
   "email_smtp_connect": {
     "qualified": "smtp::connect",
     "namespace": "smtp",
@@ -8486,6 +8855,15 @@
     "class": null,
     "category": "Events/Generic"
   },
+  "events_inbound_email": {
+    "qualified": "events::inboundEmail",
+    "namespace": "events",
+    "alias": "inboundEmail",
+    "flat": "eventsInboundEmail",
+    "receiver": null,
+    "class": null,
+    "category": "Events"
+  },
   "events_location": {
     "qualified": "events::location",
     "namespace": "events",
@@ -8503,6 +8881,33 @@
     "receiver": null,
     "class": null,
     "category": "Events"
+  },
+  "events_teams_send_card": {
+    "qualified": "teams::sendCard",
+    "namespace": "teams",
+    "alias": "sendCard",
+    "flat": "eventsTeamsSendCard",
+    "receiver": null,
+    "class": null,
+    "category": "Events/Chat/Teams"
+  },
+  "events_teams_send_message": {
+    "qualified": "teams::sendMessage",
+    "namespace": "teams",
+    "alias": "sendMessage",
+    "flat": "eventsTeamsSendMessage",
+    "receiver": null,
+    "class": null,
+    "category": "Events/Chat/Teams"
+  },
+  "events_teams_update_message": {
+    "qualified": "teams::updateMessage",
+    "namespace": "teams",
+    "alias": "updateMessage",
+    "flat": "eventsTeamsUpdateMessage",
+    "receiver": null,
+    "class": null,
+    "category": "Events/Chat/Teams"
   },
   "events_widget_action": {
     "qualified": "events::widgetAction",
@@ -14550,7 +14955,7 @@
     "flat": "rpaTryCatch",
     "receiver": null,
     "class": null,
-    "category": "Automation/RPA"
+    "category": "Control"
   },
   "rpa_type_text": {
     "qualified": "rpa::typeText",
@@ -15703,6 +16108,15 @@
     "receiver": null,
     "class": null,
     "category": "Utils/Bytes"
+  },
+  "totp_code": {
+    "qualified": "browser::totpCode",
+    "namespace": "browser",
+    "alias": "totpCode",
+    "flat": "totpCode",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser/Auth"
   },
   "tracking_associate_entities": {
     "qualified": "tracking::associateEntities",

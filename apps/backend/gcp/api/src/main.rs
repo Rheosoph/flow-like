@@ -97,6 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.db_dialect,
         ChannelSweeperConfig::from_env(),
     );
+    let _teams_sweeper = flow_like_api::teams::spawn_sweeper(state.clone());
     let _cache_sweeper =
         spawn_cache_sweeper_for(&state.cache, CacheSweeperConfig::from_env()).await;
     let _telemetry_rollup = spawn_telemetry_rollup(

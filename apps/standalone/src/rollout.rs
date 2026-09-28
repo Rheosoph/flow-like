@@ -36,6 +36,8 @@ CREATE INDEX placement_rollout_history ON placement_rollouts(placement_id,create
 ";
 
 const ACTIVE: &str = "('staged','validating','activating','rolling_back')";
+/// Terminal history kept per placement; the newest row always survives for status.
+const TERMINAL_HISTORY_PER_PLACEMENT: i64 = 32;
 const COLUMNS: &str = "rollout_id,placement_id,project_id,previous_config_json,candidate_config_json,base_revision,base_intent,previous_replicas,candidate_replicas,state,stabilization_seconds,deadline_seconds,created_at,updated_at,deadline_at,stable_since,cohort,active_revision,active_intent,failure_code";
 
 #[derive(Clone, Debug)]
@@ -269,14 +271,23 @@ impl StateStore {
                 [&candidate.id], |row| row.get(0),
             )?;
             ensure!(!pending, "Wait for pending secret publication before staging");
-            let count: u64 = store.connection.query_row("SELECT COUNT(*) FROM placement_rollouts", [], |row| row.get(0))?;
-            ensure!(count < 10_000, "Rollout journal is full");
+            store.prune_rollout_history(&candidate.id)?;
             store.connection.execute(
                 "INSERT INTO placement_rollouts(rollout_id,placement_id,project_id,previous_config_json,candidate_config_json,base_revision,base_intent,previous_replicas,candidate_replicas,state,stabilization_seconds,deadline_seconds,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'staged',?10,?11,?12,?12)",
                 params![id,candidate.id,candidate.project_id,serde_json::to_string(&previous_config)?,serde_json::to_string(candidate)?,previous.config_revision,previous.intent_revision,previous.desired_replicas,previous.desired_replicas.min(candidate.max_replicas),stabilization_seconds,deadline_seconds,now],
             )?;
             store.rollout(id)?.context("Missing staged rollout")
         })
+    }
+
+    /// Bounds the journal per placement, so repeated staging in one project
+    /// cannot exhaust update capacity for other placements or projects.
+    fn prune_rollout_history(&self, placement: &str) -> Result<()> {
+        self.connection.execute(
+            &format!("DELETE FROM placement_rollouts WHERE rowid IN (SELECT rowid FROM placement_rollouts WHERE placement_id=?1 AND state NOT IN {ACTIVE} ORDER BY created_at DESC,rowid DESC LIMIT -1 OFFSET ?2)"),
+            params![placement, TERMINAL_HISTORY_PER_PLACEMENT - 1],
+        )?;
+        Ok(())
     }
 
     pub(crate) fn rollout_secret_config(&self, id: &str, name: &str) -> Result<PlacementConfig> {
@@ -373,13 +384,16 @@ impl StateStore {
             }
             let revision = rollout.base_revision + 1;
             let intent = rollout.base_intent + 1;
+            // Activation, drain and stabilization get their own budget; time spent
+            // validating must not force a rollback of a valid candidate.
+            let deadline = now.checked_add(i64::from(rollout.deadline_seconds)).context("Invalid activation deadline")?;
             store.connection.execute(
                 "UPDATE placements SET config_json=?2,config_revision=?3,intent_revision=?4,desired_replicas=?5,desired_state='running',last_error=NULL WHERE id=?1",
                 params![rollout.placement_id,serde_json::to_string(&rollout.candidate_config)?,revision,intent,rollout.candidate_replicas],
             )?;
             store.connection.execute(
-                "UPDATE placement_rollouts SET state='activating',active_revision=?2,active_intent=?3,updated_at=?4,stable_since=NULL,cohort=NULL WHERE rollout_id=?1",
-                params![id,revision,intent,now],
+                "UPDATE placement_rollouts SET state='activating',active_revision=?2,active_intent=?3,updated_at=?4,deadline_at=?5,stable_since=NULL,cohort=NULL WHERE rollout_id=?1",
+                params![id,revision,intent,now,deadline],
             )?;
             Ok(())
         })
@@ -661,7 +675,7 @@ mod tests {
         let rollout = store.rollout("rollout")?.unwrap();
         assert_eq!(rollout.state, "activating");
         assert_eq!(rollout.stable_since, None);
-        store.reconcile_rollouts(131)?;
+        store.reconcile_rollouts(132)?;
         assert_eq!(store.rollout("rollout")?.unwrap().state, "rolling_back");
         Ok(())
     }
@@ -699,11 +713,11 @@ mod tests {
         store.reset_observed()?;
         store.reset_rollout_observations()?;
         let recovered = store.rollout("rollout")?.unwrap();
-        assert_eq!(recovered.deadline_at, Some(131));
+        assert_eq!(recovered.deadline_at, Some(132));
         assert_eq!(recovered.stable_since, None);
-        store.reconcile_rollouts(131)?;
+        store.reconcile_rollouts(132)?;
         assert_eq!(store.rollout("rollout")?.unwrap().state, "rolling_back");
-        store.reconcile_rollouts(161)?;
+        store.reconcile_rollouts(162)?;
         assert_eq!(store.rollout("rollout")?.unwrap().state, "failed");
         let stopped = store.get_placement("service")?.unwrap();
         assert_eq!(stopped.desired_state, DesiredState::Stopped);
@@ -799,6 +813,69 @@ mod tests {
         assert_eq!(expired.failure_code.as_deref(), Some("staging_timeout"));
         assert_eq!(store.get_placement("service")?.unwrap().config_revision, 1);
         store.require_no_active_rollout("service")?;
+        Ok(())
+    }
+
+    #[test]
+    fn slow_successful_validation_leaves_activation_its_full_deadline() -> Result<()> {
+        let (_directory, store, candidate) = fixture()?;
+        store.stage_rollout("rollout", &candidate, 1, 2, 30, 100)?;
+        store.begin_rollout_validation("rollout", 101)?;
+        store.complete_rollout_validation("rollout", true, 130)?;
+        let activating = store.rollout("rollout")?.unwrap();
+        assert_eq!(activating.state, "activating");
+        assert_eq!(activating.deadline_at, Some(160));
+        store.reconcile_rollouts(131)?;
+        assert_eq!(store.rollout("rollout")?.unwrap().state, "activating");
+        ready(&store, 1000)?;
+        store.reconcile_rollouts(150)?;
+        store.reconcile_rollouts(152)?;
+        assert_eq!(store.rollout("rollout")?.unwrap().state, "healthy");
+        Ok(())
+    }
+
+    #[test]
+    fn repeated_discarded_updates_keep_a_bounded_history_per_placement() -> Result<()> {
+        let (directory, mut store, candidate) = fixture()?;
+        let mut other: PlacementConfig = serde_json::from_value(json!({
+            "id":"other","project_id":"other-project","deployment_id":"deployment","revision":"one",
+            "source":"offline","project_path":directory.path(),"max_replicas":1,
+            "events":[{"event_id":"http","event_version":[1,0,0],"board_version":[1,0,0]}]
+        }))?;
+        store.upsert_placement("other", &serde_json::to_value(&other)?, DesiredState::Running)?;
+        other.revision = "two".into();
+        store.stage_rollout("other-update", &other, 1, 2, 30, 50)?;
+        store.cancel_rollout("other", 51)?;
+        for index in 0..100 {
+            let id = format!("discarded-{index}");
+            store.stage_rollout(&id, &candidate, 1, 2, 30, 100 + index)?;
+            store.cancel_rollout("service", 100 + index)?;
+        }
+        fn count(store: &StateStore, placement: &str) -> Result<i64> {
+            Ok(store.connection.query_row(
+                "SELECT COUNT(*) FROM placement_rollouts WHERE placement_id=?1",
+                [placement],
+                |row| row.get(0),
+            )?)
+        }
+        assert_eq!(count(&store, "service")?, TERMINAL_HISTORY_PER_PLACEMENT);
+        assert_eq!(count(&store, "other")?, 1);
+        assert_eq!(
+            store.latest_rollout("service")?.unwrap().rollout_id,
+            "discarded-99"
+        );
+        assert!(store.rollout("discarded-0")?.is_none());
+        store.stage_rollout("accepted", &candidate, 1, 2, 30, 300)?;
+        assert_eq!(store.latest_rollout("service")?.unwrap().state, "staged");
+        store.cancel_rollout("service", 301)?;
+        store.set_desired_state("service", DesiredState::Stopped)?;
+        store.connection.execute(
+            "UPDATE placements SET observed_state='stopped' WHERE id='service'",
+            [],
+        )?;
+        store.remove_placement("service")?;
+        assert_eq!(count(&store, "service")?, 0);
+        assert_eq!(count(&store, "other")?, 1);
         Ok(())
     }
 

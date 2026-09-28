@@ -1,8 +1,12 @@
 import { describe, expect, it } from "bun:test";
+import { safeScopedCss } from "../../lib/css-utils";
 import {
 	HOME_ACCENTS,
+	HOME_PLACEHOLDER_CLASS_LIST,
 	homeAppearanceStyle,
+	homeWidgetCssScope,
 	homeWidgetFrameClassName,
+	localizeHomeWidgetKeyframes,
 } from "./home-appearance";
 
 function luminance(hex: string) {
@@ -105,26 +109,97 @@ describe("home widget frame classes", () => {
 		).not.toContain("bg-card/80");
 	});
 
+	it("never colors the widget's own shadow", () => {
+		for (const variant of ["card", "tinted", "solid", "borderless"])
+			expect(
+				frame({
+					variant,
+					accent: "rose",
+					className: "shadow-[0_12px_32px_-16px_rgb(0_0_0/0.35)]",
+				}).filter((name) => name.startsWith("shadow-")),
+			).toEqual(["shadow-[0_12px_32px_-16px_rgb(0_0_0/0.35)]"]);
+	});
+
 	it("keeps editor selection and drop feedback above the widget's classes", () => {
 		const selected = frame(
 			{ variant: "card", accent: "neutral", className: "ring-4 ring-rose-500" },
 			{ editing: true, selected: true },
 		);
 		expect(selected).toEqual(
-			expect.arrayContaining(["ring-2", "ring-primary"]),
+			expect.arrayContaining(["ring-2!", "ring-primary!"]),
 		);
-		expect(selected).not.toContain("ring-rose-500");
 		const placeholder = frame(
 			{ variant: "card", accent: "neutral", className: "bg-rose-500" },
 			{ editing: true, placeholder: true },
 		);
-		expect(placeholder).toContain("bg-primary/5");
-		expect(placeholder).not.toContain("bg-rose-500");
+		expect(placeholder).toContain("bg-primary/5!");
+		expect(placeholder).toEqual(
+			expect.arrayContaining(HOME_PLACEHOLDER_CLASS_LIST),
+		);
 		expect(
 			frame(
 				{ variant: "tinted", accent: "rose" },
 				{ editing: true, placeholder: true },
 			),
 		).toContain("bg-[var(--home-surface-background)]");
+	});
+});
+
+describe("homeWidgetCssScope", () => {
+	it("selects only its widget, with :root meaning the widget surface", () => {
+		const scope = homeWidgetCssScope("hero");
+		const css = safeScopedCss(
+			":root { color: red; } h2 { font-size: 2rem; }",
+			scope,
+			{
+				scopeRoot: true,
+			},
+		);
+		expect(css).toContain('[data-home-widget-style="hero"] {');
+		expect(css).toContain('[data-home-widget-style="hero"] h2 {');
+		expect(css).not.toContain(":root");
+	});
+
+	it("keeps ids with replacement patterns inside the attribute selector", () => {
+		for (const id of ["a$'", "a$`", "a$&", "a$$"]) {
+			const css = safeScopedCss(
+				':root"]{}nav{display:none}[x="{ color: red; } :root { color: blue; }',
+				homeWidgetCssScope(id),
+				{ scopeRoot: true },
+			);
+			expect(css).toContain(
+				`[data-home-widget-style="${id}"] { color: blue; }`,
+			);
+			expect(css.startsWith(`[data-home-widget-style="${id}"]"]`)).toBe(true);
+		}
+	});
+
+	it("escapes ids that would otherwise break out of the attribute selector", () => {
+		const scope = homeWidgetCssScope('a"] body, [x="\\\n');
+		expect(scope).toBe('[data-home-widget-style="a\\"] body, [x=\\"\\\\\\a "]');
+	});
+});
+
+describe("localizeHomeWidgetKeyframes", () => {
+	it("renames the widget's own keyframes and their uses, leaving app animations alone", () => {
+		const css = localizeHomeWidgetKeyframes(
+			"@keyframes pulse { to { opacity: 0.5; } } :root { animation: pulse 2s ease-in-out infinite, spin 1s; } h2 { animation-name: pulse, fade; }",
+			"hero",
+		);
+		const local = css.match(/@keyframes (pulse-hw[0-9a-z]+)/)?.[1];
+		expect(local).toBeDefined();
+		expect(css).toContain(
+			`animation: ${local} 2s ease-in-out infinite, spin 1s;`,
+		);
+		expect(css).toContain(`animation-name: ${local}, fade;`);
+		expect(
+			localizeHomeWidgetKeyframes("@keyframes pulse {}", "other"),
+		).not.toContain(local ?? "");
+	});
+
+	it("returns CSS without keyframes or with unparseable syntax unchanged", () => {
+		for (const css of [":root { color: red; }", ":root { color: red; "]) {
+			expect(localizeHomeWidgetKeyframes(css, "hero")).toBe(css);
+		}
 	});
 });

@@ -1,11 +1,12 @@
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json, reqwest};
+use flow_like_types::{Value, async_trait, json::json};
 
 use super::ConfluenceUser;
 
@@ -113,7 +114,7 @@ impl NodeLogic for SearchUsersNode {
             return Err(flow_like_types::anyhow!("Search query is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let users = if provider.is_cloud {
             // Cloud uses user search endpoint
@@ -126,7 +127,7 @@ impl NodeLogic for SearchUsersNode {
             let limit = limit.to_string();
 
             let response = client
-                .get(&url)
+                .get(&url)?
                 .header("Authorization", provider.auth_header())
                 .query(&[("cql", cql.as_str()), ("limit", limit.as_str())])
                 .send()
@@ -156,7 +157,7 @@ impl NodeLogic for SearchUsersNode {
             let limit = limit.to_string();
 
             let response = client
-                .get(&url)
+                .get(&url)?
                 .header("Authorization", provider.auth_header())
                 .query(&[("prefix", query.as_str()), ("limit", limit.as_str())])
                 .send()
@@ -258,12 +259,12 @@ impl NodeLogic for GetCurrentUserNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let provider: AtlassianProvider = context.evaluate_pin("provider").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let url = provider.confluence_rest_api_url("/user/current");
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;

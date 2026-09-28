@@ -45,8 +45,26 @@ const next = {
 };
 let outcome: Promise<LocalDeviceVault>;
 let calls: unknown[][] = [];
+const sealed: { context: unknown; password: string; backup: unknown }[] = [];
+const actualCrypto = {
+	...(await import("../../../lib/device-management/crypto")),
+};
 mock.module("../../../lib/device-management/crypto", () => ({
-	loadDeviceCrypto: async () => ({}),
+	...actualCrypto,
+	loadDeviceCrypto: async () => ({
+		sealAccountRecovery: (
+			context: unknown,
+			password: Uint8Array,
+			bytes: Uint8Array,
+		) => {
+			sealed.push({
+				context,
+				password: new TextDecoder().decode(password),
+				backup: JSON.parse(new TextDecoder().decode(bytes)),
+			});
+			return { ciphertext: Array(80).fill(9), proof_jws: "unused" };
+		},
+	}),
 }));
 mock.module("../../../lib/device-management/password", () => ({
 	changeDevicePassword: (...args: unknown[]) => {
@@ -62,9 +80,11 @@ const root = createRoot(container);
 afterEach(async () => {
 	await act(async () => root.render(null));
 	calls = [];
+	sealed.length = 0;
 });
 afterAll(async () => {
 	await act(async () => root.unmount());
+	mock.module("../../../lib/device-management/crypto", () => actualCrypto);
 	mock.restore();
 	await window.happyDOM.close();
 });
@@ -186,8 +206,26 @@ test("commit success offers only the updated encrypted backup and explains old c
 		"flow-like-controller-device.json",
 	);
 	const saved = await (await fetch(backup.getAttribute("href") ?? "")).json();
-	expect(saved.controllerVault).toEqual(Array.from(next.controllerVault));
-	expect(saved.invitationVault).toEqual(Array.from(next.invitationVault));
+	expect(saved).toMatchObject({
+		version: 2,
+		apiOrigin: scope.apiOrigin,
+		deviceId: "device",
+		controllerKey: key,
+	});
+	expect(saved).not.toHaveProperty("controllerVault");
+	expect(saved).not.toHaveProperty("manifestJws");
+	expect(sealed).toHaveLength(1);
+	expect(sealed[0]?.password).toBe("replacement password");
+	expect(sealed[0]?.context).toMatchObject({
+		account: scope.account,
+		device_id: "device",
+		revision: Number.MAX_SAFE_INTEGER,
+	});
+	expect(sealed[0]?.backup).toMatchObject({
+		controllerVault: Array.from(next.controllerVault),
+		invitationVault: Array.from(next.invitationVault),
+		manifestJws: next.manifestJws,
+	});
 	expect(JSON.stringify(saved)).not.toContain("password");
 	expect(document.body.textContent).toContain(
 		"Old backups still use the old password",

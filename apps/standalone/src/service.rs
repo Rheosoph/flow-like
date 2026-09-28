@@ -212,6 +212,18 @@ pub async fn verify_user_service(executable: &Path, state_dir: &Path) -> Result<
     }
 }
 
+/// Refuse an update while workloads still run when the host cannot start its watchdog.
+pub async fn verify_update_watchdog() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::verify_update_watchdog().await
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        anyhow::bail!("Managed updates require Linux with systemd")
+    }
+}
+
 #[cfg(unix)]
 mod private_file {
     use super::*;
@@ -574,6 +586,37 @@ mod linux {
         verify_manager_unit(&path, true).await
     }
 
+    // systemd-run --expand-environment=no, used by the update watchdog, first shipped in v254.
+    const MINIMUM_WATCHDOG_SYSTEMD: u32 = 254;
+
+    fn systemd_version(text: &str) -> Option<u32> {
+        let line = text.lines().next()?.trim();
+        let release = line.strip_prefix("systemd ").unwrap_or(line);
+        let digits: String = release.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok()
+    }
+
+    fn require_watchdog_version(component: &str, reported: &str) -> Result<()> {
+        let first_line = reported.lines().next().unwrap_or_default().trim();
+        let version = systemd_version(reported)
+            .with_context(|| format!("Cannot read the {component} version from {first_line:?}"))?;
+        ensure!(
+            version >= MINIMUM_WATCHDOG_SYSTEMD,
+            "Automatic updates need systemd {MINIMUM_WATCHDOG_SYSTEMD} or newer for the update watchdog; the {component} reports version {version}"
+        );
+        Ok(())
+    }
+
+    pub(super) async fn verify_update_watchdog() -> Result<()> {
+        let client = successful(
+            command("systemd-run", &["--version"]).await?,
+            "Inspect systemd-run version",
+        )?;
+        require_watchdog_version("systemd-run client", &client)?;
+        let manager = systemctl(&["show", "--property=Version", "--value"]).await?;
+        require_watchdog_version("user service manager", &manager)
+    }
+
     pub(super) async fn status(executable: &Path, state_dir: &Path) -> Result<ServiceStatus> {
         let expected = systemd_user_unit(executable, state_dir)?;
         let path = unit_path_for_user(false)?;
@@ -637,6 +680,30 @@ mod linux {
             assert!(check_executable(&linked).is_err());
             assert!(check_executable(directory.path()).is_err());
             Ok(())
+        }
+
+        #[test]
+        fn watchdog_support_requires_systemd_254_in_client_and_manager_output() {
+            assert_eq!(
+                systemd_version("systemd 255 (255.4-1ubuntu8)\n+PAM +AUDIT"),
+                Some(255)
+            );
+            assert_eq!(systemd_version("252.22-1~deb12u1\n"), Some(252));
+            assert_eq!(systemd_version("254"), Some(254));
+            assert_eq!(systemd_version("unknown output"), None);
+            assert_eq!(systemd_version(""), None);
+            assert!(require_watchdog_version("client", "systemd 254 (254.5-1)").is_ok());
+            assert!(require_watchdog_version("manager", "256.7-1\n").is_ok());
+            for reported in [
+                "systemd 252 (252.22-1~deb12u1)",
+                "249.11-0ubuntu3.12",
+                "garbage",
+            ] {
+                assert!(
+                    require_watchdog_version("client", reported).is_err(),
+                    "accepted {reported:?}"
+                );
+            }
         }
 
         #[test]

@@ -1,10 +1,15 @@
 import { sha256 } from "@noble/hashes/sha2";
+import { type ManagementRejection, managementRejection } from "./types";
 
 export const ARTIFACT_CHUNK_BYTES = 8192;
+const ARTIFACT_TRANSFER_TTL_SECONDS = 86_400;
 const MAX_FILES = 8192;
 const MAX_FILE_BYTES = 4 * 1024 ** 3;
 const MAX_BYTES = 8 * 1024 ** 3;
 const MAX_MANIFEST_BYTES = 2 * 1024 ** 2;
+// Placement configurations accept at most these pins; larger selections could never deploy.
+const MAX_BIT_PINS = 256;
+const MAX_PACKAGE_PINS = 64;
 const encoder = new TextEncoder();
 export type ProjectArtifactFile = {
 	path: string;
@@ -72,12 +77,101 @@ export type ArtifactProgress = {
 	completedFiles: number;
 	totalFiles: number;
 };
+function rejectionHint(
+	rejection: ManagementRejection,
+	transferId: string | undefined,
+): string {
+	if (rejection.code === "limit")
+		return "Abort unfinished uploads on this device or wait for them to finish, then upload again.";
+	return transferId
+		? "Resuming cannot succeed. Abort this transfer, then prepare and upload the project again."
+		: "Resolve the cause, then upload the project again.";
+}
+function uploadErrorMessage(
+	transferId: string | undefined,
+	rejection: ManagementRejection | undefined,
+): string {
+	if (!rejection)
+		return "Project upload has no confirmed completion. Reconnect and resume this transfer, or abort it.";
+	if (!rejection.retryable)
+		return `The device rejected this project upload: ${rejection.error} ${rejectionHint(rejection, transferId)}`;
+	return `The device did not complete this upload step: ${rejection.error} Resume this transfer to retry, or abort it.`;
+}
+/**
+ * `transferId` is undefined when the device holds no transfer this upload could resume or abort.
+ * `rejection` is the device's coded refusal; a retryable one keeps the resume path.
+ */
 export class ArtifactUploadError extends Error {
-	constructor(readonly transferId: string) {
-		super(
-			"Project upload has no confirmed completion. Reconnect and resume this transfer, or abort it.",
-		);
+	constructor(
+		readonly transferId: string | undefined,
+		readonly rejection?: ManagementRejection,
+	) {
+		super(uploadErrorMessage(transferId, rejection));
 		this.name = "ArtifactUploadError";
+	}
+}
+export class ArtifactAbortError extends Error {
+	/** Set only for a definitive refusal, which leaves nothing this browser can abort. */
+	readonly rejection?: ManagementRejection;
+	constructor(
+		transferId: string,
+		/** The device's coded refusal, retryable or not. */
+		readonly response?: ManagementRejection,
+		/** The device answered with a refusal; older agents send it without a code. */
+		readonly refused = response !== undefined,
+	) {
+		const rejection = response && !response.retryable ? response : undefined;
+		super(
+			rejection
+				? `The device rejected aborting transfer ${transferId}: ${rejection.error}`
+				: `Aborting transfer ${transferId} is unconfirmed.${response ? ` Device response: ${response.error}` : ""} Reconnect and try again.`,
+		);
+		this.rejection = rejection;
+		this.name = "ArtifactAbortError";
+	}
+}
+/**
+ * Whether a refused abort leaves nothing this browser should offer to abort again.
+ * Devices answer an unknown transfer with a retryable `failed`, so every coded answer except `busy`
+ * settles it; an older agent's uncoded refusal settles only a transfer the device never acknowledged.
+ */
+export function abortRefusalSettles(
+	error: unknown,
+	confirmed: boolean,
+): boolean {
+	if (!(error instanceof ArtifactAbortError) || !error.refused) return false;
+	return error.response ? error.response.code !== "busy" : !confirmed;
+}
+const BUSY_RETRY_DELAYS = [250, 500, 1000, 2000, 4000, 8000];
+function pause(milliseconds: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const abort = () => {
+			clearTimeout(timer);
+			reject(signal?.reason ?? new Error("Artifact transfer cancelled."));
+		};
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", abort);
+			resolve();
+		}, milliseconds);
+		signal?.addEventListener("abort", abort, { once: true });
+	});
+}
+/** The device answers `busy` while another artifact operation holds its lock. */
+async function requestArtifact(
+	request: ArtifactManagementCall,
+	command: Record<string, unknown>,
+	operationId?: string,
+	signal?: AbortSignal,
+): Promise<{ state: string; result: unknown }> {
+	for (let attempt = 0; ; attempt++) {
+		cancelled(signal);
+		const response = await request(command, operationId);
+		if (
+			managementRejection(response)?.code !== "busy" ||
+			attempt >= BUSY_RETRY_DELAYS.length
+		)
+			return response;
+		await pause(BUSY_RETRY_DELAYS[attempt] ?? 0, signal);
 	}
 }
 function check(value: unknown, message: string): asserts value {
@@ -218,6 +312,19 @@ function parseAssetJson(text: string): unknown {
 		throw new Error("Selected asset JSON is invalid.");
 	}
 }
+/** A placement runs one version per node package, so pins with several can never deploy. */
+export function assertOneVersionPerPackage(
+	pins: readonly Pick<ProjectPackagePin, "package_id">[],
+): void {
+	const seen = new Set<string>();
+	for (const { package_id } of pins) {
+		check(
+			!seen.has(package_id),
+			`This project pins several versions of node package ${package_id}, but a placement runs one version per package. Keep one version in the asset pins and prepare the project again.`,
+		);
+		seen.add(package_id);
+	}
+}
 export function parseProjectArtifactAssets(
 	text: string,
 ): ProjectArtifactAssets {
@@ -238,9 +345,9 @@ export function parseProjectArtifactAssets(
 	check(
 		Array.isArray(bits) &&
 			Array.isArray(packages) &&
-			bits.length <= 256 &&
-			packages.length <= 256,
-		"Too many selected project assets.",
+			bits.length <= MAX_BIT_PINS &&
+			packages.length <= MAX_PACKAGE_PINS,
+		`A deployable project pins at most ${MAX_BIT_PINS} Bits and ${MAX_PACKAGE_PINS} WASM packages; this selection has ${Array.isArray(bits) ? bits.length : "invalid"} Bits and ${Array.isArray(packages) ? packages.length : "invalid"} packages.`,
 	);
 	const ids = new Set<string>();
 	const digests = /^[a-f0-9]{64}$/;
@@ -276,9 +383,19 @@ export function parseProjectArtifactAssets(
 		check(!ids.has(key), "Duplicate selected WASM package.");
 		ids.add(key);
 	}
+	assertOneVersionPerPackage(packages);
+	// The device accepts only its canonical serde field order in the hashed manifest.
 	return {
-		bit_pins: bits.map((p) => ({ ...p })),
-		package_pins: packages.map((p) => ({ ...p })),
+		bit_pins: bits.map((pin) => ({
+			bit_id: pin.bit_id,
+			metadata_sha256: pin.metadata_sha256,
+		})),
+		package_pins: packages.map((pin) => ({
+			package_id: pin.package_id,
+			version: pin.version,
+			wasm_sha256: pin.wasm_sha256,
+			manifest_sha256: pin.manifest_sha256,
+		})),
 	};
 }
 type SelectedAsset = { size: number | null; sha256: string };
@@ -613,6 +730,8 @@ export async function uploadProjectArtifact(options: {
 	prepared: PreparedProjectArtifact;
 	request: ArtifactManagementCall;
 	transferId?: string;
+	/** False when the device never acknowledged `transferId`; a refused status then begins it under that id. */
+	confirmed?: boolean;
 	signal?: AbortSignal;
 	onProgress?: (progress: ArtifactProgress) => void;
 }): Promise<ArtifactTransferStatus> {
@@ -627,22 +746,69 @@ export async function uploadProjectArtifact(options: {
 			prepared.files.length === descriptor.file_count,
 		"Prepared artifact has changed.",
 	);
+	let started = false;
+	const send = (payload: Record<string, unknown>, operationId?: string) =>
+		requestArtifact(
+			request,
+			{ type: "artifact", request: payload },
+			operationId,
+			signal,
+		);
+	const accept = (
+		response: { state: string; result: unknown },
+		index: number | null,
+		size: number,
+	) => {
+		const rejection = managementRejection(response);
+		if (rejection)
+			// A retryable refusal may follow partial work, so the transfer stays resumable and abortable.
+			throw new ArtifactUploadError(
+				started || rejection.retryable ? transferId : undefined,
+				rejection,
+			);
+		check(
+			["accepted", "completed"].includes(response.state),
+			"Device rejected the artifact request.",
+		);
+		const status = transferStatus(
+			response.result,
+			descriptor,
+			transferId,
+			index,
+			size,
+		);
+		started = true;
+		return status;
+	};
 	const call = async (
 		payload: Record<string, unknown>,
 		index: number | null,
 		size: number,
 		operationId?: string,
-	) => {
-		cancelled(signal);
-		const response = await request(
-			{ type: "artifact", request: payload },
-			operationId,
+	) => accept(await send(payload, operationId), index, size);
+	const begin = () =>
+		call(
+			{ kind: "begin", descriptor },
+			null,
+			descriptor.manifest_size,
+			transferId,
 		);
-		check(
-			["accepted", "completed"].includes(response.state),
-			"Device rejected the artifact request.",
-		);
-		return transferStatus(response.result, descriptor, transferId, index, size);
+	const resume = async () => {
+		const response = await send({
+			kind: "status",
+			project_id: descriptor.project_id,
+			transfer_id: transferId,
+			file_index: null,
+		});
+		const code = managementRejection(response)?.code;
+		// A begin that never reached the device leaves nothing to resume, so the same id begins it now.
+		if (
+			options.confirmed === false &&
+			response.state === "rejected" &&
+			(code === undefined || code === "failed")
+		)
+			return begin();
+		return accept(response, null, descriptor.manifest_size);
 	};
 	let uploaded = 0;
 	let completed = 0;
@@ -656,23 +822,7 @@ export async function uploadProjectArtifact(options: {
 			totalFiles: descriptor.file_count,
 		});
 	try {
-		let current = options.transferId
-			? await call(
-					{
-						kind: "status",
-						project_id: descriptor.project_id,
-						transfer_id: transferId,
-						file_index: null,
-					},
-					null,
-					descriptor.manifest_size,
-				)
-			: await call(
-					{ kind: "begin", descriptor },
-					null,
-					descriptor.manifest_size,
-					transferId,
-				);
+		let current = options.transferId ? await resume() : await begin();
 		if (current.state === "committed") return current;
 		check(
 			current.state === "receiving",
@@ -759,7 +909,8 @@ export async function uploadProjectArtifact(options: {
 			"Device has not committed this project revision.",
 		);
 		return result;
-	} catch {
+	} catch (error) {
+		if (error instanceof ArtifactUploadError) throw error;
 		throw new ArtifactUploadError(transferId);
 	}
 }
@@ -770,16 +921,112 @@ export async function abortProjectArtifact(
 ): Promise<void> {
 	projectId(project);
 	id(transferId);
-	const response = await request({
+	const response = await requestArtifact(request, {
 		type: "artifact",
 		request: { kind: "abort", project_id: project, transfer_id: transferId },
 	});
-	check(
-		["accepted", "completed"].includes(response.state) &&
-			response.result &&
-			typeof response.result === "object" &&
-			(response.result as { state?: unknown }).state === "aborted",
-		"Project upload abort is unconfirmed.",
+	if (
+		!["accepted", "completed"].includes(response.state) ||
+		!response.result ||
+		typeof response.result !== "object" ||
+		(response.result as { state?: unknown }).state !== "aborted"
+	)
+		throw new ArtifactAbortError(
+			transferId,
+			managementRejection(response),
+			response.state === "rejected",
+		);
+}
+export type PendingArtifactTransfer = {
+	transfer_id: string;
+	project_id: string;
+	manifest_sha256: string;
+	expires_at: number;
+	/** Set once the device reported this transfer; absent for a begin whose reply never arrived. */
+	confirmed?: boolean;
+};
+const MAX_PENDING_TRANSFERS = 32;
+function pendingTransfersKey(deviceId: string): string {
+	return `flow-like.device-artifact-transfers.${deviceId}`;
+}
+function readPendingTransfers(deviceId: string): PendingArtifactTransfer[] {
+	try {
+		const value: unknown = JSON.parse(
+			globalThis.localStorage?.getItem(pendingTransfersKey(deviceId)) ?? "[]",
+		);
+		const now = Date.now() / 1000;
+		return Array.isArray(value)
+			? value.filter(
+					(entry): entry is PendingArtifactTransfer =>
+						entry &&
+						typeof entry === "object" &&
+						typeof entry.transfer_id === "string" &&
+						typeof entry.project_id === "string" &&
+						typeof entry.manifest_sha256 === "string" &&
+						typeof entry.expires_at === "number" &&
+						entry.expires_at > now &&
+						(entry.confirmed === undefined ||
+							typeof entry.confirmed === "boolean"),
+				)
+			: [];
+	} catch {
+		return [];
+	}
+}
+function writePendingTransfers(
+	deviceId: string,
+	transfers: PendingArtifactTransfer[],
+): void {
+	try {
+		const key = pendingTransfersKey(deviceId);
+		if (transfers.length)
+			globalThis.localStorage?.setItem(
+				key,
+				JSON.stringify(transfers.slice(-MAX_PENDING_TRANSFERS)),
+			);
+		else globalThis.localStorage?.removeItem(key);
+	} catch {
+		// Unavailable storage only loses the resume hint; the device keeps the transfer.
+	}
+}
+/** Unfinished uploads this browser began on a device, kept so a later session can resume or abort them. */
+export function pendingArtifactTransfers(
+	deviceId: string,
+	project?: string,
+): PendingArtifactTransfer[] {
+	return readPendingTransfers(deviceId).filter(
+		(transfer) => project === undefined || transfer.project_id === project,
+	);
+}
+/** A later confirmation upgrades an entry; an unconfirmed report never downgrades one. */
+export function rememberArtifactTransfer(
+	deviceId: string,
+	transfer: Omit<PendingArtifactTransfer, "expires_at">,
+): void {
+	const transfers = readPendingTransfers(deviceId);
+	const existing = transfers.find(
+		(entry) => entry.transfer_id === transfer.transfer_id,
+	);
+	if (existing && (existing.confirmed || !transfer.confirmed)) return;
+	writePendingTransfers(deviceId, [
+		...transfers.filter((entry) => entry !== existing),
+		{
+			...transfer,
+			expires_at:
+				existing?.expires_at ??
+				Date.now() / 1000 + ARTIFACT_TRANSFER_TTL_SECONDS,
+		},
+	]);
+}
+export function forgetArtifactTransfer(
+	deviceId: string,
+	transferId: string,
+): void {
+	writePendingTransfers(
+		deviceId,
+		readPendingTransfers(deviceId).filter(
+			(entry) => entry.transfer_id !== transferId,
+		),
 	);
 }
 export async function prepareOnlineProjectCache(

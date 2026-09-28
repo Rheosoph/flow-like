@@ -462,7 +462,9 @@ pub fn sink_type_from_event_type(event_type: &str) -> &str {
         "cron" => sink_types::CRON,
         "discord" => sink_types::DISCORD,
         "telegram" => sink_types::TELEGRAM,
+        "teams" => "teams",
         "email" => sink_types::EMAIL,
+        "inbound_email" => "inbound_email",
         "chat" => sink_types::CHAT,
         "api" | "http" | "webhook" => sink_types::HTTP,
         // Default to HTTP for unknown types

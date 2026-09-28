@@ -5,6 +5,7 @@ use super::{
     },
     provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
 };
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
@@ -12,7 +13,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::FlowPath;
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -221,7 +222,7 @@ impl NodeLogic for SearchSharePointSitesNode {
 
         let url = provider.api_url(&format!("/sites?search={}", urlencoding::encode(&query)));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, url).await {
             Ok(values) => {
                 let sites = values.iter().filter_map(parse_site).collect::<Vec<_>>();
@@ -345,7 +346,7 @@ impl NodeLogic for GetSharePointSiteNode {
             return Ok(());
         };
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_json(&client, &provider, url).await {
             Ok(body) => {
                 if let Some(site) = parse_site(&body) {
@@ -443,7 +444,7 @@ impl NodeLogic for ListSharePointDrivesNode {
 
         let url = provider.api_url(&format!("/sites/{}/drives", site_id));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, url).await {
             Ok(values) => {
                 let drives = values.iter().filter_map(parse_drive).collect::<Vec<_>>();
@@ -567,7 +568,7 @@ impl NodeLogic for ListSharePointDriveItemsNode {
             provider.api_url(&format!("/drives/{}/root/children", drive_id))
         };
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, url).await {
             Ok(values) => {
                 let items = values
@@ -663,12 +664,12 @@ impl NodeLogic for DownloadSharePointFileNode {
         // First get the download URL
         let url = provider.api_url(&format!("/drives/{}/items/{}", drive_id, item_id));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_json(&client, &provider, url).await {
             Ok(body) => {
                 if let Some(download_url) = body["@microsoft.graph.downloadUrl"].as_str() {
                     // Download the actual content
-                    let content_response = client.get(download_url).send().await;
+                    let content_response = client.get(&download_url)?.send().await;
 
                     match content_response {
                         Ok(content_resp) if content_resp.status().is_success() => {
@@ -811,7 +812,7 @@ impl NodeLogic for GetSharePointDriveItemNode {
             return Ok(());
         };
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_json(&client, &provider, url).await {
             Ok(body) => {
                 if let Some(item) = parse_drive_item(&body) {
@@ -953,7 +954,7 @@ impl NodeLogic for UploadSharePointFileNode {
         };
         let destination_path = normalize_graph_path(&destination_path);
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match upload_flow_path_to_drive(
             context,
             &client,
@@ -1129,9 +1130,9 @@ impl NodeLogic for CreateSharePointFolderNode {
             "@microsoft.graph.conflictBehavior": conflict_behavior
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -1225,9 +1226,9 @@ impl NodeLogic for DeleteSharePointDriveItemNode {
         let drive_id: String = context.evaluate_pin("drive_id").await?;
         let item_id: String = context.evaluate_pin("item_id").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .delete(provider.api_url(&format!("/drives/{}/items/{}", drive_id, item_id)))
+            .delete(&provider.api_url(&format!("/drives/{}/items/{}", drive_id, item_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -1353,9 +1354,9 @@ impl NodeLogic for MoveSharePointDriveItemNode {
             body["name"] = json!(new_name);
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .patch(provider.api_url(&format!("/drives/{}/items/{}", drive_id, item_id)))
+            .patch(&provider.api_url(&format!("/drives/{}/items/{}", drive_id, item_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -1541,9 +1542,9 @@ impl NodeLogic for CopySharePointDriveItemNode {
             body["includeAllVersionHistory"] = json!(true);
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url(&format!("/drives/{}/items/{}/copy", drive_id, item_id)))
+            .post(&provider.api_url(&format!("/drives/{}/items/{}/copy", drive_id, item_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .query(&[(
@@ -1651,7 +1652,7 @@ impl NodeLogic for SearchSharePointDriveItemsNode {
             urlencoding::encode(&query)
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, url).await {
             Ok(values) => {
                 let items = values
@@ -1746,7 +1747,7 @@ impl NodeLogic for ListSharePointListsNode {
 
         let url = provider.api_url(&format!("/sites/{}/lists", site_id));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, url).await {
             Ok(values) => {
                 let lists = values.iter().filter_map(parse_list).collect::<Vec<_>>();
@@ -1851,7 +1852,7 @@ impl NodeLogic for GetSharePointListItemsNode {
             url.push_str("?$expand=fields");
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, url).await {
             Ok(values) => {
                 let items = values
@@ -1961,7 +1962,7 @@ impl NodeLogic for GetSharePointListItemNode {
             url.push_str("?$expand=fields");
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_json(&client, &provider, url).await {
             Ok(body) => {
                 if let Some(item) = parse_list_item(&body) {
@@ -2065,9 +2066,9 @@ impl NodeLogic for CreateSharePointListItemNode {
         let url = provider.api_url(&format!("/sites/{}/lists/{}/items", site_id, list_id));
         let body = json!({ "fields": fields });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -2193,9 +2194,9 @@ impl NodeLogic for UpdateSharePointListItemFieldsNode {
             site_id, list_id, item_id
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .patch(url)
+            .patch(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&fields)
@@ -2299,9 +2300,9 @@ impl NodeLogic for DeleteSharePointListItemNode {
             site_id, list_id, item_id
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .delete(url)
+            .delete(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;

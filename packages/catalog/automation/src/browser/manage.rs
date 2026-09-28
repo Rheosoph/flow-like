@@ -537,13 +537,7 @@ impl NodeLogic for BrowserStartDriverNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let executable: String = context.evaluate_pin("executable").await?;
         let port: i64 = context.evaluate_pin("port").await?;
-        session.ensure_active(context).await?;
-        if context
-            .cache
-            .read()
-            .await
-            .contains_key(&format!("automation:driver:{}", session.session_ref))
-        {
+        if session.has_driver_server(context).await? {
             return Err(flow_like_types::anyhow!(
                 "Stop this session's WebDriver before starting another"
             ));
@@ -554,12 +548,13 @@ impl NodeLogic for BrowserStartDriverNode {
         let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port as u16))
             .map_err(|_| flow_like_types::anyhow!("WebDriver port is already in use"))?;
         drop(reservation);
-        let mut child = tokio::process::Command::new(executable)
+        let child = tokio::process::Command::new(executable)
             .arg(format!("--port={port}"))
             .kill_on_drop(true)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()?;
+        let mut server = crate::types::handles::DriverServer::new(child);
         let url = format!("http://127.0.0.1:{port}");
         let client = flow_like_types::reqwest::Client::builder()
             .timeout(std::time::Duration::from_millis(500))
@@ -567,7 +562,7 @@ impl NodeLogic for BrowserStartDriverNode {
         let start = std::time::Instant::now();
         loop {
             context.check_cancelled()?;
-            if child.try_wait()?.is_some() {
+            if server.has_exited()? {
                 return Err(flow_like_types::anyhow!(
                     "WebDriver exited before becoming ready"
                 ));
@@ -588,10 +583,7 @@ impl NodeLogic for BrowserStartDriverNode {
             }
             crate::rpa::branch::delay(context, std::time::Duration::from_millis(100)).await?;
         }
-        context.cache.write().await.insert(
-            format!("automation:driver:{}", session.session_ref),
-            std::sync::Arc::new(DriverProcess { child }),
-        );
+        session.set_driver_server(context, server).await?;
         context.set_pin_value("webdriver_url", json!(url)).await?;
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -632,17 +624,14 @@ impl NodeLogic for BrowserStopDriverNode {
         let mut session: AutomationSession = context.evaluate_pin("session").await?;
         let detached = session.detach_browser(context).await;
         super::protocol::clear_listeners(context, &session).await;
-        context
-            .cache
-            .write()
-            .await
-            .remove(&format!("automation:driver:{}", session.session_ref));
+        let stopped = session.stop_driver_server(context).await;
         context
             .cache
             .write()
             .await
             .remove(&format!("automation:debugger:{}", session.session_ref));
         detached?;
+        stopped?;
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
@@ -652,26 +641,6 @@ impl NodeLogic for BrowserStopDriverNode {
         Err(flow_like_types::anyhow!(
             "Browser automation requires the execute feature"
         ))
-    }
-}
-
-#[cfg(feature = "execute")]
-struct DriverProcess {
-    child: tokio::process::Child,
-}
-#[cfg(feature = "execute")]
-impl flow_like_types::Cacheable for DriverProcess {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-}
-#[cfg(feature = "execute")]
-impl Drop for DriverProcess {
-    fn drop(&mut self) {
-        let _ = self.child.start_kill();
     }
 }
 

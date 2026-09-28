@@ -3,6 +3,7 @@ import { replicaIdentifier } from "../device-frames";
 import {
 	CONTROLLER_BUDGET,
 	ConnectionSlots,
+	DEVICE_AGGREGATE_BUDGET,
 	DEVICE_PARTICIPANT_BUDGET,
 	DiscardCounter,
 	type FrameBudgetLimits,
@@ -11,7 +12,10 @@ import {
 	MAX_CONTROLLERS_PER_DEVICE_ACCOUNT,
 	ManagementOutbox,
 	type OutboxFrame,
+	SenderShares,
 	connectionSlotsFor,
+	managementFrameBudgets,
+	soleAccount,
 } from "../limits";
 
 const small: FrameBudgetLimits = {
@@ -70,6 +74,90 @@ describe("subject frame budgets", () => {
 		expect(budgets.size).toBe(1);
 		budgets.sweep(60_000);
 		expect(budgets.size).toBe(0);
+	});
+});
+
+describe("account-keyed device budgets", () => {
+	const device = {
+		role: "device",
+		deviceId: "device",
+		deviceAuthEpoch: 1,
+		subject: "device",
+	} as const;
+
+	test("one account's sockets share a single slice of the device's budget", () => {
+		const [aggregate, first] = managementFrameBudgets(
+			device,
+			"tab-1",
+			"grantee",
+		);
+		const [, second] = managementFrameBudgets(device, "tab-2", "grantee");
+		expect(aggregate[1]).toBe(DEVICE_AGGREGATE_BUDGET);
+		expect(first).toEqual(second);
+		expect(first[1]).toBe(DEVICE_PARTICIPANT_BUDGET);
+		const budgets = new FrameBudgets();
+		for (let i = 0; i < DEVICE_PARTICIPANT_BUDGET.frames; i++)
+			expect(
+				budgets.reserve(
+					managementFrameBudgets(device, `tab-${i % 8}`, "grantee"),
+					1,
+					0,
+				),
+			).toBe(0);
+		expect(
+			budgets.reserve(managementFrameBudgets(device, "tab-9", "grantee"), 1, 0),
+		).toBeGreaterThan(0);
+		expect(
+			budgets.reserve(managementFrameBudgets(device, "tab-9", "owner"), 1, 0),
+		).toBe(0);
+	});
+
+	test("a participant whose account this replica cannot see keeps its own slice", () => {
+		const [, remote] = managementFrameBudgets(device, "remote-tab", null);
+		const [, known] = managementFrameBudgets(device, "remote-tab", "grantee");
+		expect(remote[0]).not.toBe(known[0]);
+		expect(
+			managementFrameBudgets(
+				{ ...device, role: "controller", subject: "grantee" },
+				"device",
+				null,
+			),
+		).toEqual([["controller:device:1:grantee", CONTROLLER_BUDGET]]);
+	});
+
+	test("resolves a participant to an account only when its sockets agree", () => {
+		expect(soleAccount(["grantee", "grantee"])).toBe("grantee");
+		expect(soleAccount(["grantee", "owner"])).toBeNull();
+		expect(soleAccount(["grantee", undefined])).toBeNull();
+		expect(soleAccount([])).toBeNull();
+	});
+});
+
+describe("sender shares", () => {
+	test("only senders filling a device's buffer count as top contributors", () => {
+		const shares = new SenderShares(1000);
+		shares.add("account:flooder", 400_000, 0);
+		shares.add("account:victim", 8_000, 0);
+		expect(shares.isTopContributor("account:flooder", 0)).toBeTrue();
+		expect(shares.isTopContributor("account:victim", 0)).toBeFalse();
+		expect(shares.isTopContributor("account:silent", 0)).toBeFalse();
+		shares.add("account:second-flooder", 300_000, 0);
+		expect(shares.isTopContributor("account:second-flooder", 0)).toBeTrue();
+	});
+
+	test("an earlier flood stops counting once the buffer it filled has drained", () => {
+		const shares = new SenderShares(1000);
+		shares.add("account:earlier", 400_000, 0);
+		shares.add("account:current", 50_000, 5_000);
+		expect(shares.isTopContributor("account:current", 5_000)).toBeTrue();
+		expect(shares.isTopContributor("account:earlier", 5_000)).toBeFalse();
+	});
+
+	test("forgets senders whose share has decayed away", () => {
+		const shares = new SenderShares(1000);
+		for (let i = 0; i < 64; i++) shares.add(`participant:${i}`, 1, 0);
+		shares.add("account:new", 1, 60_000);
+		expect(shares.size).toBe(1);
 	});
 });
 

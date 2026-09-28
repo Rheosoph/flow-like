@@ -40,6 +40,25 @@ public struct NativeWidgetAppSelection: Sendable {
     }
 }
 
+public enum NativeWidgetFreshness {
+    /// Times after `now` at which a stale widget's age label changes, so WidgetKit can render them ahead of time.
+    public static func labelDates(_ freshness: NativeFreshness, after now: Date, limit: Int = 40) -> [Date] {
+        let hours = (1..<24).map { freshness.updatedAt.addingTimeInterval(Double($0) * 3600) }
+        let days = (1...7).map { freshness.updatedAt.addingTimeInterval(Double($0) * 86_400) }
+        return Array(Set([freshness.staleAt] + hours + days)
+            .filter { $0 > now && $0 >= freshness.staleAt && $0 < freshness.expiresAt }
+            .sorted().prefix(limit))
+    }
+
+    public static func age(since date: Date, at reference: Date,
+                           style: RelativeDateTimeFormatter.UnitsStyle = .abbreviated) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = style
+        formatter.dateTimeStyle = .numeric
+        return formatter.localizedString(for: min(date, reference), relativeTo: reference)
+    }
+}
+
 public enum NativeWidgetLaunchURL {
     public static let home = URL(string: "flow-like://native/home")!
 

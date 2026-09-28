@@ -3,7 +3,7 @@ use crate::data::providers::aws::AwsProvider;
 use crate::data::providers::azure::AzureProvider;
 use crate::data::providers::cloudflare::CloudflareProvider;
 use crate::data::providers::gcp::GcpProvider;
-use crate::data::providers::util::get_pin_string_value;
+use crate::data::providers::util::{ensure_host_fragment, get_pin_string_value};
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -116,7 +116,9 @@ impl NodeLogic for S3StoreNode {
             return Err(flow_like_types::anyhow!("S3 bucket name is required"));
         }
 
-        let mut builder = provider.apply_to_s3_builder(context, AmazonS3Builder::new())?;
+        let mut builder = provider
+            .apply_to_s3_builder(context, AmazonS3Builder::new())
+            .await?;
         builder = builder.with_bucket_name(&bucket);
         if path_style {
             builder = builder.with_virtual_hosted_style_request(false);
@@ -237,7 +239,10 @@ impl NodeLogic for S3ExpressStoreNode {
             ));
         }
 
-        let mut builder = provider.apply_to_s3_builder(context, AmazonS3Builder::new())?;
+        ensure_host_fragment("S3 Express", "bucket", &bucket)?;
+        let mut builder = provider
+            .apply_to_s3_builder(context, AmazonS3Builder::new())
+            .await?;
         builder = builder.with_bucket_name(&bucket).with_s3_express(true);
 
         let store = builder
@@ -347,7 +352,7 @@ impl NodeLogic for AzureBlobStoreNode {
         }
 
         let builder = MicrosoftAzureBuilder::new().with_container_name(&container);
-        let builder = provider.apply_to_azure_builder(context, builder)?;
+        let builder = provider.apply_to_azure_builder(context, builder).await?;
 
         let store = builder
             .build()
@@ -556,7 +561,8 @@ impl NodeLogic for CloudflareR2StoreNode {
         }
 
         let builder = AmazonS3Builder::new().with_bucket_name(&bucket);
-        let builder = provider.apply_to_s3_builder_for_r2(builder)?;
+        let builder =
+            provider.apply_to_s3_builder_for_r2(context.execution_environment(), builder)?;
 
         let store = builder
             .build()

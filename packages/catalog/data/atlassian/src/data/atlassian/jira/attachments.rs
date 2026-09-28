@@ -2,6 +2,7 @@ use crate::data::{
     atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider},
     path::FlowPath,
 };
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
@@ -149,11 +150,11 @@ impl NodeLogic for GetAttachmentsNode {
             return Err(flow_like_types::anyhow!("Issue key is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.jira_api_url(&format!("/issue/{}?fields=attachment", issue_key));
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;
@@ -304,11 +305,11 @@ impl NodeLogic for UploadAttachmentNode {
         let part = reqwest::multipart::Part::bytes(bytes).file_name(filename);
         let form = reqwest::multipart::Form::new().part("file", part);
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.jira_api_url(&format!("/issue/{}/attachments", issue_key));
 
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("X-Atlassian-Token", "no-check")
             .header("Accept", "application/json")
@@ -441,11 +442,11 @@ impl NodeLogic for DownloadAttachmentNode {
             return Err(flow_like_types::anyhow!("Attachment ID is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.jira_api_url(&format!("/attachment/content/{}", attachment_id));
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .query(&[("redirect", "false")])
             .send()
@@ -555,11 +556,11 @@ impl NodeLogic for DeleteAttachmentNode {
             return Err(flow_like_types::anyhow!("Attachment ID is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.jira_api_url(&format!("/attachment/{}", attachment_id));
 
         let response = client
-            .delete(&url)
+            .delete(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;

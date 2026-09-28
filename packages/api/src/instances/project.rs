@@ -63,7 +63,7 @@ fn verify(token: &str) -> Result<ProjectClaims, ApiError> {
         || c.exp - c.iat > MAX_INSTANCE_PROJECT_TOKEN_SECONDS
         || c.jti.is_empty()
     {
-        return Err(ApiError::UNAUTHORIZED);
+        return Err(bad_proof("project token claims are malformed"));
     }
     for id in [
         &c.instance_id,
@@ -75,7 +75,7 @@ fn verify(token: &str) -> Result<ProjectClaims, ApiError> {
     ] {
         validate_instance_identifier(id).map_err(bad_proof)?;
     }
-    live(c.exp)?;
+    proof_live(c.exp)?;
     Ok(c)
 }
 
@@ -173,13 +173,58 @@ fn validate(graph: &Graph, c: &ProjectClaims, deadline: i64) -> Result<(), ApiEr
     {
         return Err(ApiError::FORBIDDEN);
     }
-    live(deadline.min(c.exp).min(resource_deadline(graph)?))
+    // Expired authority is a denial. An expired proof or project token only needs a fresh one.
+    live(resource_deadline(graph)?)?;
+    proof_live(deadline.min(c.exp))
 }
 
 #[derive(Clone)]
 pub(super) struct AuthorizedProject {
     pub(super) claims: ProjectClaims,
     deadline: i64,
+}
+
+pub(super) async fn audit(
+    state: &AppState,
+    claims: &ProjectClaims,
+    action: &str,
+    resource_type: &str,
+    resource_id: &str,
+    details: serde_json::Value,
+) {
+    crate::audit::record_entry(
+        state,
+        audit_record(claims, action, resource_type, resource_id, details),
+    )
+    .await;
+}
+
+/// The record names the instance and the delegation so the project owner can trace
+/// device credentials and writes.
+pub(super) fn audit_record(
+    claims: &ProjectClaims,
+    action: &str,
+    resource_type: &str,
+    resource_id: &str,
+    details: serde_json::Value,
+) -> crate::audit::AuditRecordInput {
+    delegation_audit::instance_record(
+        &claims.instance_id,
+        Some(&claims.project_id),
+        action,
+        resource_type,
+        resource_id,
+        delegation_details(claims, details),
+    )
+}
+
+fn delegation_details(claims: &ProjectClaims, mut details: serde_json::Value) -> serde_json::Value {
+    if let Some(object) = details.as_object_mut() {
+        object.insert("device_id".into(), claims.device_id.clone().into());
+        object.insert("grant_id".into(), claims.grant_id.clone().into());
+        object.insert("delegated_user".into(), claims.sub.clone().into());
+    }
+    details
 }
 
 pub(super) async fn recheck_in(
@@ -340,15 +385,37 @@ pub(super) async fn recheck_storage(
     .await
 }
 
+/// A full storage quota narrows a ReadWrite lease to reads: placements keep serving
+/// existing data while the provider credential refuses every write.
+fn quota_access(quota: Result<(), ApiError>) -> Result<OnlineProjectAccess, ApiError> {
+    match quota {
+        Ok(()) => Ok(OnlineProjectAccess::ReadWrite),
+        Err(error) if error.status() == axum::http::StatusCode::PAYMENT_REQUIRED => {
+            Ok(OnlineProjectAccess::ReadOnly)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub(crate) async fn storage(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<InstanceStorageLease, ApiError> {
     let context = devices::context(state);
     let a = authenticate(&context, headers, "POST", "/instances/project/storage").await?;
-    let access = a.claims.access;
-    if access == OnlineProjectAccess::ReadWrite {
-        crate::capacity::check_storage_write(state, &a.claims.project_id, &a.claims.sub, 0).await?;
+    let access = match a.claims.access {
+        OnlineProjectAccess::ReadWrite => quota_access(
+            crate::capacity::check_storage_write(state, &a.claims.project_id, &a.claims.sub, 0)
+                .await,
+        )?,
+        OnlineProjectAccess::ReadOnly => OnlineProjectAccess::ReadOnly,
+    };
+    if access != a.claims.access {
+        tracing::info!(
+            instance_id = %a.claims.instance_id,
+            project_id = %a.claims.project_id,
+            "Storage quota is full; issuing a read-only instance storage lease"
+        );
     }
     let deadline = recheck_storage(&context, &a).await?;
     let request = StorageIssueRequest {
@@ -363,8 +430,20 @@ pub(crate) async fn storage(
     // the exact original authorization has survived a second transaction.
     let deadline = recheck_storage(&context, &a).await?;
     if issued.expires_at > deadline {
-        return Err(ApiError::UNAUTHORIZED);
+        // The grant is still valid but its deadline moved; a retry is bounded by the new one.
+        return Err(ApiError::service_unavailable(
+            "Storage authorization changed while credentials were issued; retry the lease",
+        ));
     }
+    audit(
+        state,
+        &a.claims,
+        "instance.storage.lease",
+        "PlacementResourceGrant",
+        &a.claims.grant_id,
+        serde_json::json!({ "access": access, "expires_at": issued.expires_at }),
+    )
+    .await;
     let c = a.claims;
     Ok(InstanceStorageLease {
         instance_id: c.instance_id,
@@ -434,7 +513,7 @@ pub(crate) async fn artifact(
         "events" => {
             let app = state.master_app(&c.sub, &c.project_id, state).await?;
             let event = flow_like::flow::event::Event::load_pinned(id, &app, version).await?;
-            serde_json::to_value(crate::routes::app::events::db::filter_event_secrets(event))?
+            serde_json::to_value(crate::routes::app::device_metadata::device_event(event)?)?
         }
         "widgets" => {
             let app = state.master_app(&c.sub, &c.project_id, state).await?;
@@ -512,39 +591,45 @@ pub(crate) async fn page(
 }
 
 #[cfg(test)]
+pub(super) fn test_claims() -> ProjectClaims {
+    let timestamp = now();
+    ProjectClaims {
+        sub: "owner".into(),
+        act: jwt::Actor {
+            sub: "instance:instance".into(),
+        },
+        instance_id: "instance".into(),
+        device_id: "device".into(),
+        device_auth_epoch: 1,
+        key_epoch: 1,
+        grant_id: "grant".into(),
+        authz_version: 1,
+        deployment_id: "deployment".into(),
+        placement_id: "placement".into(),
+        project_id: "project".into(),
+        purpose: InstancePurpose::Workload,
+        access: OnlineProjectAccess::ReadOnly,
+        cnf: devices::jwt::Confirmation { jkt: "key".into() },
+        dpop_nonce: "a".repeat(43),
+        scope: INSTANCE_PROJECT_READ_SCOPE.into(),
+        typ: TokenType::InstanceProject,
+        iss: backend_jwt::issuer().into(),
+        aud: INSTANCE_PROJECT_AUDIENCE.into(),
+        iat: timestamp,
+        nbf: timestamp,
+        exp: timestamp + 300,
+        jti: "jti".into(),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn project_token_profile_has_no_model_user_or_device_fallback() {
         backend_jwt::init_for_tests();
-        let timestamp = now();
-        let claims = ProjectClaims {
-            sub: "owner".into(),
-            act: jwt::Actor {
-                sub: "instance:instance".into(),
-            },
-            instance_id: "instance".into(),
-            device_id: "device".into(),
-            device_auth_epoch: 1,
-            key_epoch: 1,
-            grant_id: "grant".into(),
-            authz_version: 1,
-            deployment_id: "deployment".into(),
-            placement_id: "placement".into(),
-            project_id: "project".into(),
-            purpose: InstancePurpose::Workload,
-            access: OnlineProjectAccess::ReadOnly,
-            cnf: devices::jwt::Confirmation { jkt: "key".into() },
-            dpop_nonce: "a".repeat(43),
-            scope: INSTANCE_PROJECT_READ_SCOPE.into(),
-            typ: TokenType::InstanceProject,
-            iss: backend_jwt::issuer().into(),
-            aud: INSTANCE_PROJECT_AUDIENCE.into(),
-            iat: timestamp,
-            nbf: timestamp,
-            exp: timestamp + 300,
-            jti: "jti".into(),
-        };
+        let claims = test_claims();
+        let timestamp = claims.iat;
         let token = backend_jwt::sign_typed(&claims, JOSE_TYPE).unwrap();
         assert!(verify(&token).is_ok());
         assert!(jwt::verify(&token).is_err());
@@ -574,6 +659,89 @@ mod tests {
         validation.access = OnlineProjectAccess::ReadOnly;
         validation.scope = INSTANCE_PROJECT_READ_SCOPE.into();
         assert!(verify(&backend_jwt::sign_typed(&validation, JOSE_TYPE).unwrap()).is_err());
+    }
+
+    #[test]
+    fn malformed_or_expired_project_tokens_are_proof_failures() {
+        backend_jwt::init_for_tests();
+        let timestamp = now();
+        let claims = serde_json::json!({
+            "sub": "owner", "act": {"sub": "instance:other"}, "instance_id": "instance",
+            "device_id": "device", "device_auth_epoch": 1, "key_epoch": 1, "grant_id": "grant",
+            "authz_version": 1, "deployment_id": "deployment", "placement_id": "placement",
+            "project_id": "project", "access": OnlineProjectAccess::ReadOnly,
+            "cnf": {"jkt": "key"}, "dpop_nonce": "a".repeat(43),
+            "scope": INSTANCE_PROJECT_READ_SCOPE, "typ": TokenType::InstanceProject,
+            "iss": backend_jwt::issuer(), "aud": INSTANCE_PROJECT_AUDIENCE,
+            "iat": timestamp, "nbf": timestamp, "exp": timestamp + 300, "jti": "jti",
+        });
+        let error = verify(&backend_jwt::sign_typed(&claims, JOSE_TYPE).unwrap()).unwrap_err();
+        assert_eq!(error.status(), axum::http::StatusCode::UNAUTHORIZED);
+        assert_eq!(error.public_code(), INSTANCE_PROOF_INVALID);
+        assert_eq!(
+            verify("not-a-token").unwrap_err().public_code(),
+            INSTANCE_PROOF_INVALID
+        );
+    }
+
+    #[test]
+    fn full_storage_quota_narrows_the_lease_to_reads() {
+        assert_eq!(
+            quota_access(Ok(())).unwrap(),
+            OnlineProjectAccess::ReadWrite
+        );
+        let full = ApiError::coded(
+            axum::http::StatusCode::PAYMENT_REQUIRED,
+            "PLAN_LIMIT_EXCEEDED",
+            "Storage is full",
+        );
+        assert_eq!(
+            quota_access(Err(full)).unwrap(),
+            OnlineProjectAccess::ReadOnly
+        );
+        let outage = quota_access(Err(ApiError::internal("capacity lookup failed")));
+        assert_eq!(outage.unwrap_err().status().as_u16(), 500);
+    }
+
+    #[test]
+    fn instance_audit_details_name_the_delegation() {
+        let timestamp = now();
+        let claims = ProjectClaims {
+            sub: "owner".into(),
+            act: jwt::Actor {
+                sub: "instance:instance".into(),
+            },
+            instance_id: "instance".into(),
+            device_id: "device".into(),
+            device_auth_epoch: 1,
+            key_epoch: 1,
+            grant_id: "grant".into(),
+            authz_version: 1,
+            deployment_id: "deployment".into(),
+            placement_id: "placement".into(),
+            project_id: "project".into(),
+            purpose: InstancePurpose::Workload,
+            access: OnlineProjectAccess::ReadWrite,
+            cnf: devices::jwt::Confirmation { jkt: "key".into() },
+            dpop_nonce: "a".repeat(43),
+            scope: INSTANCE_PROJECT_WRITE_SCOPE.into(),
+            typ: TokenType::InstanceProject,
+            iss: "issuer".into(),
+            aud: INSTANCE_PROJECT_AUDIENCE.into(),
+            iat: timestamp,
+            nbf: timestamp,
+            exp: timestamp + 300,
+            jti: "jti".into(),
+        };
+        assert_eq!(
+            delegation_details(&claims, serde_json::json!({"access": "read_only"})),
+            serde_json::json!({
+                "access": "read_only",
+                "device_id": "device",
+                "grant_id": "grant",
+                "delegated_user": "owner",
+            })
+        );
     }
 
     #[test]

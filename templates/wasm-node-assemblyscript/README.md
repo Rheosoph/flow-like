@@ -239,8 +239,8 @@ This produces:
 
 Once your package is ready:
 
-1. Navigate to **Library → Packages → Publish** in Flow-Like Desktop
-2. Select your compiled `build/release.wasm` file
+1. In Flow-Like Desktop, open **Packages › Mine** and add this folder with **Add folder** if it is not listed yet
+2. Select **Publish…** on the package card; the wizard picks up the compiled `build/release.wasm`
 3. Review and edit the manifest metadata
 4. Set the resource tiers and allowed hosts (capabilities come from your nodes)
 5. Submit for review

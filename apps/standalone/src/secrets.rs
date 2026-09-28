@@ -18,23 +18,7 @@ use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
 fn key(root: &Path) -> Result<Zeroizing<[u8; 32]>> {
-    let path = root.join("secrets.key");
-    if !path.try_exists()? {
-        let mut key = Zeroizing::new([0; 32]);
-        OsRng.fill_bytes(key.as_mut());
-        if let Err(error) = vault::write_new_private(&path, key.as_ref()) {
-            if !path.try_exists()? {
-                return Err(error);
-            }
-        }
-    }
-    let bytes = vault::read_private(&path)?;
-    Ok(Zeroizing::new(
-        bytes
-            .as_slice()
-            .try_into()
-            .context("Invalid secret storage key")?,
-    ))
+    vault::load_or_create_key(&root.join("secrets.key"), "secret storage key")
 }
 
 /// A keyed journal digest prevents guessing a short secret from its public request hash.
@@ -125,6 +109,10 @@ pub fn install(config: &PlacementConfig, name: &str, value: &[u8]) -> Result<()>
     if target.try_exists()? {
         vault::read_private(&target)?;
     }
+    #[cfg(unix)]
+    vault::remove_abandoned_staging(&directory, |name| {
+        name.starts_with('.') && name.ends_with(".tmp")
+    });
     let temporary = directory.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
     vault::write_new_private(&temporary, value)?;
     if let Err(error) = std::fs::rename(&temporary, target) {
@@ -273,11 +261,31 @@ pub fn publish_one(root: &Path) -> Result<bool> {
     }
 }
 
+fn publish_retry_delay(failures: u32) -> Duration {
+    Duration::from_millis(250u64 << failures.min(7)).min(Duration::from_secs(30))
+}
+
+/// Only cancellation ends publication. A busy or full state database delays
+/// pending operations instead of leaving them pending forever.
 pub async fn publish(root: PathBuf, cancel: CancellationToken) -> Result<()> {
     let mut tick = tokio::time::interval(Duration::from_millis(250));
+    let mut failures = 0u32;
     loop {
         tokio::select! {_=cancel.cancelled()=>return Ok(()),_=tick.tick()=>()};
-        publish_one(&root)?;
+        match publish_one(&root) {
+            Ok(_) => failures = 0,
+            Err(error) => {
+                failures = failures.saturating_add(1);
+                let delay = publish_retry_delay(failures);
+                tracing::warn!(
+                    "Secret publication failed (attempt {failures}); retrying in {delay:?}: {error:#}"
+                );
+                tokio::select! {
+                    _ = cancel.cancelled() => return Ok(()),
+                    _ = tokio::time::sleep(delay) => {}
+                }
+            }
+        }
     }
 }
 
@@ -304,6 +312,39 @@ mod tests {
         assert_eq!(&**vault::read_private(&target)?, b"original");
         install(&config, "Token", b"rotated")?;
         assert_eq!(&**vault::read_private(&target)?, b"rotated");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn installing_a_secret_removes_values_left_by_interrupted_installs() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config: PlacementConfig = serde_json::from_value(serde_json::json!({
+            "id":"placement","project_id":"project","deployment_id":"service",
+            "revision":"v1","source":"offline","project_path":dir.path(),
+            "events":[{"event_id":"event","event_version":[1,0,0],"board_version":[1,0,0]}]
+        }))?;
+        let directory = directory(&config)?;
+        let interrupted = [
+            format!(".{}.tmp", uuid::Uuid::new_v4()),
+            format!(
+                "..{}.tmp.{}.tmp",
+                uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4()
+            ),
+        ];
+        for name in &interrupted {
+            vault::write_new_private(&directory.join(name), b"deleted secret")?;
+            File::options()
+                .write(true)
+                .open(directory.join(name))?
+                .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))?;
+        }
+        install(&config, "token", b"current")?;
+        let names: Vec<_> = std::fs::read_dir(&directory)?
+            .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+            .collect::<Result<_>>()?;
+        assert_eq!(names, ["token.secret"]);
         Ok(())
     }
 
@@ -419,6 +460,45 @@ mod tests {
             &**vault::read_private(&root.join(".secrets/placement/listener.secret"))?,
             b"test-listener-secret"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn publisher_survives_an_unavailable_state_database() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let database = root.join("management.sqlite");
+        std::fs::create_dir(&database)?;
+        let cancel = CancellationToken::new();
+        let publisher = tokio::spawn(publish(root.clone(), cancel.clone()));
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(
+            !publisher.is_finished(),
+            "A database error ended publication"
+        );
+        std::fs::remove_dir(&database)?;
+        let mut store = StateStore::open(&database)?;
+        let config: PlacementConfig = serde_json::from_value(
+            serde_json::json!({"id":"placement","project_id":"project","deployment_id":"service","revision":"v1","source":"offline","project_path":root,"events":[{"event_id":"event","event_version":[1,0,0],"board_version":[1,0,0]}]}),
+        )?;
+        store.upsert_placement(
+            "placement",
+            &serde_json::to_value(&config)?,
+            crate::state::DesiredState::Stopped,
+        )?;
+        enqueue(&store, &root, "operation", "placement", 1, "token", "value")?;
+        let secret = root.join(".secrets/placement/token.secret");
+        tokio::time::timeout(Duration::from_secs(40), async {
+            while !secret.exists() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await?;
+        assert_eq!(&**vault::read_private(&secret)?, b"value");
+        cancel.cancel();
+        publisher.await??;
+        assert_eq!(publish_retry_delay(1), Duration::from_millis(500));
+        assert_eq!(publish_retry_delay(u32::MAX), Duration::from_secs(30));
         Ok(())
     }
 }

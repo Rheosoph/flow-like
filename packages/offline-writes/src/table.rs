@@ -253,7 +253,7 @@ impl TableOverlay {
             &remote,
             &local,
             &new_name,
-            manager.max_mirror_bytes.load(Ordering::Acquire),
+            manager.refresh_snapshot_budget()?,
         )
         .await?;
         let _guard = manager.gate.lock().await;
@@ -509,9 +509,19 @@ impl TableOverlay {
         Ok(())
     }
     pub(crate) async fn recover_local(&self, manager: &WriteManager) -> Result<()> {
-        let result = self.recover_local_inner(manager).await;
+        self.recover_local_through(manager, u64::MAX).await
+    }
+    /// Materializes the unmaterialized operations up to and including queue `sequence`, so
+    /// a later operation that cannot be materialized never holds back an earlier one.
+    pub(crate) async fn recover_local_through(
+        &self,
+        manager: &WriteManager,
+        sequence: u64,
+    ) -> Result<()> {
+        let result = self.recover_local_inner(manager, sequence).await;
         if result.is_err()
             && let Ok(Some(operation)) = manager.queue.next_unmaterialized(&self.key)
+            && operation.sequence <= sequence
         {
             // Keep detailed provider/schema diagnostics local. Management
             // needs the blocked operation and a safe recovery instruction.
@@ -529,8 +539,12 @@ impl TableOverlay {
         }
         result
     }
-    async fn recover_local_inner(&self, manager: &WriteManager) -> Result<()> {
-        while let Some(operation) = manager.queue.next_unmaterialized(&self.key)? {
+    async fn recover_local_inner(&self, manager: &WriteManager, through: u64) -> Result<()> {
+        while let Some(operation) = manager
+            .queue
+            .next_unmaterialized(&self.key)?
+            .filter(|operation| operation.sequence <= through)
+        {
             let request: OfflineReplayRequest = serde_json::from_value(operation.payload.clone())?;
             let table = self.local_table(manager).await?;
             let expected = match manager.queue.local_expected(&operation.operation_id)? {

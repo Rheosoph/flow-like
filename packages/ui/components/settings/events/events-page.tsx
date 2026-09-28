@@ -56,6 +56,11 @@ import {
 	useInvoke,
 } from "@flow-like/flow-like-ui";
 import type { IOAuthConsentStore } from "@flow-like/flow-like-ui/db/oauth-db";
+import {
+	isServerOnlyEventType,
+	serverEventBlocker,
+	serverEventBlockerMessage,
+} from "@flow-like/flow-like-ui/lib/event-definitions";
 import type { EventSectionId } from "@flow-like/flow-like-ui/lib/event-sections";
 import {
 	getEventSections,
@@ -864,6 +869,18 @@ function EventConfiguration({
 		!!formData.board_id && !isPageTargetEvent && canReadBoards,
 	);
 
+	useEffect(() => {
+		if (
+			isServerOnlyEventType(formData.event_type) &&
+			formData.execution_mode !== IEventExecutionMode.Remote
+		) {
+			setFormData((previous) => ({
+				...previous,
+				execution_mode: IEventExecutionMode.Remote,
+			}));
+		}
+	}, [formData.event_type, formData.execution_mode]);
+
 	// Check if app is offline
 	useEffect(() => {
 		const checkOffline = async () => {
@@ -941,11 +958,31 @@ function EventConfiguration({
 		return eventTypeConfig?.withSink.includes(formData.event_type);
 	};
 
+	// Teams and inbound email setup is fetched per saved event; a save can change
+	// whether the server accepts that request at all.
+	const refreshServerEventSetup = async (eventId: string) => {
+		const { getTeamsBot, getInboundEmailAddress } = backend.eventState;
+		await Promise.all([
+			getTeamsBot && invalidate(getTeamsBot, [appId, eventId]),
+			getInboundEmailAddress &&
+				invalidate(getInboundEmailAddress, [appId, eventId]),
+		]);
+	};
+
 	const runSave = async (
 		selectedPat?: string,
 		oauthTokens?: Record<string, IOAuthToken>,
 	) => {
 		setRoutePathError(null);
+		const serverBlocker = isServerOnlyEventType(formData.event_type)
+			? serverEventBlocker(isOffline, board.data?.execution_mode)
+			: undefined;
+		if (serverBlocker) {
+			toast.error(
+				serverEventBlockerMessage(t, serverBlocker, formData.event_type),
+			);
+			return;
+		}
 		const isUiEvent = uiEventTypeSet.has(formData.event_type);
 		const isPageTargetEvent = !!formData.default_page_id;
 		const shouldHaveRoute = isUiEvent || isPageTargetEvent;
@@ -1071,6 +1108,7 @@ function EventConfiguration({
 		// claiming unsaved changes right after a successful save, which reads as
 		// "saving is broken" and invites repeated taps.
 		setFormData(saved);
+		await refreshServerEventSetup(saved.id);
 
 		if (shouldHaveRoute && desiredRoutePath) {
 			try {
@@ -1553,6 +1591,16 @@ function EventConfiguration({
 						</span>
 					</div>
 					{(() => {
+						if (isServerOnlyEventType(formData.event_type)) {
+							return (
+								<Badge variant="secondary" className="gap-1.5">
+									<Cloud className="h-3 w-3" />
+									{formData.event_type === "teams"
+										? t("teamsBot", "Teams bot")
+										: t("serverEmail", "Server email")}
+								</Badge>
+							);
+						}
 						const boardMode = board.data?.execution_mode;
 						const locked = boardMode === "Local" || boardMode === "Remote";
 						const currentMode =
@@ -2619,6 +2667,7 @@ function EventConfiguration({
 										nodeId={formData.node_id}
 										hub={hub}
 										eventId={event.id}
+										savedEvent={event}
 										canExecuteLocally={canExecuteLocally}
 										eventExecutionMode={
 											formData.execution_mode ?? IEventExecutionMode.Local

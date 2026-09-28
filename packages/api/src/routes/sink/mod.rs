@@ -21,8 +21,14 @@ pub mod management;
 pub mod service;
 pub mod trigger;
 
-pub fn routes() -> Router<AppState> {
+pub fn routes(mail_max_bytes: usize) -> Router<AppState> {
     Router::new()
+        .route(
+            "/trigger/teams/{connection_id}",
+            post(crate::teams::runtime::incoming)
+                .layer(axum::extract::DefaultBodyLimit::max(256 * 1024)),
+        )
+        .nest("/mail", crate::mail_ingress::routes(mail_max_bytes))
         // List all active sinks for apps user has access to
         .route("/", get(management::list_sinks))
         // List sinks for a specific app

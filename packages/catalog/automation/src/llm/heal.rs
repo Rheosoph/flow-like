@@ -1,3 +1,9 @@
+use super::{COORDINATE_SPACE, add_screenshot_pins};
+#[cfg(feature = "execute")]
+use super::{
+    ModelView, SubmitTool, call_tool, load_screenshot, parse_point, parse_tool_args,
+    truncate_on_char_boundary, vision_history,
+};
 use flow_like::{
     bit::Bit,
     flow::{
@@ -7,15 +13,7 @@ use flow_like::{
         variable::VariableType,
     },
 };
-#[cfg(feature = "execute")]
-use flow_like_types::anyhow;
 use flow_like_types::{async_trait, json};
-#[cfg(feature = "execute")]
-use rig::completion::{Completion, Message, ToolDefinition};
-#[cfg(feature = "execute")]
-use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
-#[cfg(feature = "execute")]
-use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -25,7 +23,9 @@ pub struct FailureDiagnosis {
     pub root_cause: String,
     pub severity: String,
     pub recoverable: bool,
+    #[serde(default)]
     pub recommended_actions: Vec<String>,
+    #[serde(default)]
     pub context_clues: Vec<String>,
 }
 
@@ -39,46 +39,60 @@ pub struct HealingResult {
 }
 
 #[cfg(feature = "execute")]
-#[derive(Debug, Serialize, Deserialize)]
-struct DiagnoseAndHealTool {
-    parameters: flow_like_types::Value,
-}
-
+const TOOL: &str = "submit_diagnosis_and_healing";
 #[cfg(feature = "execute")]
-#[derive(Debug)]
-struct DiagnoseAndHealError(String);
+const MAX_HTML_BYTES: usize = 30_000;
 
+/// A target given as a point in the node's coordinate space, rewritten as pixels of the image
+/// the model sees.
 #[cfg(feature = "execute")]
-impl std::fmt::Display for DiagnoseAndHealError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Diagnose and heal error: {}", self.0)
+fn target_for_model(target: &str, view: Option<&ModelView>) -> String {
+    let (Some(view), Some((x, y))) = (view, parse_point(target)) else {
+        return target.to_string();
+    };
+    match view.point_to_model(x.round() as i32, y.round() as i32) {
+        Some((x, y)) => format!("{x},{y} (pixels of the screenshot)"),
+        None => format!("{target} (outside the screenshot)"),
     }
 }
 
+/// A healed point comes back in pixels of the model's image; it is mapped to the node's
+/// coordinate space, and a point off the screenshot means healing failed.
 #[cfg(feature = "execute")]
-impl std::error::Error for DiagnoseAndHealError {}
-
-#[cfg(feature = "execute")]
-impl Tool for DiagnoseAndHealTool {
-    const NAME: &'static str = "submit_diagnosis_and_healing";
-    type Error = DiagnoseAndHealError;
-    type Args = flow_like_types::Value;
-    type Output = flow_like_types::Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Submit failure diagnosis and healing result".to_string(),
-            parameters: self.parameters.clone(),
+fn map_healed_point(mut healing: HealingResult, view: Option<&ModelView>) -> HealingResult {
+    let point = healing.new_value.as_deref().and_then(parse_point);
+    let (Some(view), Some((x, y))) = (view, point) else {
+        return healing;
+    };
+    match view.point_from_model(x, y) {
+        Ok((x, y)) => healing.new_value = Some(format!("{x},{y}")),
+        Err(error) => {
+            healing.healed = false;
+            healing.new_value = None;
+            healing.diagnosis.root_cause = format!(
+                "{} (healed point rejected: {error})",
+                healing.diagnosis.root_cause
+            );
         }
     }
+    healing
+}
 
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        Ok(args)
-    }
-
-    fn name(&self) -> String {
-        Self::NAME.to_string()
+#[cfg(feature = "execute")]
+fn not_healed(root_cause: String) -> HealingResult {
+    HealingResult {
+        healed: false,
+        diagnosis: FailureDiagnosis {
+            failure_type: "unknown".to_string(),
+            root_cause,
+            severity: "high".to_string(),
+            recoverable: false,
+            recommended_actions: vec![],
+            context_clues: vec![],
+        },
+        healing_action: None,
+        new_value: None,
+        confidence: 0.0,
     }
 }
 
@@ -103,7 +117,7 @@ impl NodeLogic for LLMDiagnoseAndHealNode {
         );
         node.set_flowscript_name("automation.llm", "diagnoseAndHeal");
         node.add_icon("/flow/icons/bot-fix.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()
@@ -127,13 +141,11 @@ impl NodeLogic for LLMDiagnoseAndHealNode {
         .set_schema::<Bit>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
-        node.add_input_pin(
-            "screenshot",
-            "Screenshot",
-            "Base64-encoded screenshot at time of failure",
-            VariableType::String,
-        )
-        .set_default_value(Some(json::json!("")));
+        add_screenshot_pins(
+            &mut node,
+            "Optional screenshot at the time of failure",
+            true,
+        );
 
         node.add_input_pin(
             "error_message",
@@ -152,7 +164,9 @@ impl NodeLogic for LLMDiagnoseAndHealNode {
         node.add_input_pin(
             "action_target",
             "Action Target",
-            "The target of the failed action (selector, coordinates, text)",
+            &format!(
+                "The target of the failed action (selector, text, or an x,y point in {COORDINATE_SPACE})"
+            ),
             VariableType::String,
         );
 
@@ -167,7 +181,7 @@ impl NodeLogic for LLMDiagnoseAndHealNode {
         node.add_input_pin(
             "page_html",
             "Page HTML",
-            "Current page HTML (for selector-based failures)",
+            "Current page HTML (for selector-based failures); only the first 30,000 bytes are sent",
             VariableType::String,
         )
         .set_default_value(Some(json::json!("")));
@@ -205,7 +219,7 @@ impl NodeLogic for LLMDiagnoseAndHealNode {
         node.add_output_pin(
             "new_value",
             "New Value",
-            "Healed value (new selector, coordinates, etc.)",
+            &format!("Healed value (new selector, text, or an x,y point in {COORDINATE_SPACE})"),
             VariableType::String,
         );
 
@@ -216,23 +230,19 @@ impl NodeLogic for LLMDiagnoseAndHealNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_model_provider::history::{
-            Content, ContentType, History, HistoryMessage, ImageUrl as HistoryImageUrl,
-            MessageContent, Role,
-        };
-
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_failed").await?;
 
         let model_bit: Bit = context.evaluate_pin("model").await?;
-        let screenshot: String = context.evaluate_pin("screenshot").await.unwrap_or_default();
         let error_message: String = context.evaluate_pin("error_message").await?;
         let action_type: String = context.evaluate_pin("action_type").await?;
         let action_target: String = context.evaluate_pin("action_target").await?;
         let ctx: String = context.evaluate_pin("context").await.unwrap_or_default();
         let page_html: String = context.evaluate_pin("page_html").await.unwrap_or_default();
+        let screenshot = load_screenshot(context).await?;
+        let view = screenshot.as_ref().map(|screenshot| &screenshot.view);
 
-        let tool_params = json::json!({
+        let parameters = json::json!({
             "type": "object",
             "properties": {
                 "healed": { "type": "boolean", "description": "Whether healing was successful" },
@@ -249,66 +259,34 @@ impl NodeLogic for LLMDiagnoseAndHealNode {
                     "required": ["failure_type", "root_cause", "severity", "recoverable"]
                 },
                 "healing_action": { "type": "string", "description": "The healing action taken" },
-                "new_value": { "type": "string", "description": "New selector/coordinates/value to use" },
+                "new_value": { "type": "string", "description": "New selector, text or value to use; a screen position as x,y pixels of the screenshot" },
                 "confidence": { "type": "number", "description": "Confidence in the healing 0-1" }
             },
             "required": ["healed", "diagnosis", "confidence"]
         });
 
-        let mut content_items = vec![];
-
-        if !screenshot.is_empty() {
-            content_items.push(Content::Image {
-                content_type: ContentType::ImageUrl,
-                image_url: HistoryImageUrl {
-                    url: format!("data:image/png;base64,{}", screenshot),
-                    detail: None,
-                    media_type: Some("image/png".to_string()),
-                    additional_params: None,
-                },
-            });
-        }
-
-        let truncated_html = if page_html.len() > 30000 {
-            format!("\n\nPage HTML (truncated):\n{}...", &page_html[..30000])
+        let html_section = if page_html.len() > MAX_HTML_BYTES {
+            format!(
+                "\n\nPage HTML (truncated):\n{}...",
+                truncate_on_char_boundary(&page_html, MAX_HTML_BYTES)
+            )
         } else if !page_html.is_empty() {
-            format!("\n\nPage HTML:\n{}", page_html)
+            format!("\n\nPage HTML:\n{page_html}")
         } else {
             String::new()
         };
+        let coordinate_hint = view
+            .map(|view| format!("\n{}", view.coordinate_hint()))
+            .unwrap_or_default();
+        let context_text = if ctx.is_empty() {
+            "None provided"
+        } else {
+            &ctx
+        };
 
-        content_items.push(Content::Text {
-            content_type: ContentType::Text,
-            text: format!(
-                "Automation Failure:\n\
-                Action Type: {}\n\
-                Action Target: {}\n\
-                Error: {}\n\
-                Context: {}\n\
-                {}\n\n\
-                Diagnose the failure and provide a healing solution if possible.",
-                action_type,
-                action_target,
-                error_message,
-                if ctx.is_empty() {
-                    "None provided"
-                } else {
-                    &ctx
-                },
-                truncated_html
-            ),
-        });
-
-        let history = History::new(
-            "".to_string(),
-            vec![HistoryMessage {
-                role: Role::User,
-                content: MessageContent::Contents(content_items),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                annotations: None,
-            }],
+        let instructions = format!(
+            "Automation Failure:\nAction Type: {action_type}\nAction Target: {}\nError: {error_message}\nContext: {context_text}{html_section}\n\nDiagnose the failure and provide a healing solution if possible.{coordinate_hint}",
+            target_for_model(&action_target, view)
         );
 
         let preamble = "You are an automation failure diagnosis and self-healing expert. Analyze failures and provide actionable healing solutions. Common failure types include:\n\
@@ -320,59 +298,30 @@ impl NodeLogic for LLMDiagnoseAndHealNode {
         - template_mismatch: Visual template no longer matches\n\
         Provide specific, actionable healing solutions when possible.";
 
-        let agent_builder = model_bit
-            .agent(context, &Some(history))
-            .await?
-            .preamble(preamble)
-            .tool(DiagnoseAndHealTool {
-                parameters: tool_params,
-            })
-            .tool_choice(ToolChoice::Required);
-
-        let agent = agent_builder.build();
-
-        let response = agent
-            .completion(
-                format!("Diagnose and heal: {} - {}", action_type, error_message),
-                Vec::<Message>::new(),
-            )
-            .await
-            .map_err(|e| anyhow!("LLM completion failed: {}", e))?
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to send request: {}", e))?;
-
-        let mut result: Option<HealingResult> = None;
-        for content in response.choice {
-            if let AssistantContent::ToolCall(ToolCall {
-                function: ToolFunction {
-                    name, arguments, ..
-                },
-                ..
-            }) = content
-                && name == "submit_diagnosis_and_healing"
-            {
-                result = Some(json::from_value(arguments)?);
-            }
-        }
-
-        let healing = result.unwrap_or(HealingResult {
-            healed: false,
-            diagnosis: FailureDiagnosis {
-                failure_type: "unknown".to_string(),
-                root_cause: "Could not diagnose failure".to_string(),
-                severity: "high".to_string(),
-                recoverable: false,
-                recommended_actions: vec![],
-                context_clues: vec![],
+        let images: Vec<_> = screenshot
+            .iter()
+            .map(|screenshot| &screenshot.image)
+            .collect();
+        let arguments = call_tool(
+            context,
+            &model_bit,
+            vision_history(&images, &instructions),
+            preamble,
+            SubmitTool {
+                name: TOOL,
+                description: "Submit failure diagnosis and healing result",
+                parameters,
             },
-            healing_action: None,
-            new_value: None,
-            confidence: 0.0,
-        });
+        )
+        .await?;
+
+        let healing = match arguments {
+            Some(arguments) => map_healed_point(parse_tool_args(TOOL, &arguments)?, view),
+            None => not_healed(format!("The model answered without calling `{TOOL}`")),
+        };
 
         context
-            .set_pin_value("result", json::json!(healing.clone()))
+            .set_pin_value("result", json::json!(healing))
             .await?;
         context
             .set_pin_value("diagnosis", json::json!(healing.diagnosis))
@@ -398,5 +347,66 @@ impl NodeLogic for LLMDiagnoseAndHealNode {
         Err(flow_like_types::anyhow!(
             "LLM processing requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+    use crate::types::screen_frame::ScreenFrame;
+
+    fn view() -> ModelView {
+        let frame = ScreenFrame::new(None, (0, 0, 1440, 900), (2880, 1800)).unwrap();
+        ModelView::new(frame.resized(1440, 900).unwrap())
+    }
+
+    fn healing(new_value: &str) -> HealingResult {
+        let mut healing = not_healed("moved".into());
+        healing.healed = true;
+        healing.new_value = Some(new_value.into());
+        healing
+    }
+
+    #[test]
+    fn points_parse_in_common_notations() {
+        assert_eq!(parse_point("12,34"), Some((12.0, 34.0)));
+        assert_eq!(parse_point(" (12.5, 34) "), Some((12.5, 34.0)));
+        assert_eq!(parse_point("[1, 2]"), Some((1.0, 2.0)));
+        assert_eq!(parse_point("#submit"), None);
+        assert_eq!(parse_point("a,b"), None);
+    }
+
+    #[test]
+    fn healed_points_are_mapped_and_off_image_points_fail() {
+        let view = view();
+        assert_eq!(
+            map_healed_point(healing("(100, 200)"), Some(&view)).new_value,
+            Some("100,200".into())
+        );
+        let rejected = map_healed_point(healing("5000,10"), Some(&view));
+        assert!(!rejected.healed && rejected.new_value.is_none());
+        assert_eq!(
+            map_healed_point(healing("#next"), Some(&view)).new_value,
+            Some("#next".into())
+        );
+        assert_eq!(
+            target_for_model("100,200", Some(&view)),
+            "100,200 (pixels of the screenshot)"
+        );
+        assert_eq!(target_for_model("#a", Some(&view)), "#a");
+    }
+
+    #[test]
+    fn diagnosis_without_optional_lists_parses() {
+        let result: HealingResult = parse_tool_args(
+            TOOL,
+            &json::json!({
+                "healed": false,
+                "confidence": 0.2,
+                "diagnosis": { "failure_type": "timeout", "root_cause": "slow", "severity": "low", "recoverable": true }
+            }),
+        )
+        .unwrap();
+        assert!(result.diagnosis.recommended_actions.is_empty() && result.new_value.is_none());
     }
 }

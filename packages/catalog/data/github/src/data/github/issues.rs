@@ -2,13 +2,14 @@ use super::{
     list_issues::{GitHubIssue, GitHubIssueUser, parse_issue},
     provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider},
 };
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 fn string_list_from_value(value: Value) -> Vec<String> {
@@ -172,9 +173,9 @@ impl NodeLogic for GetGitHubIssueNode {
             owner, repo, issue_number
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -468,9 +469,9 @@ impl NodeLogic for UpdateGitHubIssueNode {
             request_body["issue_field_values"] = issue_field_values;
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .patch(&url)
+            .patch(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -649,9 +650,9 @@ impl NodeLogic for AddGitHubIssueCommentNode {
             "body": body
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -837,9 +838,9 @@ impl NodeLogic for ListGitHubIssueCommentsNode {
             page.max(1)
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)

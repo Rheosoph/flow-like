@@ -1,11 +1,12 @@
 use crate::data::atlassian::provider::AtlassianProvider;
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json, reqwest};
+use flow_like_types::{Value, async_trait, json::json};
 
 use super::JiraComment;
 
@@ -93,7 +94,7 @@ impl NodeLogic for AddJiraCommentNode {
             return Err(flow_like_types::anyhow!("Comment body is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.jira_api_url(&format!("/issue/{}/comment", issue_key));
 
         // Build request body based on cloud vs server
@@ -124,7 +125,7 @@ impl NodeLogic for AddJiraCommentNode {
         };
 
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Content-Type", "application/json")
             .json(&request_body)

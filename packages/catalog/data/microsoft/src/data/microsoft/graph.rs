@@ -1,4 +1,5 @@
 use super::provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -69,12 +70,12 @@ pub async fn graph_error_message(resp: reqwest::Response) -> String {
 }
 
 pub async fn graph_get_json(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &MicrosoftGraphProvider,
     url: impl AsRef<str>,
 ) -> flow_like_types::Result<Value> {
     let resp = client
-        .get(url.as_ref())
+        .get(url.as_ref())?
         .header("Authorization", format!("Bearer {}", provider.access_token))
         .header("Content-Type", "application/json")
         .send()
@@ -88,7 +89,7 @@ pub async fn graph_get_json(
 }
 
 pub async fn graph_get_paginated_values(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &MicrosoftGraphProvider,
     first_url: impl Into<String>,
 ) -> flow_like_types::Result<Vec<Value>> {
@@ -111,18 +112,18 @@ pub async fn graph_get_paginated_values(
 }
 
 pub async fn graph_send_json(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &MicrosoftGraphProvider,
     method: &str,
     url: impl AsRef<str>,
     body: Option<&Value>,
 ) -> flow_like_types::Result<(u16, Value)> {
     let mut request = match method {
-        "GET" => client.get(url.as_ref()),
-        "POST" => client.post(url.as_ref()),
-        "PATCH" => client.patch(url.as_ref()),
-        "PUT" => client.put(url.as_ref()),
-        "DELETE" => client.delete(url.as_ref()),
+        "GET" => client.get(url.as_ref())?,
+        "POST" => client.post(url.as_ref())?,
+        "PATCH" => client.patch(url.as_ref())?,
+        "PUT" => client.put(url.as_ref())?,
+        "DELETE" => client.delete(url.as_ref())?,
         _ => {
             return Err(flow_like_types::anyhow!(
                 "Unsupported HTTP method: {}",
@@ -168,7 +169,7 @@ async fn flow_path_size(
 
 async fn upload_with_simple_put(
     context: &mut ExecutionContext,
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &MicrosoftGraphProvider,
     content_url: String,
     source_file: &FlowPath,
@@ -177,7 +178,7 @@ async fn upload_with_simple_put(
     let bytes = source_file.get(context, false).await?;
     let size = bytes.len() as u64;
     let resp = client
-        .put(content_url)
+        .put(&content_url)?
         .header("Authorization", format!("Bearer {}", provider.access_token))
         .header("Content-Type", "application/octet-stream")
         .query(&[("@microsoft.graph.conflictBehavior", conflict_behavior)])
@@ -199,7 +200,7 @@ async fn upload_with_simple_put(
 #[allow(clippy::too_many_arguments)]
 async fn upload_with_session(
     context: &mut ExecutionContext,
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &MicrosoftGraphProvider,
     session_url: String,
     source_file: &FlowPath,
@@ -233,7 +234,7 @@ async fn upload_with_session(
         let bytes = store.get_range(&runtime.path, start..end_exclusive).await?;
 
         let resp = client
-            .put(&upload_url)
+            .put(&upload_url)?
             .header("Content-Length", bytes.len().to_string())
             .header(
                 "Content-Range",
@@ -263,7 +264,7 @@ async fn upload_with_session(
 #[allow(clippy::too_many_arguments)]
 pub async fn upload_flow_path_to_drive(
     context: &mut ExecutionContext,
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &MicrosoftGraphProvider,
     content_url: String,
     upload_session_url: String,
@@ -426,7 +427,7 @@ impl NodeLogic for MicrosoftGraphRequestNode {
             provider.api_url(&path)
         };
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let result = if paginate && method.eq_ignore_ascii_case("GET") {
             match graph_get_paginated_values(&client, &provider, url).await {
                 Ok(values) => {

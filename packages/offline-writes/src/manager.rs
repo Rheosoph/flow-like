@@ -11,7 +11,7 @@ use anyhow::{Context, Result, ensure};
 use bytes::Bytes;
 use flow_like_device_protocol::{
     INSTANCE_OFFLINE_LIMITS, OfflineExpected, OfflineLimits, OfflineMutation, OfflineReplayRequest,
-    OfflineReplayStatus, OfflineResource,
+    OfflineReplayStatus, OfflineResource, format_limit,
 };
 use flow_like_storage::{
     databases::vector::{
@@ -40,6 +40,10 @@ use tokio::{
 const KEY_VALIDATION_MEMORY: usize = 256 * 1024 * 1024;
 const MAX_COALESCED: usize = 1024;
 const ACTIVATION_ATTEMPTS: usize = 3;
+const MIN_SNAPSHOT_BYTES: u64 = 1024 * 1024;
+/// Outlasts local queries that still read a superseded snapshot while bounding how many
+/// 30 s refreshes can hold copies of one table.
+const STANDALONE_SNAPSHOT_GRACE: Duration = Duration::from_secs(120);
 const REFRESH_FAILED: &str = "Cloud table refresh failed; the last complete local snapshot remains active. Check connectivity and the mirror disk budget.";
 
 /// Fast-forward refresh before a write to an idle table.
@@ -96,7 +100,7 @@ impl WriteManagerOptions {
             fast_forward: None,
             connectivity: None,
             recreate_dropped_tables: true,
-            retired_snapshot_grace: None,
+            retired_snapshot_grace: Some(STANDALONE_SNAPSHOT_GRACE),
         }
     }
 }
@@ -177,6 +181,7 @@ pub struct WriteManager {
     pub(crate) queue: Arc<Outbox>,
     pub(crate) host: Arc<dyn OfflineHost>,
     local: RwLock<Option<Connection>>,
+    local_budget: offline_replay::LocalBudget,
     tables: RwLock<Registry>,
     pub(crate) gate: Arc<Mutex<()>>,
     pub(crate) wake: Arc<Notify>,
@@ -226,7 +231,7 @@ impl WriteManager {
             std::fs::remove_dir_all(&spill)?;
         }
         fs::private_directory(&spill)?;
-        let local = offline_replay::budgeted_local_connection(
+        let (local, local_budget) = offline_replay::budgeted_local_connection_with_budget(
             &tables_root,
             options.limits.max_mirror_bytes,
         )
@@ -235,6 +240,7 @@ impl WriteManager {
             queue,
             host,
             local: RwLock::new(Some(local)),
+            local_budget,
             tables: RwLock::new(Registry::default()),
             gate: Arc::new(Mutex::new(())),
             wake: Arc::new(Notify::new()),
@@ -270,6 +276,22 @@ impl WriteManager {
 
     pub(crate) fn key_validation_memory(&self) -> usize {
         KEY_VALIDATION_MEMORY
+    }
+
+    /// What a refresh snapshot may use of the shared local disk budget: the rest after
+    /// keeping room to materialize a full queue of accepted writes.
+    pub(crate) fn refresh_snapshot_budget(&self) -> Result<u64> {
+        let mirror = self.max_mirror_bytes.load(Ordering::Acquire);
+        let reserve = self.queue.limits()?.max_queue_bytes.min(mirror / 2);
+        let available = self.local_budget.available();
+        let budget = mirror.min(available.saturating_sub(reserve));
+        ensure!(
+            budget >= MIN_SNAPSHOT_BYTES,
+            "Offline table refresh needs 1 MiB of the local mirror budget beyond the {} kept for queued writes; {} is free",
+            format_limit(reserve as usize),
+            format_limit(available as usize)
+        );
+        Ok(budget)
     }
 
     fn database_path(&self, table: &BufferedTable) -> Result<ObjectPath> {
@@ -742,16 +764,17 @@ impl WriteManager {
         }
     }
 
-    /// Idle refreshes and retired snapshot cleanup.
+    /// Retired snapshot cleanup, then idle refreshes, so a new copy finds the space the
+    /// expired ones held.
     pub(crate) async fn idle_pass(&self) {
+        if let Err(error) = self.prune_retired().await {
+            tracing::debug!(%error, "Could not delete retired offline table snapshots");
+        }
         for table in self.overlays() {
             if let Err(error) = table.refresh_idle(self).await {
                 tracing::debug!(%error,"Keeping the last complete offline table snapshot");
                 let _ = self.queue.mirror_error(&table.key, Some(REFRESH_FAILED));
             }
-        }
-        if let Err(error) = self.prune_retired().await {
-            tracing::debug!(%error, "Could not delete retired offline table snapshots");
         }
     }
 
@@ -976,7 +999,9 @@ impl WriteManager {
         guard: MutexGuard<'_, ()>,
     ) -> Result<bool> {
         if let Some(table) = self.overlay(&operation.resource) {
-            table.recover_local(self).await?;
+            table
+                .recover_local_through(self, operation.sequence)
+                .await?;
             operation = self
                 .queue
                 .operation(&operation.operation_id)?

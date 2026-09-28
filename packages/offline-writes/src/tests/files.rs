@@ -16,6 +16,7 @@ use flow_like_storage::object_store::{
 use flow_like_types::authorization::AuthorizationError;
 use futures_util::stream::BoxStream;
 use std::{
+    collections::BTreeSet,
     fmt,
     sync::{
         Arc, Mutex,
@@ -31,6 +32,7 @@ pub(super) struct Cloud {
     pub(super) offline: AtomicBool,
     pub(super) put_delay_ms: AtomicU64,
     pub(super) puts: AtomicUsize,
+    pub(super) lists: AtomicUsize,
     pub(super) strip_revisions: AtomicBool,
 }
 impl fmt::Display for Cloud {
@@ -100,6 +102,7 @@ impl ObjectStore for Cloud {
         &self,
         prefix: Option<&ObjectPath>,
     ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        self.lists.fetch_add(1, Ordering::SeqCst);
         if let Err(error) = self.check() {
             return Box::pin(futures_util::stream::once(async { Err(error) }));
         }
@@ -321,6 +324,92 @@ async fn when_offline_mode_routes_paths_with_pending_ops_through_the_queue_onlin
         Err(object_store::Error::NotFound { .. })
     ));
     assert_eq!(files.cloud.puts.load(Ordering::SeqCst), 0);
+}
+
+fn listed(result: &ListResult) -> (BTreeSet<String>, BTreeSet<String>) {
+    (
+        result
+            .objects
+            .iter()
+            .map(|meta| meta.location.to_string())
+            .collect(),
+        result
+            .common_prefixes
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+    )
+}
+
+fn names(items: &[&str]) -> BTreeSet<String> {
+    items.iter().map(|item| (*item).to_owned()).collect()
+}
+
+#[tokio::test]
+async fn delimiter_listing_reads_one_level_and_merges_queued_changes() {
+    let root = tempfile::tempdir().unwrap();
+    let files = files(root.path(), "az", Duration::from_secs(1)).await;
+    for key in [
+        "apps/project/other/a.txt",
+        "apps/project/other/deep/b.txt",
+        "apps/project/upload/exports/cloud.txt",
+        "apps/project/upload/exports/gone.txt",
+        "apps/project/upload/exports/nested/x.txt",
+    ] {
+        files
+            .cloud
+            .memory
+            .put(&ObjectPath::from(key), Bytes::from_static(b"cloud").into())
+            .await
+            .unwrap();
+    }
+    files.breaker.offline.store(true, Ordering::SeqCst);
+    for file in ["new.txt", "sub/deeper/y.txt"] {
+        files
+            .store
+            .put(&path(file), Bytes::from_static(b"queued").into())
+            .await
+            .unwrap();
+    }
+    files.store.delete(&path("gone.txt")).await.unwrap();
+    assert_eq!(pending(&files), 3);
+
+    let list = |prefix: &'static str| {
+        let store = files.store.clone();
+        async move {
+            listed(
+                &store
+                    .list_with_delimiter(Some(&ObjectPath::from(prefix)))
+                    .await
+                    .unwrap(),
+            )
+        }
+    };
+    assert_eq!(
+        list("apps/project/other").await,
+        (
+            names(&["apps/project/other/a.txt"]),
+            names(&["apps/project/other/deep"])
+        )
+    );
+    assert_eq!(
+        list("apps/project/upload/exports").await,
+        (
+            names(&[
+                "apps/project/upload/exports/cloud.txt",
+                "apps/project/upload/exports/new.txt"
+            ]),
+            names(&[
+                "apps/project/upload/exports/nested",
+                "apps/project/upload/exports/sub"
+            ])
+        )
+    );
+    assert_eq!(
+        list("apps/project/upload").await,
+        (names(&[]), names(&["apps/project/upload/exports"]))
+    );
+    assert_eq!(files.cloud.lists.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

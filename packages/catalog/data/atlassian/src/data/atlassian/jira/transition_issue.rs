@@ -1,12 +1,13 @@
 use super::{JiraIssue, JiraTransition, parse_jira_issue, parse_jira_transition};
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json, reqwest};
+use flow_like_types::{Value, async_trait, json::json};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -141,7 +142,7 @@ impl NodeLogic for TransitionJiraIssueNode {
             return Ok(());
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         // Get available transitions
         let transitions = get_transitions(&provider, &issue_key, context).await?;
@@ -234,7 +235,7 @@ impl NodeLogic for TransitionJiraIssueNode {
         );
 
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
@@ -278,11 +279,11 @@ async fn get_transitions(
     issue_key: &str,
     context: &mut ExecutionContext,
 ) -> flow_like_types::Result<Vec<JiraTransition>> {
-    let client = reqwest::Client::new();
+    let client = GuardedHttpClient::new(context.execution_environment())?;
     let url = provider.jira_api_url(&format!("/issue/{}/transitions", issue_key));
 
     let response = client
-        .get(&url)
+        .get(&url)?
         .header("Authorization", provider.auth_header())
         .header("Accept", "application/json")
         .send()
@@ -319,11 +320,11 @@ async fn fetch_issue(
     issue_key: &str,
     context: &mut ExecutionContext,
 ) -> flow_like_types::Result<Option<JiraIssue>> {
-    let client = reqwest::Client::new();
+    let client = GuardedHttpClient::new(context.execution_environment())?;
     let url = provider.jira_api_url(&format!("/issue/{}", issue_key));
 
     let response = client
-        .get(&url)
+        .get(&url)?
         .header("Authorization", provider.auth_header())
         .header("Accept", "application/json")
         .send()

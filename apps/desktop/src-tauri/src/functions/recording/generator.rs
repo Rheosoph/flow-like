@@ -51,6 +51,11 @@ fn clipboard_shortcut(key: &str, original: &RecordedAction) -> RecordedAction {
     action
 }
 
+/// Largest `dx`/`dy` the Scroll node accepts per step.
+const MAX_SCROLL_TICKS: i32 = 1000;
+
+const SECRET_STEP_NOTE: &str = " | Recorded into a password field — connect a secret to Secret";
+
 /// Expand clipboard operations and pointer-targeted scrolling into executable actions.
 fn replay_actions(actions: &[RecordedAction]) -> Vec<RecordedAction> {
     let mut result = Vec::new();
@@ -106,17 +111,32 @@ fn replay_actions(actions: &[RecordedAction]) -> Vec<RecordedAction> {
                 result.push(wait);
                 result.push(action.clone());
             }
-            ActionType::Paste { .. } => {
+            ActionType::Paste { secure: false, .. } => {
                 result.push(action.clone());
                 result.push(clipboard_shortcut("v", action));
             }
-            ActionType::Scroll { .. } => {
+            ActionType::Scroll { direction, amount } => {
                 if let Some((x, y)) = action.coordinates {
                     let mut pointer = action.clone();
                     pointer.action_type = ActionType::MouseMove { x, y };
                     result.push(pointer);
                 }
-                result.push(action.clone());
+                let mut remaining = *amount;
+                while remaining > MAX_SCROLL_TICKS {
+                    let mut chunk = action.clone();
+                    chunk.action_type = ActionType::Scroll {
+                        direction: direction.clone(),
+                        amount: MAX_SCROLL_TICKS,
+                    };
+                    result.push(chunk);
+                    remaining -= MAX_SCROLL_TICKS;
+                }
+                let mut rest = action.clone();
+                rest.action_type = ActionType::Scroll {
+                    direction: direction.clone(),
+                    amount: remaining,
+                };
+                result.push(rest);
             }
             _ => result.push(action.clone()),
         }
@@ -769,10 +789,10 @@ pub async fn generate_add_node_commands(
             } => (
                 "computer_mouse_drag",
                 vec![
-                    ("start_x", json!(start.0)),
-                    ("start_y", json!(start.1)),
-                    ("end_x", json!(end.0)),
-                    ("end_y", json!(end.1)),
+                    ("from_x", json!(start.0)),
+                    ("from_y", json!(start.1)),
+                    ("to_x", json!(end.0)),
+                    ("to_y", json!(end.1)),
                     ("button", json!(mouse_button_name(button))),
                     ("modifiers", json!(modifier_names(modifiers))),
                 ],
@@ -808,7 +828,10 @@ pub async fn generate_add_node_commands(
                     false,
                 )
             }
-            ActionType::KeyType { text } => {
+            ActionType::KeyType { secure: true, .. } => {
+                ("computer_type_secret", vec![("mode", json!("type"))], false)
+            }
+            ActionType::KeyType { text, .. } => {
                 ("computer_key_type", vec![("text", json!(text))], false)
             }
             ActionType::KeyPress { key, modifiers } => {
@@ -845,7 +868,14 @@ pub async fn generate_add_node_commands(
                 // Copy reads from clipboard - we'll track its output to connect to Paste
                 ("computer_clipboard_get_text", vec![], false)
             }
-            ActionType::Paste { clipboard_content } => {
+            ActionType::Paste { secure: true, .. } => (
+                "computer_type_secret",
+                vec![("mode", json!("paste"))],
+                false,
+            ),
+            ActionType::Paste {
+                clipboard_content, ..
+            } => {
                 // For Paste, we write to clipboard
                 // If we have a previous Copy, we'll connect them; otherwise use captured content
                 let text = clipboard_content.clone().unwrap_or_default();
@@ -867,6 +897,9 @@ pub async fn generate_add_node_commands(
             }
         };
         node.coordinates = Some((x_offset, y_offset, 0.0));
+        if action.action_type.is_secure_input() {
+            node.description.push_str(SECRET_STEP_NOTE);
+        }
 
         // Annotate click nodes with fingerprint context for debugging
         if is_click && let Some(fp) = &action.fingerprint {
@@ -1058,7 +1091,7 @@ pub async fn generate_add_node_commands(
             }
         }
 
-        if matches!(&action.action_type, ActionType::Paste { .. }) {
+        if matches!(&action.action_type, ActionType::Paste { secure: false, .. }) {
             // Connect previous Copy's text output to this Paste's text input
             if let Some((copy_node_id, copy_text_pin)) = &last_copy_text_output
                 && let Some(paste_text_pin) = text_input_pin
@@ -1423,6 +1456,7 @@ mod tests {
                 "paste",
                 ActionType::Paste {
                     clipboard_content: Some("recorded".into()),
+                    secure: false,
                 },
             ),
             RecordedAction::new(
@@ -1472,6 +1506,147 @@ mod tests {
             .find(|node| node.name == "computer_clipboard_set_text")
             .unwrap();
         assert!(commands.iter().any(|command| matches!(command, GenericCommand::ConnectPin(connection) if connection.from_node == copy.id && connection.to_node == paste.id && copy.pins[&connection.from_pin].name == "text" && paste.pins[&connection.to_pin].name == "text")));
+        verify_connections(&commands);
+    }
+
+    #[tokio::test]
+    async fn drag_replay_sets_the_drag_node_endpoints() {
+        let action = RecordedAction::new(
+            "drag",
+            ActionType::Drag {
+                start: (12, -34),
+                end: (560, 78),
+                button: MouseButton::Right,
+                modifiers: vec![KeyModifier::Alt, KeyModifier::Shift],
+            },
+        )
+        .with_coordinates(12, -34);
+        let commands = generate(&[action], GeneratorOptions::default()).await;
+        let nodes = nodes(&commands);
+        let drag = nodes
+            .iter()
+            .find(|node| node.name == "computer_mouse_drag")
+            .unwrap();
+        assert_eq!(pin(drag, "from_x"), json!(12));
+        assert_eq!(pin(drag, "from_y"), json!(-34));
+        assert_eq!(pin(drag, "to_x"), json!(560));
+        assert_eq!(pin(drag, "to_y"), json!(78));
+        assert_eq!(pin(drag, "button"), json!("right"));
+        assert_eq!(pin(drag, "modifiers"), json!("alt,shift"));
+        verify_connections(&commands);
+    }
+
+    #[tokio::test]
+    async fn long_scrolls_split_into_steps_the_scroll_node_accepts() {
+        let action = RecordedAction::new(
+            "scroll",
+            ActionType::Scroll {
+                direction: ScrollDirection::Up,
+                amount: 2500,
+            },
+        )
+        .with_coordinates(40, 60);
+        let commands = generate(&[action], GeneratorOptions::default()).await;
+        let steps: Vec<_> = nodes(&commands)
+            .into_iter()
+            .filter(|node| node.name == "computer_scroll")
+            .map(|node| pin(node, "dy"))
+            .collect();
+        assert_eq!(steps, [json!(-1000), json!(-1000), json!(-500)]);
+        verify_connections(&commands);
+    }
+
+    fn assert_no_pin_holds(commands: &[GenericCommand], secret: &str) {
+        for node in nodes(commands) {
+            for pin in node.pins.values() {
+                if let Some(value) = &pin.default_value {
+                    assert!(
+                        !String::from_utf8_lossy(value).contains(secret),
+                        "{}.{} stores the typed secret",
+                        node.name,
+                        pin.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn password_typing_replays_as_a_secret_step_without_the_text() {
+        let actions = [
+            RecordedAction::new(
+                "username",
+                ActionType::KeyType {
+                    text: "felix".into(),
+                    secure: false,
+                },
+            ),
+            RecordedAction::new(
+                "password",
+                ActionType::KeyType {
+                    text: "hunter2".into(),
+                    secure: true,
+                },
+            ),
+        ];
+        let commands = generate(&actions, GeneratorOptions::default()).await;
+        let nodes = nodes(&commands);
+        let typed = nodes
+            .iter()
+            .find(|node| node.name == "computer_key_type")
+            .unwrap();
+        assert_eq!(pin(typed, "text"), json!("felix"));
+        let secret = nodes
+            .iter()
+            .find(|node| node.name == "computer_type_secret")
+            .unwrap();
+        assert_eq!(pin(secret, "mode"), json!("type"));
+        assert!(secret.description.ends_with(SECRET_STEP_NOTE));
+        let secret_pin = secret
+            .pins
+            .values()
+            .find(|pin| pin.name == "secret" && pin.pin_type == PinType::Input)
+            .unwrap();
+        assert!(secret_pin.default_value.is_none());
+        assert_no_pin_holds(&commands, "hunter2");
+        verify_connections(&commands);
+    }
+
+    #[tokio::test]
+    async fn password_paste_replays_as_a_secret_paste_without_clipboard_steps() {
+        let actions = [
+            RecordedAction::new(
+                "copy",
+                ActionType::Copy {
+                    clipboard_content: None,
+                },
+            ),
+            RecordedAction::new(
+                "paste",
+                ActionType::Paste {
+                    clipboard_content: Some("hunter2".into()),
+                    secure: true,
+                },
+            ),
+        ];
+        let commands = generate(&actions, GeneratorOptions::default()).await;
+        let nodes = nodes(&commands);
+        let names: Vec<_> = nodes.iter().map(|node| node.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "events_simple",
+                "automation_start_session",
+                "computer_key_press",
+                "delay",
+                "computer_clipboard_get_text",
+                "computer_type_secret"
+            ]
+        );
+        let secret = nodes.last().unwrap();
+        assert_eq!(pin(secret, "mode"), json!("paste"));
+        assert!(!commands.iter().any(|command| matches!(command, GenericCommand::ConnectPin(connection) if connection.to_node == secret.id && secret.pins[&connection.to_pin].name == "secret")));
+        assert_no_pin_holds(&commands, "hunter2");
         verify_connections(&commands);
     }
 

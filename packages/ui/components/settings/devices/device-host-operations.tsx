@@ -6,6 +6,7 @@ import {
 	fetchVerifiedRelease,
 } from "../../../lib/device-management/package";
 import type { ManagementCall } from "../../../lib/device-management/telemetry";
+import { rejectionMessage } from "../../../lib/device-management/transport";
 import type { PlacementStatus } from "../../../lib/device-management/types";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -98,7 +99,10 @@ export function DeviceHostOperations({
 					if (alive.current) {
 						setPending(undefined);
 					}
-					throw new Error("The device rejected this secret update.");
+					throw new Error(
+						rejectionMessage(response) ??
+							"The device rejected this secret update.",
+					);
 				}
 				if (alive.current)
 					setResult(

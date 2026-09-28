@@ -64,8 +64,10 @@ pub struct ExplorePreviewQuery {
     /// `draft` (default) or `live`.
     pub source: Option<String>,
     /// Simulate developer mode.
+    #[param(value_type = Option<bool>)]
     pub dev: Option<String>,
     /// Simulate a signed-in viewer.
+    #[param(value_type = Option<bool>)]
     pub signed_in: Option<String>,
     /// `desktop` or `web` (default).
     pub platform: Option<String>,

@@ -2,13 +2,14 @@ use super::{
     graph::{graph_error_message, graph_get_paginated_values},
     provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
 };
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -117,7 +118,7 @@ impl NodeLogic for ListTaskListsNode {
 
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, provider.api_url("/me/todo/lists"))
             .await
         {
@@ -205,9 +206,9 @@ impl NodeLogic for CreateTaskListNode {
             "displayName": display_name
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url("/me/todo/lists"))
+            .post(&provider.api_url("/me/todo/lists"))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -308,7 +309,7 @@ impl NodeLogic for ListTasksNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let list_id: String = context.evaluate_pin("list_id").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(
             &client,
             &provider,
@@ -448,9 +449,9 @@ impl NodeLogic for CreateTaskNode {
             });
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url(&format!("/me/todo/lists/{}/tasks", list_id)))
+            .post(&provider.api_url(&format!("/me/todo/lists/{}/tasks", list_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -604,9 +605,9 @@ impl NodeLogic for UpdateTaskNode {
             request_body["importance"] = json!(importance);
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .patch(provider.api_url(&format!("/me/todo/lists/{}/tasks/{}", list_id, task_id)))
+            .patch(&provider.api_url(&format!("/me/todo/lists/{}/tasks/{}", list_id, task_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -711,9 +712,9 @@ impl NodeLogic for CompleteTaskNode {
             "status": "completed"
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .patch(provider.api_url(&format!("/me/todo/lists/{}/tasks/{}", list_id, task_id)))
+            .patch(&provider.api_url(&format!("/me/todo/lists/{}/tasks/{}", list_id, task_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -812,9 +813,9 @@ impl NodeLogic for DeleteTaskNode {
         let list_id: String = context.evaluate_pin("list_id").await?;
         let task_id: String = context.evaluate_pin("task_id").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .delete(provider.api_url(&format!("/me/todo/lists/{}/tasks/{}", list_id, task_id)))
+            .delete(&provider.api_url(&format!("/me/todo/lists/{}/tasks/{}", list_id, task_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;

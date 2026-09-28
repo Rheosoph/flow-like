@@ -1179,8 +1179,7 @@ fn frontend_tool_result_with_timeout(
         &mut image_result,
     );
     let mut output = ToolResultObject::text(
-        serde_json::to_string_pretty(&result)
-            .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
+        serde_json::to_string(&result).unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
     );
     if !image_result.images.is_empty() {
         output.binary_results_for_llm = Some(image_result.images);

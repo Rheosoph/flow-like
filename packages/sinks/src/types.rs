@@ -26,6 +26,10 @@ pub enum SinkType {
     Telegram,
     /// Email/IMAP polling
     Email,
+    /// Email delivered to an address issued by the server
+    InboundEmail,
+    /// Microsoft Teams bot webhook
+    Teams,
     /// Desktop deeplink URL scheme
     Deeplink,
     /// NFC tag scanning
@@ -58,6 +62,8 @@ impl SinkType {
             Self::Slack => "slack",
             Self::Telegram => "telegram",
             Self::Email => "email",
+            Self::InboundEmail => "inbound_email",
+            Self::Teams => "teams",
             Self::Deeplink => "deeplink",
             Self::Nfc => "nfc",
             Self::Geolocation => "geolocation",
@@ -80,13 +86,14 @@ impl SinkType {
                 | Self::GitHub
                 | Self::Rss
                 | Self::Email
+                | Self::InboundEmail
+                | Self::Teams
         )
     }
 
     /// Check if this sink type is available on desktop
     pub fn is_desktop_available(&self) -> bool {
-        // All sink types are available on desktop
-        true
+        !matches!(self, Self::InboundEmail | Self::Teams)
     }
 
     /// Get the availability of this sink type
@@ -122,6 +129,8 @@ impl std::str::FromStr for SinkType {
             "slack" => Ok(Self::Slack),
             "telegram" => Ok(Self::Telegram),
             "email" => Ok(Self::Email),
+            "inbound_email" => Ok(Self::InboundEmail),
+            "teams" => Ok(Self::Teams),
             "deeplink" => Ok(Self::Deeplink),
             "nfc" => Ok(Self::Nfc),
             "geolocation" => Ok(Self::Geolocation),
@@ -217,4 +226,19 @@ pub enum SinkExecution {
     Remote,
     /// Runs on both (based on board execution mode)
     Hybrid,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inbound_email_is_server_only_and_distinct_from_imap() {
+        let inbound: SinkType = "inbound_email".parse().unwrap();
+        assert_eq!(inbound, SinkType::InboundEmail);
+        assert_eq!(inbound.as_str(), "inbound_email");
+        assert_eq!(inbound.availability(), SinkAvailability::Remote);
+        assert_eq!("email".parse::<SinkType>().unwrap(), SinkType::Email);
+        assert!(SinkType::Email.is_desktop_available());
+    }
 }

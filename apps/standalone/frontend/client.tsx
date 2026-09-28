@@ -6,6 +6,10 @@ import { PageInterface } from "@flow-like/flow-like-ui/components/interfaces/pag
 import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider";
 import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
 import { TooltipProvider } from "@flow-like/flow-like-ui/components/ui/tooltip";
+import {
+	type ClientNavigation,
+	ClientNavigationContext,
+} from "@flow-like/flow-like-ui/lib/client-navigation";
 import { QueryParamNavigationContext } from "@flow-like/flow-like-ui/lib/set-query-params";
 import { useBackendStore } from "@flow-like/flow-like-ui/state/backend-state";
 import { ExecutionEngineProviderComponent } from "@flow-like/flow-like-ui/state/execution-engine-context";
@@ -18,6 +22,14 @@ import {
 	type PageBootstrap,
 	createServiceBackend,
 } from "./lib/backend";
+import { clearServiceHistory } from "./lib/history";
+import {
+	SERVICE_BASE,
+	appRouteHref,
+	initialServiceEvent,
+	resolveServiceNavigation,
+	serviceEventHref,
+} from "./lib/navigation";
 import { type ServiceRequest, createServiceRequest } from "./lib/transport";
 
 interface Session {
@@ -31,13 +43,29 @@ export default function Service() {
 	const [input, setInput] = useState("");
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
+	const [clearing, setClearing] = useState(false);
 	useEffect(() => () => session?.controller.abort(), [session]);
 	const lock = useCallback(() => {
 		session?.controller.abort();
 		setSession(undefined);
 		setInput("");
 		setError("");
+		window.history.replaceState(null, "", SERVICE_BASE);
+		setClearing(true);
 	}, [session]);
+	// Runs after the interface unmounted, so no late write can restore stored data. The reload
+	// also drops the Page state the shared UI keeps in memory.
+	useEffect(() => {
+		if (!clearing) return;
+		clearServiceHistory()
+			.then(() => window.location.replace(SERVICE_BASE))
+			.catch(() => {
+				setError(
+					"Earlier conversations and Page data could not be removed from this browser. Clear this site's data and close this tab before someone else uses it.",
+				);
+				setClearing(false);
+			});
+	}, [clearing]);
 	if (!session)
 		return (
 			<main className="grid min-h-dvh place-items-center bg-background p-6 text-foreground">
@@ -80,7 +108,8 @@ export default function Service() {
 					</div>
 					<p className="text-sm text-muted-foreground">
 						Enter the access token supplied by the device owner. It stays in
-						this tab until you lock it or close it.
+						this tab until you lock it or close it. Conversations and Page data
+						stay in this browser until you select Lock.
 					</p>
 					<label className="block space-y-2">
 						<span className="text-sm font-medium">Service access token</span>
@@ -90,7 +119,7 @@ export default function Service() {
 							autoComplete="off"
 							value={input}
 							onChange={(event) => setInput(event.target.value)}
-							disabled={busy}
+							disabled={busy || clearing}
 							className="w-full rounded-md border bg-background px-3 py-2"
 						/>
 					</label>
@@ -100,11 +129,11 @@ export default function Service() {
 						</p>
 					)}
 					<button
-						disabled={busy || !input}
+						disabled={busy || clearing || !input}
 						className="w-full rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground disabled:opacity-50"
 						type="submit"
 					>
-						{busy ? "Opening…" : "Open service"}
+						{clearing ? "Locking…" : busy ? "Opening…" : "Open service"}
 					</button>
 				</form>
 			</main>
@@ -150,11 +179,15 @@ function SessionView({
 			),
 		[session],
 	);
-	const events = session.inventory.events.filter(
-		(event) => event.default_page_id || event.event_type === "simple_chat",
+	const events = useMemo(
+		() =>
+			session.inventory.events.filter(
+				(event) => event.default_page_id || event.event_type === "simple_chat",
+			),
+		[session.inventory.events],
 	);
 	const [selected, setSelected] = useState(
-		() => events.find((event) => event.is_default)?.id ?? events[0]?.id,
+		() => initialServiceEvent(window.location.search, events)?.id,
 	);
 	const [ready, setReady] = useState(false);
 	const [page, setPage] = useState<PageBootstrap>();
@@ -196,17 +229,66 @@ function SessionView({
 		bootstrap,
 		session.inventory.project_id,
 	]);
+	const navigation = useMemo<ClientNavigation>(() => {
+		const resolve = (href: string) =>
+			resolveServiceNavigation(
+				href,
+				session.inventory.project_id,
+				events,
+				new URL(window.location.href),
+			);
+		return {
+			href: (href) => {
+				const target = resolve(href);
+				return target.kind === "event" || target.kind === "query"
+					? target.href
+					: href;
+			},
+			navigate: (href, replace) => {
+				const target = resolve(href);
+				if (target.kind === "unsupported") {
+					setError("That route is not deployed on this service.");
+					return;
+				}
+				if (target.kind === "external") {
+					window.open(target.href, "_blank", "noopener,noreferrer");
+					return;
+				}
+				if (target.kind === "event") {
+					setError("");
+					setSelected(target.eventId);
+				}
+				window.history[replace ? "replaceState" : "pushState"](
+					null,
+					"",
+					target.href,
+				);
+			},
+		};
+	}, [events, session.inventory.project_id]);
 	const navigate = useCallback(
-		(route: string) => {
-			const next = events.find((event) => event.route === route);
-			if (!next) {
-				setError("That route is not deployed on this service.");
-				return;
-			}
-			setSelected(next.id);
+		(route: string, replace: boolean, queryParams?: Record<string, string>) =>
+			navigation.navigate(appRouteHref(route, queryParams), replace),
+		[navigation],
+	);
+	const choose = useCallback(
+		(id: string) => {
+			const target = events.find((event) => event.id === id);
+			if (!target) return;
+			setError("");
+			setSelected(id);
+			window.history.pushState(null, "", serviceEventHref(target));
 		},
 		[events],
 	);
+	useEffect(() => {
+		const restore = () => {
+			setError("");
+			setSelected(initialServiceEvent(window.location.search, events)?.id);
+		};
+		window.addEventListener("popstate", restore);
+		return () => window.removeEventListener("popstate", restore);
+	}, [events]);
 	const updateQuery = useCallback((href: string, replace: boolean) => {
 		const target = new URL(href, window.location.origin);
 		if (target.origin !== window.location.origin) return;
@@ -218,84 +300,85 @@ function SessionView({
 	}, []);
 	return (
 		<QueryClientProvider client={client}>
-			<QueryParamNavigationContext.Provider value={updateQuery}>
-				<main className="flex h-dvh min-h-0 flex-col bg-background text-foreground">
-					<header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-4">
-						<span className="font-semibold">Flow-Like</span>
-						<label className="flex min-w-0 flex-1 items-center gap-2">
-							<span className="sr-only">Deployed interface</span>
-							<select
-								aria-label="Deployed interface"
-								value={selected ?? ""}
-								onChange={(event) => setSelected(event.target.value)}
-								className="max-w-sm rounded-md border bg-background px-3 py-1.5"
-							>
-								{events.map((event) => (
-									<option value={event.id} key={event.id}>
-										{event.name}
-									</option>
-								))}
-							</select>
-						</label>
-						<button
-							type="button"
-							onClick={lock}
-							className="rounded-md border px-3 py-1.5 text-sm"
-						>
-							Lock
-						</button>
-					</header>
-					{error && (
-						<p role="alert" className="border-b p-4 text-destructive">
-							{error}
-						</p>
-					)}
-					{!event ? (
-						<p className="p-6 text-muted-foreground">
-							This deployment has no Page or chat interface. Its API endpoints
-							are available to clients.
-						</p>
-					) : !ready ? (
-						<p className="p-6">Loading…</p>
-					) : (
-						<Suspense fallback={<p className="p-6">Loading interface…</p>}>
-							<ExecutionEngineProviderComponent>
-								<div
-									className="flex min-h-0 flex-1 flex-col overflow-hidden"
-									key={event.id}
+			<ClientNavigationContext.Provider value={navigation}>
+				<QueryParamNavigationContext.Provider value={updateQuery}>
+					<main className="flex h-dvh min-h-0 flex-col bg-background text-foreground">
+						<header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-4">
+							<span className="font-semibold">Flow-Like</span>
+							<label className="flex min-w-0 flex-1 items-center gap-2">
+								<span className="sr-only">Deployed interface</span>
+								<select
+									aria-label="Deployed interface"
+									value={selected ?? ""}
+									onChange={(event) => choose(event.target.value)}
+									className="max-w-sm rounded-md border bg-background px-3 py-1.5"
 								>
-									{event.default_page_id ? (
-										page ? (
-											<PageInterface
-												appId={session.inventory.project_id}
-												event={page.event}
-												page={{ ...page.page, noCache: true }}
-												pageRevision={page.execution_revision}
-												pageExecutionRevision={page.execution_revision}
-												pageElementDemand={page.element_demand}
-												route={page.route}
-												config={{}}
-												onNavigate={navigate}
-											/>
+									{events.map((event) => (
+										<option value={event.id} key={event.id}>
+											{event.name}
+										</option>
+									))}
+								</select>
+							</label>
+							<button
+								type="button"
+								onClick={lock}
+								className="rounded-md border px-3 py-1.5 text-sm"
+							>
+								Lock
+							</button>
+						</header>
+						{error && (
+							<p role="alert" className="border-b p-4 text-destructive">
+								{error}
+							</p>
+						)}
+						{!event ? (
+							<p className="p-6 text-muted-foreground">
+								This deployment has no Page or chat interface. Its API endpoints
+								are available to clients.
+							</p>
+						) : !ready ? (
+							<p className="p-6">Loading…</p>
+						) : (
+							<Suspense fallback={<p className="p-6">Loading interface…</p>}>
+								<ExecutionEngineProviderComponent>
+									<div
+										className="flex min-h-0 flex-1 flex-col overflow-hidden"
+										key={event.id}
+									>
+										{event.default_page_id ? (
+											page ? (
+												<PageInterface
+													appId={session.inventory.project_id}
+													event={page.event}
+													page={{ ...page.page, noCache: true }}
+													pageRevision={page.execution_revision}
+													pageExecutionRevision={page.execution_revision}
+													pageElementDemand={page.element_demand}
+													route={page.route}
+													config={{}}
+												/>
+											) : (
+												<p className="p-6">Loading Page…</p>
+											)
 										) : (
-											<p className="p-6">Loading Page…</p>
-										)
-									) : (
-										<ChatFeedbackEnabledContext.Provider value={false}>
-											<ChatInterface
-												appId={session.inventory.project_id}
-												event={event}
-												config={{}}
-												onNavigate={navigate}
-											/>
-										</ChatFeedbackEnabledContext.Provider>
-									)}
-								</div>
-							</ExecutionEngineProviderComponent>
-						</Suspense>
-					)}
-				</main>
-			</QueryParamNavigationContext.Provider>
+											<ChatFeedbackEnabledContext.Provider value={false}>
+												<ChatInterface
+													appId={session.inventory.project_id}
+													event={event}
+													config={{}}
+													onNavigate={navigate}
+												/>
+											</ChatFeedbackEnabledContext.Provider>
+										)}
+									</div>
+								</ExecutionEngineProviderComponent>
+							</Suspense>
+						)}
+					</main>
+				</QueryParamNavigationContext.Provider>
+			</ClientNavigationContext.Provider>
 		</QueryClientProvider>
 	);
 }

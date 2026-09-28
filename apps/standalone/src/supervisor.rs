@@ -5,7 +5,7 @@ use crate::{
     broker::{WorkloadBroker, drain_retirements},
     config::{PlacementConfig, RestartPolicy},
     enrollment::DeviceSession,
-    state::{DesiredState, ObservedState, StateStore},
+    state::{DesiredState, ObservedState, PlacementRecord, StateStore},
 };
 use anyhow::{Context, Result, bail};
 use fs2::FileExt;
@@ -25,6 +25,11 @@ pub(crate) const SERVICE_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(15);
 const FORCED_REAP_GRACE: Duration = Duration::from_secs(2);
 const STABLE_UPTIME: Duration = Duration::from_secs(60);
+const STORE_FAILURE_BUDGET: Duration = Duration::from_secs(300);
+const MAX_TICK_BACKOFF: Duration = Duration::from_secs(30);
+const STARTUP_TIMEOUT_REASON: &str = "Service readiness timed out after 60 seconds";
+const BROKER_CLOSED_REASON: &str = "Workload broker channel closed while the worker was running";
+const BROKER_CLOSE_GRACE: Duration = Duration::from_millis(1500);
 
 pub fn prepare_state_dir(path: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(path).context("Create agent state directory")?;
@@ -41,7 +46,7 @@ pub fn prepare_state_dir(path: &Path) -> Result<PathBuf> {
     path.canonicalize().context("Resolve agent state directory")
 }
 
-pub fn lock_file(path: &Path) -> Result<File> {
+fn open_lock(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
@@ -49,10 +54,41 @@ pub fn lock_file(path: &Path) -> Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
-    let file = options.open(path).context("Open agent lock")?;
+    options.open(path).context("Open agent lock")
+}
+
+pub fn lock_file(path: &Path) -> Result<File> {
+    let file = open_lock(path)?;
     file.try_lock_exclusive()
         .context("Another agent or workload already holds this state lock")?;
     Ok(file)
+}
+
+/// Waits a bounded time for a lock held by another request, including one in
+/// this process. A timeout keeps the `WouldBlock` cause so callers can report
+/// the contention as retryable.
+pub(crate) fn lock_file_within(path: &Path, wait: Duration) -> Result<File> {
+    let file = open_lock(path)?;
+    let deadline = Instant::now() + wait;
+    loop {
+        match file.try_lock_exclusive() {
+            Ok(()) => return Ok(file),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "{} is still held by another operation after waiting {} ms",
+                        path.display(),
+                        wait.as_millis()
+                    )
+                });
+            }
+        }
+    }
 }
 
 pub fn agent_is_running(state_dir: &Path) -> Result<bool> {
@@ -78,7 +114,11 @@ struct RunningChild {
     intent_revision: u64,
     started: Instant,
     stopping_since: Option<Instant>,
-    startup_timed_out: bool,
+    broker_closed_since: Option<Instant>,
+    /// Why the supervisor stopped a wanted worker; its exit counts as a failure.
+    failure: Option<&'static str>,
+    /// The exit observation, decided once so a failed write never double-counts a restart.
+    exit: Option<(ObservedState, Option<String>)>,
     restart: RestartPolicy,
     broker_task: tokio::task::JoinHandle<()>,
     broker_cancel: CancellationToken,
@@ -107,11 +147,14 @@ struct DataPreparation {
     result: Option<std::result::Result<PathBuf, String>>,
 }
 
-struct RolloutValidation(tokio::task::JoinHandle<bool>);
+struct RolloutValidation {
+    task: tokio::task::JoinHandle<bool>,
+    valid: Option<bool>,
+}
 
 impl Drop for RolloutValidation {
     fn drop(&mut self) {
-        self.0.abort();
+        self.task.abort();
     }
 }
 
@@ -124,22 +167,21 @@ async fn poll_rollout_validations(
     let pending = store.validating_rollouts()?;
     jobs.retain(|id, _| pending.iter().any(|record| &record.rollout_id == id));
     for record in pending {
-        if jobs
-            .get(&record.rollout_id)
-            .is_some_and(|job| job.0.is_finished())
-        {
-            let mut job = jobs
-                .remove(&record.rollout_id)
-                .context("Missing rollout validation")?;
-            let valid = (&mut job.0).await.unwrap_or(false);
-            store.complete_rollout_validation(
-                &record.rollout_id,
-                valid,
-                crate::enrollment::unix_time()?,
-            )?;
+        if let Some(job) = jobs.get_mut(&record.rollout_id) {
+            if job.valid.is_none() && job.task.is_finished() {
+                job.valid = Some((&mut job.task).await.unwrap_or(false));
+            }
+            if let Some(valid) = job.valid {
+                store.complete_rollout_validation(
+                    &record.rollout_id,
+                    valid,
+                    crate::enrollment::unix_time()?,
+                )?;
+                jobs.remove(&record.rollout_id);
+            }
             continue;
         }
-        if jobs.contains_key(&record.rollout_id) || jobs.len() >= 2 {
+        if jobs.len() >= 2 {
             continue;
         }
         let id = record.rollout_id.clone();
@@ -191,7 +233,7 @@ async fn poll_rollout_validations(
                 false
             }
         });
-        jobs.insert(id, RolloutValidation(task));
+        jobs.insert(id, RolloutValidation { task, valid: None });
     }
     Ok(())
 }
@@ -292,6 +334,48 @@ fn backoff(policy: &RestartPolicy, failures: u32) -> Duration {
     )
 }
 
+fn tick_backoff(failures: u32) -> Duration {
+    Duration::from_secs(1u64 << failures.saturating_sub(1).min(5)).min(MAX_TICK_BACKOFF)
+}
+
+fn restart_state(restart: bool) -> ObservedState {
+    if restart {
+        ObservedState::Backoff
+    } else {
+        ObservedState::Failed
+    }
+}
+
+/// Logs a failing reconciliation step on its first, second, fourth, ... consecutive
+/// failure, so a persistent fault stays visible without flooding the journal.
+fn report_step(failures: &mut HashMap<String, u32>, step: String, result: Result<()>) {
+    match result {
+        Ok(()) => {
+            if !failures.is_empty() {
+                failures.remove(&step);
+            }
+        }
+        Err(error) => {
+            let count = failures.entry(step.clone()).or_default();
+            *count = count.saturating_add(1);
+            if count.is_power_of_two() {
+                tracing::warn!(
+                    step = %step,
+                    failures = *count,
+                    error = %format!("{error:#}"),
+                    "Supervisor reconciliation step failed; other placements continue and it is retried next tick"
+                );
+            }
+        }
+    }
+}
+
+fn step_placement(step: &str) -> Option<&str> {
+    step.strip_prefix("placement ")?
+        .split_once(' ')
+        .map(|(id, _)| id)
+}
+
 pub async fn run(state_dir: &Path, program: &Path, cancel: CancellationToken) -> Result<()> {
     let session = DeviceSession::load(state_dir)?.map(Arc::new);
     run_with_session(state_dir, program, cancel, session).await
@@ -342,510 +426,28 @@ pub async fn run_with_session_and_ready<F: FnOnce() -> Result<()>>(
             retire_wake.clone(),
         ))
     });
-    let mut children: HashMap<(String, u8), RunningChild> = HashMap::new();
-    let mut retries: HashMap<(String, u8), RetryState> = HashMap::new();
-    let mut data_preparations: HashMap<String, DataPreparation> = HashMap::new();
-    let mut rollout_validations: HashMap<String, RolloutValidation> = HashMap::new();
-    let mut listeners: HashMap<String, (std::net::SocketAddr, std::net::TcpListener)> =
-        HashMap::new();
-    let mut tick = tokio::time::interval(Duration::from_secs(1));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let result: Result<()> = async {
-        loop {
-            tokio::select! {_=cancel.cancelled()=>break,_=tick.tick()=>{}}
-            poll_rollout_validations(
-                &store,
-                &mut rollout_validations,
-                &state_dir,
-                session.as_ref(),
-            )
-            .await?;
-            let records = store.list_placements()?;
-            data_preparations.retain(|id, _| records.iter().any(|record| &record.id == id));
-            for record in records {
-                if record.desired_state != DesiredState::Running {
-                    if let Some(job) = data_preparations.get(&record.id) {
-                        job.cancel.cancel();
-                    }
-                }
-                let parsed = serde_json::from_value::<PlacementConfig>(record.config.clone())
-                    .and_then(|c| {
-                        c.validate().map_err(serde::de::Error::custom)?;
-                        Ok(c)
-                    });
-                let version = (record.config_revision, record.intent_revision);
-                // Every old worker must drain before a new revision uses the shared
-                // listener and mutable project data, including during rollback.
-                let draining_previous_cohort = children.iter().any(|((id, _), child)| {
-                    id == &record.id && (child.revision, child.intent_revision) != version
-                });
-                let mut slots = record
-                    .replicas
-                    .iter()
-                    .map(|r| r.slot)
-                    .collect::<std::collections::BTreeSet<_>>();
-                slots.extend(0..record.desired_replicas);
-                slots.extend(
-                    children
-                        .keys()
-                        .filter(|(id, _)| id == &record.id)
-                        .map(|(_, slot)| *slot),
-                );
-                for slot in slots {
-                    let key = (record.id.clone(), slot);
-                    let retry = retries
-                        .entry(key.clone())
-                        .or_insert_with(|| RetryState::new(version));
-                    if retry.version != version {
-                        *retry = RetryState::new(version);
-                    }
-                    let wanted = record.desired_state == DesiredState::Running
-                        && slot < record.desired_replicas;
-                    if let Some(mut running) = children.remove(&key) {
-                        if let Some(status) = running.child.try_wait()? {
-                            running.broker_cancel.cancel();
-                            running.broker_task.abort();
-                            if let Some(instance) = &running.instance_id {
-                                store.retire_instance(instance)?;
-                                retire_wake.notify_one();
-                            }
-                            if wanted
-                                && (running.stopping_since.is_none() || running.startup_timed_out)
-                                && running.revision == record.config_revision
-                                && running.intent_revision == record.intent_revision
-                            {
-                                if running.started.elapsed() >= STABLE_UPTIME
-                                    && record.replicas.iter().any(|replica| {
-                                        replica.slot == slot
-                                            && replica.observed_state == ObservedState::Running
-                                    })
-                                {
-                                    retry.failures = 0;
-                                }
-                                let restart = retry.failed(&running.restart);
-                                store.record_replica(
-                                    &record.id,
-                                    slot,
-                                    running.revision,
-                                    running.intent_revision,
-                                    if restart {
-                                        ObservedState::Backoff
-                                    } else {
-                                        ObservedState::Failed
-                                    },
-                                    None,
-                                    Some(&if running.startup_timed_out {
-                                        "Service readiness timed out after 60 seconds".to_owned()
-                                    } else { format!("Persistent service exited: {status}") }),
-                                )?;
-                            } else {
-                                store.record_replica(
-                                    &record.id,
-                                    slot,
-                                    running.revision,
-                                    running.intent_revision,
-                                    ObservedState::Stopped,
-                                    None,
-                                    None,
-                                )?;
-                            }
-                        } else if !wanted
-                            || running.revision != record.config_revision
-                            || running.intent_revision != record.intent_revision
-                            || running.stopping_since.is_some()
-                        {
-                            if let Some(since) = running.stopping_since {
-                                if since.elapsed() >= SHUTDOWN_GRACE {
-                                    if !running.isolation.signal(true)? {
-                                        force_kill(&mut running.child)?;
-                                    }
-                                }
-                            } else {
-                                running.broker_drain.cancel();
-                                if let Some(instance) = &running.instance_id {
-                                    store.retire_instance(instance)?;
-                                    retire_wake.notify_one();
-                                }
-                                store.record_replica(
-                                    &record.id,
-                                    slot,
-                                    running.revision,
-                                    running.intent_revision,
-                                    ObservedState::Stopping,
-                                    running.child.id(),
-                                    None,
-                                )?;
-                                if !running.isolation.signal(false)? {
-                                    signal_shutdown(&mut running.child)?;
-                                }
-                                running.stopping_since = Some(Instant::now());
-                            }
-                            children.insert(key, running);
-                            continue;
-                        } else if running.started.elapsed() >= SERVICE_STARTUP_TIMEOUT
-                            && record.replicas.iter().any(|replica| {
-                                replica.slot == slot
-                                    && replica.observed_state == ObservedState::Starting
-                            })
-                        {
-                            // Preparation and application readiness share the worker's
-                            // deadline. A live process alone is never healthy.
-                            running.broker_drain.cancel();
-                            running.broker_cancel.cancel();
-                            running.broker_task.abort();
-                            if let Some(instance) = &running.instance_id {
-                                store.retire_instance(instance)?;
-                                retire_wake.notify_one();
-                            }
-                            if !running.isolation.signal(true)? {
-                                force_kill(&mut running.child)?;
-                            }
-                            // Keep ownership and the PID until try_wait confirms exit.
-                            // Even SIGKILL can wait on kernel I/O; other placements
-                            // must continue reconciling while this child is reaped.
-                            running.startup_timed_out = true;
-                            running.stopping_since = Some(Instant::now());
-                            store.record_replica(
-                                &record.id, slot, running.revision, running.intent_revision,
-                                ObservedState::Stopping, running.child.id(),
-                                Some("Service readiness timed out after 60 seconds"),
-                            )?;
-                            children.insert(key, running);
-                            continue;
-                        } else {
-                            children.insert(key, running);
-                            continue;
-                        }
-                    }
-                    if !wanted {
-                        retries.remove(&key);
-                        continue;
-                    }
-                    if draining_previous_cohort {
-                        continue;
-                    }
-                    if retry.configuration_failed || Instant::now() < retry.next_attempt {
-                        continue;
-                    }
-                    let config = match &parsed {
-                        Ok(c) => c.clone(),
-                        Err(_) => {
-                            if store.claim_replica(
-                                &record.id,
-                                slot,
-                                record.config_revision,
-                                record.intent_revision,
-                            )? {
-                                store.record_replica(
-                                    &record.id,
-                                    slot,
-                                    record.config_revision,
-                                    record.intent_revision,
-                                    ObservedState::Failed,
-                                    None,
-                                    Some("Invalid persisted placement configuration"),
-                                )?;
-                                retry.configuration_failed = true;
-                            }
-                            continue;
-                        }
-                    };
-                    if retry.failures > config.restart.max_restarts {
-                        continue;
-                    }
-                    #[cfg(feature = "runtime")]
-                    let cached_start = if config.source == crate::config::ProjectSource::Online
-                        && store.has_pending_serving_retirements(
-                            &config.id,
-                            crate::enrollment::unix_time()?,
-                        )? {
-                        session
-                            .as_deref()
-                            .map(|device| {
-                                WorkloadBroker::can_restore_outage(device, &config, state_dir)
-                            })
-                            .transpose()
-                            .unwrap_or_else(|_| {
-                                tracing::warn!(placement = %config.id, "Cached startup snapshot could not be verified; waiting for serving leases before cloud recovery");
-                                None
-                            })
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    };
-                    #[cfg(not(feature = "runtime"))]
-                    let cached_start = false;
-                    if wait_for_serving_retirements(
-                        &store,
-                        &config,
-                        slot,
-                        version,
-                        crate::enrollment::unix_time()?,
-                        cached_start,
-                    )? {
-                        continue;
-                    }
-                    let data_root = match poll_data_preparation(
-                        &mut data_preparations,
-                        state_dir,
-                        &config,
-                        version,
-                        &cancel,
-                    )
-                    .await
-                    {
-                        Ok(Some(path)) => path,
-                        Ok(None) => continue,
-                        Err(error) => {
-                            data_preparations.remove(&record.id);
-                            let restart = retry.failed(&config.restart);
-                            if store.claim_replica(&record.id, slot, version.0, version.1)? {
-                                store.record_replica(
-                                    &record.id,
-                                    slot,
-                                    version.0,
-                                    version.1,
-                                    if restart {
-                                        ObservedState::Backoff
-                                    } else {
-                                        ObservedState::Failed
-                                    },
-                                    None,
-                                    Some(&error.to_string()),
-                                )?;
-                            }
-                            continue;
-                        }
-                    };
-                    if !store.claim_replica(
-                        &record.id,
-                        slot,
-                        record.config_revision,
-                        record.intent_revision,
-                    )? {
-                        continue;
-                    }
-                    if config.id != record.id {
-                        store.record_replica(
-                            &record.id,
-                            slot,
-                            record.config_revision,
-                            record.intent_revision,
-                            ObservedState::Failed,
-                            None,
-                            Some("Placement identity differs"),
-                        )?;
-                        retry.configuration_failed = true;
-                        continue;
-                    }
-                    if let Some(hosting) = &config.hosting {
-                        let address = std::net::SocketAddr::new(hosting.host, hosting.port);
-                        if listeners
-                            .get(&record.id)
-                            .is_some_and(|(old, _)| *old != address)
-                        {
-                            if children.keys().any(|(id, _)| id == &record.id) {
-                                continue;
-                            }
-                            listeners.remove(&record.id);
-                        }
-                        if !listeners.contains_key(&record.id) {
-                            match std::net::TcpListener::bind(address).and_then(|listener| {
-                                listener.set_nonblocking(true)?;
-                                Ok(listener)
-                            }) {
-                                Ok(listener) => {
-                                    listeners.insert(record.id.clone(), (address, listener));
-                                }
-                                Err(error) => {
-                                    let restart = retry.failed(&config.restart);
-                                    store.record_replica(
-                                        &record.id,
-                                        slot,
-                                        record.config_revision,
-                                        record.intent_revision,
-                                        if restart {
-                                            ObservedState::Backoff
-                                        } else {
-                                            ObservedState::Failed
-                                        },
-                                        None,
-                                        Some(&format!("Cannot bind service listener: {error}")),
-                                    )?;
-                                    continue;
-                                }
-                            }
-                        }
-                    }
-                    let listener = config
-                        .hosting
-                        .as_ref()
-                        .and_then(|_| listeners.get(&record.id))
-                        .map(|(_, listener)| listener);
-                    match spawn_child(
-                        program,
-                        state_dir,
-                        &record.id,
-                        slot,
-                        record.config_revision,
-                        record.intent_revision,
-                        listener,
-                        &config,
-                        &data_root,
-                    ) {
-                        Ok((mut child, channel, isolation)) => {
-                            for (stream, source) in [
-                                (
-                                    child.stdout.take().map(|v| {
-                                        Box::pin(v)
-                                            as std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>>
-                                    }),
-                                    "stdout",
-                                ),
-                                (
-                                    child.stderr.take().map(|v| {
-                                        Box::pin(v)
-                                            as std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>>
-                                    }),
-                                    "stderr",
-                                ),
-                            ] {
-                                if let Some(stream) = stream {
-                                    let root = state_dir.to_path_buf();
-                                    let placement = record.id.clone();
-                                    tokio::spawn(async move {
-                                        let _ = crate::telemetry::capture(
-                                            stream, root, placement, source,
-                                        )
-                                        .await;
-                                    });
-                                }
-                            }
-                            store.record_replica(
-                                &record.id,
-                                slot,
-                                record.config_revision,
-                                record.intent_revision,
-                                ObservedState::Starting,
-                                child.id(),
-                                None,
-                            )?;
-                            let broker = if config.resource_grant.is_some() {
-                                match session
-                                    .clone()
-                                    .context("Resource placement requires an enrolled device")
-                                    .and_then(|session| {
-                                        WorkloadBroker::new_replica(
-                                            session,
-                                            config.clone(),
-                                            state_dir.to_path_buf(),
-                                            record.config_revision,
-                                            record.intent_revision,
-                                            slot,
-                                        )
-                                    }) {
-                                    Ok(broker) => Some(Arc::new(broker)),
-                                    Err(error) => {
-                                        drop(child);
-                                        store.record_replica(
-                                            &record.id,
-                                            slot,
-                                            record.config_revision,
-                                            record.intent_revision,
-                                            ObservedState::Failed,
-                                            None,
-                                            Some(&error.to_string()),
-                                        )?;
-                                        retry.configuration_failed = true;
-                                        continue;
-                                    }
-                                }
-                            } else {
-                                None
-                            };
-                            let instance_id = broker.as_ref().map(|b| b.instance_id().to_string());
-                            let bootstrap = crate::ipc::ChildBootstrap {
-                                config: config.clone(),
-                                data_root: Some(data_root),
-                                replica_slot: slot,
-                                inherited_listener: listener.is_some(),
-                                config_revision: record.config_revision,
-                                intent_revision: record.intent_revision,
-                                parent_pid: std::process::id(),
-                                api_base_url: session
-                                    .as_ref()
-                                    .map(|s| s.manifest().api_base_url.clone()),
-                                workload_identity: broker.as_ref().map(|b| b.identity()),
-                            };
-                            let broker_cancel = CancellationToken::new();
-                            let task_cancel = broker_cancel.clone();
-                            let broker_drain = CancellationToken::new();
-                            let task_drain = broker_drain.clone();
-                            let task_state = state_dir.to_path_buf();
-                            let process_id = child.id().context("Workload has no process ID")?;
-                            let broker_task = tokio::spawn(async move {
-                                if crate::ipc::serve_with_drain(
-                                    channel,
-                                    bootstrap,
-                                    task_state,
-                                    process_id,
-                                    broker,
-                                    task_cancel,
-                                    task_drain,
-                                )
-                                .await
-                                .is_err()
-                                {
-                                    tracing::debug!("Workload broker channel closed");
-                                }
-                            });
-                            children.insert(
-                                key,
-                                RunningChild {
-                                    child,
-                                    isolation,
-                                    revision: record.config_revision,
-                                    intent_revision: record.intent_revision,
-                                    started: Instant::now(),
-                                    stopping_since: None,
-                                    startup_timed_out: false,
-                                    restart: config.restart,
-                                    broker_task,
-                                    broker_cancel,
-                                    broker_drain,
-                                    instance_id,
-                                },
-                            );
-                        }
-                        Err(error) => {
-                            let restart = retry.failed(&config.restart);
-                            store.record_replica(
-                                &record.id,
-                                slot,
-                                record.config_revision,
-                                record.intent_revision,
-                                if restart {
-                                    ObservedState::Backoff
-                                } else {
-                                    ObservedState::Failed
-                                },
-                                None,
-                                Some(&error.to_string()),
-                            )?;
-                        }
-                    }
-                }
-                if !children.keys().any(|(id, _)| id == &record.id) {
-                    listeners.remove(&record.id);
-                }
-                store.aggregate_replicas(&record.id)?;
-            }
-            store.reconcile_rollouts(crate::enrollment::unix_time()?)?;
-        }
-        Ok(())
-    }
-    .await;
-    rollout_validations.clear();
+    let mut reconciler = Reconciler {
+        state_dir,
+        program,
+        cancel,
+        session,
+        retire_wake: retire_wake.clone(),
+        store,
+        children: HashMap::new(),
+        retries: HashMap::new(),
+        data_preparations: HashMap::new(),
+        rollout_validations: HashMap::new(),
+        listeners: HashMap::new(),
+        failures: HashMap::new(),
+    };
+    let result = reconciler.run().await;
+    let Reconciler {
+        store,
+        mut children,
+        rollout_validations,
+        ..
+    } = reconciler;
+    drop(rollout_validations);
     let graceful_deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
     let forced_deadline = graceful_deadline + FORCED_REAP_GRACE;
     // Shutdown observations are best-effort. A locked database must not add a
@@ -858,10 +460,7 @@ pub async fn run_with_session_and_ready<F: FnOnce() -> Result<()>>(
         }
     }
     for ((id, slot), running) in &children {
-        if let Some(instance) = &running.instance_id {
-            let _ = store.retire_instance(instance);
-            retire_wake.notify_one();
-        }
+        let _ = retire_running(&store, &retire_wake, running);
         let _ = store.record_replica(
             id,
             *slot,
@@ -916,6 +515,659 @@ pub async fn run_with_session_and_ready<F: FnOnce() -> Result<()>>(
             "Exit of {unconfirmed} workload processes was not confirmed within the shutdown budget"
         ))
     })
+}
+
+/// Reconciliation state for one agent run. A failing store call or signal is
+/// isolated to its placement slot; only a store that cannot list placements for
+/// `STORE_FAILURE_BUDGET` stops the agent and its workloads.
+#[cfg(unix)]
+struct Reconciler<'a> {
+    state_dir: &'a Path,
+    program: &'a Path,
+    cancel: CancellationToken,
+    session: Option<Arc<DeviceSession>>,
+    retire_wake: Arc<Notify>,
+    store: StateStore,
+    children: HashMap<(String, u8), RunningChild>,
+    retries: HashMap<(String, u8), RetryState>,
+    data_preparations: HashMap<String, DataPreparation>,
+    rollout_validations: HashMap<String, RolloutValidation>,
+    listeners: HashMap<String, (std::net::SocketAddr, std::net::TcpListener)>,
+    failures: HashMap<String, u32>,
+}
+
+#[cfg(unix)]
+impl Reconciler<'_> {
+    async fn run(&mut self) -> Result<()> {
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut failing_since = None;
+        let mut failures = 0_u32;
+        loop {
+            tokio::select! {_ = self.cancel.cancelled() => return Ok(()), _ = tick.tick() => {}}
+            let Err(error) = self.tick().await else {
+                failing_since = None;
+                failures = 0;
+                continue;
+            };
+            failures = failures.saturating_add(1);
+            let since = *failing_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= STORE_FAILURE_BUDGET {
+                return Err(error.context(format!(
+                    "Supervisor could not read placements for {} seconds",
+                    STORE_FAILURE_BUDGET.as_secs()
+                )));
+            }
+            let delay = tick_backoff(failures);
+            tracing::warn!(
+                failures,
+                retry_in_secs = delay.as_secs(),
+                error = %format!("{error:#}"),
+                "Supervisor cannot read placements; running workloads are left untouched"
+            );
+            tokio::select! {_ = self.cancel.cancelled() => return Ok(()), _ = tokio::time::sleep(delay) => {}}
+        }
+    }
+
+    async fn tick(&mut self) -> Result<()> {
+        let validations = poll_rollout_validations(
+            &self.store,
+            &mut self.rollout_validations,
+            self.state_dir,
+            self.session.as_ref(),
+        )
+        .await;
+        report_step(&mut self.failures, "rollout validation".into(), validations);
+        let records = self.store.list_placements()?;
+        let known = |id: &str| records.iter().any(|record| record.id == id);
+        self.data_preparations.retain(|id, _| known(id));
+        self.retries.retain(|(id, _), _| known(id));
+        self.listeners.retain(|id, _| known(id));
+        self.failures
+            .retain(|step, _| step_placement(step).is_none_or(known));
+        for record in &records {
+            self.reconcile_placement(record).await;
+        }
+        // Rollout reconciliation takes the write lock; skip it while idle.
+        let rollouts = self.store.has_active_rollouts().and_then(|active| {
+            if active {
+                self.store
+                    .reconcile_rollouts(crate::enrollment::unix_time()?)?;
+            }
+            Ok(())
+        });
+        report_step(
+            &mut self.failures,
+            "rollout reconciliation".into(),
+            rollouts,
+        );
+        Ok(())
+    }
+
+    async fn reconcile_placement(&mut self, record: &PlacementRecord) {
+        if record.desired_state != DesiredState::Running {
+            if let Some(job) = self.data_preparations.get(&record.id) {
+                job.cancel.cancel();
+            }
+        }
+        let parsed =
+            serde_json::from_value::<PlacementConfig>(record.config.clone()).and_then(|c| {
+                c.validate().map_err(serde::de::Error::custom)?;
+                Ok(c)
+            });
+        let version = (record.config_revision, record.intent_revision);
+        // Every old worker must drain before a new revision uses the shared
+        // listener and mutable project data, including during rollback.
+        let draining_previous_cohort = self.children.iter().any(|((id, _), child)| {
+            id == &record.id && (child.revision, child.intent_revision) != version
+        });
+        let mut slots = record
+            .replicas
+            .iter()
+            .map(|r| r.slot)
+            .collect::<std::collections::BTreeSet<_>>();
+        slots.extend(0..record.desired_replicas);
+        slots.extend(
+            self.children
+                .keys()
+                .filter(|(id, _)| id == &record.id)
+                .map(|(_, slot)| *slot),
+        );
+        for slot in slots {
+            let result = self
+                .reconcile_slot(record, &parsed, version, draining_previous_cohort, slot)
+                .await;
+            report_step(
+                &mut self.failures,
+                format!("placement {} slot {slot}", record.id),
+                result,
+            );
+        }
+        if !self.children.keys().any(|(id, _)| id == &record.id) {
+            self.listeners.remove(&record.id);
+        }
+        let aggregate = self.store.aggregate_replicas(&record.id);
+        report_step(
+            &mut self.failures,
+            format!("placement {} status", record.id),
+            aggregate,
+        );
+    }
+
+    async fn reconcile_slot(
+        &mut self,
+        record: &PlacementRecord,
+        parsed: &std::result::Result<PlacementConfig, serde_json::Error>,
+        version: (u64, u64),
+        draining_previous_cohort: bool,
+        slot: u8,
+    ) -> Result<()> {
+        let key = (record.id.clone(), slot);
+        let retry = self
+            .retries
+            .entry(key.clone())
+            .or_insert_with(|| RetryState::new(version));
+        if retry.version != version {
+            *retry = RetryState::new(version);
+        }
+        let wanted =
+            record.desired_state == DesiredState::Running && slot < record.desired_replicas;
+        if let Some(running) = self.children.get_mut(&key) {
+            let Some(status) = running.child.try_wait()? else {
+                return supervise_live(
+                    &self.store,
+                    &self.retire_wake,
+                    running,
+                    record,
+                    slot,
+                    wanted,
+                );
+            };
+            running.broker_cancel.cancel();
+            running.broker_task.abort();
+            let (state, error) = match &running.exit {
+                Some(observation) => observation.clone(),
+                None => {
+                    let observation = if wanted
+                        && (running.stopping_since.is_none() || running.failure.is_some())
+                        && running.revision == record.config_revision
+                        && running.intent_revision == record.intent_revision
+                    {
+                        if running.started.elapsed() >= STABLE_UPTIME
+                            && record.replicas.iter().any(|replica| {
+                                replica.slot == slot
+                                    && replica.observed_state == ObservedState::Running
+                            })
+                        {
+                            retry.failures = 0;
+                        }
+                        (
+                            restart_state(retry.failed(&running.restart)),
+                            Some(running.failure.map_or_else(
+                                || format!("Persistent service exited: {status}"),
+                                str::to_owned,
+                            )),
+                        )
+                    } else {
+                        (ObservedState::Stopped, None)
+                    };
+                    running.exit = Some(observation.clone());
+                    observation
+                }
+            };
+            retire_running(&self.store, &self.retire_wake, running)?;
+            self.store.record_replica(
+                &record.id,
+                slot,
+                running.revision,
+                running.intent_revision,
+                state,
+                None,
+                error.as_deref(),
+            )?;
+            self.children.remove(&key);
+        }
+        if !wanted {
+            self.retries.remove(&key);
+            return Ok(());
+        }
+        if draining_previous_cohort
+            || retry.configuration_failed
+            || Instant::now() < retry.next_attempt
+        {
+            return Ok(());
+        }
+        let config = match parsed {
+            Ok(config) => config.clone(),
+            Err(_) => {
+                if self.store.claim_replica(
+                    &record.id,
+                    slot,
+                    record.config_revision,
+                    record.intent_revision,
+                )? {
+                    self.store.record_replica(
+                        &record.id,
+                        slot,
+                        record.config_revision,
+                        record.intent_revision,
+                        ObservedState::Failed,
+                        None,
+                        Some("Invalid persisted placement configuration"),
+                    )?;
+                    retry.configuration_failed = true;
+                }
+                return Ok(());
+            }
+        };
+        if retry.failures > config.restart.max_restarts {
+            return Ok(());
+        }
+        let now = crate::enrollment::unix_time()?;
+        #[cfg(feature = "runtime")]
+        let cached_start = if config.source == crate::config::ProjectSource::Online
+            && self
+                .store
+                .has_pending_serving_retirements(&config.id, now)?
+        {
+            self.session
+                .as_deref()
+                .map(|device| WorkloadBroker::can_restore_outage(device, &config, self.state_dir))
+                .transpose()
+                .unwrap_or_else(|_| {
+                    tracing::warn!(placement = %config.id, "Cached startup snapshot could not be verified; waiting for serving leases before cloud recovery");
+                    None
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        #[cfg(not(feature = "runtime"))]
+        let cached_start = false;
+        if wait_for_serving_retirements(&self.store, &config, slot, version, now, cached_start)? {
+            return Ok(());
+        }
+        let data_root = match poll_data_preparation(
+            &mut self.data_preparations,
+            self.state_dir,
+            &config,
+            version,
+            &self.cancel,
+        )
+        .await
+        {
+            Ok(Some(path)) => path,
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                self.data_preparations.remove(&record.id);
+                let restart = retry.failed(&config.restart);
+                if self
+                    .store
+                    .claim_replica(&record.id, slot, version.0, version.1)?
+                {
+                    self.store.record_replica(
+                        &record.id,
+                        slot,
+                        version.0,
+                        version.1,
+                        restart_state(restart),
+                        None,
+                        Some(&error.to_string()),
+                    )?;
+                }
+                return Ok(());
+            }
+        };
+        if !self.store.claim_replica(
+            &record.id,
+            slot,
+            record.config_revision,
+            record.intent_revision,
+        )? {
+            return Ok(());
+        }
+        if config.id != record.id {
+            self.store.record_replica(
+                &record.id,
+                slot,
+                record.config_revision,
+                record.intent_revision,
+                ObservedState::Failed,
+                None,
+                Some("Placement identity differs"),
+            )?;
+            retry.configuration_failed = true;
+            return Ok(());
+        }
+        if let Some(hosting) = &config.hosting {
+            let address = std::net::SocketAddr::new(hosting.host, hosting.port);
+            if self
+                .listeners
+                .get(&record.id)
+                .is_some_and(|(old, _)| *old != address)
+            {
+                if self.children.keys().any(|(id, _)| id == &record.id) {
+                    return Ok(());
+                }
+                self.listeners.remove(&record.id);
+            }
+            if !self.listeners.contains_key(&record.id) {
+                match std::net::TcpListener::bind(address).and_then(|listener| {
+                    listener.set_nonblocking(true)?;
+                    Ok(listener)
+                }) {
+                    Ok(listener) => {
+                        self.listeners
+                            .insert(record.id.clone(), (address, listener));
+                    }
+                    Err(error) => {
+                        let restart = retry.failed(&config.restart);
+                        self.store.record_replica(
+                            &record.id,
+                            slot,
+                            record.config_revision,
+                            record.intent_revision,
+                            restart_state(restart),
+                            None,
+                            Some(&format!("Cannot bind service listener: {error}")),
+                        )?;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        let listener = config
+            .hosting
+            .as_ref()
+            .and_then(|_| self.listeners.get(&record.id))
+            .map(|(_, listener)| listener);
+        let inherited_listener = listener.is_some();
+        let (mut child, channel, isolation) = match spawn_child(
+            self.program,
+            self.state_dir,
+            &record.id,
+            slot,
+            record.config_revision,
+            record.intent_revision,
+            listener,
+            &config,
+            &data_root,
+        ) {
+            Ok(spawned) => spawned,
+            Err(error) => {
+                let restart = retry.failed(&config.restart);
+                self.store.record_replica(
+                    &record.id,
+                    slot,
+                    record.config_revision,
+                    record.intent_revision,
+                    restart_state(restart),
+                    None,
+                    Some(&error.to_string()),
+                )?;
+                return Ok(());
+            }
+        };
+        let process_id = child.id().context("Spawned workload has no process ID")?;
+        for (stream, source) in
+            [
+                (
+                    child.stdout.take().map(|v| {
+                        Box::pin(v) as std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>>
+                    }),
+                    "stdout",
+                ),
+                (
+                    child.stderr.take().map(|v| {
+                        Box::pin(v) as std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>>
+                    }),
+                    "stderr",
+                ),
+            ]
+        {
+            if let Some(stream) = stream {
+                let root = self.state_dir.to_path_buf();
+                let placement = record.id.clone();
+                tokio::spawn(async move {
+                    let _ = crate::telemetry::capture(stream, root, placement, source).await;
+                });
+            }
+        }
+        // record_replica stores nothing on error, so the claimed slot stays
+        // reusable and this untracked worker must not survive.
+        if let Err(error) = self.store.record_replica(
+            &record.id,
+            slot,
+            record.config_revision,
+            record.intent_revision,
+            ObservedState::Starting,
+            Some(process_id),
+            None,
+        ) {
+            let _ = force_kill(&mut child);
+            return Err(error);
+        }
+        let mut running = RunningChild {
+            child,
+            isolation,
+            revision: record.config_revision,
+            intent_revision: record.intent_revision,
+            started: Instant::now(),
+            stopping_since: None,
+            broker_closed_since: None,
+            failure: None,
+            exit: None,
+            restart: config.restart.clone(),
+            broker_task: tokio::spawn(async {}),
+            broker_cancel: CancellationToken::new(),
+            broker_drain: CancellationToken::new(),
+            instance_id: None,
+        };
+        let broker = if config.resource_grant.is_some() {
+            match self
+                .session
+                .clone()
+                .context("Resource placement requires an enrolled device")
+                .and_then(|session| {
+                    WorkloadBroker::new_replica(
+                        session,
+                        config.clone(),
+                        self.state_dir.to_path_buf(),
+                        record.config_revision,
+                        record.intent_revision,
+                        slot,
+                    )
+                }) {
+                Ok(broker) => Some(Arc::new(broker)),
+                Err(error) => {
+                    // The PID is durable now. Keep ownership until the exit is
+                    // recorded, so a failed write never strands the slot.
+                    retry.configuration_failed = true;
+                    running.exit = Some((ObservedState::Failed, Some(error.to_string())));
+                    running.stopping_since = Some(Instant::now());
+                    let killed = stop_child(&mut running, true);
+                    self.children.insert(key, running);
+                    return killed;
+                }
+            }
+        } else {
+            None
+        };
+        running.instance_id = broker.as_ref().map(|b| b.instance_id().to_string());
+        let bootstrap = crate::ipc::ChildBootstrap {
+            config: config.clone(),
+            data_root: Some(data_root),
+            replica_slot: slot,
+            inherited_listener,
+            config_revision: record.config_revision,
+            intent_revision: record.intent_revision,
+            parent_pid: std::process::id(),
+            api_base_url: self
+                .session
+                .as_ref()
+                .map(|s| s.manifest().api_base_url.clone()),
+            workload_identity: broker.as_ref().map(|b| b.identity()),
+        };
+        running.broker_task = tokio::spawn(serve_broker(
+            channel,
+            bootstrap,
+            self.state_dir.to_path_buf(),
+            process_id,
+            broker,
+            running.broker_cancel.clone(),
+            running.broker_drain.clone(),
+        ));
+        self.children.insert(key, running);
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+async fn serve_broker(
+    channel: tokio::net::UnixStream,
+    bootstrap: crate::ipc::ChildBootstrap,
+    state_dir: PathBuf,
+    process_id: u32,
+    broker: Option<Arc<WorkloadBroker>>,
+    cancel: CancellationToken,
+    drain: CancellationToken,
+) {
+    let placement = bootstrap.config.id.clone();
+    let slot = bootstrap.replica_slot;
+    let result = crate::ipc::serve_with_drain(
+        channel,
+        bootstrap,
+        state_dir,
+        process_id,
+        broker,
+        cancel,
+        drain.clone(),
+    )
+    .await;
+    match result {
+        Err(error) if !drain.is_cancelled() => tracing::warn!(
+            placement = %placement,
+            slot,
+            error = %format!("{error:#}"),
+            "Workload broker channel closed"
+        ),
+        Err(_) => {
+            tracing::debug!(placement = %placement, slot, "Draining workload broker channel closed")
+        }
+        Ok(()) => {}
+    }
+}
+
+/// Stops, times out or fails a live worker. Signals are sent before the store
+/// is updated, so a locked or failing database never keeps a worker running.
+fn supervise_live(
+    store: &StateStore,
+    retire_wake: &Notify,
+    running: &mut RunningChild,
+    record: &PlacementRecord,
+    slot: u8,
+    wanted: bool,
+) -> Result<()> {
+    if !wanted
+        || running.revision != record.config_revision
+        || running.intent_revision != record.intent_revision
+        || running.stopping_since.is_some()
+    {
+        return match running.stopping_since {
+            Some(since) if since.elapsed() >= SHUTDOWN_GRACE => stop_child(running, true),
+            Some(_) => Ok(()),
+            None => {
+                running.broker_drain.cancel();
+                running.stopping_since = Some(Instant::now());
+                let signalled = stop_child(running, false);
+                retire_running(store, retire_wake, running)?;
+                store.record_replica(
+                    &record.id,
+                    slot,
+                    running.revision,
+                    running.intent_revision,
+                    ObservedState::Stopping,
+                    running.child.id(),
+                    None,
+                )?;
+                signalled
+            }
+        };
+    }
+    // Preparation and application readiness share the worker's deadline. A live
+    // process alone is never healthy, and neither is one cut off from its broker.
+    let (reason, force) = if running.started.elapsed() >= SERVICE_STARTUP_TIMEOUT
+        && record.replicas.iter().any(|replica| {
+            replica.slot == slot && replica.observed_state == ObservedState::Starting
+        }) {
+        (STARTUP_TIMEOUT_REASON, true)
+    } else if broker_lost(
+        &mut running.broker_closed_since,
+        running.broker_task.is_finished(),
+        Instant::now(),
+    ) {
+        tracing::warn!(placement = %record.id, slot, "{BROKER_CLOSED_REASON}");
+        (BROKER_CLOSED_REASON, false)
+    } else {
+        return Ok(());
+    };
+    running.broker_drain.cancel();
+    running.broker_cancel.cancel();
+    running.broker_task.abort();
+    // Keep ownership and the PID until try_wait confirms exit. Even SIGKILL can
+    // wait on kernel I/O; other placements continue reconciling meanwhile.
+    running.failure = Some(reason);
+    running.stopping_since = Some(Instant::now());
+    let signalled = stop_child(running, force);
+    retire_running(store, retire_wake, running)?;
+    store.record_replica(
+        &record.id,
+        slot,
+        running.revision,
+        running.intent_revision,
+        ObservedState::Stopping,
+        running.child.id(),
+        Some(reason),
+    )?;
+    signalled
+}
+
+/// A worker closes its broker channel while it exits, before `try_wait` can
+/// observe the exit. Only a channel that stays closed past the grace is a loss.
+fn broker_lost(closed_since: &mut Option<Instant>, closed: bool, now: Instant) -> bool {
+    closed && now.saturating_duration_since(*closed_since.get_or_insert(now)) >= BROKER_CLOSE_GRACE
+}
+
+fn retire_running(store: &StateStore, retire_wake: &Notify, running: &RunningChild) -> Result<()> {
+    if let Some(instance) = &running.instance_id {
+        store.retire_instance(instance)?;
+        retire_wake.notify_one();
+    }
+    Ok(())
+}
+
+/// Signals the sandbox cgroup, falling back to the worker's process group when
+/// the cgroup cannot be signalled, so a stop always reaches the workload.
+fn stop_child(running: &mut RunningChild, force: bool) -> Result<()> {
+    let group = |child: &mut Child| {
+        if force {
+            force_kill(child)
+        } else {
+            signal_shutdown(child)
+        }
+    };
+    match running.isolation.signal(force) {
+        Ok(true) => Ok(()),
+        Ok(false) => group(&mut running.child),
+        Err(error) => {
+            tracing::warn!(
+                force,
+                error = %format!("{error:#}"),
+                "Cannot signal the workload cgroup; signalling its process group"
+            );
+            group(&mut running.child)
+        }
+    }
 }
 
 fn wait_for_serving_retirements(
@@ -1317,5 +1569,75 @@ mod tests {
             }
         }
         assert!(path.exists());
+    }
+
+    #[test]
+    fn bounded_lock_wait_reports_contention_and_acquires_after_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("artifact.lock");
+        let held = lock_file(&path).unwrap();
+        let error = lock_file_within(&path, Duration::from_millis(50)).unwrap_err();
+        assert!(
+            error.chain().any(|cause| cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::WouldBlock)),
+            "{error:#}"
+        );
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(held);
+        });
+        lock_file_within(&path, Duration::from_secs(5)).unwrap();
+        release.join().unwrap();
+    }
+
+    #[test]
+    fn store_failure_backoff_is_exponential_and_capped() {
+        assert_eq!(tick_backoff(1), Duration::from_secs(1));
+        assert_eq!(tick_backoff(3), Duration::from_secs(4));
+        assert_eq!(tick_backoff(6), MAX_TICK_BACKOFF);
+        assert_eq!(tick_backoff(u32::MAX), MAX_TICK_BACKOFF);
+    }
+
+    #[test]
+    fn repeated_step_failures_are_counted_and_cleared_on_success() {
+        let mut failures = HashMap::new();
+        for _ in 0..3 {
+            report_step(
+                &mut failures,
+                "placement a slot 0".into(),
+                Err(anyhow::anyhow!("database is locked")),
+            );
+        }
+        report_step(&mut failures, "placement b slot 0".into(), Ok(()));
+        assert_eq!(failures.get("placement a slot 0"), Some(&3));
+        report_step(&mut failures, "placement a slot 0".into(), Ok(()));
+        assert!(failures.is_empty());
+    }
+
+    #[test]
+    fn broker_loss_waits_for_an_exiting_worker_to_be_reaped() {
+        let start = Instant::now();
+        let mut closed_since = None;
+        assert!(!broker_lost(&mut closed_since, false, start));
+        assert!(closed_since.is_none());
+        assert!(!broker_lost(&mut closed_since, true, start));
+        assert!(!broker_lost(
+            &mut closed_since,
+            true,
+            start + BROKER_CLOSE_GRACE - Duration::from_millis(1)
+        ));
+        assert!(broker_lost(
+            &mut closed_since,
+            true,
+            start + BROKER_CLOSE_GRACE
+        ));
+    }
+
+    #[test]
+    fn failure_steps_are_attributed_to_their_placement() {
+        assert_eq!(step_placement("placement svc.1 slot 3"), Some("svc.1"));
+        assert_eq!(step_placement("placement svc status"), Some("svc"));
+        assert_eq!(step_placement("rollout reconciliation"), None);
     }
 }

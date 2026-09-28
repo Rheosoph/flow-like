@@ -40,11 +40,90 @@ export function isChatEventType(eventType: string): boolean {
 	return eventType === "simple_chat";
 }
 
+const SERVER_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set([
+	"inbound_email",
+	"teams",
+]);
+
+/** Event types received by a hosted endpoint; they only ever execute on the server. */
+export function isServerOnlyEventType(eventType: string | undefined): boolean {
+	return !!eventType && SERVER_ONLY_EVENT_TYPES.has(eventType);
+}
+
+/**
+ * The server only serves a server-only event's setup once the event is saved as
+ * that type and Remote; before that the setup is known to be unavailable.
+ */
+export function serverEventSetupReady(
+	eventType: string,
+	saved?: { event_type: string; execution_mode?: string | null },
+): boolean {
+	if (!saved || !isServerOnlyEventType(eventType)) return true;
+	return saved.event_type === eventType && saved.execution_mode === "Remote";
+}
+
+export type ServerEventBlocker = "offline" | "local_board";
+
+/**
+ * Why a server-only event cannot be saved. Unknown state — a pending or failed
+ * offline check, an unreadable board — never blocks; the server rejects what it
+ * cannot host.
+ */
+export function serverEventBlocker(
+	isOffline: boolean | null | undefined,
+	boardMode: string | null | undefined,
+): ServerEventBlocker | undefined {
+	if (isOffline === true) return "offline";
+	if (boardMode === "Local") return "local_board";
+	return undefined;
+}
+
+/** Keys name the `common` namespace so callers bound to any namespace resolve them. */
+export function serverEventBlockerMessage(
+	t: (key: string, defaultValue: string) => string,
+	blocker: ServerEventBlocker,
+	eventType: string,
+): string {
+	const teams = eventType === "teams";
+	if (blocker === "offline")
+		return teams
+			? t(
+					"common:teamsBotsNeedAnOnlineSyncedApp",
+					"Teams bots need an online, synced app. Sync this app to an online profile first.",
+				)
+			: t(
+					"common:inboundEmailNeedsAnOnlineSyncedApp",
+					"Inbound email needs an online, synced app. Sync this app to an online profile first.",
+				);
+	return teams
+		? t(
+				"common:teamsBotsNeedARemoteOrHybridFlow",
+				"Teams bots run on the server. Set this flow's execution mode to Remote or Hybrid.",
+			)
+		: t(
+				"common:inboundEmailNeedsARemoteOrHybridFlow",
+				"Inbound email runs on the server. Set this flow's execution mode to Remote or Hybrid.",
+			);
+}
+
 /**
  * Event types and their persisted defaults. This module deliberately has no UI component
  * imports so host tools, validators, and tests can use the catalog without loading React.
  */
 export const EVENT_DEFINITIONS: EventDefinitionMapping = {
+	events_inbound_email: {
+		defaultEventType: "inbound_email",
+		eventTypes: ["inbound_email"],
+		withSink: ["inbound_email"],
+		configs: { inbound_email: { sink_type: "inbound_email" } },
+		sinkAvailability: {
+			inbound_email: {
+				availability: "remote",
+				description:
+					"Receives email at a generated address and runs on the server.",
+			},
+		},
+	},
 	events_location: {
 		defaultEventType: "geolocation",
 		eventTypes: ["geolocation"],
@@ -90,6 +169,7 @@ export const EVENT_DEFINITIONS: EventDefinitionMapping = {
 				default_tools: [],
 				example_messages: [],
 			},
+			teams: { sink_type: "teams" },
 			discord: {
 				sink_type: "discord",
 				token: "",
@@ -115,9 +195,13 @@ export const EVENT_DEFINITIONS: EventDefinitionMapping = {
 			},
 		},
 		defaultEventType: "simple_chat",
-		eventTypes: ["simple_chat", "discord", "telegram"],
-		withSink: ["discord", "telegram"],
+		eventTypes: ["simple_chat", "discord", "telegram", "teams"],
+		withSink: ["discord", "telegram", "teams"],
 		sinkAvailability: {
+			teams: {
+				availability: "remote",
+				description: "Teams messages and card actions run on the server.",
+			},
 			discord: {
 				availability: "local",
 				description: "Requires persistent connection to Discord",

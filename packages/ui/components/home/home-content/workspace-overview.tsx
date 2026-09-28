@@ -216,7 +216,7 @@ export function HomeWorkspacePulse({ widget, editing }: HomeContentProps) {
 								</div>
 							))}
 						</div>
-					{/* An aggregate with counts but no day rows is a source that
+						{/* An aggregate with counts but no day rows is a source that
 					    answered without them; the axis is dropped rather than read
 					    past its own end. */}
 						{statistics.buckets.length > 0 && (

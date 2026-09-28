@@ -1461,6 +1461,7 @@ mod tests {
             max_in_flight: 1,
             request_timeout_secs: 5,
             auth_secret: "listener".into(),
+            ui_origins: Vec::new(),
         });
         let token = "t".repeat(32);
         config

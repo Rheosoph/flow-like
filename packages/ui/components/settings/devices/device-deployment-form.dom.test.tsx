@@ -1,8 +1,8 @@
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { StrictMode, act } from "react";
-import type { InstalledProject } from "../../../lib/device-management/deployment";
 import type { DeviceCertificate } from "../../../lib/device-management/certificates";
+import type { InstalledProject } from "../../../lib/device-management/deployment";
 import type { ManagementCall } from "../../../lib/device-management/telemetry";
 import type {
 	ManagementResponse,
@@ -41,10 +41,19 @@ mock.module("../../../state/backend-state", () => ({
 				onlineReads.push("events");
 				return [{ ...event, board_id: "published-board", active: true }];
 			},
-			getEventAuthoritative: async (projectId: string, eventId: string) => {
+			getEventAuthoritative: async (
+				projectId: string,
+				eventId: string,
+				version: number[],
+			) => {
 				expect([projectId, eventId]).toEqual(["project", event.id]);
 				onlineReads.push("event");
-				return { ...event, board_id: "published-board", active: true };
+				return {
+					...event,
+					event_version: version,
+					board_id: "published-board",
+					active: true,
+				};
 			},
 		},
 		boardState: {
@@ -53,29 +62,18 @@ mock.module("../../../state/backend-state", () => ({
 				boardId: string,
 				version: number[],
 			) => {
-				expect([projectId, boardId, version]).toEqual([
-					"project",
-					"published-board",
-					event.board_version,
-				]);
+				expect([projectId, boardId]).toEqual(["project", "published-board"]);
 				onlineReads.push("board");
-				return {
-					id: boardId,
-					version,
-					layers: {},
-					variables: Object.fromEntries(
-						discoveredVariables.map((variable) => [
-							variable.id,
-							{ ...variable, exposed: true },
-						]),
-					),
-				};
+				return publishedBoard(version);
 			},
 		},
 	}),
 }));
 const { createRoot } = await import("react-dom/client");
 const { DeviceDeploymentForm } = await import("./device-deployment-form");
+const { approvedOnlineCatalog } = await import(
+	"../../../lib/device-management/deployment"
+);
 const container = document.createElement("div");
 document.body.append(container);
 const root = createRoot(container);
@@ -105,6 +103,35 @@ const variables = [
 		secret: true,
 	},
 ];
+function publishedBoard(version: number[]) {
+	return {
+		id: "published-board",
+		version,
+		layers: {},
+		variables: Object.fromEntries(
+			discoveredVariables.map((variable) => [
+				variable.id,
+				{ ...variable, exposed: true },
+			]),
+		),
+	};
+}
+/** The approved metadata an online upload installs, derived from the current fixtures. */
+function withOnlineCatalog(value: InstalledProject): InstalledProject {
+	if (value.source !== "online" || value.online_catalog) return value;
+	return {
+		...value,
+		online_catalog: approvedOnlineCatalog({
+			[`events/${event.id}/versions/${event.event_version.join("/")}`]: {
+				...event,
+				board_id: "published-board",
+				active: true,
+			},
+			[`boards/published-board/versions/${event.board_version.join("/")}`]:
+				publishedBoard(event.board_version),
+		}),
+	};
+}
 const serviceToken = "a-private-service-token-from-password-manager";
 const variableSecret = "private-variable-value";
 let calls: { command: Record<string, unknown>; id?: string }[] = [];
@@ -112,6 +139,8 @@ let journals = new Map<string, Record<string, unknown>>();
 let applied = 0;
 let callOverride: ManagementCall | undefined;
 let discoveredVariables = variables;
+let deployedVariables: typeof variables | undefined;
+let extraEvents: (typeof event)[] = [];
 let placementRows: PlacementStatus[] = [];
 let certificateManagement = false;
 let canManageCertificates = false;
@@ -194,15 +223,23 @@ function respond(
 		const request = command.request as Record<string, unknown>;
 		expect(request.kind).toBe("describe");
 		expect(request.project_id).toBe(installed.project_id);
-		expect(request.revision).toBe(installed.revision);
+		// Earlier secret definitions are read from the revision the placement runs.
+		const deployed = request.revision === configuration.config.revision;
+		if (!deployed) expect(request.revision).toBe(installed.revision);
 		return {
 			operation_id: id,
 			state: "completed",
 			result: {
 				project_id: installed.project_id,
-				revision: installed.revision,
+				revision: request.revision,
 				event_id: request.event_id,
-				items: request.event_id ? discoveredVariables : [event],
+				items: !request.event_id
+					? [event, ...extraEvents]
+					: request.event_id !== event.id
+						? []
+						: deployed
+							? (deployedVariables ?? discoveredVariables)
+							: discoveredVariables,
 				next: null,
 			},
 		};
@@ -250,7 +287,7 @@ async function render(connected = true) {
 		root.render(
 			<StrictMode>
 				<DeviceDeploymentForm
-					installed={project}
+					installed={withOnlineCatalog(project)}
 					connected={connected}
 					placements={placementRows}
 					certificateManagement={certificateManagement}
@@ -370,6 +407,8 @@ afterEach(async () => {
 	project = installed;
 	callOverride = undefined;
 	discoveredVariables = variables;
+	deployedVariables = undefined;
+	extraEvents = [];
 	placementRows = [];
 	certificateManagement = false;
 	canManageCertificates = false;
@@ -777,7 +816,8 @@ for (const source of ["offline", "online"] as const) {
 		});
 		expect(httpCalls).toBe(0);
 		if (source === "online") {
-			expect(onlineReads).toEqual(["events", "event", "board"]);
+			// Choices come from the installed metadata; only the deployed revision's archive is read.
+			expect(onlineReads).toEqual(["event", "board"]);
 			expect(calls.some(({ command }) => command.type === "artifact")).toBe(
 				false,
 			);
@@ -816,6 +856,7 @@ test("an online project on an older agent offers manual updates without claiming
 test("an online placement explicitly selects buffered resources and budgets", async () => {
 	project = { ...installed, source: "online", revision: "published-2" };
 	configuration.config.source = "online";
+	configuration.config.max_replicas = 1;
 	await prepareUpdate(true);
 	expect(container.textContent).toContain(
 		"Buffer selected writes on this device",
@@ -1269,4 +1310,171 @@ test("a failed secret publication requires reloading the created placement and c
 	expect(input("Placement ID")?.value).toBe(configuration.placement_id);
 	expect(input("Placement ID")?.disabled).toBe(true);
 	expect(calls.some(({ command }) => command.type === "start")).toBe(false);
+});
+
+function submitDisabled() {
+	return container.querySelector<HTMLButtonElement>('button[type="submit"]')
+		?.disabled;
+}
+
+test("a manual update after an earlier healthy rollout reports the stopped placement", async () => {
+	Object.assign(configuration, {
+		rollout: {
+			rollout_id: crypto.randomUUID(),
+			placement_id: configuration.placement_id,
+			project_id: "project",
+			state: "healthy",
+		},
+	});
+	await prepareUpdate();
+	expect(container.textContent).not.toContain(
+		"passed the listener startup check",
+	);
+	await click("Apply placement update");
+	await until(() => applied === 1);
+	expect(container.textContent).toContain("stopped and ready for review");
+	expect(container.textContent).not.toContain("Updated services started");
+});
+
+test("values entered for a deselected event are not submitted", async () => {
+	extraEvents = [
+		{
+			id: "worker-event",
+			name: "Background worker",
+			event_type: "daemon",
+			event_version: [1, 0, 0],
+			board_version: [2, 0, 0],
+			hosted: false,
+			eligible: true,
+		},
+	];
+	await render();
+	await click("Read published events");
+	await toggle("Published API");
+	await toggle("API credential");
+	await fill(
+		container.querySelector('[aria-label="API credential value"]'),
+		variableSecret,
+	);
+	await toggle("Published API");
+	await toggle("Background worker");
+	expect(container.querySelector('[aria-label="API credential value"]')).toBe(
+		null,
+	);
+	await click("Create stopped placement");
+	await until(() => applied === 1);
+	const apply = calls.find(({ command }) => command.type === "apply")?.command;
+	expect((apply?.config as Record<string, unknown>).secret_overrides).toEqual(
+		{},
+	);
+	expect(calls.some(({ command }) => command.type === "set_secret")).toBe(
+		false,
+	);
+	expect(JSON.stringify(calls)).not.toContain(variableSecret);
+});
+
+test("a definitive device rejection shows its reason and unlocks the form instead of retrying", async () => {
+	callOverride = async (command, id) =>
+		command.type === "apply"
+			? {
+					operation_id: id ?? crypto.randomUUID(),
+					state: "rejected",
+					result: {
+						error: "This host requires Linux isolation",
+						code: "host_policy",
+						retryable: false,
+					},
+				}
+			: respond(command, id);
+	await prepare();
+	await click("Create stopped placement");
+	await until(
+		() =>
+			container.textContent?.includes("This host requires Linux isolation") ??
+			false,
+	);
+	expect(container.textContent).not.toContain(
+		"Retry the same provisioning operations",
+	);
+	expect(container.querySelector("fieldset")?.disabled).toBe(false);
+	callOverride = undefined;
+	await click("Create stopped placement");
+	await until(() => applied === 1);
+	const applies = calls.filter(({ command }) => command.type === "apply");
+	expect(applies).toHaveLength(2);
+	expect(applies[0].id).not.toBe(applies[1].id);
+});
+
+test("turning off buffering waits until the device's offline queue is empty", async () => {
+	project = { ...installed, source: "online", revision: "published-2" };
+	configuration.config.source = "online";
+	configuration.config.max_replicas = 1;
+	Object.assign(configuration.config, {
+		offline_writes: {
+			tables: [],
+			files: [{ purpose: "storage", prefix: "exports" }],
+			max_queue_bytes: 256 * 1048576,
+			max_operations: 10000,
+			max_age_seconds: 7 * 86400,
+			max_mirror_bytes: 2 * 1024 ** 3,
+		},
+	});
+	let pending = 3;
+	callOverride = async (command, id) =>
+		command.type === "offline_queue"
+			? {
+					operation_id: id ?? crypto.randomUUID(),
+					state: "completed",
+					result: {
+						placement_id: configuration.placement_id,
+						queues: [
+							{
+								scope: "a".repeat(64),
+								quarantined: false,
+								pending_count: pending,
+								pending_bytes: pending * 10,
+								oldest_at: pending ? 1 : null,
+								head: null,
+							},
+						],
+						next: null,
+					},
+				}
+			: respond(command, id);
+	await prepareUpdate(true);
+	await toggle("Buffer selected writes on this device");
+	expect(container.textContent).toContain("stops buffering writes");
+	await click("Apply placement update");
+	await until(
+		() =>
+			container.textContent?.includes("still has 3 buffered writes") ?? false,
+	);
+	expect(calls.some(({ command }) => command.type === "apply")).toBe(false);
+	pending = 0;
+	await click("Apply placement update");
+	await until(() => applied === 1);
+	const apply = calls.find(({ command }) => command.type === "apply")?.command;
+	expect(
+		(apply?.config as Record<string, unknown>).offline_writes,
+	).toBeUndefined();
+});
+
+test("a kept secret written for another type must be replaced or removed", async () => {
+	deployedVariables = [{ ...variables[0], value_type: "HashMap" }];
+	await prepareUpdate();
+	expect(container.textContent).toContain(
+		"written for String/HashMap, now String/Normal",
+	);
+	expect(submitDisabled()).toBe(true);
+	await toggle("API credential");
+	await fill(
+		container.querySelector('[aria-label="API credential value"]'),
+		variableSecret,
+	);
+	expect(submitDisabled()).toBe(false);
+	await click("Apply placement update");
+	await until(() => applied === 1);
+	const secrets = calls.filter(({ command }) => command.type === "set_secret");
+	expect(secrets).toHaveLength(1);
+	expect(secrets[0].command.value).toBe(JSON.stringify(variableSecret));
 });

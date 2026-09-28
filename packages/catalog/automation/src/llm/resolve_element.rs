@@ -1,3 +1,8 @@
+use super::{COORDINATE_SPACE, add_screenshot_pins};
+#[cfg(feature = "execute")]
+use super::{
+    ModelView, SubmitTool, call_tool, parse_tool_args, require_screenshot, vision_history,
+};
 use flow_like::{
     bit::Bit,
     flow::{
@@ -7,15 +12,9 @@ use flow_like::{
         variable::VariableType,
     },
 };
+use flow_like_types::async_trait;
 #[cfg(feature = "execute")]
-use flow_like_types::anyhow;
-use flow_like_types::{async_trait, json};
-#[cfg(feature = "execute")]
-use rig::completion::{Completion, Message, ToolDefinition};
-#[cfg(feature = "execute")]
-use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
-#[cfg(feature = "execute")]
-use rig::tool::Tool;
+use flow_like_types::{anyhow, json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -37,46 +36,86 @@ pub struct ResolvedElement {
 }
 
 #[cfg(feature = "execute")]
-#[derive(Debug, Serialize, Deserialize)]
-struct ResolveElementTool {
-    parameters: flow_like_types::Value,
+const TOOL: &str = "submit_resolution";
+
+#[cfg(feature = "execute")]
+#[derive(Debug, Deserialize)]
+struct ResolveArgs {
+    resolved: bool,
+    selected_index: Option<f64>,
+    reasoning: String,
 }
 
 #[cfg(feature = "execute")]
-#[derive(Debug)]
-struct ResolveElementError(String);
-
-#[cfg(feature = "execute")]
-impl std::fmt::Display for ResolveElementError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Resolve element error: {}", self.0)
+fn unresolved(reasoning: String) -> ResolvedElement {
+    ResolvedElement {
+        resolved: false,
+        selected_index: None,
+        x: None,
+        y: None,
+        reasoning,
     }
 }
 
 #[cfg(feature = "execute")]
-impl std::error::Error for ResolveElementError {}
-
-#[cfg(feature = "execute")]
-impl Tool for ResolveElementTool {
-    const NAME: &'static str = "submit_resolution";
-    type Error = ResolveElementError;
-    type Args = flow_like_types::Value;
-    type Output = flow_like_types::Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Submit the resolved element selection".to_string(),
-            parameters: self.parameters.clone(),
+fn check_unique_indices(candidates: &[ElementCandidate]) -> flow_like_types::Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    for candidate in candidates {
+        if !seen.insert(candidate.index) {
+            return Err(anyhow!(
+                "Candidate index {} appears more than once; every candidate needs a unique index",
+                candidate.index
+            ));
         }
     }
+    Ok(())
+}
 
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        Ok(args)
+#[cfg(feature = "execute")]
+fn describe_candidates(candidates: &[ElementCandidate], view: &ModelView) -> String {
+    candidates
+        .iter()
+        .map(|candidate| {
+            let position = view.point_to_model(candidate.x, candidate.y).map_or_else(
+                || "outside the screenshot".to_string(),
+                |(x, y)| format!("at ({x}, {y})"),
+            );
+            format!(
+                "[{}] {position}: {}",
+                candidate.index, candidate.description
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The answer only counts when it names a listed candidate; its coordinates come from that
+/// candidate, never from the model.
+#[cfg(feature = "execute")]
+fn resolve(args: ResolveArgs, candidates: &[ElementCandidate]) -> ResolvedElement {
+    if !args.resolved {
+        return unresolved(args.reasoning);
     }
-
-    fn name(&self) -> String {
-        Self::NAME.to_string()
+    let chosen = args
+        .selected_index
+        .filter(|index| index.fract() == 0.0 && *index >= 0.0)
+        .and_then(|index| {
+            candidates
+                .iter()
+                .find(|candidate| candidate.index as f64 == index)
+        });
+    match chosen {
+        Some(candidate) => ResolvedElement {
+            resolved: true,
+            selected_index: Some(candidate.index),
+            x: Some(candidate.x),
+            y: Some(candidate.y),
+            reasoning: args.reasoning,
+        },
+        None => unresolved(format!(
+            "Model selected index {:?}, which is not one of the candidates: {}",
+            args.selected_index, args.reasoning
+        )),
     }
 }
 
@@ -101,7 +140,7 @@ impl NodeLogic for LLMResolveElementNode {
         );
         node.set_flowscript_name("automation.llm", "resolveElement");
         node.add_icon("/flow/icons/bot-search.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.set_scores(
             NodeScores::new()
@@ -125,17 +164,14 @@ impl NodeLogic for LLMResolveElementNode {
         .set_schema::<Bit>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
-        node.add_input_pin(
-            "screenshot",
-            "Screenshot",
-            "Base64-encoded screenshot",
-            VariableType::String,
-        );
+        add_screenshot_pins(&mut node, "Screenshot", true);
 
         node.add_input_pin(
             "candidates",
             "Candidates",
-            "Array of element candidates to choose from",
+            &format!(
+                "Element candidates to choose from, each with a unique index. x/y are in {COORDINATE_SPACE}"
+            ),
             VariableType::Struct,
         )
         .set_schema::<ElementCandidate>()
@@ -153,14 +189,14 @@ impl NodeLogic for LLMResolveElementNode {
         node.add_output_pin(
             "exec_ambiguous",
             "Ambiguous",
-            "Could not resolve",
+            "No candidate could be chosen (none given, none matched, or the model picked an unknown index)",
             VariableType::Execution,
         );
 
         node.add_output_pin(
             "result",
             "Result",
-            "Resolution result",
+            "Resolution result; x/y are copied from the chosen candidate",
             VariableType::Struct,
         )
         .set_schema::<ResolvedElement>();
@@ -172,110 +208,53 @@ impl NodeLogic for LLMResolveElementNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_model_provider::history::{
-            Content, ContentType, History, HistoryMessage, ImageUrl as HistoryImageUrl,
-            MessageContent, Role,
-        };
-
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_ambiguous").await?;
 
         let model_bit: Bit = context.evaluate_pin("model").await?;
-        let screenshot: String = context.evaluate_pin("screenshot").await?;
         let candidates: Vec<ElementCandidate> = context.evaluate_pin("candidates").await?;
         let intent: String = context.evaluate_pin("intent").await?;
+        check_unique_indices(&candidates)?;
 
-        let tool_params = json::json!({
-            "type": "object",
-            "properties": {
-                "resolved": { "type": "boolean", "description": "Whether a single best match was identified" },
-                "selected_index": { "type": "integer", "description": "Index of the selected candidate (0-based)" },
-                "x": { "type": "integer", "description": "X coordinate of resolved element" },
-                "y": { "type": "integer", "description": "Y coordinate of resolved element" },
-                "reasoning": { "type": "string", "description": "Explanation of why this element was selected" }
-            },
-            "required": ["resolved", "reasoning"]
-        });
-
-        let candidates_desc = candidates
-            .iter()
-            .map(|c| format!("[{}] at ({}, {}): {}", c.index, c.x, c.y, c.description))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let content_parts = vec![
-            Content::Image {
-                content_type: ContentType::ImageUrl,
-                image_url: HistoryImageUrl {
-                    url: format!("data:image/png;base64,{}", screenshot),
-                    detail: None,
-                    media_type: Some("image/png".to_string()),
-                    additional_params: None,
+        let resolved = if candidates.is_empty() {
+            unresolved("No candidates to choose from".to_string())
+        } else {
+            let screenshot = require_screenshot(context).await?;
+            let parameters = json::json!({
+                "type": "object",
+                "properties": {
+                    "resolved": { "type": "boolean", "description": "Whether a single best match was identified" },
+                    "selected_index": { "type": "integer", "description": "The bracketed index of the chosen candidate, exactly as listed" },
+                    "reasoning": { "type": "string", "description": "Explanation of why this element was selected" }
                 },
-            },
-            Content::Text {
-                content_type: ContentType::Text,
-                text: format!(
-                    "User intent: {}\n\nMultiple elements found:\n{}\n\nSelect the best matching element.",
-                    intent, candidates_desc
-                ),
-            },
-        ];
+                "required": ["resolved", "reasoning"]
+            });
 
-        let history = History::new(
-            "".to_string(),
-            vec![HistoryMessage {
-                role: Role::User,
-                content: MessageContent::Contents(content_parts),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                annotations: None,
-            }],
-        );
+            let instructions = format!(
+                "User intent: {intent}\n\nCandidate elements (positions are pixels of the screenshot):\n{}\n\nSelect the candidate that best matches the intent and answer with its bracketed index.",
+                describe_candidates(&candidates, &screenshot.view)
+            );
 
-        let preamble = "You are a UI element resolver. Given multiple candidate elements and the user's intent, select the most appropriate one. Consider visual context, element type, and user goal.";
+            let preamble = "You are a UI element resolver. Given multiple candidate elements and the user's intent, select the most appropriate one. Consider visual context, element type, and user goal. Only choose among the listed candidates.";
 
-        let agent_builder = model_bit
-            .agent(context, &Some(history))
-            .await?
-            .preamble(preamble)
-            .tool(ResolveElementTool {
-                parameters: tool_params,
-            })
-            .tool_choice(ToolChoice::Required);
-
-        let agent = agent_builder.build();
-
-        let response = agent
-            .completion(intent.clone(), Vec::<Message>::new())
-            .await
-            .map_err(|e| anyhow!("LLM completion failed: {}", e))?
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to send request: {}", e))?;
-
-        let mut result: Option<ResolvedElement> = None;
-        for content in response.choice {
-            if let AssistantContent::ToolCall(ToolCall {
-                function: ToolFunction {
-                    name, arguments, ..
+            let arguments = call_tool(
+                context,
+                &model_bit,
+                vision_history(&[&screenshot.image], &instructions),
+                preamble,
+                SubmitTool {
+                    name: TOOL,
+                    description: "Submit the resolved element selection",
+                    parameters,
                 },
-                ..
-            }) = content
-                && name == "submit_resolution"
-            {
-                result = Some(json::from_value(arguments)?);
+            )
+            .await?;
+
+            match arguments {
+                Some(arguments) => resolve(parse_tool_args(TOOL, &arguments)?, &candidates),
+                None => unresolved(format!("The model answered without calling `{TOOL}`")),
             }
-        }
-
-        let resolved = result.unwrap_or(ResolvedElement {
-            resolved: false,
-            selected_index: None,
-            x: None,
-            y: None,
-            reasoning: "Could not resolve element".to_string(),
-        });
+        };
 
         context
             .set_pin_value("result", json::json!(resolved))
@@ -295,5 +274,60 @@ impl NodeLogic for LLMResolveElementNode {
         Err(flow_like_types::anyhow!(
             "LLM processing requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+
+    fn candidates() -> Vec<ElementCandidate> {
+        vec![
+            ElementCandidate {
+                index: 3,
+                x: 10,
+                y: 20,
+                description: "Cancel".into(),
+            },
+            ElementCandidate {
+                index: 7,
+                x: 300,
+                y: 400,
+                description: "Submit".into(),
+            },
+        ]
+    }
+
+    fn args(resolved: bool, selected_index: Option<f64>) -> ResolveArgs {
+        ResolveArgs {
+            resolved,
+            selected_index,
+            reasoning: "why".into(),
+        }
+    }
+
+    #[test]
+    fn coordinates_come_from_the_selected_candidate() {
+        let result = resolve(args(true, Some(7.0)), &candidates());
+        assert!(result.resolved);
+        assert_eq!(
+            (result.selected_index, result.x, result.y),
+            (Some(7), Some(300), Some(400))
+        );
+    }
+
+    #[test]
+    fn unknown_or_missing_index_is_unresolved() {
+        assert!(!resolve(args(true, Some(1.0)), &candidates()).resolved);
+        assert!(!resolve(args(true, Some(7.5)), &candidates()).resolved);
+        assert!(!resolve(args(true, None), &candidates()).resolved);
+        assert!(!resolve(args(false, Some(7.0)), &candidates()).resolved);
+    }
+
+    #[test]
+    fn duplicate_candidate_indices_are_rejected() {
+        let mut list = candidates();
+        list[1].index = 3;
+        assert!(check_unique_indices(&list).is_err());
     }
 }

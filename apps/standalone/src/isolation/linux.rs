@@ -6,7 +6,7 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
-        unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt},
+        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     },
     path::{Path, PathBuf},
 };
@@ -145,7 +145,7 @@ pub(super) fn capabilities(state_dir: &Path) -> Capabilities {
         sandbox_available: reason.is_none(),
         require_isolation: false,
         placement_preflight_required: true,
-        network_boundary: "shared host network; local services must authenticate callers",
+        network_boundary: super::NETWORK_BOUNDARY,
         reason,
         disk_requirement: "ext4 mounted prjquota; distinct inherited project ID; finite enforced byte and inode hard quotas",
     }
@@ -198,7 +198,15 @@ fn project_attribute(path: &Path) -> Result<(File, FsXattr)> {
     Ok((file, attributes))
 }
 
-fn quota(data: &Path, limit: u64) -> Result<u32> {
+struct ProjectQuota {
+    root: File,
+    project: u32,
+    inode_limit: u64,
+}
+
+/// Checks the mount, the root's inherited project and its enforced limits. This
+/// is O(1); `verify_quota_tree` inspects existing inodes once per data version.
+fn quota_root(data: &Path, limit: u64) -> Result<ProjectQuota> {
     let canonical = data.canonicalize()?;
     ensure!(
         canonical == data,
@@ -275,11 +283,34 @@ fn quota(data: &Path, limit: u64) -> Result<u32> {
         quota.dqb_curspace <= hard_bytes && quota.dqb_curinodes <= quota.dqb_ihardlimit,
         "Placement already exceeds its hard disk quota"
     );
-    // Existing files may predate inheritance. Verify every inode before granting
-    // write access, with bounded memory and a finite number of metadata reads.
+    Ok(ProjectQuota {
+        root: file,
+        project,
+        inode_limit: quota.dqb_ihardlimit,
+    })
+}
+
+fn inspection_denied(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied)
+}
+
+/// Existing files may predate inheritance. Verify every regular file and
+/// directory before granting write access, with bounded memory and a finite
+/// number of metadata reads. Symlinks, FIFOs, sockets and device nodes cannot
+/// be opened for the project ioctl; the kernel gives them the inherited project
+/// of the verified directory that holds them, and they cannot be re-projected.
+fn verify_quota_tree(data: &Path, quota: ProjectQuota) -> Result<()> {
+    let ProjectQuota {
+        root,
+        project,
+        inode_limit,
+    } = quota;
     let mut visited = 0_u64;
-    let entries = std::fs::read_dir(format!("/proc/self/fd/{}", file.as_raw_fd()))?;
-    let mut stack = vec![(file, entries)];
+    let mut uninspected = 0_u64;
+    let entries = std::fs::read_dir(format!("/proc/self/fd/{}", root.as_raw_fd()))?;
+    let mut stack = vec![(root, entries)];
     while let Some((_, directory)) = stack.last_mut() {
         let Some(entry) = directory.next() else {
             stack.pop();
@@ -288,14 +319,29 @@ fn quota(data: &Path, limit: u64) -> Result<u32> {
         let entry = entry?;
         visited += 1;
         ensure!(
-            visited <= quota.dqb_ihardlimit.min(1_000_000),
+            visited <= inode_limit.min(1_000_000),
             "Quota admission tree exceeds its inode inspection bound"
         );
-        let metadata = std::fs::symlink_metadata(entry.path())?;
-        if metadata.file_type().is_socket() {
+        let path = entry.path();
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                uninspected += 1;
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if !metadata.is_file() && !metadata.is_dir() {
             continue;
         }
-        let (file, attribute) = project_attribute(&entry.path())?;
+        let (file, attribute) = match project_attribute(&path) {
+            Ok(value) => value,
+            Err(error) if inspection_denied(&error) => {
+                uninspected += 1;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let metadata = file.metadata()?;
         ensure!(
             attribute.project == project
@@ -310,20 +356,73 @@ fn quota(data: &Path, limit: u64) -> Result<u32> {
             stack.push((file, entries));
         }
     }
-    Ok(project)
+    if uninspected > 0 {
+        tracing::warn!(
+            data = %data.display(),
+            uninspected,
+            "Quota admission skipped entries the agent cannot read; they keep the project inherited at creation"
+        );
+    }
+    Ok(())
 }
 
+/// The managed project root holds every revision and the online cache, each
+/// with its own placements' secrets, so a sandbox may only mount one of them.
+fn ensure_single_project_tree(project: &Path, state: &Path) -> Result<()> {
+    let managed = state.join("projects");
+    ensure!(
+        project != managed && project.parent() != Some(managed.as_path()),
+        "Sandboxed placements must run an imported project revision; {} also contains other placements' secrets",
+        project.display()
+    );
+    Ok(())
+}
+
+/// Admission runs once per placement data version, before the supervisor spawns
+/// any replica of that version, so each spawn only repeats the O(1) root checks.
 pub(super) fn preflight(
     resources: &PlacementResources,
     state_dir: &Path,
+    project: &Path,
     data: &Path,
 ) -> Result<()> {
     resources.validate()?;
     landlock_abi()?;
     bubblewrap()?;
     cgroup_root(state_dir)?;
-    quota(data, resources.disk_bytes.context("Missing disk bound")?)?;
-    Ok(())
+    ensure_single_project_tree(&project.canonicalize()?, &state_dir.canonicalize()?)?;
+    let quota = quota_root(data, resources.disk_bytes.context("Missing disk bound")?)?;
+    verify_quota_tree(data, quota)
+}
+
+/// A private directory the sandbox can always mask or bind, so secrets published
+/// after spawn stay hidden. A project the agent cannot write can never receive
+/// agent-published secrets and needs no mask.
+fn secrets_directory(parent: &Path, name: &str) -> Result<Option<PathBuf>> {
+    crate::config::ensure_unaliased_child(parent, name)?;
+    let path = parent.join(name);
+    match std::fs::DirBuilder::new().mode(0o700).create(&path) {
+        Ok(()) => File::open(parent)?.sync_all()?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Create sandbox secrets directory {}", path.display()));
+        }
+    }
+    ensure!(
+        path.canonicalize()? == path && std::fs::symlink_metadata(&path)?.is_dir(),
+        "Invalid sandbox secrets directory {}",
+        path.display()
+    );
+    Ok(Some(path))
 }
 
 pub(super) fn sample(
@@ -749,9 +848,10 @@ pub(super) fn command(
         .context("Missing sandbox limits")?;
     resources.validate()?;
     landlock_abi()?;
-    let project_id = quota(data, resources.disk_bytes.unwrap())?;
+    let project_id = quota_root(data, resources.disk_bytes.context("Missing disk bound")?)?.project;
     let project = config.project_path.canonicalize()?;
     let state = state.canonicalize()?;
+    ensure_single_project_tree(&project, &state)?;
     ensure!(
         !["/usr", "/bin", "/lib", "/lib64", "/etc/ssl/certs"]
             .iter()
@@ -820,21 +920,12 @@ pub(super) fn command(
         .arg("--ro-bind")
         .arg(&project)
         .arg(&project);
-    let secrets = project.join(".secrets");
-    if secrets.try_exists()? {
-        ensure!(
-            secrets.canonicalize()? == secrets && secrets.is_dir(),
-            "Invalid project secrets directory"
-        );
-        // A revision can be reused by several placements. Hide their private
-        // settings even though all placements share immutable project files.
+    // A revision can be reused by several placements, and siblings may publish
+    // secrets after this worker starts. Mask the shared directory whether or not
+    // it has contents yet; the bind mount shows only this placement's own.
+    if let Some(secrets) = secrets_directory(&project, ".secrets")? {
         command.arg("--tmpfs").arg(&secrets);
-        let own = secrets.join(&config.id);
-        if own.try_exists()? {
-            ensure!(
-                own.canonicalize()? == own && own.is_dir(),
-                "Invalid placement secrets directory"
-            );
+        if let Some(own) = secrets_directory(&secrets, &config.id)? {
             command.arg("--ro-bind").arg(&own).arg(&own);
         }
         command.arg("--remount-ro").arg(&secrets);
@@ -928,6 +1019,44 @@ mod tests {
         assert_eq!(cpu("150000 100000").unwrap(), 1500);
         assert!(cpu("max 100000").is_err());
         assert!(cpu("1 0").is_err());
+    }
+
+    #[test]
+    fn sandbox_refuses_the_managed_project_root_but_accepts_a_revision() {
+        let state = Path::new("/srv/agent");
+        for shared in ["/srv/agent/projects", "/srv/agent/projects/project"] {
+            assert!(ensure_single_project_tree(Path::new(shared), state).is_err());
+        }
+        for single in [
+            "/srv/agent/projects/project/revisions/digest",
+            "/srv/agent/projects/project/online-cache",
+            "/srv/projects/project",
+        ] {
+            assert!(ensure_single_project_tree(Path::new(single), state).is_ok());
+        }
+    }
+
+    #[test]
+    fn secrets_mask_exists_before_spawn_and_read_only_projects_need_none() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir()?;
+        let project = root.path().canonicalize()?;
+        let secrets = secrets_directory(&project, ".secrets")?.context("Missing secrets mask")?;
+        assert_eq!(std::fs::metadata(&secrets)?.mode() & 0o777, 0o700);
+        assert_eq!(
+            secrets_directory(&secrets, "placement")?,
+            Some(secrets.join("placement"))
+        );
+        assert_eq!(secrets_directory(&project, ".secrets")?, Some(secrets));
+        let locked = project.join("locked");
+        std::fs::create_dir(&locked)?;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500))?;
+        let result = secrets_directory(&locked, ".secrets");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700))?;
+        if unsafe { libc::geteuid() } != 0 {
+            assert_eq!(result?, None);
+        }
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]

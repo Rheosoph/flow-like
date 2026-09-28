@@ -2,6 +2,7 @@ use crate::data::{
     atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider},
     path::FlowPath,
 };
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
@@ -186,7 +187,7 @@ impl NodeLogic for ListConfluenceAttachmentsNode {
             return Err(flow_like_types::anyhow!("Page ID is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.confluence_rest_api_url(&format!(
             "/content/{}/child/attachment?limit={}&expand=version",
             page_id,
@@ -194,7 +195,7 @@ impl NodeLogic for ListConfluenceAttachmentsNode {
         ));
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/json")
             .send()
@@ -357,12 +358,12 @@ impl NodeLogic for UploadConfluenceAttachmentNode {
             form = form.text("comment", comment);
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url =
             provider.confluence_rest_api_url(&format!("/content/{}/child/attachment", page_id));
 
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("X-Atlassian-Token", "no-check")
             .header("Accept", "application/json")
@@ -499,12 +500,12 @@ impl NodeLogic for DownloadConfluenceAttachmentNode {
             return Err(flow_like_types::anyhow!("Attachment ID is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let metadata_url =
             provider.confluence_rest_api_url(&format!("/content/{}?expand=version", attachment_id));
 
         let metadata_response = client
-            .get(&metadata_url)
+            .get(&metadata_url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/json")
             .send()
@@ -531,7 +532,7 @@ impl NodeLogic for DownloadConfluenceAttachmentNode {
         }
 
         let response = client
-            .get(&attachment.download_url)
+            .get(&attachment.download_url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;
@@ -643,11 +644,11 @@ impl NodeLogic for DeleteConfluenceAttachmentNode {
             return Err(flow_like_types::anyhow!("Attachment ID is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.confluence_rest_api_url(&format!("/content/{}", attachment_id));
 
         let response = client
-            .delete(&url)
+            .delete(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;

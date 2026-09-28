@@ -3,13 +3,14 @@ use super::{
     provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider},
 };
 use crate::data::path::FlowPath;
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -213,9 +214,9 @@ impl NodeLogic for ListGitHubReleasesNode {
             page.max(1)
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -362,9 +363,9 @@ impl NodeLogic for GetLatestGitHubReleaseNode {
 
         let url = provider.api_url(&format!("/repos/{}/{}/releases/latest", owner, repo));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -526,9 +527,9 @@ impl NodeLogic for GetGitHubReleaseByTagNode {
             urlencoding::encode(&tag)
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -814,9 +815,9 @@ impl NodeLogic for CreateGitHubReleaseNode {
             request_body["make_latest"] = json!(make_latest);
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -989,9 +990,9 @@ impl NodeLogic for ListGitHubReleaseAssetsNode {
             page.max(1)
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -1191,9 +1192,9 @@ impl NodeLogic for UploadGitHubReleaseAssetNode {
             url.push_str(&format!("&label={}", urlencoding::encode(&label)));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("Content-Type", content_type)
@@ -1353,9 +1354,9 @@ impl NodeLogic for DownloadGitHubReleaseAssetNode {
             owner, repo, asset_id
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/octet-stream")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)

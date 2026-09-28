@@ -1,4 +1,6 @@
 pub mod imap;
+pub mod platform_reply;
+pub mod platform_send;
 pub mod smtp;
 
 use std::time::{SystemTime, UNIX_EPOCH};

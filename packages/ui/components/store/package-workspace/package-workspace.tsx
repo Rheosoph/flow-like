@@ -101,6 +101,8 @@ export interface PackageWorkspaceLocal {
 	nodeCount?: number;
 	test?: ReactNode;
 	manifest?: ReactNode;
+	/** The checkout's id is a template placeholder the host flags itself, so a taken id shows no id-taken banner. */
+	placeholderId?: boolean;
 }
 
 /** Host capabilities that exist without a linked checkout. */
@@ -152,6 +154,7 @@ function WorkspaceGate({
 	const authState = useSettledAuthState(registry.authState);
 	const entry = registry.source === "registry" ? registry.entry : undefined;
 	const hasLocal = !!local;
+	const placeholderId = !!local?.placeholderId;
 	const permission = entry?.currentUserPermission;
 
 	const access = useMemo(
@@ -160,6 +163,7 @@ function WorkspaceGate({
 				packageId,
 				hasLocal,
 				localPending,
+				placeholderId,
 				auth: authState,
 				remote: {
 					status: registry.status,
@@ -171,6 +175,7 @@ function WorkspaceGate({
 			packageId,
 			hasLocal,
 			localPending,
+			placeholderId,
 			authState,
 			registry.status,
 			registry.source,

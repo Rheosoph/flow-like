@@ -63,7 +63,7 @@ impl NodeLogic for TakeSnapshotNode {
         node.add_input_pin(
             "monitor",
             "Monitor",
-            "Monitor index (0 = primary)",
+            "Monitor index from List Displays (-1 = primary)",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(0)));
@@ -89,16 +89,21 @@ impl NodeLogic for TakeSnapshotNode {
         let file_path: FlowPath = context.evaluate_pin("file_path").await?;
         let monitor_index: i64 = context.evaluate_pin("monitor").await?;
 
-        // Windows monitor handles must be dropped before awaiting.
-        let screenshot = {
-            let monitors = xcap::Monitor::all()?;
-            let monitor = monitors
-                .get(usize::try_from(monitor_index)?)
-                .ok_or_else(|| flow_like_types::anyhow!("Monitor index is unavailable"))?;
-            crate::types::screen_match::capture_monitor(monitor)?
-        };
-        let mut bytes = Vec::new();
-        screenshot.write_with_encoder(image::codecs::png::PngEncoder::new(&mut bytes))?;
+        let bytes = tokio::task::spawn_blocking(move || {
+            let (screenshot, _) = crate::types::screen_frame::capture_display(monitor_index)?;
+            let mut bytes = Vec::new();
+            screenshot
+                .write_with_encoder(image::codecs::png::PngEncoder::new(&mut bytes))
+                .map_err(|e| {
+                    flow_like_types::anyhow!(
+                        "Failed to encode snapshot of monitor {}: {}",
+                        monitor_index,
+                        e
+                    )
+                })?;
+            flow_like_types::Ok(bytes)
+        })
+        .await??;
         file_path.put(context, bytes, false).await?;
         let success = true;
 

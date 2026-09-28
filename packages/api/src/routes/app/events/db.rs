@@ -491,6 +491,10 @@ pub async fn sync_event_with_sink_tokens(
     )
     .await?;
 
+    if event.event_type == "inbound_email" {
+        crate::mail_ingress::address::sync_address(state, app_id, &event.id).await?;
+    }
+
     Ok(())
 }
 

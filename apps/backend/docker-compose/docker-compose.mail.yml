@@ -4,6 +4,11 @@ services:
     environment:
       INBOUND_MAIL_DOMAIN: ${INBOUND_MAIL_DOMAIN:?Set the receiving domain}
       INBOUND_MAIL_MAX_BYTES: ${MAIL_MAX_MESSAGE_BYTES:-10485760}
+      # Overrides sending_enabled; true also needs an outbound mail provider.
+      MAIL_AUTOMATION_ENABLED: ${MAIL_AUTOMATION_ENABLED:-false}
+  api-gateway:
+    networks:
+      - mail-api
   mail-ingress:
     build:
       context: ../../..
@@ -18,9 +23,11 @@ services:
       RUST_LOG: info
     secrets:
       - mail_sink_jwt
+    # Only Postfix shares `mail`; `mail-api` reaches the API gateway. Neither
+    # network carries runtimes or other services.
     networks:
-      - app
       - mail
+      - mail-api
     read_only: true
     cap_drop: [ALL]
     security_opt: ['no-new-privileges:true']
@@ -43,6 +50,7 @@ services:
       MAIL_POSTFIX_HOSTNAME: ${MAIL_POSTFIX_HOSTNAME:?Set the public MX hostname}
       INBOUND_MAIL_DOMAIN: ${INBOUND_MAIL_DOMAIN:?Set the receiving domain}
       MAIL_MAX_MESSAGE_BYTES: ${MAIL_MAX_MESSAGE_BYTES:-10485760}
+      MAIL_OPERATOR_ADDRESS: ${MAIL_OPERATOR_ADDRESS:-}
     ports:
       - '${MAIL_BIND_ADDRESS:-0.0.0.0}:25:25'
     volumes:
@@ -66,6 +74,8 @@ services:
 
 networks:
   mail:
+    internal: true
+  mail-api:
     internal: true
 volumes:
   mail_spool: {}

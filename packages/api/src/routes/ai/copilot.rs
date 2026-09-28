@@ -49,6 +49,25 @@ fn chat_routes<S: Clone + Send + Sync + 'static>(chat: MethodRouter<S>) -> Route
         .route_layer(axum::middleware::from_fn(
             crate::routes::app::board::capabilities::negotiate_board_format,
         ))
+        .route_layer(axum::middleware::from_fn(require_interactive_session))
+}
+
+fn interactive_session_required() -> ApiError {
+    ApiError::bad_request("FlowPilot in the browser requires an interactive session")
+}
+
+/// The auth middleware passes anonymous requests through, and the body limit admits
+/// image attachments. Reject callers that can never chat before that body is parsed.
+async fn require_interactive_session(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match request.extensions().get::<AppUser>() {
+        Some(AppUser::OpenID(_)) => next.run(request).await,
+        None | Some(AppUser::Unauthorized) => ApiError::UNAUTHORIZED.into_response(),
+        Some(_) => interactive_session_required().into_response(),
+    }
 }
 
 /// Request payload for the unified copilot endpoint
@@ -728,9 +747,7 @@ pub(crate) async fn run_copilot(
         None => None,
     };
 
-    let token = user_access_token(&user).ok_or_else(|| {
-        ApiError::bad_request("FlowPilot in the browser requires an interactive session")
-    })?;
+    let token = user_access_token(&user).ok_or_else(interactive_session_required)?;
     let (prepared_profile, access) =
         super::global_chat::load_user_profile_access(&state, &sub, payload.profile_id.as_deref())
             .await?
@@ -1292,6 +1309,7 @@ mod tests {
         CopilotChatRequest, MAX_COPILOT_BODY_BYTES, MAX_IMAGE_BYTES, MAX_REQUEST_IMAGES,
         MAX_TOTAL_IMAGES, chat_routes, ensure_requested_profile, validate_copilot_payload,
     };
+    use crate::middleware::jwt::AppUser;
     use axum::{
         Json, Router,
         body::{Body, Bytes},
@@ -1316,12 +1334,55 @@ mod tests {
     }
 
     fn chat_request(body: impl Into<Body>) -> Request<Body> {
-        Request::builder()
+        chat_request_as(
+            Some(AppUser::OpenID(crate::middleware::jwt::OpenIDUser {
+                sub: "account".into(),
+                access_token: "token".into(),
+            })),
+            body,
+        )
+    }
+
+    fn chat_request_as(user: Option<AppUser>, body: impl Into<Body>) -> Request<Body> {
+        let mut request = Request::builder()
             .method("POST")
             .uri("/chat")
             .header("content-type", "application/json")
             .body(body.into())
-            .unwrap()
+            .unwrap();
+        if let Some(user) = user {
+            request.extensions_mut().insert(user);
+        }
+        request
+    }
+
+    #[tokio::test]
+    async fn copilot_rejects_callers_without_a_session_before_reading_the_body() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        for (user, expected) in [
+            (None, StatusCode::UNAUTHORIZED),
+            (Some(AppUser::Unauthorized), StatusCode::UNAUTHORIZED),
+            (
+                Some(AppUser::PAT(crate::middleware::jwt::PATUser {
+                    pat: "pat_token".into(),
+                    sub: "owner".into(),
+                })),
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            let polled = Arc::new(AtomicBool::new(false));
+            let flag = polled.clone();
+            let body = Body::from_stream(futures::stream::once(async move {
+                flag.store(true, Ordering::SeqCst);
+                Ok::<_, std::convert::Infallible>(Bytes::from_static(b"[0,0,0]"))
+            }));
+            let response = chat_routes(post(validate_chat_body))
+                .oneshot(chat_request_as(user, body))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            assert!(!polled.load(Ordering::SeqCst));
+        }
     }
 
     #[tokio::test]

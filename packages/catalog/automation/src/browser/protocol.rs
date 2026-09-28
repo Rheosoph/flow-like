@@ -15,13 +15,18 @@ use std::{
 };
 
 #[cfg(feature = "execute")]
+const MAX_BUFFERED_EVENTS: usize = 10_000;
+#[cfg(feature = "execute")]
+const DEBUGGER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[cfg(feature = "execute")]
 pub(crate) struct NetworkState {
     pub pending: HashSet<String>,
     pub url_pattern: String,
-    pub requests: Vec<super::observe::NetworkRequest>,
-    pub request_ids: Vec<String>,
+    pub requests: VecDeque<super::observe::NetworkRequest>,
+    pub request_ids: VecDeque<String>,
     started: HashMap<String, f64>,
-    pub console_logs: Vec<super::observe::ConsoleMessage>,
+    pub console_logs: VecDeque<super::observe::ConsoleMessage>,
     pub failure: Option<String>,
     pub last_activity: std::time::Instant,
 }
@@ -32,14 +37,164 @@ impl Default for NetworkState {
         Self {
             pending: HashSet::new(),
             url_pattern: String::new(),
-            requests: Vec::new(),
-            request_ids: Vec::new(),
+            requests: VecDeque::new(),
+            request_ids: VecDeque::new(),
             started: HashMap::new(),
-            console_logs: Vec::new(),
+            console_logs: VecDeque::new(),
             failure: None,
             last_activity: std::time::Instant::now(),
         }
     }
+}
+
+#[cfg(feature = "execute")]
+impl NetworkState {
+    fn push_console(&mut self, message: super::observe::ConsoleMessage) {
+        if self.console_logs.len() >= MAX_BUFFERED_EVENTS {
+            self.console_logs.pop_front();
+        }
+        self.console_logs.push_back(message);
+    }
+}
+
+/// Console entries from `Runtime.consoleAPICalled`, uncaught `Runtime.exceptionThrown`
+/// errors, and browser-originated `Log.entryAdded` messages (failed loads, CSP, …).
+#[cfg(any(feature = "execute", test))]
+pub(crate) fn console_message(
+    method: &str,
+    params: &Value,
+) -> Option<super::observe::ConsoleMessage> {
+    match method {
+        "Runtime.consoleAPICalled" => {
+            let text = params["args"]
+                .as_array()
+                .map(|args| {
+                    args.iter()
+                        .map(|arg| {
+                            arg.get("value")
+                                .map(|value| {
+                                    value
+                                        .as_str()
+                                        .map(str::to_owned)
+                                        .unwrap_or_else(|| value.to_string())
+                                })
+                                .or_else(|| arg["description"].as_str().map(str::to_owned))
+                                .unwrap_or_default()
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default();
+            let frame = &params["stackTrace"]["callFrames"][0];
+            Some(super::observe::ConsoleMessage {
+                level: console_level(params["type"].as_str().unwrap_or("log")),
+                text,
+                timestamp: params["timestamp"].as_f64().unwrap_or_default() as i64,
+                source: frame["url"].as_str().map(str::to_owned),
+                line_number: frame["lineNumber"].as_i64().map(|line| line as i32),
+            })
+        }
+        "Runtime.exceptionThrown" => {
+            let details = &params["exceptionDetails"];
+            let frame = &details["stackTrace"]["callFrames"][0];
+            let text = details["exception"]["description"]
+                .as_str()
+                .or_else(|| details["exception"]["value"].as_str())
+                .or_else(|| details["text"].as_str())
+                .unwrap_or("Uncaught exception")
+                .to_owned();
+            Some(super::observe::ConsoleMessage {
+                level: "error".into(),
+                text,
+                timestamp: params["timestamp"].as_f64().unwrap_or_default() as i64,
+                source: details["url"]
+                    .as_str()
+                    .filter(|url| !url.is_empty())
+                    .or_else(|| frame["url"].as_str())
+                    .map(str::to_owned),
+                line_number: details["lineNumber"]
+                    .as_i64()
+                    .or_else(|| frame["lineNumber"].as_i64())
+                    .map(|line| line as i32),
+            })
+        }
+        "Log.entryAdded" => {
+            let entry = &params["entry"];
+            Some(super::observe::ConsoleMessage {
+                level: console_level(entry["level"].as_str().unwrap_or("info")),
+                text: entry["text"].as_str().unwrap_or_default().to_owned(),
+                timestamp: entry["timestamp"].as_f64().unwrap_or_default() as i64,
+                source: entry["url"].as_str().map(str::to_owned),
+                line_number: entry["lineNumber"].as_i64().map(|line| line as i32),
+            })
+        }
+        _ => None,
+    }
+}
+
+#[cfg(any(feature = "execute", test))]
+fn console_level(level: &str) -> String {
+    match level {
+        "warning" => "warn",
+        "verbose" => "debug",
+        level => level,
+    }
+    .to_string()
+}
+
+#[cfg(feature = "execute")]
+async fn send_confirmed<S>(
+    socket: &mut S,
+    id: u64,
+    method: &str,
+    params: Value,
+    queued_events: &mut VecDeque<Value>,
+) -> flow_like_types::Result<()>
+where
+    S: futures::Sink<
+            tokio_tungstenite::tungstenite::Message,
+            Error = tokio_tungstenite::tungstenite::Error,
+        > + futures::Stream<
+            Item = Result<
+                tokio_tungstenite::tungstenite::Message,
+                tokio_tungstenite::tungstenite::Error,
+            >,
+        > + Unpin,
+{
+    use tokio_tungstenite::tungstenite::Message;
+    socket
+        .send(Message::Text(
+            json!({"id":id,"method":method,"params":params})
+                .to_string()
+                .into(),
+        ))
+        .await?;
+    tokio::time::timeout(DEBUGGER_TIMEOUT, async {
+        while let Some(message) = socket.next().await {
+            if let Message::Text(text) = message? {
+                let value: Value = flow_like_types::json::from_str(&text)?;
+                if value["id"] == id {
+                    if let Some(error) = value.get("error") {
+                        return Err(flow_like_types::anyhow!(
+                            "Browser rejected {method}: {error}"
+                        ));
+                    }
+                    return Ok(());
+                }
+                queued_events.push_back(value);
+            }
+        }
+        Err(flow_like_types::anyhow!(
+            "Browser protocol connection closed while waiting for {method}"
+        ))
+    })
+    .await
+    .map_err(|_| {
+        flow_like_types::anyhow!(
+            "Browser did not confirm {method} within {} seconds",
+            DEBUGGER_TIMEOUT.as_secs()
+        )
+    })?
 }
 
 #[cfg(any(feature = "execute", test))]
@@ -202,7 +357,6 @@ pub(crate) async fn start_listener(
     debugger_address: &str,
     auth: Option<(String, String, String)>,
 ) -> flow_like_types::Result<()> {
-    use thirtyfour::extensions::cdp::ChromeDevTools;
     if auth.is_none() {
         if let Ok(state) = network_state(context, session).await {
             if state.lock().await.failure.is_none() {
@@ -234,16 +388,20 @@ pub(crate) async fn start_listener(
             "Debugger address must use HTTP or HTTPS"
         ));
     }
-    let info = ChromeDevTools::new(driver.handle.clone())
-        .execute_cdp("Target.getTargetInfo")
-        .await?;
+    let info = super::cdp::cdp(driver, "Target.getTargetInfo", json!({})).await?;
     let target_id = info["targetInfo"]["targetId"]
         .as_str()
         .ok_or_else(|| flow_like_types::anyhow!("Browser did not return a target ID"))?;
-    let targets: Value = flow_like_types::reqwest::Client::new()
-        .get(endpoint.join("/json/list")?)
+    let list_url = endpoint.join("/json/list")?;
+    let targets: Value = flow_like_types::reqwest::Client::builder()
+        .timeout(DEBUGGER_TIMEOUT)
+        .build()?
+        .get(list_url.clone())
         .send()
-        .await?
+        .await
+        .map_err(|e| {
+            flow_like_types::anyhow!("Failed to list debugger targets at {list_url}: {e}")
+        })?
         .error_for_status()?
         .json()
         .await?;
@@ -258,7 +416,14 @@ pub(crate) async fn start_listener(
         .ok_or_else(|| {
             flow_like_types::anyhow!("Current tab is not exposed by this debugger endpoint")
         })?;
-    let (mut socket, _) = tokio_tungstenite::connect_async(websocket).await?;
+    let (mut socket, _) = tokio::time::timeout(
+        DEBUGGER_TIMEOUT,
+        tokio_tungstenite::connect_async(websocket),
+    )
+    .await
+    .map_err(|_| {
+        flow_like_types::anyhow!("Timed out connecting to the browser debugger at {websocket}")
+    })??;
     let (kind, method, params) = if let Some((origin, _, _)) = &auth {
         (
             "auth",
@@ -268,68 +433,25 @@ pub(crate) async fn start_listener(
     } else {
         ("network", "Network.enable", json!({}))
     };
-    socket
-        .send(Message::Text(
-            json!({"id":1,"method":method,"params":params})
-                .to_string()
-                .into(),
-        ))
-        .await?;
     // Confirm protocol support before reporting that the node succeeded.
     let mut queued_events = VecDeque::new();
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while let Some(message) = socket.next().await {
-            let message = message?;
-            if let Message::Text(text) = message {
-                let value: Value = flow_like_types::json::from_str(&text)?;
-                if value["id"] == 1 {
-                    if value.get("error").is_some() {
-                        return Err(flow_like_types::anyhow!("Browser rejected {method}"));
-                    }
-                    return Ok(());
-                }
-                queued_events.push_back(value);
-            }
-        }
-        Err(flow_like_types::anyhow!(
-            "Browser protocol connection closed"
-        ))
-    })
-    .await??;
+    send_confirmed(&mut socket, 1, method, params, &mut queued_events).await?;
     if auth.is_none() {
-        socket
-            .send(Message::Text(
-                json!({"id":2,"method":"Runtime.enable","params":{}})
-                    .to_string()
-                    .into(),
-            ))
-            .await?;
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            while let Some(message) = socket.next().await {
-                if let Message::Text(text) = message? {
-                    let value: Value = flow_like_types::json::from_str(&text)?;
-                    if value["id"] == 2 {
-                        if value.get("error").is_some() {
-                            return Err(flow_like_types::anyhow!(
-                                "Browser rejected Runtime.enable"
-                            ));
-                        }
-                        return Ok(());
-                    }
-                    queued_events.push_back(value);
-                }
-            }
-            Err(flow_like_types::anyhow!(
-                "Browser protocol connection closed"
-            ))
-        })
-        .await??;
+        send_confirmed(
+            &mut socket,
+            2,
+            "Runtime.enable",
+            json!({}),
+            &mut queued_events,
+        )
+        .await?;
+        send_confirmed(&mut socket, 3, "Log.enable", json!({}), &mut queued_events).await?;
     }
     let network = Arc::new(tokio::sync::Mutex::new(NetworkState::default()));
     let task_state = network.clone();
     let cancellation = context.get_cancellation_token();
     let task = tokio::spawn(async move {
-        let mut id = 3u64;
+        let mut id = 4u64;
         let mut authenticated = HashSet::new();
         loop {
             let event = if let Some(event) = queued_events.pop_front() {
@@ -360,7 +482,12 @@ pub(crate) async fn start_listener(
             let params = &event["params"];
             let request_id = params["requestId"].as_str().unwrap_or_default();
             let mut command = None;
-            match event["method"].as_str().unwrap_or_default() {
+            let method = event["method"].as_str().unwrap_or_default();
+            if let Some(message) = console_message(method, params) {
+                task_state.lock().await.push_console(message);
+                continue;
+            }
+            match method {
                 "Fetch.requestPaused" => {
                     command = Some(("Fetch.continueRequest", json!({"requestId":request_id})))
                 }
@@ -374,43 +501,6 @@ pub(crate) async fn start_listener(
                             "Fetch.continueWithAuth",
                             json!({"requestId":request_id,"authChallengeResponse":response}),
                         ));
-                    }
-                }
-                "Runtime.consoleAPICalled" => {
-                    let mut state = task_state.lock().await;
-                    let text = params["args"]
-                        .as_array()
-                        .map(|args| {
-                            args.iter()
-                                .map(|arg| {
-                                    arg.get("value")
-                                        .map(|value| {
-                                            value
-                                                .as_str()
-                                                .map(str::to_owned)
-                                                .unwrap_or_else(|| value.to_string())
-                                        })
-                                        .or_else(|| arg["description"].as_str().map(str::to_owned))
-                                        .unwrap_or_default()
-                                })
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        })
-                        .unwrap_or_default();
-                    let frame = &params["stackTrace"]["callFrames"][0];
-                    state.console_logs.push(super::observe::ConsoleMessage {
-                        level: match params["type"].as_str().unwrap_or("log") {
-                            "warning" => "warn",
-                            level => level,
-                        }
-                        .to_string(),
-                        text,
-                        timestamp: params["timestamp"].as_f64().unwrap_or_default() as i64,
-                        source: frame["url"].as_str().map(str::to_owned),
-                        line_number: frame["lineNumber"].as_i64().map(|line| line as i32),
-                    });
-                    if state.console_logs.len() > 10000 {
-                        state.console_logs.remove(0);
                     }
                 }
                 "Network.requestWillBeSent" => {
@@ -427,7 +517,11 @@ pub(crate) async fn start_listener(
                             .unwrap_or_default()
                             .contains(&state.url_pattern)
                     {
-                        state.requests.push(super::observe::NetworkRequest {
+                        if state.requests.len() >= MAX_BUFFERED_EVENTS {
+                            state.requests.pop_front();
+                            state.request_ids.pop_front();
+                        }
+                        state.requests.push_back(super::observe::NetworkRequest {
                             url: request["url"].as_str().unwrap_or_default().into(),
                             method: request["method"].as_str().unwrap_or_default().into(),
                             status: None,
@@ -438,11 +532,7 @@ pub(crate) async fn start_listener(
                             size_bytes: None,
                             resource_type: params["type"].as_str().map(str::to_owned),
                         });
-                        state.request_ids.push(request_id.to_owned());
-                        if state.requests.len() > 10000 {
-                            state.requests.remove(0);
-                            state.request_ids.remove(0);
-                        }
+                        state.request_ids.push_back(request_id.to_owned());
                     }
                 }
                 "Network.responseReceived" => {
@@ -576,6 +666,57 @@ mod tests {
             quiet
         ));
     }
+    #[test]
+    fn uncaught_exceptions_and_browser_log_entries_are_console_errors() {
+        let exception = console_message(
+            "Runtime.exceptionThrown",
+            &json!({
+                "timestamp": 1700000000000.0,
+                "exceptionDetails": {
+                    "text": "Uncaught",
+                    "lineNumber": 41,
+                    "url": "https://example.com/app.js",
+                    "exception": {"description": "TypeError: x is undefined\n    at app.js:42:7"}
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(exception.level, "error");
+        assert!(exception.text.starts_with("TypeError: x is undefined"));
+        assert!(exception.text.contains("app.js:42:7"));
+        assert_eq!(
+            exception.source.as_deref(),
+            Some("https://example.com/app.js")
+        );
+        assert_eq!(exception.line_number, Some(41));
+        assert_eq!(exception.timestamp, 1700000000000);
+
+        let thrown_string = console_message(
+            "Runtime.exceptionThrown",
+            &json!({"exceptionDetails": {"text": "Uncaught", "exception": {"type": "string", "value": "boom"}, "stackTrace": {"callFrames": [{"url": "inline.js", "lineNumber": 3}]}}}),
+        )
+        .unwrap();
+        assert_eq!(thrown_string.text, "boom");
+        assert_eq!(thrown_string.source.as_deref(), Some("inline.js"));
+
+        let failed_load = console_message(
+            "Log.entryAdded",
+            &json!({"entry": {"source": "network", "level": "error", "text": "Failed to load resource: 404", "timestamp": 5.0, "url": "https://example.com/missing.png"}}),
+        )
+        .unwrap();
+        assert_eq!(failed_load.level, "error");
+        assert_eq!(failed_load.text, "Failed to load resource: 404");
+
+        let warning = console_message(
+            "Runtime.consoleAPICalled",
+            &json!({"type": "warning", "args": [{"type": "string", "value": "careful"}, {"type": "number", "value": 3}]}),
+        )
+        .unwrap();
+        assert_eq!(warning.level, "warn");
+        assert_eq!(warning.text, "careful 3");
+        assert!(console_message("Network.requestWillBeSent", &json!({})).is_none());
+    }
+
     #[test]
     fn credentials_are_limited_to_exact_server_origin() {
         let origin = normalized_origin("https://example.com/account").unwrap();

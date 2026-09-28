@@ -152,6 +152,7 @@ async fn main() {
         state.db_dialect,
         ChannelSweeperConfig::from_env(),
     );
+    let _teams_sweeper_handle = flow_like_api::teams::spawn_sweeper(state.clone());
 
     // Only spawns for backends without native expiry; the others no-op and log why.
     let _cache_sweeper_handle =

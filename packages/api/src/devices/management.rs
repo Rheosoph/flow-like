@@ -23,6 +23,11 @@ fn invalid(error: impl std::fmt::Display) -> ApiError {
     ApiError::bad_request(error.to_string())
 }
 
+const SIGNALING_TOKEN_SECONDS: i64 = 300;
+/// Relay credentials cannot be revoked, so they lapse with the subject's
+/// authorization and never outlive this even when the provider allows longer.
+const MANAGEMENT_TURN_SECONDS: i64 = 60 * 60;
+
 pub(crate) async fn shared_devices(
     state: &AppState,
     user_id: &str,
@@ -42,7 +47,10 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/{id}/management/policies", post(device_policies))
         .route("/{id}/management/applied", post(device_applied))
         .route("/{id}/identity", get(identity))
-        .route("/controller-vaults/{id}", get(super::recovery::get).put(super::recovery::put))
+        .route(
+            "/controller-vaults/{id}",
+            get(super::recovery::get).put(super::recovery::put),
+        )
 }
 
 #[derive(Serialize)]
@@ -62,13 +70,15 @@ struct SignalingClaims {
     jti: String,
 }
 
+/// `authorized_until` is when the subject's access ends; `None` means only the
+/// device registration itself bounds it.
 async fn signaling_response(
     state: &AppState,
     device: &DeviceStatus,
     subject: &str,
     role: &str,
     participant: &str,
-    expires_at: i64,
+    authorized_until: Option<i64>,
 ) -> Result<DeviceSignalingResponse, ApiError> {
     if participant.is_empty()
         || participant.len() > 128
@@ -80,7 +90,8 @@ async fn signaling_response(
         return Err(ApiError::bad_request("Invalid signaling participant"));
     }
     let now = chrono::Utc::now().timestamp();
-    let expires_at = expires_at.min(now + 300);
+    let authorized_until = authorized_until.unwrap_or(i64::MAX);
+    let expires_at = authorized_until.min(now + SIGNALING_TOKEN_SECONDS);
     if expires_at <= now {
         return Err(ApiError::UNAUTHORIZED);
     }
@@ -128,10 +139,26 @@ async fn signaling_response(
         exp: expires_at,
         jti: uuid::Uuid::new_v4().to_string(),
     };
-    let ice = match state.realtime_ice.issue(&claims.jti).await {
+    let turn_seconds = authorized_until
+        .saturating_sub(now)
+        .clamp(0, MANAGEMENT_TURN_SECONDS);
+    let ice = match state
+        .realtime_ice
+        .issue_bounded(
+            &format!(
+                "device-management:{}:{}:{role}:{subject}",
+                device.device_id, device.auth_epoch
+            ),
+            &claims.jti,
+            u32::try_from(turn_seconds).unwrap_or(0),
+            now,
+        )
+        .await
+    {
         Ok(ice) => ice,
-        Err(_) => {
+        Err(error) => {
             tracing::warn!(
+                error = %error,
                 "Device TURN credentials unavailable; direct ICE and encrypted WebSocket remain available"
             );
             None
@@ -179,24 +206,17 @@ async fn signal_device(
     )
     .await?;
     Ok(Json(
-        signaling_response(
-            &state,
-            &device.status,
-            &id,
-            "device",
-            &id,
-            chrono::Utc::now().timestamp() + 300,
-        )
-        .await?,
+        signaling_response(&state, &device.status, &id, "device", &id, None).await?,
     ))
 }
 
 /// This grants discovery and rendezvous only. The agent separately verifies controller keys.
+/// The second value is when a grantee's access ends; it is `None` for the owner.
 pub(crate) async fn admitted_device(
     state: &AppState,
     user_id: &str,
     id: &str,
-) -> Result<(repository::Device, i64), ApiError> {
+) -> Result<(repository::Device, Option<i64>), ApiError> {
     enabled(&context(state))?;
     repository::active_account(&state.db, user_id).await?;
     let device = repository(&context(state)).device(id).await?;
@@ -206,13 +226,13 @@ pub(crate) async fn admitted_device(
     }
     let now = chrono::Utc::now().timestamp();
     if device.status.owner_id == user_id {
-        return Ok((device, now + 300));
+        return Ok((device, None));
     }
     let row=state.db.query_one_raw(sql(r#"SELECT MAX(r."expiresAt") AS expiry FROM "DeviceManagementRecipient" r WHERE r."deviceId"=$1 AND r."userId"=$2 AND r."expiresAt">$3 AND r.version=(SELECT MAX(version) FROM "DeviceManagementPolicy" WHERE "deviceId"=$1)"#,[id.into(),user_id.into(),now.into()])).await?.ok_or(ApiError::FORBIDDEN)?;
     let expiry = row
         .try_get::<Option<i64>>("", "expiry")?
         .ok_or(ApiError::FORBIDDEN)?;
-    Ok((device, expiry.min(now + 300)))
+    Ok((device, Some(expiry)))
 }
 
 async fn signal_controller(
@@ -365,19 +385,45 @@ async fn persist_policy(
             let policy=verify_management_policy(&compact,&owner_key,chrono::Utc::now().timestamp()).map_err(invalid)?;
             let digest=compact_digest(&compact);
             let previous=tx.query_one_raw(sql(r#"SELECT version,digest FROM "DeviceManagementPolicy" WHERE "deviceId"=$1 ORDER BY version DESC LIMIT 1"#,[id.clone().into()])).await?;
+            let mut retained=std::collections::HashSet::new();
             if let Some(previous)=previous {
                 let version=previous.try_get::<i64>("","version")? as u64; let old=previous.try_get::<String>("","digest")?;
                 if policy.policy_version==version && digest==old{return Ok(());}
                 if policy.policy_version!=version+1 || policy.previous_policy_digest.as_ref()!=Some(&old){return Err(ApiError::conflict("Management policy changed; reload before signing"));}
+                for row in tx.query_all_raw(sql(r#"SELECT "grantId","userId" FROM "DeviceManagementRecipient" WHERE "deviceId"=$1 AND version=$2"#,[id.clone().into(),(version as i64).into()])).await? {
+                    retained.insert((row.try_get::<String>("","grantId")?,row.try_get::<String>("","userId")?));
+                }
             }else if policy.policy_version!=1{return Err(ApiError::conflict("Management policy genesis required"));}
             tx.execute_raw(sql(r#"INSERT INTO "DeviceManagementPolicy"("deviceId",version,digest,"policyJws","expiresAt","createdAt") VALUES($1,$2,$3,$4,$5,$6)"#,[id.clone().into(),(policy.policy_version as i64).into(),digest.into(),compact.into(),policy.expires_at.into(),policy.issued_at.into()])).await?;
             for grant in policy.grants {
-                repository::active_account(tx,&grant.user_id).await?;
+                // Carried-over grants never block a revocation when their account is
+                // suspended; admission rechecks the account on every use.
+                if !retained.contains(&(grant.grant_id.clone(),grant.user_id.clone())) {
+                    require_grantee_account(tx,&grant).await?;
+                }
                 tx.execute_raw(sql(r#"INSERT INTO "DeviceManagementRecipient"("deviceId",version,"grantId","userId","expiresAt") VALUES($1,$2,$3,$4,$5)"#,[id.clone().into(),(policy.policy_version as i64).into(),grant.grant_id.into(),grant.user_id.into(),grant.expires_at.into()])).await?;
             }
             Ok(())
         })
     }).await
+}
+
+async fn require_grantee_account<C: ConnectionTrait>(
+    db: &C,
+    grant: &ManagementGrant,
+) -> Result<(), ApiError> {
+    repository::active_account(db, &grant.user_id)
+        .await
+        .map_err(|error| {
+            if error.status() == axum::http::StatusCode::FORBIDDEN {
+                ApiError::forbidden(format!(
+                    "Grant {} names account {}, which is not an active account",
+                    grant.grant_id, grant.user_id
+                ))
+            } else {
+                error
+            }
+        })
 }
 
 #[derive(Deserialize)]
@@ -593,25 +639,69 @@ mod tests {
             .unwrap()
             .try_get::<String>("", "digest")
             .unwrap();
+        let connection = &db;
+        let owner_key = owner.public_key();
+        let persist = move |compact: String| {
+            persist_policy(
+                connection,
+                DbDialect::Postgres,
+                "device".into(),
+                1,
+                "owner".into(),
+                owner_key.clone(),
+                compact,
+            )
+        };
+        let reader = ManagementGrant {
+            grant_id: "reader".into(),
+            user_id: "reader".into(),
+            controller_key: SigningKey::generate().public_key(),
+            scope: ManagementScope::Device,
+            capabilities: vec![ManagementCapability::Status],
+            expires_at: now + 300,
+            group_id: None,
+            group_version: None,
+        };
         policy.policy_version = 3;
         policy.previous_policy_digest = Some(head);
+        policy.grants = vec![reader.clone()];
+        let shared = sign_management_policy(&policy, &owner).unwrap();
+        persist(shared.clone()).await.unwrap();
+        // A suspended grantee carried over from the head never blocks the owner's
+        // next revision, but it cannot be named in a new grant.
+        db.execute_unprepared(r#"UPDATE "User" SET status='SUSPENDED' WHERE id='reader'"#)
+            .await
+            .unwrap();
+        policy.policy_version = 4;
+        policy.previous_policy_digest = Some(compact_digest(&shared));
+        policy.grants = vec![
+            reader.clone(),
+            ManagementGrant {
+                grant_id: "fresh".into(),
+                ..reader.clone()
+            },
+        ];
+        let added = persist(sign_management_policy(&policy, &owner).unwrap())
+            .await
+            .unwrap_err();
+        assert_eq!(added.status(), axum::http::StatusCode::FORBIDDEN);
+        assert!(
+            added
+                .public_message()
+                .is_some_and(|message| message.contains("fresh"))
+        );
+        policy.grants = vec![reader];
+        let retained = sign_management_policy(&policy, &owner).unwrap();
+        persist(retained.clone()).await.unwrap();
+        policy.policy_version = 5;
+        policy.previous_policy_digest = Some(compact_digest(&retained));
+        policy.grants.clear();
         let revoked = sign_management_policy(&policy, &owner).unwrap();
         db.execute_unprepared(r#"UPDATE "ManagedDevice" SET status='revoked',"authEpoch"=2"#)
             .await
             .unwrap();
         assert_eq!(
-            persist_policy(
-                &db,
-                DbDialect::Postgres,
-                "device".into(),
-                1,
-                "owner".into(),
-                owner.public_key(),
-                revoked
-            )
-            .await
-            .unwrap_err()
-            .status(),
+            persist(revoked).await.unwrap_err().status(),
             axum::http::StatusCode::UNAUTHORIZED
         );
         db.close().await.unwrap();

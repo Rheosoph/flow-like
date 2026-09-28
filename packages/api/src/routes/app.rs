@@ -29,6 +29,7 @@ pub mod fork;
 pub mod graph;
 pub mod groups;
 pub mod invoke;
+pub mod mail;
 pub mod meta;
 pub mod notifications;
 pub mod packages;
@@ -82,6 +83,8 @@ pub fn routes() -> Router<AppState> {
             "/{app_id}/notifications/create",
             post(notifications::create_notification),
         )
+        .route("/{app_id}/mail/send", post(mail::send_mail))
+        .route("/{app_id}/mail/reply", post(mail::reply_mail))
         .route(
             "/{app_id}/cache",
             get(cache::read_cache_entry)

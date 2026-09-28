@@ -89,7 +89,9 @@ mock.module("../../../lib/device-management/crypto", () => ({
 	}),
 }));
 const { createRoot } = await import("react-dom/client");
-const { DeviceSharingForm } = await import("./device-sharing-form");
+const { DeviceSharingForm, mergeRecipientGrants } = await import(
+	"./device-sharing-form"
+);
 const container = document.createElement("div");
 document.body.append(container);
 const root = createRoot(container);
@@ -99,7 +101,10 @@ const manifest = {
 	owner_invitation_key: key,
 } as OnboardingManifest;
 const receipt = { device_id: "device" } as DeviceReceipt;
-async function render(supported?: boolean) {
+async function render(
+	supported?: boolean,
+	isolation?: Parameters<typeof DeviceSharingForm>[0]["isolation"],
+) {
 	await act(async () =>
 		root.render(
 			<DeviceSharingForm
@@ -107,12 +112,20 @@ async function render(supported?: boolean) {
 				manifest={manifest}
 				receipt={receipt}
 				invitationVault={new Uint8Array([1])}
+				isolation={isolation}
 				{...(supported === undefined
 					? {}
 					: { certificateManagement: supported })}
 			/>,
 		),
 	);
+}
+function checkbox(text: string) {
+	const input = [...container.querySelectorAll("label")]
+		.find((label) => label.textContent?.trim().startsWith(text))
+		?.querySelector("input");
+	if (!input) throw new Error(`Missing checkbox ${text}`);
+	return input;
 }
 function permission() {
 	const input = [...container.querySelectorAll("label")]
@@ -230,4 +243,79 @@ test("support is rechecked at signing if a pending policy read spans a device ca
 	expect(container.querySelector('[role="alert"]')?.textContent).toContain(
 		"before sharing certificate management permission",
 	);
+});
+
+test("re-approving an access request replaces its grant, and a foreign grant id is refused", () => {
+	const template = {
+		scope: { kind: "device" as const },
+		capabilities: ["status" as const, "deploy" as const],
+		expires_at: 99,
+		group_id: null,
+		group_version: null,
+	};
+	const renewed = mergeRecipientGrants(
+		previous.grants,
+		[{ user_id: "existing-user", controller_key: key, grant_id: "existing" }],
+		template,
+	);
+	expect(renewed).toHaveLength(1);
+	expect(renewed[0]).toMatchObject({
+		grant_id: "existing",
+		capabilities: ["status", "deploy"],
+		expires_at: 99,
+	});
+	expect(() =>
+		mergeRecipientGrants(
+			previous.grants,
+			[{ user_id: "intruder", controller_key: key, grant_id: "existing" }],
+			template,
+		),
+	).toThrow("already belongs to another account");
+	expect(() =>
+		mergeRecipientGrants(
+			[],
+			[
+				{ user_id: "a", controller_key: key, grant_id: "same" },
+				{ user_id: "b", controller_key: key, grant_id: "same" },
+			],
+			template,
+		),
+	).toThrow("listed more than once");
+	expect(
+		mergeRecipientGrants(
+			previous.grants,
+			[{ user_id: "new-user", controller_key: key }],
+			template,
+			() => "generated",
+		).map((grant) => grant.grant_id),
+	).toEqual(["existing", "generated"]);
+});
+
+test("workload permissions require confirming full device trust unless the host requires isolation", async () => {
+	await render(true, {
+		platform: "macos",
+		sandboxAvailable: false,
+		requireIsolation: false,
+	});
+	await act(async () => checkbox("deploy").click());
+	expect(container.textContent).toContain(
+		"This macos host does not require isolation",
+	);
+	await fields();
+	await submit();
+	expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+		"full access",
+	);
+	expect(signed).toHaveLength(0);
+	await act(async () => checkbox("I trust these recipients").click());
+	await fields();
+	await submit();
+	expect(signed).toHaveLength(1);
+	expect(signed[0].grants[1].capabilities).toContain("deploy");
+	await render(true, {
+		platform: "linux",
+		sandboxAvailable: true,
+		requireIsolation: true,
+	});
+	expect(container.textContent).not.toContain("I trust these recipients");
 });
