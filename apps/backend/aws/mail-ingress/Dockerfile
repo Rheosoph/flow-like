@@ -2,7 +2,7 @@
 FROM --platform=linux/arm64 public.ecr.aws/amazonlinux/amazonlinux:2023 AS builder
 COPY rust-toolchain.toml /rust-toolchain.toml
 WORKDIR /app
-RUN yum install -y gcc gcc-c++ make openssl-devel pkgconf-pkg-config xz && \
+RUN yum install -y gcc gcc-c++ git make openssl-devel pkgconf-pkg-config xz && \
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none && \
     /root/.cargo/bin/rustup toolchain install && \
     yum clean all
