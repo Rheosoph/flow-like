@@ -385,6 +385,7 @@
 	"publishPackagenameToTheRegistryForTheFirstTime": "首次将 {{packageName}} 发布到注册表。",
 	"purchaseCanceledTryAgainAnytime": "购买已取消。你可以随时重新尝试。",
 	"purchaseSuccessfulYouNowHaveAccessToThisPackage": "购买成功！你现在已获得此包的访问权限。",
+	"purchaseUnavailable": "",
 	"quickActions": "快捷操作",
 	"rateThisApp": "为此应用评分",
 	"rating": "评分",

@@ -2350,6 +2350,7 @@
 	"searchYourLibrary": "Search your library…",
 	"searchYourPackages": "Search your packages…",
 	"secret": "Secret",
+	"secretInputConnectASecret": "Secret input (connect a secret)",
 	"secretVariablesWillBeExportedInPlainText": "Secret variables will be exported in plain text",
 	"secureCheckoutViaStripe": "Secure checkout via Stripe",
 	"security": "Security",

@@ -391,6 +391,7 @@
 	"publishPackagenameToTheRegistryForTheFirstTime": "Publica {{packageName}} en el registro por primera vez.",
 	"purchaseCanceledTryAgainAnytime": "La compra se canceló. Puedes intentarlo de nuevo cuando quieras.",
 	"purchaseSuccessfulYouNowHaveAccessToThisPackage": "¡Compra exitosa! Ahora tienes acceso a este paquete.",
+	"purchaseUnavailable": "",
 	"quickActions": "Acciones rápidas",
 	"rateThisApp": "Valorar esta aplicación",
 	"rating": "Valoración",

@@ -385,6 +385,7 @@
 	"publishPackagenameToTheRegistryForTheFirstTime": "{{packageName}}をレジストリに初めて公開します。",
 	"purchaseCanceledTryAgainAnytime": "購入がキャンセルされました。いつでも再度お試しいただけます。",
 	"purchaseSuccessfulYouNowHaveAccessToThisPackage": "購入が完了しました！このパッケージを利用できるようになりました。",
+	"purchaseUnavailable": "",
 	"quickActions": "クイックアクション",
 	"rateThisApp": "このアプリを評価",
 	"rating": "評価",

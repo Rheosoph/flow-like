@@ -721,6 +721,8 @@
 	"historyEntryUnreadableSkipped": "{{action}}: one recorded change was unreadable and was skipped",
 	"home": "Home",
 	"homeWidgetClassesHint": "Applied to the widget surface. Target inner elements with variants like [&_h2]:text-lg. The layout keeps control of position, width and height.",
+	"homeWidgetCssHint": "Scoped to this widget. :root is the widget surface (write :root:is(.dark *) for dark mode), other selectors match inside it, and rules override Tailwind classes. Keyframe names stay local. Avoid + or ~ after :root, which reach neighboring widgets.",
+	"homeWidgetCssTooLarge": "This CSS is {{bytes}} bytes. Keep it under {{max}} bytes to save.",
 	"horizontal": "Horizontal",
 	"hoursAgoRangeCountRunsFailed_one": "{{hoursAgo}}–{{rangeEnd}} h ago: {{count}} run, {{failed}} failed",
 	"hoursAgoRangeCountRunsFailed_other": "{{hoursAgo}}–{{rangeEnd}} h ago: {{count}} runs, {{failed}} failed",
