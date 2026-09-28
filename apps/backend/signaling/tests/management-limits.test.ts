@@ -7,8 +7,11 @@ import {
 	DiscardCounter,
 	type FrameBudgetLimits,
 	FrameBudgets,
+	MAX_CONTROLLERS_PER_DEVICE,
+	MAX_CONTROLLERS_PER_DEVICE_ACCOUNT,
 	ManagementOutbox,
 	type OutboxFrame,
+	connectionSlotsFor,
 } from "../limits";
 
 const small: FrameBudgetLimits = {
@@ -185,6 +188,45 @@ describe("connection slots", () => {
 		slots.release(["token:a", "account:owner"]);
 		expect(slots.count("account:owner")).toBe(1);
 		expect(slots.acquire(token)).toBeTrue();
+	});
+
+	test("grantees filling their per-account share cannot lock the owner out of a device", () => {
+		const slots = new ConnectionSlots();
+		let token = 0;
+		const controller = (subject: string) =>
+			connectionSlotsFor(`device-signaling:device:controller:${subject}`, 16, {
+				role: "controller",
+				deviceId: "device",
+				subject,
+				tokenId: `token-${token++}`,
+			});
+		for (let grantee = 0; grantee < 24; grantee++) {
+			for (let i = 0; i < MAX_CONTROLLERS_PER_DEVICE_ACCOUNT; i++)
+				expect(slots.acquire(controller(`grantee-${grantee}`))).toBeTrue();
+			expect(slots.acquire(controller(`grantee-${grantee}`))).toBeFalse();
+		}
+		for (let i = 0; i < MAX_CONTROLLERS_PER_DEVICE_ACCOUNT; i++)
+			expect(slots.acquire(controller("owner"))).toBeTrue();
+		expect(slots.count("device-signaling-controllers:device")).toBe(
+			MAX_CONTROLLERS_PER_DEVICE,
+		);
+	});
+
+	test("an operator's lower per-subject limit still applies to controllers", () => {
+		const admission = {
+			role: "controller",
+			deviceId: "device",
+			subject: "owner",
+			tokenId: "token",
+		} as const;
+		expect(connectionSlotsFor("subject", 2, admission)[0]).toEqual([
+			"subject",
+			2,
+		]);
+		expect(
+			connectionSlotsFor("subject", 16, { ...admission, role: "device" }),
+		).toEqual([["subject", 16]]);
+		expect(connectionSlotsFor(null, 16, null)).toEqual([]);
 	});
 });
 

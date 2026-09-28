@@ -272,6 +272,55 @@ export class ManagementOutbox {
 	}
 }
 
+/** An owner-signed policy names at most 24 grantee accounts, plus the owner. */
+const MAX_DEVICE_ACCOUNTS = 25;
+export const MAX_CONTROLLERS_PER_DEVICE_ACCOUNT = 8;
+/** Sized so no set of other accounts can take every slot and lock out the owner. */
+export const MAX_CONTROLLERS_PER_DEVICE =
+	MAX_DEVICE_ACCOUNTS * MAX_CONTROLLERS_PER_DEVICE_ACCOUNT;
+/** Device-role sockets replace each other, so this bounds an account's controllers. */
+const MAX_CONTROLLERS_PER_ACCOUNT = 128;
+
+export type SlotAdmission = {
+	role: "device" | "controller";
+	deviceId: string;
+	subject: string;
+	tokenId: string;
+};
+
+/** A management socket's `subject` is already scoped to its device and role. */
+export function connectionSlotsFor(
+	subject: string | null,
+	subjectLimit: number,
+	management: SlotAdmission | null,
+): [string, number][] {
+	const controller = management?.role === "controller" ? management : null;
+	const slots: [string, number][] =
+		subject === null
+			? []
+			: [
+					[
+						subject,
+						controller
+							? Math.min(subjectLimit, MAX_CONTROLLERS_PER_DEVICE_ACCOUNT)
+							: subjectLimit,
+					],
+				];
+	if (controller)
+		slots.push(
+			[`device-signaling-token:${controller.tokenId}`, 1],
+			[
+				`device-signaling-controllers:${controller.deviceId}`,
+				MAX_CONTROLLERS_PER_DEVICE,
+			],
+			[
+				`device-signaling-account:${controller.subject}`,
+				MAX_CONTROLLERS_PER_ACCOUNT,
+			],
+		);
+	return slots;
+}
+
 /** Admits a connection only when every one of its slots has room. */
 export class ConnectionSlots {
 	private readonly live = new Map<string, number>();

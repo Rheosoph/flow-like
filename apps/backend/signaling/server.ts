@@ -34,6 +34,7 @@ import {
 	type FrameBudgetLimits,
 	FrameBudgets,
 	ManagementOutbox,
+	connectionSlotsFor,
 } from "./limits";
 import {
 	type SignalRedisClient,
@@ -342,10 +343,6 @@ const deviceSockets = new Map<string, Socket>();
 const frameBudgets = new FrameBudgets();
 const discardedFrames = new DiscardCounter();
 const MAX_MANAGEMENT_CONNECTIONS = 2_000;
-// Device-role sockets replace each other, so these bound what one account can
-// hold: its controllers, plus one socket per device it has enrolled.
-const MAX_CONTROLLERS_PER_DEVICE = 64;
-const MAX_CONTROLLERS_PER_ACCOUNT = 128;
 // Kept below the transport's close-on-backpressure limit so a congested device
 // socket is never closed; the frame that would overflow it is refused instead.
 const MANAGEMENT_SEND_BUFFER_BYTES = 512 * 1024;
@@ -370,27 +367,6 @@ function noStoreResponse(body: string, status: number, extraHeaders = {}) {
 			...extraHeaders,
 		},
 	});
-}
-
-function connectionSlotsFor(
-	subject: string | null,
-	management: DeviceTransportAdmission | null,
-): [string, number][] {
-	const slots: [string, number][] =
-		subject === null ? [] : [[subject, MAX_CONNECTIONS_PER_SUB]];
-	if (management?.role === "controller")
-		slots.push(
-			[`device-signaling-token:${management.tokenId}`, 1],
-			[
-				`device-signaling-controllers:${management.deviceId}`,
-				MAX_CONTROLLERS_PER_DEVICE,
-			],
-			[
-				`device-signaling-account:${management.subject}`,
-				MAX_CONTROLLERS_PER_ACCOUNT,
-			],
-		);
-	return slots;
 }
 
 function frameBudgetsFor(
@@ -587,7 +563,11 @@ const server = serve<WSData>({
 				return noStoreResponse("Unauthorized", 401);
 			}
 
-			const slots = connectionSlotsFor(authorization.subject, management);
+			const slots = connectionSlotsFor(
+				authorization.subject,
+				MAX_CONNECTIONS_PER_SUB,
+				management,
+			);
 			if (!connectionSlots.acquire(slots)) {
 				return noStoreResponse("Too Many Requests", 429, {
 					"Retry-After": "5",
