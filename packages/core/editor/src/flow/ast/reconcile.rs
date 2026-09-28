@@ -30632,13 +30632,16 @@ eventsSimple() {
                 .add_input_pin("exec_in", "In", "", VariableType::Execution)
                 .id
                 .clone();
-            let mode = decision.add_input_pin("question_type", "Question Type", "", VariableType::String);
+            let mode =
+                decision.add_input_pin("question_type", "Question Type", "", VariableType::String);
             mode.default_value = Some(b"\"choice\"".to_vec());
             let mode_in = mode.id.clone();
             for name in ["text", "instructions"] {
                 decision.add_input_pin(name, name, "", VariableType::String);
             }
-            decision.add_input_pin("criteria", "Criteria", "", VariableType::String).value_type = ValueType::Array;
+            decision
+                .add_input_pin("criteria", "Criteria", "", VariableType::String)
+                .value_type = ValueType::Array;
             if selector_connected {
                 for name in ["false_description", "true_description"] {
                     decision.add_input_pin(name, name, "", VariableType::String);
@@ -30663,7 +30666,10 @@ eventsSimple() {
                 assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
             } else {
                 assert!(
-                    result.diagnostics.iter().any(|diagnostic| diagnostic.contains("literal `questionType`")),
+                    result
+                        .diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.contains("literal `questionType`")),
                     "{:?}",
                     result.diagnostics
                 );
@@ -30683,7 +30689,10 @@ eventsSimple() {
             &laya_dynamic_catalog(),
         );
         assert!(
-            result.diagnostics.iter().any(|diagnostic| diagnostic.contains("falseDescription")),
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("falseDescription")),
             "{:?}",
             result.diagnostics
         );

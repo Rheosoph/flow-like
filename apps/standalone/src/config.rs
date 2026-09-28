@@ -7,6 +7,7 @@ use std::{
 };
 
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+const MAX_UI_ORIGINS: usize = 16;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -123,6 +124,11 @@ pub struct HostingConfig {
     pub max_in_flight: u16,
     pub request_timeout_secs: u32,
     pub auth_secret: String,
+    /// Remote `https://` sources the service UI may load images, media, frames and fetches from,
+    /// such as the CDN serving a Page's pictures or 3D models. The UI stays same-origin otherwise,
+    /// so streamed workflow output cannot make the browser send conversation data elsewhere.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ui_origins: Vec<String>,
 }
 impl HostingConfig {
     pub fn validate(&self) -> Result<()> {
@@ -133,8 +139,50 @@ impl HostingConfig {
             "Invalid service listener limits"
         );
         validate_id("service authentication secret", &self.auth_secret)?;
+        ensure!(
+            self.ui_origins.len() <= MAX_UI_ORIGINS,
+            "The service UI allows at most {MAX_UI_ORIGINS} remote origins, got {}",
+            self.ui_origins.len()
+        );
+        let mut origins = std::collections::HashSet::new();
+        for origin in &self.ui_origins {
+            validate_ui_origin(origin)?;
+            ensure!(
+                origins.insert(origin.to_ascii_lowercase()),
+                "Duplicate service UI origin {origin:?}"
+            );
+        }
         Ok(())
     }
+}
+
+fn validate_ui_origin(origin: &str) -> Result<()> {
+    let rest = origin
+        .strip_prefix("https://")
+        .filter(|_| origin.len() <= 256)
+        .unwrap_or_default();
+    let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    let (host, port) = authority
+        .rsplit_once(':')
+        .map_or((authority, None), |(host, port)| (host, Some(port)));
+    let host = host.strip_prefix("*.").unwrap_or(host);
+    ensure!(
+        host.contains('.')
+            && host.split('.').all(|label| {
+                (1..=63).contains(&label.len())
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            })
+            && port.is_none_or(|port| port.parse::<u16>().is_ok_and(|port| port > 0))
+            && path
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-._~/%".contains(&b)),
+        "Invalid service UI origin {origin:?}: expected https://host[:port][/path/], optionally with a leading *. subdomain wildcard"
+    );
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -426,6 +474,53 @@ mod tests {
         config.source = ProjectSource::Offline;
         config.events.push(config.events[0].clone());
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn service_ui_origins_are_bounded_https_sources() {
+        let mut hosting: HostingConfig = serde_json::from_value(serde_json::json!({
+            "host":"127.0.0.1","port":8080,"max_in_flight":4,"request_timeout_secs":30,"auth_secret":"service"
+        }))
+        .unwrap();
+        assert!(hosting.ui_origins.is_empty());
+        assert!(
+            !serde_json::to_value(&hosting)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("ui_origins")
+        );
+        hosting.ui_origins = vec![
+            "https://cdn.example.com".into(),
+            "https://*.assets.example.com:8443".into(),
+            "https://models.example.org/pages/".into(),
+        ];
+        hosting.validate().unwrap();
+        for origin in [
+            "http://cdn.example.com",
+            "https://*",
+            "https://*.com",
+            "https://localhost",
+            "https://cdn.example.com:0",
+            "https://cdn.example.com?leak=1",
+            "https://cdn.example.com/a b",
+            "https://cdn.example.com; script-src *",
+            "https://cdn.example.com 'unsafe-eval'",
+            "https://-cdn.example.com",
+            "data:",
+        ] {
+            hosting.ui_origins = vec![origin.into()];
+            assert!(hosting.validate().is_err(), "{origin} must be refused");
+        }
+        hosting.ui_origins = vec![
+            "https://cdn.example.com".into(),
+            "https://CDN.example.com".into(),
+        ];
+        assert!(hosting.validate().is_err());
+        hosting.ui_origins = (0..=MAX_UI_ORIGINS)
+            .map(|index| format!("https://cdn{index}.example.com"))
+            .collect();
+        assert!(hosting.validate().is_err());
     }
 
     #[test]

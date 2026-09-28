@@ -1,21 +1,26 @@
 use super::state::RecordedFingerprint;
 
+/// Roles that accessibility APIs report for password fields.
+pub fn is_password_role(role: &str) -> bool {
+    role.eq_ignore_ascii_case("password text") || role.eq_ignore_ascii_case("AXSecureTextField")
+}
+
 #[cfg(target_os = "macos")]
-pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
+mod ax {
     use std::ffi::c_void;
     use std::ptr;
 
     #[link(name = "ApplicationServices", kind = "framework")]
     unsafe extern "C" {
-        fn AXUIElementCopyElementAtPosition(
+        pub fn AXUIElementCopyElementAtPosition(
             application: *const c_void,
             x: f32,
             y: f32,
             element: *mut *const c_void,
         ) -> i32;
-        fn AXUIElementCreateSystemWide() -> *const c_void;
-        fn AXUIElementSetMessagingTimeout(element: *const c_void, timeout: f32) -> i32;
-        fn AXUIElementCopyAttributeValue(
+        pub fn AXUIElementCreateSystemWide() -> *const c_void;
+        pub fn AXUIElementSetMessagingTimeout(element: *const c_void, timeout: f32) -> i32;
+        pub fn AXUIElementCopyAttributeValue(
             element: *const c_void,
             attribute: *const c_void,
             value: *mut *const c_void,
@@ -37,14 +42,19 @@ pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
         ) -> bool;
         fn CFGetTypeID(cf: *const c_void) -> u64;
         fn CFStringGetTypeID() -> u64;
-        fn CFRelease(cf: *const c_void);
+        pub fn CFRelease(cf: *const c_void);
+    }
+
+    #[link(name = "Carbon", kind = "framework")]
+    unsafe extern "C" {
+        pub fn IsSecureEventInputEnabled() -> u8;
     }
 
     const K_CF_STRING_ENCODING_UTF8: u32 = 0x08000100;
 
     // SAFETY: Calls CoreFoundation FFI. The CString is valid for the duration of the call,
     // and CFStringCreateWithCString returns a retained CF object that must be CFRelease'd.
-    unsafe fn create_cf_string(s: &str) -> *const c_void {
+    pub unsafe fn create_cf_string(s: &str) -> *const c_void {
         let c_str = match std::ffi::CString::new(s) {
             Ok(c) => c,
             Err(_) => return ptr::null(),
@@ -54,7 +64,7 @@ pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
 
     // SAFETY: Reads CF string contents into a buffer. Validates the CF type before reading.
     // Buffer is stack-allocated with fixed size, null-terminated by CFStringGetCString.
-    unsafe fn cf_string_to_string(cf: *const c_void) -> Option<String> {
+    pub unsafe fn cf_string_to_string(cf: *const c_void) -> Option<String> {
         unsafe {
             if cf.is_null() || CFGetTypeID(cf) != CFStringGetTypeID() {
                 return None;
@@ -70,6 +80,77 @@ pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
             }
         }
     }
+
+    // SAFETY: `element` must be a live AXUIElementRef. The returned value is retained and the
+    // caller must CFRelease it.
+    pub unsafe fn copy_attribute(element: *const c_void, name: &str) -> Option<*const c_void> {
+        unsafe {
+            let attribute = create_cf_string(name);
+            if attribute.is_null() {
+                return None;
+            }
+            let mut value: *const c_void = ptr::null();
+            let result = AXUIElementCopyAttributeValue(element, attribute, &mut value);
+            CFRelease(attribute);
+            if result != 0 || value.is_null() {
+                return None;
+            }
+            Some(value)
+        }
+    }
+
+    // SAFETY: `element` must be a live AXUIElementRef; the copied value is released here.
+    pub unsafe fn string_attribute(element: *const c_void, name: &str) -> Option<String> {
+        unsafe {
+            let value = copy_attribute(element, name)?;
+            let text = cf_string_to_string(value);
+            CFRelease(value);
+            text
+        }
+    }
+
+    // SAFETY: `element` must be a live AXUIElementRef.
+    pub unsafe fn is_secure_element(element: *const c_void) -> bool {
+        unsafe {
+            string_attribute(element, "AXSubrole")
+                .is_some_and(|role| super::is_password_role(&role))
+                || string_attribute(element, "AXRole")
+                    .is_some_and(|role| super::is_password_role(&role))
+        }
+    }
+}
+
+/// Whether keyboard focus is in a password field. `None` when the platform cannot tell.
+#[cfg(target_os = "macos")]
+pub fn focused_element_is_secure() -> Option<bool> {
+    use ax::*;
+
+    // SAFETY: IsSecureEventInputEnabled only reads global input state. Every CF object copied
+    // here is released on all paths, and null checks guard each dereference.
+    unsafe {
+        if IsSecureEventInputEnabled() != 0 {
+            return Some(true);
+        }
+        let system_wide = AXUIElementCreateSystemWide();
+        if system_wide.is_null() {
+            return None;
+        }
+        AXUIElementSetMessagingTimeout(system_wide, 0.1);
+        let focused = copy_attribute(system_wide, "AXFocusedUIElement");
+        CFRelease(system_wide);
+        let focused = focused?;
+        AXUIElementSetMessagingTimeout(focused, 0.1);
+        let secure = is_secure_element(focused);
+        CFRelease(focused);
+        Some(secure)
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
+    use ax::*;
+    use std::ffi::c_void;
+    use std::ptr;
 
     // SAFETY: macOS Accessibility API requires FFI calls. All CF objects obtained via
     // Copy* functions are properly CFRelease'd on all code paths. Null checks prevent
@@ -142,7 +223,11 @@ pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
             }
         }
 
-        let value_attr = create_cf_string("AXValue");
+        let value_attr = if is_secure_element(element) {
+            ptr::null()
+        } else {
+            create_cf_string("AXValue")
+        };
         if !value_attr.is_null() {
             let mut value_value: *const c_void = ptr::null();
             if AXUIElementCopyAttributeValue(element, value_attr, &mut value_value) == 0
@@ -244,14 +329,14 @@ pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
 }
 
 #[cfg(target_os = "windows")]
-pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
+fn with_com<T>(operation: impl FnOnce() -> Option<T>) -> Option<T> {
     use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
     // SAFETY: CoInitializeEx/CoUninitialize are COM initialization functions.
     // We call CoInitializeEx once at start and CoUninitialize on all return paths.
     // This is safe as long as we don't call COM from other threads without initialization.
     let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
-    let result = extract_fingerprint_windows_inner(x, y);
+    let result = operation();
     if initialized {
         unsafe {
             CoUninitialize();
@@ -259,6 +344,29 @@ pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
     }
 
     result
+}
+
+#[cfg(target_os = "windows")]
+pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
+    with_com(|| extract_fingerprint_windows_inner(x, y))
+}
+
+/// Whether keyboard focus is in a password field. `None` when the platform cannot tell.
+#[cfg(target_os = "windows")]
+pub fn focused_element_is_secure() -> Option<bool> {
+    with_com(|| {
+        use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
+        use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
+
+        // SAFETY: COM is initialized by `with_com`; the interfaces are released before it
+        // uninitializes.
+        let automation: IUIAutomation =
+            unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.ok()?;
+        let element = unsafe { automation.GetFocusedElement() }.ok()?;
+        unsafe { element.CurrentIsPassword() }
+            .ok()
+            .map(|password| password.as_bool())
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -367,14 +475,18 @@ fn control_type_to_string(control_type: i32) -> String {
 }
 
 #[cfg(target_os = "linux")]
-pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
+fn block_on_atspi<T, F>(operation: impl FnOnce() -> F + Send) -> Option<T>
+where
+    T: Send,
+    F: std::future::Future<Output = Option<T>>,
+{
     use std::time::Duration;
 
     // AT-SPI2 requires an async runtime, and callers already run inside one, so the
     // runtime has to be built on a thread that is not a tokio worker.
     std::thread::scope(|scope| {
         scope
-            .spawn(|| {
+            .spawn(move || {
                 let rt = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -386,22 +498,141 @@ pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
                     }
                 };
 
-                rt.block_on(async {
-                    tokio::time::timeout(
-                        Duration::from_millis(500),
-                        extract_fingerprint_atspi(x, y),
-                    )
-                    .await
-                    .ok()
-                    .flatten()
+                rt.block_on(async move {
+                    tokio::time::timeout(Duration::from_millis(500), operation())
+                        .await
+                        .ok()
+                        .flatten()
                 })
             })
             .join()
             .unwrap_or_else(|_| {
-                tracing::debug!("AT-SPI fingerprint thread panicked");
+                tracing::debug!("AT-SPI thread panicked");
                 None
             })
     })
+}
+
+#[cfg(target_os = "linux")]
+pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
+    block_on_atspi(move || extract_fingerprint_atspi(x, y))
+}
+
+/// Whether keyboard focus is in a password field. `None` when the platform cannot tell.
+#[cfg(target_os = "linux")]
+pub fn focused_element_is_secure() -> Option<bool> {
+    block_on_atspi(focused_is_password_atspi)
+}
+
+/// Finds the focused object inside the active top-level windows, preferring one Collection
+/// query per window and walking showing descendants for toolkits without Collection.
+#[cfg(target_os = "linux")]
+async fn focused_is_password_atspi() -> Option<bool> {
+    use atspi::connection::AccessibilityConnection;
+    use atspi::proxy::{accessible::AccessibleProxy, collection::CollectionProxy};
+    use atspi::{MatchType, ObjectMatchRule, ObjectRef, Role, SortOrder, State};
+
+    let conn = AccessibilityConnection::new().await.ok()?;
+    let bus = conn.inner().connection();
+    let root = AccessibleProxy::builder(bus)
+        .destination("org.a11y.atspi.Registry")
+        .ok()?
+        .path("/org/a11y/atspi/accessible/root")
+        .ok()?
+        .build()
+        .await
+        .ok()?;
+    let focused_rule = ObjectMatchRule::builder()
+        .states([State::Focused], MatchType::All)
+        .build();
+    let mut pending: Vec<ObjectRef> = Vec::new();
+    for application in root.get_children().await.ok()? {
+        let Ok(app) = AccessibleProxy::builder(bus)
+            .destination(application.name.clone())
+            .ok()?
+            .path(application.path.clone())
+            .ok()?
+            .build()
+            .await
+        else {
+            continue;
+        };
+        for window in app.get_children().await.unwrap_or_default() {
+            let Ok(accessible) = AccessibleProxy::builder(bus)
+                .destination(window.name.clone())
+                .ok()?
+                .path(window.path.clone())
+                .ok()?
+                .build()
+                .await
+            else {
+                continue;
+            };
+            if !accessible
+                .get_state()
+                .await
+                .is_ok_and(|state| state.contains(State::Active))
+            {
+                continue;
+            }
+            let collected = match CollectionProxy::builder(bus)
+                .destination(window.name.clone())
+                .ok()?
+                .path(window.path.clone())
+                .ok()?
+                .build()
+                .await
+            {
+                Ok(collection) => collection
+                    .get_matches(focused_rule.clone(), SortOrder::Canonical, 1, false)
+                    .await
+                    .ok(),
+                Err(_) => None,
+            };
+            match collected {
+                Some(matches) => {
+                    if let Some(focused) = matches.into_iter().next() {
+                        let focused = AccessibleProxy::builder(bus)
+                            .destination(focused.name.clone())
+                            .ok()?
+                            .path(focused.path.clone())
+                            .ok()?
+                            .build()
+                            .await
+                            .ok()?;
+                        return Some(focused.get_role().await.ok()? == Role::PasswordText);
+                    }
+                }
+                None => pending.push(window),
+            }
+        }
+    }
+    for _ in 0..512 {
+        let object = pending.pop()?;
+        if object.path.as_str().ends_with("/null") {
+            continue;
+        }
+        let Ok(accessible) = AccessibleProxy::builder(bus)
+            .destination(object.name.clone())
+            .ok()?
+            .path(object.path.clone())
+            .ok()?
+            .build()
+            .await
+        else {
+            continue;
+        };
+        let Ok(state) = accessible.get_state().await else {
+            continue;
+        };
+        if state.contains(State::Focused) {
+            return Some(accessible.get_role().await.ok()? == Role::PasswordText);
+        }
+        if state.contains(State::Showing) {
+            pending.extend(accessible.get_children().await.unwrap_or_default());
+        }
+    }
+    None
 }
 
 #[cfg(target_os = "linux")]
@@ -505,5 +736,10 @@ async fn extract_fingerprint_atspi(x: i32, y: i32) -> Option<RecordedFingerprint
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub fn extract_fingerprint_at(_x: i32, _y: i32) -> Option<RecordedFingerprint> {
     tracing::debug!("UI element fingerprinting not supported on this platform");
+    None
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+pub fn focused_element_is_secure() -> Option<bool> {
     None
 }

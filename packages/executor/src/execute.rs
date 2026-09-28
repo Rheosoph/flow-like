@@ -17,20 +17,20 @@ use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, LogLevel, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
+use flow_like::hub::retry_after;
 use flow_like::profile::Profile;
 use flow_like::state::{FlowLikeConfig, FlowLikeState, FlowNodeRegistryInner};
 use flow_like::utils::http::HTTPClient;
 use flow_like_catalog::get_catalog;
 use flow_like_storage::Path;
+use flow_like_types::channel::{Channel, ChannelTicket};
 use flow_like_types::create_id;
 use flow_like_types::intercom::BufferedInterComHandler;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, LazyLock};
-#[cfg(test)]
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch};
 
 /// Cached prepared registry - initialized once on first access.
@@ -641,6 +641,14 @@ async fn execute_inner(
         return Err(error);
     }
 
+    let event: Option<Event> = request
+        .event_json
+        .as_ref()
+        .and_then(|json| serde_json::from_str(json).ok());
+    let teams_callbacks = event
+        .as_ref()
+        .is_some_and(|event| event.event_type == "teams");
+
     // Strict queue mode first acquires one conditional Cosmos lease. A live
     // owner serializes deliveries; an expired owner can be taken over; and a
     // terminal run is an idempotent broker redelivery that must not execute.
@@ -732,6 +740,8 @@ async fn execute_inner(
     let callback_jwt = executor_jwt.clone();
     let callback_config = config.clone();
     let callback_lease = queue_lease.clone();
+    let run_channel = RunChannel::default();
+    let callback_channel = run_channel.clone();
     callback_task.handle = Some(tokio::spawn(async move {
         let result = run_callback_batcher(
             event_rx,
@@ -739,6 +749,8 @@ async fn execute_inner(
             callback_jwt,
             callback_config,
             callback_lease,
+            teams_callbacks,
+            callback_channel,
         )
         .await;
         if let Err(error) = &result {
@@ -848,12 +860,6 @@ async fn execute_inner(
         serde_json::json!({ "message": "Execution started" }),
     );
 
-    // Parse event from JSON if provided
-    let event: Option<Event> = request
-        .event_json
-        .as_ref()
-        .and_then(|json| serde_json::from_str(json).ok());
-
     // Convert OAuth tokens from input format to core format
     let oauth_tokens: HashMap<String, OAuthToken> = request
         .oauth_tokens
@@ -945,7 +951,10 @@ async fn execute_inner(
     )
     .await
     {
-        Ok(channel) => channel,
+        Ok(channel) => {
+            let _ = run_channel.set(channel.clone());
+            channel
+        }
         Err(error) => {
             let error = ExecutorError::RunInit(error.to_string());
             report_executor_rejection(
@@ -1001,6 +1010,14 @@ async fn execute_inner(
             return Err(error);
         }
     };
+
+    if !request.shadow {
+        run.set_executor_api_auth(flow_like::flow::execution::ExecutorApiAuth::new(
+            executor_jwt.clone(),
+            claims.callback_url.clone(),
+        ))
+        .await;
+    }
 
     run.set_execution_environment(execution_environment);
     if let Some(mode) = request.execution_mode {
@@ -1089,6 +1106,19 @@ async fn execute_inner(
                 None
             }
         }
+    } else if teams_callbacks {
+        tokio::select! {
+            result = &mut execution_future => Some(result),
+            changed = callback_failure_rx.changed() => {
+                let detail = match changed {
+                    Ok(()) => callback_failure_rx.borrow().clone()
+                        .unwrap_or_else(|| "Teams callback task stopped unexpectedly".to_string()),
+                    Err(_) => "Teams callback task stopped unexpectedly".to_string(),
+                };
+                lease_failure = Some(ExecutorError::Callback(detail));
+                None
+            }
+        }
     } else {
         Some(execution_future.as_mut().await)
     };
@@ -1111,6 +1141,9 @@ async fn execute_inner(
         drop(run);
         drop(intercom_handler);
         drop(event_tx);
+        if teams_callbacks && queue_lease.is_none() {
+            report_teams_callback_failure(&claims, &executor_jwt, &config, &error).await;
+        }
         return Err(error);
     }
     let execution_result = execution_result.expect("execution result exists without lease failure");
@@ -1211,12 +1244,18 @@ async fn execute_inner(
         .await;
     callback_task.handle = None;
     match callback_result {
+        Ok(Err(error)) if teams_callbacks && queue_lease.is_none() => {
+            report_teams_callback_failure(&claims, &executor_jwt, &config, &error).await;
+            return Err(error);
+        }
         Ok(result) if queue_lease.is_some() => result?,
         Ok(_) => {}
-        Err(error) if queue_lease.is_some() => {
-            return Err(ExecutorError::Callback(format!(
-                "callback task failed: {error}"
-            )));
+        Err(error) if queue_lease.is_some() || teams_callbacks => {
+            let error = ExecutorError::Callback(format!("callback task failed: {error}"));
+            if queue_lease.is_none() {
+                report_teams_callback_failure(&claims, &executor_jwt, &config, &error).await;
+            }
+            return Err(error);
         }
         Err(error) => {
             tracing::warn!(error = %error, "Callback task stopped unexpectedly");
@@ -1349,18 +1388,226 @@ fn api_event_input(event: &ExecutionEvent) -> ApiEventInput {
     }
 }
 
+fn is_teams_output(event: &ExecutionEvent) -> bool {
+    matches!(&event.event_type, EventType::Custom(kind) if kind == "interaction_request" || kind == "chat_out")
+}
+
+/// An outbound Teams event is delivered inside `/api/v1/execution/events`
+/// before the API acknowledges it; that route has the API's 120 s data deadline.
+const TEAMS_DELIVERY_TIMEOUT: Duration = Duration::from_secs(130);
+const TEAMS_RETRY_DELAY_CAP: Duration = Duration::from_secs(30);
+
+type RunChannel = Arc<std::sync::OnceLock<Arc<dyn Channel>>>;
+
+fn within_run_deadline(
+    config: &ExecutorConfig,
+    wanted: Duration,
+) -> Result<Duration, ExecutorError> {
+    match config.execution_deadline() {
+        Some(deadline) => {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(ExecutorError::Timeout);
+            }
+            Ok(wanted.min(remaining))
+        }
+        None => Ok(wanted),
+    }
+}
+
+fn event_callback_timeout(
+    config: &ExecutorConfig,
+    teams_callbacks: bool,
+    events: &[ExecutionEvent],
+) -> Result<Duration, ExecutorError> {
+    if !teams_callbacks {
+        return Ok(config.callback_timeout());
+    }
+    let timeout = if events.iter().any(is_teams_output) {
+        config.callback_timeout().max(TEAMS_DELIVERY_TIMEOUT)
+    } else {
+        config.callback_timeout()
+    };
+    within_run_deadline(config, timeout)
+}
+
+/// Validation, rendering, size and Teams refusals: repeating the batch cannot
+/// change them. Conflicts (a delivery still in flight), throttling and server
+/// errors are transient.
+fn is_teams_rejection(status: reqwest::StatusCode) -> bool {
+    status.is_client_error()
+        && !matches!(
+            status,
+            reqwest::StatusCode::REQUEST_TIMEOUT
+                | reqwest::StatusCode::CONFLICT
+                | reqwest::StatusCode::TOO_MANY_REQUESTS
+        )
+}
+
+fn teams_retry_delay(attempt: u32, retry_after: Option<Duration>) -> Duration {
+    retry_after
+        .unwrap_or_else(|| Duration::from_secs(2 << attempt.min(4)))
+        .min(TEAMS_RETRY_DELAY_CAP)
+}
+
+/// Tickets of the interaction requests in `batch`, so their waiters can be
+/// released when the API refuses to deliver them.
+fn interaction_tickets(channel: &dyn Channel, batch: &[ExecutionEvent]) -> Vec<ChannelTicket> {
+    batch
+        .iter()
+        .filter(|event| {
+            matches!(&event.event_type, EventType::Custom(kind) if kind == "interaction_request")
+        })
+        .filter_map(|event| {
+            let request_id = event.payload.get("id")?.as_str()?;
+            let expires_at = event.payload.get("expires_at")?.as_i64()?;
+            Some(ChannelTicket {
+                request_id: request_id.to_string(),
+                expires_at,
+                handle: channel.handle().for_request(request_id, expires_at),
+            })
+        })
+        .collect()
+}
+
+async fn report_teams_callback_failure(
+    claims: &ExecutorClaims,
+    executor_jwt: &str,
+    config: &ExecutorConfig,
+    error: &ExecutorError,
+) {
+    let update = ProgressUpdateRequest {
+        progress: None,
+        current_step: None,
+        status: Some("failed".into()),
+        output_len: None,
+        error: Some(error.to_string()),
+        job_id: None,
+        lease_token: None,
+        lease_duration_ms: None,
+        summary: RunSummary::default(),
+    };
+    if let Err(report_error) = send_progress(
+        &format!(
+            "{}/api/v1/execution/progress",
+            claims.callback_url.trim_end_matches('/')
+        ),
+        executor_jwt,
+        &update,
+        config,
+        &callback_client(),
+    )
+    .await
+    {
+        tracing::error!(error = %report_error, run_id = %claims.run_id, "Could not report Teams delivery failure");
+    }
+}
+
+struct EventsCallbackFailure {
+    error: ExecutorError,
+    /// The API refused the batch for a reason a repeat cannot change.
+    rejected: bool,
+}
+
+impl From<ExecutorError> for EventsCallbackFailure {
+    fn from(error: ExecutorError) -> Self {
+        Self {
+            error,
+            rejected: false,
+        }
+    }
+}
+
+struct EventsCallback<'a> {
+    url: String,
+    jwt: &'a str,
+    config: &'a ExecutorConfig,
+    client: reqwest::Client,
+    queue_lease: Option<&'a QueueLeaseContext>,
+    teams_callbacks: bool,
+    channel: &'a RunChannel,
+}
+
+impl EventsCallback<'_> {
+    async fn flush(
+        &self,
+        batch: &mut Vec<ExecutionEvent>,
+        failure_log: &str,
+    ) -> Result<(), ExecutorError> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+        let outcome = match send_events_to_api(
+            &self.url,
+            self.jwt,
+            batch,
+            self.config,
+            &self.client,
+            self.queue_lease,
+            self.teams_callbacks,
+        )
+        .await
+        {
+            Ok(()) => Ok(()),
+            Err(failure) => self.recover(failure, batch, failure_log).await,
+        };
+        batch.clear();
+        outcome
+    }
+
+    /// A refused Teams interaction ends without a response instead of failing
+    /// the run; any other failure is fatal in strict modes and logged otherwise.
+    async fn recover(
+        &self,
+        failure: EventsCallbackFailure,
+        batch: &[ExecutionEvent],
+        failure_log: &str,
+    ) -> Result<(), ExecutorError> {
+        if failure.rejected {
+            if let Some(channel) = self.channel.get() {
+                let tickets = interaction_tickets(channel.as_ref(), batch);
+                if !tickets.is_empty() {
+                    for ticket in &tickets {
+                        channel.abandon(ticket).await;
+                    }
+                    tracing::error!(
+                        error = %failure.error,
+                        interactions = tickets.len(),
+                        "Teams interaction delivery was refused; the interaction ends without a response"
+                    );
+                    return Ok(());
+                }
+            }
+        }
+        if self.queue_lease.is_some() || self.teams_callbacks {
+            return Err(failure.error);
+        }
+        tracing::warn!(error = %failure.error, "{}", failure_log);
+        Ok(())
+    }
+}
+
 async fn run_callback_batcher(
     mut event_rx: mpsc::UnboundedReceiver<ExecutionEvent>,
     claims: ExecutorClaims,
     executor_jwt: String,
     config: ExecutorConfig,
     queue_lease: Option<QueueLeaseContext>,
+    teams_callbacks: bool,
+    run_channel: RunChannel,
 ) -> Result<(), ExecutorError> {
-    let events_url = format!(
-        "{}/api/v1/execution/events",
-        claims.callback_url.trim_end_matches('/')
-    );
-    let client = callback_client();
+    let callback = EventsCallback {
+        url: format!(
+            "{}/api/v1/execution/events",
+            claims.callback_url.trim_end_matches('/')
+        ),
+        jwt: &executor_jwt,
+        config: &config,
+        client: callback_client(),
+        queue_lease: queue_lease.as_ref(),
+        teams_callbacks,
+        channel: &run_channel,
+    };
     let mut batch = Vec::new();
     // Multiple producers can reserve an AtomicI32 value and reach the channel
     // in the opposite order. Assign the durable identity at this single
@@ -1373,22 +1620,7 @@ async fn run_callback_batcher(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                if !batch.is_empty() {
-                    if let Err(error) = send_events_to_api(
-                        &events_url,
-                        &executor_jwt,
-                        &batch,
-                        &config,
-                        &client,
-                        queue_lease.as_ref(),
-                    ).await {
-                        if queue_lease.is_some() {
-                            return Err(error);
-                        }
-                        tracing::warn!(error = %error, "Failed to send events batch");
-                    }
-                    batch.clear();
-                }
+                callback.flush(&mut batch, "Failed to send events batch").await?;
             }
             event = event_rx.recv() => {
                 match event {
@@ -1399,40 +1631,16 @@ async fn run_callback_batcher(
                                 "execution event sequence exceeded i32 capacity".to_string(),
                             )
                         })?;
+                        let outbound = teams_callbacks && is_teams_output(&e);
                         batch.push(e);
-                        if batch.len() >= send_threshold {
-                            if let Err(error) = send_events_to_api(
-                                &events_url,
-                                &executor_jwt,
-                                &batch,
-                                &config,
-                                &client,
-                                queue_lease.as_ref(),
-                            ).await {
-                                if queue_lease.is_some() {
-                                    return Err(error);
-                                }
-                                tracing::warn!(error = %error, "Failed to send events batch");
-                            }
-                            batch.clear();
+                        // Send each Teams card or reply immediately and alone among
+                        // outbound events, keeping the API's delivery work bounded.
+                        if batch.len() >= send_threshold || outbound {
+                            callback.flush(&mut batch, "Failed to send events batch").await?;
                         }
                     }
                     None => {
-                        if !batch.is_empty() {
-                            if let Err(error) = send_events_to_api(
-                                &events_url,
-                                &executor_jwt,
-                                &batch,
-                                &config,
-                                &client,
-                                queue_lease.as_ref(),
-                            ).await {
-                                if queue_lease.is_some() {
-                                    return Err(error);
-                                }
-                                tracing::warn!(error = %error, "Failed to send final events batch");
-                            }
-                        }
+                        callback.flush(&mut batch, "Failed to send final events batch").await?;
                         return Ok(());
                     }
                 }
@@ -1461,7 +1669,8 @@ async fn send_events_to_api(
     config: &ExecutorConfig,
     client: &reqwest::Client,
     queue_lease: Option<&QueueLeaseContext>,
-) -> Result<(), ExecutorError> {
+    teams_callbacks: bool,
+) -> Result<(), EventsCallbackFailure> {
     let api_events: Vec<ApiEventInput> = events.iter().map(api_event_input).collect();
 
     let request = PushEventsRequest {
@@ -1469,38 +1678,67 @@ async fn send_events_to_api(
         job_id: queue_lease.map(|lease| lease.job_id.clone()),
         lease_token: queue_lease.map(|lease| lease.token.clone()),
     };
+    let mut last_failure = None;
 
     for attempt in 0..=config.callback_retries {
+        let timeout = event_callback_timeout(config, teams_callbacks, events)?;
         let result = client
             .post(url)
             .header("Authorization", format!("Bearer {}", jwt))
             .header("Content-Type", "application/json")
-            .timeout(config.callback_timeout())
+            .timeout(timeout)
             .json(&request)
             .send()
             .await;
 
+        let mut delay_hint = None;
         match result {
             Ok(response) if response.status().is_success() => return Ok(()),
             Ok(response) => {
                 let status = response.status();
+                delay_hint = retry_after(response.headers());
                 let body = response.text().await.unwrap_or_default();
                 tracing::warn!(attempt, status = %status, body = %body, "Events callback failed");
+                let failure = format!(
+                    "HTTP {status}: {}",
+                    body.chars().take(512).collect::<String>()
+                );
+                if teams_callbacks && is_teams_rejection(status) {
+                    return Err(EventsCallbackFailure {
+                        error: ExecutorError::Callback(format!(
+                            "Teams delivery callback was rejected: {failure}"
+                        )),
+                        rejected: true,
+                    });
+                }
+                last_failure = Some(failure);
             }
             Err(e) => {
                 tracing::warn!(attempt, error = %e, "Events callback error");
+                last_failure = Some(e.to_string());
             }
         }
 
         if attempt < config.callback_retries {
-            tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1))).await;
+            let delay = if teams_callbacks {
+                within_run_deadline(config, teams_retry_delay(attempt, delay_hint))?
+            } else {
+                Duration::from_millis(100 * (attempt as u64 + 1))
+            };
+            tokio::time::sleep(delay).await;
         }
     }
 
-    Err(ExecutorError::Callback(format!(
-        "Failed after {} retries",
-        config.callback_retries
-    )))
+    let message = if teams_callbacks {
+        format!(
+            "Teams delivery callback failed after {} retries: {}",
+            config.callback_retries,
+            last_failure.unwrap_or_else(|| "No acknowledgement".into())
+        )
+    } else {
+        format!("Failed after {} retries", config.callback_retries)
+    };
+    Err(ExecutorError::Callback(message).into())
 }
 
 async fn send_progress(
@@ -1765,6 +2003,244 @@ mod callback_event_identity_tests {
         let api = api_event_input(&second);
         assert_eq!(api.id.as_deref(), Some(second.id.as_str()));
         assert_eq!(api.sequence, Some(1));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn teams_delivery_budget_is_longer_and_never_outlives_the_run() {
+        let config = ExecutorConfig::default();
+        let mut output = event("run", 0);
+        output.event_type = EventType::Custom("interaction_request".into());
+        assert_eq!(
+            event_callback_timeout(&config, false, &[output.clone()]).unwrap(),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            event_callback_timeout(&config, true, &[output.clone()]).unwrap(),
+            TEAMS_DELIVERY_TIMEOUT
+        );
+        assert!(TEAMS_DELIVERY_TIMEOUT >= Duration::from_secs(120 + 10));
+        assert_eq!(
+            event_callback_timeout(&config, true, &[event("run", 1)]).unwrap(),
+            Duration::from_secs(5)
+        );
+        let config = config.with_execution_deadline(
+            tokio::time::Instant::now() + Duration::from_secs(12),
+            flow_like_types::tokio_util::sync::CancellationToken::new(),
+        );
+        assert_eq!(
+            event_callback_timeout(&config, true, &[output.clone()]).unwrap(),
+            Duration::from_secs(12)
+        );
+        tokio::time::advance(Duration::from_secs(12)).await;
+        assert!(matches!(
+            event_callback_timeout(&config, true, &[output]),
+            Err(ExecutorError::Timeout)
+        ));
+    }
+
+    async fn callback_server(
+        status: axum::http::StatusCode,
+    ) -> (
+        ExecutorClaims,
+        Arc<tokio::sync::Mutex<Vec<serde_json::Value>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let received = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let captured = received.clone();
+        let router = axum::Router::new().route(
+            "/api/v1/execution/events",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let captured = captured.clone();
+                async move {
+                    captured.lock().await.push(body);
+                    (status, [(axum::http::header::RETRY_AFTER, "0")])
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let claims = serde_json::from_value(serde_json::json!({
+            "sub":"user", "run_id":"run", "app_id":"app", "board_id":"board",
+            "callback_url":format!("http://{address}"), "typ":"executor", "iss":"flow-like",
+            "aud":"flow-like-executor", "iat":0, "nbf":0, "exp":0, "jti":"test"
+        }))
+        .unwrap();
+        (claims, received, task)
+    }
+
+    #[tokio::test]
+    async fn teams_callbacks_send_each_outbound_event_in_its_own_batch() {
+        let (claims, received, server) = callback_server(axum::http::StatusCode::OK).await;
+        let (tx, rx) = mpsc::unbounded_channel();
+        for kind in ["log", "interaction_request", "log", "chat_out"] {
+            let mut output = event("run", 0);
+            output.event_type = string_to_event_type(kind);
+            tx.send(output).unwrap();
+        }
+        drop(tx);
+        let mut config = ExecutorConfig::default();
+        config.callback_retries = 0;
+        run_callback_batcher(
+            rx,
+            claims,
+            "token".into(),
+            config,
+            None,
+            true,
+            RunChannel::default(),
+        )
+        .await
+        .unwrap();
+        let batches = received.lock().await;
+        let mut outbound_count = 0;
+        for batch in batches.iter() {
+            let outbound = batch["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event["event_type"].as_str(),
+                        Some("interaction_request" | "chat_out")
+                    )
+                })
+                .count();
+            assert!(outbound <= 1);
+            outbound_count += outbound;
+        }
+        assert_eq!(outbound_count, 2);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn teams_delivery_errors_are_fatal_without_a_queue_lease() {
+        let (claims, _, server) = callback_server(axum::http::StatusCode::BAD_GATEWAY).await;
+        for teams_callbacks in [false, true] {
+            let (tx, rx) = mpsc::unbounded_channel();
+            let mut output = event("run", 0);
+            output.event_type = EventType::Custom("interaction_request".into());
+            tx.send(output).unwrap();
+            drop(tx);
+            let mut config = ExecutorConfig::default();
+            config.callback_retries = 0;
+            let result = run_callback_batcher(
+                rx,
+                claims.clone(),
+                "token".into(),
+                config,
+                None,
+                teams_callbacks,
+                RunChannel::default(),
+            )
+            .await;
+            assert_eq!(result.is_err(), teams_callbacks);
+        }
+        server.abort();
+    }
+
+    #[test]
+    fn teams_deterministic_refusals_are_not_retried() {
+        for status in [400, 401, 403, 404, 413, 422] {
+            assert!(is_teams_rejection(
+                reqwest::StatusCode::from_u16(status).unwrap()
+            ));
+        }
+        for status in [408, 409, 429, 500, 502, 503, 504] {
+            assert!(!is_teams_rejection(
+                reqwest::StatusCode::from_u16(status).unwrap()
+            ));
+        }
+        assert_eq!(teams_retry_delay(0, None), Duration::from_secs(2));
+        assert_eq!(teams_retry_delay(2, None), Duration::from_secs(8));
+        assert_eq!(teams_retry_delay(9, None), TEAMS_RETRY_DELAY_CAP);
+        assert_eq!(
+            teams_retry_delay(0, Some(Duration::from_secs(3600))),
+            TEAMS_RETRY_DELAY_CAP
+        );
+    }
+
+    async fn run_teams_batch(
+        status: axum::http::StatusCode,
+        output: ExecutionEvent,
+        channel: RunChannel,
+    ) -> (Result<(), ExecutorError>, usize) {
+        let (claims, received, server) = callback_server(status).await;
+        let (tx, rx) = mpsc::unbounded_channel();
+        tx.send(output).unwrap();
+        drop(tx);
+        let mut config = ExecutorConfig::default();
+        config.callback_retries = 2;
+        let result =
+            run_callback_batcher(rx, claims, "token".into(), config, None, true, channel).await;
+        let attempts = received.lock().await.len();
+        server.abort();
+        (result, attempts)
+    }
+
+    #[tokio::test]
+    async fn teams_callbacks_retry_in_flight_deliveries_and_fail_when_they_persist() {
+        let mut output = event("run", 0);
+        output.event_type = EventType::Custom("chat_out".into());
+        let (result, attempts) = run_teams_batch(
+            axum::http::StatusCode::CONFLICT,
+            output,
+            RunChannel::default(),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(attempts, 3);
+    }
+
+    #[tokio::test]
+    async fn refused_chat_output_fails_the_run_without_retrying() {
+        let mut output = event("run", 0);
+        output.event_type = EventType::Custom("chat_out".into());
+        let (result, attempts) = run_teams_batch(
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            output,
+            RunChannel::default(),
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("rejected"));
+        assert_eq!(attempts, 1);
+    }
+
+    #[tokio::test]
+    async fn refused_interaction_ends_that_interaction_and_keeps_the_run() {
+        let channel = flow_like_types::channel::InProcessChannel::register(
+            "teams-refused-interaction",
+            Duration::from_secs(60),
+        )
+        .await;
+        let ticket = channel.open(Duration::from_secs(60)).await.unwrap();
+        let waiter = {
+            let (channel, ticket) = (channel.clone(), ticket.clone());
+            tokio::spawn(async move { channel.wait(&ticket, None).await.unwrap() })
+        };
+        let run_channel = RunChannel::default();
+        let _ = run_channel.set(channel.clone());
+        let mut output = event("run", 0);
+        output.event_type = EventType::Custom("interaction_request".into());
+        output.payload =
+            serde_json::json!({"id": ticket.request_id, "expires_at": ticket.expires_at});
+        let (result, attempts) = run_teams_batch(
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            output,
+            run_channel,
+        )
+        .await;
+        result.unwrap();
+        assert_eq!(attempts, 1);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), waiter)
+                .await
+                .unwrap()
+                .unwrap(),
+            flow_like_types::channel::ChannelOutcome::Closed
+        );
     }
 }
 

@@ -1,4 +1,6 @@
 FROM rust:1.97.1-bookworm AS seaorm_builder
+ENV RUSTUP_TOOLCHAIN=beta-2026-09-27
+RUN rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
 RUN cargo install sea-orm-cli@2.0.2 --locked
 
 FROM oven/bun:latest

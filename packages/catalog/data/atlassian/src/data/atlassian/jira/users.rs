@@ -1,11 +1,12 @@
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 use super::JiraUser;
@@ -77,7 +78,7 @@ impl NodeLogic for GetCurrentUserNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let provider: AtlassianProvider = context.evaluate_pin("provider").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.jira_api_url("/myself");
 
         context.log_message(&format!("Jira API URL: {}", url), LogLevel::Debug);
@@ -87,7 +88,7 @@ impl NodeLogic for GetCurrentUserNode {
         );
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;
@@ -286,14 +287,14 @@ impl NodeLogic for GetChangelogNode {
             return Err(flow_like_types::anyhow!("Issue key is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.jira_api_url(&format!(
             "/issue/{}/changelog?maxResults={}",
             issue_key, max_results
         ));
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;
@@ -413,14 +414,14 @@ impl NodeLogic for BatchGetChangelogsNode {
             return Err(flow_like_types::anyhow!("Issue keys are required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let mut results = Vec::with_capacity(keys.len());
 
         for key in keys {
             let url = provider.jira_api_url(&format!("/issue/{}/changelog?maxResults=100", key));
 
             let response = client
-                .get(&url)
+                .get(&url)?
                 .header("Authorization", provider.auth_header())
                 .send()
                 .await;

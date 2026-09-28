@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1.4
 FROM rust:1.97.1-bookworm AS builder
+COPY rust-toolchain.toml /rust-toolchain.toml
+RUN rustup toolchain install
 RUN apt-get update && apt-get install -y pkg-config libssl-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
@@ -11,8 +13,8 @@ RUN cp "$FLOW_LIKE_CONFIG" /app/flow-like.config.json
 ARG AUDIT_FEATURES=aws,azure,gcp
 ARG CARGO_BUILD_JOBS=2
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
-RUN --mount=type=cache,target=/cargo-home,id=cargo-home,sharing=shared \
-    --mount=type=cache,target=/app/target,id=cargo-target-audit-worker,sharing=locked \
+RUN --mount=type=cache,target=/cargo-home,id=cargo-home-rust-beta-2026-09-27,sharing=shared \
+    --mount=type=cache,target=/app/target,id=cargo-target-audit-worker-rust-beta-2026-09-27,sharing=locked \
     CARGO_HOME=/cargo-home cargo build --locked --release --package flow-like-audit-worker --features "$AUDIT_FEATURES" && \
     cp /app/target/release/flow-like-audit-worker /tmp/flow-like-audit-worker
 

@@ -8,6 +8,27 @@ import type { IEventState } from "@flow-like/flow-like-ui/state/backend-state/ev
 import type { IPage } from "@flow-like/flow-like-ui/state/backend-state/page-state";
 import { type ServiceRequest, consumeServiceStream } from "./transport";
 
+/** Mirrors `BODY_LIMIT` in apps/standalone/src/hosting.rs. */
+export const MAX_REQUEST_BYTES = 10 * 1024 * 1024;
+/**
+ * A non-image chat attachment travels base64-encoded (4/3 of its size) in the message and
+ * again in its attachment list, so two copies plus the rest of the message must fit.
+ */
+export const MAX_ATTACHMENT_BYTES = Math.floor(
+	((MAX_REQUEST_BYTES - 512 * 1024) * 3) / 8,
+);
+const megabytes = (bytes: number) =>
+	`${Math.floor((bytes / (1024 * 1024)) * 10) / 10} MB`;
+
+export function serializeServiceRequest(body: unknown): string {
+	const serialized = JSON.stringify(body);
+	if (new TextEncoder().encode(serialized).length > MAX_REQUEST_BYTES)
+		throw new Error(
+			`This request exceeds the service's ${megabytes(MAX_REQUEST_BYTES)} limit. Remove an attachment or start a new chat, then try again.`,
+		);
+	return serialized;
+}
+
 export interface Inventory {
 	project_id: string;
 	events: IEvent[];
@@ -148,6 +169,7 @@ export function createServiceBackend(
 				path = `/chat/${encodeURIComponent(id)}`;
 				body = payload.payload;
 			}
+			const serialized = serializeServiceRequest(body);
 			const controller = new AbortController();
 			const abort = () => controller.abort();
 			signal.addEventListener("abort", abort, { once: true });
@@ -157,7 +179,7 @@ export function createServiceBackend(
 				beforeDispatch?.();
 				const response = await request(path, {
 					method: "POST",
-					body: JSON.stringify(body),
+					body: serialized,
 					signal: controller.signal,
 				});
 				if (!response.body)
@@ -203,8 +225,10 @@ export function createServiceBackend(
 		}),
 		helperState: restricted<IBackendState["helperState"]>({
 			fileToUrl: async (file: File) => {
-				if (file.size > 5 * 1024 * 1024)
-					throw new Error("Attachments must be smaller than 5 MB.");
+				if (file.size > MAX_ATTACHMENT_BYTES)
+					throw new Error(
+						`Attachments must be smaller than ${megabytes(MAX_ATTACHMENT_BYTES)}.`,
+					);
 				return new Promise<string>((resolve, reject) => {
 					const reader = new FileReader();
 					reader.onload = () => resolve(String(reader.result));

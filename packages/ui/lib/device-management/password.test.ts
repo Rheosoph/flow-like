@@ -1,10 +1,12 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
+import { base64url } from "./crypto";
 import { changeDevicePassword } from "./password";
 import {
 	type LocalDeviceVault,
 	addDeviceVault,
 	controllerBackup,
 	encryptedControllerBackup,
+	pinDeviceIdentity,
 	readDeviceVault,
 	replaceRewrappedVault,
 } from "./storage";
@@ -60,9 +62,23 @@ Object.defineProperty(globalThis, "indexedDB", {
 										return result;
 									},
 									add(value: unknown, key: string) {
-										if (staged.has(key)) throw new Error("duplicate");
+										const request = {
+											error: null as { name: string } | null,
+											onerror: undefined as
+												| ((event: { preventDefault(): void }) => void)
+												| undefined,
+										};
+										if (staged.has(key)) {
+											request.error = { name: "ConstraintError" };
+											queueMicrotask(() => {
+												request.onerror?.({ preventDefault() {} });
+												tx.abort();
+											});
+											return request;
+										}
 										staged.set(key, structuredClone(value));
 										finish();
+										return request;
 									},
 									put(value: unknown, key: string) {
 										staged.set(key, structuredClone(value));
@@ -295,9 +311,33 @@ test("password workflow clears both buffers on commit failure and releases its l
 	).rejects.toThrow("another tab");
 });
 
+function sharedFixture(): LocalDeviceVault {
+	const key = (fill: number) => ({
+		kty: "OKP" as const,
+		crv: "Ed25519" as const,
+		x: base64url(new Uint8Array(32).fill(fill)),
+	});
+	const base = fixture();
+	return {
+		...base,
+		invitationVault: undefined,
+		ownerControllerKey: key(2),
+		controllerPublic: { ...base.controllerPublic, controller_key: key(1) },
+		manifestJws: `header.${base64url(
+			new TextEncoder().encode(
+				JSON.stringify({
+					device_id: "device",
+					api_base_url: "https://hub.test/api/v1",
+					owner_id: "device-owner",
+					controller_key: key(2),
+				}),
+			),
+		)}.signature`,
+	};
+}
+
 test("shared-user backup contains only encrypted keys and restores as a fresh endpoint", async () => {
-	const previous = fixture();
-	previous.invitationVault = undefined;
+	const previous = sharedFixture();
 	await addDeviceVault(scope, previous);
 	const next = replacement(previous);
 	await replaceRewrappedVault(scope, previous, next);
@@ -390,4 +430,40 @@ test("crypto rejection, identity substitution and cancellation never replace sav
 	).rejects.toThrow("Cancelled");
 	expect(await readDeviceVault(scope, "device")).toEqual(previous);
 	expect(lockHeld).toBe(false);
+});
+
+test("a second vault for the same device reports the existing keys instead of a storage failure", async () => {
+	const previous = fixture();
+	await addDeviceVault(scope, previous);
+	await expect(addDeviceVault(scope, replacement(previous))).rejects.toThrow(
+		"already holds encrypted keys for device device",
+	);
+	expect(await readDeviceVault(scope, "device")).toEqual(previous);
+});
+
+test("the first verified device identity is pinned per account and enrollment", async () => {
+	const receipt = (management: number, enrollment = "enrollment") =>
+		({
+			device_id: "device",
+			enrollment_id: enrollment,
+			identity: {
+				auth_key: { kty: "OKP", crv: "Ed25519", x: "auth" },
+				telemetry_key: { kty: "OKP", crv: "Ed25519", x: "telemetry" },
+				management_key: Array(32).fill(management),
+			},
+		}) as unknown as Parameters<typeof pinDeviceIdentity>[2];
+	await pinDeviceIdentity(scope, "device", receipt(1));
+	await pinDeviceIdentity(scope, "device", receipt(1));
+	await expect(pinDeviceIdentity(scope, "device", receipt(2))).rejects.toThrow(
+		"first verified",
+	);
+	await pinDeviceIdentity(
+		{ ...scope, profileId: "other" },
+		"device",
+		receipt(2),
+	);
+	await pinDeviceIdentity(scope, "device", receipt(2, "re-enrollment"));
+	await expect(pinDeviceIdentity(scope, "other", receipt(1))).rejects.toThrow(
+		"cannot be pinned",
+	);
 });

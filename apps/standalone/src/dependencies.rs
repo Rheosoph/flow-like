@@ -162,7 +162,7 @@ fn verify_pack_metadata(pack: &PackagedBit, expected: &str) -> Result<()> {
     Ok(())
 }
 
-fn verify_asset(mut file: File, asset: &ProjectArtifactFile) -> Result<()> {
+fn verify_asset(file: &mut File, asset: &ProjectArtifactFile) -> Result<()> {
     ensure!(
         file.metadata()?.len() == asset.size,
         "Bit artifact size differs"
@@ -190,12 +190,13 @@ fn prepare_bit_assets(
     root: &Path,
     assets: &[ProjectArtifactFile],
     destination: Option<&Path>,
+    trust_markers: bool,
 ) -> Result<()> {
     for asset in assets {
         let parts = asset.path.split('/').collect::<Vec<_>>();
-        let source = open_bounded(root, &parts, asset.size)?;
+        let mut source = open_bounded(root, &parts, asset.size)?;
         let Some(destination) = destination else {
-            verify_asset(source, asset)?;
+            verify_asset(&mut source, asset)?;
             continue;
         };
         ensure!(
@@ -203,19 +204,71 @@ fn prepare_bit_assets(
             "Invalid selected Bit asset prefix"
         );
         if root.join("bits").canonicalize()? == destination.canonicalize()? {
-            verify_asset(source, asset)?;
+            verify_asset(&mut source, asset)?;
             continue;
         }
-        materialize_bit_asset(source, destination, &parts[1..], asset)?;
+        materialize_bit_asset(source, destination, &parts[1..], asset, trust_markers)?;
     }
     Ok(())
 }
 
+/// Binds a verified digest to the exact published inode. Any write, replacement
+/// or rename changes the inode or its ctime, which invalidates the marker.
+#[cfg(unix)]
+fn verification_stamp(metadata: &std::fs::Metadata, asset: &ProjectArtifactFile) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    Some(format!(
+        "{} {} {} {} {} {} {} {}",
+        asset.sha256,
+        metadata.dev(),
+        metadata.ino(),
+        metadata.len(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec()
+    ))
+}
+
+#[cfg(not(unix))]
+fn verification_stamp(_: &std::fs::Metadata, _: &ProjectArtifactFile) -> Option<String> {
+    None
+}
+
+fn is_verified(marker: Option<&Path>, stamp: Option<&str>) -> bool {
+    marker.zip(stamp).is_some_and(|(marker, stamp)| {
+        crate::vault::read_private(marker).is_ok_and(|bytes| bytes.as_slice() == stamp.as_bytes())
+    })
+}
+
+/// The marker only saves later replicas a full hash, so failing to write it,
+/// for example on a full placement quota, never fails a verified start.
+fn record_verified(controls: &Path, marker: Option<&Path>, stamp: Option<&str>) {
+    let Some((marker, stamp)) = marker.zip(stamp) else {
+        return;
+    };
+    let temporary = controls.join(format!(".{}.verified.tmp", uuid::Uuid::new_v4()));
+    let result = crate::vault::write_new_private(&temporary, stamp.as_bytes())
+        .and_then(|()| Ok(std::fs::rename(&temporary, marker)?));
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&temporary);
+        tracing::warn!(
+            marker = %marker.display(),
+            error = %format!("{error:#}"),
+            "Cannot record a verified Bit import; later starts will hash it again"
+        );
+    }
+}
+
+/// A sandboxed workload could replace a cached Bit and forge its marker, so its
+/// starts pass `trust_markers = false` and re-hash. Process-profile workloads
+/// run as the agent account, where a marker grants nothing they lack.
 fn materialize_bit_asset(
     mut source: File,
     destination: &Path,
     parts: &[&str],
     asset: &ProjectArtifactFile,
+    trust_markers: bool,
 ) -> Result<()> {
     use fs2::FileExt;
     #[cfg(unix)]
@@ -265,6 +318,7 @@ fn materialize_bit_asset(
         crate::runtime::private_runtime_directory(&target)?;
     }
     target.push(parts[parts.len() - 1]);
+    let marker = trust_markers.then(|| controls.join(format!("{key}.verified")));
     match std::fs::symlink_metadata(&target) {
         Ok(metadata) => {
             ensure!(
@@ -278,7 +332,23 @@ fn materialize_bit_asset(
                     && metadata.nlink() == 1,
                 "Cached Bit must be private with one link"
             );
-            return verify_asset(open_bounded(destination, parts, asset.size)?, asset);
+            let mut file = open_bounded(destination, parts, asset.size)?;
+            let stamp = verification_stamp(&file.metadata()?, asset);
+            if is_verified(marker.as_deref(), stamp.as_deref()) {
+                return Ok(());
+            }
+            // A published Bit is never rewritten in place, so replicas verify
+            // it concurrently instead of queueing full hashes behind the lock.
+            drop(lock);
+            verify_asset(&mut file, asset)?;
+            ensure!(
+                verification_stamp(&file.metadata()?, asset) == stamp
+                    && verification_stamp(&std::fs::symlink_metadata(&target)?, asset) == stamp,
+                "Cached Bit {} changed during verification",
+                asset.path
+            );
+            record_verified(&controls, marker.as_deref(), stamp.as_deref());
+            return Ok(());
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
         Err(error) => return Err(error.into()),
@@ -341,6 +411,11 @@ fn materialize_bit_asset(
     output.sync_all()?;
     std::fs::rename(&partial, &target)?;
     File::open(target.parent().context("Bit target has no parent")?)?.sync_all()?;
+    record_verified(
+        &controls,
+        marker.as_deref(),
+        verification_stamp(&std::fs::symlink_metadata(&target)?, asset).as_deref(),
+    );
     File::open(&controls)?.sync_all()?;
     Ok(())
 }
@@ -486,8 +561,9 @@ pub(crate) async fn hydrate_bits(
         let root = config.project_path.clone();
         let selected = assets.into_values().collect::<Vec<_>>();
         let target = destination.clone();
+        let trust_markers = !crate::isolation::sandboxed(config);
         tokio::task::spawn_blocking(move || {
-            prepare_bit_assets(&root, &selected, target.as_deref())
+            prepare_bit_assets(&root, &selected, target.as_deref(), trust_markers)
         })
         .await??;
     }
@@ -849,7 +925,7 @@ mod tests {
         ] {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o500))?;
         }
-        prepare_bit_assets(source.path(), &assets, Some(&destination))?;
+        prepare_bit_assets(source.path(), &assets, Some(&destination), true)?;
         assert!(!partial.exists());
         let target = destination.join("hash/nested/model");
         let before = std::fs::metadata(&target)?;
@@ -858,12 +934,31 @@ mod tests {
             std::fs::metadata(destination.join("hash/nested"))?.mode() & 0o777,
             0o700
         );
-        prepare_bit_assets(source.path(), &assets, Some(&destination))?;
+        prepare_bit_assets(source.path(), &assets, Some(&destination), true)?;
         assert_eq!(std::fs::metadata(&target)?.ino(), before.ino());
         assert_eq!(std::fs::read(&target)?, b"weights");
+        let marker = controls.join(format!(
+            "{}.verified",
+            artifact_sha256(assets[0].path.as_bytes())
+        ));
+        assert!(marker.is_file());
+        // An in-place change invalidates the marker and fails verification.
+        std::fs::write(&target, b"WEIGHTS")?;
+        assert!(prepare_bit_assets(source.path(), &assets, Some(&destination), true).is_err());
+        std::fs::write(&target, b"weights")?;
+        prepare_bit_assets(source.path(), &assets, Some(&destination), true)?;
+        // A workload that can write the store can also forge the marker, so a
+        // sandboxed start never trusts one.
+        std::fs::write(&target, b"WEIGHTS")?;
+        let forged = verification_stamp(&std::fs::metadata(&target)?, &assets[0]).unwrap();
+        std::fs::write(&marker, forged)?;
+        prepare_bit_assets(source.path(), &assets, Some(&destination), true)?;
+        assert!(prepare_bit_assets(source.path(), &assets, Some(&destination), false).is_err());
+        std::fs::write(&target, b"weights")?;
+        prepare_bit_assets(source.path(), &assets, Some(&destination), false)?;
         std::fs::remove_file(&target)?;
         std::os::unix::fs::symlink(source.path().join("bits/hash/nested/model"), &target)?;
-        assert!(prepare_bit_assets(source.path(), &assets, Some(&destination)).is_err());
+        assert!(prepare_bit_assets(source.path(), &assets, Some(&destination), true).is_err());
         for path in [
             source.path().join("bits/hash/nested"),
             source.path().join("bits/hash"),

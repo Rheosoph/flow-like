@@ -19,7 +19,6 @@ use crate::{
     state::AppState,
 };
 use axum::http::HeaderMap;
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use flow_like::hub::StandaloneConfig;
 use flow_like_device_protocol::*;
 use jwt::{Confirmation, EnrollmentClaims, SessionClaims};
@@ -81,6 +80,20 @@ fn bad_protocol(_: ProtocolError) -> ApiError {
 }
 fn bad_proof(_: impl std::fmt::Display) -> ApiError {
     ApiError::unauthorized("Device proof is invalid or expired")
+}
+
+pub(crate) const DEVICE_PROOF_INVALID: &str = "DEVICE_PROOF_INVALID";
+
+/// A registered device's proof failed verification or its time window, which a
+/// skewed clock also causes. Devices retry these; they are never a revocation,
+/// which keeps its own 401 or 403 without this code.
+pub(crate) fn device_proof_invalid(reason: impl std::fmt::Display) -> ApiError {
+    tracing::warn!(%reason, "Device proof rejected");
+    ApiError::coded(
+        axum::http::StatusCode::UNAUTHORIZED,
+        DEVICE_PROOF_INVALID,
+        "Device proof is invalid or outside its validity window; check that the device clock is synchronized",
+    )
 }
 
 pub(crate) fn api_base_url(state: &DeviceContext<'_>) -> Result<String, ApiError> {
@@ -222,6 +235,16 @@ async fn pending_enrollment(
     Ok((claims, stored))
 }
 
+/// The nonce is derived from its random challenge id, so a repeated request can
+/// be answered with the outstanding challenge instead of replacing it. Neither
+/// value is secret from the enrollment token holder, who still needs the
+/// bootstrap key to redeem.
+pub(crate) fn challenge_nonce(challenge_id: &str) -> String {
+    compact_digest(&format!("flow-like-enrollment-challenge:{challenge_id}"))
+}
+
+/// The enrollment token alone cannot displace a challenge a device is
+/// redeeming: every request before expiry receives the same one.
 pub(crate) async fn challenge(
     state: &DeviceContext<'_>,
     id: &str,
@@ -229,23 +252,20 @@ pub(crate) async fn challenge(
 ) -> Result<EnrollmentChallenge, ApiError> {
     let (claims, _) = pending_enrollment(state, id, &request.enrollment_token).await?;
     let now = chrono::Utc::now().timestamp();
-    let nonce = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
-    let response = EnrollmentChallenge {
-        challenge_id: uuid::Uuid::new_v4().to_string(),
-        nonce,
-        expires_at: (now + 60).min(claims.exp),
-    };
-    repository(state)
+    let (challenge_id, expires_at) = repository(state)
         .challenge(
             id,
             &claims.jti,
-            &response.challenge_id,
-            &compact_digest(&response.nonce),
-            response.expires_at,
+            &uuid::Uuid::new_v4().to_string(),
+            (now + 60).min(claims.exp),
             now,
         )
         .await?;
-    Ok(response)
+    Ok(EnrollmentChallenge {
+        nonce: challenge_nonce(&challenge_id),
+        challenge_id,
+        expires_at,
+    })
 }
 
 pub(crate) async fn redeem(
@@ -342,7 +362,7 @@ pub(crate) async fn registered_assertion(
         &endpoint(state, path)?,
         chrono::Utc::now().timestamp(),
     )
-    .map_err(bad_proof)?;
+    .map_err(device_proof_invalid)?;
     repository(state)
         .authorize_proof(
             id,
@@ -459,7 +479,7 @@ pub(crate) async fn device_principal(
 ) -> Result<DevicePrincipal, ApiError> {
     enabled(state)?;
     let (token, dpop) = proof_credentials(headers)?;
-    let claims = jwt::verify_session(token).map_err(bad_proof)?;
+    let claims = jwt::verify_session(token).map_err(device_proof_invalid)?;
     if claims.device_id != id {
         return Err(ApiError::FORBIDDEN);
     }
@@ -482,7 +502,7 @@ pub(crate) async fn device_principal(
             now,
         },
     )
-    .map_err(bad_proof)?;
+    .map_err(device_proof_invalid)?;
     let current = repository(state)
         .authorize_proof(
             id,
@@ -525,6 +545,27 @@ mod tests {
         );
         assert!(require_device_pat_permission(-1).is_err());
         assert!(require_device_pat_permission(PatPermission::All.bits() | (1 << 62)).is_err());
+    }
+
+    #[test]
+    fn device_proof_failures_are_coded_apart_from_denials() {
+        let failure = device_proof_invalid("proof issued in the future");
+        assert_eq!(failure.status(), axum::http::StatusCode::UNAUTHORIZED);
+        assert_eq!(failure.public_code(), DEVICE_PROOF_INVALID);
+        assert!(
+            !failure
+                .public_message()
+                .unwrap()
+                .contains("issued in the future")
+        );
+        assert_eq!(
+            repository::expired_authorization().public_code(),
+            DEVICE_PROOF_INVALID
+        );
+        assert_ne!(
+            ApiError::unauthorized("Device registration is no longer active").public_code(),
+            DEVICE_PROOF_INVALID
+        );
     }
 
     #[test]

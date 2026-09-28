@@ -202,7 +202,7 @@ impl SecretStore {
     }
 
     async fn resolve_with_fallback(&self, reference: &SecretRef) -> Result<SecretValue> {
-        let mut last_error = None;
+        let mut last_error: Option<SecretError> = None;
 
         for kind in &self.provider_order {
             let provider = self.provider_for(*kind)?;
@@ -218,7 +218,10 @@ impl SecretStore {
                             "secret provider failed after retries, falling through to next provider"
                         );
                     }
-                    last_error = Some(error);
+                    // A missing fallback must not hide an earlier access or transport failure.
+                    if last_error.as_ref().is_none_or(SecretError::is_not_found) {
+                        last_error = Some(error);
+                    }
                 }
             }
         }
@@ -275,6 +278,73 @@ mod tests {
         GcpSecretManagerProviderConfig, ProviderConfig, SecretStoreConfig,
     };
     use secrecy::ExposeSecret;
+
+    struct FixedProvider {
+        kind: SecretProviderKind,
+        result: Result<SecretValue>,
+    }
+
+    #[async_trait::async_trait]
+    impl SecretProvider for FixedProvider {
+        fn kind(&self) -> SecretProviderKind {
+            self.kind
+        }
+        async fn get(&self, _: &SecretRef) -> Result<SecretValue> {
+            self.result.clone()
+        }
+    }
+
+    fn fallback_store(first: Result<SecretValue>, second: Result<SecretValue>) -> SecretStore {
+        let store = SecretStore::new(
+            SecretStoreConfig::default()
+                .with_allow_env_override(false)
+                .with_provider(ProviderConfig::Env(EnvProviderConfig::default()))
+                .with_provider(ProviderConfig::File(crate::FileProviderConfig {
+                    root_path: std::path::PathBuf::from("unused"),
+                    trim_trailing_newline: true,
+                })),
+        )
+        .unwrap();
+        for (kind, result) in [
+            (SecretProviderKind::Env, first),
+            (SecretProviderKind::File, second),
+        ] {
+            assert!(
+                store.providers[&kind]
+                    .provider
+                    .set(Arc::new(FixedProvider { kind, result }))
+                    .is_ok()
+            );
+        }
+        store
+    }
+
+    #[tokio::test]
+    async fn missing_fallback_preserves_the_first_provider_failure() {
+        let denied = SecretError::provider_failure(SecretProviderKind::Env, "access denied");
+        let store = fallback_store(
+            Err(denied.clone()),
+            Err(SecretError::SecretNotFound(SecretProviderKind::File)),
+        );
+        let result = store.get_secret(&SecretRef::new("MAIL_CONFIG")).await;
+        assert!(matches!(result, Err(error) if error == denied));
+    }
+
+    #[tokio::test]
+    async fn successful_fallback_still_wins_after_a_provider_failure() {
+        let store = fallback_store(
+            Err(SecretError::provider_failure(
+                SecretProviderKind::Env,
+                "access denied",
+            )),
+            Ok(SecretValue::from_string("configured".into())),
+        );
+        let value = store
+            .get_secret_string(&SecretRef::new("MAIL_CONFIG"))
+            .await
+            .unwrap();
+        assert_eq!(value.expose_secret(), "configured");
+    }
 
     fn must_ok<T, E: std::fmt::Display>(result: std::result::Result<T, E>, context: &str) -> T {
         match result {

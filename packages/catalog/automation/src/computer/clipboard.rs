@@ -5,7 +5,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::NodeImage;
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::async_trait;
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
 
 /// Node to get text from the system clipboard
 #[crate::register_node]
@@ -89,12 +91,12 @@ impl NodeLogic for ClipboardGetTextNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         session.ensure_active(context).await?;
 
-        let result = std::thread::spawn(|| {
+        let result = tokio::task::spawn_blocking(|| {
             let mut clipboard = Clipboard::new()?;
             clipboard.get_text()
         })
-        .join()
-        .map_err(|_| flow_like_types::anyhow!("Clipboard thread panicked"))?;
+        .await
+        .map_err(|e| flow_like_types::anyhow!("Clipboard read task failed: {}", e))?;
 
         match result {
             Ok(text) => {
@@ -212,12 +214,12 @@ impl NodeLogic for ClipboardGetImageNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         session.ensure_active(context).await?;
 
-        let result = std::thread::spawn(|| {
+        let result = tokio::task::spawn_blocking(|| {
             let mut clipboard = Clipboard::new()?;
             clipboard.get_image()
         })
-        .join()
-        .map_err(|_| flow_like_types::anyhow!("Clipboard thread panicked"))?;
+        .await
+        .map_err(|e| flow_like_types::anyhow!("Clipboard read task failed: {}", e))?;
 
         context.set_pin_value("session_out", json!(session)).await?;
 

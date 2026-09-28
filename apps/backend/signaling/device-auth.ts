@@ -84,6 +84,8 @@ function rejectAmbiguousJson(segment: string): void {
 	}
 }
 
+export type DeviceTransportAdmission = DeviceAdmission & { tokenId: string };
+
 /** Transport admission conveys no authority to decrypt or execute management requests. */
 export async function createDeviceAuthenticator(config: RealtimeAuthConfig) {
 	const verificationKey = config.insecureLocalDev
@@ -92,7 +94,7 @@ export async function createDeviceAuthenticator(config: RealtimeAuthConfig) {
 	return async (
 		origin: string | null,
 		protocols: string | null,
-	): Promise<DeviceAdmission> => {
+	): Promise<DeviceTransportAdmission> => {
 		try {
 			// Device management never inherits the collaboration server's anonymous dev mode.
 			if (!verificationKey) throw new RealtimeAuthError();
@@ -149,13 +151,14 @@ export async function createDeviceAuthenticator(config: RealtimeAuthConfig) {
 				payload.exp * 1000 <= Date.now()
 			)
 				throw new RealtimeAuthError();
-			const admission: DeviceAdmission = {
+			const admission: DeviceTransportAdmission = {
 				deviceId: payload.device_id,
 				deviceAuthEpoch: payload.device_auth_epoch,
 				participantId: payload.participant_id,
 				role: payload.role as DeviceAdmission["role"],
 				subject: payload.sub,
 				expiresAtMs: payload.exp * 1000,
+				tokenId: payload.jti,
 			};
 			deviceInbox(admission);
 			if (

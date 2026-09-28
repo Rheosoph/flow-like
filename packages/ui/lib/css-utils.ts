@@ -109,13 +109,13 @@ function scopeSelectorForRule(
 	// Self-contained surfaces can use :root as an ergonomic alias for their
 	// own root without leaking variables into the rest of the application.
 	if (trimmed.startsWith(":root")) {
-		return options.scopeRoot ? trimmed.replace(/^:root/, scope) : trimmed;
+		return options.scopeRoot ? trimmed.replace(/^:root/, () => scope) : trimmed;
 	}
 
 	// Replace body/html with the scope selector itself (these are "root" selectors for the page)
 	// Also handle combinations like "body.dark" → "[scope].dark"
 	if (/^(body|html)($|[.#:\[])/.test(trimmed)) {
-		return trimmed.replace(/^(body|html)/, scope);
+		return trimmed.replace(/^(body|html)/, () => scope);
 	}
 
 	// For everything else, prefix with scope

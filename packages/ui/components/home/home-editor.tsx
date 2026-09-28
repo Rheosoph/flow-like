@@ -71,6 +71,7 @@ import {
 	type AssistantHomeStageResult,
 	useAssistantSurface,
 } from "../../state/assistant-surface";
+import { ScopedCustomCss } from "../scoped-custom-css";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -94,6 +95,7 @@ import {
 } from "../ui/dropdown-menu";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
+import { MonacoCodeEditor } from "../ui/monaco-code-editor";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../ui/sheet";
 import { Textarea } from "../ui/textarea";
 import {
@@ -106,8 +108,11 @@ import { HomeDataWidget } from "./data-widget";
 import { HomeDataWidgetSettings } from "./data-widget-settings";
 import {
 	HOME_ACCENTS as ACCENTS,
+	HOME_PLACEHOLDER_CLASS_LIST,
 	homeAppearanceStyle,
+	homeWidgetCssScope,
 	homeWidgetFrameClassName,
+	localizeHomeWidgetKeyframes,
 } from "./home-appearance";
 import {
 	type HomeDragPoint,
@@ -122,6 +127,7 @@ import {
 	MAX_HOME_LAYOUT_BYTES,
 	MAX_HOME_WIDGETS,
 	MAX_HOME_WIDGET_CLASS_NAME_BYTES,
+	MAX_HOME_WIDGET_CSS_BYTES,
 	homeLayoutByteLength,
 	homeWidgetAutoHeight,
 	homeWidgetHeight,
@@ -129,10 +135,12 @@ import {
 	minimumHomeWidgetRows,
 	moveHomeWidget,
 	normalizeHomeWidgetClassName,
+	normalizeHomeWidgetCss,
 	responsiveHomeColumns,
 } from "./home-layout";
 import {
 	homeLayoutFingerprint,
+	homeLayoutPersistenceError,
 	homeLayoutsEqual,
 	parseHomeLayoutJson,
 } from "./home-layout-json";
@@ -537,6 +545,13 @@ export function HomeEditor({
 			toast.error(
 				"This layout is too large. Shorten its content before saving.",
 			);
+			return;
+		}
+		const persistenceError = resetPending
+			? null
+			: homeLayoutPersistenceError(draft);
+		if (persistenceError) {
+			toast.error(persistenceError);
 			return;
 		}
 		setSaving(true);
@@ -1537,6 +1552,33 @@ const keepPreviewInWindow: Modifier = ({
 	};
 };
 
+function HomeWidgetStyles({ widgets }: { widgets: IHomeWidget[] }) {
+	return widgets.map(
+		(widget) =>
+			widget.appearance.css && (
+				<HomeWidgetStyle
+					key={widget.id}
+					id={widget.id}
+					css={widget.appearance.css}
+				/>
+			),
+	);
+}
+
+function HomeWidgetStyle({ id, css }: { id: string; css: string }) {
+	const localCss = useMemo(
+		() => localizeHomeWidgetKeyframes(css, id),
+		[css, id],
+	);
+	return (
+		<ScopedCustomCss
+			css={localCss}
+			scopeSelector={homeWidgetCssScope(id)}
+			options={{ scopeRoot: true }}
+		/>
+	);
+}
+
 function cloneWidgetPreview(element: HTMLElement) {
 	const box = element.getBoundingClientRect();
 	const snapshot = element.cloneNode(true) as HTMLElement;
@@ -1547,13 +1589,9 @@ function cloneWidgetPreview(element: HTMLElement) {
 		node.removeAttribute("id");
 	for (const node of snapshot.querySelectorAll("[data-home-drop-hint]"))
 		node.remove();
-	snapshot.classList.remove(
-		"border-dashed",
-		"border-primary/70",
-		"bg-primary/5",
-		"ring-1",
-		"ring-primary/25",
-	);
+	snapshot
+		.querySelector("[data-home-widget-style]")
+		?.classList.remove(...HOME_PLACEHOLDER_CLASS_LIST);
 	Object.assign(snapshot.style, {
 		width: `${box.width}px`,
 		height: `${box.height}px`,
@@ -1717,6 +1755,7 @@ function HomeCanvas({
 			data-home-canvas
 			data-grid-columns={columns}
 		>
+			<HomeWidgetStyles widgets={widgets} />
 			<SortableContext
 				items={widgets.map((widget) => widget.id)}
 				strategy={rectSortingStrategy}
@@ -1827,7 +1866,7 @@ function HomeWidgetFrame({
 		[setNodeRef],
 	);
 	// Only widgets with their own classes pay for the runtime Tailwind compiler.
-	const attachStyledFrame = useRuntimeTailwindRef(attachFrame);
+	const attachStyledSurface = useRuntimeTailwindRef();
 	const contentRef = useRef<HTMLDivElement>(null);
 	const [contentHeight, setContentHeight] = useState(120);
 	const [dataState, setDataState] = useState("");
@@ -1940,7 +1979,7 @@ function HomeWidgetFrame({
 	} as CSSProperties;
 	return (
 		<section
-			ref={widget.appearance.className ? attachStyledFrame : attachFrame}
+			ref={attachFrame}
 			style={style}
 			data-home-widget={widget.id}
 			data-widget-type={widget.type}
@@ -1949,13 +1988,7 @@ function HomeWidgetFrame({
 			data-home-placeholder={
 				placeholder ? (activeDrop ? "active" : "outside") : undefined
 			}
-			className={homeWidgetFrameClassName({
-				appearance: widget.appearance,
-				editing,
-				selected,
-				placeholder,
-				autoHeight,
-			})}
+			className="group/widget relative flex min-h-0 min-w-0 flex-col"
 		>
 			{editing && !placeholder && (
 				<div
@@ -2040,75 +2073,87 @@ function HomeWidgetFrame({
 				</div>
 			)}
 			<div
-				ref={contentRef}
-				className={cn(
-					"min-w-0",
-					autoHeight && "flex flex-1 flex-col",
-					(!autoHeight || embedHeight) && "flex h-full min-h-0 flex-col",
-				)}
-				style={{ height: embedHeight }}
+				ref={widget.appearance.className ? attachStyledSurface : undefined}
+				data-home-widget-style={widget.id}
+				className={homeWidgetFrameClassName({
+					appearance: widget.appearance,
+					editing,
+					selected,
+					placeholder,
+					autoHeight,
+				})}
 			>
-				{!ownHeader && (widget.title || widget.description) && (
-					<header className="shrink-0 px-5 pt-5 pb-3">
-						<h2 className="flex items-center gap-2 text-base font-semibold tracking-tight">
-							<HomeWidgetIcon
-								name={preset?.icon}
-								className="h-4 w-4 shrink-0 text-[var(--home-accent)]"
-							/>
-							{widget.title}
-						</h2>
-						{widget.description && (
-							<p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-								{widget.description}
-							</p>
-						)}
-					</header>
-				)}
 				<div
+					ref={contentRef}
 					className={cn(
-						"relative min-h-0 min-w-0",
+						"min-w-0",
 						autoHeight && "flex flex-1 flex-col",
-						(!autoHeight || embedHeight) && "flex-1 overflow-auto",
-						!ownHeader && "px-5 pb-5",
-						!ownHeader && !widget.title && !widget.description && "pt-5",
-						ownHeader && autoHeight && !embedHeight && "overflow-hidden",
+						(!autoHeight || embedHeight) && "flex h-full min-h-0 flex-col",
 					)}
+					style={{ height: embedHeight }}
 				>
-					<WidgetErrorBoundary
-						key={`${widget.id}:${widget.type}`}
-						resetKey={JSON.stringify(widget.config)}
-					>
-						<div
-							className={cn(
-								"min-h-0 min-w-0",
-								autoHeight && "flex flex-1 flex-col",
-								(!autoHeight || embedHeight) && "h-full",
-							)}
-							style={{ height: bodyHeight }}
-							inert={editing}
-						>
-							{widget.type === "data" ? (
-								<HomeDataWidget widget={widget} editing={editing} />
-							) : (
-								<HomeWidgetContent
-									widget={widget}
-									editing={editing}
-									onUpdate={onConfigChange}
+					{!ownHeader && (widget.title || widget.description) && (
+						<header className="shrink-0 px-5 pt-5 pb-3">
+							<h2 className="flex items-center gap-2 text-base font-semibold tracking-tight">
+								<HomeWidgetIcon
+									name={preset?.icon}
+									className="h-4 w-4 shrink-0 text-[var(--home-accent)]"
 								/>
+								{widget.title}
+							</h2>
+							{widget.description && (
+								<p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+									{widget.description}
+								</p>
 							)}
-						</div>
-					</WidgetErrorBoundary>
-					{editing && (
-						<button
-							type="button"
-							className="absolute inset-0 z-[1] cursor-grab active:cursor-grabbing"
-							{...listeners}
-							aria-label={`Select ${widget.title ?? "widget"}`}
-							onClick={onSelect}
-						/>
+						</header>
 					)}
+					<div
+						className={cn(
+							"relative min-h-0 min-w-0",
+							autoHeight && "flex flex-1 flex-col",
+							(!autoHeight || embedHeight) && "flex-1 overflow-auto",
+							!ownHeader && "px-5 pb-5",
+							!ownHeader && !widget.title && !widget.description && "pt-5",
+							ownHeader && autoHeight && !embedHeight && "overflow-hidden",
+						)}
+					>
+						<WidgetErrorBoundary
+							key={`${widget.id}:${widget.type}`}
+							resetKey={JSON.stringify(widget.config)}
+						>
+							<div
+								className={cn(
+									"min-h-0 min-w-0",
+									autoHeight && "flex flex-1 flex-col",
+									(!autoHeight || embedHeight) && "h-full",
+								)}
+								style={{ height: bodyHeight }}
+								inert={editing}
+							>
+								{widget.type === "data" ? (
+									<HomeDataWidget widget={widget} editing={editing} />
+								) : (
+									<HomeWidgetContent
+										widget={widget}
+										editing={editing}
+										onUpdate={onConfigChange}
+									/>
+								)}
+							</div>
+						</WidgetErrorBoundary>
+					</div>
 				</div>
 			</div>
+			{editing && (
+				<button
+					type="button"
+					className="absolute inset-0 z-[1] cursor-grab active:cursor-grabbing"
+					{...listeners}
+					aria-label={`Select ${widget.title ?? "widget"}`}
+					onClick={onSelect}
+				/>
+			)}
 			{editing && !placeholder && (
 				<button
 					type="button"
@@ -2583,11 +2628,20 @@ function WidgetInspector({
 					value={widget.appearance.className}
 					onChange={(className) =>
 						onChange({
-							appearance: {
-								variant: widget.appearance.variant,
-								accent: widget.appearance.accent,
-								...(className ? { className } : {}),
-							},
+							appearance: withAppearanceText(
+								widget.appearance,
+								"className",
+								className,
+							),
+						})
+					}
+				/>
+				<WidgetCssField
+					key={widget.id}
+					value={widget.appearance.css}
+					onChange={(css) =>
+						onChange({
+							appearance: withAppearanceText(widget.appearance, "css", css),
 						})
 					}
 				/>
@@ -2658,6 +2712,57 @@ function WidgetClassNameField({
 			<p className="text-[11px] leading-relaxed text-muted-foreground">
 				{t("homeWidgetClassesHint")}
 			</p>
+		</div>
+	);
+}
+
+function withAppearanceText(
+	appearance: IHomeWidget["appearance"],
+	field: "className" | "css",
+	value: string | undefined,
+): IHomeWidget["appearance"] {
+	const { [field]: _previous, ...rest } = appearance;
+	return value ? { ...rest, [field]: value } : rest;
+}
+
+function WidgetCssField({
+	value,
+	onChange,
+}: {
+	value?: string;
+	onChange: (css: string | undefined) => void;
+}) {
+	const { t } = useTranslation("flow");
+	const bytes = useMemo(
+		() => new TextEncoder().encode(value ?? "").byteLength,
+		[value],
+	);
+	return (
+		<div className="space-y-2">
+			<Label>{t("customCss")}</Label>
+			<MonacoCodeEditor
+				value={value ?? ""}
+				onChange={(source) => {
+					const next = normalizeHomeWidgetCss(source);
+					if (next !== value) onChange(next);
+				}}
+				language="css"
+				height="150px"
+				autoFocus={false}
+				ariaLabel={t("customCss")}
+				consumeMouseWheel={false}
+			/>
+			<p className="text-[11px] leading-relaxed text-muted-foreground">
+				{t("homeWidgetCssHint")}
+			</p>
+			{bytes > MAX_HOME_WIDGET_CSS_BYTES && (
+				<p className="text-[11px] text-destructive">
+					{t("homeWidgetCssTooLarge", {
+						bytes,
+						max: MAX_HOME_WIDGET_CSS_BYTES,
+					})}
+				</p>
+			)}
 		</div>
 	);
 }

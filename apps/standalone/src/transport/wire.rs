@@ -57,6 +57,10 @@ pub(super) enum NoiseEnvelope {
         session_id: String,
         data: String,
     },
+    /// Releases a session's slot. Only the participant that opened the session may send it.
+    Close {
+        session_id: String,
+    },
 }
 
 impl NoiseEnvelope {
@@ -64,7 +68,8 @@ impl NoiseEnvelope {
         match self {
             Self::Hello { session_id, .. }
             | Self::Handshake { session_id, .. }
-            | Self::Message { session_id, .. } => session_id,
+            | Self::Message { session_id, .. }
+            | Self::Close { session_id } => session_id,
         }
     }
     pub(super) fn parse(bytes: &[u8]) -> Result<Self> {
@@ -208,9 +213,15 @@ mod tests {
             r#"{"session_id":"s","session_id":"t","kind":"message","data":"YQ"}"#,
             r#"{"session_id":"s","kind":"message","grant_id":"owner","data":"YQ"}"#,
             r#"{"session_id":"../s","kind":"message","data":"YQ"}"#,
+            r#"{"session_id":"s","kind":"close","data":"YQ"}"#,
+            r#"{"session_id":"../s","kind":"close"}"#,
         ] {
             assert!(NoiseEnvelope::parse(value.as_bytes()).is_err());
         }
+        assert!(matches!(
+            NoiseEnvelope::parse(br#"{"kind":"close","session_id":"s"}"#),
+            Ok(NoiseEnvelope::Close { session_id }) if session_id == "s"
+        ));
     }
 
     #[test]

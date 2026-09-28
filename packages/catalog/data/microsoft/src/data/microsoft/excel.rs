@@ -4,6 +4,7 @@ use super::{
     },
     provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
 };
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -13,7 +14,6 @@ use flow_like::flow::{
 use flow_like_types::{
     JsonSchema, Value, async_trait,
     json::{self, json},
-    reqwest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -91,7 +91,7 @@ impl NodeLogic for ListExcelWorksheetsNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let file_path: String = context.evaluate_pin("file_path").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(
             &client,
             &provider,
@@ -199,7 +199,7 @@ impl NodeLogic for ReadExcelRangeNode {
         let worksheet: String = context.evaluate_pin("worksheet").await?;
         let range: String = context.evaluate_pin("range").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.api_url(&workbook_api_path(
             &file_path,
             &format!(
@@ -302,7 +302,7 @@ impl NodeLogic for WriteExcelRangeNode {
 
         let body = json!({ "values": values });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.api_url(&workbook_api_path(
             &file_path,
             &format!(
@@ -312,7 +312,7 @@ impl NodeLogic for WriteExcelRangeNode {
             ),
         ));
         let response = client
-            .patch(url)
+            .patch(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -415,7 +415,7 @@ impl NodeLogic for GetExcelUsedRangeNode {
         let file_path: String = context.evaluate_pin("file_path").await?;
         let worksheet: String = context.evaluate_pin("worksheet").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.api_url(&workbook_api_path(
             &file_path,
             &format!("worksheets/{}/usedRange", urlencoding::encode(&worksheet)),
@@ -509,7 +509,7 @@ impl NodeLogic for GetExcelTableNode {
         let file_path: String = context.evaluate_pin("file_path").await?;
         let table_name: String = context.evaluate_pin("table_name").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let headers_url = provider.api_url(&workbook_api_path(
             &file_path,
@@ -650,13 +650,13 @@ impl NodeLogic for AddExcelTableRowNode {
 
         let body = json!({ "values": [values] });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.api_url(&workbook_api_path(
             &file_path,
             &format!("tables/{}/rows/add", urlencoding::encode(&table_name)),
         ));
         let response = client
-            .post(url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)

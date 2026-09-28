@@ -3,13 +3,15 @@ pub mod utils;
 
 pub use stablediffusion::{StableDiffusionVideoOptions, StableDiffusionVideoOutputFormat};
 
-use std::{collections::HashMap, path::Path, sync::OnceLock, time::Duration};
+use std::{collections::HashMap, path::Path, time::Duration};
 
 use flow_like::{
     bit::{Bit, BitTypes, LLMParameters, VLMParameters},
     flow::{
         board::Board,
-        execution::{LogLevel, context::ExecutionContext},
+        execution::{
+            ExecutionEnvironment, LogLevel, context::ExecutionContext, egress::GuardedHttpClient,
+        },
         node::{Node, NodeLogic, NodeScores},
         pin::{PinOptions, ValueType},
         variable::VariableType,
@@ -402,11 +404,6 @@ struct MultipartFile {
     bytes: Vec<u8>,
 }
 
-fn shared_http_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(reqwest::Client::new)
-}
-
 fn optional_clean(value: String) -> Option<String> {
     let value = value.trim().to_string();
     if value.is_empty() || value.eq_ignore_ascii_case("auto") {
@@ -726,7 +723,7 @@ fn parse_data_url(url: &str) -> Option<(Vec<u8>, Option<String>)> {
 }
 
 async fn generated_video_from_url_or_data(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     url: &str,
     metadata: Value,
 ) -> flow_like_types::Result<GeneratedVideo> {
@@ -738,7 +735,7 @@ async fn generated_video_from_url_or_data(
         });
     }
 
-    let response = client.get(url).send().await?;
+    let response = client.get(url)?.send().await?;
     let (bytes, mime_type) = read_binary_response(response, "Video provider").await?;
     Ok(GeneratedVideo {
         bytes,
@@ -783,7 +780,7 @@ fn collect_video_urls(value: &Value, urls: &mut Vec<String>) {
 }
 
 async fn videos_from_response_urls(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     value: &Value,
     provider_label: &str,
 ) -> flow_like_types::Result<Vec<GeneratedVideo>> {
@@ -884,7 +881,7 @@ async fn google_authorization_header(provider: &ModelProvider) -> flow_like_type
 }
 
 async fn generate_openai_sora(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &VideoGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedVideo>> {
@@ -923,7 +920,7 @@ async fn generate_openai_sora(
     });
     let form = multipart_body(fields, file)?;
     let create = client
-        .post(format!("{}/videos", endpoint.trim_end_matches('/')))
+        .post(&format!("{}/videos", endpoint.trim_end_matches('/')))?
         .bearer_auth(api_key.clone())
         .multipart(form)
         .send()
@@ -947,11 +944,11 @@ async fn generate_openai_sora(
         match status {
             "completed" => {
                 let response = client
-                    .get(format!(
+                    .get(&format!(
                         "{}/videos/{}/content",
                         endpoint.trim_end_matches('/'),
                         video_id
-                    ))
+                    ))?
                     .bearer_auth(api_key)
                     .send()
                     .await?;
@@ -968,11 +965,11 @@ async fn generate_openai_sora(
             _ => {
                 tokio::time::sleep(Duration::from_secs(req.poll_interval_seconds.max(1))).await;
                 let response = client
-                    .get(format!(
+                    .get(&format!(
                         "{}/videos/{}",
                         endpoint.trim_end_matches('/'),
                         video_id
-                    ))
+                    ))?
                     .bearer_auth(api_key.clone())
                     .send()
                     .await?;
@@ -1002,7 +999,7 @@ fn runway_ratio(req: &VideoGenerationRequest) -> Option<String> {
 }
 
 async fn generate_runway(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &VideoGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedVideo>> {
@@ -1038,7 +1035,7 @@ async fn generate_runway(
     merge_options(&mut body, &req.provider_options);
 
     let response = client
-        .post(format!("{}/{}", endpoint.trim_end_matches('/'), path))
+        .post(&format!("{}/{}", endpoint.trim_end_matches('/'), path))?
         .bearer_auth(api_key.clone())
         .header("X-Runway-Version", version.clone())
         .header("Content-Type", "application/json")
@@ -1069,11 +1066,11 @@ async fn generate_runway(
             _ => {
                 tokio::time::sleep(Duration::from_secs(req.poll_interval_seconds.max(1))).await;
                 let response = client
-                    .get(format!(
+                    .get(&format!(
                         "{}/tasks/{}",
                         endpoint.trim_end_matches('/'),
                         task_id
-                    ))
+                    ))?
                     .bearer_auth(api_key.clone())
                     .header("X-Runway-Version", version.clone())
                     .send()
@@ -1091,7 +1088,7 @@ fn fal_duration(duration: Option<u32>) -> Option<String> {
 }
 
 async fn generate_fal(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &VideoGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedVideo>> {
@@ -1123,7 +1120,7 @@ async fn generate_fal(
     merge_options(&mut body, &req.provider_options);
 
     let response = client
-        .post(format!("{}/{}", endpoint.trim_end_matches('/'), model_id))
+        .post(&format!("{}/{}", endpoint.trim_end_matches('/'), model_id))?
         .header("Authorization", format!("Key {api_key}"))
         .header("Content-Type", "application/json")
         .json(&Value::Object(body))
@@ -1166,7 +1163,7 @@ async fn generate_fal(
         .max(1);
     for _ in 0..max_iterations {
         let response = client
-            .get(&status_url)
+            .get(&status_url)?
             .header("Authorization", format!("Key {api_key}"))
             .send()
             .await?;
@@ -1178,7 +1175,7 @@ async fn generate_fal(
         match status {
             "COMPLETED" => {
                 let response = client
-                    .get(&response_url)
+                    .get(&response_url)?
                     .header("Authorization", format!("Key {api_key}"))
                     .send()
                     .await?;
@@ -1199,7 +1196,7 @@ async fn generate_fal(
 }
 
 async fn generate_replicate(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &VideoGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedVideo>> {
@@ -1254,7 +1251,7 @@ async fn generate_replicate(
     };
 
     let response = client
-        .post(url)
+        .post(&url)?
         .bearer_auth(api_key.clone())
         .header("Content-Type", "application/json")
         .json(&Value::Object(body))
@@ -1293,7 +1290,7 @@ async fn generate_replicate(
             _ => {
                 tokio::time::sleep(Duration::from_secs(req.poll_interval_seconds.max(1))).await;
                 let response = client
-                    .get(&get_url)
+                    .get(&get_url)?
                     .bearer_auth(api_key.clone())
                     .send()
                     .await?;
@@ -1318,7 +1315,7 @@ fn vertex_media_object(input: &MediaInput) -> Value {
 }
 
 async fn generate_vertex_veo(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &ModelProvider,
     req: &VideoGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedVideo>> {
@@ -1367,7 +1364,7 @@ async fn generate_vertex_veo(
         model_id
     );
     let response = client
-        .post(format!("{model_path}:predictLongRunning"))
+        .post(&format!("{model_path}:predictLongRunning"))?
         .header(AUTHORIZATION.as_str(), authorization.clone())
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -1426,7 +1423,7 @@ async fn generate_vertex_veo(
 
         tokio::time::sleep(Duration::from_secs(req.poll_interval_seconds.max(1))).await;
         let response = client
-            .post(format!("{model_path}:fetchPredictOperation"))
+            .post(&format!("{model_path}:fetchPredictOperation"))?
             .header(AUTHORIZATION.as_str(), authorization.clone())
             .header("Content-Type", "application/json")
             .json(&json!({
@@ -1441,10 +1438,11 @@ async fn generate_vertex_veo(
 }
 
 async fn generate_video_with_provider(
+    environment: ExecutionEnvironment,
     provider: &ModelProvider,
     req: &VideoGenerationRequest,
 ) -> flow_like_types::Result<Vec<GeneratedVideo>> {
-    let client = shared_http_client();
+    let client = &GuardedHttpClient::new(environment)?;
     match provider.provider_name.as_str() {
         PROVIDER_OPENAI => generate_openai_sora(client, provider, req).await,
         PROVIDER_VERTEX => generate_vertex_veo(client, provider, req).await,
@@ -2421,7 +2419,9 @@ impl NodeLogic for GenerateVideoNode {
         )
         .await?;
         crate::ensure_vertex_credentials_explicit(context, &provider)?;
-        let videos = generate_video_with_provider(&provider, &request).await?;
+        let videos =
+            generate_video_with_provider(context.execution_environment(), &provider, &request)
+                .await?;
         let total = videos.len();
         let mut paths = Vec::with_capacity(total);
         let mut provider_metadata = Vec::with_capacity(total);

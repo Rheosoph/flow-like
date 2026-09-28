@@ -313,9 +313,9 @@ async fn attempting_file_put_reconciles_when_bytes_match_and_stays_unknown_other
 }
 
 #[test]
-fn desktop_audit_names_the_replayed_resource() {
+fn replay_audit_names_the_replayed_resource() {
     let (action, resource_type, resource_id, details) =
-        desktop_audit(&put_request(StoragePurpose::User, b"x"));
+        replay_audit(&put_request(StoragePurpose::User, b"x"));
     assert_eq!(
         (action, resource_type, resource_id.as_str()),
         ("storage.files.offline_replay", "StorageFile", "report.txt")
@@ -325,7 +325,7 @@ fn desktop_audit_names_the_replayed_resource() {
     let request = table_request(OfflineMutation::TableDelete {
         filter: "id = 1".into(),
     });
-    let (action, resource_type, resource_id, details) = desktop_audit(&request);
+    let (action, resource_type, resource_id, details) = replay_audit(&request);
     assert_eq!(
         (action, resource_type, resource_id.as_str()),
         ("database.rows.offline_replay", "DatabaseTable", "rows")
@@ -341,6 +341,34 @@ fn desktop_audit_names_the_replayed_resource() {
             crate::audit::level::AuditLevel::Verbose
         );
     }
+}
+
+#[test]
+fn applied_instance_replay_is_recorded_as_the_instance_on_the_project_chain() {
+    let claims = project::test_claims();
+    let request = put_request(StoragePurpose::Files, b"x");
+    let record = instance_replay_record(&claims, &request);
+    assert_eq!(record.actor_id, "instance:instance");
+    assert!(matches!(
+        record.actor_type,
+        crate::entity::sea_orm_active_enums::AuditActorType::System
+    ));
+    assert_eq!(record.scope.as_deref(), Some("project"));
+    assert_eq!(
+        (
+            record.action.as_str(),
+            record.resource_type.as_str(),
+            record.resource_id.as_str()
+        ),
+        ("storage.files.offline_replay", "StorageFile", "report.txt")
+    );
+    let details = record.details.unwrap();
+    assert_eq!(details["device_id"], "device");
+    assert_eq!(details["grant_id"], "grant");
+    assert_eq!(details["delegated_user"], "owner");
+    assert_eq!(details["operation_id"], request.operation_id.as_str());
+    assert_eq!(details["kind"], "file_put");
+    assert_eq!(details["user_scoped"], false);
 }
 
 async fn receipt_database(url: &str) -> DatabaseConnection {

@@ -245,35 +245,37 @@ impl NodeLogic for LocateByColorNode {
                 "Color channels and tolerance must be between 0 and 255"
             ));
         }
-        let mut found_pos = None;
-        'displays: for monitor in Monitor::all()? {
-            let image = crate::types::screen_match::capture_monitor(&monitor)?;
-            let (ox, oy, w, h) = crate::types::screen_match::monitor_input_bounds(&monitor)?;
-            if w == 0 || h == 0 {
-                continue;
-            }
-            for (x, y, pixel) in image.enumerate_pixels() {
-                if (i64::from(pixel[0]) - red).abs() <= tolerance
-                    && (i64::from(pixel[1]) - green).abs() <= tolerance
-                    && (i64::from(pixel[2]) - blue).abs() <= tolerance
-                {
-                    let (dx, _) = crate::types::screen_match::map_capture_point(
-                        x,
-                        0,
-                        (ox as f64, 0.0),
-                        image.width() as f64 / w as f64,
-                    )?;
-                    let (_, dy) = crate::types::screen_match::map_capture_point(
-                        0,
-                        y,
-                        (0.0, oy as f64),
-                        image.height() as f64 / h as f64,
-                    )?;
-                    found_pos = Some((dx, dy));
-                    break 'displays;
+        let found_pos = tokio::task::spawn_blocking(move || {
+            for monitor in Monitor::all()? {
+                let image = crate::types::screen_match::capture_monitor(&monitor)?;
+                let (ox, oy, w, h) = crate::types::screen_match::monitor_input_bounds(&monitor)?;
+                if w == 0 || h == 0 {
+                    continue;
+                }
+                for (x, y, pixel) in image.enumerate_pixels() {
+                    if (i64::from(pixel[0]) - red).abs() <= tolerance
+                        && (i64::from(pixel[1]) - green).abs() <= tolerance
+                        && (i64::from(pixel[2]) - blue).abs() <= tolerance
+                    {
+                        let (dx, _) = crate::types::screen_match::map_capture_point(
+                            x,
+                            0,
+                            (ox as f64, 0.0),
+                            image.width() as f64 / w as f64,
+                        )?;
+                        let (_, dy) = crate::types::screen_match::map_capture_point(
+                            0,
+                            y,
+                            (0.0, oy as f64),
+                            image.height() as f64 / h as f64,
+                        )?;
+                        return flow_like_types::Ok(Some((dx, dy)));
+                    }
                 }
             }
-        }
+            Ok(None)
+        })
+        .await??;
 
         match found_pos {
             Some((px, py)) => {

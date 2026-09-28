@@ -9,8 +9,9 @@ use instant_acme::{
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
-    net::SocketAddr,
+    collections::{HashMap, VecDeque},
+    future::Future,
+    net::{IpAddr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -22,6 +23,12 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
+
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(300);
+const CHALLENGE_CONNECTIONS: usize = 64;
+const CHALLENGE_CONNECTIONS_PER_SOURCE: usize = 8;
+const CHALLENGE_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(2);
+const CHALLENGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) const SCHEMA: &str = "
 CREATE TABLE certificate_acme (
@@ -235,6 +242,7 @@ async fn attempt(root: &Path, record: &mut Record) -> Result<()> {
     attempt_with_builder(root, record, Account::builder()?).await
 }
 
+/// The challenge socket is closed before this returns, so the next job can bind the same address.
 async fn attempt_with_builder(
     root: &Path,
     record: &mut Record,
@@ -242,7 +250,26 @@ async fn attempt_with_builder(
 ) -> Result<()> {
     let listener = ChallengeServer::bind(&record.metadata.http_bind)
         .await
-        .context("HTTP challenge listener could not start")?;
+        .with_context(|| {
+            format!(
+                "HTTP challenge listener could not start on {}",
+                record.metadata.http_bind
+            )
+        })?;
+    let result = tokio::time::timeout(ATTEMPT_TIMEOUT, issue(root, record, builder, &listener))
+        .await
+        .context("ACME issuance timed out")
+        .and_then(|result| result);
+    listener.shutdown().await;
+    result
+}
+
+async fn issue(
+    root: &Path,
+    record: &mut Record,
+    builder: instant_acme::AccountBuilder,
+    listener: &ChallengeServer,
+) -> Result<()> {
     let account = if let Some(file) = &record.account_file {
         let bytes = read_material(root, record, file)?;
         builder
@@ -458,9 +485,9 @@ pub async fn run(root: PathBuf, cancel: CancellationToken) -> Result<()> {
             };
             let result = tokio::select! {
                 _ = cancel.cancelled() => return Ok(()),
-                result = tokio::time::timeout(Duration::from_secs(300), attempt(&root, &mut record)) => result,
+                result = attempt(&root, &mut record) => result,
             };
-            if !matches!(result, Ok(Ok(()))) {
+            if result.is_err() {
                 // Remote error bodies may contain customer identifiers; expose a bounded local diagnosis.
                 let _ = record_failure(&root, &mut record, crate::enrollment::unix_time()?);
             }
@@ -490,22 +517,33 @@ impl ChallengeServer {
         let values = Arc::new(RwLock::new(HashMap::<String, String>::new()));
         let serving = values.clone();
         let task = tokio::spawn(async move {
-            let mut connections = tokio::task::JoinSet::new();
+            let mut connections =
+                PendingConnections::new(CHALLENGE_CONNECTIONS, CHALLENGE_CONNECTIONS_PER_SOURCE);
             loop {
                 tokio::select! {
                     _ = connections.join_next(), if !connections.is_empty() => (),
-                    accepted = listener.accept() => {
-                        let Ok((stream, _)) = accepted else { break; };
-                        if connections.len() >= 32 { drop(stream); continue; }
-                        let serving = serving.clone();
-                        connections.spawn(async move {
-                            let _ = tokio::time::timeout(Duration::from_secs(5), serve_challenge(stream, serving)).await;
-                        });
+                    accepted = listener.accept() => match accepted {
+                        Ok((stream, peer)) => {
+                            let serving = serving.clone();
+                            connections.spawn(peer.ip(), async move {
+                                let _ = tokio::time::timeout(CHALLENGE_REQUEST_TIMEOUT, serve_challenge(stream, serving)).await;
+                            });
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "ACME challenge listener could not accept a connection");
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
                     }
                 }
             }
         });
         Ok(Self { values, task })
+    }
+
+    /// Waits until the listener task, and with it the bound socket, is gone.
+    async fn shutdown(mut self) {
+        self.task.abort();
+        let _ = (&mut self.task).await;
     }
 
     async fn insert(&self, token: &str, value: &str) -> Result<()> {
@@ -535,7 +573,14 @@ async fn serve_challenge(
     let mut request = Vec::with_capacity(1024);
     let mut buffer = [0_u8; 512];
     loop {
-        let length = stream.read(&mut buffer).await?;
+        let read = stream.read(&mut buffer);
+        let length = if request.is_empty() {
+            tokio::time::timeout(CHALLENGE_FIRST_BYTE_TIMEOUT, read)
+                .await
+                .context("HTTP challenge client sent nothing before the first-byte deadline")??
+        } else {
+            read.await?
+        };
         if length == 0 {
             return Ok(());
         }
@@ -558,6 +603,72 @@ async fn serve_challenge(
     stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
     stream.shutdown().await?;
     Ok(())
+}
+
+/// Admission for connections that have not authenticated yet. Accepting never pauses: a new
+/// connection evicts the oldest pending one from its own source network, or else the oldest overall.
+pub(crate) struct PendingConnections<T> {
+    tasks: tokio::task::JoinSet<T>,
+    order: VecDeque<(tokio::task::Id, IpAddr, tokio::task::AbortHandle)>,
+    capacity: usize,
+    per_source: usize,
+}
+
+impl<T: Send + 'static> PendingConnections<T> {
+    pub(crate) fn new(capacity: usize, per_source: usize) -> Self {
+        Self {
+            tasks: tokio::task::JoinSet::new(),
+            order: VecDeque::with_capacity(capacity),
+            capacity: capacity.max(1),
+            per_source: per_source.clamp(1, capacity.max(1)),
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    pub(crate) fn spawn(&mut self, peer: IpAddr, task: impl Future<Output = T> + Send + 'static) {
+        let source = source_network(peer);
+        let from_source = self.order.iter().filter(|entry| entry.1 == source).count();
+        let evicted = if from_source >= self.per_source {
+            self.order.iter().position(|entry| entry.1 == source)
+        } else if self.order.len() >= self.capacity {
+            Some(0)
+        } else {
+            None
+        };
+        if let Some((_, _, handle)) = evicted.and_then(|index| self.order.remove(index)) {
+            handle.abort();
+        }
+        let handle = self.tasks.spawn(task);
+        self.order.push_back((handle.id(), source, handle));
+    }
+
+    /// Cancel safe; evicted and panicked connections are skipped.
+    pub(crate) async fn join_next(&mut self) -> Option<T> {
+        loop {
+            let (id, output) = match self.tasks.join_next_with_id().await? {
+                Ok((id, output)) => (id, Some(output)),
+                Err(error) => (error.id(), None),
+            };
+            self.order.retain(|entry| entry.0 != id);
+            if output.is_some() {
+                return output;
+            }
+        }
+    }
+}
+
+/// One IPv6 client usually controls a whole /64, so it counts as one source.
+fn source_network(peer: IpAddr) -> IpAddr {
+    match peer {
+        IpAddr::V6(address) => match address.to_ipv4_mapped() {
+            Some(address) => IpAddr::V4(address),
+            None => IpAddr::V6(Ipv6Addr::from(u128::from(address) & !u128::from(u64::MAX))),
+        },
+        address => address,
+    }
 }
 
 #[cfg(test)]
@@ -792,6 +903,85 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn idle_connections_cannot_starve_the_challenge_listener() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let server = ChallengeServer::start(listener)?;
+        server.insert("token-1", "token-1.thumbprint").await?;
+        let mut idle = Vec::new();
+        for _ in 0..CHALLENGE_CONNECTIONS * 2 {
+            idle.push(TcpStream::connect(address).await?);
+        }
+        let validation = tokio::time::timeout(
+            Duration::from_secs(2),
+            response(
+                address,
+                b"GET /.well-known/acme-challenge/token-1 HTTP/1.1\r\nHost: api.example.test\r\n\r\n",
+            ),
+        )
+        .await??;
+        assert!(String::from_utf8(validation)?.ends_with("token-1.thumbprint"));
+        drop(idle);
+
+        let mut silent = TcpStream::connect(address).await?;
+        let started = std::time::Instant::now();
+        let mut closed = Vec::new();
+        let _ = tokio::time::timeout(CHALLENGE_REQUEST_TIMEOUT, silent.read_to_end(&mut closed))
+            .await
+            .context("A silent client kept its slot past the first-byte deadline")?;
+        assert!(started.elapsed() < CHALLENGE_REQUEST_TIMEOUT);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn challenge_listener_releases_its_port_before_the_next_job_binds() -> Result<()> {
+        let reservation = TcpListener::bind("127.0.0.1:0").await?;
+        let address = reservation.local_addr()?.to_string();
+        drop(reservation);
+        for _ in 0..20 {
+            let server = ChallengeServer::bind(&address).await?;
+            server.shutdown().await;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pending_connections_evict_the_oldest_from_the_busiest_source() -> Result<()> {
+        let mut pending = PendingConnections::new(4, 2);
+        let mut releases = Vec::new();
+        let mut spawn =
+            |pending: &mut PendingConnections<u32>, peer: &str, id: u32| -> Result<()> {
+                let (release, wait) = tokio::sync::oneshot::channel::<()>();
+                releases.push(release);
+                pending.spawn(peer.parse()?, async move {
+                    let _ = wait.await;
+                    id
+                });
+                Ok(())
+            };
+        spawn(&mut pending, "192.0.2.1", 1)?;
+        spawn(&mut pending, "192.0.2.1", 2)?;
+        spawn(&mut pending, "::ffff:192.0.2.1", 3)?;
+        spawn(&mut pending, "2001:db8::1", 4)?;
+        spawn(&mut pending, "2001:db8::2", 5)?;
+        spawn(&mut pending, "198.51.100.7", 6)?;
+        spawn(&mut pending, "203.0.113.9", 7)?;
+        spawn(&mut pending, "2001:db8::3", 8)?;
+        assert_eq!(pending.order.len(), 4);
+        for release in releases {
+            let _ = release.send(());
+        }
+        let mut completed = Vec::new();
+        while let Some(id) = pending.join_next().await {
+            completed.push(id);
+        }
+        completed.sort_unstable();
+        assert_eq!(completed, [5, 6, 7, 8]);
+        assert!(pending.is_empty() && pending.order.is_empty());
+        Ok(())
+    }
+
     #[derive(Default)]
     struct FakeAcmeState {
         accounts: usize,
@@ -894,7 +1084,7 @@ mod tests {
                             params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
                             params.key_usages = vec![rcgen::KeyUsagePurpose::KeyCertSign];
                             let issuer = rcgen::CertifiedIssuer::self_signed(params, KeyPair::generate()?)?;
-                            state.chain = Some(csr.signed_by(&issuer)?.pem() + &issuer.pem());
+                            state.chain = Some(csr.signed_by(&issuer)?.pem() + issuer.pem().as_str());
                             fake_order(&state).to_string()
                         }
                         "/certificate" => state.chain.clone().context("Certificate not finalized")?,
@@ -960,8 +1150,6 @@ mod tests {
         )?)?;
         record_failure(&root, &mut record, now)?;
         assert!(certificates::metadata(&store, &id).is_err());
-        // The completed failed attempt drops its challenge listener before a retry binds it.
-        tokio::task::yield_now().await;
         let mut resumed = load_job(&root, &id, stored.metadata.revision)?;
         attempt_with_builder(
             &root,

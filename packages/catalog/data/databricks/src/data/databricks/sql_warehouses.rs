@@ -1,11 +1,12 @@
 use super::provider::{DATABRICKS_PROVIDER_ID, DatabricksProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -157,9 +158,9 @@ impl NodeLogic for ListDatabricksSqlWarehousesNode {
 
         let url = provider.api_url("/sql/warehouses");
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .send()
@@ -312,9 +313,9 @@ impl NodeLogic for StartDatabricksSqlWarehouseNode {
 
         let url = provider.api_url(&format!("/sql/warehouses/{}/start", warehouse_id));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .send()
@@ -451,9 +452,9 @@ impl NodeLogic for StopDatabricksSqlWarehouseNode {
 
         let url = provider.api_url(&format!("/sql/warehouses/{}/stop", warehouse_id));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .send()

@@ -10,6 +10,7 @@ use flow_like_types::Value;
 use middleware::deadline::deadline_middleware;
 use middleware::error_reporting::error_reporting_middleware;
 use middleware::jwt::jwt_middleware;
+use middleware::response_headers::response_headers_middleware;
 use state::{AppState, State};
 use tower::ServiceBuilder;
 use tower_http::{
@@ -44,6 +45,7 @@ pub use devices::certificates::spawn_sweeper as spawn_device_certificate_sweeper
 pub mod error;
 pub(crate) mod instances;
 pub mod mail;
+pub mod mail_ingress;
 pub mod model_tier;
 pub mod notification_images;
 pub mod package_license;
@@ -66,6 +68,7 @@ pub mod storage_identity;
 #[cfg(feature = "storage-queue")]
 mod storage_queue;
 pub mod stripe_connect;
+pub mod teams;
 pub mod telemetry;
 pub mod usage_accounting;
 pub mod usage_limits;
@@ -202,7 +205,10 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/usage", routes::usage::routes())
         .nest("/registry", routes::registry::routes())
         .nest("/audit", routes::audit::routes())
-        .nest("/sink", routes::sink::routes())
+        .nest(
+            "/sink",
+            routes::sink::routes(state.mail_automation.max_bytes),
+        )
         .nest("/aliases", routes::alias::routes())
         .nest("/telemetry", routes::telemetry::routes())
         .nest("/flowscript", routes::flowscript::routes())
@@ -230,7 +236,8 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
                 .layer(CompressionLayer::new().compress_when(
                     DefaultPredicate::new().and(NotForContentType::new("text/event-stream")),
                 )),
-        );
+        )
+        .layer(from_fn(response_headers_middleware));
 
     // Inbound REST/MCP routers. They deliberately bypass the JWT
     // middleware (per-registration auth is enforced inside the handler)

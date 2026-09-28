@@ -13,6 +13,9 @@ const MAX_ICE_SERVERS: usize = 16;
 const MAX_URLS_PER_SERVER: usize = 16;
 const MAX_ICE_URL_LENGTH: usize = 2_048;
 const MAX_CREDENTIAL_LENGTH: usize = 4_096;
+/// Bounded issuance never mints a relay credential shorter than this.
+pub const MIN_BOUNDED_TTL_SECONDS: u32 = 5 * 60;
+const MAX_REUSED_SUBJECTS: u64 = 10_000;
 
 /// Browser-ready STUN or TURN configuration returned by the realtime endpoint.
 #[derive(Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
@@ -49,12 +52,31 @@ pub struct IssuedRealtimeIceServers {
 /// long-lived credential to the browser.
 #[async_trait]
 pub trait RealtimeIceProvider: Send + Sync {
-    async fn issue(&self, issuance_id: &str) -> Result<IssuedRealtimeIceServers>;
+    /// `max_ttl_seconds` only ever shortens the configured credential lifetime.
+    async fn issue(
+        &self,
+        issuance_id: &str,
+        max_ttl_seconds: Option<u32>,
+    ) -> Result<IssuedRealtimeIceServers>;
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
+struct ReusedCredential {
+    issued: IssuedRealtimeIceServers,
+    /// A provider TTL below the request caps the lifetime actually granted.
+    lifetime_seconds: i64,
+}
+
+#[derive(Clone)]
 pub struct RealtimeIceService {
     provider: Option<Arc<dyn RealtimeIceProvider>>,
+    reused: moka::sync::Cache<String, ReusedCredential>,
+}
+
+impl Default for RealtimeIceService {
+    fn default() -> Self {
+        Self::with_provider(None)
+    }
 }
 
 impl RealtimeIceService {
@@ -77,17 +99,71 @@ impl RealtimeIceService {
             )?),
         };
 
-        Ok(Self {
-            provider: Some(provider),
-        })
+        Ok(Self::with_provider(Some(provider)))
+    }
+
+    fn with_provider(provider: Option<Arc<dyn RealtimeIceProvider>>) -> Self {
+        Self {
+            provider,
+            reused: moka::sync::Cache::builder()
+                .max_capacity(MAX_REUSED_SUBJECTS)
+                .time_to_live(std::time::Duration::from_secs(48 * 60 * 60))
+                .build(),
+        }
     }
 
     pub async fn issue(&self, issuance_id: &str) -> Result<Option<IssuedRealtimeIceServers>> {
         match self.provider.as_ref() {
-            Some(provider) => provider.issue(issuance_id).await.map(Some),
+            Some(provider) => provider.issue(issuance_id, None).await.map(Some),
             None => Ok(None),
         }
     }
+
+    /// Relay credentials cannot be revoked, so a subject's credential lapses with
+    /// its authorization and renewals reuse it instead of minting another one.
+    /// A credential is reused while at least half of its granted lifetime remains
+    /// and it does not outlive the subject's current authorization.
+    pub async fn issue_bounded(
+        &self,
+        subject: &str,
+        issuance_id: &str,
+        max_ttl_seconds: u32,
+        now: i64,
+    ) -> Result<Option<IssuedRealtimeIceServers>> {
+        let Some(provider) = self.provider.as_ref() else {
+            return Ok(None);
+        };
+        if max_ttl_seconds < MIN_BOUNDED_TTL_SECONDS {
+            return Ok(None);
+        }
+        if let Some(reused) = self
+            .reused
+            .get(subject)
+            .filter(|reused| reusable(reused, max_ttl_seconds, now))
+        {
+            return Ok(Some(reused.issued));
+        }
+        let issued = provider.issue(issuance_id, Some(max_ttl_seconds)).await?;
+        self.reused.insert(
+            subject.to_owned(),
+            ReusedCredential {
+                lifetime_seconds: issued.expires_at.saturating_sub(now),
+                issued: issued.clone(),
+            },
+        );
+        Ok(Some(issued))
+    }
+}
+
+/// Providers stamp expiry from their own clock read, which can land after the caller's `now`.
+const REUSE_BOUND_SLACK_SECONDS: i64 = 5;
+
+fn reusable(reused: &ReusedCredential, max_ttl_seconds: u32, now: i64) -> bool {
+    let bound = now
+        .saturating_add(i64::from(max_ttl_seconds))
+        .saturating_add(REUSE_BOUND_SLACK_SECONDS);
+    let expires_at = reused.issued.expires_at;
+    expires_at <= bound && expires_at.saturating_sub(now) >= reused.lifetime_seconds / 2
 }
 
 fn validate_ice_servers(ice_servers: &[RealtimeIceServer]) -> Result<()> {
@@ -150,6 +226,129 @@ mod tests {
     async fn unconfigured_service_omits_ice_servers() {
         let issued = RealtimeIceService::default().issue("issuance-id").await;
         assert_eq!(issued.unwrap(), None);
+    }
+
+    struct CountingProvider {
+        ttl_seconds: u32,
+        issued: std::sync::Mutex<Vec<Option<u32>>>,
+    }
+
+    #[async_trait]
+    impl RealtimeIceProvider for CountingProvider {
+        async fn issue(
+            &self,
+            _issuance_id: &str,
+            max_ttl_seconds: Option<u32>,
+        ) -> Result<IssuedRealtimeIceServers> {
+            self.issued.lock().unwrap().push(max_ttl_seconds);
+            let ttl = max_ttl_seconds.map_or(self.ttl_seconds, |max| max.min(self.ttl_seconds));
+            Ok(IssuedRealtimeIceServers {
+                ice_servers: vec![RealtimeIceServer {
+                    urls: vec!["turn:turn.example:3478".into()],
+                    username: Some(format!("user-{}", self.issued.lock().unwrap().len())),
+                    credential: Some("credential".into()),
+                }],
+                expires_at: chrono::Utc::now().timestamp() + i64::from(ttl),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_issuance_caps_lifetime_and_reuses_a_subjects_credential() {
+        let provider = Arc::new(CountingProvider {
+            ttl_seconds: 4 * 60 * 60,
+            issued: Default::default(),
+        });
+        let service = RealtimeIceService::with_provider(Some(provider.clone()));
+        let now = chrono::Utc::now().timestamp();
+        let first = service
+            .issue_bounded("device:1:device:a", "one", 3600, now)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(first.expires_at <= now + 3600 + 1);
+        let renewed = service
+            .issue_bounded("device:1:device:a", "two", 3600, now + 240)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(renewed, first);
+        let other = service
+            .issue_bounded("device:1:controller:b", "three", 3600, now)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(other, first);
+        // A shortened grant must not keep receiving the longer credential.
+        let narrowed = service
+            .issue_bounded("device:1:device:a", "four", 900, now + 300)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(narrowed, first);
+        assert!(narrowed.expires_at <= chrono::Utc::now().timestamp() + 900);
+        assert_eq!(
+            service
+                .issue_bounded(
+                    "device:1:device:a",
+                    "five",
+                    MIN_BOUNDED_TTL_SECONDS - 1,
+                    now
+                )
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            *provider.issued.lock().unwrap(),
+            vec![Some(3600), Some(3600), Some(900)]
+        );
+    }
+
+    #[tokio::test]
+    async fn reuse_follows_the_granted_lifetime_and_tolerates_a_later_provider_clock() {
+        let provider = Arc::new(CountingProvider {
+            ttl_seconds: 600,
+            issued: Default::default(),
+        });
+        let service = RealtimeIceService::with_provider(Some(provider.clone()));
+        // The provider reads its clock a second after the caller did.
+        let now = chrono::Utc::now().timestamp() - 1;
+        let first = service
+            .issue_bounded("device:1:device:a", "one", 3600, now)
+            .await
+            .unwrap()
+            .unwrap();
+        // A provider TTL below half the requested bound still allows renewals to reuse.
+        for (issuance, at) in [("two", now), ("three", now + 235)] {
+            let reused = service
+                .issue_bounded("device:1:device:a", issuance, 3600, at)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(reused, first);
+        }
+        let lapsing = service
+            .issue_bounded("device:1:device:a", "four", 3600, now + 302)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(lapsing, first);
+        let bounded = service
+            .issue_bounded("device:1:controller:b", "five", 600, now)
+            .await
+            .unwrap()
+            .unwrap();
+        let reticketed = service
+            .issue_bounded("device:1:controller:b", "six", 600, now)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reticketed, bounded);
+        assert_eq!(
+            *provider.issued.lock().unwrap(),
+            vec![Some(3600), Some(3600), Some(600)]
+        );
     }
 
     #[test]

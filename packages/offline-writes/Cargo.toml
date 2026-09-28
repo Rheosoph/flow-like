@@ -28,7 +28,7 @@ blake3.workspace = true
 fs2 = "0.4.3"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 thiserror = "2"
 uuid.workspace = true
 flow-like-device-protocol.workspace = true

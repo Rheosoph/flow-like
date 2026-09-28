@@ -1,9 +1,19 @@
 import { z } from "zod";
 import type { IBoardState } from "../../state/backend-state/board-state";
 import type { IEventState } from "../../state/backend-state/event-state";
+import type { IBoard } from "../schema/flow/board";
 import type { IEvent } from "../schema/flow/event";
-import type { ProjectArtifactAssets } from "./artifacts";
+import {
+	type ProjectArtifactAssets,
+	assertOneVersionPerPackage,
+} from "./artifacts";
+import { readOfflineQueues } from "./offline-queue";
 import type { ManagementCall } from "./telemetry";
+import {
+	type ManagementRejection,
+	type ManagementResponse,
+	managementRejection,
+} from "./types";
 
 function assertBoundedJson(value: unknown, maxBytes: number): void {
 	let remaining = 8192;
@@ -81,6 +91,7 @@ const eventSchema = z.object({
 	readiness_kind: z.enum(["listener", "explicit", "unsupported"]).optional(),
 	rollout_supported: z.boolean().optional(),
 	eligible: z.boolean(),
+	ineligible_reason: z.string().max(480).optional(),
 });
 const variableSchema = z.object({
 	id: identifier,
@@ -287,6 +298,7 @@ const placementConfigSchema = z
 				config.events.length &&
 			(config.source !== "online" || config.resource_grant != null) &&
 			(config.source === "online" || config.offline_writes == null) &&
+			(config.offline_writes == null || config.max_replicas === 1) &&
 			(config.max_replicas === 1 || config.hosting != null)
 		);
 	});
@@ -329,12 +341,51 @@ export class StaleDeploymentRevisionError extends Error {
 	}
 }
 export class DeploymentPublicationFailedError extends Error {
-	constructor(placementId: string) {
+	constructor(placementId: string, detail?: string) {
 		super(
-			`Secret publication failed for placement ${placementId}. Reload this existing placement before preparing another update.`,
+			`Secret publication failed for placement ${placementId}.${detail ? ` ${detail}` : ""} Reload this existing placement before preparing another update.`,
 		);
 		this.name = "DeploymentPublicationFailedError";
 	}
+}
+const rejectionHints: Record<string, string> = {
+	unauthorized: "Your access to this device does not allow this change.",
+	revision_conflict:
+		"The placement identity or revision differs on the device. Reload the placement, or choose another placement ID for a new placement.",
+	invalid: "Change the configuration before trying again.",
+	host_policy:
+		"Change the isolation settings to satisfy the device host policy.",
+	unsupported:
+		"The device agent does not support this setting. Update the agent or choose another setting.",
+	limit:
+		"A device capacity limit was reached. Free capacity on the device or reduce the request.",
+};
+/** A definitive device refusal: retrying the same operations cannot succeed. */
+export class DeploymentRejectedError extends Error {
+	constructor(
+		readonly rejection: ManagementRejection,
+		action: string,
+		hint = Object.hasOwn(rejectionHints, rejection.code)
+			? rejectionHints[rejection.code]
+			: undefined,
+	) {
+		super(
+			`The device rejected ${action}: ${rejection.error}${hint ? ` ${hint}` : ""}`,
+		);
+		this.name = "DeploymentRejectedError";
+	}
+}
+function finalRejection(
+	response: Pick<ManagementResponse, "state" | "result">,
+): ManagementRejection | undefined {
+	const rejection = managementRejection(response);
+	return rejection && !rejection.retryable ? rejection : undefined;
+}
+function rejectionDetail(
+	response: Pick<ManagementResponse, "state" | "result">,
+) {
+	const rejection = managementRejection(response);
+	return rejection ? ` Device response: ${rejection.error}` : "";
 }
 export class DeploymentRolloutEndedError extends Error {
 	constructor(readonly status: DeploymentRolloutStatus) {
@@ -367,7 +418,7 @@ export async function readExistingDeployment(
 	});
 	if (response.state !== "completed")
 		throw new Error(
-			`The device did not return the configuration of placement ${placementId}. Updating it requires deploy access to this placement.`,
+			`The device did not return the configuration of placement ${placementId}. Updating it requires deploy access to this placement.${rejectionDetail(response)}`,
 		);
 	assertBoundedJson(response.result, 16 * 1024);
 	const {
@@ -419,6 +470,10 @@ export async function readExistingDeployment(
 		rollout,
 	};
 }
+export type DeploymentCatalog = {
+	events: DeploymentEvent[];
+	variables: Record<string, DeploymentVariable[]>;
+};
 export type InstalledProject = {
 	project_id: string;
 	project_path: string;
@@ -426,10 +481,8 @@ export type InstalledProject = {
 	source: "offline" | "online";
 	assets?: ProjectArtifactAssets;
 	online_metadata_sha256?: string;
-};
-export type DeploymentCatalog = {
-	events: DeploymentEvent[];
-	variables: Record<string, DeploymentVariable[]>;
+	/** Events and variables of the approved metadata installed with this online revision. */
+	online_catalog?: DeploymentCatalog;
 };
 
 export function canCheckDeploymentStartup(
@@ -469,7 +522,7 @@ async function pages(
 		});
 		if (response.state !== "completed")
 			throw new Error(
-				"The device could not read this published project revision.",
+				`The device could not read project revision ${revision}.${rejectionDetail(response)}`,
 			);
 		const page = z
 			.object({
@@ -521,18 +574,18 @@ export async function discoverOfflineVariables(
 		variableSchema.parse(value),
 	);
 }
-export async function discoverOnlineEvents(
-	events: IEventState,
-	project: string,
-): Promise<DeploymentEvent[]> {
-	const rows = await events.getEventsAuthoritative(project);
-	if (rows.length > 512)
-		throw new Error("Project inventory exceeds its discovery limit.");
-	return rows
-		.map(onlineEvent)
-		.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+const byId = <T extends { id: string }>(a: T, b: T) =>
+	a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+function samePins(
+	left: Pick<DeploymentEvent, "event_version" | "board_version">,
+	right: Pick<DeploymentEvent, "event_version" | "board_version">,
+): boolean {
+	return (
+		JSON.stringify(left.event_version) ===
+			JSON.stringify(right.event_version) &&
+		JSON.stringify(left.board_version) === JSON.stringify(right.board_version)
+	);
 }
-
 function onlineEvent(event: IEvent): DeploymentEvent {
 	const hosted =
 		Boolean(event.default_page_id) ||
@@ -563,69 +616,218 @@ function onlineEvent(event: IEvent): DeploymentEvent {
 			(hosted || ["daemon", "rest", "mcp"].includes(event.event_type)),
 	});
 }
-export async function discoverOnlineVariables(
+function boardVariables(
+	board: Pick<IBoard, "variables" | "layers">,
+): DeploymentVariable[] {
+	return mergeVariables(
+		[
+			Object.values(board.variables ?? {})
+				.concat(
+					...Object.values(board.layers ?? {}).map((layer) =>
+						Object.values(layer.variables ?? {}),
+					),
+				)
+				.filter((v) => v.exposed || v.runtime_configured)
+				.map((v) => {
+					const parsed = variableSchema.safeParse({
+						id: v.id,
+						name: String(v.name ?? "").slice(0, 120),
+						data_type: v.data_type,
+						value_type: v.value_type,
+						secret: v.secret,
+					});
+					if (!parsed.success)
+						throw new Error(
+							`Variable ${JSON.stringify(String(v.name || v.id).slice(0, 64))} has an identifier or type that a device placement cannot configure.`,
+						);
+					return parsed.data;
+				}),
+		],
+		(variable) =>
+			`The board and its layers define variable ${variable.name} differently.`,
+	);
+}
+/** Deployment choices from the exact approved metadata bundle the device verifies. */
+export function approvedOnlineCatalog(
+	documents: Record<string, unknown>,
+): DeploymentCatalog {
+	const events: DeploymentEvent[] = [];
+	const variables: Record<string, DeploymentVariable[]> = Object.create(null);
+	for (const [key, value] of Object.entries(documents)) {
+		if (!key.startsWith("events/")) continue;
+		if (events.length >= 512)
+			throw new Error("Approved project metadata exceeds 512 events.");
+		const record = value as IEvent;
+		const event = onlineEvent(record);
+		if (
+			!event.event_version ||
+			!event.board_version ||
+			key !== `events/${event.id}/versions/${event.event_version.join("/")}` ||
+			Object.hasOwn(variables, event.id)
+		)
+			throw new Error(
+				`Approved metadata document ${key} does not match its event identity. Prepare the project again.`,
+			);
+		const boardKey = `boards/${record.board_id}/versions/${event.board_version.join("/")}`;
+		const board = documents[boardKey] as IBoard | undefined;
+		if (
+			!board ||
+			board.id !== record.board_id ||
+			JSON.stringify(board.version) !== JSON.stringify(event.board_version)
+		)
+			throw new Error(
+				`Approved metadata for event ${event.id} is missing board ${boardKey}. Prepare the project again.`,
+			);
+		const boardLabel = `${record.board_id} ${event.board_version.join(".")}`;
+		// The device accepts the bundle, so one unconfigurable board only blocks its own event.
+		try {
+			variables[event.id] = boardVariables(board);
+			events.push(event);
+		} catch (error) {
+			variables[event.id] = [];
+			events.push({
+				...event,
+				eligible: false,
+				ineligible_reason:
+					`Board ${boardLabel} cannot be deployed: ${error instanceof Error ? error.message : String(error)}`.slice(
+						0,
+						480,
+					),
+			});
+		}
+	}
+	return { events: events.sort(byId), variables };
+}
+function approvedCatalog(installed: InstalledProject): DeploymentCatalog {
+	if (installed.source !== "online" || !installed.online_catalog)
+		throw new Error(
+			"Prepare and install this online project again so deployment uses its approved executable metadata.",
+		);
+	return installed.online_catalog;
+}
+/** Online events come from the installed approved metadata, never the live cloud. */
+export function discoverOnlineEvents(
+	installed: InstalledProject,
+): DeploymentEvent[] {
+	return approvedCatalog(installed).events;
+}
+function requireApprovedEvent(
+	catalog: DeploymentCatalog,
+	selected: DeploymentEvent,
+): void {
+	const approved = catalog.events.find((event) => event.id === selected.id);
+	if (!approved?.eligible || !samePins(approved, selected))
+		throw new Error(
+			`Event ${selected.id} ${selected.event_version?.join(".") ?? "(unpinned)"} is not in the approved metadata installed on the device. Prepare and install the project again.`,
+		);
+}
+export function discoverOnlineVariables(
+	installed: InstalledProject,
+	selected: DeploymentEvent,
+): DeploymentVariable[] {
+	const catalog = approvedCatalog(installed);
+	requireApprovedEvent(catalog, selected);
+	return catalog.variables[selected.id] ?? [];
+}
+function previousSecrets(
+	groups: DeploymentVariable[][],
+	existing: PlacementConfiguration,
+): DeploymentVariable[] {
+	const secrets = new Map<string, DeploymentVariable>();
+	for (const variable of groups.flat())
+		if (
+			variable.secret &&
+			Object.hasOwn(existing.config.secret_overrides, variable.id) &&
+			!secrets.has(variable.id)
+		)
+			secrets.set(variable.id, variable);
+	return [...secrets.values()];
+}
+/** Secret definitions the existing revision's stored references were written for. */
+export async function discoverPreviousOfflineVariables(
+	call: ManagementCall,
+	installed: InstalledProject,
+	existing: PlacementConfiguration,
+): Promise<DeploymentVariable[]> {
+	if (
+		!Object.keys(existing.config.secret_overrides).length ||
+		existing.config.revision === installed.revision
+	)
+		return [];
+	const previous = { ...installed, revision: existing.config.revision };
+	const groups: DeploymentVariable[][] = [];
+	for (const binding of existing.config.events)
+		groups.push(
+			await discoverOfflineVariables(call, previous, binding.event_id),
+		);
+	return previousSecrets(groups, existing);
+}
+export async function discoverPreviousOnlineVariables(
 	events: IEventState,
 	boards: IBoardState,
-	project: string,
-	selected: DeploymentEvent,
+	installed: InstalledProject,
+	existing: PlacementConfiguration,
 ): Promise<DeploymentVariable[]> {
-	if (!selected.eligible || !selected.event_version || !selected.board_version)
-		throw new Error("Choose a published event with a concrete board version.");
-	// The picker selects the current definition; it may not have an archive yet.
-	const event = await events.getEventAuthoritative(project, selected.id);
-	const current = onlineEvent(event);
-	if (
-		current.id !== selected.id ||
-		!current.eligible ||
-		current.event_type !== selected.event_type ||
-		current.hosted !== selected.hosted ||
-		JSON.stringify(current.event_version) !==
-			JSON.stringify(selected.event_version) ||
-		JSON.stringify(current.board_version) !==
-			JSON.stringify(selected.board_version)
-	)
-		throw new Error(
-			"Published event pins or eligibility changed. Reload the project.",
+	if (!Object.keys(existing.config.secret_overrides).length) return [];
+	const catalog = approvedCatalog(installed);
+	const groups: DeploymentVariable[][] = [];
+	for (const binding of existing.config.events) {
+		const approved = catalog.events.find(
+			(event) => event.id === binding.event_id,
 		);
-	const board = await boards.getBoardAuthoritative(
-		project,
-		event.board_id,
-		selected.board_version,
-	);
-	if (
-		board.id !== event.board_id ||
-		JSON.stringify(board.version) !== JSON.stringify(selected.board_version)
-	)
-		throw new Error("Published board pins differ.");
-	return mergeVariables([
-		Object.values(board.variables)
-			.concat(
-				...Object.values(board.layers).map((layer) =>
-					Object.values(layer.variables),
-				),
-			)
-			.filter((v) => v.exposed || v.runtime_configured)
-			.map((v) =>
-				variableSchema.parse({
-					id: v.id,
-					name: v.name.slice(0, 120),
-					data_type: v.data_type,
-					value_type: v.value_type,
-					secret: v.secret,
-				}),
-			),
-	]);
+		if (approved && samePins(approved, binding)) {
+			groups.push(catalog.variables[binding.event_id] ?? []);
+			continue;
+		}
+		const event = await events.getEventAuthoritative(
+			installed.project_id,
+			binding.event_id,
+			binding.event_version,
+		);
+		if (
+			event.id !== binding.event_id ||
+			JSON.stringify(event.event_version) !==
+				JSON.stringify(binding.event_version)
+		)
+			throw new Error(
+				`Published event ${binding.event_id} differs from its deployed version.`,
+			);
+		const board = await boards.getBoardAuthoritative(
+			installed.project_id,
+			event.board_id,
+			binding.board_version,
+		);
+		if (
+			board.id !== event.board_id ||
+			JSON.stringify(board.version) !== JSON.stringify(binding.board_version)
+		)
+			throw new Error("Published board pins differ.");
+		groups.push(boardVariables(board));
+	}
+	return previousSecrets(groups, existing);
+}
+/** The earlier definition when a kept secret reference was written for another type. */
+export function changedSecretType(
+	previous: readonly DeploymentVariable[] | undefined,
+	current: DeploymentVariable,
+): DeploymentVariable | undefined {
+	const old = previous?.find((variable) => variable.id === current.id);
+	return old &&
+		(old.data_type !== current.data_type ||
+			old.value_type !== current.value_type)
+		? old
+		: undefined;
 }
 export function mergeVariables(
 	groups: DeploymentVariable[][],
+	conflict = (variable: DeploymentVariable) =>
+		`These events disagree about variable ${variable.name}. Deploy them separately.`,
 ): DeploymentVariable[] {
 	const rows = new Map<string, DeploymentVariable>();
 	for (const variable of groups.flat()) {
 		const previous = rows.get(variable.id);
 		if (previous && JSON.stringify(previous) !== JSON.stringify(variable))
-			throw new Error(
-				"These events disagree about a variable. Deploy them separately.",
-			);
+			throw new Error(conflict(variable));
 		rows.set(variable.id, variable);
 	}
 	return [...rows.values()].sort((a, b) =>
@@ -717,6 +919,8 @@ type PlanInput = {
 	deployment: string;
 	events: DeploymentEvent[];
 	variables: DeploymentVariable[];
+	/** Secret definitions of the existing revision; kept references must still match them. */
+	previousVariables?: DeploymentVariable[];
 	overrides: Record<string, string>;
 	host: string;
 	port: number;
@@ -744,13 +948,16 @@ function placementVariables(input: PlanInput) {
 	))
 		if (!removed.has(id)) references[id] = name;
 	const secrets: { name: string; value: string }[] = [];
+	const replaced = new Set<string>();
 	const definitions = new Map(
 		input.variables.map((variable) => [variable.id, variable]),
 	);
 	for (const [id, text] of Object.entries(input.overrides)) {
 		const definition = definitions.get(id);
 		if (!definition)
-			throw new Error("A variable is outside the selected events.");
+			throw new Error(
+				`Variable ${id} is outside the selected events. Select its event again or clear its value.`,
+			);
 		// Empty secret inputs mean keep the opaque reference, never read or replace it.
 		if (definition.secret && text === "") continue;
 		const value = variableValue(definition, text);
@@ -758,6 +965,7 @@ function placementVariables(input: PlanInput) {
 			const name = `variable-${crypto.randomUUID()}`;
 			delete plain[id];
 			references[id] = name;
+			replaced.add(id);
 			secrets.push({ name, value: JSON.stringify(value) });
 		} else {
 			delete references[id];
@@ -773,6 +981,13 @@ function placementVariables(input: PlanInput) {
 		if (definition.secret !== Object.hasOwn(references, id))
 			throw new Error(
 				`Stored override ${id} changed between public and secret. Replace or remove it.`,
+			);
+		const previous = replaced.has(id)
+			? undefined
+			: changedSecretType(input.previousVariables, definition);
+		if (Object.hasOwn(references, id) && previous)
+			throw new Error(
+				`Stored secret ${id} was written for ${previous.data_type}/${previous.value_type}, but the selected event expects ${definition.data_type}/${definition.value_type}. Enter a new value or remove the override.`,
 			);
 		if (Object.hasOwn(plain, id)) {
 			try {
@@ -799,6 +1014,86 @@ function retainedSettings(
 	} = existing.config;
 	return retained;
 }
+/** True when an update turns buffering off or stops buffering a previously buffered resource. */
+export function removesOfflineBuffering(
+	previous: OfflineWritesConfig | null | undefined,
+	next: OfflineWritesConfig | null | undefined,
+): boolean {
+	if (!previous) return false;
+	if (!next) return true;
+	return (
+		previous.tables.some(
+			(table) =>
+				!next.tables.some(
+					(candidate) =>
+						candidate.purpose === table.purpose &&
+						candidate.database === table.database &&
+						candidate.table === table.table,
+				),
+		) ||
+		previous.files.some(
+			(file) =>
+				!next.files.some(
+					(candidate) =>
+						candidate.purpose === file.purpose &&
+						candidate.prefix === file.prefix,
+				),
+		)
+	);
+}
+/** Queued writes are replayed only while their resources stay buffered. */
+export async function assertOfflineQueuesDrained(
+	call: ManagementCall,
+	placementId: string,
+): Promise<void> {
+	let pending: number;
+	try {
+		pending = (await readOfflineQueues(call, placementId)).reduce(
+			(total, queue) => total + queue.pending_count,
+			0,
+		);
+	} catch (error) {
+		throw new Error(
+			`Removing buffered writes from placement ${placementId} requires reading its offline queue first: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	if (pending > 0)
+		throw new Error(
+			`Placement ${placementId} still has ${pending} buffered writes waiting to replay. Keep its buffered tables and directories until the queue is empty, or retry or skip the queued writes under Offline write queues first.`,
+		);
+}
+/** One Apply or StageRollout carries the whole configuration in a single management message. */
+export const DEPLOYMENT_CONFIG_BYTES = 12_000;
+function jsonBytes(value: unknown): number {
+	return new TextEncoder().encode(JSON.stringify(value)).length;
+}
+/** Bytes that Bit and node-package pins add to every placement configuration of a project. */
+export function deploymentPinBytes(
+	assets: Pick<ProjectArtifactAssets, "bit_pins" | "package_pins">,
+): number {
+	return jsonBytes({
+		bit_pins: assets.bit_pins,
+		package_pins: assets.package_pins,
+	});
+}
+function deploymentSizeError(
+	config: Record<string, unknown>,
+	bytes: number,
+): Error {
+	const pins = deploymentPinBytes({
+		bit_pins: (config.bit_pins ?? []) as ProjectArtifactAssets["bit_pins"],
+		package_pins: (config.package_pins ??
+			[]) as ProjectArtifactAssets["package_pins"],
+	});
+	const values = jsonBytes(config.variables ?? {});
+	return new Error(
+		`This deployment needs ${bytes} bytes, but one remote management message carries at most ${DEPLOYMENT_CONFIG_BYTES}. Bit and node-package pins of the whole project use ${pins} bytes and public variable overrides use ${values} bytes. ${
+			pins >= values
+				? "Remove Bits or node packages the project no longer uses and prepare it again."
+				: "Shorten the public variable overrides."
+		}`,
+	);
+}
 export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 	const resourceLimits =
 		input.resourceLimits === undefined
@@ -820,6 +1115,10 @@ export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 		offlineWrites == null
 			? undefined
 			: offlineWritesSchema.parse(offlineWrites);
+	if (checkedOfflineWrites && input.replicas !== 1)
+		throw new Error(
+			`Offline write buffering requires a placement with one replica, but this placement allows ${input.replicas}. Turn off buffering or use a single-replica placement.`,
+		);
 	const { installed, events, existing } = input;
 	identifier.parse(input.placement);
 	identifier.parse(input.deployment);
@@ -870,6 +1169,9 @@ export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 		new Set(events.map((event) => event.id)).size !== events.length
 	)
 		throw new Error("Select 1 to 64 published, supported events.");
+	if (installed.source === "online" && installed.online_catalog)
+		for (const event of events)
+			requireApprovedEvent(installed.online_catalog, event);
 	const resourceGrant = existing
 		? (existing.config.resource_grant ?? undefined)
 		: input.resourceGrant;
@@ -911,6 +1213,7 @@ export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 		throw new Error(
 			"Set a listener IP, a port from 1 to 65535, and a service token of at least 32 printable characters.",
 		);
+	assertOneVersionPerPackage(installed.assets?.package_pins ?? []);
 	const { plain, references, secrets } = placementVariables(input);
 	// A rotated token gets a fresh name so the running revision keeps its current token.
 	const authSecret = !previousHosting
@@ -969,7 +1272,8 @@ export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 		...(resourceGrant ? { resource_grant: resourceGrant } : {}),
 	};
 	if (input.tlsCertificateId !== undefined) {
-		if (input.tlsCertificateId === null) delete config.tls_certificate_id;
+		if (input.tlsCertificateId === null)
+			Reflect.deleteProperty(config, "tls_certificate_id");
 		else
 			config.tls_certificate_id = z
 				.string()
@@ -994,7 +1298,9 @@ export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 			);
 	}
 	placementConfigSchema.parse(config);
-	assertBoundedJson(config, 12_000);
+	assertBoundedJson(config, Number.POSITIVE_INFINITY);
+	if (jsonBytes(config) > DEPLOYMENT_CONFIG_BYTES)
+		throw deploymentSizeError(config, jsonBytes(config));
 	const expected = existing?.config_revision ?? 0;
 	if (
 		input.healthChecked &&
@@ -1043,21 +1349,24 @@ export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 			id: crypto.randomUUID(),
 			command: { type: "activate_rollout", rollout_id: rolloutId },
 		});
-	if (
-		steps.some(
-			(step) =>
-				new TextEncoder().encode(JSON.stringify(step.command)).length > 12_000,
-		)
-	)
-		throw new Error(
-			"This deployment exceeds the management message limit. Use smaller placements.",
-		);
+	const largest = Math.max(...steps.map((step) => jsonBytes(step.command)));
+	if (largest > DEPLOYMENT_CONFIG_BYTES)
+		throw deploymentSizeError(config, largest);
 	return { config, steps, expected_revision: expected, rollout_id: rolloutId };
 }
-function applyFailure(plan: DeploymentPlan): string {
+/** `rejection` is a retryable coded refusal; older agents send none. */
+function applyFailure(
+	plan: DeploymentPlan,
+	rejection?: ManagementRejection,
+): string {
+	const subject = plan.expected_revision
+		? `The update of placement ${String(plan.config.id)}`
+		: "Placement creation";
+	if (rejection)
+		return `${subject} was not confirmed. Device response: ${rejection.error} Retry to confirm the same operations.`;
 	return plan.expected_revision
-		? `The update of placement ${String(plan.config.id)} was not confirmed. Reload the placement and try again.`
-		: "Placement creation was not confirmed. Its identity may already exist.";
+		? `${subject} was not confirmed. Reload the placement and try again.`
+		: `${subject} was not confirmed. Its identity may already exist.`;
 }
 
 async function executeRolloutPlan(
@@ -1078,24 +1387,28 @@ async function executeRolloutPlan(
 		}
 		signal?.throwIfAborted();
 		if (response.state === "rejected") {
+			const rejection = finalRejection(response);
 			if (step.command.type === "stage_rollout") {
 				const current = await readExistingDeployment(
 					call,
 					String(plan.config.id),
 					String(plan.config.project_id),
-				);
-				if (current.config_revision !== plan.expected_revision)
+				).catch((error: unknown) => {
+					if (rejection) return undefined;
+					throw error;
+				});
+				if (current && current.config_revision !== plan.expected_revision)
 					throw new StaleDeploymentRevisionError(
 						String(plan.config.id),
 						plan.expected_revision,
 						current.config_revision,
 					);
-				if (current.desired_state === "stopped")
+				if (current?.desired_state === "stopped")
 					throw new DeploymentReviewRequiredError(
 						"The placement was stopped after this update was prepared. Reload it and review the update before continuing.",
 					);
 				if (
-					current.rollout &&
+					current?.rollout &&
 					current.rollout.rollout_id !== plan.rollout_id &&
 					["staged", "validating", "activating", "rolling_back"].includes(
 						current.rollout.state,
@@ -1103,6 +1416,11 @@ async function executeRolloutPlan(
 				)
 					throw new DeploymentReviewRequiredError(
 						"Another update is already in progress for this placement. Reload it to review that rollout.",
+					);
+				if (rejection)
+					throw new DeploymentRejectedError(
+						rejection,
+						`the update of placement ${String(plan.config.id)}`,
 					);
 			}
 			const current = await readDeploymentRollout(call, {
@@ -1117,8 +1435,16 @@ async function executeRolloutPlan(
 					throw new DeploymentRolloutEndedError(current);
 				if (current.state === "healthy") return;
 			}
+			if (rejection)
+				throw new DeploymentRejectedError(
+					rejection,
+					step.command.type === "rollout_secret"
+						? `staged secret ${String(step.command.name)}`
+						: "activation of the staged update",
+					"Discard the staged update, then prepare the update again.",
+				);
 			throw new Error(
-				"The device rejected this rollout operation. Retry to confirm its journal and current status.",
+				`The device rejected this rollout operation.${rejectionDetail(response)} Retry to confirm its journal and current status.`,
 			);
 		}
 		if (
@@ -1213,9 +1539,15 @@ export async function readDeploymentRollout(
 		type: "rollout",
 		rollout_id: scope.rollout_id,
 	});
+	const rejection = finalRejection(response);
+	if (rejection)
+		throw new DeploymentRejectedError(
+			rejection,
+			`reading the status of rollout ${scope.rollout_id}`,
+		);
 	if (response.state !== "completed")
 		throw new Error(
-			"The device could not confirm rollout status. Reconnect and retry the same rollout.",
+			`The device could not confirm the status of rollout ${scope.rollout_id}.${rejectionDetail(response)} Reconnect and retry the same rollout.`,
 		);
 	return scopedRollout(response.result, scope);
 }
@@ -1233,7 +1565,27 @@ export async function cancelDeploymentRollout(
 		id,
 	);
 	signal?.throwIfAborted();
-	if (response.state === "rejected") return readDeploymentRollout(call, scope);
+	if (response.state === "rejected") {
+		// A refusal after activation began is a race; the re-read status tells the caller what happened.
+		const rejection = finalRejection(response);
+		const status = await readDeploymentRollout(call, scope).catch(
+			(error: unknown) => {
+				if (rejection) return undefined;
+				throw error;
+			},
+		);
+		signal?.throwIfAborted();
+		if (status && !["staged", "validating"].includes(status.state))
+			return status;
+		if (rejection)
+			throw new DeploymentRejectedError(
+				rejection,
+				`discarding staged update ${scope.rollout_id}`,
+			);
+		throw new Error(
+			`The device did not discard staged update ${scope.rollout_id}.${rejectionDetail(response)} Try again, or reload the placement to review it.`,
+		);
+	}
 	if (
 		response.operation_id !== id ||
 		!["accepted", "completed"].includes(response.state)
@@ -1253,9 +1605,10 @@ async function rejectStep(
 	plan: DeploymentPlan,
 	step: DeploymentPlan["steps"][number],
 	terminal = false,
+	rejection?: ManagementRejection,
 ): Promise<never> {
 	const placement = String(plan.config.id);
-	// Rejections carry no reason, so a changed revision is the only proof of a stale read.
+	// Older agents give no reason, so a changed revision is the only proof of a stale read.
 	const expected = Number(step.command.expected_revision);
 	if (expected > 0) {
 		const current = await readExistingDeployment(
@@ -1270,11 +1623,25 @@ async function rejectStep(
 				current.config_revision,
 			);
 	}
-	if (terminal) throw new DeploymentPublicationFailedError(placement);
+	const final = rejection && !rejection.retryable ? rejection : undefined;
+	if (final && step.command.type === "apply")
+		throw new DeploymentRejectedError(
+			final,
+			plan.expected_revision
+				? `the update of placement ${placement}`
+				: `creation of placement ${placement}`,
+		);
+	if (terminal || final)
+		throw new DeploymentPublicationFailedError(
+			placement,
+			final
+				? `The device rejected secret ${String(step.command.name)}: ${final.error}`
+				: undefined,
+		);
 	throw new Error(
 		step.command.type === "apply"
-			? applyFailure(plan)
-			: `The device rejected secret ${String(step.command.name)} for placement ${placement}. Retry to confirm the same operations.`,
+			? applyFailure(plan, rejection)
+			: `The device rejected secret ${String(step.command.name)} for placement ${placement}.${rejection ? ` Device response: ${rejection.error}` : ""} Retry to confirm the same operations.`,
 	);
 }
 export async function executeDeploymentPlan(
@@ -1311,7 +1678,8 @@ export async function executeDeploymentPlan(
 			response = await call(step.command, step.id);
 		}
 		signal?.throwIfAborted();
-		if (response.state === "rejected") await rejectStep(call, plan, step);
+		if (response.state === "rejected")
+			await rejectStep(call, plan, step, false, managementRejection(response));
 		if (response.operation_id !== step.id)
 			throw new Error("The device returned a different deployment operation.");
 		if (step.command.type === "apply") {

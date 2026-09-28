@@ -207,8 +207,12 @@ export function isNativeWidgetContent(
 		!object(value) ||
 		!keys(
 			value,
-			"id title kind appId updatedAt staleAt expiresAt state message warnings accent action chart page",
+			"id title kind appId updatedAt staleAt expiresAt state message warnings accent action chart page pending target",
 		) ||
+		(value.pending !== undefined &&
+			(value.pending !== true || value.state === "ready")) ||
+		(value.target !== undefined &&
+			!/^[0-9a-f]{16}$/.test(String(value.target))) ||
 		value.id !== definition.id ||
 		value.kind !== definition.kind ||
 		value.appId !== definition.appId ||

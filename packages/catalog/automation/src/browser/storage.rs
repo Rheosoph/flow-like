@@ -4,7 +4,143 @@ use flow_like::flow::{
     node::{Node, NodeLogic},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json};
+#[cfg(any(feature = "execute", test))]
+use flow_like_types::Value;
+use flow_like_types::{async_trait, json::json};
+
+/// Keys and values travel as WebDriver script arguments, never as script text.
+#[cfg(any(feature = "execute", test))]
+const STORAGE_PRELUDE: &str =
+    "const storage = arguments[0] === 'session' ? window.sessionStorage : window.localStorage;";
+#[cfg(any(feature = "execute", test))]
+const GET_ITEM_SCRIPT: &str = "return storage.getItem(arguments[1]);";
+#[cfg(any(feature = "execute", test))]
+const SET_ITEM_SCRIPT: &str = "storage.setItem(arguments[1], arguments[2]);";
+#[cfg(any(feature = "execute", test))]
+const ALL_ITEMS_SCRIPT: &str = "return Array.from({ length: storage.length }, (_, index) => { const key = storage.key(index); return [key, storage.getItem(key)]; });";
+
+#[cfg(any(feature = "execute", test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum StorageArea {
+    Local,
+    Session,
+}
+
+#[cfg(any(feature = "execute", test))]
+impl StorageArea {
+    fn argument(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Session => "session",
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Local => "localStorage",
+            Self::Session => "sessionStorage",
+        }
+    }
+}
+
+#[cfg(any(feature = "execute", test))]
+fn storage_script(body: &str) -> String {
+    format!("{STORAGE_PRELUDE} {body}")
+}
+
+#[cfg(any(feature = "execute", test))]
+fn storage_arguments(area: StorageArea, key: Option<&str>, value: Option<&str>) -> Vec<Value> {
+    let mut arguments = vec![json!(area.argument())];
+    arguments.extend(key.map(|key| json!(key)));
+    arguments.extend(value.map(|value| json!(value)));
+    arguments
+}
+
+#[cfg(any(feature = "execute", test))]
+fn storage_entries(
+    value: &Value,
+) -> flow_like_types::Result<flow_like_types::json::Map<String, Value>> {
+    let entries = value.as_array().ok_or_else(|| {
+        flow_like_types::anyhow!("Browser storage listing returned a non-array value: {value}")
+    })?;
+    entries
+        .iter()
+        .map(|entry| match entry.as_array().map(Vec::as_slice) {
+            Some([Value::String(key), item]) => Ok((key.clone(), item.clone())),
+            _ => Err(flow_like_types::anyhow!(
+                "Browser storage listing returned a malformed entry: {entry}"
+            )),
+        })
+        .collect()
+}
+
+#[cfg(feature = "execute")]
+async fn get_item(
+    driver: &thirtyfour::WebDriver,
+    area: StorageArea,
+    key: &str,
+) -> flow_like_types::Result<Option<String>> {
+    let result = driver
+        .execute(
+            storage_script(GET_ITEM_SCRIPT),
+            storage_arguments(area, Some(key), None),
+        )
+        .await
+        .map_err(|e| flow_like_types::anyhow!("Failed to read {} key '{key}': {e}", area.name()))?;
+    Ok(result.json().as_str().map(str::to_owned))
+}
+
+#[cfg(feature = "execute")]
+async fn set_item(
+    driver: &thirtyfour::WebDriver,
+    area: StorageArea,
+    key: &str,
+    value: &str,
+) -> flow_like_types::Result<()> {
+    driver
+        .execute(
+            storage_script(SET_ITEM_SCRIPT),
+            storage_arguments(area, Some(key), Some(value)),
+        )
+        .await
+        .map_err(|e| {
+            flow_like_types::anyhow!("Failed to write {} key '{key}': {e}", area.name())
+        })?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_payload_keeps_keys_and_values_out_of_the_script() {
+        let key = "C:\\temp\\new';alert(1);//";
+        let value = "line one\nline two\r\n\u{2028}\"quoted\"";
+        let arguments = storage_arguments(StorageArea::Session, Some(key), Some(value));
+        assert_eq!(arguments, vec![json!("session"), json!(key), json!(value)]);
+        for body in [GET_ITEM_SCRIPT, SET_ITEM_SCRIPT, ALL_ITEMS_SCRIPT] {
+            let script = storage_script(body);
+            assert!(!script.contains(key) && !script.contains("line one"));
+            assert!(script.starts_with(STORAGE_PRELUDE));
+        }
+        assert_eq!(
+            storage_arguments(StorageArea::Local, None, None),
+            vec![json!("local")]
+        );
+    }
+
+    #[test]
+    fn storage_listing_keeps_prototype_like_keys_as_data() {
+        let entries =
+            storage_entries(&json!([["__proto__", "x"], ["a\\b", null], ["", ""]])).unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries["__proto__"], json!("x"));
+        assert_eq!(entries["a\\b"], Value::Null);
+        assert!(storage_entries(&json!({"a": "b"})).is_err());
+        assert!(storage_entries(&json!([["only-key"]])).is_err());
+    }
+}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -92,27 +228,15 @@ impl NodeLogic for BrowserGetLocalStorageNode {
         let key: String = context.evaluate_pin("key").await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
-
-        let script = format!(
-            "return localStorage.getItem('{}');",
-            key.replace('\'', "\\'")
-        );
-
-        let result = driver
-            .execute(&script, vec![])
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to get localStorage: {}", e))?;
-
-        let value = result.json();
-        let (value_str, exists) = if value.is_null() {
-            ("".to_string(), false)
-        } else {
-            (value.as_str().unwrap_or("").to_string(), true)
-        };
+        let value = get_item(&driver, StorageArea::Local, &key).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
-        context.set_pin_value("value", json!(value_str)).await?;
-        context.set_pin_value("exists", json!(exists)).await?;
+        context
+            .set_pin_value("exists", json!(value.is_some()))
+            .await?;
+        context
+            .set_pin_value("value", json!(value.unwrap_or_default()))
+            .await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
@@ -198,17 +322,7 @@ impl NodeLogic for BrowserSetLocalStorageNode {
         let value: String = context.evaluate_pin("value").await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
-
-        let script = format!(
-            "localStorage.setItem('{}', '{}');",
-            key.replace('\'', "\\'"),
-            value.replace('\'', "\\'")
-        );
-
-        driver
-            .execute(&script, vec![])
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to set localStorage: {}", e))?;
+        set_item(&driver, StorageArea::Local, &key, &value).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -310,27 +424,15 @@ impl NodeLogic for BrowserGetSessionStorageNode {
         let key: String = context.evaluate_pin("key").await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
-
-        let script = format!(
-            "return sessionStorage.getItem('{}');",
-            key.replace('\'', "\\'")
-        );
-
-        let result = driver
-            .execute(&script, vec![])
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to get sessionStorage: {}", e))?;
-
-        let value = result.json();
-        let (value_str, exists) = if value.is_null() {
-            ("".to_string(), false)
-        } else {
-            (value.as_str().unwrap_or("").to_string(), true)
-        };
+        let value = get_item(&driver, StorageArea::Session, &key).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
-        context.set_pin_value("value", json!(value_str)).await?;
-        context.set_pin_value("exists", json!(exists)).await?;
+        context
+            .set_pin_value("exists", json!(value.is_some()))
+            .await?;
+        context
+            .set_pin_value("value", json!(value.unwrap_or_default()))
+            .await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
@@ -416,17 +518,7 @@ impl NodeLogic for BrowserSetSessionStorageNode {
         let value: String = context.evaluate_pin("value").await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
-
-        let script = format!(
-            "sessionStorage.setItem('{}', '{}');",
-            key.replace('\'', "\\'"),
-            value.replace('\'', "\\'")
-        );
-
-        driver
-            .execute(&script, vec![])
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to set sessionStorage: {}", e))?;
+        set_item(&driver, StorageArea::Session, &key, &value).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -648,38 +740,24 @@ impl NodeLogic for BrowserGetAllStorageNode {
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let storage_name = if storage_type == "session" {
-            "sessionStorage"
+        let area = if storage_type == "session" {
+            StorageArea::Session
         } else {
-            "localStorage"
+            StorageArea::Local
         };
-
-        let script = format!(
-            r#"
-            var data = {{}};
-            for (var i = 0; i < {storage_name}.length; i++) {{
-                var key = {storage_name}.key(i);
-                data[key] = {storage_name}.getItem(key);
-            }}
-            return data;
-            "#,
-            storage_name = storage_name
-        );
 
         let result = driver
-            .execute(&script, vec![])
+            .execute(
+                storage_script(ALL_ITEMS_SCRIPT),
+                storage_arguments(area, None, None),
+            )
             .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to get all storage: {}", e))?;
-
-        let data = result.json();
-        let count = if let Value::Object(obj) = &data {
-            obj.len() as i64
-        } else {
-            0
-        };
+            .map_err(|e| flow_like_types::anyhow!("Failed to list {}: {e}", area.name()))?;
+        let data = storage_entries(result.json())?;
+        let count = data.len() as i64;
 
         context.set_pin_value("session_out", json!(session)).await?;
-        context.set_pin_value("data", data.clone()).await?;
+        context.set_pin_value("data", Value::Object(data)).await?;
         context.set_pin_value("count", json!(count)).await?;
         context.activate_exec_pin("exec_out").await?;
 

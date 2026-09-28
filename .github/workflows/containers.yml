@@ -7,6 +7,8 @@ on:
   pull_request:
     paths:
       - '.github/workflows/containers.yml'
+      - '.github/workflows/compiler-reproducibility.yml'
+      - '.github/actions/setup-rust/**'
       - '.github/scripts/**'
       - '.dockerignore'
       - 'LICENSE'
@@ -15,6 +17,7 @@ on:
       # crate graph or lockfile edit can break a build that touches no Dockerfile.
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - 'bun.lock'
       - 'bunfig.toml'
       - 'package.json'
@@ -43,6 +46,9 @@ env:
   DOCKER_BUILD_RECORD_UPLOAD: 'false'
 
 jobs:
+  compiler-checks:
+    uses: ./.github/workflows/compiler-reproducibility.yml
+
   validate:
     name: Validate container publication contracts
     runs-on: ubuntu-24.04
@@ -75,6 +81,11 @@ jobs:
         run: bun install --frozen-lockfile --dry-run
       - name: Test browser configuration and API URL resolution
         run: bun test packages/ui/lib/public-web-config.test.ts
+      - name: Test signaling admission, limits and transport
+        working-directory: apps/backend/signaling
+        run: |
+          bun install --frozen-lockfile
+          bun test tests/
       - name: Verify build-context exclusions
         working-directory: apps/backend/docker-compose/tests/build-context
         run: go test ./...
@@ -114,9 +125,54 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: bash .github/scripts/check-container-native-deps.sh "$DOCKERFILE" "$PLATFORM"
 
+  signaling-image:
+    name: Signaling image starts (${{ matrix.cloud }})
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        cloud: [docker-compose, gcp, azure]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          persist-credentials: false
+      # Publication builds skip pull requests, so this is the only PR gate that
+      # proves the recipe ships every module server.ts imports.
+      - name: Build the signaling image
+        env:
+          RECIPE: apps/backend/${{ matrix.cloud }}/signaling/Dockerfile
+        run: DOCKER_BUILDKIT=1 docker build --file "$RECIPE" --tag "signaling-smoke:${GITHUB_SHA}" .
+      - name: Start the image and require readiness
+        run: bash apps/backend/signaling/tests/image-smoke.sh "signaling-smoke:${GITHUB_SHA}"
+
+  web-image:
+    name: Web images export device cryptography
+    needs: validate
+    # Publication builds these recipes on push; for pull requests this is the only
+    # gate on the device-crypto stage's Rust, clang and wasm-bindgen toolchain.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          persist-credentials: false
+      # Both recipes share their build stages, so the second build reuses the first's layers.
+      - name: Build each web recipe through its static export and require the bundle
+        run: |
+          for recipe in apps/backend/docker-compose/web/Dockerfile apps/backend/kubernetes/web/Dockerfile; do
+            tag="web-smoke:${GITHUB_SHA}"
+            DOCKER_BUILDKIT=1 docker build --file "$recipe" --target builder --tag "$tag" .
+            docker run --rm --entrypoint sh "$tag" -c \
+              'test -s out/device-crypto/flow_like_device_crypto_bg.wasm && test -s out/device-crypto/flow_like_device_crypto.js' \
+              || { echo "${recipe} exported no device-crypto bundle under out/device-crypto." >&2; exit 1; }
+          done
+
   matrix:
     name: Select release images
-    needs: native-deps
+    needs: [native-deps, signaling-image, compiler-checks]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -184,9 +240,9 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/container-cargo-cache
-          key: container-cargo-v1-${{ matrix.id }}-${{ hashFiles(matrix.dockerfile, 'Cargo.lock', '.cargo/config.toml') }}-${{ github.sha }}
+          key: container-cargo-v1-${{ matrix.id }}-${{ hashFiles(matrix.dockerfile, 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}-${{ github.sha }}
           restore-keys: |
-            container-cargo-v1-${{ matrix.id }}-${{ hashFiles(matrix.dockerfile, 'Cargo.lock', '.cargo/config.toml') }}-
+            container-cargo-v1-${{ matrix.id }}-${{ hashFiles(matrix.dockerfile, 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}-
       - name: Restore and later extract BuildKit cache mounts (optional)
         if: vars.CONTAINER_CARGO_CACHE == 'true' && !contains(fromJSON('["signaling","migration","otel-collector","db-init","object-store-init","web"]'), matrix.workload)
         uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
@@ -223,6 +279,11 @@ jobs:
           # Never publish builder/source layers to a GHCR :buildcache package.
           cache-from: ${{ matrix.layer_cache && format('type=gha,scope=container-v1-{0}', matrix.id) || '' }}
           cache-to: ${{ matrix.layer_cache && format('type=gha,scope=container-v1-{0},mode=max', matrix.id) || '' }}
+      - name: Start the signaling image and require readiness
+        if: matrix.workload == 'signaling'
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: bash apps/backend/signaling/tests/image-smoke.sh "$IMAGE" "$PLATFORM"
       - name: Inspect final filesystem and extract compiled text for scanning
         env:
           IMAGE: ${{ steps.image.outputs.ref }}

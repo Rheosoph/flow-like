@@ -4,6 +4,7 @@ use crate::credentials::RuntimeCredentials;
 use crate::middleware::jwt::AppUser;
 use crate::permission::role_permission::RolePermissions;
 use crate::routes::app::invoke::offline_replay::{desktop_access, desktop_forbidden};
+use axum::extract::{FromRequest, rejection::JsonRejection};
 use axum::http::StatusCode;
 use base64::engine::general_purpose::STANDARD;
 use flow_like_storage::{
@@ -98,7 +99,8 @@ enum DesktopAuthority<'a> {
 }
 
 enum ReplayPrincipal<'a> {
-    Instance(project::AuthorizedProject),
+    /// The state records applied replays; test fixtures without one skip the audit.
+    Instance(project::AuthorizedProject, Option<&'a AppState>),
     Desktop {
         principal: DesktopReplayPrincipal,
         authority: DesktopAuthority<'a>,
@@ -115,21 +117,21 @@ struct ReceiptOwner {
 impl ReplayPrincipal<'_> {
     fn project_id(&self) -> &str {
         match self {
-            Self::Instance(authorization) => &authorization.claims.project_id,
+            Self::Instance(authorization, _) => &authorization.claims.project_id,
             Self::Desktop { principal, .. } => &principal.app_id,
         }
     }
 
     fn sub(&self) -> &str {
         match self {
-            Self::Instance(authorization) => &authorization.claims.sub,
+            Self::Instance(authorization, _) => &authorization.claims.sub,
             Self::Desktop { principal, .. } => &principal.sub,
         }
     }
 
     fn instance_column(&self) -> &str {
         match self {
-            Self::Instance(authorization) => &authorization.claims.instance_id,
+            Self::Instance(authorization, _) => &authorization.claims.instance_id,
             Self::Desktop { principal, .. } => &principal.installation_id,
         }
     }
@@ -148,7 +150,7 @@ impl ReplayPrincipal<'_> {
         digest: &str,
     ) -> Result<ReceiptKey, ApiError> {
         match self {
-            Self::Instance(authorization) => {
+            Self::Instance(authorization, _) => {
                 ReceiptKey::new(&authorization.claims, request, digest)
             }
             Self::Desktop { principal, .. } => Ok(ReceiptKey {
@@ -163,7 +165,7 @@ impl ReplayPrincipal<'_> {
     /// The grant row an instance claim locks; desktop claims serialize on the receipt key.
     fn claim_lock(&self) -> Option<project::AuthorizedProject> {
         match self {
-            Self::Instance(authorization) => Some(authorization.clone()),
+            Self::Instance(authorization, _) => Some(authorization.clone()),
             Self::Desktop { .. } => None,
         }
     }
@@ -174,7 +176,7 @@ impl ReplayPrincipal<'_> {
         resource: &OfflineResource,
     ) -> Result<(), ApiError> {
         let (principal, authority) = match self {
-            Self::Instance(authorization) => {
+            Self::Instance(authorization, _) => {
                 return project::recheck(context, authorization).await.map(|_| ());
             }
             Self::Desktop {
@@ -199,7 +201,7 @@ impl ReplayPrincipal<'_> {
 
     async fn upload_deadline(&self, context: &DeviceContext<'_>) -> Result<i64, ApiError> {
         Ok(match self {
-            Self::Instance(authorization) => project::recheck_storage(context, authorization)
+            Self::Instance(authorization, _) => project::recheck_storage(context, authorization)
                 .await?
                 .min(now() + 300),
             Self::Desktop { .. } => now() + 300,
@@ -207,23 +209,31 @@ impl ReplayPrincipal<'_> {
     }
 
     async fn record_applied(&self, request: &OfflineReplayRequest) {
-        let Self::Desktop {
-            principal,
-            authority: DesktopAuthority::Session { state, user },
-        } = self
-        else {
-            return;
-        };
-        let (action, resource_type, resource_id, details) = desktop_audit(request);
-        crate::audit_branch!(
-            state,
-            user,
-            principal.app_id,
-            action,
-            resource_type,
-            resource_id,
-            details
-        );
+        match self {
+            Self::Desktop {
+                principal,
+                authority: DesktopAuthority::Session { state, user },
+            } => {
+                let (action, resource_type, resource_id, details) = replay_audit(request);
+                crate::audit_branch!(
+                    state,
+                    user,
+                    principal.app_id,
+                    action,
+                    resource_type,
+                    resource_id,
+                    details
+                );
+            }
+            Self::Instance(authorization, Some(state)) => {
+                crate::audit::record_entry(
+                    state,
+                    instance_replay_record(&authorization.claims, request),
+                )
+                .await;
+            }
+            _ => {}
+        }
     }
 }
 
@@ -440,6 +450,73 @@ async fn retain(
         .flatten()
         .map(|value| (value, false))
         .ok_or_else(|| ApiError::internal("Offline receipt disappeared"))
+}
+
+/// Blocked waits for an operator, so it is reserved for definitive no-effect rejections.
+/// Infrastructure failures and proofs that lapsed during a slow replay answer 503, and
+/// the device keeps retrying with backoff.
+fn is_transient(error: &ApiError) -> bool {
+    error.status().is_server_error() || error.public_code() == INSTANCE_PROOF_INVALID
+}
+
+fn retry_later(operation: &str, cause: impl std::fmt::Display) -> ApiError {
+    tracing::warn!(operation, %cause, "Offline replay failed transiently; the device will retry");
+    ApiError::service_unavailable(format!(
+        "{operation} is temporarily unavailable; the offline change will be retried"
+    ))
+}
+
+/// Quota (402) and rate (429) refusals are definitive; lookup failures are not.
+fn admission_refused(
+    request: &OfflineReplayRequest,
+    digest: &str,
+    error: ApiError,
+) -> Result<OfflineReplayResponse, ApiError> {
+    if is_transient(&error) {
+        return Err(retry_later("Storage quota admission", &error));
+    }
+    Ok(response(
+        request,
+        digest,
+        OfflineReplayStatus::Blocked,
+        None,
+        Some(
+            error
+                .public_message()
+                .unwrap_or("Storage quota admission is unavailable"),
+        ),
+    ))
+}
+
+/// Nothing reached the provider, so the retained Blocked receipt stays reclaimable by the
+/// same request. A transient recheck failure is answered as retryable instead of Blocked.
+async fn recheck_refused(
+    context: &DeviceContext<'_>,
+    key: &ReceiptKey,
+    request: &OfflineReplayRequest,
+    digest: &str,
+    error: ApiError,
+) -> Result<OfflineReplayResponse, ApiError> {
+    let retained = finish(
+        context,
+        key,
+        response(
+            request,
+            digest,
+            OfflineReplayStatus::Blocked,
+            None,
+            Some(
+                error
+                    .public_message()
+                    .unwrap_or("Project authorization changed before replay"),
+            ),
+        ),
+    )
+    .await?;
+    if is_transient(&error) && retained.status == OfflineReplayStatus::Blocked {
+        return Err(retry_later("Project authorization recheck", &error));
+    }
+    Ok(retained)
 }
 
 fn unknown(request: &OfflineReplayRequest, digest: &str) -> OfflineReplayResponse {
@@ -953,18 +1030,46 @@ pub(super) async fn authorize(
     Ok(authorization)
 }
 
+fn body_rejection(rejection: JsonRejection) -> ApiError {
+    if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return ApiError::coded(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            OFFLINE_ERROR_LIMIT_EXCEEDED,
+            "This change exceeds the offline sync request limit",
+        );
+    }
+    ApiError::coded(
+        rejection.status(),
+        OFFLINE_ERROR_INVALID,
+        rejection.body_text(),
+    )
+}
+
+/// The device proof is checked from the headers before the body is buffered, so an
+/// unauthenticated caller never makes the API decompress or parse up to the replay limit.
+async fn authorize_request<S: Send + Sync>(
+    context: &DeviceContext<'_>,
+    http: axum::extract::Request,
+    state: &S,
+) -> Result<(project::AuthorizedProject, OfflineReplayRequest), ApiError> {
+    let authorization = authorize(context, http.headers()).await?;
+    let axum::Json(request) = axum::Json::<OfflineReplayRequest>::from_request(http, state)
+        .await
+        .map_err(body_rejection)?;
+    request.validate().map_err(invalid)?;
+    Ok((authorization, request))
+}
+
 pub(crate) async fn replay(
     state: &AppState,
-    headers: &HeaderMap,
-    request: OfflineReplayRequest,
+    http: axum::extract::Request,
 ) -> Result<OfflineReplayResponse, ApiError> {
     let context = devices::context(state);
-    let authorization = authorize(&context, headers).await?;
-    request.validate().map_err(invalid)?;
+    let (authorization, request) = authorize_request(&context, http, state).await?;
     replay_as(
         state,
         &context,
-        ReplayPrincipal::Instance(authorization),
+        ReplayPrincipal::Instance(authorization, Some(state)),
         request,
     )
     .await
@@ -990,7 +1095,7 @@ pub(crate) async fn replay_desktop(
     .await
 }
 
-fn desktop_audit(
+fn replay_audit(
     request: &OfflineReplayRequest,
 ) -> (&'static str, &'static str, String, serde_json::Value) {
     let kind = match &request.mutation {
@@ -1025,6 +1130,14 @@ fn desktop_audit(
             "user_scoped": *purpose == StoragePurpose::User,
         }),
     )
+}
+
+fn instance_replay_record(
+    claims: &project::ProjectClaims,
+    request: &OfflineReplayRequest,
+) -> crate::audit::AuditRecordInput {
+    let (action, resource_type, resource_id, details) = replay_audit(request);
+    project::audit_record(claims, action, resource_type, &resource_id, details)
 }
 
 enum ReplayTarget {
@@ -1137,19 +1250,7 @@ async fn replay_as(
         .await
         {
             Ok(reservation) => Some(reservation),
-            Err(error) => {
-                return Ok(response(
-                    &request,
-                    &digest,
-                    OfflineReplayStatus::Blocked,
-                    None,
-                    Some(
-                        error
-                            .public_message()
-                            .unwrap_or("Storage quota admission is unavailable"),
-                    ),
-                ));
-            }
+            Err(error) => return admission_refused(&request, &digest, error),
         }
     } else {
         None
@@ -1202,22 +1303,7 @@ async fn run_file_attempt(
     // A revocation after admission must stop a request that has not yet reached
     // the provider. A provider outcome is always retained before replying.
     if let Err(error) = principal.recheck(context, &request.resource).await {
-        return finish(
-            context,
-            key,
-            response(
-                request,
-                digest,
-                OfflineReplayStatus::Blocked,
-                None,
-                Some(
-                    error
-                        .public_message()
-                        .unwrap_or("Project authorization changed before replay"),
-                ),
-            ),
-        )
-        .await;
+        return recheck_refused(context, key, request, digest, error).await;
     }
     let value = match &request.mutation {
         OfflineMutation::FilePut { .. } => {
@@ -1234,7 +1320,7 @@ pub(super) async fn assert_receipt_lifecycle(
     context: &DeviceContext<'_>,
     authorization: &project::AuthorizedProject,
 ) {
-    let principal = ReplayPrincipal::Instance(authorization.clone());
+    let principal = ReplayPrincipal::Instance(authorization.clone(), None);
     let request = tests::file_request(b"one");
     let digest = request.digest().unwrap();
     let key = ReceiptKey::new(&authorization.claims, &request, &digest).unwrap();
@@ -1430,7 +1516,7 @@ pub(super) async fn assert_revoked_attempt(
     context: &DeviceContext<'_>,
     authorization: &project::AuthorizedProject,
 ) {
-    let principal = ReplayPrincipal::Instance(authorization.clone());
+    let principal = ReplayPrincipal::Instance(authorization.clone(), None);
     let request = tests::file_request(b"later");
     let key = ReceiptKey::new(&authorization.claims, &request, &request.digest().unwrap()).unwrap();
     assert_eq!(
@@ -1476,8 +1562,7 @@ mod tests {
     #[cfg(feature = "aws")]
     async fn file_http_handler(
         axum::extract::State(fixture): axum::extract::State<HttpFixture>,
-        headers: HeaderMap,
-        axum::Json(request): axum::Json<OfflineReplayRequest>,
+        http: axum::extract::Request,
     ) -> Result<axum::Json<OfflineReplayResponse>, ApiError> {
         let context = DeviceContext {
             db: &fixture.db,
@@ -1486,8 +1571,7 @@ mod tests {
             domain: &fixture.domain,
             secure: fixture.secure,
         };
-        let authorization = authorize(&context, &headers).await?;
-        request.validate().map_err(invalid)?;
+        let (authorization, request) = authorize_request(&context, http, &fixture).await?;
         let digest = request.digest().map_err(invalid)?;
         let key = ReceiptKey::new(&authorization.claims, &request, &digest)?;
         let OfflineResource::File { purpose, path } = &request.resource else {
@@ -1511,7 +1595,7 @@ mod tests {
         Ok(axum::Json(
             run_file_attempt(
                 &context,
-                &ReplayPrincipal::Instance(authorization.clone()),
+                &ReplayPrincipal::Instance(authorization.clone(), None),
                 &key,
                 &path,
                 &store,
@@ -1670,7 +1754,7 @@ mod tests {
         assert!(
             claim(
                 context,
-                &ReplayPrincipal::Instance(authorization.clone()),
+                &ReplayPrincipal::Instance(authorization.clone(), None),
                 &key,
                 None
             )
@@ -1699,6 +1783,81 @@ mod tests {
             ),
             "ambiguous create must not resurrect deleted cloud content"
         );
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn unauthenticated_replay_is_rejected_before_the_body_is_read() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let db = sea_orm::DatabaseConnection::default();
+        let config = flow_like::hub::StandaloneConfig {
+            enabled: true,
+            api_base_url: Some("https://instance-test.example/api/v1".into()),
+            ..Default::default()
+        };
+        let context = DeviceContext {
+            db: &db,
+            dialect: crate::db::DbDialect::Postgres,
+            config: &config,
+            domain: "instance-test.example",
+            secure: true,
+        };
+        for credentials in [
+            vec![],
+            vec![("authorization", "Bearer human-token")],
+            vec![("authorization", "DPoP forged"), ("dpop", "forged-proof")],
+        ] {
+            let polled = Arc::new(AtomicBool::new(false));
+            let flag = polled.clone();
+            let body = axum::body::Body::from_stream(futures::stream::once(async move {
+                flag.store(true, Ordering::SeqCst);
+                Ok::<_, std::convert::Infallible>(axum::body::Bytes::from_static(b"[0,0,0]"))
+            }));
+            let mut http = axum::http::Request::builder()
+                .method("POST")
+                .uri(OFFLINE_REPLAY_PATH)
+                .header("content-type", "application/json");
+            for (name, value) in &credentials {
+                http = http.header(*name, *value);
+            }
+            let error = authorize_request(&context, http.body(body).unwrap(), &())
+                .await
+                .err()
+                .expect("unauthenticated replay must fail");
+            assert_eq!(error.status(), StatusCode::UNAUTHORIZED, "{credentials:?}");
+            assert_eq!(
+                error.public_code(),
+                INSTANCE_PROOF_INVALID,
+                "{credentials:?}"
+            );
+            assert!(
+                !polled.load(Ordering::SeqCst),
+                "{credentials:?}: the body was read before authentication"
+            );
+        }
+    }
+
+    #[test]
+    fn only_definitive_admission_refusals_block_the_queue() {
+        let request = file_request(b"quota");
+        let digest = request.digest().unwrap();
+        for status in [StatusCode::PAYMENT_REQUIRED, StatusCode::TOO_MANY_REQUESTS] {
+            let refused = ApiError::coded(status, "LIMIT", "Storage quota exceeded");
+            let value = admission_refused(&request, &digest, refused).unwrap();
+            assert_eq!(value.status, OfflineReplayStatus::Blocked);
+            assert_eq!(value.message.as_deref(), Some("Storage quota exceeded"));
+        }
+        for outage in [
+            ApiError::internal("capacity lookup failed"),
+            ApiError::service_unavailable("database failover"),
+        ] {
+            let error = admission_refused(&request, &digest, outage).unwrap_err();
+            assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
+        }
+        assert!(!is_transient(&ApiError::FORBIDDEN));
+        assert!(!is_transient(&ApiError::UNAUTHORIZED));
+        assert!(!is_transient(&live(now() - 1).unwrap_err()));
+        assert!(is_transient(&ApiError::internal("recheck failed")));
+        assert!(is_transient(&proof_live(now() - 1).unwrap_err()));
     }
 
     pub(super) fn file_request(bytes: &[u8]) -> OfflineReplayRequest {
@@ -2005,7 +2164,11 @@ async fn replay_table(
     let existing = match connection.open_table(table).execute().await {
         Ok(table) => Some(table),
         Err(flow_like_storage::lancedb::Error::TableNotFound { .. }) => None,
-        Err(_) => {
+        Err(
+            flow_like_storage::lancedb::Error::InvalidTableName { .. }
+            | flow_like_storage::lancedb::Error::InvalidInput { .. }
+            | flow_like_storage::lancedb::Error::NotSupported { .. },
+        ) => {
             return Ok(if previous {
                 unknown(&request, &digest)
             } else {
@@ -2014,10 +2177,11 @@ async fn replay_table(
                     &digest,
                     OfflineReplayStatus::Blocked,
                     None,
-                    Some("The cloud table is unavailable"),
+                    Some("The cloud table cannot be opened"),
                 )
             });
         }
+        Err(error) => return Err(retry_later("The cloud table", error)),
     };
     if previous {
         let Some(existing) = existing else {
@@ -2067,17 +2231,7 @@ async fn replay_table(
         )
         .await
         {
-            return Ok(response(
-                &request,
-                &digest,
-                OfflineReplayStatus::Blocked,
-                None,
-                Some(
-                    error
-                        .public_message()
-                        .unwrap_or("Storage quota admission is unavailable"),
-                ),
-            ));
+            return admission_refused(&request, &digest, error);
         }
     }
     if !claim(context, principal, key, None).await? {
@@ -2087,22 +2241,7 @@ async fn replay_table(
             .unwrap_or_else(|| unknown(&request, &digest)));
     }
     if let Err(error) = principal.recheck(context, &request.resource).await {
-        return finish(
-            context,
-            key,
-            response(
-                &request,
-                &digest,
-                OfflineReplayStatus::Blocked,
-                None,
-                Some(
-                    error
-                        .public_message()
-                        .unwrap_or("Project authorization changed before replay"),
-                ),
-            ),
-        )
-        .await;
+        return recheck_refused(context, key, &request, &digest, error).await;
     }
     let outcome = if *version == 0 {
         let rows = match &request.mutation {

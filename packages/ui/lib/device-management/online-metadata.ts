@@ -3,11 +3,14 @@ import type { IBackendState } from "../../state/backend-state";
 import type { IProfile } from "../../types";
 import type { IApp } from "../schema/app/app";
 import type { ArtifactInput } from "./artifacts";
+import { type DeploymentCatalog, approvedOnlineCatalog } from "./deployment";
 
 export type ApprovedOnlineMetadata = {
 	app: IApp;
 	file: ArtifactInput;
 	sha256: string;
+	/** Deployment choices derived from exactly these approved bytes. */
+	catalog: DeploymentCatalog;
 };
 
 /** Hash the exact locally held payload. Only the authenticated deployment approves it. */
@@ -44,6 +47,7 @@ export async function prepareOnlineMetadata(
 		throw new Error("Executable metadata exceeds the 32 MiB deployment limit.");
 	return {
 		app,
+		catalog: approvedOnlineCatalog(bundle.documents),
 		file: {
 			path: `apps/${project}/online-metadata.json`,
 			file: new Blob([bytes]),

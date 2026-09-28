@@ -60,6 +60,16 @@ describe("Home FlowPilot tools", () => {
 					optional: true,
 					max_bytes: 1024,
 				},
+				css: { field: "appearance.css", optional: true, max_bytes: 8192 },
+				surface_variables: {
+					names: expect.arrayContaining([
+						"--home-accent",
+						"--home-surface-item",
+					]),
+				},
+				theme_colors: {
+					names: expect.arrayContaining(["--primary", "--chart-5"]),
+				},
 			},
 			data_options: {
 				aggregations: expect.arrayContaining(["count", "sum", "median"]),
@@ -228,6 +238,21 @@ describe("Home FlowPilot tools", () => {
 			": absolute, md:z-10, !-z-10, z-20!, lg:col-span-full, row-start-2, self-end, [&~div]:hidden, [&+section]:mt-2, relative.",
 		);
 
+		expect(
+			codes(
+				styled(
+					"before:absolute before:inset-0 md:after:z-10 [&_span]:absolute [&>div]:relative [&::before]:absolute *:self-end **:col-span-2 first-letter:float-left",
+				),
+			),
+		).toEqual([]);
+		const escaping = styled(
+			"fixed before:fixed [&_span]:fixed [&:hover]:absolute hover:z-10",
+		);
+		expect(codes(escaping)).toEqual(["home_widget_class_name_out_of_scope"]);
+		expect(escaping.issues[0].message).toContain(
+			": fixed, before:fixed, [&_span]:fixed, [&:hover]:absolute, hover:z-10.",
+		);
+
 		expect(codes(styled("x".repeat(1024)))).toEqual([]);
 		for (const oversized of ["x".repeat(1025), "é".repeat(513)]) {
 			const result = styled(oversized);
@@ -241,6 +266,156 @@ describe("Home FlowPilot tools", () => {
 				}),
 			]);
 		}
+	});
+
+	test("candidate validation keeps widget CSS and flags parts that leave the widget", () => {
+		const styled = (css: unknown) =>
+			validateHomeLayoutCandidate(
+				layout([
+					{
+						...widget("styled"),
+						appearance: {
+							variant: "card",
+							accent: "neutral",
+							css,
+						} as IHomeLayout["widgets"][number]["appearance"],
+					},
+				]),
+			);
+		const codes = (result: ReturnType<typeof validateHomeLayoutCandidate>) =>
+			result.issues.map((entry) => entry.code);
+
+		const clean = styled(
+			"@keyframes glow { to { opacity: 0.6; } }\n:root { background: var(--card); animation: glow 2s; }\n:root:is(.dark *) { color: white; }\n:root:hover > h2 ~ p, h2 + p { width: 50%; }\n:root { h2 { height: 2rem; } & > p ~ p { margin: 0; } }",
+		);
+		expect(clean.valid).toBe(true);
+		expect(clean.issues).toEqual([]);
+		expect(clean.canonical_layout?.widgets[0].appearance.css).toBe(
+			"@keyframes glow { to { opacity: 0.6; } }\n:root { background: var(--card); animation: glow 2s; }\n:root:is(.dark *) { color: white; }\n:root:hover > h2 ~ p, h2 + p { width: 50%; }\n:root { h2 { height: 2rem; } & > p ~ p { margin: 0; } }",
+		);
+		expect(codes(styled(" \n "))).toEqual(["home_layout_normalized"]);
+
+		for (const invalid of [42, [":root {}"], null]) {
+			const result = styled(invalid);
+			expect(result.valid).toBe(false);
+			expect(result.issues).toContainEqual(
+				expect.objectContaining({
+					severity: "error",
+					code: "home_widget_css_type_invalid",
+					path: "$.widgets[0].appearance.css",
+				}),
+			);
+		}
+
+		const outOfScope = styled(
+			"@property --angle { syntax: '<angle>'; inherits: false; initial-value: 0deg; }\n:root ~ section { opacity: 0; }\nbody.dark + * { color: red; }\n:root { position: fixed; z-index: 50; & + div { display: none; } }\n@media (min-width: 600px) { :root:hover { height: 900px; } }",
+		);
+		expect(outOfScope.valid).toBe(true);
+		expect(outOfScope.issues).toEqual([
+			expect.objectContaining({
+				severity: "warning",
+				code: "home_widget_css_out_of_scope",
+				path: "$.widgets[0].appearance.css",
+			}),
+		]);
+		expect(outOfScope.issues[0].message).toContain(
+			": @property, :root ~ section, body.dark + *, position on :root, z-index on :root, & + div, height on :root, position: fixed.",
+		);
+
+		const decoration = styled(
+			':root { isolation: isolate; }\n:root::before { content: ""; position: absolute; inset: 0; z-index: -1; width: 100%; height: 4px; }\n:root:is(.dark *)::after, body:after { position: absolute; top: 0; }\n:root:first-letter { width: 1em; }',
+		);
+		expect(decoration.issues).toEqual([]);
+		const fixedInside = styled("p { position: fixed; }");
+		expect(codes(fixedInside)).toEqual(["home_widget_css_out_of_scope"]);
+		expect(fixedInside.issues[0].message).toContain(": position: fixed.");
+
+		const tailwind = styled(
+			":root { @apply bg-card; color: theme(--color-primary); background: --alpha(var(--primary) / 50%); padding: --spacing(4); }\n@theme { --color-brand: red; }\n@tailwind utilities;",
+		);
+		expect(tailwind.valid).toBe(true);
+		expect(tailwind.issues).toEqual([
+			expect.objectContaining({
+				severity: "warning",
+				code: "home_widget_css_tailwind_syntax",
+				path: "$.widgets[0].appearance.css",
+			}),
+		]);
+		expect(tailwind.issues[0].message).toContain(
+			": @apply, @theme, @tailwind, theme(), --alpha(), --spacing().",
+		);
+
+		const wrapped = styled(
+			":root { background: hsl(var(--primary)); color: rgb( var(--foreground) / 0.8); border-color: oklch(var(--home-accent)); --ring: HSL(var(--card)); outline-color: color-mix(in oklab, var(--border) 50%, transparent); }",
+		);
+		expect(wrapped.valid).toBe(true);
+		expect(wrapped.issues).toEqual([
+			expect.objectContaining({
+				severity: "warning",
+				code: "home_widget_css_wrapped_color_variable",
+				path: "$.widgets[0].appearance.css",
+			}),
+		]);
+		expect(wrapped.issues[0].message).toContain(
+			": hsl(var(--primary)), rgb(var(--foreground)), oklch(var(--home-accent)), hsl(var(--card)).",
+		);
+
+		const broken = styled(":root { color: red;");
+		expect(broken.valid).toBe(true);
+		expect(codes(broken)).toEqual(["home_widget_css_invalid"]);
+
+		expect(codes(styled(`:root{}${" ".repeat(8185)}`))).toEqual([]);
+		const oversized = styled(`:root{}${" ".repeat(8186)}`);
+		expect(oversized.valid).toBe(false);
+		expect(oversized.issues).toContainEqual(
+			expect.objectContaining({
+				severity: "error",
+				code: "home_layout_invalid",
+				message: "Widget 1 appearance css must not exceed 8192 bytes.",
+			}),
+		);
+
+		const withStyling = (
+			id: string,
+			styling: { className?: string; css?: string } = {},
+		) => ({
+			...widget(id),
+			appearance: { variant: "card", accent: "neutral", ...styling },
+		});
+		const current = layout([
+			withStyling("styled", {
+				className: "bg-card",
+				css: ":root { color: red; }",
+			}),
+			withStyling("classes", { className: "bg-card" }),
+			withStyling("plain"),
+		]);
+		const dropped = validateHomeLayoutCandidate(
+			layout([
+				withStyling("styled"),
+				withStyling("classes", {
+					className: "bg-primary",
+					css: "p { margin: 0; }",
+				}),
+				withStyling("plain"),
+				withStyling("new"),
+			]),
+			current,
+		);
+		expect(dropped.valid).toBe(true);
+		expect(dropped.issues).toEqual([
+			expect.objectContaining({
+				severity: "warning",
+				code: "home_widget_styling_removed",
+				path: "$.widgets[0].appearance.className",
+			}),
+			expect.objectContaining({
+				severity: "warning",
+				code: "home_widget_styling_removed",
+				path: "$.widgets[0].appearance.css",
+			}),
+		]);
+		expect(validateHomeLayoutCandidate(current, current).issues).toEqual([]);
 	});
 
 	test("public validation and context comparisons avoid duplicate layout payloads", () => {

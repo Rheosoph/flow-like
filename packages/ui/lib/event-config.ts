@@ -1,14 +1,16 @@
 import { ChatInterface } from "../components/interfaces/chat-default";
 import { CronJobConfig } from "../components/interfaces/configs/cron";
-import { GeolocationConfig } from "../components/interfaces/configs/geolocation";
 import { DaemonConfig } from "../components/interfaces/configs/daemon";
 import { DeeplinkConfig } from "../components/interfaces/configs/deeplink";
 import { DiscordConfig } from "../components/interfaces/configs/discord";
 import { GenericFormConfig } from "../components/interfaces/configs/generic_form";
+import { GeolocationConfig } from "../components/interfaces/configs/geolocation";
 import { HttpConfig } from "../components/interfaces/configs/http";
+import { InboundEmailConfig } from "../components/interfaces/configs/inbound-email";
 import { McpConfig } from "../components/interfaces/configs/mcp";
 import { RestConfig } from "../components/interfaces/configs/rest";
 import { SimpleChatConfig } from "../components/interfaces/configs/simple_chat";
+import { TeamsConfig } from "../components/interfaces/configs/teams";
 import { TelegramConfig } from "../components/interfaces/configs/telegram";
 import { UserMailConfig } from "../components/interfaces/configs/user_mail";
 import { GenericEventFormInterface } from "../components/interfaces/generic-event-form";
@@ -21,6 +23,11 @@ export {
 } from "./event-definitions";
 
 export const EVENT_CONFIG: IEventMapping = {
+	events_inbound_email: {
+		...EVENT_DEFINITIONS.events_inbound_email,
+		configInterfaces: { inbound_email: InboundEmailConfig },
+		useInterfaces: {},
+	},
 	events_location: {
 		...EVENT_DEFINITIONS.events_location,
 		configInterfaces: { geolocation: GeolocationConfig },
@@ -32,6 +39,7 @@ export const EVENT_CONFIG: IEventMapping = {
 			simple_chat: SimpleChatConfig,
 			discord: DiscordConfig,
 			telegram: TelegramConfig,
+			teams: TeamsConfig,
 		},
 		useInterfaces: {
 			simple_chat: ChatInterface,

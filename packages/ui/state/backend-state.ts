@@ -128,6 +128,7 @@ export type {
 export type { SinkType } from "./backend-state/sink-state";
 
 export type {
+	IInboundEmailAddress,
 	IEventRunsResult,
 	IEventTimeline,
 	IEventTimelineEntry,
@@ -227,6 +228,8 @@ export interface ICapabilities {
 	canHostMLX: boolean;
 	canHostEmbeddings: boolean;
 	canExecuteLocally: boolean;
+	/** Desktop runtimes may reuse installed agent CLI credentials. */
+	canUseNativeAgentProviders?: boolean;
 }
 
 export interface IBackendState {

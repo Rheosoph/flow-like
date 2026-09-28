@@ -147,7 +147,9 @@
 		"discord": false,
 		"slack": false,
 		"telegram": false,
-		"email": true
+		"teams": true,
+		"email": true,
+		"inbound_email": true
 	},
 	"hubs": [],
 	"cdn": "https://cdn.flow-like.com",
@@ -180,6 +182,9 @@
 		"provider": "ses",
 		"from_email": "no-reply@flow-like.com",
 		"from_name": "Flow-Like"
+	},
+	"mail_automation": {
+		"enabled": false
 	},
 	"alerting": {
 		"mail": "info@great-co.de"

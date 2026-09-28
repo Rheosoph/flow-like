@@ -1,6 +1,7 @@
 use super::{ProjectCredentials, WorkloadIdentity};
 use crate::{
     config::PlacementConfig,
+    enrollment::{api_error_code, api_status},
     outbox::{BufferedTable, BufferingConfig},
 };
 use anyhow::{Context, Result, ensure};
@@ -27,6 +28,26 @@ use std::{
 
 pub(super) mod files;
 
+/// A denial quarantines every queued write, so a replay treats only a 403 or a
+/// 401 with a specific code as one. An API without proof codes answers a
+/// project token that expired during a long upload with a plain or generic
+/// 401, which is retried; a real revocation still reaches the broker token and
+/// storage lease paths.
+fn replay_error_kind(error: &anyhow::Error) -> ReplayErrorKind {
+    let status = api_status(error);
+    if status == Some(reqwest::StatusCode::UNAUTHORIZED)
+        && api_error_code(error).is_none_or(|code| code == "UNAUTHORIZED")
+    {
+        return ReplayErrorKind::Unavailable;
+    }
+    match super::authorization_error(error) {
+        AuthorizationError::Denied => ReplayErrorKind::Denied,
+        AuthorizationError::Unavailable => ReplayErrorKind::Unavailable,
+        _ if status.is_some_and(|status| status.is_client_error()) => ReplayErrorKind::Rejected,
+        _ => ReplayErrorKind::Unavailable,
+    }
+}
+
 pub(super) struct WriteManager {
     engine: Arc<flow_like_offline_writes::WriteManager>,
     credentials: Arc<ProjectCredentials>,
@@ -40,44 +61,43 @@ struct StandaloneHost {
 
 #[async_trait::async_trait]
 impl OfflineHost for StandaloneHost {
+    /// Any error here quarantines every queued write, so only a durable
+    /// revocation counts. An elapsed deadline already stops this process, and a
+    /// local read failure fails the write it guards.
     fn authorization_current(&self) -> Result<(), AuthorizationError> {
-        self.credentials.authorization_current().map_err(|error| {
-            error
-                .downcast_ref::<AuthorizationError>()
-                .copied()
-                .unwrap_or(AuthorizationError::Denied)
-        })
+        match self.credentials.authorization_current() {
+            Err(error)
+                if super::local_authorization_error(&error) == AuthorizationError::Denied =>
+            {
+                Err(AuthorizationError::Denied)
+            }
+            Err(error) => {
+                tracing::debug!(
+                    placement_id = %self.credentials.config.id,
+                    "Offline writes keep their queue without a confirmed denial: {error:#}"
+                );
+                Ok(())
+            }
+            Ok(()) => Ok(()),
+        }
     }
     async fn replay(
         &self,
         request: &OfflineReplayRequest,
     ) -> Result<OfflineReplayResponse, ReplayError> {
-        let body = serde_json::to_value(request).map_err(|error| ReplayError {
+        let body = serde_json::to_vec(request).map_err(|error| ReplayError {
             kind: ReplayErrorKind::Unavailable,
             code: None,
             message: error.to_string(),
         })?;
         self.credentials
             .client
-            .request::<OfflineReplayResponse>(reqwest::Method::POST, "offline/replay", Some(&body))
+            .replay::<OfflineReplayResponse>("offline/replay", body)
             .await
-            .map_err(|error| {
-                let kind = if super::authorization_error(&error) == AuthorizationError::Denied {
-                    ReplayErrorKind::Denied
-                } else if crate::enrollment::api_status(&error).is_some_and(|status| {
-                    status.is_client_error()
-                        && status != reqwest::StatusCode::UNAUTHORIZED
-                        && status != reqwest::StatusCode::TOO_MANY_REQUESTS
-                }) {
-                    ReplayErrorKind::Rejected
-                } else {
-                    ReplayErrorKind::Unavailable
-                };
-                ReplayError {
-                    kind,
-                    code: None,
-                    message: error.to_string(),
-                }
+            .map_err(|error| ReplayError {
+                kind: replay_error_kind(&error),
+                code: None,
+                message: error.to_string(),
             })
     }
     fn location_prefix(&self, purpose: StoragePurpose) -> Option<String> {
@@ -223,4 +243,101 @@ pub(super) async fn configure(
         engine,
         credentials,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::broker::api_error;
+
+    #[tokio::test]
+    async fn only_a_durable_revocation_quarantines_offline_writes() -> Result<()> {
+        use crate::online::tests::{config, identity, lease, lease_server};
+        let root = tempfile::tempdir()?;
+        let config = config(root.path());
+        let status = Arc::new(std::sync::atomic::AtomicU16::new(200));
+        let (client, server) =
+            lease_server(Arc::new(tokio::sync::Mutex::new(lease())), status).await?;
+        let credentials =
+            ProjectCredentials::new(client, &config, &identity(), root.path()).await?;
+        let host = Arc::new(StandaloneHost {
+            credentials: credentials.clone(),
+            remotes: RwLock::new(Vec::new()),
+            session: Arc::new(flow_like_storage::lance::session::Session::default()),
+        });
+        let engine = flow_like_offline_writes::WriteManager::open(
+            WriteManagerOptions::standalone(
+                root.path().to_path_buf(),
+                config.id.clone(),
+                credentials.scope.clone(),
+                BufferingConfig::default(),
+            ),
+            host,
+        )
+        .await?;
+        let database = rusqlite::Connection::open(credentials.cache.database_path())?;
+        database.execute_batch("ALTER TABLE cache_state RENAME TO cache_state_unavailable")?;
+        assert!(credentials.cache.is_revoked().is_err());
+        engine.drain_once().await?;
+        assert!(
+            engine.queue().check_authorized().is_ok(),
+            "An unreadable cache state quarantined the outbox"
+        );
+        database.execute_batch("ALTER TABLE cache_state_unavailable RENAME TO cache_state")?;
+        credentials.grant_expires_at.store(
+            crate::enrollment::unix_time()? - 1,
+            std::sync::atomic::Ordering::Release,
+        );
+        engine.drain_once().await?;
+        assert!(
+            engine.queue().check_authorized().is_ok(),
+            "An elapsed grant deadline quarantined the outbox"
+        );
+        credentials.cache.revoke()?;
+        assert!(engine.drain_once().await.is_err());
+        assert!(engine.queue().check_authorized().is_err());
+        engine.close().await?;
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_quarantines_only_on_a_confirmed_denial() {
+        for (status, body, expected) in [
+            (401, "", ReplayErrorKind::Unavailable),
+            (
+                401,
+                r#"{"error":{"code":"UNAUTHORIZED","message":"Unauthorized"}}"#,
+                ReplayErrorKind::Unavailable,
+            ),
+            (
+                401,
+                r#"{"error":{"code":"INSTANCE_PROOF_INVALID"}}"#,
+                ReplayErrorKind::Unavailable,
+            ),
+            (
+                401,
+                r#"{"error":{"code":"GRANT_REVOKED"}}"#,
+                ReplayErrorKind::Denied,
+            ),
+            (403, "", ReplayErrorKind::Denied),
+            (402, "", ReplayErrorKind::Unavailable),
+            (409, "", ReplayErrorKind::Rejected),
+            (503, "", ReplayErrorKind::Unavailable),
+        ] {
+            assert_eq!(
+                replay_error_kind(&api_error(status, body).await),
+                expected,
+                "{status} {body}"
+            );
+        }
+        assert_eq!(
+            replay_error_kind(&AuthorizationError::Denied.into()),
+            ReplayErrorKind::Denied
+        );
+        assert_eq!(
+            replay_error_kind(&AuthorizationError::Expired.into()),
+            ReplayErrorKind::Unavailable
+        );
+    }
 }

@@ -69,6 +69,41 @@ fn instance_auth_uses_the_same_viewer_credential_as_the_cloudfront_boundary() {
 }
 
 #[test]
+fn proof_failures_are_coded_and_distinct_from_denials() {
+    let mut missing = valid_headers();
+    missing.remove("dpop");
+    for error in [
+        credentials(&missing).unwrap_err(),
+        credentials(&HeaderMap::new()).unwrap_err(),
+        bad_proof("InvalidTime"),
+        proof_live(now() - 1).unwrap_err(),
+    ] {
+        assert_eq!(error.status(), axum::http::StatusCode::UNAUTHORIZED);
+        assert_eq!(error.public_code(), INSTANCE_PROOF_INVALID);
+    }
+    for denial in [live(now() - 1).unwrap_err(), ApiError::FORBIDDEN] {
+        assert_ne!(denial.public_code(), INSTANCE_PROOF_INVALID);
+    }
+    proof_live(now() + 60).unwrap();
+}
+
+#[test]
+fn replayed_device_proofs_are_proof_failures_not_denials() {
+    let replayed = device_proof_failure(ApiError::unauthorized("Device proof was already used"));
+    assert_eq!(replayed.status(), axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(replayed.public_code(), INSTANCE_PROOF_INVALID);
+    for other in [
+        ApiError::NOT_FOUND,
+        ApiError::internal("database unavailable"),
+    ] {
+        let status = other.status();
+        let passed = device_proof_failure(other);
+        assert_eq!(passed.status(), status);
+        assert_ne!(passed.public_code(), INSTANCE_PROOF_INVALID);
+    }
+}
+
+#[test]
 fn reserved_instance_jose_types_never_fall_through_to_human_authentication() {
     backend_jwt::init_for_tests();
     for typ in [

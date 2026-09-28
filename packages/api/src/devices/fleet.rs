@@ -1,5 +1,6 @@
 use super::{context, human_owner, management, repository};
 use crate::{
+    cache::{PlatformCache, Reservation},
     db::{RetryPolicy, retry_transaction},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -13,7 +14,7 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use flow_like_device_protocol::*;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseTransaction, Statement, Value};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::result::Result;
 
 fn sql(query: &str, values: impl IntoIterator<Item = Value>) -> Statement {
@@ -33,6 +34,103 @@ fn key(id: &str) -> Result<Ed25519PublicKey, ApiError> {
     }
     Ed25519PublicKey::from_bytes(bytes).map_err(invalid)
 }
+/// Every replacement changes the reader digest the device seals to, so it
+/// invalidates that reader's in-flight publication.
+const MIN_READER_RENEWAL_SECONDS: i64 = 60 * 60;
+const READER_CHANGE_NAMESPACE: &str = "device-fleet-reader-change";
+/// Stale non-deleted rows can outnumber live readers; they are filtered after loading.
+const MAX_READER_ROWS: u64 = 1024;
+
+fn issued_at(compact: &str) -> Option<i64> {
+    let payload = URL_SAFE_NO_PAD.decode(compact.split('.').nth(1)?).ok()?;
+    serde_json::from_slice::<FleetReader>(&payload)
+        .ok()
+        .map(|reader| reader.issued_at)
+}
+
+/// `accepted_at` is when the server last accepted a change to this reader. The
+/// grantee chooses the signed issued_at, so it only raises that floor: a
+/// declaration signed long ago, such as a retried pending one, is still accepted
+/// once the interval has passed, but backdating cannot skip it.
+fn check_renewal_interval(
+    previous_jws: &str,
+    accepted_at: Option<i64>,
+    now: i64,
+) -> Result<(), ApiError> {
+    let Some(previous) = issued_at(previous_jws).max(accepted_at) else {
+        return Ok(());
+    };
+    let allowed_at = previous.saturating_add(MIN_READER_RENEWAL_SECONDS);
+    if now < allowed_at {
+        return Err(ApiError::too_many_requests(format!(
+            "Fleet reader renewals must be at least {MIN_READER_RENEWAL_SECONDS} seconds apart; the current reader changed at {previous}, so a replacement is accepted from {allowed_at}"
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+struct ReaderChange {
+    accepted_at: i64,
+}
+
+/// A cross-replica record of a reader's last accepted change, kept for one
+/// renewal interval. Without the platform cache only the signed floor applies.
+enum ReaderChangeClaim {
+    Owned(PlatformCache),
+    Held(i64),
+    Unavailable,
+}
+
+impl ReaderChangeClaim {
+    async fn acquire(state: &AppState, key: &str, now: i64) -> Self {
+        let cache = match state.cache.platform().await {
+            Ok(cache) => cache,
+            Err(error) => {
+                tracing::warn!(%error, "Platform cache unavailable; fleet reader renewals fall back to the signed issue time");
+                return Self::Unavailable;
+            }
+        };
+        let ttl = std::time::Duration::from_secs(MIN_READER_RENEWAL_SECONDS as u64);
+        match cache
+            .try_insert(
+                READER_CHANGE_NAMESPACE,
+                key,
+                &ReaderChange { accepted_at: now },
+                ttl,
+            )
+            .await
+        {
+            Ok(Reservation::Acquired) => Self::Owned(cache),
+            Ok(Reservation::Held(change)) => Self::Held(change.accepted_at),
+            Err(error) => {
+                tracing::warn!(%error, "Fleet reader change record failed; renewals fall back to the signed issue time");
+                Self::Unavailable
+            }
+        }
+    }
+
+    fn accepted_at(&self) -> Option<i64> {
+        match self {
+            Self::Held(accepted_at) => Some(*accepted_at),
+            Self::Owned(_) | Self::Unavailable => None,
+        }
+    }
+
+    /// An owned record stays only when this request changed the reader.
+    async fn settle(self, key: &str, changed: bool) {
+        let Self::Owned(cache) = self else {
+            return;
+        };
+        if changed {
+            return;
+        }
+        if let Err(error) = cache.delete(READER_CHANGE_NAMESPACE, key).await {
+            tracing::warn!(%error, "Could not release an unused fleet reader change record; renewals of this reader wait for it to expire");
+        }
+    }
+}
+
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route(
@@ -68,6 +166,31 @@ async fn load_reader(
     key_id: &str,
 ) -> Result<Option<FleetReaderState>, ApiError> {
     tx.query_one_raw(sql(r#"SELECT "readerJws",revision,deleted FROM "DeviceFleetReader" WHERE "deviceId"=$1 AND "userId"=$2 AND "keyId"=$3"#, [id.into(),user.into(),key_id.into()])).await?.map(|r| Ok(FleetReaderState { reader_jws:r.try_get("","readerJws")?, revision:r.try_get::<i64>("","revision")? as u64, deleted:r.try_get("","deleted")? })).transpose()
+}
+async fn live_readers(
+    tx: &DatabaseTransaction,
+    id: &str,
+    manifest: &OnboardingManifest,
+    policy: Option<&(String, ManagementPolicy)>,
+    now: i64,
+) -> Result<Vec<(String, String, FleetReaderState)>, ApiError> {
+    let rows = tx.query_all_raw(sql(&format!(r#"SELECT r."userId",r."keyId",r."readerJws",r.revision FROM "DeviceFleetReader" r JOIN "User" u ON u.id=r."userId" WHERE r."deviceId"=$1 AND r.deleted=false AND u.status='ACTIVE' ORDER BY r."userId",r."keyId" LIMIT {MAX_READER_ROWS}"#), [id.into()])).await?;
+    let mut live = vec![];
+    for row in rows {
+        let (user, key_id) = (
+            row.try_get::<String>("", "userId")?,
+            row.try_get::<String>("", "keyId")?,
+        );
+        let state = FleetReaderState {
+            reader_jws: row.try_get("", "readerJws")?,
+            revision: row.try_get::<i64>("", "revision")? as u64,
+            deleted: false,
+        };
+        if authorize_reader(&state, &key(&key_id)?, &user, manifest, policy, now).is_ok() {
+            live.push((user, key_id, state));
+        }
+    }
+    Ok(live)
 }
 fn authorize_reader(
     state: &FleetReaderState,
@@ -155,17 +278,33 @@ async fn reader_action(
         .enrollment(&device.receipt.enrollment_id)
         .await?
         .manifest;
-    retain_reader(
+    let change_key = format!("{id}:{user}:{key_id}");
+    let claim = match &action {
+        ReaderAction::Put(_) => Some(
+            ReaderChangeClaim::acquire(&state, &change_key, chrono::Utc::now().timestamp()).await,
+        ),
+        ReaderAction::Get | ReaderAction::Delete(_) => None,
+    };
+    let accepted_at = claim.as_ref().and_then(ReaderChangeClaim::accepted_at);
+    let result = retain_reader(
         &state.db,
         state.db_dialect,
         device,
         manifest,
         user,
         key_id,
+        accepted_at,
         action,
     )
-    .await
+    .await;
+    if let Some(claim) = claim {
+        claim
+            .settle(&change_key, matches!(result, Ok((_, true))))
+            .await;
+    }
+    result.map(|(reader, _)| reader)
 }
+/// Returns the reader and whether this call changed it.
 #[allow(clippy::too_many_arguments)]
 async fn retain_reader(
     db: &sea_orm::DatabaseConnection,
@@ -174,8 +313,9 @@ async fn retain_reader(
     manifest: OnboardingManifest,
     user: String,
     key_id: String,
+    accepted_at: Option<i64>,
     action: ReaderAction,
-) -> Result<FleetReaderState, ApiError> {
+) -> Result<(FleetReaderState, bool), ApiError> {
     let id = device.status.device_id.clone();
     let key = key(&key_id)?;
     if let ReaderAction::Put(jws) = &action {
@@ -201,7 +341,7 @@ async fn retain_reader(
                 ReaderAction::Get => old.ok_or(ApiError::NOT_FOUND)?,
                 ReaderAction::Delete(revision) => {
                     let mut old=old.ok_or(ApiError::NOT_FOUND)?;
-                    if old.deleted && revision==old.revision {return Ok(old);}
+                    if old.deleted && revision==old.revision {return Ok((old,false));}
                     if revision!=old.revision+1 {return Err(ApiError::conflict("Fleet reader changed; reload before removing it"));}
                     old.revision=revision; old.deleted=true;
                     old
@@ -211,21 +351,22 @@ async fn retain_reader(
                     let next=FleetReaderState {reader_jws:jws,revision:reader.revision,deleted:false};
                     authorize_reader(&next,&key,&user,&manifest,policy.as_ref(),now)?;
                     if let Some(old)=&old {
-                        if old.revision==next.revision && old.reader_jws==next.reader_jws && !old.deleted {return Ok(next);}
+                        if old.revision==next.revision && old.reader_jws==next.reader_jws && !old.deleted {return Ok((next,false));}
                         if next.revision!=old.revision+1 {return Err(ApiError::conflict("Fleet reader changed; reload before replacing it"));}
+                        check_renewal_interval(&old.reader_jws,accepted_at,now)?;
                     } else {
                         if next.revision!=1 {return Err(ApiError::conflict("Fleet reader genesis revision required"));}
-                        let count=tx.query_one_raw(sql(r#"SELECT COUNT(*) AS count FROM "DeviceFleetReader" WHERE "deviceId"=$1"#,[id.clone().into()])).await?.ok_or(ApiError::FORBIDDEN)?.try_get::<i64>("","count")?;
-                        if count>=MAX_FLEET_READERS as i64 {return Err(invalid("This device reached its fleet reader key limit"));}
+                        // Deleted rows stay as replay floors; only live readers use capacity.
+                        if live_readers(tx,&id,&manifest,policy.as_ref(),now).await?.len()>=MAX_FLEET_READERS {return Err(invalid("This device reached its fleet reader key limit"));}
                     }
                     next
                 }
             };
-            if is_get {return Ok(output);}
+            if is_get {return Ok((output,false));}
             tx.execute_raw(sql(r#"INSERT INTO "DeviceFleetReader"("deviceId","userId","keyId",revision,"readerJws",deleted) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT("deviceId","userId","keyId") DO UPDATE SET revision=excluded.revision,"readerJws"=excluded."readerJws",deleted=excluded.deleted"#,[id.clone().into(),user.clone().into(),key_id.clone().into(),(output.revision as i64).into(),output.reader_jws.clone().into(),output.deleted.into()])).await?;
             // Key renewal or deletion removes the old ciphertext, with its replay floor retained by the device head.
             tx.execute_raw(sql(r#"DELETE FROM "DeviceFleetSnapshot" WHERE "deviceId"=$1 AND "userId"=$2 AND "keyId"=$3"#,[id.into(),user.into(),key_id.into()])).await?;
-            Ok(output)
+            Ok((output,true))
         })
     }).await
 }
@@ -272,20 +413,32 @@ async fn recipients(
         .enrollment(&device.receipt.enrollment_id)
         .await?
         .manifest;
-    retry_transaction(&state.db,state.db_dialect,None,&RetryPolicy::default(),move|tx|{
-        let (id,device,manifest)=(id.clone(),device.clone(),manifest.clone());
-        Box::pin(async move {
-            repository::lock_active_device(tx,&id,device.status.auth_epoch).await?;
-            let now=chrono::Utc::now().timestamp(); let policy=policy(tx,&manifest,now).await?;
-            let rows=tx.query_all_raw(sql(r#"SELECT r."readerJws",r."keyId",r."userId",r.revision FROM "DeviceFleetReader" r JOIN "User" u ON u.id=r."userId" WHERE r."deviceId"=$1 AND r.deleted=false AND u.status='ACTIVE' ORDER BY r."userId",r."keyId" LIMIT 64"#,[id.clone().into()])).await?;
-            let mut readers=vec![];
-            for row in rows {
-                let state=FleetReaderState{reader_jws:row.try_get("","readerJws")?,revision:row.try_get::<i64>("","revision")? as u64,deleted:false};
-                if authorize_reader(&state,&key(&row.try_get::<String>("","keyId")?)?,&row.try_get::<String>("","userId")?,&manifest,policy.as_ref(),now).is_ok() {readers.push(state.reader_jws);}
-            }
-            Ok(Json(FleetRecipients {readers,policy_jws:policy.map(|(j,_)|j),head:head(tx,&id).await?}))
-        })
-    }).await
+    retry_transaction(
+        &state.db,
+        state.db_dialect,
+        None,
+        &RetryPolicy::default(),
+        move |tx| {
+            let (id, device, manifest) = (id.clone(), device.clone(), manifest.clone());
+            Box::pin(async move {
+                repository::lock_active_device(tx, &id, device.status.auth_epoch).await?;
+                let now = chrono::Utc::now().timestamp();
+                let policy = policy(tx, &manifest, now).await?;
+                let readers = live_readers(tx, &id, &manifest, policy.as_ref(), now)
+                    .await?
+                    .into_iter()
+                    .take(MAX_FLEET_READERS)
+                    .map(|(_, _, state)| state.reader_jws)
+                    .collect();
+                Ok(Json(FleetRecipients {
+                    readers,
+                    policy_jws: policy.map(|(j, _)| j),
+                    head: head(tx, &id).await?,
+                }))
+            })
+        },
+    )
+    .await
 }
 async fn upload(
     State(state): State<AppState>,
@@ -353,9 +506,7 @@ async fn retain_snapshot(
             let previous=head(tx,&id).await?;
             if previous.sequence==manifest.sequence && previous.manifest_digest.as_ref()==Some(&digest) {return Ok(previous);}
             if previous.sequence+1!=manifest.sequence || previous.manifest_digest!=manifest.previous_digest {return Err(ApiError::conflict("Fleet sequence does not extend the device publication chain"));}
-            let reader_rows=tx.query_all_raw(sql(r#"SELECT r."userId",r."keyId",r."readerJws",r.revision FROM "DeviceFleetReader" r JOIN "User" u ON u.id=r."userId" WHERE r."deviceId"=$1 AND r.deleted=false AND u.status='ACTIVE' LIMIT 64"#,[id.clone().into()])).await?;
-            let mut readers=std::collections::BTreeMap::new();
-            for row in reader_rows {readers.insert((row.try_get::<String>("","userId")?,row.try_get::<String>("","keyId")?),FleetReaderState{reader_jws:row.try_get("","readerJws")?,revision:row.try_get::<i64>("","revision")? as u64,deleted:false});}
+            let readers:std::collections::BTreeMap<_,_>=live_readers(tx,&id,&onboarding,policy.as_ref(),now).await?.into_iter().map(|(user,key_id,state)|((user,key_id),state)).collect();
             let rows=tx.query_all_raw(sql(r#"SELECT "streamId","manifestJws","updatedAt" FROM "DeviceFleetSnapshot" WHERE "deviceId"=$1 LIMIT 128"#,[id.clone().into()])).await?;
             let mut retained=0; let mut exists=false;
             for row in rows {
@@ -417,10 +568,74 @@ async fn retained_view(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn signed_reader(issued_at: i64) -> String {
+        let key = SigningKey::generate();
+        let reader = FleetReader {
+            version: 1,
+            device_id: "device".into(),
+            api_base_url: "https://hub.example/api/v1".into(),
+            user_id: "reader".into(),
+            controller_key: key.public_key(),
+            archive_key: [7; 32],
+            revision: 1,
+            issued_at,
+            expires_at: issued_at + 86_400,
+        };
+        sign_fleet_reader(&reader, &key).unwrap()
+    }
+
+    #[test]
+    fn a_recorded_acceptance_spaces_renewals_even_when_the_stored_declaration_is_backdated() {
+        let now = 50_000;
+        let backdated = signed_reader(now - 2 * MIN_READER_RENEWAL_SECONDS);
+        assert!(check_renewal_interval(&backdated, None, now).is_ok());
+        let refused = check_renewal_interval(&backdated, Some(now - 60), now).unwrap_err();
+        assert_eq!(refused.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        assert!(
+            check_renewal_interval(&backdated, Some(now - 60), now - 60 + MIN_READER_RENEWAL_SECONDS)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn declarations_signed_long_before_their_upload_are_accepted_once_the_interval_passed() {
+        let now = 50_000;
+        let stored = signed_reader(now - MIN_READER_RENEWAL_SECONDS);
+        // A pending declaration retried after a failed upload, or signed by a
+        // browser whose clock trails the server, carries an old issued_at.
+        assert!(check_renewal_interval(&stored, None, now).is_ok());
+        assert!(
+            check_renewal_interval(&stored, Some(now - MIN_READER_RENEWAL_SECONDS - 1), now)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn reader_replacements_are_spaced_from_the_later_of_issue_and_acceptance() {
+        let stored = signed_reader(10_000);
+        assert_eq!(issued_at(&stored), Some(10_000));
+        let refused =
+            check_renewal_interval(&stored, Some(9_000), 10_000 + MIN_READER_RENEWAL_SECONDS - 1)
+                .unwrap_err();
+        assert_eq!(refused.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        assert!(
+            refused
+                .public_message()
+                .is_some_and(|message| message.contains("13600"))
+        );
+        assert!(
+            check_renewal_interval(&stored, Some(9_000), 10_000 + MIN_READER_RENEWAL_SECONDS)
+                .is_ok()
+        );
+        assert!(check_renewal_interval("not-a-jws", None, 10_000).is_ok());
+        assert!(check_renewal_interval("not-a-jws", Some(10_000), 10_001).is_err());
+    }
+
     #[flow_like_types::tokio::test]
     #[ignore = "requires FLOW_LIKE_DEVICE_TEST_DATABASE_URL pointing to a disposable PostgreSQL server"]
     async fn fleet_latest_snapshot_reader_cas_revocation_and_lost_ack() {
-        use sea_orm::{ConnectOptions, Database};
+        use sea_orm::{ConnectOptions, Database, TransactionTrait};
         let url = std::env::var("FLOW_LIKE_DEVICE_TEST_DATABASE_URL").unwrap();
         let admin = Database::connect(&url).await.unwrap();
         let schema = format!("fleet_test_{}", uuid::Uuid::new_v4().simple());
@@ -516,7 +731,22 @@ mod tests {
             expires_at: now + 600,
         };
         let signed = sign_fleet_reader(&declaration, &reader).unwrap();
-        let reader_call = |user: &str, key_id: String, action| {
+        let aged = sign_fleet_reader(
+            &FleetReader {
+                issued_at: now - 2 * MIN_READER_RENEWAL_SECONDS,
+                ..declaration.clone()
+            },
+            &reader,
+        )
+        .unwrap();
+        // Stands in for the renewal interval passing since the stored reader was issued.
+        let age_reader = || {
+            db.execute_raw(sql(
+                r#"UPDATE "DeviceFleetReader" SET "readerJws"=$1 WHERE "deviceId"='device' AND "userId"='reader' AND "keyId"=$2"#,
+                [aged.clone().into(), key_id.clone().into()],
+            ))
+        };
+        let reader_call_at = |user: &str, key_id: String, action, accepted_at| {
             retain_reader(
                 &db,
                 crate::db::DbDialect::Postgres,
@@ -524,15 +754,25 @@ mod tests {
                 manifest.clone(),
                 user.to_string(),
                 key_id,
+                accepted_at,
                 action,
             )
         };
-        reader_call("reader", key_id.clone(), ReaderAction::Put(signed.clone()))
-            .await
-            .unwrap();
-        reader_call("reader", key_id.clone(), ReaderAction::Put(signed.clone()))
-            .await
-            .unwrap();
+        let reader_call =
+            |user: &str, key_id: String, action| reader_call_at(user, key_id, action, None);
+        assert!(
+            reader_call("reader", key_id.clone(), ReaderAction::Put(signed.clone()))
+                .await
+                .unwrap()
+                .1
+        );
+        assert!(
+            !reader_call("reader", key_id.clone(), ReaderAction::Put(signed.clone()))
+                .await
+                .unwrap()
+                .1,
+            "An acknowledged retry must not keep a new change record"
+        );
         assert!(
             reader_call("owner", key_id.clone(), ReaderAction::Put(signed.clone()))
                 .await
@@ -656,6 +896,35 @@ mod tests {
         );
         let mut renewal = declaration.clone();
         renewal.revision = 2;
+        renewal.issued_at = now - MIN_READER_RENEWAL_SECONDS - 1;
+        let backdated = sign_fleet_reader(&renewal, &reader).unwrap();
+        assert_eq!(
+            reader_call(
+                "reader",
+                key_id.clone(),
+                ReaderAction::Put(backdated.clone())
+            )
+            .await
+            .unwrap_err()
+            .status(),
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "A backdated declaration must not skip the renewal interval"
+        );
+        age_reader().await.unwrap();
+        assert_eq!(
+            reader_call_at(
+                "reader",
+                key_id.clone(),
+                ReaderAction::Put(backdated),
+                Some(now)
+            )
+            .await
+            .unwrap_err()
+            .status(),
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "A recorded acceptance must hold even when every signed issued_at is backdated"
+        );
+        renewal.issued_at = now;
         renewal.expires_at += 1;
         let renewal_a = sign_fleet_reader(&renewal, &reader).unwrap();
         renewal.expires_at += 1;
@@ -697,7 +966,22 @@ mod tests {
         );
         let mut renewal = declaration.clone();
         renewal.revision = 4;
+        // Signed before an upload that did not commit and retried as the pending declaration.
+        renewal.issued_at = now - 2 * MIN_READER_RENEWAL_SECONDS;
         let renewal_signed = sign_fleet_reader(&renewal, &reader).unwrap();
+        assert_eq!(
+            reader_call(
+                "reader",
+                key_id.clone(),
+                ReaderAction::Put(renewal_signed.clone()),
+            )
+            .await
+            .unwrap_err()
+            .status(),
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "Deleting and re-adding a reader must not skip the renewal interval"
+        );
+        age_reader().await.unwrap();
         reader_call(
             "reader",
             key_id.clone(),
@@ -717,7 +1001,7 @@ mod tests {
         policy.policy_version = 2;
         policy.previous_policy_digest = Some(compact_digest(&compact));
         let revoked = sign_management_policy(&policy, &invitation).unwrap();
-        db.execute_raw(sql(r#"INSERT INTO "DeviceManagementPolicy"("deviceId",version,digest,"policyJws","expiresAt","createdAt") VALUES('device',2,$1,$2,$3,$4)"#,[compact_digest(&revoked).into(),revoked.into(),policy.expires_at.into(),now.into()])).await.unwrap();
+        db.execute_raw(sql(r#"INSERT INTO "DeviceManagementPolicy"("deviceId",version,digest,"policyJws","expiresAt","createdAt") VALUES('device',2,$1,$2,$3,$4)"#,[compact_digest(&revoked).into(),revoked.clone().into(),policy.expires_at.into(),now.into()])).await.unwrap();
         assert!(read().await.is_err());
         assert!(
             upload(make(latest_audience, 3, Some(second_digest), 11))
@@ -725,15 +1009,113 @@ mod tests {
                 .is_err()
         );
         let owner_key = URL_SAFE_NO_PAD.encode(owner.public_key().to_bytes().unwrap());
-        let owner_declaration = FleetReader {
+        let mut owner_declaration = FleetReader {
             user_id: "owner".into(),
             controller_key: owner.public_key(),
-            ..declaration
+            issued_at: now,
+            ..declaration.clone()
         };
         let owner_signed = sign_fleet_reader(&owner_declaration, &owner).unwrap();
         reader_call("owner", owner_key.clone(), ReaderAction::Put(owner_signed))
             .await
             .unwrap();
+        // Every replacement invalidates the reader's in-flight publication, so
+        // replacements within the renewal interval are refused.
+        owner_declaration.revision = 2;
+        assert_eq!(
+            reader_call(
+                "owner",
+                owner_key.clone(),
+                ReaderAction::Put(sign_fleet_reader(&owner_declaration, &owner).unwrap()),
+            )
+            .await
+            .unwrap_err()
+            .status(),
+            axum::http::StatusCode::TOO_MANY_REQUESTS
+        );
+        let grantee = SigningKey::generate();
+        policy.grants = vec![ManagementGrant {
+            grant_id: "grantee".into(),
+            user_id: "grantee".into(),
+            controller_key: grantee.public_key(),
+            scope: ManagementScope::Project {
+                project_id: "project".into(),
+            },
+            capabilities: vec![ManagementCapability::Status],
+            expires_at: now + 300,
+            group_id: None,
+            group_version: None,
+        }];
+        policy.policy_version = 3;
+        policy.previous_policy_digest = Some(compact_digest(&revoked));
+        let regranted = sign_management_policy(&policy, &invitation).unwrap();
+        db.execute_raw(sql(r#"INSERT INTO "DeviceManagementPolicy"("deviceId",version,digest,"policyJws","expiresAt","createdAt") VALUES('device',3,$1,$2,$3,$4)"#,[compact_digest(&regranted).into(),regranted.into(),policy.expires_at.into(),now.into()])).await.unwrap();
+        db.execute_unprepared(
+            r#"INSERT INTO "User" VALUES('grantee','ACTIVE'),('former','SUSPENDED')"#,
+        )
+        .await
+        .unwrap();
+        // Deleted rows, suspended accounts and keys the policy no longer grants
+        // stay as history but must not use reader capacity.
+        for index in 0..MAX_FLEET_READERS {
+            let historical = SigningKey::generate();
+            let user = if index % 2 == 0 { "former" } else { "reader" };
+            let historical_jws = sign_fleet_reader(
+                &FleetReader {
+                    user_id: user.into(),
+                    controller_key: historical.public_key(),
+                    ..declaration.clone()
+                },
+                &historical,
+            )
+            .unwrap();
+            db.execute_raw(sql(
+                r#"INSERT INTO "DeviceFleetReader"("deviceId","userId","keyId",revision,"readerJws",deleted) VALUES('device',$1,$2,1,$3,$4)"#,
+                [
+                    user.into(),
+                    URL_SAFE_NO_PAD
+                        .encode(historical.public_key().to_bytes().unwrap())
+                        .into(),
+                    historical_jws.into(),
+                    (index % 3 == 0).into(),
+                ],
+            ))
+            .await
+            .unwrap();
+        }
+        let grantee_key = URL_SAFE_NO_PAD.encode(grantee.public_key().to_bytes().unwrap());
+        let grantee_signed = sign_fleet_reader(
+            &FleetReader {
+                user_id: "grantee".into(),
+                controller_key: grantee.public_key(),
+                ..declaration.clone()
+            },
+            &grantee,
+        )
+        .unwrap();
+        reader_call(
+            "grantee",
+            grantee_key.clone(),
+            ReaderAction::Put(grantee_signed),
+        )
+        .await
+        .unwrap();
+        let tx = db.begin().await.unwrap();
+        let current = super::policy(&tx, &manifest, now).await.unwrap();
+        let live: Vec<_> = live_readers(&tx, "device", &manifest, current.as_ref(), now)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(user, key_id, _)| (user, key_id))
+            .collect();
+        tx.rollback().await.unwrap();
+        assert_eq!(
+            live,
+            [
+                ("grantee".to_string(), grantee_key),
+                ("owner".to_string(), owner_key.clone())
+            ]
+        );
         db.execute_unprepared(
             r#"UPDATE "ManagedDevice" SET status='revoked',"authEpoch"=2 WHERE id='device'"#,
         )

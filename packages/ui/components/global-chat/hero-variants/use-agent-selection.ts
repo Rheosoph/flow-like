@@ -88,14 +88,15 @@ export function useAgentSelection() {
 		!!settingsProfile.data,
 		[settingsProfile.data?.hub_profile.id],
 	);
-	const { canHostLlamaCPP, canHostMLX } = backend.capabilities();
+	const { canHostLlamaCPP, canHostMLX, canUseNativeAgentProviders } =
+		backend.capabilities();
 	const bitsModels = useMemo(
 		() =>
 			selectProfileLlmModels(
 				llmBits.data,
 				customBits.data,
 				settingsProfile.data?.hub_profile.bits,
-				{ canHostLlamaCPP, canHostMLX },
+				{ canHostLlamaCPP, canHostMLX, canUseNativeAgentProviders },
 			),
 		[
 			llmBits.data,
@@ -103,6 +104,7 @@ export function useAgentSelection() {
 			settingsProfile.data?.hub_profile.bits,
 			canHostLlamaCPP,
 			canHostMLX,
+			canUseNativeAgentProviders,
 		],
 	);
 

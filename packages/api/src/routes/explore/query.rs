@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use flow_like::app::{AppCategory, AppType};
@@ -23,6 +23,7 @@ use crate::entity::sea_orm_active_enums::{
 };
 use crate::entity::{app, app_sales_daily, meta, wasm_package, wasm_package_purchase};
 use crate::error::ApiError;
+use crate::routes::user::identity::escape_like_pattern;
 
 /// Most packages a permission-filtered search looks at; permissions exist only in Rust.
 pub const PACKAGE_WINDOW: u64 = 200;
@@ -65,22 +66,10 @@ impl From<RuleSort> for ExploreSort {
     }
 }
 
-/// `text` with the LIKE wildcards `%`, `_` and the escape character `\` escaped.
-pub fn escape_like(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len());
-    for c in text.chars() {
-        if matches!(c, '\\' | '%' | '_') {
-            escaped.push('\\');
-        }
-        escaped.push(c);
-    }
-    escaped
-}
-
 /// PostgreSQL's default LIKE escape is `\`. An explicit `ESCAPE` would make SeaQuery render
 /// `ILIKE (pattern ESCAPE '\')`, which PostgreSQL rejects as a syntax error.
 fn containing(text: &str) -> LikeExpr {
-    LikeExpr::new(format!("%{}%", escape_like(text)))
+    LikeExpr::new(format!("%{}%", escape_like_pattern(text)))
 }
 
 fn never() -> Expr {
@@ -456,6 +445,46 @@ where
         .await?)
 }
 
+/// The public, active apps among `ids`.
+pub async fn public_app_ids<C: ConnectionTrait>(
+    db: &C,
+    ids: &[String],
+) -> Result<HashSet<String>, ApiError> {
+    if ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+    Ok(app::Entity::find()
+        .select_only()
+        .column(app::Column::Id)
+        .filter(public_app_condition())
+        .filter(app::Column::Id.is_in(ids.to_vec()))
+        .into_tuple::<String>()
+        .all(db)
+        .await?
+        .into_iter()
+        .collect())
+}
+
+/// The public, active packages among `ids`.
+pub async fn public_package_ids<C: ConnectionTrait>(
+    db: &C,
+    ids: &[String],
+) -> Result<HashSet<String>, ApiError> {
+    if ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+    Ok(wasm_package::Entity::find()
+        .select_only()
+        .column(wasm_package::Column::Id)
+        .filter(public_package_condition())
+        .filter(wasm_package::Column::Id.is_in(ids.to_vec()))
+        .into_tuple::<String>()
+        .all(db)
+        .await?
+        .into_iter()
+        .collect())
+}
+
 fn unsigned(value: i64) -> u64 {
     u64::try_from(value).unwrap_or_default()
 }
@@ -827,12 +856,6 @@ mod tests {
     fn position(sql: &str, needle: &str) -> usize {
         sql.find(needle)
             .unwrap_or_else(|| panic!("'{needle}' is missing from {sql}"))
-    }
-
-    #[test]
-    fn like_wildcards_are_escaped() {
-        assert_eq!(escape_like(r"50%_off\now"), r"50\%\_off\\now");
-        assert_eq!(escape_like("plain"), "plain");
     }
 
     #[test]

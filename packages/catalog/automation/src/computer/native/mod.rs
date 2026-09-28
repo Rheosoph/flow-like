@@ -22,6 +22,12 @@ use windows as platform;
 mod linux;
 #[cfg(target_os = "linux")]
 use linux as platform;
+#[cfg(target_os = "macos")]
+mod ocr_macos;
+#[cfg(any(target_os = "linux", test))]
+pub(crate) mod ocr_tesseract;
+#[cfg(target_os = "windows")]
+mod ocr_windows;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ElementLocator {
@@ -99,6 +105,71 @@ pub async fn select_window_async(
     let (id, title, process) = (id.to_owned(), title.to_owned(), process.to_owned());
     tokio::task::spawn_blocking(move || select_window(&id, &title, &process, exact)).await?
 }
+
+#[derive(Clone, Copy, Debug)]
+struct TargetCandidate {
+    own: bool,
+    focused: bool,
+    visible: bool,
+}
+
+/// The focused foreign window, else the front-most visible foreign window. Flow-Like's own
+/// windows are skipped: they hold focus whenever a run is started from the editor.
+fn default_target_index(candidates: &[TargetCandidate]) -> Option<usize> {
+    candidates
+        .iter()
+        .position(|w| !w.own && w.focused)
+        .or_else(|| candidates.iter().position(|w| !w.own && w.visible))
+}
+
+#[cfg(target_os = "macos")]
+fn on_screen(window: &NativeWindow) -> bool {
+    window.is_onscreen()
+}
+#[cfg(not(target_os = "macos"))]
+fn on_screen(_: &NativeWindow) -> bool {
+    true
+}
+
+/// A window by title, or with an empty title the window a user means by "the current window".
+pub fn select_target_window(title: &str) -> Result<Option<NativeWindow>> {
+    if !title.is_empty() {
+        return select_window("", title, "", false);
+    }
+    let own = std::process::id();
+    let windows = NativeWindow::all()?;
+    let candidates: Vec<_> = windows
+        .iter()
+        .map(|w| TargetCandidate {
+            own: w.pid().is_ok_and(|pid| pid == own),
+            focused: w.is_focused().unwrap_or(false),
+            visible: !w.is_minimized().unwrap_or(true)
+                && w.width().unwrap_or(0) >= 50
+                && w.height().unwrap_or(0) >= 50
+                && on_screen(w),
+        })
+        .collect();
+    Ok(default_target_index(&candidates).and_then(|index| windows.into_iter().nth(index)))
+}
+
+/// Recognizes text with the operating system's OCR engine (Apple Vision, Windows.Media.Ocr,
+/// or Tesseract on Linux). Boxes are in pixels of `image`.
+pub async fn recognize_text(
+    image: image::RgbaImage,
+    options: crate::computer::ocr::OcrOptions,
+) -> Result<Vec<crate::computer::ocr::OcrLine>> {
+    #[cfg(target_os = "macos")]
+    return ocr_macos::recognize(image, options).await;
+    #[cfg(target_os = "windows")]
+    return ocr_windows::recognize(image, options).await;
+    #[cfg(target_os = "linux")]
+    return ocr_tesseract::recognize(image, options).await;
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = (image, options);
+        Err(anyhow!("Text recognition is not available on this operating system"))
+    }
+}
 pub fn operate_window(
     id: &str,
     operation: &str,
@@ -169,4 +240,30 @@ pub fn verify(node: &AccessibilityNode, locator: &ElementLocator) -> Result<()> 
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate(own: bool, focused: bool, visible: bool) -> TargetCandidate {
+        TargetCandidate {
+            own,
+            focused,
+            visible,
+        }
+    }
+
+    #[test]
+    fn default_target_skips_flow_like_windows() {
+        let focused_editor = [
+            candidate(true, true, true),
+            candidate(false, false, false),
+            candidate(false, false, true),
+        ];
+        assert_eq!(default_target_index(&focused_editor), Some(2));
+        let focused_app = [candidate(false, false, true), candidate(false, true, true)];
+        assert_eq!(default_target_index(&focused_app), Some(1));
+        assert_eq!(default_target_index(&[candidate(true, true, true)]), None);
+    }
 }

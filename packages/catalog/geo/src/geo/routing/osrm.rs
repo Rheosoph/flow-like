@@ -181,3 +181,12 @@ pub(crate) async fn set_route_geometries(
         .await?;
     Ok(())
 }
+
+#[cfg(feature = "execute")]
+pub(crate) fn osrm_client(
+    environment: flow_like::flow::execution::ExecutionEnvironment,
+) -> flow_like_types::Result<flow_like::flow::execution::egress::GuardedHttpClient> {
+    flow_like::flow::execution::egress::GuardedHttpClient::configured(environment, |builder| {
+        builder.user_agent("FlowLike/1.0")
+    })
+}

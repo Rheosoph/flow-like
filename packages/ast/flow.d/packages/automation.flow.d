@@ -178,25 +178,28 @@ declare namespace automation {
          * Uses LLM to diagnose automation failures and suggest/apply healing actions
          * @node llm_diagnose_and_heal @alias llmDiagnoseAndHeal
          * @param model — LLM model (vision-capable preferred)
-         * @param screenshot (optional) — Base64-encoded screenshot at time of failure
+         * @param screenshot (optional) — Optional screenshot at the time of failure as base64 PNG, JPEG, WebP or GIF (a data URL is fine). Ignored when Image is connected
+         * @param image (optional) — Optional screenshot at the time of failure as an image, e.g. from the Screenshot node. Takes precedence over the base64 Screenshot
+         * @param frame (optional) — Screen frame of the screenshot, from the capture node. Coordinates are desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
          * @param errorMessage — The error message from the failed action
          * @param actionType — Type of action that failed (click, type, wait, find, etc.)
-         * @param actionTarget — The target of the failed action (selector, coordinates, text)
+         * @param actionTarget — The target of the failed action (selector, text, or an x,y point in desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot)
          * @param context (optional) — Additional context about what the automation was trying to do
-         * @param pageHtml (optional) — Current page HTML (for selector-based failures)
+         * @param pageHtml (optional) — Current page HTML (for selector-based failures); only the first 30,000 bytes are sent
          * @returns result — Full healing result
          * @returns diagnosis — Failure diagnosis
-         * @returns newValue — Healed value (new selector, coordinates, etc.)
+         * @returns newValue — Healed value (new selector, text, or an x,y point in desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot)
          * @impure has side effects / drives control flow
          */
-        function diagnoseAndHeal({ model: Struct, screenshot?: string, errorMessage: string, actionType: string, actionTarget: string, context?: string, pageHtml?: string }): { result: Struct, diagnosis: Struct, newValue: string };
+        function diagnoseAndHeal({ model: Struct, screenshot?: string, image?: Struct, frame?: Struct, errorMessage: string, actionType: string, actionTarget: string, context?: string, pageHtml?: string }): { result: Struct, diagnosis: Struct, newValue: string };
 
         /**
          * Uses LLM to fix a broken CSS/XPath selector based on page context
          * @node llm_heal_selector @alias llmHealSelector
          * @param model — LLM model (vision-capable preferred)
-         * @param screenshot (optional) — Base64-encoded screenshot (optional but recommended)
-         * @param pageHtml — Current page HTML or DOM structure
+         * @param screenshot (optional) — Optional (recommended) screenshot as base64 PNG, JPEG, WebP or GIF (a data URL is fine). Ignored when Image is connected
+         * @param image (optional) — Optional (recommended) screenshot as an image, e.g. from the Screenshot node. Takes precedence over the base64 Screenshot
+         * @param pageHtml — Current page HTML or DOM structure; only the first 50,000 bytes are sent
          * @param brokenSelector — The selector that no longer works
          * @param elementDescription — Description of what the selector should match
          * @param selectorType (optional) — Type of selector: css, xpath, or accessibility
@@ -204,22 +207,24 @@ declare namespace automation {
          * @returns newSelector — The healed selector string
          * @impure has side effects / drives control flow
          */
-        function healSelector({ model: Struct, screenshot?: string, pageHtml: string, brokenSelector: string, elementDescription: string, selectorType?: string }): { result: Struct, newSelector: string };
+        function healSelector({ model: Struct, screenshot?: string, image?: Struct, pageHtml: string, brokenSelector: string, elementDescription: string, selectorType?: string }): { result: Struct, newSelector: string };
 
         /**
          * Uses vision LLM to find a visually similar element when template matching fails
          * @node llm_heal_template @alias llmHealTemplate
          * @param model — Vision-capable LLM model
-         * @param screenshot — Base64-encoded current screenshot
-         * @param template — Base64-encoded template image that failed to match
+         * @param screenshot (optional) — Current screenshot as base64 PNG, JPEG, WebP or GIF (a data URL is fine). Ignored when Image is connected
+         * @param image (optional) — Current screenshot as an image, e.g. from the Screenshot node. Takes precedence over the base64 Screenshot
+         * @param frame (optional) — Screen frame of the screenshot, from the capture node. Coordinates are desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
+         * @param template — Base64-encoded template image (PNG, JPEG, WebP or GIF) that failed to match
          * @param elementDescription — Description of what the template represents
-         * @param lastKnownPosition (optional) — Where the element was previously found (x,y)
-         * @returns result — Healed template result
-         * @returns x — X coordinate of found element
-         * @returns y — Y coordinate of found element
+         * @param lastKnownPosition (optional) — Where the element was previously found (x,y in desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot)
+         * @returns result — Healed template result; points and regions are in desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
+         * @returns x — X coordinate of the found element's center, in desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
+         * @returns y — Y coordinate of the found element's center, in desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
          * @impure has side effects / drives control flow
          */
-        function healTemplate({ model: Struct, screenshot: string, template: string, elementDescription: string, lastKnownPosition?: string }): { result: Struct, x: int, y: int };
+        function healTemplate({ model: Struct, screenshot?: string, image?: Struct, frame?: Struct, template: string, elementDescription: string, lastKnownPosition?: string }): { result: Struct, x: int, y: int };
 
         // === Automation/LLM/Planning ===
 
@@ -227,33 +232,37 @@ declare namespace automation {
          * Uses LLM to plan a sequence of automation actions to achieve a goal
          * @node llm_plan_actions @alias llmPlanActions
          * @param model — Vision-capable LLM model
-         * @param screenshot — Base64-encoded current screenshot
+         * @param screenshot (optional) — Current screenshot as base64 PNG, JPEG, WebP or GIF (a data URL is fine). Ignored when Image is connected
+         * @param image (optional) — Current screenshot as an image, e.g. from the Screenshot node. Takes precedence over the base64 Screenshot
+         * @param frame (optional) — Screen frame of the screenshot, from the capture node. Coordinates are desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
          * @param executionTarget (optional) — General proposes actions for any surface. Browser creates a plan for Execute Browser Action Plan.
          * @param pageContext (optional) — DOM or accessibility snapshot containing selectors for browser actions
          * @param goal — What the automation should accomplish
          * @param availableActions (optional) — JSON array of available action types and their parameters
          * @param constraints (optional) — Any constraints or preferences for the plan
          * @returns plan — Complete action plan
-         * @returns actions — List of planned actions
+         * @returns actions — List of planned actions. In General plans parameters.x/parameters.y are a screen position in desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
          * @returns firstAction — The first action to execute
          * @impure has side effects / drives control flow
          */
-        function planActions({ model: Struct, screenshot: string, executionTarget?: string, pageContext?: string, goal: string, availableActions?: string, constraints?: string }): { plan: Struct, actions: Struct[], firstAction: Struct };
+        function planActions({ model: Struct, screenshot?: string, image?: Struct, frame?: Struct, executionTarget?: string, pageContext?: string, goal: string, availableActions?: string, constraints?: string }): { plan: Struct, actions: Struct[], firstAction: Struct };
 
         /**
          * Uses LLM to suggest the most appropriate next action given current screen and goal
          * @node llm_suggest_next_step @alias llmSuggestNextStep
          * @param model — Vision-capable LLM model
-         * @param screenshot — Base64-encoded current screenshot
+         * @param screenshot (optional) — Current screenshot as base64 PNG, JPEG, WebP or GIF (a data URL is fine). Ignored when Image is connected
+         * @param image (optional) — Current screenshot as an image, e.g. from the Screenshot node. Takes precedence over the base64 Screenshot
+         * @param frame (optional) — Screen frame of the screenshot, from the capture node. Coordinates are desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
          * @param goal — Ultimate goal we're trying to achieve
          * @param completedActions (optional) — JSON array of actions already taken
          * @param lastResult (optional) — Result/outcome of the last action
-         * @returns suggestion — Next step suggestion
+         * @returns suggestion — Next step suggestion; target_coordinates are in desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
          * @returns actionType — Type of suggested action
          * @returns target — Target description
          * @impure has side effects / drives control flow
          */
-        function suggestNextStep({ model: Struct, screenshot: string, goal: string, completedActions?: string, lastResult?: string }): { suggestion: Struct, actionType: string, target: string };
+        function suggestNextStep({ model: Struct, screenshot?: string, image?: Struct, frame?: Struct, goal: string, completedActions?: string, lastResult?: string }): { suggestion: Struct, actionType: string, target: string };
 
         // === Automation/LLM/Vision ===
 
@@ -261,91 +270,103 @@ declare namespace automation {
          * Uses vision LLM to classify screen state and identify visible elements
          * @node llm_classify_screen @alias llmClassifyScreen
          * @param model — Vision-capable LLM model
-         * @param screenshot — Base64-encoded screenshot
+         * @param screenshot (optional) — Screenshot as base64 PNG, JPEG, WebP or GIF (a data URL is fine). Ignored when Image is connected
+         * @param image (optional) — Screenshot as an image, e.g. from the Screenshot node. Takes precedence over the base64 Screenshot
          * @param expectedStates (optional) — Comma-separated list of possible states to classify into
          * @returns classification — Screen classification result
          * @returns screenType — Detected screen type
          * @returns state — Current screen state
          * @impure has side effects / drives control flow
          */
-        function classifyScreen({ model: Struct, screenshot: string, expectedStates?: string }): { classification: Struct, screenType: string, state: string };
+        function classifyScreen({ model: Struct, screenshot?: string, image?: Struct, expectedStates?: string }): { classification: Struct, screenType: string, state: string };
 
         /**
          * Uses vision LLM to describe a specific UI element at given coordinates
          * @node llm_describe_element @alias llmDescribeElement
          * @param model — Vision-capable LLM model
-         * @param screenshot — Base64-encoded screenshot
-         * @param x — X coordinate of element
-         * @param y — Y coordinate of element
+         * @param screenshot (optional) — Screenshot as base64 PNG, JPEG, WebP or GIF (a data URL is fine). Ignored when Image is connected
+         * @param image (optional) — Screenshot as an image, e.g. from the Screenshot node. Takes precedence over the base64 Screenshot
+         * @param frame (optional) — Screen frame of the screenshot, from the capture node. Coordinates are desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
+         * @param x — X coordinate of the element, in desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
+         * @param y — Y coordinate of the element, in desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
          * @returns element — Element description
          * @returns description — Text description
          * @impure has side effects / drives control flow
          */
-        function describeElement({ model: Struct, screenshot: string, x: int, y: int }): { element: Struct, description: string };
+        function describeElement({ model: Struct, screenshot?: string, image?: Struct, frame?: Struct, x: int, y: int }): { element: Struct, description: string };
 
         /**
          * Uses vision LLM to extract structured data from a screenshot
          * @node llm_extract_from_screen @alias llmExtractFromScreen
          * @param model — Vision-capable LLM model
-         * @param screenshot — Base64-encoded screenshot
+         * @param screenshot (optional) — Screenshot as base64 PNG, JPEG, WebP or GIF (a data URL is fine). Ignored when Image is connected
+         * @param image (optional) — Screenshot as an image, e.g. from the Screenshot node. Takes precedence over the base64 Screenshot
          * @param schema — JSON Schema describing what to extract (or example JSON)
          * @param hint (optional) — Optional extraction hint
-         * @returns data — Extracted structured data
+         * @returns data — Extracted structured data, validated against the schema
          * @impure has side effects / drives control flow
          */
-        function extractFromScreen({ model: Struct, screenshot: string, schema: string, hint?: string }): any;
+        function extractFromScreen({ model: Struct, screenshot?: string, image?: Struct, schema: string, hint?: string }): any;
 
         /**
          * Uses a vision LLM to locate UI elements based on natural language description
          * @node llm_find_element @alias llmFindElement
          * @param model — Vision-capable LLM model
-         * @param screenshot — Base64-encoded screenshot of the screen
+         * @param screenshot (optional) — Screenshot of the screen as base64 PNG, JPEG, WebP or GIF (a data URL is fine). Ignored when Image is connected
+         * @param image (optional) — Screenshot of the screen as an image, e.g. from the Screenshot node. Takes precedence over the base64 Screenshot
+         * @param frame (optional) — Screen frame of the screenshot, from the capture node. Coordinates are desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
          * @param description — Natural language description of the element to find (e.g., 'the blue submit button')
          * @param context (optional) — Optional context about the application or page
-         * @returns location — Element location details
+         * @returns location — Element location. x/y is the element's center and width/height its size, in desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
          * @impure has side effects / drives control flow
          */
-        function findElement({ model: Struct, screenshot: string, description: string, context?: string }): Struct;
+        function findElement({ model: Struct, screenshot?: string, image?: Struct, frame?: Struct, description: string, context?: string }): Struct;
 
         /**
          * Uses vision LLM to comprehensively observe and describe the current screen
          * @node llm_observe_screen @alias llmObserveScreen
          * @param model — Vision-capable LLM model
-         * @param screenshot — Base64-encoded screenshot
+         * @param screenshot (optional) — Screenshot as base64 PNG, JPEG, WebP or GIF (a data URL is fine). Ignored when Image is connected
+         * @param image (optional) — Screenshot as an image, e.g. from the Screenshot node. Takes precedence over the base64 Screenshot
+         * @param frame (optional) — Screen frame of the screenshot, from the capture node. Coordinates are desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
          * @param focusArea (optional) — Specific area or aspect to focus on (optional)
          * @returns observation — Complete screen observation
          * @returns description — Text description of the screen
-         * @returns elements — List of observed elements
+         * @returns elements — Observed elements. Optional x/y is the element's center in desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
          * @impure has side effects / drives control flow
          */
-        function observeScreen({ model: Struct, screenshot: string, focusArea?: string }): { observation: Struct, description: string, elements: Struct[] };
+        function observeScreen({ model: Struct, screenshot?: string, image?: Struct, frame?: Struct, focusArea?: string }): { observation: Struct, description: string, elements: Struct[] };
 
         /**
          * Uses LLM to rank multiple element candidates based on match quality
          * @node llm_rank_candidates @alias llmRankCandidates
          * @param model — Vision-capable LLM model
-         * @param screenshot — Base64-encoded screenshot
-         * @param candidates — Array of candidate elements to rank
+         * @param screenshot (optional) — Screenshot as base64 PNG, JPEG, WebP or GIF (a data URL is fine). Ignored when Image is connected
+         * @param image (optional) — Screenshot as an image, e.g. from the Screenshot node. Takes precedence over the base64 Screenshot
+         * @param frame (optional) — Screen frame of the screenshot, from the capture node. Coordinates are desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
+         * @param candidates — Candidate elements to rank, each with a unique id. Optional x/y are in desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
          * @param criteria — What the target element should match (description/intent)
          * @param context (optional) — Additional context for ranking
-         * @returns result — Full ranking result
+         * @returns result — Full ranking result; only given candidate ids appear
          * @returns bestMatch — ID of the best matching candidate
          * @returns ranked — Candidates sorted by rank
          * @impure has side effects / drives control flow
          */
-        function rankCandidates({ model: Struct, screenshot: string, candidates: Struct[], criteria: string, context?: string }): { result: Struct, bestMatch: string, ranked: Struct[] };
+        function rankCandidates({ model: Struct, screenshot?: string, image?: Struct, frame?: Struct, candidates: Struct[], criteria: string, context?: string }): { result: Struct, bestMatch: string, ranked: Struct[] };
 
         /**
          * Uses LLM to disambiguate between multiple element candidates
          * @node llm_resolve_element @alias llmResolveElement
          * @param model — Vision-capable LLM model
-         * @param screenshot — Base64-encoded screenshot
-         * @param candidates — Array of element candidates to choose from
+         * @param screenshot (optional) — Screenshot as base64 PNG, JPEG, WebP or GIF (a data URL is fine). Ignored when Image is connected
+         * @param image (optional) — Screenshot as an image, e.g. from the Screenshot node. Takes precedence over the base64 Screenshot
+         * @param frame (optional) — Screen frame of the screenshot, from the capture node. Coordinates are desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
+         * @param candidates — Element candidates to choose from, each with a unique index. x/y are in desktop input coordinates (ready for the mouse nodes) when Frame is connected, otherwise pixels of the original screenshot
          * @param intent — What the user is trying to accomplish
-         * @returns result — Resolution result
+         * @returns result — Resolution result; x/y are copied from the chosen candidate
          * @impure has side effects / drives control flow
          */
-        function resolveElement({ model: Struct, screenshot: string, candidates: Struct[], intent: string }): Struct;
+        function resolveElement({ model: Struct, screenshot?: string, image?: Struct, frame?: Struct, candidates: Struct[], intent: string }): Struct;
     }
 
     namespace selector {
@@ -444,7 +465,7 @@ declare namespace automation {
         // === Automation/Vision ===
 
         /**
-         * Finds a template image on screen and clicks on it
+         * Finds a template image on screen and clicks on it. Fails instead of guessing when two matches score within 0.01 of each other; use Find All Templates to choose one
          * @node vision_click_template @alias visionClickTemplate
          * @param session — Automation session handle
          * @param template — Path to the template image file (FlowPath with caching support)
@@ -453,8 +474,8 @@ declare namespace automation {
          * @param clickType (optional) — Type of click to perform
          * @param offsetX (optional) — X offset from center of matched template
          * @param offsetY (optional) — Y offset from center of matched template
-         * @param fallbackX (optional) — X coordinate to click if template not found (use -1 to disable fallback)
-         * @param fallbackY (optional) — Y coordinate to click if template not found (use -1 to disable fallback)
+         * @param fallbackX (optional) — Desktop X to click when the template is not found. The fallback is disabled only when both Fallback X and Fallback Y are -1, so negative coordinates on displays left of the primary work
+         * @param fallbackY (optional) — Desktop Y to click when the template is not found (both -1 disables the fallback)
          * @returns found — Whether the template was found and clicked
          * @returns x — X coordinate where clicked
          * @returns y — Y coordinate where clicked
@@ -493,58 +514,64 @@ declare namespace automation {
         function findTemplate({ session: Struct, template: Struct, monitor?: int, confidence?: float, matchMode?: string }): { found: bool, result: Struct, x: int, y: int };
 
         /**
-         * Gets the color of a pixel at a screen position
+         * Gets the color at a screen position. By default X/Y are desktop coordinates, the same ones the mouse nodes and Assert Color use; set Coordinate Space to pixels for the version 1 behaviour (screenshot pixels of Monitor)
          * @node vision_get_pixel_color @alias visionGetPixelColor
          * @param session — Automation session handle
          * @param x (optional) — X position
          * @param y (optional) — Y position
-         * @param monitor (optional) — Monitor index from List Displays (-1 = primary); coordinates are screenshot pixels
+         * @param coordinateSpace (optional) — desktop: X/Y are desktop input coordinates on any display (Monitor is ignored). pixels: X/Y are screenshot pixels of Monitor
+         * @param monitor (optional) — Monitor index from List Displays (-1 = primary); only used when Coordinate Space is pixels
          * @returns red — Red component (0-255)
          * @returns green — Green component (0-255)
          * @returns blue — Blue component (0-255)
          * @returns hex — Hex color code (#RRGGBB)
          * @impure has side effects / drives control flow
          */
-        function getPixelColor({ session: Struct, x?: int, y?: int, monitor?: int }): { red: int, green: int, blue: int, hex: string };
+        function getPixelColor({ session: Struct, x?: int, y?: int, coordinateSpace?: string, monitor?: int }): { red: int, green: int, blue: int, hex: string };
 
         /**
-         * Gets the dimensions of a monitor
+         * Gets the size of a monitor in desktop coordinates (as Get Display reports it) and in screenshot pixels
          * @node vision_get_screen_size @alias visionGetScreenSize
          * @param session — Automation session handle
          * @param monitor (optional) — Monitor index from List Displays (-1 = primary)
-         * @returns width — Screen width
-         * @returns height — Screen height
+         * @returns width — Width in desktop input coordinates
+         * @returns height — Height in desktop input coordinates
+         * @returns pixelWidth — Width of a screenshot of this monitor in pixels
+         * @returns pixelHeight — Height of a screenshot of this monitor in pixels
+         * @returns frame — Desktop rectangle and screenshot pixel size of the monitor
          * @impure has side effects / drives control flow
          */
-        function getScreenSize({ session: Struct, monitor?: int }): { width: int, height: int };
+        function getScreenSize({ session: Struct, monitor?: int }): { width: int, height: int, pixelWidth: int, pixelHeight: int, frame: Struct };
 
         /**
-         * Captures a region of the screen and saves it
+         * Captures a region of a display, given in that display's screenshot pixels, and optionally saves it. Frame converts pixels of the result to mouse coordinates
          * @node vision_screenshot_region @alias visionScreenshotRegion
          * @param session — Automation session handle
-         * @param x (optional) — Left position
-         * @param y (optional) — Top position
-         * @param width (optional) — Region width
-         * @param height (optional) — Region height
+         * @param x (optional) — Left edge in screenshot pixels of the display
+         * @param y (optional) — Top edge in screenshot pixels of the display
+         * @param width (optional) — Region width in screenshot pixels
+         * @param height (optional) — Region height in screenshot pixels
          * @param filePath — Path to save the screenshot
          * @param monitor (optional) — Monitor index from List Displays (-1 = primary); coordinates are screenshot pixels
          * @returns success — Whether the screenshot was saved
          * @returns image — Screenshot as NodeImage
+         * @returns frame — Desktop rectangle and pixel size of the captured region
          * @impure has side effects / drives control flow
          */
-        function screenshotRegion({ session: Struct, x?: int, y?: int, width?: int, height?: int, filePath: Struct, monitor?: int }): { success: bool, image: Struct };
+        function screenshotRegion({ session: Struct, x?: int, y?: int, width?: int, height?: int, filePath: Struct, monitor?: int }): { success: bool, image: Struct, frame: Struct };
 
         /**
-         * Captures a screenshot and saves it to a file
+         * Captures a display and optionally saves it as PNG
          * @node vision_screenshot_to_file @alias visionScreenshotToFile
          * @param session — Automation session handle
          * @param filePath — Path to save the screenshot
          * @param monitor (optional) — Monitor index from List Displays (-1 = primary)
          * @returns success — Whether the screenshot was saved
          * @returns image — Screenshot as NodeImage
+         * @returns frame — Desktop rectangle and pixel size of the display; converts image pixels to mouse coordinates
          * @impure has side effects / drives control flow
          */
-        function screenshotToFile({ session: Struct, filePath: Struct, monitor?: int }): { success: bool, image: Struct };
+        function screenshotToFile({ session: Struct, filePath: Struct, monitor?: int }): { success: bool, image: Struct, frame: Struct };
 
         /**
          * Waits for a template image to appear on screen
@@ -632,7 +659,7 @@ declare namespace browser {
     function enterFrame({ session: Struct, locator?: Struct, selector?: string }): Struct;
 
     /**
-     * Executes a validated LLM browser plan in order, stopping on the first failed action.
+     * Executes a validated LLM browser plan in order, stopping on the first failed action. Navigate actions follow the session navigation policy (HTTP and HTTPS only when none is set), including the final URL after redirects.
      * @node browser_execute_plan @alias browserExecutePlan
      * @param session — Automation session
      * @param plan — Plan from LLM Plan Actions with CSS or typed selectors
@@ -697,21 +724,27 @@ declare namespace browser {
     function newPage({ session: Struct }): Struct;
 
     /**
-     * Connects to a WebDriver server and opens a new browser session
+     * Connects to a WebDriver server and opens a new browser session, optionally with a persistent profile, proxy, locale and relaxed certificate checks
      * @node browser_open @alias browserOpen
      * @param session — Automation session to attach browser to
      * @param webdriverUrl (optional) — URL of the WebDriver server (e.g., http://localhost:9515 for ChromeDriver)
      * @param browserType (optional) — Browser to use (Chrome, Firefox, Edge, Safari)
      * @param headless (optional) — Run browser in headless mode (no visible window)
-     * @param viewportWidth (optional) — Browser viewport width in pixels
-     * @param viewportHeight (optional) — Browser viewport height in pixels
+     * @param viewportWidth (optional) — Page viewport width in CSS pixels; the window grows by the browser frame so the page gets this size (the screen may cap it)
+     * @param viewportHeight (optional) — Page viewport height in CSS pixels; the window grows by the browser frame so the page gets this size (the screen may cap it)
      * @param userAgent (optional) — Custom user agent string (optional)
-     * @param pageLoadTimeout (optional) — Timeout for page loads in seconds
+     * @param pageLoadTimeout (optional) — Timeout for page loads in seconds (at least 1)
+     * @param userDataDir (optional) — Local directory for a persistent browser profile (cookies, storage, logins survive between runs). Chrome and Edge allow one browser per profile at a time. Requires WebDriver on this machine.
+     * @param userDataPath (optional) — Absolute profile directory on the WebDriver host; used when Profile Directory is not connected
+     * @param proxyServer (optional) — Proxy such as http://host:8080 or socks5://host:1080 (proxy credentials are not supported)
+     * @param proxyBypass (optional) — Comma-separated hosts that skip the proxy, such as localhost,*.internal
+     * @param locale (optional) — Browser language and Accept-Language such as de-DE (empty keeps the default)
+     * @param ignoreHttpsErrors (optional) — Accept invalid or self-signed TLS certificates
      * @returns debuggerAddress — Chrome or Edge debugger endpoint, when available
      * @returns sessionOut — Automation session with browser attached
      * @impure has side effects / drives control flow
      */
-    function open({ session: Struct, webdriverUrl?: string, browserType?: string, headless?: bool, viewportWidth?: int, viewportHeight?: int, userAgent?: string, pageLoadTimeout?: int }): { debuggerAddress: string, sessionOut: Struct };
+    function open({ session: Struct, webdriverUrl?: string, browserType?: string, headless?: bool, viewportWidth?: int, viewportHeight?: int, userAgent?: string, pageLoadTimeout?: int, userDataDir?: Struct, userDataPath?: string, proxyServer?: string, proxyBypass?: string, locale?: string, ignoreHttpsErrors?: bool }): { debuggerAddress: string, sessionOut: Struct };
 
     /**
      * Opens the context menu for an element.
@@ -782,7 +815,7 @@ declare namespace browser {
     // === Automation/Browser/Auth ===
 
     /**
-     * Clears all cookies from the browser session
+     * Clears cookies: every domain on Chrome and Edge, the current document's cookies on other browsers
      * @node browser_clear_cookies @alias browserClearCookies
      * @param session — Automation session
      * @returns sessionOut — Automation session (pass-through)
@@ -791,18 +824,33 @@ declare namespace browser {
     function clearCookies({ session: Struct }): Struct;
 
     /**
-     * Loads cookies from a file into the browser session
+     * Loads cookies from a file into the browser session. Chrome and Edge accept cookies for every domain with their HttpOnly, Secure and SameSite flags; other browsers only accept cookies for the current page's domain.
      * @node browser_load_cookies @alias browserLoadCookies
      * @param session — Automation session
      * @param filePath — Path to cookies JSON file
      * @returns sessionOut — Automation session (pass-through)
-     * @returns cookieCount — Number of cookies loaded
+     * @returns cookieCount — Number of cookies the browser accepted
+     * @returns failedCount — Number of cookies that were expired or rejected
      * @impure has side effects / drives control flow
      */
-    function loadCookies({ session: Struct, filePath: Struct }): { sessionOut: Struct, cookieCount: int };
+    function loadCookies({ session: Struct, filePath: Struct }): { sessionOut: Struct, cookieCount: int, failedCount: int };
 
     /**
-     * Saves all browser cookies to a file for later restoration
+     * Restores cookies and web storage from a Playwright-compatible storageState JSON file. Cookies for every domain are restored on Chrome and Edge (only the current domain elsewhere). Storage is applied only to the origin the page is on, without navigating; other origins are reported as skipped.
+     * @node browser_load_storage_state @receiver session @alias browserLoadStorageState
+     * @param session — Automation session (receiver: `this` in `x.loadStorageState(...)`)
+     * @param filePath — Storage state JSON written by Save Storage State or Playwright
+     * @returns sessionOut — Updated automation session
+     * @returns cookiesApplied — Cookies the browser accepted
+     * @returns cookiesFailed — Cookies that were expired or rejected
+     * @returns originsApplied — Origins whose storage was restored
+     * @returns skippedOrigins — Origins not restored because the page is on a different origin
+     * @impure has side effects / drives control flow
+     */
+    function loadStorageState(this: AutomationSession, { session: Struct, filePath: Struct }): { sessionOut: Struct, cookiesApplied: int, cookiesFailed: int, originsApplied: int, skippedOrigins: string[] };
+
+    /**
+     * Saves browser cookies to a file for later restoration: every domain including HttpOnly cookies on Chrome and Edge, the current document's cookies on other browsers
      * @node browser_save_cookies @alias browserSaveCookies
      * @param session — Automation session
      * @param filePath — Path to save cookies JSON file
@@ -811,6 +859,19 @@ declare namespace browser {
      * @impure has side effects / drives control flow
      */
     function saveCookies({ session: Struct, filePath: Struct }): { sessionOut: Struct, cookieCount: int };
+
+    /**
+     * Saves all cookies (every domain, including HttpOnly, on Chrome and Edge) and the current origin's localStorage to a Playwright-compatible storageState JSON file. The file holds login sessions; store it like a password.
+     * @node browser_save_storage_state @receiver session @alias browserSaveStorageState
+     * @param session — Automation session (receiver: `this` in `x.saveStorageState(...)`)
+     * @param filePath — Where to write the storage state JSON
+     * @param includeSessionStorage (optional) — Also save the current origin's sessionStorage
+     * @returns sessionOut — Updated automation session
+     * @returns cookieCount — Number of cookies saved
+     * @returns originCount — Number of origins whose storage was saved
+     * @impure has side effects / drives control flow
+     */
+    function saveStorageState(this: AutomationSession, { session: Struct, filePath: Struct, includeSessionStorage?: bool }): { sessionOut: Struct, cookieCount: int, originCount: int };
 
     /**
      * Configures HTTP Basic Authentication credentials for requests
@@ -825,13 +886,41 @@ declare namespace browser {
      */
     function setBasicAuth({ session: Struct, username?: string, password?: string, origin: string, debuggerAddress?: string }): Struct;
 
+    /**
+     * Generates the current RFC 6238 one-time password (authenticator app code) from a base32 secret
+     * @node totp_code @alias totpCode
+     * @param secret (optional) — Base32 shared secret from the authenticator setup (spaces and dashes are ignored)
+     * @param digits (optional) — Code length (6 to 8)
+     * @param period (optional) — Seconds each code is valid
+     * @param algorithm (optional) — HMAC algorithm of the secret
+     * @param unixTime (optional) — Time in Unix seconds to generate the code for; negative uses the current time
+     * @returns code — One-time password
+     * @returns secondsRemaining — Seconds until the code changes
+     */
+    function totpCode({ secret?: string, digits?: int, period?: int, algorithm?: string, unixTime?: int }): { code: string, secondsRemaining: int };
+
     // === Automation/Browser/Capture ===
+
+    /**
+     * Prints the current page to a PDF file, the way the browser's print dialog would. Chrome and Edge print through DevTools (headless Chrome is the most reliable); other browsers use WebDriver printing.
+     * @node browser_print_pdf @receiver session @alias browserPrintPdf
+     * @param session — Automation session (receiver: `this` in `x.printPdf(...)`)
+     * @param filePath — Where to write the PDF; an existing file is replaced
+     * @param paperFormat (optional) — Paper size of each PDF page
+     * @param landscape (optional) — Print in landscape orientation
+     * @param printBackground (optional) — Include background colors and images
+     * @param scale (optional) — Content scale between 0.1 and 2
+     * @returns sessionOut — Updated automation session
+     * @returns pdfPath — The written PDF file
+     * @impure has side effects / drives control flow
+     */
+    function printPdf(this: AutomationSession, { session: Struct, filePath: Struct, paperFormat?: string, landscape?: bool, printBackground?: bool, scale?: float }): { sessionOut: Struct, pdfPath: Struct };
 
     /**
      * Takes a screenshot of the current page
      * @node browser_screenshot @alias browserScreenshot
      * @param session — Automation session
-     * @param fullPage (optional) — Capture entire scrollable page
+     * @param fullPage (optional) — Capture the entire scrollable page instead of the viewport (Chrome and Edge only)
      * @returns sessionOut — Automation session (pass-through)
      * @returns screenshot — Screenshot as base64 PNG data
      * @returns image — Screenshot as NodeImage
@@ -852,7 +941,77 @@ declare namespace browser {
      */
     function screenshotElement({ session: Struct, selector?: string, locator?: Struct }): { sessionOut: Struct, screenshot: string, image: Struct };
 
+    /**
+     * Captures a region of the visible page at a higher device scale, so small text and icons stay legible for vision models. Coordinates are viewport CSS pixels, the same space as element bounding boxes and Click At Point. Chrome and Edge only.
+     * @node browser_zoom_screenshot @receiver session @alias browserZoomScreenshot
+     * @param session — Automation session (receiver: `this` in `x.zoomScreenshot(...)`)
+     * @param x (optional) — Left edge of the region in viewport CSS pixels
+     * @param y (optional) — Top edge of the region in viewport CSS pixels
+     * @param width (optional) — Region width in CSS pixels
+     * @param height (optional) — Region height in CSS pixels
+     * @param scale (optional) — Render scale: 2 doubles the region's pixel size (on top of the display's pixel ratio); up to 10
+     * @returns sessionOut — Updated automation session
+     * @returns screenshot — Region as base64 PNG data
+     * @returns image — Region as NodeImage
+     * @impure has side effects / drives control flow
+     */
+    function zoomScreenshot(this: AutomationSession, { session: Struct, x?: float, y?: float, width?: float, height?: float, scale?: float }): { sessionOut: Struct, screenshot: string, image: Struct };
+
+    // === Automation/Browser/Emulation ===
+
+    /**
+     * Stops the current tab from loading matching URLs, such as ads, trackers or heavy media. Patterns use * as a wildcard. Replaces the previous list; an empty list unblocks everything. Chrome and Edge only.
+     * @node browser_block_urls @receiver session @alias browserBlockUrls
+     * @param session — Automation session (receiver: `this` in `x.blockUrls(...)`)
+     * @param patterns (optional) — URL patterns such as *://*.doubleclick.net/* or *.mp4
+     * @returns sessionOut — Updated automation session
+     * @returns blockedCount — Number of patterns now blocked
+     * @impure has side effects / drives control flow
+     */
+    function blockUrls(this: AutomationSession, { session: Struct, patterns?: string[] }): { sessionOut: Struct, blockedCount: int };
+
+    /**
+     * Makes the current tab behave like another device or place: locale, time zone, geolocation, screen size, color scheme, user agent and offline mode. Empty or zero inputs leave that setting unchanged; Offline is always applied. Overrides last until the tab closes. Chrome and Edge only.
+     * @node browser_set_emulation @receiver session @alias browserSetEmulation
+     * @param session — Automation session (receiver: `this` in `x.setEmulation(...)`)
+     * @param locale (optional) — BCP 47 locale such as de-DE, used for Intl formatting, navigator.language and the Accept-Language header
+     * @param timezoneId (optional) — IANA time zone such as Europe/Berlin
+     * @param geolocation (optional) — Position reported by the Geolocation API; also grants the geolocation permission
+     * @param viewportWidth (optional) — Emulated screen width in CSS pixels; set together with Viewport Height
+     * @param viewportHeight (optional) — Emulated screen height in CSS pixels; set together with Viewport Width
+     * @param deviceScaleFactor (optional) — Device pixel ratio for the emulated screen; 0 keeps the display's own ratio
+     * @param mobile (optional) — Emulate a mobile device (meta viewport, overlay scrollbars) with the viewport size
+     * @param colorScheme (optional) — Value reported to prefers-color-scheme media queries
+     * @param userAgent (optional) — User-Agent header and navigator.userAgent for this tab
+     * @param offline (optional) — Simulate a lost network connection; false restores connectivity
+     * @returns sessionOut — Updated automation session
+     * @impure has side effects / drives control flow
+     */
+    function setEmulation(this: AutomationSession, { session: Struct, locale?: string, timezoneId?: string, geolocation?: Struct, viewportWidth?: int, viewportHeight?: int, deviceScaleFactor?: float, mobile?: bool, colorScheme?: string, userAgent?: string, offline?: bool }): Struct;
+
+    /**
+     * Adds HTTP headers to every request the current tab makes, including requests to third-party origins, so avoid credentials on pages that load foreign content. Replaces headers set earlier; an empty object removes them. Chrome and Edge only.
+     * @node browser_set_extra_headers @receiver session @alias browserSetExtraHeaders
+     * @param session — Automation session (receiver: `this` in `x.setExtraHeaders(...)`)
+     * @param headers (optional) — Object mapping header names to string values, e.g. {"X-Tenant": "acme"}
+     * @returns sessionOut — Updated automation session
+     * @impure has side effects / drives control flow
+     */
+    function setExtraHeaders(this: AutomationSession, { session: Struct, headers?: Struct }): Struct;
+
     // === Automation/Browser/Extract ===
+
+    /**
+     * Counts the elements matching a selector (0 when none match).
+     * @node browser_count_elements @receiver session @alias browserCountElements
+     * @param session — Automation session (receiver: `this` in `x.countElements(...)`)
+     * @param selector (optional) — CSS selector, or a snapshot ref such as e12
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
+     * @returns sessionOut — Updated automation session
+     * @returns count — Number of matching elements
+     * @impure has side effects / drives control flow
+     */
+    function countElements(this: AutomationSession, { session: Struct, selector?: string, locator?: Struct }): { sessionOut: Struct, count: int };
 
     /**
      * Executes JavaScript code in the browser and returns the result
@@ -879,6 +1038,27 @@ declare namespace browser {
     function getAttribute({ session: Struct, selector?: string, attribute?: string, locator?: Struct }): { sessionOut: Struct, value: string };
 
     /**
+     * Reads whether an element is visible, enabled, checked, editable, focused and in the viewport, plus its box, tag and text. Fails when no element matches.
+     * @node browser_get_element_state @receiver session @alias browserGetElementState
+     * @param session — Automation session (receiver: `this` in `x.getElementState(...)`)
+     * @param selector (optional) — CSS selector, or a snapshot ref such as e12
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
+     * @returns sessionOut — Updated automation session
+     * @returns visible — Rendered with a non-empty box
+     * @returns enabled — Not disabled
+     * @returns checked — Checked, selected or pressed
+     * @returns editable — Accepts typed input
+     * @returns focused — Has keyboard focus
+     * @returns inViewport — Visible and intersecting the viewport
+     * @returns bounds — Box in CSS pixels relative to the viewport
+     * @returns tag — Lowercase tag name
+     * @returns text — Visible text, or the field value (empty for passwords)
+     * @returns state — All state values
+     * @impure has side effects / drives control flow
+     */
+    function getElementState(this: AutomationSession, { session: Struct, selector?: string, locator?: Struct }): { sessionOut: Struct, visible: bool, enabled: bool, checked: bool, editable: bool, focused: bool, inViewport: bool, bounds: Struct, tag: string, text: string, state: Struct };
+
+    /**
      * Gets the HTML content of an element or the entire page
      * @node browser_get_html @alias browserGetHtml
      * @param session — Automation session
@@ -892,6 +1072,21 @@ declare namespace browser {
     function getHtml({ session: Struct, selector?: string, outerHtml?: bool, locator?: Struct }): { sessionOut: Struct, html: string };
 
     /**
+     * Reads the rendered text of the page, or of one scoped element, and a Markdown version of the same content for prompts and summaries. Hidden elements are excluded from the text; scripts, styles and embedded media are dropped from the Markdown.
+     * @node browser_get_page_text @receiver session @alias browserGetPageText
+     * @param session — Automation session (receiver: `this` in `x.getPageText(...)`)
+     * @param scope (optional) — CSS selector of the element to read; empty reads the whole page body
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
+     * @param maxChars (optional) — Maximum characters returned in Text and in Markdown; 0 returns everything
+     * @returns sessionOut — Updated automation session
+     * @returns text — Rendered text (innerText) with the page's line breaks
+     * @returns markdown — Markdown converted from the same content, keeping headings, links, lists and tables
+     * @returns truncated — True when Text or Markdown was cut to Max Characters
+     * @impure has side effects / drives control flow
+     */
+    function getPageText(this: AutomationSession, { session: Struct, scope?: string, locator?: Struct, maxChars?: int }): { sessionOut: Struct, text: string, markdown: string, truncated: bool };
+
+    /**
      * Gets the text content of an element
      * @node browser_get_text @alias browserGetText
      * @param session — Automation session
@@ -902,6 +1097,21 @@ declare namespace browser {
      * @impure has side effects / drives control flow
      */
     function getText({ session: Struct, selector?: string, locator?: Struct }): { sessionOut: Struct, text: string };
+
+    /**
+     * Lists elements matching a selector with their text, chosen attributes, box and visibility. When a browser snapshot exists for the page, each main-frame element also gets a ref usable as a Ref selector.
+     * @node browser_list_elements @receiver session @alias browserListElements
+     * @param session — Automation session (receiver: `this` in `x.listElements(...)`)
+     * @param selector (optional) — CSS selector, or a snapshot ref such as e12
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
+     * @param attributes (optional) — Attribute names to include for each element
+     * @param limit (optional) — Maximum elements returned
+     * @returns sessionOut — Updated automation session
+     * @returns elements — Matching elements in document order
+     * @returns count — Number of matches before the limit
+     * @impure has side effects / drives control flow
+     */
+    function listElements(this: AutomationSession, { session: Struct, selector?: string, locator?: Struct, attributes?: string[], limit?: int }): { sessionOut: Struct, elements: Struct[], count: int };
 
     // === Automation/Browser/Files ===
 
@@ -967,6 +1177,18 @@ declare namespace browser {
     // === Automation/Browser/Input ===
 
     /**
+     * Fills several form fields in order: text inputs are cleared and typed, selects pick an option by value or label, checkboxes and radios are set. Each field is scrolled into view and must become visible and enabled within the timeout. Stops at the first failing field.
+     * @node browser_fill_form @receiver session @alias browserFillForm
+     * @param session — Automation session (receiver: `this` in `x.fillForm(...)`)
+     * @param fields (optional) — Fields to fill: target (selector or ref such as e12), value and kind (text, select, checkbox, radio)
+     * @param timeoutMs (optional) — Maximum wait per field for it to become visible and enabled
+     * @returns sessionOut — Updated automation session
+     * @returns filledCount — Number of fields filled
+     * @impure has side effects / drives control flow
+     */
+    function fillForm(this: AutomationSession, { session: Struct, fields?: Struct[], timeoutMs?: int }): { sessionOut: Struct, filledCount: int };
+
+    /**
      * Presses a keyboard key (Enter, Tab, Escape, etc.)
      * @node browser_press_key @alias browserPressKey
      * @param session — Automation session
@@ -990,6 +1212,21 @@ declare namespace browser {
      * @impure has side effects / drives control flow
      */
     function selectOption({ session: Struct, selector?: string, value?: string, locator?: Struct }): Struct;
+
+    /**
+     * Types a password or other secret into a field without logging it. The field must become visible and enabled within the timeout.
+     * @node browser_type_secret @receiver session @alias browserTypeSecret
+     * @param session — Automation session (receiver: `this` in `x.typeSecret(...)`)
+     * @param selector (optional) — CSS selector of the field, or a snapshot ref such as e12
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
+     * @param secret (optional) — Value to type; never written to logs
+     * @param clear (optional) — Clear the field before typing
+     * @param submit (optional) — Press Enter after typing
+     * @param timeoutMs (optional) — Maximum wait for the field to become visible and enabled
+     * @returns sessionOut — Updated automation session
+     * @impure has side effects / drives control flow
+     */
+    function typeSecret(this: AutomationSession, { session: Struct, selector?: string, locator?: Struct, secret?: string, clear?: bool, submit?: bool, timeoutMs?: int }): Struct;
 
     /**
      * Types text into an element matching the selector
@@ -1018,6 +1255,20 @@ declare namespace browser {
      * @impure has side effects / drives control flow
      */
     function click({ session: Struct, selector?: string, button?: string, modifiers?: string[], locator?: Struct }): Struct;
+
+    /**
+     * Clicks at viewport CSS coordinates instead of an element, for canvas apps and coordinates read off a screenshot by a vision model. Works in every WebDriver browser.
+     * @node browser_click_at_point @receiver session @alias browserClickAtPoint
+     * @param session — Automation session (receiver: `this` in `x.clickAtPoint(...)`)
+     * @param x (optional) — Horizontal position in viewport CSS pixels
+     * @param y (optional) — Vertical position in viewport CSS pixels
+     * @param button (optional) — Mouse button to press
+     * @param clickCount (optional) — 1 for a click, 2 for a double click, 3 for a triple click
+     * @param modifiers (optional) — Keys held during the click: Control, Shift, Alt, or Meta
+     * @returns sessionOut — Updated automation session
+     * @impure has side effects / drives control flow
+     */
+    function clickAtPoint(this: AutomationSession, { session: Struct, x?: float, y?: float, button?: string, clickCount?: int, modifiers?: string[] }): Struct;
 
     /**
      * Double-clicks on an element matching the selector
@@ -1054,6 +1305,23 @@ declare namespace browser {
      */
     function scrollIntoView({ session: Struct, selector?: string, locator?: Struct }): Struct;
 
+    /**
+     * Scrolls the page, or a scrollable container, by a distance or to its top or bottom, and reports where it ended up. Use At Bottom to stop infinite-scroll loops.
+     * @node browser_scroll_page @receiver session @alias browserScrollPage
+     * @param session — Automation session (receiver: `this` in `x.scrollPage(...)`)
+     * @param mode (optional) — by scrolls by Delta X/Y; top and bottom jump to the vertical ends
+     * @param deltaX (optional) — Horizontal distance in CSS pixels for mode 'by'; negative scrolls left
+     * @param deltaY (optional) — Vertical distance in CSS pixels for mode 'by'; negative scrolls up
+     * @param scope (optional) — CSS selector of a scrollable container; empty scrolls the page
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
+     * @returns sessionOut — Updated automation session
+     * @returns scrollX — Horizontal scroll offset after scrolling, in CSS pixels
+     * @returns scrollY — Vertical scroll offset after scrolling, in CSS pixels
+     * @returns atBottom — True when the page or container cannot scroll further down
+     * @impure has side effects / drives control flow
+     */
+    function scrollPage(this: AutomationSession, { session: Struct, mode?: string, deltaX?: float, deltaY?: float, scope?: string, locator?: Struct }): { sessionOut: Struct, scrollX: int, scrollY: int, atBottom: bool };
+
     // === Automation/Browser/Navigation ===
 
     /**
@@ -1075,7 +1343,7 @@ declare namespace browser {
     function forward({ session: Struct }): Struct;
 
     /**
-     * Navigates the page to a URL
+     * Navigates the page to a URL. file:, javascript:, chrome:, edge:, devtools: and view-source: URLs are blocked unless Set Navigation Policy allows them; a session navigation policy is enforced before loading and again on the final URL after redirects.
      * @node browser_goto @alias browserGoto
      * @param session — Automation session
      * @param url (optional) — URL to navigate to
@@ -1094,6 +1362,21 @@ declare namespace browser {
      */
     function reload({ session: Struct }): Struct;
 
+    /**
+     * Restricts where Go To and Execute Browser Action Plan may navigate in this session: URL schemes, domain allow and block lists, and private network addresses. The final URL after redirects is checked too; a blocked landing page is left for about:blank and the node fails. Requests the page makes on its own are not filtered.
+     * @node browser_set_navigation_policy @receiver session @alias browserSetNavigationPolicy
+     * @param session — Automation session (receiver: `this` in `x.setNavigationPolicy(...)`)
+     * @param enabled (optional) — Disable to remove the policy and restore the default rules (privileged schemes such as file: and javascript: stay blocked)
+     * @param allowedSchemes (optional) — URL schemes that may be opened; empty allows all except file, javascript, chrome, edge, devtools and view-source
+     * @param allowedDomains (optional) — Host globs such as example.com or *.example.com; empty allows any host
+     * @param blockedDomains (optional) — Host globs that are always blocked
+     * @param blockPrivateNetworks (optional) — Block loopback, private, link-local and cloud metadata addresses (hosts are resolved; unresolvable hosts are blocked)
+     * @returns sessionOut — Updated automation session
+     * @returns policy — The policy now in effect
+     * @impure has side effects / drives control flow
+     */
+    function setNavigationPolicy(this: AutomationSession, { session: Struct, enabled?: bool, allowedSchemes?: string[], allowedDomains?: string[], blockedDomains?: string[], blockPrivateNetworks?: bool }): { sessionOut: Struct, policy: Struct };
+
     // === Automation/Browser/Observe ===
 
     /**
@@ -1106,14 +1389,14 @@ declare namespace browser {
     function clearConsoleLogs({ session: Struct }): Struct;
 
     /**
-     * Retrieves console messages from the browser (logs, warnings, errors)
+     * Retrieves captured console messages, uncaught page exceptions, and browser log entries such as failed resource loads. Requires a running console or network observer.
      * @node browser_get_console_logs @alias browserGetConsoleLogs
      * @param session — Automation session
      * @param levelFilter (optional) — Filter by log level (empty for all)
      * @returns sessionOut — Automation session (pass-through)
      * @returns logs — Array of console messages
      * @returns count — Number of log entries
-     * @returns hasErrors — Whether there are error-level logs
+     * @returns hasErrors — Whether any returned entry is an error, including uncaught exceptions and failed resource loads
      * @impure has side effects / drives control flow
      */
     function getConsoleLogs({ session: Struct, levelFilter?: string }): { sessionOut: Struct, logs: Struct[], count: int, hasErrors: bool };
@@ -1131,7 +1414,7 @@ declare namespace browser {
     function getNetworkRequests({ session: Struct, clearAfter?: bool }): { sessionOut: Struct, requests: Struct[], count: int };
 
     /**
-     * Starts observing network requests using the Performance API
+     * Starts observing network requests and console output (including uncaught exceptions) through the Chrome DevTools Protocol. Chrome and Edge only.
      * @node browser_start_network_observer @alias browserStartNetworkObserver
      * @param session — Automation session
      * @param urlPattern (optional) — Filter requests by URL pattern (empty for all)
@@ -1153,6 +1436,25 @@ declare namespace browser {
     function waitForNetworkIdle({ session: Struct, idleTimeMs?: int, timeoutMs?: int }): Struct;
 
     // === Automation/Browser/Snapshot ===
+
+    /**
+     * Searches the latest browser snapshot by role, accessible name and text and returns matching refs. Takes a fresh full snapshot when none exists, the page navigated, or Refresh is set. Requires Chrome or Edge.
+     * @node browser_find_elements @receiver session @alias browserFindElements
+     * @param session — Automation session (receiver: `this` in `x.findElements(...)`)
+     * @param role (optional) — ARIA role such as button, link or textbox (empty matches any role)
+     * @param name (optional) — Accessible name to match (empty matches any name)
+     * @param nameMatch (optional) — How Name is compared: case-insensitive contains, exact, or regex
+     * @param text (optional) — Case-insensitive text contained in the name, value, text or description
+     * @param refresh (optional) — Always take a fresh full snapshot before searching
+     * @param limit (optional) — Maximum matches returned
+     * @returns sessionOut — Updated automation session
+     * @returns refs — Matching refs
+     * @returns lines — Snapshot line of each match
+     * @returns elements — Matching snapshot elements
+     * @returns count — Number of matches before the limit
+     * @impure has side effects / drives control flow
+     */
+    function findElements(this: AutomationSession, { session: Struct, role?: string, name?: string, nameMatch?: string, text?: string, refresh?: bool, limit?: int }): { sessionOut: Struct, refs: string[], lines: string[], elements: Struct[], count: int };
 
     /**
      * Captures the accessibility tree of the current page for screen reader analysis
@@ -1199,6 +1501,26 @@ declare namespace browser {
      * @impure has side effects / drives control flow
      */
     function getElementSnapshot({ session: Struct, selector?: string, locator?: Struct }): { sessionOut: Struct, html: string, text: string, tag: string, x: int, y: int, width: int, height: int, visible: bool };
+
+    /**
+     * Captures the page accessibility tree as compact text with element refs (e1, e2, …) that any selector pin accepts as a Ref selector. Refs stay valid until the page navigates or the element is removed; a stale ref fails with a request to take a new snapshot. Covers the current tab including same-process iframes; out-of-process (cross-site) iframes are omitted. Requires Chrome or Edge.
+     * @node browser_snapshot @receiver session @alias browserSnapshot
+     * @param session — Automation session (receiver: `this` in `x.snapshot(...)`)
+     * @param interactiveOnly (optional) — List only interactive elements (buttons, links, inputs, clickable elements) as a flat list; disable for the full page structure with text
+     * @param maxDepth (optional) — Maximum nesting depth of listed elements (-1 for unlimited)
+     * @param scopeRef (optional) — Optional ref from an earlier snapshot of this page; only its subtree is captured
+     * @param maxChars (optional) — Maximum length of the snapshot text; longer snapshots are cut and flagged as truncated
+     * @param detectClickable (optional) — Also list elements without an interactive role that have a pointer cursor, onclick or tabindex
+     * @returns sessionOut — Updated automation session
+     * @returns snapshot — Indented text such as `- button "Sign in" [ref=e12]`
+     * @returns elements — Listed elements in document order
+     * @returns url — Page URL
+     * @returns title — Page title
+     * @returns generation — Snapshot counter for this session
+     * @returns truncated — Whether the snapshot exceeded Max Characters
+     * @impure has side effects / drives control flow
+     */
+    function snapshot(this: AutomationSession, { session: Struct, interactiveOnly?: bool, maxDepth?: int, scopeRef?: string, maxChars?: int, detectClickable?: bool }): { sessionOut: Struct, snapshot: string, elements: Struct[], url: string, title: string, generation: int, truncated: bool };
 
     // === Automation/Browser/Storage ===
 
@@ -1295,6 +1617,22 @@ declare namespace browser {
      * @impure has side effects / drives control flow
      */
     function waitFor({ session: Struct, selector?: string, timeoutMs?: int, locator?: Struct }): { sessionOut: Struct, found: bool };
+
+    /**
+     * Polls the current page until a condition holds, then continues on Met, or on Timeout when the deadline passes. Conditions: text_visible / text_gone (rendered page text contains Value), url_matches (glob with * and ?, or re:<regex>), title_contains, load_state (domcontentloaded, load, or networkidle — networkidle needs a running Network Observer), js_truthy (Value is a JavaScript function body whose return value is tested, e.g. return window.appReady === true), element_visible / element_hidden (CSS selector in Value, or a connected Locator).
+     * @node browser_wait_for_condition @receiver session @alias browserWaitForCondition
+     * @param session — Automation session (receiver: `this` in `x.waitForCondition(...)`)
+     * @param condition (optional) — What to wait for
+     * @param value (optional) — Text, URL pattern, title part, load state, JavaScript function body, or CSS selector, depending on Condition
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
+     * @param timeoutMs (optional) — Maximum time to wait
+     * @param pollMs (optional) — Pause between checks, at least 10
+     * @returns sessionOut — Updated automation session
+     * @returns met — Whether the condition held before the deadline
+     * @returns elapsedMs — Time spent waiting
+     * @impure has side effects / drives control flow
+     */
+    function waitForCondition(this: AutomationSession, { session: Struct, condition?: string, value?: string, locator?: Struct, timeoutMs?: int, pollMs?: int }): { sessionOut: Struct, met: bool, elapsedMs: int };
 }
 
 declare namespace computer {
@@ -1304,7 +1642,7 @@ declare namespace computer {
      * Invokes, focuses, selects, expands, collapses, or edits a native accessible element
      * @node computer_accessibility_action @alias computerAccessibilityAction
      * @param session — Active automation session
-     * @param element — Native element returned by Find Accessibility Element
+     * @param element — Native element returned by Find Accessibility Element or the elements list of Get Accessibility Tree
      * @param action (optional) — Native action
      * @param value (optional) — Value to write for set_value
      * @returns sessionOut — Session
@@ -1331,34 +1669,103 @@ declare namespace computer {
      * Retrieves the accessibility tree for a window (requires platform-specific accessibility APIs)
      * @node computer_get_accessibility_tree @alias computerGetAccessibilityTree
      * @param session — Computer session handle
-     * @param windowTitle (optional) — Window title; empty uses the focused window, or the desktop accessibility root on Linux
+     * @param windowTitle (optional) — Window title; empty targets the focused window outside Flow-Like (on Linux the desktop accessibility root when no window resolves)
      * @param maxDepth (optional) — Maximum tree depth (1–32); results are limited to 2000 elements
      * @returns sessionOut — Computer session handle (pass-through)
      * @returns tree — Accessibility tree root node
      * @returns treeJson — Accessibility tree as JSON string for LLM processing
+     * @returns elements — Every element of the tree as a flat list in document order (children omitted); each can be passed to Act on Accessibility Element
      * @returns error — Error message if accessibility APIs are unavailable
      * @impure has side effects / drives control flow
      */
-    function getAccessibilityTree({ session: Struct, windowTitle?: string, maxDepth?: int }): { sessionOut: Struct, tree: Struct, treeJson: string, error: string };
+    function getAccessibilityTree({ session: Struct, windowTitle?: string, maxDepth?: int }): { sessionOut: Struct, tree: Struct, treeJson: string, elements: Struct[], error: string };
+
+    // === Automation/Computer/Agent ===
+
+    /**
+     * Lets a vision model operate the desktop until a goal is reached: it looks at a screenshot (optionally with numbered accessibility marks), calls mouse and keyboard tools, waits for the screen to settle, checks the result and repeats. Works with any vision model that supports tool calling. Ends when the model reports done or asks the user, or when it is stuck or out of steps or time
+     * @node computer_use_agent @receiver session @alias computerUseAgent
+     * @param session — Computer session handle (receiver: `this` in `x.useAgent(...)`)
+     * @param model — Vision model with tool calling that operates the desktop
+     * @param goal (optional) — The task in plain language, e.g. 'Rename report.txt on the Desktop to final.txt'
+     * @param displayIndex (optional) — Display the agent sees and acts on; -1 is the primary display
+     * @param targetWindow (optional) — Optional window title (or part of it): the agent sees the display showing this window and its elements are the numbered ones. Empty uses the focused window outside Flow-Like
+     * @param perception (optional) — screenshot: the plain screenshot; screenshot_marks: numbered boxes on accessibility elements plus an element list; screenshot_marks_ocr: also number recognized text
+     * @param maxSteps (optional) — Most model turns before the agent stops with max_steps (1–500)
+     * @param maxDurationS (optional) — Wall-clock budget in seconds before the agent stops with timeout (1–86400)
+     * @param maxActionsPerStep (optional) — Most tool calls executed per model turn (1–20)
+     * @param settleMs (optional) — Longest wait after actions for the screen to stop changing before the next screenshot (0–10000)
+     * @param forbiddenText (optional) — Regular expressions the agent may never type; a matching type call is refused
+     * @param extraInstructions (optional) — Optional guidance added to the task, e.g. which app to use or what to avoid
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @returns status — done, failed, stuck, max_steps, timeout or needs_input
+     * @returns answer — The model's result or summary, the question for the user, or why the agent stopped
+     * @returns steps — Trajectory: per turn the screenshot seen, the model's text, each action with its arguments, desktop coordinates and result, and the duration
+     * @returns finalImage — The last screenshot, without marks
+     * @returns finalFrame — Desktop rectangle and pixel size of the final screenshot
+     * @impure has side effects / drives control flow
+     */
+    function useAgent(this: AutomationSession, { session: Struct, model: Struct, goal?: string, displayIndex?: int, targetWindow?: string, perception?: string, maxSteps?: int, maxDurationS?: int, maxActionsPerStep?: int, settleMs?: int, forbiddenText?: string[], extraInstructions?: string }): { sessionOut: Struct, status: string, answer: string, steps: Struct[], finalImage: Struct, finalFrame: Struct };
 
     // === Automation/Computer/Capture ===
 
     /**
-     * Takes a screenshot of the screen, window, or region
+     * Observes a window or display for an agent: a screenshot, the same screenshot with numbered boxes on every actionable element, and a compact element list (accessibility tree plus optional OCR text) whose ids Click Screen Element accepts
+     * @node computer_capture_state @receiver session @alias computerCaptureState
+     * @param session — Computer session handle (receiver: `this` in `x.captureState(...)`)
+     * @param target (optional) — focused_window: the focused window outside Flow-Like; window: the window titled below; display: a whole display
+     * @param windowTitle (optional) — Title (or part of it) of the window for the window target
+     * @param displayIndex (optional) — Display for the display target
+     * @param includeAx (optional) — List elements from the accessibility tree
+     * @param includeOcr (optional) — Add recognized text that no accessibility element already covers
+     * @param interactiveOnly (optional) — Only list controls that can be clicked, typed into or toggled
+     * @param maxElements (optional) — Upper bound on listed elements (1–500)
+     * @param languages (optional) — Comma-separated OCR languages such as en-US, de; empty lets the OS engine choose
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @returns image — Screenshot of the target
+     * @returns annotated — Screenshot with a numbered box on every listed element
+     * @returns frame — Desktop rectangle and pixel size of both images
+     * @returns elements — Listed elements with role, name, value, states and desktop bounds
+     * @returns summary — One line per element for a language model, e.g. [3] button "Save" @ (812,433)
+     * @returns generation — Identifies this capture; Click Screen Element rejects ids from older captures
+     * @impure has side effects / drives control flow
+     */
+    function captureState(this: AutomationSession, { session: Struct, target?: string, windowTitle?: string, displayIndex?: int, includeAx?: bool, includeOcr?: bool, interactiveOnly?: bool, maxElements?: int, languages?: string }): { sessionOut: Struct, image: Struct, annotated: Struct, frame: Struct, elements: Struct[], summary: string, generation: int };
+
+    /**
+     * Takes a screenshot of the primary display, a chosen display, or a region of one display. Frame maps image pixels back to the desktop coordinates the mouse nodes use
      * @node computer_screenshot @alias computerScreenshot
      * @param session — Computer session handle
-     * @param captureType (optional) — What to capture: full screen, specific display, or region
-     * @param displayIndex (optional) — Index of display for display or region capture
-     * @param regionX (optional) — X coordinate of region (when capture_type=region)
-     * @param regionY (optional) — Y coordinate of region
-     * @param regionWidth (optional) — Width of region
-     * @param regionHeight (optional) — Height of region
+     * @param captureType (optional) — full: the primary display only. display: the display at Display Index. region: a rectangle of one display
+     * @param displayIndex (optional) — Display for display capture and pixel-space region capture: index from List Displays, -1 = primary
+     * @param regionSpace (optional) — pixels: region is in screenshot pixels of the display at Display Index (Retina displays have twice as many pixels as desktop units). desktop: region is in desktop input coordinates, like the mouse nodes, and may be on any display
+     * @param regionX (optional) — Left edge of the region (capture_type=region), in Region Space units
+     * @param regionY (optional) — Top edge of the region, in Region Space units
+     * @param regionWidth (optional) — Width of the region, in Region Space units
+     * @param regionHeight (optional) — Height of the region, in Region Space units
      * @returns sessionOut — Computer session handle (pass-through)
      * @returns screenshot — Reference to the captured screenshot
      * @returns image — Screenshot as NodeImage
+     * @returns frame — Desktop rectangle and pixel size of the screenshot; converts image pixels to mouse coordinates
      * @impure has side effects / drives control flow
      */
-    function screenshot({ session: Struct, captureType?: string, displayIndex?: int, regionX?: int, regionY?: int, regionWidth?: int, regionHeight?: int }): { sessionOut: Struct, screenshot: Struct, image: Struct };
+    function screenshot({ session: Struct, captureType?: string, displayIndex?: int, regionSpace?: string, regionX?: int, regionY?: int, regionWidth?: int, regionHeight?: int }): { sessionOut: Struct, screenshot: Struct, image: Struct, frame: Struct };
+
+    /**
+     * Captures a desktop rectangle at the display's full pixel density, optionally enlarged, to read small text or inspect details. Coordinates found in the image map back to the desktop through the frame
+     * @node computer_zoom @receiver session @alias computerZoom
+     * @param session — Computer session handle (receiver: `this` in `x.zoom(...)`)
+     * @param x (optional) — Left edge in desktop input coordinates
+     * @param y (optional) — Top edge in desktop input coordinates
+     * @param width (optional) — Width in desktop input coordinates
+     * @param height (optional) — Height in desktop input coordinates
+     * @param upscale (optional) — Enlarge the capture by this factor (1–4) for tiny text
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @returns image — The captured region
+     * @returns frame — Desktop rectangle and pixel size of the image; map image points back with it
+     * @impure has side effects / drives control flow
+     */
+    function zoom(this: AutomationSession, { session: Struct, x?: int, y?: int, width?: int, height?: int, upscale?: int }): { sessionOut: Struct, image: Struct, frame: Struct };
 
     // === Automation/Computer/Clipboard ===
 
@@ -1426,10 +1833,32 @@ declare namespace computer {
     // === Automation/Computer/Keyboard ===
 
     /**
+     * Holds a key down for a duration and then releases it. The key is released even when the run fails or is cancelled
+     * @node computer_hold_key @receiver session @alias computerHoldKey
+     * @param session — Computer session handle (receiver: `this` in `x.holdKey(...)`)
+     * @param key (optional) — Key to hold (case-insensitive): a single character or a named key: Enter, Tab, Escape, Backspace, Delete, Space, arrows (Up/Down/Left/Right), Home, End, PageUp, PageDown, Insert, CapsLock, NumLock, ScrollLock, PrintScreen, Pause, Help, F1–F24, Shift, Ctrl, Alt, Cmd/Meta/Super/Win, Numpad0–Numpad9, NumpadAdd, NumpadSubtract, NumpadMultiply, NumpadDivide, NumpadDecimal, VolumeUp, VolumeDown, VolumeMute, MediaPlayPause, MediaNext, MediaPrev. Keys the operating system cannot send fail with an error
+     * @param durationMs (optional) — How long to hold the key (0-60000 ms)
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @impure has side effects / drives control flow
+     */
+    function holdKey(this: AutomationSession, { session: Struct, key?: string, durationMs?: int }): Struct;
+
+    /**
+     * Presses a keyboard shortcut written as text, such as ctrl+shift+s, cmd+space or alt+F4. Modifiers are released in reverse order even when a key fails
+     * @node computer_key_chord @receiver session @alias computerKeyChord
+     * @param session — Computer session handle (receiver: `this` in `x.keyChord(...)`)
+     * @param chord (optional) — Modifiers joined with '+' followed by one key, e.g. ctrl+shift+s, cmd+space, alt+F4, ctrl++. Modifiers: ctrl, shift, alt/option, cmd/meta/super/win, primary (cmd on macOS, ctrl elsewhere). Key: a single character or a named key: Enter, Tab, Escape, Backspace, Delete, Space, arrows (Up/Down/Left/Right), Home, End, PageUp, PageDown, Insert, CapsLock, NumLock, ScrollLock, PrintScreen, Pause, Help, F1–F24, Shift, Ctrl, Alt, Cmd/Meta/Super/Win, Numpad0–Numpad9, NumpadAdd, NumpadSubtract, NumpadMultiply, NumpadDivide, NumpadDecimal, VolumeUp, VolumeDown, VolumeMute, MediaPlayPause, MediaNext, MediaPrev. Keys the operating system cannot send fail with an error
+     * @param repeat (optional) — How many times to press the chord (1-100)
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @impure has side effects / drives control flow
+     */
+    function keyChord(this: AutomationSession, { session: Struct, chord?: string, repeat?: int }): Struct;
+
+    /**
      * Presses a keyboard key or key combination
      * @node computer_key_press @alias computerKeyPress
      * @param session — Computer session handle
-     * @param key (optional) — Key to press (e.g., 'a', 'Enter', 'Tab', 'Escape')
+     * @param key (optional) — Key to press (case-insensitive): a single character or a named key: Enter, Tab, Escape, Backspace, Delete, Space, arrows (Up/Down/Left/Right), Home, End, PageUp, PageDown, Insert, CapsLock, NumLock, ScrollLock, PrintScreen, Pause, Help, F1–F24, Shift, Ctrl, Alt, Cmd/Meta/Super/Win, Numpad0–Numpad9, NumpadAdd, NumpadSubtract, NumpadMultiply, NumpadDivide, NumpadDecimal, VolumeUp, VolumeDown, VolumeMute, MediaPlayPause, MediaNext, MediaPrev. Keys the operating system cannot send fail with an error
      * @param modifiers (optional) — Modifier keys to hold (comma-separated: ctrl,shift,alt,meta)
      * @returns sessionOut — Computer session handle (pass-through)
      * @impure has side effects / drives control flow
@@ -1437,7 +1866,18 @@ declare namespace computer {
     function keyPress({ session: Struct, key?: string, modifiers?: string }): Struct;
 
     /**
-     * Types text using the keyboard
+     * Enters a password or other secret into the focused field without logging it. Type mode sends keystrokes; paste mode puts the secret on the clipboard (excluded from clipboard history where supported), presses the paste shortcut and restores the previous text or image clipboard afterwards
+     * @node computer_type_secret @receiver session @alias computerTypeSecret
+     * @param session — Computer session handle (receiver: `this` in `x.typeSecret(...)`)
+     * @param secret — Secret to enter; connect it from a secret or variable so it is not stored in the board
+     * @param mode (optional) — type: send keystrokes. paste: paste through the clipboard, then restore it (use for fields that drop fast keystrokes)
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @impure has side effects / drives control flow
+     */
+    function typeSecret(this: AutomationSession, { session: Struct, secret: string, mode?: string }): Struct;
+
+    /**
+     * Types text using the keyboard. The text is stored in the board; use Type Secret for passwords
      * @node computer_key_type @alias computerKeyType
      * @param session — Computer session handle
      * @param text (optional) — Text to type
@@ -1447,6 +1887,35 @@ declare namespace computer {
     function typeText({ session: Struct, text?: string }): Struct;
 
     // === Automation/Computer/Mouse ===
+
+    /**
+     * Clicks an element by its id from the latest Capture Screen State of this session, through the accessibility action when possible, otherwise with the mouse at its center
+     * @node computer_click_element @receiver session @alias computerClickElement
+     * @param session — Computer session handle (receiver: `this` in `x.clickElement(...)`)
+     * @param elementId (optional) — The [id] from the screen state
+     * @param generation (optional) — Generation of the screen state the id comes from; 0 accepts the latest capture
+     * @param button (optional) — Mouse button
+     * @param double (optional) — Click twice
+     * @param preferAccessibilityAction (optional) — Press accessibility elements through the accessibility API (works when covered or off-focus) for single left clicks; falls back to the mouse
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @returns element — The clicked element
+     * @returns method — accessibility or mouse
+     * @impure has side effects / drives control flow
+     */
+    function clickElement(this: AutomationSession, { session: Struct, elementId?: int, generation?: int, button?: string, double?: bool, preferAccessibilityAction?: bool }): { sessionOut: Struct, element: Struct, method: string };
+
+    /**
+     * Reads the mouse pointer position in desktop input coordinates and the display it is on. Not available on Wayland, which does not expose the global pointer
+     * @node computer_cursor_position @receiver session @alias computerCursorPosition
+     * @param session — Computer session handle (receiver: `this` in `x.cursorPosition(...)`)
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @returns x — Pointer X in desktop input coordinates
+     * @returns y — Pointer Y in desktop input coordinates
+     * @returns displayIndex — Index (as in List Displays) of the display under the pointer, or -1 if none
+     * @returns frame — Frame of that display (input rectangle and pixel size), or null
+     * @impure has side effects / drives control flow
+     */
+    function cursorPosition(this: AutomationSession, { session: Struct }): { sessionOut: Struct, x: int, y: int, displayIndex: int, frame: Struct };
 
     /**
      * Clicks the mouse at the specified coordinates
@@ -1489,7 +1958,19 @@ declare namespace computer {
     function mouseDoubleClick({ session: Struct, x?: int, y?: int, useTemplateMatching?: bool, template: Struct, confidence?: float, naturalMove?: bool, moveDurationMs?: int, useFingerprint?: bool, fingerprint: Struct, button?: string, modifiers?: string }): Struct;
 
     /**
-     * Drags the mouse from one position to another
+     * Presses and keeps a mouse button down, optionally after moving to X/Y. Release it with Mouse Up; it is released automatically if the session closes or the run is cancelled
+     * @node computer_mouse_down @receiver session @alias computerMouseDown
+     * @param session — Computer session handle (receiver: `this` in `x.mouseDown(...)`)
+     * @param button (optional) — Mouse button to press
+     * @param x (optional) — Optional desktop coordinate to move to first; leave both X and Y empty to use the current pointer position
+     * @param y (optional) — Optional desktop coordinate to move to first; leave both X and Y empty to use the current pointer position
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @impure has side effects / drives control flow
+     */
+    function mouseDown(this: AutomationSession, { session: Struct, button?: string, x?: int, y?: int }): Struct;
+
+    /**
+     * Presses the button at the start point, moves to the end point in small steps over the duration, pauses, and releases so applications register a real drag
      * @node computer_mouse_drag @alias computerMouseDrag
      * @param session — Computer session handle
      * @param fromX (optional) — Starting X coordinate
@@ -1498,10 +1979,11 @@ declare namespace computer {
      * @param toY (optional) — Ending Y coordinate
      * @param button (optional) — Mouse button to use for dragging
      * @param modifiers (optional) — Comma-separated ctrl, shift, alt, meta
+     * @param durationMs (optional) — Time spent moving from start to end (0-60000 ms); the pointer moves in steps of about 16 ms
      * @returns sessionOut — Computer session handle (pass-through)
      * @impure has side effects / drives control flow
      */
-    function mouseDrag({ session: Struct, fromX?: int, fromY?: int, toX?: int, toY?: int, button?: string, modifiers?: string }): Struct;
+    function mouseDrag({ session: Struct, fromX?: int, fromY?: int, toX?: int, toY?: int, button?: string, modifiers?: string, durationMs?: int }): Struct;
 
     /**
      * Moves the mouse cursor to the specified screen coordinates
@@ -1513,6 +1995,31 @@ declare namespace computer {
      * @impure has side effects / drives control flow
      */
     function mouseMove({ session: Struct, x?: int, y?: int }): Struct;
+
+    /**
+     * Triple-clicks at desktop coordinates, e.g. to select a whole line or paragraph of text
+     * @node computer_mouse_triple_click @receiver session @alias computerMouseTripleClick
+     * @param session — Computer session handle (receiver: `this` in `x.mouseTripleClick(...)`)
+     * @param x (optional) — Desktop X coordinate
+     * @param y (optional) — Desktop Y coordinate
+     * @param button (optional) — Mouse button to click
+     * @param modifiers (optional) — Comma-separated ctrl, shift, alt, meta held during the clicks
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @impure has side effects / drives control flow
+     */
+    function mouseTripleClick(this: AutomationSession, { session: Struct, x?: int, y?: int, button?: string, modifiers?: string }): Struct;
+
+    /**
+     * Releases a mouse button, optionally after moving to X/Y (for example to finish a drag started with Mouse Down)
+     * @node computer_mouse_up @receiver session @alias computerMouseUp
+     * @param session — Computer session handle (receiver: `this` in `x.mouseUp(...)`)
+     * @param button (optional) — Mouse button to release
+     * @param x (optional) — Optional desktop coordinate to move to first; leave both X and Y empty to use the current pointer position
+     * @param y (optional) — Optional desktop coordinate to move to first; leave both X and Y empty to use the current pointer position
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @impure has side effects / drives control flow
+     */
+    function mouseUp(this: AutomationSession, { session: Struct, button?: string, x?: int, y?: int }): Struct;
 
     /**
      * Moves the mouse cursor naturally using curved paths with variable speed to avoid bot detection
@@ -1529,15 +2036,95 @@ declare namespace computer {
     function naturalMouseMove({ session: Struct, x?: int, y?: int, durationMs?: int, curveIntensity?: float, overshoot?: bool }): Struct;
 
     /**
-     * Scrolls the mouse wheel
+     * Scrolls the mouse wheel at the current pointer position, one wheel tick at a time. Positive Delta Y scrolls down (towards the end of a page); note that RPA Scroll uses the opposite sign
      * @node computer_scroll @alias computerScroll
      * @param session — Computer session handle
-     * @param dx (optional) — Horizontal scroll amount (positive = right)
-     * @param dy (optional) — Vertical scroll amount (positive = down)
+     * @param dx (optional) — Horizontal wheel ticks: positive scrolls right, negative scrolls left (-1000 to 1000)
+     * @param dy (optional) — Vertical wheel ticks: positive scrolls DOWN (content moves up), negative scrolls up (-1000 to 1000)
      * @returns sessionOut — Computer session handle (pass-through)
      * @impure has side effects / drives control flow
      */
     function scroll({ session: Struct, dx?: int, dy?: int }): Struct;
+
+    // === Automation/Computer/Vision ===
+
+    /**
+     * Finds text on screen with OCR and clicks the center of the matched words
+     * @node computer_click_text @receiver session @alias computerClickText
+     * @param session — Computer session handle (receiver: `this` in `x.clickText(...)`)
+     * @param text (optional) — Text or pattern to find
+     * @param matchMode (optional) — exact: whole words equal the text; contains: substring; regex: pattern; fuzzy: similar words
+     * @param caseSensitive (optional) — Compare letter case; whitespace and typographic quotes are always normalized
+     * @param fuzzyThreshold (optional) — Minimum similarity (0–1) for fuzzy matches
+     * @param occurrence (optional) — Which match to use in reading order (1 = first)
+     * @param windowTitle (optional) — Look only inside the window with this title; empty uses the region or display
+     * @param displayIndex (optional) — Display to capture when no window or region is given
+     * @param regionX (optional) — Left edge of the region in desktop input coordinates
+     * @param regionY (optional) — Top edge of the region in desktop input coordinates
+     * @param regionWidth (optional) — Region width; 0 captures the whole display
+     * @param regionHeight (optional) — Region height; 0 captures the whole display
+     * @param languages (optional) — Comma-separated languages such as en-US, de; empty lets the OS engine choose
+     * @param button (optional) — Mouse button
+     * @param double (optional) — Click twice
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @returns found — Whether the text was found and clicked
+     * @returns x — Clicked X in desktop input coordinates
+     * @returns y — Clicked Y in desktop input coordinates
+     * @returns match — The clicked match
+     * @impure has side effects / drives control flow
+     */
+    function clickText(this: AutomationSession, { session: Struct, text?: string, matchMode?: string, caseSensitive?: bool, fuzzyThreshold?: float, occurrence?: int, windowTitle?: string, displayIndex?: int, regionX?: int, regionY?: int, regionWidth?: int, regionHeight?: int, languages?: string, button?: string, double?: bool }): { sessionOut: Struct, found: bool, x: int, y: int, match: Struct };
+
+    /**
+     * Finds text on a display, region or window with OCR and returns its position in desktop coordinates
+     * @node computer_find_text @receiver session @alias computerFindText
+     * @param session — Computer session handle (receiver: `this` in `x.findText(...)`)
+     * @param text (optional) — Text or pattern to find
+     * @param matchMode (optional) — exact: whole words equal the text; contains: substring; regex: pattern; fuzzy: similar words
+     * @param caseSensitive (optional) — Compare letter case; whitespace and typographic quotes are always normalized
+     * @param fuzzyThreshold (optional) — Minimum similarity (0–1) for fuzzy matches
+     * @param occurrence (optional) — Which match to use in reading order (1 = first)
+     * @param windowTitle (optional) — Look only inside the window with this title; empty uses the region or display
+     * @param displayIndex (optional) — Display to capture when no window or region is given
+     * @param regionX (optional) — Left edge of the region in desktop input coordinates
+     * @param regionY (optional) — Top edge of the region in desktop input coordinates
+     * @param regionWidth (optional) — Region width; 0 captures the whole display
+     * @param regionHeight (optional) — Region height; 0 captures the whole display
+     * @param languages (optional) — Comma-separated languages such as en-US, de; empty lets the OS engine choose
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @returns found — Whether the requested occurrence exists
+     * @returns x — Center X of the match in desktop input coordinates
+     * @returns y — Center Y of the match in desktop input coordinates
+     * @returns bbox — Bounds of the match in desktop input coordinates
+     * @returns match — The selected match
+     * @returns matches — Every match in reading order
+     * @returns frame — Screen frame of the searched capture
+     * @impure has side effects / drives control flow
+     */
+    function findText(this: AutomationSession, { session: Struct, text?: string, matchMode?: string, caseSensitive?: bool, fuzzyThreshold?: float, occurrence?: int, windowTitle?: string, displayIndex?: int, regionX?: int, regionY?: int, regionWidth?: int, regionHeight?: int, languages?: string }): { sessionOut: Struct, found: bool, x: int, y: int, bbox: Struct, match: Struct, matches: Struct[], frame: Struct };
+
+    /**
+     * Recognizes text in an image or on the screen with the operating system's OCR engine (Apple Vision, Windows OCR, Tesseract on Linux). Lines carry pixel boxes and, when the screen frame is known, desktop coordinates for the mouse nodes
+     * @node computer_ocr @receiver session @alias computerOcr
+     * @param session — Computer session handle (receiver: `this` in `x.ocr(...)`)
+     * @param image (optional) — Image to read; leave unconnected to capture the window, region or display below
+     * @param imageFrame (optional) — Screen frame of the connected image; maps recognized boxes to desktop coordinates
+     * @param windowTitle (optional) — Look only inside the window with this title; empty uses the region or display
+     * @param displayIndex (optional) — Display to capture when no window or region is given
+     * @param regionX (optional) — Left edge of the region in desktop input coordinates
+     * @param regionY (optional) — Top edge of the region in desktop input coordinates
+     * @param regionWidth (optional) — Region width; 0 captures the whole display
+     * @param regionHeight (optional) — Region height; 0 captures the whole display
+     * @param languages (optional) — Comma-separated languages such as en-US, de; empty lets the OS engine choose
+     * @param languageCorrection (optional) — Let the engine correct words with its language model (Apple Vision); turn off for codes and identifiers
+     * @param minConfidence (optional) — Drop lines below this confidence (0–1); engines without confidence keep all lines
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @returns text — All recognized lines in reading order, separated by newlines
+     * @returns lines — Recognized lines with confidence, pixel boxes, desktop boxes and word boxes
+     * @returns frame — Screen frame of the recognized image; empty when an image without frame was read
+     * @impure has side effects / drives control flow
+     */
+    function ocr(this: AutomationSession, { session: Struct, image?: Struct, imageFrame?: Struct, windowTitle?: string, displayIndex?: int, regionX?: int, regionY?: int, regionWidth?: int, regionHeight?: int, languages?: string, languageCorrection?: bool, minConfidence?: float }): { sessionOut: Struct, text: string, lines: Struct[], frame: Struct };
 
     // === Automation/Computer/Wait ===
 
@@ -1551,18 +2138,65 @@ declare namespace computer {
      */
     function wait({ session: Struct, ms?: int }): Struct;
 
+    /**
+     * Verifies that an action had a visible effect: compares a display or desktop region against a baseline until at least Threshold of it has changed, or times out. Connect Baseline to a screenshot of the same area taken before the action to also catch instant changes; otherwise the baseline is captured when this node starts
+     * @node computer_wait_screen_change @receiver session @alias computerWaitScreenChange
+     * @param session — Computer session handle (receiver: `this` in `x.waitScreenChange(...)`)
+     * @param display (optional) — Display to watch when no region is set: index from List Displays, -1 = primary
+     * @param regionX (optional) — Left edge of the watched region in desktop input coordinates
+     * @param regionY (optional) — Top edge of the watched region in desktop input coordinates
+     * @param regionWidth (optional) — Region width in desktop input coordinates; 0 with height 0 watches the whole display. The region must lie on one display
+     * @param regionHeight (optional) — Region height in desktop input coordinates; 0 with width 0 watches the whole display
+     * @param baseline (optional) — Optional image of the same area captured before the action
+     * @param threshold (optional) — Fraction of pixels (0-1) that must differ from the baseline to count as changed
+     * @param pollMs (optional) — Pause between captures (20-60000 ms)
+     * @param timeoutMs (optional) — Maximum wait before taking the Timeout branch (0-3600000 ms)
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @returns changed — Whether the area changed before the timeout
+     * @returns changeRatio — Fraction of pixels that differ from the baseline in the last frame
+     * @returns before — Baseline image
+     * @returns after — Last captured image
+     * @returns frame — Desktop rectangle and pixel size of the After image
+     * @impure has side effects / drives control flow
+     */
+    function waitScreenChange(this: AutomationSession, { session: Struct, display?: int, regionX?: int, regionY?: int, regionWidth?: int, regionHeight?: int, baseline?: Struct, threshold?: float, pollMs?: int, timeoutMs?: int }): { sessionOut: Struct, changed: bool, changeRatio: float, before: Struct, after: Struct, frame: Struct };
+
+    /**
+     * Captures a display or desktop region repeatedly until consecutive frames stop changing for Stable (ms), e.g. after a page load or animation. Frames are compared on a downsampled grayscale copy
+     * @node computer_wait_screen_stable @receiver session @alias computerWaitScreenStable
+     * @param session — Computer session handle (receiver: `this` in `x.waitScreenStable(...)`)
+     * @param display (optional) — Display to watch when no region is set: index from List Displays, -1 = primary
+     * @param regionX (optional) — Left edge of the watched region in desktop input coordinates
+     * @param regionY (optional) — Top edge of the watched region in desktop input coordinates
+     * @param regionWidth (optional) — Region width in desktop input coordinates; 0 with height 0 watches the whole display. The region must lie on one display
+     * @param regionHeight (optional) — Region height in desktop input coordinates; 0 with width 0 watches the whole display
+     * @param threshold (optional) — Largest fraction of pixels (0-1) that may change between two frames while still counting as stable
+     * @param stableMs (optional) — How long the screen must stay unchanged (0-600000 ms)
+     * @param pollMs (optional) — Pause between captures (20-60000 ms)
+     * @param timeoutMs (optional) — Maximum wait before taking the Timeout branch (0-3600000 ms)
+     * @returns sessionOut — Computer session handle (pass-through)
+     * @returns image — Last captured frame
+     * @returns frame — Desktop rectangle and pixel size of the image
+     * @returns stable — Whether the screen became stable before the timeout
+     * @returns lastChange — Fraction of pixels that changed between the last two frames
+     * @returns waitedMs — Time spent waiting
+     * @impure has side effects / drives control flow
+     */
+    function waitScreenStable(this: AutomationSession, { session: Struct, display?: int, regionX?: int, regionY?: int, regionWidth?: int, regionHeight?: int, threshold?: float, stableMs?: int, pollMs?: int, timeoutMs?: int }): { sessionOut: Struct, image: Struct, frame: Struct, stable: bool, lastChange: float, waitedMs: int };
+
     // === Automation/Computer/Window ===
 
     /**
-     * Captures a screenshot of a specific window
+     * Captures a screenshot of a specific window. Frame maps image pixels to the desktop coordinates the mouse nodes use
      * @node computer_capture_window @alias computerCaptureWindow
      * @param session — Computer session handle
      * @param windowId — ID of the window to capture
      * @returns screenshot — Base64-encoded PNG image
      * @returns image — Screenshot as NodeImage
+     * @returns frame — The window's desktop rectangle and the image's pixel size, or null when the window reports no geometry
      * @impure has side effects / drives control flow
      */
-    function captureWindow({ session: Struct, windowId: string }): { screenshot: string, image: Struct };
+    function captureWindow({ session: Struct, windowId: string }): { screenshot: string, image: Struct, frame: Struct };
 
     /**
      * Finds a window by its title (partial match supported)
@@ -1583,14 +2217,14 @@ declare namespace computer {
      * @param processName (optional) — Exact application name to disambiguate the window
      * @param windowTitle — Title or app name to search for (partial match on both title and app name)
      * @param exactMatch (optional) — Require exact title match
-     * @param launchIfNotFound (optional) — Try to launch the application if no window is found
+     * @param launchIfNotFound (optional) — Launch the program named in Application when no window matches (requires Application; the title is never executed)
      * @returns window — Focused window information
      * @impure has side effects / drives control flow
      */
     function focusWindow({ session: Struct, windowId?: string, processName?: string, windowTitle: string, exactMatch?: bool, launchIfNotFound?: bool }): Struct;
 
     /**
-     * Gets information about the currently focused window
+     * Gets the focused window of another application (Flow-Like's own windows are skipped), falling back to the front-most visible window
      * @node computer_get_active_window @alias computerGetActiveWindow
      * @param session — Computer session handle
      * @returns window — Active window information
@@ -1638,7 +2272,7 @@ declare namespace computer {
     function manageWindow({ session: Struct, windowId: string, operation?: string, x?: int, y?: int, width?: int, height?: int }): Struct;
 
     /**
-     * Waits for a uniquely matching window or a timeout
+     * Waits until a window matches the title and application, or the timeout passes. When several windows match, the focused one is returned, otherwise the first in the operating system's window order (front to back)
      * @node computer_wait_for_window @alias computerWaitForWindow
      * @param session — Active session
      * @param windowTitle — Window title substring
@@ -1810,10 +2444,10 @@ declare namespace rpa {
     function saveCheckpoint({ checkpointName?: string, data?: string }): { checkpointData: string, checkpointId: string };
 
     /**
-     * Performs a scroll action at the current mouse position
+     * Scrolls the mouse wheel vertically at the current pointer position. Positive Clicks scroll UP (towards the top of a page); note that the Computer Scroll node uses the opposite sign
      * @node rpa_scroll @alias rpaScroll
      * @param session — Automation session
-     * @param clicks (optional) — Number of scroll clicks (positive = up, negative = down)
+     * @param clicks (optional) — Wheel ticks: positive scrolls UP (content moves down), negative scrolls down (-1000 to 1000)
      * @impure has side effects / drives control flow
      */
     function scroll({ session: Struct, clicks?: int }): void;
@@ -1831,7 +2465,7 @@ declare namespace rpa {
      * @node rpa_take_snapshot @alias rpaTakeSnapshot
      * @param session — Automation session
      * @param filePath — Path to save the snapshot image
-     * @param monitor (optional) — Monitor index (0 = primary)
+     * @param monitor (optional) — Monitor index from List Displays (-1 = primary)
      * @returns success — Whether the snapshot was saved
      * @impure has side effects / drives control flow
      */

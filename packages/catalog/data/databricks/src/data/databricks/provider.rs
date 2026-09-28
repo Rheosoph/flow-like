@@ -1,3 +1,4 @@
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
@@ -364,9 +365,9 @@ impl NodeLogic for DatabricksServicePrincipalProviderNode {
             )
         };
 
-        let client = flow_like_types::reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&token_url)
+            .post(&token_url)?
             .basic_auth(&client_id, Some(&client_secret))
             .form(&[("grant_type", "client_credentials"), ("scope", "all-apis")])
             .send()

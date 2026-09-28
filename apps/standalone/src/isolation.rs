@@ -78,11 +78,16 @@ pub struct Capabilities {
     pub disk_requirement: &'static str,
 }
 
+/// Seccomp cannot inspect connect() addresses, Landlock network rules match only
+/// TCP ports, and cgroup BPF or nftables need privileges the agent lacks, so the
+/// operator must firewall metadata and loopback for the workload cgroup.
+const NETWORK_BOUNDARY: &str = "shared host network; the sandbox does not filter loopback or link-local metadata (169.254.0.0/16, fd00:ec2::254). Block them for the delegated workload cgroup with host firewall rules, and make local services authenticate callers";
+
 pub fn capabilities(state_dir: &Path) -> Capabilities {
     #[cfg(target_os = "linux")]
     let mut capabilities = linux::capabilities(state_dir);
     #[cfg(not(target_os = "linux"))]
-    let mut capabilities = Capabilities { platform: std::env::consts::OS, landlock_abi: None, bubblewrap: None, cgroup_root: None, sandbox_available: false, require_isolation: false, placement_preflight_required: true, network_boundary: "shared host network; local services must authenticate callers", reason: Some("linux_sandbox requires Linux; use trusted_process only for a dedicated trusted account".into()), disk_requirement: "enforced ext4 project quota" };
+    let mut capabilities = Capabilities { platform: std::env::consts::OS, landlock_abi: None, bubblewrap: None, cgroup_root: None, sandbox_available: false, require_isolation: false, placement_preflight_required: true, network_boundary: NETWORK_BOUNDARY, reason: Some("linux_sandbox requires Linux; use trusted_process only for a dedicated trusted account".into()), disk_requirement: "enforced ext4 project quota" };
     match host_configuration(state_dir) {
         Ok(config) => capabilities.require_isolation = config.required,
         Err(error) => {
@@ -403,7 +408,7 @@ pub fn preflight(
         if resources.profile == IsolationProfile::LinuxSandbox {
             #[cfg(target_os = "linux")]
             {
-                linux::preflight(resources, state_dir, data_root)?;
+                linux::preflight(resources, state_dir, &config.project_path, data_root)?;
             }
             #[cfg(not(target_os = "linux"))]
             {

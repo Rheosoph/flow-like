@@ -398,6 +398,8 @@ pub struct State {
     pub legacy_payments_gateway:
         flow_like_types::tokio::sync::OnceCell<Arc<crate::stripe_connect::HttpStripeGateway>>,
     pub mail_client: Option<DynMailClient>,
+    pub(crate) mail_automation: crate::runtime_config::mail::MailAutomationConfig,
+    pub(crate) automation_mail_client: Option<DynMailClient>,
     #[cfg(feature = "aws")]
     pub aws_client: Arc<SdkConfig>,
     #[cfg(feature = "aws")]
@@ -738,7 +740,17 @@ impl State {
             .load(&secrets)
             .await
             .unwrap_or_else(|error| panic!("{error}"));
+        let mut mail_automation =
+            crate::runtime_config::mail::MailAutomationConfig::load_or_disabled(
+                effective_config.mail_automation,
+                &secrets,
+            )
+            .await;
         let mut platform_config = effective_config.hub;
+        crate::runtime_config::configure_mail_capability(
+            &mut platform_config,
+            mail_automation.enabled,
+        );
         if platform_config.payments.creation_enabled() {
             platform_config.payments.validate().unwrap_or_else(|error| {
                 panic!("Payment creation configuration is invalid: {error}")
@@ -1002,6 +1014,9 @@ impl State {
         } else {
             None
         };
+        let automation_mail_client = mail_automation
+            .create_client_or_disable(&secrets, platform_config.mail.as_ref(), mail_client.clone())
+            .await;
 
         #[cfg(feature = "aws")]
         let aws_client = Arc::new(aws_config::load_from_env().await);
@@ -1120,6 +1135,8 @@ impl State {
             payments_gateway: flow_like_types::tokio::sync::OnceCell::new(),
             legacy_payments_gateway: flow_like_types::tokio::sync::OnceCell::new(),
             mail_client,
+            mail_automation,
+            automation_mail_client,
             #[cfg(feature = "aws")]
             aws_client,
             #[cfg(feature = "aws")]

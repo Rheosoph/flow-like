@@ -1,6 +1,6 @@
 use super::element_utils::extract_element_id_from_pin;
 use flow_like::flow::{
-    execution::{LogLevel, context::ExecutionContext},
+    execution::{LogLevel, context::ExecutionContext, egress::GuardedHttpClient},
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
@@ -257,7 +257,7 @@ async fn create_memory_store(context: &mut ExecutionContext, element_id: &str) -
 const MAX_FILE_INPUT_DOWNLOAD_BYTES: usize = 512 * 1024 * 1024;
 
 async fn download_file_input_url(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     url: &str,
     name: &str,
 ) -> flow_like_types::Result<(Vec<u8>, Option<String>)> {
@@ -265,9 +265,9 @@ async fn download_file_input_url(
 
     // Frontend-supplied URLs are dereferenced from inside the executor. Reject
     // non-http(s) schemes so local-resource URLs (file:, data:, etc.) are never
-    // fetched. NOTE: this does not block http(s) URLs targeting private/loopback
-    // hosts (SSRF residue) — self-hosted upload backends legitimately live on
-    // loopback/private ranges, so a blanket IP blocklist would break them.
+    // fetched. Server-side the guarded client also refuses the host plane
+    // (metadata, loopback, link-local); private ranges stay reachable for
+    // self-hosted upload backends.
     let scheme = reqwest::Url::parse(url)
         .map(|parsed| parsed.scheme().to_string())
         .unwrap_or_default();
@@ -278,7 +278,7 @@ async fn download_file_input_url(
         ));
     }
 
-    let response = client.get(url).send().await.map_err(|err| {
+    let response = client.get(url)?.send().await.map_err(|err| {
         flow_like_types::anyhow!(
             "Failed to download uploaded file \"{}\": {}",
             name,
@@ -401,7 +401,7 @@ async fn materialize_missing_flow_paths(
     } else {
         None
     };
-    let client = reqwest::Client::new();
+    let client = GuardedHttpClient::new(context.execution_environment())?;
     let mut flow_paths = Vec::new();
     let present = existing_flow_paths(context, files).await?;
 
@@ -432,6 +432,9 @@ async fn materialize_missing_flow_paths(
         // the engine. Resolve them to their on-disk path and register a store for
         // that file instead of downloading.
         if let Some(local_path) = decode_local_file_url(&url) {
+            context
+                .execution_environment()
+                .ensure_host_filesystem_access("File input local file URL")?;
             let local_path = PathBuf::from(local_path);
             if local_path.is_file() {
                 let flow_path = FlowPath::from_pathbuf(local_path, context).await?;

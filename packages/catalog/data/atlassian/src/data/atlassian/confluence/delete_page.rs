@@ -1,11 +1,12 @@
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{async_trait, reqwest};
+use flow_like_types::async_trait;
 
 /// Delete a Confluence page
 #[crate::register_node]
@@ -80,7 +81,7 @@ impl NodeLogic for DeleteConfluencePageNode {
             return Err(flow_like_types::anyhow!("Page ID is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let url = if provider.is_cloud {
             provider.confluence_api_url(&format!("/pages/{}", page_id))
@@ -89,7 +90,7 @@ impl NodeLogic for DeleteConfluencePageNode {
         };
 
         let response = client
-            .delete(&url)
+            .delete(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;

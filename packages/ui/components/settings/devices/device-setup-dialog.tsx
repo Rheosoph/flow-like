@@ -12,8 +12,15 @@ import {
 	type DeviceSetupReadiness,
 	checkDeviceSetup,
 } from "../../../lib/device-management/readiness";
-import { prepareDevicePackage } from "../../../lib/device-management/setup";
-import type { DeviceAccountScope } from "../../../lib/device-management/storage";
+import {
+	type AccountBackupOutcome,
+	prepareDevicePackage,
+} from "../../../lib/device-management/setup";
+import {
+	type DeviceAccountScope,
+	type DeviceStoragePersistence,
+	deviceStorageWarning,
+} from "../../../lib/device-management/storage";
 import { useBackend } from "../../../state/backend-state";
 import type { IProfile } from "../../../types";
 import { Button } from "../../ui/button";
@@ -58,8 +65,10 @@ export function DeviceSetupDialog({
 		packageUrl: string;
 		backupUrl: string;
 		deviceId: string;
-		accountBackup?: "saved" | "local_only";
+		accountBackup?: AccountBackupOutcome;
+		storage: DeviceStoragePersistence;
 	}>();
+	const [backupSaved, setBackupSaved] = useState(false);
 	const current = useRef(true);
 	const abort = useRef(new AbortController());
 	const urls = useRef<string[]>([]);
@@ -78,6 +87,7 @@ export function DeviceSetupDialog({
 		setVerified(undefined);
 		setBusy(false);
 		setResult(undefined);
+		setBackupSaved(false);
 		setReadiness(undefined);
 		setError(undefined);
 		const signal = abort.current.signal;
@@ -167,6 +177,7 @@ export function DeviceSetupDialog({
 				backupUrl,
 				deviceId: prepared.deviceId,
 				accountBackup: prepared.accountBackup,
+				storage: prepared.storage,
 			});
 		} catch (error) {
 			if (active())
@@ -241,30 +252,56 @@ export function DeviceSetupDialog({
 								below, then retry account backup from device management.
 							</p>
 						)}
-						<p>
-							The package is ready. Start it on the target device within one day
-							to complete enrollment.
-						</p>
-						<Button asChild>
-							<a
-								href={result.packageUrl}
-								download={`flow-like-${result.deviceId}.zip`}
-							>
-								Download deployment package
-							</a>
-						</Button>
+						{result.accountBackup === "limit" && (
+							<p role="alert">
+								The hub refused another account backup: this account reached its
+								backup limit or sent too many requests. Save the encrypted
+								backup below, then retry account backup from device management
+								later.
+							</p>
+						)}
+						{deviceStorageWarning(result.storage) && (
+							<output className="block text-sm text-destructive">
+								{deviceStorageWarning(result.storage)}
+							</output>
+						)}
 						<p className="text-sm text-muted-foreground">
-							Save this encrypted controller backup separately. Your password
-							and invitation keys are not in the deployment package.
+							Save this encrypted controller backup separately. It is sealed
+							with your password, and your password and invitation keys are not
+							in the deployment package.
 						</p>
 						<Button variant="outline" asChild>
 							<a
 								href={result.backupUrl}
 								download={`flow-like-controller-${result.deviceId}.json`}
+								onClick={() => setBackupSaved(true)}
 							>
 								Save encrypted controller backup
 							</a>
 						</Button>
+						<p>
+							The package is ready. Start it on the target device within one day
+							to complete enrollment.
+						</p>
+						{backupSaved || result.accountBackup === "saved" ? (
+							<Button asChild>
+								<a
+									href={result.packageUrl}
+									download={`flow-like-${result.deviceId}.zip`}
+								>
+									Download deployment package
+								</a>
+							</Button>
+						) : (
+							<>
+								<Button disabled>Download deployment package</Button>
+								<p className="text-xs text-muted-foreground">
+									Save the encrypted controller backup first. Without it or an
+									account backup, losing this app's storage means re-enrolling
+									the device.
+								</p>
+							</>
+						)}
 						<p className="font-mono text-xs break-all">{result.deviceId}</p>
 					</div>
 				) : (

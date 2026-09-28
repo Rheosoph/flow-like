@@ -285,9 +285,9 @@ impl Controller {
 
     async fn wait_rollout(&mut self, rollout: &str, expected: &str) -> Result<Value> {
         let mut last_status = None;
-        // Rollback receives a fresh deadline after the candidate fails. The test
-        // must allow both bounded phases, including worker drain and preparation.
-        let phases = if expected == "rolled_back" { 2 } else { 1 };
+        // Validation, activation and rollback each receive their own deadline. The
+        // test must allow every bounded phase, including worker drain and preparation.
+        let phases = if expected == "rolled_back" { 3 } else { 2 };
         let budget = Duration::from_secs(ROLLOUT_DEADLINE_SECONDS * phases + 15);
         let result = tokio::time::timeout(budget, async {
             loop {
@@ -596,6 +596,7 @@ impl Fixture {
                 max_in_flight: 4,
                 request_timeout_secs: 5,
                 auth_secret: "service-token".into(),
+                ui_origins: Vec::new(),
             }),
             max_replicas: 2,
             variables: BTreeMap::from([("device-setting".into(), json!("device-specific"))]),

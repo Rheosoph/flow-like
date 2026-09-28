@@ -253,13 +253,24 @@ describe("PackageDetailView owner surface", () => {
 		expect(tabs()).toEqual(STORE_TABS);
 	});
 
-	test("the versions list offers no install buttons, even to a maintainer", async () => {
+	test("a viewer without a known permission gets no Manage package", async () => {
+		const { fetcher } = recordingFetcher();
+		await render({ pkg: registryEntry(), fetcher });
+
+		expect(byText("a", "Manage package")).toBeUndefined();
+		expect(tabs()).toEqual(STORE_TABS);
+	});
+
+	test("the versions list offers no install buttons, even to an owner", async () => {
 		const { fetcher } = recordingFetcher();
 		await render({
 			pkg: registryEntry(PackagePermissionBits.Owner),
 			currentUserPermission: PackagePermissionBits.Owner,
 			fetcher,
 		});
+		expect(
+			byText<HTMLAnchorElement>("a", "Manage package")?.getAttribute("href"),
+		).toBe(`/store/package-workspace?id=${PACKAGE_ID}`);
 		await openTab("versions");
 
 		const panel = host.querySelector('[role="tabpanel"][data-state="active"]');

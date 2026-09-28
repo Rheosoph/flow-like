@@ -128,7 +128,7 @@ impl NodeLogic for ComputerListDisplaysNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         session.ensure_active(context).await?;
 
-        let (displays, primary_index) = {
+        let (displays, primary_index) = tokio::task::spawn_blocking(|| {
             let monitors = Monitor::all()
                 .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
 
@@ -143,8 +143,9 @@ impl NodeLogic for ComputerListDisplaysNode {
 
                 displays.push(DisplayInfo::from_monitor(monitor)?);
             }
-            (displays, primary_index)
-        };
+            flow_like_types::Ok((displays, primary_index))
+        })
+        .await??;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.set_pin_value("displays", json!(displays)).await?;
@@ -264,16 +265,18 @@ impl NodeLogic for ComputerGetDisplayNode {
         session.ensure_active(context).await?;
         let index: i64 = context.evaluate_pin("index").await?;
 
-        let display = {
+        let display = tokio::task::spawn_blocking(move || {
             let monitors = Monitor::all()
                 .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
 
-            let monitor = monitors
-                .get(index as usize)
+            let monitor = usize::try_from(index)
+                .ok()
+                .and_then(|index| monitors.get(index))
                 .ok_or_else(|| flow_like_types::anyhow!("Display index {} not found", index))?;
 
-            DisplayInfo::from_monitor(monitor)?
-        };
+            DisplayInfo::from_monitor(monitor)
+        })
+        .await??;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.set_pin_value("display", json!(display)).await?;
@@ -384,7 +387,7 @@ impl NodeLogic for ComputerGetPrimaryDisplayNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         session.ensure_active(context).await?;
 
-        let display = {
+        let display = tokio::task::spawn_blocking(|| {
             let monitors = Monitor::all()
                 .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
 
@@ -394,8 +397,9 @@ impl NodeLogic for ComputerGetPrimaryDisplayNode {
                 .or_else(|| monitors.first())
                 .ok_or_else(|| flow_like_types::anyhow!("No displays found"))?;
 
-            DisplayInfo::from_monitor(monitor)?
-        };
+            DisplayInfo::from_monitor(monitor)
+        })
+        .await??;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.set_pin_value("display", json!(display)).await?;

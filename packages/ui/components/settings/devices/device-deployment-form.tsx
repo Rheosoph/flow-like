@@ -2,13 +2,14 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import {
-	certificateStatus,
 	type DeviceCertificate,
+	certificateStatus,
 } from "../../../lib/device-management/certificates";
 import {
 	type DeploymentEvent,
 	type DeploymentPlan,
 	DeploymentPublicationFailedError,
+	DeploymentRejectedError,
 	DeploymentReviewRequiredError,
 	DeploymentRolloutEndedError,
 	type DeploymentRolloutStatus,
@@ -18,16 +19,21 @@ import {
 	type PlacementConfiguration,
 	type PlacementResources,
 	StaleDeploymentRevisionError,
+	assertOfflineQueuesDrained,
 	canCheckDeploymentStartup,
 	cancelDeploymentRollout,
+	changedSecretType,
 	createDeploymentPlan,
 	discoverOfflineEvents,
 	discoverOfflineVariables,
 	discoverOnlineEvents,
 	discoverOnlineVariables,
+	discoverPreviousOfflineVariables,
+	discoverPreviousOnlineVariables,
 	executeDeploymentPlan,
 	mergeVariables,
 	readExistingDeployment,
+	removesOfflineBuffering,
 	validateVariableValue,
 	variableText,
 	waitForDeploymentRollout,
@@ -106,10 +112,13 @@ export function DeviceDeploymentForm({
 	const [busy, setBusy] = useState(false);
 	const [loaded, setLoaded] = useState(false);
 	const [error, setError] = useState<string>();
-	const [done, setDone] = useState(false);
+	const [done, setDone] = useState<"rollout" | "update" | "create">();
 	const [retry, setRetry] = useState(false);
 	const [healthChecked, setHealthChecked] = useState(true);
 	const [rollout, setRollout] = useState<DeploymentRolloutStatus>();
+	const [previousVariables, setPreviousVariables] = useState<
+		DeploymentVariable[]
+	>([]);
 	const plan = useRef<DeploymentPlan | undefined>(undefined);
 	const alive = useRef(true);
 	const abort = useRef(new AbortController());
@@ -138,11 +147,7 @@ export function DeviceDeploymentForm({
 		selectedEvents,
 	);
 	const automaticRollout = canCheckStartup && healthChecked;
-	const activeRollout =
-		rollout &&
-		["staged", "validating", "activating", "rolling_back"].includes(
-			rollout.state,
-		);
+	const activeRollout = rollout && isActiveRollout(rollout);
 	const grants =
 		resources?.grants.filter(
 			(grant) =>
@@ -171,6 +176,8 @@ export function DeviceDeploymentForm({
 					Object.hasOwn(overrides, id) &&
 					(!definition.secret || overrides[id] !== "");
 				if (wasSecret !== definition.secret) return !hasReplacement;
+				if (wasSecret && !hasReplacement)
+					return Boolean(changedSecretType(previousVariables, definition));
 				if (!wasSecret && !hasReplacement) {
 					try {
 						validateVariableValue(definition, existing.config.variables[id]);
@@ -181,10 +188,19 @@ export function DeviceDeploymentForm({
 				return false;
 			})
 		: [];
+	function secretTypeChange(id: string): string {
+		const definition = variables.find((value) => value.id === id);
+		const previous =
+			definition && changedSecretType(previousVariables, definition);
+		return previous && definition
+			? ` · written for ${previous.data_type}/${previous.value_type}, now ${definition.data_type}/${definition.value_type}`
+			: "";
+	}
 	function resetTarget(value: string) {
 		generation.current++;
 		setTarget(value);
 		setExisting(undefined);
+		setPreviousVariables([]);
 		setOfflineWrites(null);
 		setResourceLimits(null);
 		setEvents([]);
@@ -229,10 +245,7 @@ export function DeviceDeploymentForm({
 			const discovery = async (call?: ManagementCall) => {
 				const rows = call
 					? await discoverOfflineEvents(call, installed)
-					: await discoverOnlineEvents(
-							backend.eventState,
-							installed.project_id,
-						);
+					: discoverOnlineEvents(installed);
 				const previousIds =
 					snapshot?.config.events.map((event) => event.event_id) ?? [];
 				const chosen = rows.filter(
@@ -244,16 +257,23 @@ export function DeviceDeploymentForm({
 						throw new Error("Project discovery was cancelled.");
 					vars[event.id] = call
 						? await discoverOfflineVariables(call, installed, event.id)
-						: await discoverOnlineVariables(
-								backend.eventState,
-								backend.boardState,
-								installed.project_id,
-								event,
-							);
+						: discoverOnlineVariables(installed, event);
 				}
-				return { rows, chosen, vars, previousIds };
+				// Unknown earlier definitions leave type checks of kept secrets to the device.
+				const previous = snapshot
+					? await (call
+							? discoverPreviousOfflineVariables(call, installed, snapshot)
+							: discoverPreviousOnlineVariables(
+									backend.eventState,
+									backend.boardState,
+									installed,
+									snapshot,
+								)
+						).catch(() => [])
+					: [];
+				return { rows, chosen, vars, previousIds, previous };
 			};
-			const { rows, chosen, vars, previousIds } =
+			const { rows, chosen, vars, previousIds, previous } =
 				installed.source === "offline"
 					? await run(discovery)
 					: await discovery();
@@ -280,10 +300,15 @@ export function DeviceDeploymentForm({
 				}
 			}
 			setExisting(snapshot);
+			setPreviousVariables(previous);
 			setTlsCertificateId(snapshot?.config.tls_certificate_id ?? "");
 			setOfflineWrites(snapshot?.config.offline_writes ?? null);
 			setResourceLimits(snapshot?.config.resources ?? null);
-			setRollout(snapshot?.rollout ?? undefined);
+			setRollout(
+				snapshot?.rollout && isActiveRollout(snapshot.rollout)
+					? snapshot.rollout
+					: undefined,
+			);
 			setEvents(rows);
 			setLoaded(true);
 			setSelected(chosen.map((event) => event.id));
@@ -329,12 +354,7 @@ export function DeviceDeploymentForm({
 					? await run((call) =>
 							discoverOfflineVariables(call, installed, event.id),
 						)
-					: await discoverOnlineVariables(
-							backend.eventState,
-							backend.boardState,
-							installed.project_id,
-							event,
-						);
+					: discoverOnlineVariables(installed, event);
 			if (alive.current) {
 				setDefinitions((previous) => ({ ...previous, [event.id]: vars }));
 				setSelected((previous) => [...previous, event.id]);
@@ -388,6 +408,13 @@ export function DeviceDeploymentForm({
 					throw new Error(
 						"Select an active model allowance for this resource approval.",
 					);
+				if (
+					existing &&
+					removesOfflineBuffering(existing.config.offline_writes, offlineWrites)
+				)
+					await run((call) =>
+						assertOfflineQueuesDrained(call, existing.placement_id),
+					);
 				plan.current = createDeploymentPlan({
 					installed,
 					existing,
@@ -397,13 +424,19 @@ export function DeviceDeploymentForm({
 					deployment,
 					events: selectedEvents,
 					variables,
+					previousVariables,
+					// Values of deselected events stay in the form but are never submitted.
 					overrides: Object.fromEntries(
-						Object.entries(overrides).filter(
-							([id, value]) =>
+						Object.entries(overrides).filter(([id, value]) => {
+							const definition = variables.find(
+								(variable) => variable.id === id,
+							);
+							return (
+								definition &&
 								(!existing || editedOverrides.includes(id)) &&
-								(value !== "" ||
-									!variables.find((variable) => variable.id === id)?.secret),
-						),
+								(value !== "" || !definition.secret)
+							);
+						}),
 					),
 					host,
 					port: Number(port),
@@ -430,6 +463,7 @@ export function DeviceDeploymentForm({
 			}
 			const prepared = plan.current;
 			if (!prepared) throw new Error("Deployment preparation was cancelled.");
+			if (!prepared.rollout_id) setRollout(undefined);
 			await run((call) =>
 				executeDeploymentPlan(
 					call,
@@ -441,7 +475,9 @@ export function DeviceDeploymentForm({
 				),
 			);
 			if (alive.current) {
-				setDone(true);
+				setDone(
+					prepared.rollout_id ? "rollout" : existing ? "update" : "create",
+				);
 				setRetry(false);
 				setOverrides({});
 				setServiceToken("");
@@ -491,6 +527,8 @@ export function DeviceDeploymentForm({
 					setOverrides({});
 					setEditedOverrides([]);
 					setServiceToken("");
+				} else if (error instanceof DeploymentRejectedError) {
+					plan.current = undefined;
 				}
 				if (!alive.current) return;
 				setRetry(Boolean(plan.current));
@@ -525,7 +563,7 @@ export function DeviceDeploymentForm({
 				setOverrides({});
 				setEditedOverrides([]);
 				setServiceToken("");
-				setDone(true);
+				setDone("rollout");
 				try {
 					await onApplied();
 				} catch {
@@ -550,6 +588,9 @@ export function DeviceDeploymentForm({
 					} catch {
 						/* The explicit reload can refresh later. */
 					}
+				} else if (error instanceof DeploymentRejectedError) {
+					plan.current = undefined;
+					setRetry(false);
 				}
 				if (!alive.current) return;
 				setError(
@@ -581,7 +622,7 @@ export function DeviceDeploymentForm({
 				setEditedOverrides([]);
 				setServiceToken("");
 				setNeedsReload(status.state !== "healthy");
-				setDone(status.state === "healthy");
+				setDone(status.state === "healthy" ? "rollout" : undefined);
 				const snapshot = await run((call) =>
 					readExistingDeployment(call, status.placement_id, status.project_id),
 				);
@@ -629,7 +670,7 @@ export function DeviceDeploymentForm({
 						: "Online project with pinned event and board versions"}
 				</p>
 				<fieldset
-					disabled={busy || done || retry || !connected}
+					disabled={busy || Boolean(done) || retry || !connected}
 					className="space-y-3"
 				>
 					<label className="block text-sm">
@@ -714,6 +755,7 @@ export function DeviceDeploymentForm({
 										{Object.hasOwn(existing?.config.secret_overrides ?? {}, id)
 											? " · stored secret reference"
 											: " · stored public override"}
+										{secretTypeChange(id)}
 									</span>
 									<Button
 										type="button"
@@ -757,7 +799,8 @@ export function DeviceDeploymentForm({
 								<span className="block text-xs text-muted-foreground">
 									{event.eligible
 										? `Board ${event.board_version?.join(".")}`
-										: "Requires an active supported event, concrete board version, and no traffic variants."}
+										: (event.ineligible_reason ??
+											"Requires an active supported event, concrete board version, and no traffic variants.")}
 								</span>
 							</span>
 						</label>
@@ -885,6 +928,7 @@ export function DeviceDeploymentForm({
 					{installed.source === "online" && (
 						<DeviceOfflineWritesFields
 							value={offlineWrites}
+							previous={existing?.config.offline_writes}
 							onChange={setOfflineWrites}
 						/>
 					)}
@@ -1151,11 +1195,16 @@ export function DeviceDeploymentForm({
 				)}
 				{done ? (
 					<output className="text-sm">
-						{rollout?.state === "healthy"
-							? "Updated services started and passed the listener startup check."
-							: existing
-								? "Placement update applied and secrets confirmed. It is stopped and ready for review. Start it from its controls when ready."
-								: "Placement installed and secrets confirmed. It is stopped and ready for review."}
+						{
+							{
+								rollout:
+									"Updated services started and passed the listener startup check.",
+								update:
+									"Placement update applied and secrets confirmed. It is stopped and ready for review. Start it from its controls when ready.",
+								create:
+									"Placement installed and secrets confirmed. It is stopped and ready for review.",
+							}[done]
+						}
 					</output>
 				) : (
 					<Button
@@ -1185,6 +1234,12 @@ export function DeviceDeploymentForm({
 				)}
 			</form>
 		</details>
+	);
+}
+
+function isActiveRollout(status: DeploymentRolloutStatus): boolean {
+	return ["staged", "validating", "activating", "rolling_back"].includes(
+		status.state,
 	);
 }
 

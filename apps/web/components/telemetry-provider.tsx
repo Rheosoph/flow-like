@@ -1,5 +1,6 @@
 "use client";
 
+import { installCspReporting } from "@/lib/csp-reporting";
 import {
 	type TelemetryConsent,
 	getCrashReportsEnabled,
@@ -225,6 +226,13 @@ export function TelemetryProvider({
 
 	useWebVitals(usageActive);
 	useScreenLoadMetric(pathname, usageActive);
+
+	useEffect(() => {
+		if (!usageActive) return;
+		return installCspReporting(document, (report) =>
+			captureTelemetryEvent("csp_violation", report),
+		);
+	}, [usageActive]);
 
 	useEffect(() => {
 		if (!crashReportingActive) return;

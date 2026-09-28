@@ -142,12 +142,14 @@ describe("bit editor persistence", () => {
 	test("custom credentials are separated without modifying nested configuration or the source", () => {
 		const original = fixture();
 		original.parameters.provider.params.api_key = "fixture-key";
+		original.parameters.provider.params.access_token = "fixture-access-token";
 		original.parameters.provider.params.headers = {
 			authorization: "fixture-value",
 		};
 		const { bit, secrets } = splitBitSecrets(original);
 		expect(secrets).toEqual({
 			api_key: "fixture-key",
+			access_token: "fixture-access-token",
 			headers: { authorization: "fixture-value" },
 		});
 		expect(bit.parameters.provider.params).toEqual({
@@ -157,6 +159,9 @@ describe("bit editor persistence", () => {
 		expect(bit.parameters.unknown).toEqual({ preserve: [1, 2] });
 		expect(bit.parameters.provider.api_surface).toBeNull();
 		expect(original.parameters.provider.params.api_key).toBe("fixture-key");
+		expect(original.parameters.provider.params.access_token).toBe(
+			"fixture-access-token",
+		);
 	});
 	test("legacy metadata can be edited without normalizing untouched model parameters", () => {
 		const original = fixture();
@@ -177,6 +182,41 @@ describe("bit editor persistence", () => {
 		draft.parameters.provider.provider_name = "MLX";
 		expect(validateBitDraft(draft, "admin")).toContain("dependency");
 		expect(validateBitDraft(draft, "custom")).toBeNull();
+	});
+	test("external model edits preserve fixed service IDs and text-only types", () => {
+		const original = fixture();
+		original.parameters.provider = {
+			provider_name: "custom:microsoft-copilot",
+			model_id: "microsoft-365-copilot",
+			params: { model_id: "microsoft-365-copilot", timezone: "UTC" },
+		};
+		const draft = clone(original);
+		expect(validateBitDraft(draft, "custom", original)).toBeNull();
+		draft.parameters.provider.model_id = "arbitrary-model";
+		expect(validateBitDraft(draft, "custom", original)).toContain(
+			"fixed model ID",
+		);
+		draft.parameters.provider.model_id = "microsoft-365-copilot";
+		draft.type = IBitTypes.Vlm;
+		expect(validateBitDraft(draft, "custom", original)).toContain("text only");
+		draft.parameters.provider = {
+			provider_name: "custom:claude-code",
+			model_id: "sonnet",
+		};
+		expect(validateBitDraft(draft, "custom", original)).toContain("text only");
+		draft.type = IBitTypes.Llm;
+		expect(validateBitDraft(draft, "custom", original)).toBeNull();
+	});
+	test("external model editing requires one consistent ID without requiring redacted credentials", () => {
+		const original = fixture();
+		const draft = clone(original);
+		draft.parameters.provider = { provider_name: "custom:codex", params: {} };
+		expect(validateBitDraft(draft, "custom", original)).toContain("model ID");
+		draft.parameters.provider.model_id = "gpt-5.4";
+		draft.parameters.provider.params.model_id = "gpt-5.3-codex";
+		expect(validateBitDraft(draft, "custom", original)).toContain("must match");
+		draft.parameters.provider.params.model_id = "gpt-5.4";
+		expect(validateBitDraft(draft, "custom", original)).toBeNull();
 	});
 	test("hosted USD rates persist exactly and preserve unrelated parameters", async () => {
 		const original = fixture();

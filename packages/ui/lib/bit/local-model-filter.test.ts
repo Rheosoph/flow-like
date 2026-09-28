@@ -50,6 +50,39 @@ describe("isLocalLlmModel", () => {
 });
 
 describe("local runtime providers", () => {
+	test("native Claude Bits are only selectable on a host with agent CLI support", () => {
+		const claude = bit("custom:claude-code");
+		const desktop = {
+			canHostLlamaCPP: true,
+			canHostMLX: true,
+			canUseNativeAgentProviders: true,
+		};
+		const browser = { canHostLlamaCPP: false, canHostMLX: false };
+		expect(isHostableLlmModel(claude, desktop)).toBe(true);
+		expect(isHostableLlmModel(claude, browser)).toBe(false);
+		expect(
+			filterHostableLlmModels(
+				[
+					claude,
+					bit("custom:codex"),
+					bit("custom:github-copilot"),
+					bit("custom:microsoft-copilot"),
+				],
+				browser,
+			).map((model) => model.id),
+		).toEqual([
+			"custom:codex",
+			"custom:github-copilot",
+			"custom:microsoft-copilot",
+		]);
+		expect(
+			filterHostableLlmModels([claude], {
+				canHostLlamaCPP: true,
+				canHostMLX: true,
+			}),
+		).toEqual([]);
+	});
+
 	test("distinguishes llama.cpp-compatible and MLX models", () => {
 		expect(isLlamaCppLlmModel(bit("Local"))).toBe(true);
 		expect(isLlamaCppLlmModel(bit("MLX"))).toBe(false);

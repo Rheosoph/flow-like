@@ -1,5 +1,6 @@
 use super::provider::GitHubProvider;
 use base64::{Engine, engine::general_purpose::STANDARD};
+use flow_like::flow::execution::{ExecutionEnvironment, egress};
 use flow_like_types::{Result, anyhow, bail, reqwest::Url};
 use std::{
     path::Path,
@@ -120,7 +121,7 @@ pub(crate) fn validate_remote(name: &str) -> Result<()> {
 
 pub(crate) fn ensure_repository(path: &Path) -> Result<()> {
     if !path.is_dir() || !path.join(".git").exists() {
-        bail!("Select the root of a local Git working tree with its .git metadata");
+        bail!("Select a Git working tree with its .git metadata. For a stored file snapshot, clone again with Include .git enabled.");
     }
     if run(path, &["rev-parse", "--is-inside-work-tree"])?.trim() != "true" {
         bail!("This operation requires a Git working tree; bare repositories are not supported");
@@ -216,6 +217,16 @@ fn provider_origin(provider: &GitHubProvider) -> Result<Url> {
     }
     url.set_path("/");
     Ok(url)
+}
+
+/// Git runs as a child process the egress resolver cannot reach, so the
+/// provider origin every authenticated network command is pinned to is vetted
+/// once up front.
+pub(crate) async fn ensure_origin_allowed(
+    environment: ExecutionEnvironment,
+    provider: &GitHubProvider,
+) -> Result<()> {
+    egress::ensure_url_resolves_allowed(environment, &provider_origin(provider)?).await
 }
 
 fn validated_url(value: &str, origin: &Url, secrets: &mut Vec<String>) -> Result<String> {
@@ -680,6 +691,46 @@ mod tests {
         )
         .unwrap();
         assert!(!String::from_utf8(output).unwrap().contains("stale"));
+    }
+
+    #[test]
+    fn provider_origins_on_the_host_plane_are_refused_server_side() {
+        let runtime = flow_like_types::tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let with_base = |base_url: &str| GitHubProvider {
+            base_url: base_url.into(),
+            ..provider()
+        };
+        runtime.block_on(async {
+            for base_url in [
+                "https://169.254.169.254/api/v3",
+                "https://127.0.0.1:8443/api/v3",
+                "https://localhost/api/v3",
+            ] {
+                let provider = with_base(base_url);
+                assert!(
+                    ensure_origin_allowed(ExecutionEnvironment::Server, &provider)
+                        .await
+                        .is_err(),
+                    "{base_url} must be refused server-side"
+                );
+                assert!(
+                    ensure_origin_allowed(ExecutionEnvironment::Local, &provider)
+                        .await
+                        .is_ok()
+                );
+            }
+            assert!(
+                ensure_origin_allowed(
+                    ExecutionEnvironment::Server,
+                    &with_base("https://203.0.113.7/api/v3")
+                )
+                .await
+                .is_ok()
+            );
+        });
     }
 
     #[test]

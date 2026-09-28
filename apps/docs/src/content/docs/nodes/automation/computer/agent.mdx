@@ -1,0 +1,30 @@
+---
+title: "Agent Node Catalog"
+description: "Automation/Computer/Agent Flow-Like node category with 1 generated node reference."
+sidebar:
+  order: 0
+  label: "Agent"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Agent nodes, Automation/Computer/Agent, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Automation/Computer/Agent"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Agent Node Catalog\",\"description\":\"Automation/Computer/Agent Flow-Like node category with 1 generated node reference.\",\"url\":\"https://docs.flow-like.com/nodes/automation/computer/agent/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Automation/Computer/Agent\",\"keywords\":\"Agent nodes, Automation/Computer/Agent, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Automation/Computer/Agent"}
+	label="Agent"
+	nodes={nodesByCategory["Automation/Computer/Agent"] ?? []}
+	client:load
+/>

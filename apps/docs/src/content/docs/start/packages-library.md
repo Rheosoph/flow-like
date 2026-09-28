@@ -107,7 +107,7 @@ the version on disk, **View store page**, and the next action. The tabs are:
 | **Manifest** | Edit `flow-like.toml` (desktop). |
 | **Listing** | The store listing: name, descriptions, icon, thumbnail, keywords and links, the price (owners), and a preview of the store card and page. A private package can request publication review here. |
 | **Access** | Access requests and the people who can use or maintain the package. |
-| **Releases** | Every published version, **Install for testing**, the publication review history, and the next release. |
+| **Releases** | Every published version, **Install for testing**, the publication review history, and the next release. Owners also restore or delete the package here. |
 
 The web shows the registry tabs only: Overview, Nodes, Listing, Access and
 Releases. On desktop, **Test** and **Manifest** need the package's folder;
@@ -133,8 +133,9 @@ build.
 
 ## Publish
 
-Select **Publish…** on the card in **Mine**, or the publish action in the
-workspace header:
+In Flow-Like Desktop, select **Publish…** on the card in **Mine**, or the
+publish action in the workspace header. Publishing works from the package
+folder, so the web has no publish action:
 
 1. Confirm the package id and version. If they differ from `flow-like.toml`,
    publishing saves them there.

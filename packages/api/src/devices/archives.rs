@@ -388,8 +388,17 @@ async fn read(
 }
 
 /// Bounded maintenance is safe to run concurrently on API replicas.
+/// Device retention: removes expired encrypted history and returns its count,
+/// then removes enrollments that lapsed without becoming devices.
 pub(crate) async fn sweep_expired(state: &AppState) -> Result<u64, ApiError> {
-    Ok(state.db.execute_raw(sql(r#"DELETE FROM "DeviceArchive" WHERE ("deviceId","archiveId") IN (SELECT "deviceId","archiveId" FROM "DeviceArchive" WHERE "expiresAt"<=$1 LIMIT 128)"#,[chrono::Utc::now().timestamp().into()])).await?.rows_affected())
+    let now = chrono::Utc::now().timestamp();
+    let deleted = state.db.execute_raw(sql(r#"DELETE FROM "DeviceArchive" WHERE ("deviceId","archiveId") IN (SELECT "deviceId","archiveId" FROM "DeviceArchive" WHERE "expiresAt"<=$1 LIMIT 128)"#,[now.into()])).await?.rows_affected();
+    match repository::prune_abandoned_enrollments(&state.db, state.db_dialect, now).await {
+        Ok(0) => {}
+        Ok(pruned) => tracing::info!(pruned, "Abandoned device enrollments removed"),
+        Err(error) => tracing::warn!(%error, "Abandoned device enrollment cleanup failed"),
+    }
+    Ok(deleted)
 }
 
 #[cfg(test)]

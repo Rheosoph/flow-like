@@ -22,9 +22,10 @@ impl NodeLogic for BrowserGotoNode {
         let mut node = Node::new(
             "browser_goto",
             "Go To URL",
-            "Navigates the page to a URL",
+            "Navigates the page to a URL. file:, javascript:, chrome:, edge:, devtools: and view-source: URLs are blocked unless Set Navigation Policy allows them; a session navigation policy is enforced before loading and again on the final URL after redirects.",
             "Automation/Browser/Navigation",
         );
+        node.set_version(2);
         node.set_flowscript_name("browser", "goto");
         node.add_icon("/flow/icons/browser.svg");
 
@@ -80,22 +81,26 @@ impl NodeLogic for BrowserGotoNode {
         let mut session: AutomationSession = context.evaluate_pin("session").await?;
         session.browser_frame_selectors.clear();
         let url: String = context.evaluate_pin("url").await?;
+        let policy = super::policy::session_policy(
+            context,
+            &session,
+            super::policy::NavigationPolicy::goto_default(),
+        )
+        .await;
+        let target = policy.check(&url).await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
         driver
-            .goto(&url)
+            .goto(target.as_str())
             .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to navigate to URL: {}", e))?;
+            .map_err(|e| flow_like_types::anyhow!("Failed to navigate to '{}': {}", url, e))?;
 
-        let final_url = driver
-            .current_url()
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to get current URL: {}", e))?;
+        let final_url = super::policy::verify_landing(&driver, &policy, &url).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context
-            .set_pin_value("final_url", json!(final_url.to_string()))
+            .set_pin_value("final_url", json!(final_url))
             .await?;
         context.activate_exec_pin("exec_out").await?;
 

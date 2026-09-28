@@ -359,7 +359,7 @@ mod tests {
         if let Some(names) = names {
             csr.params.subject_alt_names = CertificateParams::new(names)?.subject_alt_names;
         }
-        Ok(csr.signed_by(&issuer)?.pem() + &issuer.pem())
+        Ok(csr.signed_by(&issuer)?.pem() + issuer.pem().as_str())
     }
 
     fn request(

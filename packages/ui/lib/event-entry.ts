@@ -80,6 +80,10 @@ export function describeEventEntry(
 			if (!mailbox) return { text: "No mailbox", muted: true };
 			return { text: mailbox, title: mailbox };
 		}
+		case "teams":
+			return { text: "Microsoft Teams bot", muted: true };
+		case "inbound_email":
+			return { text: "Server email address", muted: true };
 		case "discord": {
 			const allowed = count(config.channel_whitelist);
 			return {

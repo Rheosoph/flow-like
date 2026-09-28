@@ -120,6 +120,16 @@ impl CloudflareRealtimeIceProvider {
             .map_err(|_| anyhow!("configured realtime ICE secret is unavailable"))
     }
 
+    fn lifetime(&self, max_ttl_seconds: Option<u32>) -> Result<u32> {
+        let ttl = max_ttl_seconds.map_or(self.ttl_seconds, |max| max.min(self.ttl_seconds));
+        if ttl < MIN_TTL_SECONDS {
+            return Err(anyhow!(
+                "Cloudflare realtime ICE lifetime {ttl}s is below the {MIN_TTL_SECONDS}s minimum"
+            ));
+        }
+        Ok(ttl)
+    }
+
     fn parse_response(body: &[u8]) -> Result<Vec<RealtimeIceServer>> {
         let response: CloudflareCredentialResponse = serde_json::from_slice(body)
             .map_err(|error| anyhow!("Cloudflare realtime ICE response is malformed: {error}"))?;
@@ -130,16 +140,19 @@ impl CloudflareRealtimeIceProvider {
 
 #[async_trait]
 impl RealtimeIceProvider for CloudflareRealtimeIceProvider {
-    async fn issue(&self, _issuance_id: &str) -> Result<IssuedRealtimeIceServers> {
+    async fn issue(
+        &self,
+        _issuance_id: &str,
+        max_ttl_seconds: Option<u32>,
+    ) -> Result<IssuedRealtimeIceServers> {
+        let ttl = self.lifetime(max_ttl_seconds)?;
         let credentials = self.credentials().await?;
         let issued_at = chrono::Utc::now().timestamp();
         let mut response = self
             .client
             .post(&credentials.endpoint)
             .bearer_auth(credentials.turn_key_api_token.expose_secret())
-            .json(&CloudflareCredentialRequest {
-                ttl: self.ttl_seconds,
-            })
+            .json(&CloudflareCredentialRequest { ttl })
             .send()
             .await
             .map_err(|error| {
@@ -180,7 +193,7 @@ impl RealtimeIceProvider for CloudflareRealtimeIceProvider {
             body.extend_from_slice(&chunk);
         }
         let ice_servers = Self::parse_response(&body)?;
-        let expires_at = issued_at.saturating_add(i64::from(self.ttl_seconds));
+        let expires_at = issued_at.saturating_add(i64::from(ttl));
 
         Ok(IssuedRealtimeIceServers {
             ice_servers,
@@ -238,6 +251,21 @@ mod tests {
             );
             assert!(result.is_err());
         }
+    }
+
+    #[test]
+    fn bounded_lifetimes_only_shorten_the_configured_ttl() {
+        let provider = CloudflareRealtimeIceProvider::new(
+            empty_secret_store(),
+            "turn-key-id",
+            "turn-key-api-token",
+            4 * 60 * 60,
+        )
+        .unwrap();
+        assert_eq!(provider.lifetime(None).unwrap(), 4 * 60 * 60);
+        assert_eq!(provider.lifetime(Some(3600)).unwrap(), 3600);
+        assert_eq!(provider.lifetime(Some(48 * 60 * 60)).unwrap(), 4 * 60 * 60);
+        assert!(provider.lifetime(Some(MIN_TTL_SECONDS - 1)).is_err());
     }
 
     #[test]

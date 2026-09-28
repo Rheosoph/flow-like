@@ -1,4 +1,6 @@
-use crate::data::providers::util::get_pin_string_value;
+use crate::data::providers::util::{
+    WithEgressGuard, ensure_host_fragment, ensure_store_endpoint_allowed, get_pin_string_value,
+};
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -78,7 +80,7 @@ impl AzureProvider {
     ///
     /// Host-resolved modes are refused when running server-side — see
     /// [`ExecutionEnvironment::ensure_no_ambient_credentials`](flow_like::flow::execution::ExecutionEnvironment::ensure_no_ambient_credentials).
-    pub fn apply_to_azure_builder(
+    pub async fn apply_to_azure_builder(
         &self,
         context: &ExecutionContext,
         builder: flow_like_storage::object_store::azure::MicrosoftAzureBuilder,
@@ -92,11 +94,21 @@ impl AzureProvider {
                 .ensure_no_ambient_credentials("AzureProvider", &self.auth_mode)?;
         }
 
+        let account_forms_host = self.endpoint.is_none();
         let mut b: MicrosoftAzureBuilder = builder;
         if let Some(acc) = &self.account {
+            if account_forms_host {
+                ensure_host_fragment("AzureProvider", "account", acc)?;
+            }
             b = b.with_account(acc);
         }
         if let Some(endpoint) = &self.endpoint {
+            ensure_store_endpoint_allowed(
+                context.execution_environment(),
+                "AzureProvider",
+                endpoint,
+            )
+            .await?;
             b = b.with_endpoint(endpoint.clone());
         }
 
@@ -140,6 +152,9 @@ impl AzureProvider {
                 // by extracting AccountName / AccountKey ourselves.
                 let (acc, key) = parse_connection_string(cs);
                 if let Some(a) = acc {
+                    if account_forms_host {
+                        ensure_host_fragment("AzureProvider", "connection string AccountName", &a)?;
+                    }
                     b = b.with_account(a);
                 }
                 if let Some(k) = key {
@@ -195,7 +210,7 @@ impl AzureProvider {
             }
         }
 
-        Ok(b)
+        Ok(b.with_egress_guard(context.execution_environment()))
     }
 }
 

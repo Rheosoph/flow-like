@@ -23,6 +23,18 @@ pub fn routes() -> Router<AppState> {
         .route("/progress", post(progress::report_progress))
         .route("/quota", post(quota::report))
         .route("/events", post(progress::push_events))
+        .route(
+            "/apps/{app_id}/teams/send",
+            post(crate::teams::runtime::send),
+        )
+        .route(
+            "/apps/{app_id}/mail/send",
+            post(crate::routes::app::mail::executor_send_mail),
+        )
+        .route(
+            "/apps/{app_id}/mail/reply",
+            post(crate::routes::app::mail::executor_reply_mail),
+        )
         .route("/result", get(progress::executor_result))
         .route("/apps/{app_id}/widgets", get(widgets::get_app_widgets))
         // User endpoints (require user JWT)

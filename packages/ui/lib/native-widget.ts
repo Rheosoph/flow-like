@@ -6,6 +6,8 @@ import {
 import type { IBackendState } from "../state/backend-state";
 import { getApiOrigin } from "./api-url";
 import { type AppQueryParam, parseAppRouteTarget } from "./app-route-url";
+import { hashString } from "./node-suggestions/neural/featurize";
+import { stableStringify } from "./stable-stringify";
 
 export const NATIVE_WIDGETS_CHANGED = "flow-like:native-widgets-changed";
 export const NATIVE_WIDGETS_REFRESH = "flow-like:native-widgets-refresh";
@@ -123,6 +125,10 @@ export interface NativeCustomWidget {
 	action: NativeWidgetOpenAction;
 	chart?: NativeWidgetChart;
 	page?: NativeWidgetPageNode;
+	/** No content yet; the native store keeps its last content for the same target. */
+	pending?: true;
+	/** Fingerprint of what the content shows, from nativeWidgetTarget. */
+	target?: string;
 }
 
 export function nativeWidgetScope(
@@ -305,6 +311,22 @@ export function saveNativeWidgetDefinitions(
 		);
 }
 
+/** Fingerprint of the settings that decide a widget's content; title, accent and refresh interval are left out. */
+export function nativeWidgetTarget(definition: NativeWidgetDefinition): string {
+	const source = stableStringify([
+		definition.kind,
+		definition.appId,
+		definition.path,
+		definition.queryParams,
+		definition.kind === "chart"
+			? definition.data
+			: (definition.containerId ?? null),
+	]);
+	return [hashString(source), hashString(source, 0x9747b28c)]
+		.map((part) => part.toString(16).padStart(8, "0"))
+		.join("");
+}
+
 export function nativeWidgetShell(
 	definition: NativeWidgetDefinition,
 	now = new Date(),
@@ -314,6 +336,7 @@ export function nativeWidgetShell(
 		title: definition.title,
 		kind: definition.kind,
 		appId: definition.appId,
+		target: nativeWidgetTarget(definition),
 		updatedAt: now.toISOString(),
 		staleAt: new Date(
 			now.getTime() + definition.refreshMinutes * 60_000,

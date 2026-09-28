@@ -14,7 +14,55 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
+    time::Duration,
 };
+
+/// Stays below the controller's 15 second response deadline. A timeout keeps its
+/// `WouldBlock` cause, so the management plane reports it as retryable.
+const ARTIFACT_LOCK_WAIT: Duration = Duration::from_secs(10);
+const MAX_RECEIVING_PER_PRINCIPAL: u64 = 4;
+const MAX_TRANSFERS_PER_PRINCIPAL: u64 = 256;
+const MAX_RECEIVING_BYTES_PER_PRINCIPAL: u64 = 16 * 1024 * 1024 * 1024;
+const MAX_RECEIVING: u64 = 64;
+const MAX_TRANSFERS: u64 = 4096;
+
+fn artifact_lock(root: &Path) -> Result<File> {
+    supervisor::lock_file_within(&root.join("artifact.lock"), ARTIFACT_LOCK_WAIT)
+}
+
+/// A staging or storage budget refusal. Retrying cannot succeed until uploads
+/// finish, expire or an operator changes the budget, so it is not retryable.
+#[derive(Debug)]
+pub struct ArtifactLimitExceeded(String);
+
+impl std::fmt::Display for ArtifactLimitExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ArtifactLimitExceeded {}
+
+type FileStamp = (u64, u64, u64, i64, i64, i64, i64);
+
+#[cfg(unix)]
+fn file_stamp(metadata: &std::fs::Metadata) -> FileStamp {
+    use std::os::unix::fs::MetadataExt;
+    (
+        metadata.dev(),
+        metadata.ino(),
+        metadata.len(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec(),
+    )
+}
+
+#[cfg(not(unix))]
+fn file_stamp(metadata: &std::fs::Metadata) -> FileStamp {
+    (0, 0, metadata.len(), 0, 0, 0, 0)
+}
 
 struct Transfer {
     descriptor: ProjectArtifactDescriptor,
@@ -81,13 +129,10 @@ impl ArtifactUsage {
             self.bytes <= limit.bytes
                 && self.files <= limit.files
                 && self.revisions <= limit.revisions,
-            "Artifact storage budget exceeded for {scope}: {} / {} charged bytes, {} / {} file/directory entries, {} / {} revisions. Each in-flight file reserves 34 entries for maximum path depth until commit. An operator must remove unused revisions or increase the limit in agent.env",
-            self.bytes,
-            limit.bytes,
-            self.files,
-            limit.files,
-            self.revisions,
-            limit.revisions
+            ArtifactLimitExceeded(format!(
+                "Artifact storage budget exceeded for {scope}: {} / {} charged bytes, {} / {} file/directory entries, {} / {} revisions. Each in-flight file reserves 34 entries for maximum path depth until commit. An operator must remove unused revisions or increase the limit in agent.env",
+                self.bytes, limit.bytes, self.files, limit.files, self.revisions, limit.revisions
+            ))
         );
         Ok(())
     }
@@ -589,7 +634,7 @@ fn load(
 struct CachedManifest {
     path: PathBuf,
     descriptor: ProjectArtifactDescriptor,
-    stamp: (u64, u64, i64, i64, i64, i64),
+    stamp: FileStamp,
     value: Arc<ProjectArtifactManifest>,
 }
 static MANIFESTS: OnceLock<Mutex<std::collections::VecDeque<CachedManifest>>> = OnceLock::new();
@@ -604,20 +649,7 @@ fn manifest(
         metadata.len() == descriptor.manifest_size,
         "Artifact manifest is incomplete"
     );
-    #[cfg(unix)]
-    let stamp = {
-        use std::os::unix::fs::MetadataExt;
-        (
-            metadata.dev(),
-            metadata.ino(),
-            metadata.mtime(),
-            metadata.mtime_nsec(),
-            metadata.ctime(),
-            metadata.ctime_nsec(),
-        )
-    };
-    #[cfg(not(unix))]
-    let stamp = (0, 0, 0, 0, 0, 0);
+    let stamp = file_stamp(&metadata);
     let cache = MANIFESTS.get_or_init(Default::default);
     if let Some(value) = cache
         .lock()
@@ -765,6 +797,53 @@ fn status_inner(
     })
 }
 
+/// Staging slots are partitioned per controller principal, so one principal's
+/// abandoned uploads cannot block another. The device-wide bounds only cap
+/// bookkeeping, and the device owner is exempt from them so grantees can never
+/// lock it out; its own per-principal bounds still apply. Storage is charged by
+/// admission.
+fn enforce_staging_limits(
+    store: &StateStore,
+    owner: &str,
+    descriptor: &ProjectArtifactDescriptor,
+    device_owner: bool,
+) -> Result<()> {
+    let (receiving, transfers, own_receiving, own_transfers, own_bytes): (u64, u64, u64, u64, u64) =
+        store.connection.query_row(
+            "SELECT COALESCE(SUM(state='receiving'),0),COUNT(*),COALESCE(SUM(state='receiving' AND principal=?1),0),COALESCE(SUM(principal=?1),0),COALESCE(SUM(CASE WHEN state='receiving' AND principal=?1 THEN json_extract(descriptor_json,'$.total_bytes')+json_extract(descriptor_json,'$.manifest_size') ELSE 0 END),0) FROM project_artifact_transfers",
+            [owner],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )?;
+    ensure!(
+        own_receiving < MAX_RECEIVING_PER_PRINCIPAL,
+        ArtifactLimitExceeded(format!(
+            "This controller already has {own_receiving} of {MAX_RECEIVING_PER_PRINCIPAL} artifact uploads in progress on the device; finish or abort one first"
+        ))
+    );
+    ensure!(
+        own_transfers < MAX_TRANSFERS_PER_PRINCIPAL,
+        ArtifactLimitExceeded(format!(
+            "This controller started {own_transfers} of {MAX_TRANSFERS_PER_PRINCIPAL} artifact transfers allowed per day; older transfers expire after 24 hours"
+        ))
+    );
+    ensure!(
+        own_bytes
+            .checked_add(descriptor.total_bytes + descriptor.manifest_size)
+            .is_some_and(|bytes| bytes <= MAX_RECEIVING_BYTES_PER_PRINCIPAL),
+        ArtifactLimitExceeded(format!(
+            "This controller's in-progress artifact uploads would exceed {} GiB of staging",
+            MAX_RECEIVING_BYTES_PER_PRINCIPAL / 1024 / 1024 / 1024
+        ))
+    );
+    ensure!(
+        device_owner || (receiving < MAX_RECEIVING && transfers < MAX_TRANSFERS),
+        ArtifactLimitExceeded(format!(
+            "Device artifact staging is full: {receiving} of {MAX_RECEIVING} uploads in progress and {transfers} of {MAX_TRANSFERS} transfer records"
+        ))
+    );
+    Ok(())
+}
+
 /// The management dispatcher authorizes the project and journals begin/commit in its transaction.
 /// Run file I/O on a blocking task; a final chunk hashes the complete file before acknowledging it.
 pub fn begin(
@@ -774,11 +853,34 @@ pub fn begin(
     owner: &str,
     descriptor: &ProjectArtifactDescriptor,
 ) -> Result<ArtifactTransferStatus> {
+    begin_transfer(store, root, transfer_id, owner, descriptor, false)
+}
+
+/// Starts a transfer for the device owner, which the device-wide staging bounds
+/// never refuse.
+pub fn begin_as_device_owner(
+    store: &StateStore,
+    root: &Path,
+    transfer_id: &str,
+    owner: &str,
+    descriptor: &ProjectArtifactDescriptor,
+) -> Result<ArtifactTransferStatus> {
+    begin_transfer(store, root, transfer_id, owner, descriptor, true)
+}
+
+fn begin_transfer(
+    store: &StateStore,
+    root: &Path,
+    transfer_id: &str,
+    owner: &str,
+    descriptor: &ProjectArtifactDescriptor,
+    device_owner: bool,
+) -> Result<ArtifactTransferStatus> {
     descriptor.validate()?;
     uuid(transfer_id)?;
     principal(owner)?;
     private_root(root)?;
-    let _lock = supervisor::lock_file(&root.join("artifact.lock"))?;
+    let _lock = artifact_lock(root)?;
     let exists: bool = store.connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM project_artifact_transfers WHERE transfer_id=?1)",
         [transfer_id],
@@ -831,15 +933,7 @@ pub fn begin(
             [id],
         )?;
     }
-    let (count,bytes,rows):(u64,u64,u64)=store.connection.query_row("SELECT COALESCE(SUM(CASE WHEN state='receiving' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN state='receiving' THEN json_extract(descriptor_json,'$.total_bytes')+json_extract(descriptor_json,'$.manifest_size') ELSE 0 END),0),COUNT(*) FROM project_artifact_transfers",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-    ensure!(
-        count < 4
-            && bytes
-                .checked_add(descriptor.total_bytes + descriptor.manifest_size)
-                .is_some_and(|v| v <= 16 * 1024 * 1024 * 1024)
-            && rows < 4096,
-        "Artifact staging quota exceeded"
-    );
+    enforce_staging_limits(store, owner, descriptor, device_owner)?;
     admit_artifact(
         store,
         root,
@@ -882,13 +976,42 @@ pub fn status(
     owner: &str,
     index: Option<u32>,
 ) -> Result<ArtifactTransferStatus> {
-    let _lock = supervisor::lock_file(&root.join("artifact.lock"))?;
+    let _lock = artifact_lock(root)?;
     status_inner(
         root,
         transfer_id,
         load(store, transfer_id, project, owner, true)?,
         index,
     )
+}
+
+/// A complete file whose digest is checked without holding the device-wide
+/// artifact lock. The stamp detects any change before the result is recorded.
+struct PendingVerification {
+    file: File,
+    stamp: FileStamp,
+    path: PathBuf,
+    size: u64,
+    digest: String,
+    marker: Option<PathBuf>,
+    dir: PathBuf,
+}
+
+fn file_sha256(file: &mut File, size: u64) -> Result<Option<String>> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut received = 0u64;
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        received += count as u64;
+        ensure!(received <= size, "Artifact changed during verification");
+        hash.update(&buffer[..count]);
+    }
+    Ok((received == size).then(|| format!("{:x}", hash.finalize())))
 }
 pub fn chunk(
     store: &StateStore,
@@ -911,80 +1034,93 @@ pub fn chunk(
         bytes.len() <= PROJECT_ARTIFACT_CHUNK_BYTES && URL_SAFE_NO_PAD.encode(&bytes) == data,
         "Invalid artifact chunk encoding"
     );
-    let _lock = supervisor::lock_file(&root.join("artifact.lock"))?;
-    let value = load(store, transfer_id, project, owner, false)?;
-    let dir = transfer_dir(root, transfer_id)?;
-    let (path, size, digest, marker) = file_info(&dir, &value, index)?;
-    let end = offset
-        .checked_add(bytes.len() as u64)
-        .context("Artifact chunk offset overflow")?;
-    ensure!(
-        end <= size && (!bytes.is_empty() || size == 0),
-        "Artifact chunk exceeds declared size"
-    );
-    let mut file = open(&path, true, true)?;
-    let length = file.metadata()?.len();
-    ensure!(
-        length <= size && offset <= length,
-        "Artifact chunk offset is not contiguous"
-    );
-    if offset < length {
-        ensure!(end <= length, "Artifact retry overlaps unwritten bytes");
-        let mut existing = vec![0; bytes.len()];
-        file.seek(SeekFrom::Start(offset))?;
-        file.read_exact(&mut existing)?;
+    let mut pending = {
+        let _lock = artifact_lock(root)?;
+        let value = load(store, transfer_id, project, owner, false)?;
+        let dir = transfer_dir(root, transfer_id)?;
+        let (path, size, digest, marker) = file_info(&dir, &value, index)?;
+        let end = offset
+            .checked_add(bytes.len() as u64)
+            .context("Artifact chunk offset overflow")?;
         ensure!(
-            existing == bytes,
-            "Artifact retry differs from received bytes"
+            end <= size && (!bytes.is_empty() || size == 0),
+            "Artifact chunk exceeds declared size"
         );
-    } else {
-        file.seek(SeekFrom::Start(offset))?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-    }
-    if file.metadata()?.len() == size {
-        file.seek(SeekFrom::Start(0))?;
-        let mut hash = Sha256::new();
-        let mut buffer = [0u8; 64 * 1024];
-        let mut received = 0u64;
-        loop {
-            let count = file.read(&mut buffer)?;
-            if count == 0 {
-                break;
-            }
-            received += count as u64;
-            ensure!(received <= size, "Artifact changed during verification");
-            hash.update(&buffer[..count]);
-        }
-        if received != size || format!("{:x}", hash.finalize()) != digest {
-            file.set_len(0)?;
+        let mut file = open(&path, true, true)?;
+        let length = file.metadata()?.len();
+        ensure!(
+            length <= size && offset <= length,
+            "Artifact chunk offset is not contiguous"
+        );
+        if offset < length {
+            ensure!(end <= length, "Artifact retry overlaps unwritten bytes");
+            let mut existing = vec![0; bytes.len()];
+            file.seek(SeekFrom::Start(offset))?;
+            file.read_exact(&mut existing)?;
+            ensure!(
+                existing == bytes,
+                "Artifact retry differs from received bytes"
+            );
+        } else {
+            file.seek(SeekFrom::Start(offset))?;
+            file.write_all(&bytes)?;
             file.sync_all()?;
-            if let Some(marker) = &marker {
-                if marker.try_exists()? {
-                    std::fs::remove_file(marker)?;
-                }
-            } else {
-                store.connection.execute(
-                    "UPDATE project_artifact_transfers SET manifest_ready=0 WHERE transfer_id=?1",
-                    [transfer_id],
-                )?;
-            }
-            anyhow::bail!("Artifact SHA256 differs; restart this file from offset zero");
         }
-        if let Some(parent) = path.parent() {
-            File::open(parent)?.sync_all()?;
+        let verified = match &marker {
+            Some(marker) => checked_marker(marker, &digest)?,
+            None => value.manifest_ready,
+        };
+        let metadata = file.metadata()?;
+        if metadata.len() != size || verified {
+            return status_inner(root, transfer_id, value, index);
         }
-        if let Some(marker) = marker {
-            if !checked_marker(&marker, &digest)? {
-                vault::write_new_private(&marker, digest.as_bytes())?;
+        PendingVerification {
+            file,
+            stamp: file_stamp(&metadata),
+            path,
+            size,
+            digest,
+            marker,
+            dir,
+        }
+    };
+    // Hashing up to 4 GiB must not stall other controllers' transfers.
+    let matches =
+        file_sha256(&mut pending.file, pending.size)?.as_deref() == Some(pending.digest.as_str());
+    let _lock = artifact_lock(root)?;
+    let value = load(store, transfer_id, project, owner, false)?;
+    ensure!(
+        file_stamp(&open(&pending.path, false, false)?.metadata()?) == pending.stamp,
+        "Artifact file changed while it was verified; retry its final chunk"
+    );
+    if !matches {
+        pending.file.set_len(0)?;
+        pending.file.sync_all()?;
+        if let Some(marker) = &pending.marker {
+            if marker.try_exists()? {
+                std::fs::remove_file(marker)?;
             }
         } else {
-            manifest(&dir, &value.descriptor)?;
             store.connection.execute(
-                "UPDATE project_artifact_transfers SET manifest_ready=1 WHERE transfer_id=?1",
+                "UPDATE project_artifact_transfers SET manifest_ready=0 WHERE transfer_id=?1",
                 [transfer_id],
             )?;
         }
+        anyhow::bail!("Artifact SHA256 differs; restart this file from offset zero");
+    }
+    if let Some(parent) = pending.path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
+    if let Some(marker) = &pending.marker {
+        if !checked_marker(marker, &pending.digest)? {
+            vault::write_new_private(marker, pending.digest.as_bytes())?;
+        }
+    } else {
+        manifest(&pending.dir, &value.descriptor)?;
+        store.connection.execute(
+            "UPDATE project_artifact_transfers SET manifest_ready=1 WHERE transfer_id=?1",
+            [transfer_id],
+        )?;
     }
     status_inner(
         root,
@@ -1055,7 +1191,7 @@ pub fn commit(
     transfer_id: &str,
     owner: &str,
 ) -> Result<ArtifactTransferStatus> {
-    let _lock = supervisor::lock_file(&root.join("artifact.lock"))?;
+    let _lock = artifact_lock(root)?;
     let value = load(store, transfer_id, project, owner, true)?;
     if value.state == ArtifactTransferState::Committed {
         return status_inner(root, transfer_id, value, None);
@@ -1142,8 +1278,42 @@ pub fn abort(
     transfer_id: &str,
     owner: &str,
 ) -> Result<ArtifactTransferStatus> {
-    let _lock = supervisor::lock_file(&root.join("artifact.lock"))?;
-    let value = load(store, transfer_id, project, owner, true)?;
+    abort_transfer(store, root, project, transfer_id, Some(owner))
+}
+
+/// The device owner may release any principal's transfer in a project, so an
+/// abandoned upload never holds staging or budget until it expires.
+pub fn abort_as_device_owner(
+    store: &StateStore,
+    root: &Path,
+    project: &str,
+    transfer_id: &str,
+) -> Result<ArtifactTransferStatus> {
+    abort_transfer(store, root, project, transfer_id, None)
+}
+
+fn abort_transfer(
+    store: &StateStore,
+    root: &Path,
+    project: &str,
+    transfer_id: &str,
+    owner: Option<&str>,
+) -> Result<ArtifactTransferStatus> {
+    uuid(transfer_id)?;
+    let _lock = artifact_lock(root)?;
+    let owner = match owner {
+        Some(owner) => owner.to_owned(),
+        None => store
+            .connection
+            .query_row(
+                "SELECT principal FROM project_artifact_transfers WHERE transfer_id=?1",
+                [transfer_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .context("Unknown artifact transfer")?,
+    };
+    let value = load(store, transfer_id, project, &owner, true)?;
     ensure!(
         value.state != ArtifactTransferState::Committed,
         "Committed revisions cannot be aborted"
@@ -1156,7 +1326,7 @@ pub fn abort(
     status_inner(
         root,
         transfer_id,
-        load(store, transfer_id, project, owner, true)?,
+        load(store, transfer_id, project, &owner, true)?,
         None,
     )
 }
@@ -1488,7 +1658,7 @@ pub fn import_local_selected(
     validate_selected_assets(&source, &manifest)?;
     let id = uuid::Uuid::new_v4().to_string();
     let owner = "local-cli";
-    begin(store, root, &id, owner, &descriptor)?;
+    begin_as_device_owner(store, root, &id, owner, &descriptor)?;
     for (index, bytes) in manifest
         .canonical_bytes()?
         .chunks(PROJECT_ARTIFACT_CHUNK_BYTES)
@@ -1505,56 +1675,64 @@ pub fn import_local_selected(
             &URL_SAFE_NO_PAD.encode(bytes),
         )?;
     }
-    {
-        let _lock = supervisor::lock_file(&root.join("artifact.lock"))?;
-        let transfer = load(store, &id, project, owner, false)?;
-        let dir = transfer_dir(root, &id)?;
-        for (index, (source, _)) in paths.iter().enumerate() {
+    // Each file is copied and hashed without the device-wide artifact lock, so
+    // remote transfers keep progressing during a large local import.
+    for (index, (source, relative)) in paths.iter().enumerate() {
+        let (destination, size, digest, marker, mut output) = {
+            let _lock = artifact_lock(root)?;
+            let transfer = load(store, &id, project, owner, false)?;
+            let dir = transfer_dir(root, &id)?;
             let (destination, size, digest, marker) =
                 file_info(&dir, &transfer, Some(index as u32))?;
-            let mut options = OpenOptions::new();
-            options.read(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-            }
-            let mut input = options.open(source)?;
-            ensure!(
-                input.metadata()?.is_file(),
-                "Project source changed during import"
-            );
-            let mut output = open(&destination, true, true)?;
+            let output = open(&destination, true, true)?;
             ensure!(
                 output.metadata()?.len() == 0,
                 "Import destination already exists"
             );
-            let mut hash = Sha256::new();
-            let mut bytes = [0u8; 64 * 1024];
-            let mut count = 0u64;
-            loop {
-                let length = input.read(&mut bytes)?;
-                if length == 0 {
-                    break;
-                }
-                count += length as u64;
-                ensure!(count <= size, "Project changed during import");
-                output.write_all(&bytes[..length])?;
-                hash.update(&bytes[..length]);
-            }
-            ensure!(
-                count == size && format!("{:x}", hash.finalize()) == digest,
-                "Project changed during import"
-            );
-            output.sync_all()?;
-            if let Some(parent) = destination.parent() {
-                File::open(parent)?.sync_all()?;
-            }
-            vault::write_new_private(
-                &marker.context("Missing artifact verification path")?,
-                digest.as_bytes(),
-            )?;
+            let marker = marker.context("Missing artifact verification path")?;
+            (destination, size, digest, marker, output)
+        };
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
+        let mut input = options.open(source)?;
+        ensure!(
+            input.metadata()?.is_file(),
+            "Project source changed during import"
+        );
+        let mut hash = Sha256::new();
+        let mut bytes = [0u8; 64 * 1024];
+        let mut count = 0u64;
+        loop {
+            let length = input.read(&mut bytes)?;
+            if length == 0 {
+                break;
+            }
+            count += length as u64;
+            ensure!(count <= size, "Project changed during import");
+            output.write_all(&bytes[..length])?;
+            hash.update(&bytes[..length]);
+        }
+        ensure!(
+            count == size && format!("{:x}", hash.finalize()) == digest,
+            "Project changed during import"
+        );
+        output.sync_all()?;
+        if let Some(parent) = destination.parent() {
+            File::open(parent)?.sync_all()?;
+        }
+        let stamp = file_stamp(&output.metadata()?);
+        let _lock = artifact_lock(root)?;
+        load(store, &id, project, owner, false)?;
+        ensure!(
+            file_stamp(&open(&destination, false, false)?.metadata()?) == stamp,
+            "Imported artifact file {relative} changed while it was copied"
+        );
+        vault::write_new_private(&marker, digest.as_bytes())?;
     }
     commit(store, root, project, &id, owner)
 }
@@ -1668,6 +1846,7 @@ mod tests {
             error.to_string().contains("budget exceeded for project"),
             "{error:#}"
         );
+        assert!(error.downcast_ref::<ArtifactLimitExceeded>().is_some());
         assert_eq!(
             store
                 .connection
@@ -2175,17 +2354,32 @@ mod tests {
             )
             .unwrap();
         }
+        let error = begin(
+            &store,
+            dir.path(),
+            &uuid::Uuid::new_v4().to_string(),
+            "controller",
+            &m.descriptor().unwrap(),
+        )
+        .unwrap_err();
         assert!(
-            begin(
-                &store,
-                dir.path(),
-                &uuid::Uuid::new_v4().to_string(),
-                "controller",
-                &m.descriptor().unwrap()
-            )
-            .is_err()
+            error.to_string().contains("uploads in progress"),
+            "{error:#}"
         );
-        abort(&store, dir.path(), "project", &id, "controller").unwrap();
+        assert!(error.downcast_ref::<ArtifactLimitExceeded>().is_some());
+        // One principal's abandoned uploads never block another principal.
+        let other = begin(
+            &store,
+            dir.path(),
+            &uuid::Uuid::new_v4().to_string(),
+            "other-controller",
+            &m.descriptor().unwrap(),
+        )
+        .unwrap();
+        assert!(abort(&store, dir.path(), "project", &id, "other-controller").is_err());
+        assert!(abort_as_device_owner(&store, dir.path(), "other", &id).is_err());
+        let aborted = abort_as_device_owner(&store, dir.path(), "project", &id).unwrap();
+        assert_eq!(aborted.state, ArtifactTransferState::Aborted);
         assert!(
             begin(
                 &store,
@@ -2196,6 +2390,78 @@ mod tests {
             )
             .is_ok()
         );
+        abort(
+            &store,
+            dir.path(),
+            "project",
+            &other.transfer_id,
+            "other-controller",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn grantees_filling_device_staging_never_lock_out_the_device_owner() {
+        let (dir, store, m) = setup();
+        let descriptor = m.descriptor().unwrap();
+        let begin_as = |principal: &str| {
+            begin(
+                &store,
+                dir.path(),
+                &uuid::Uuid::new_v4().to_string(),
+                principal,
+                &descriptor,
+            )
+        };
+        for grantee in 0..MAX_RECEIVING / MAX_RECEIVING_PER_PRINCIPAL {
+            for _ in 0..MAX_RECEIVING_PER_PRINCIPAL {
+                begin_as(&format!("grantee-{grantee}:grant")).unwrap();
+            }
+        }
+        let error = begin_as("late-grantee:grant").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Device artifact staging is full"),
+            "{error:#}"
+        );
+        assert!(error.downcast_ref::<ArtifactLimitExceeded>().is_some());
+        let owned = begin_as_device_owner(
+            &store,
+            dir.path(),
+            &uuid::Uuid::new_v4().to_string(),
+            "owner-user:owner",
+            &descriptor,
+        )
+        .unwrap();
+        assert_eq!(owned.state, ArtifactTransferState::Receiving);
+    }
+
+    #[test]
+    fn verified_final_chunk_retry_is_acknowledged_without_rewriting_its_marker() {
+        let (dir, store, m) = setup();
+        let id = start(&store, dir.path(), &m);
+        let send = |offset, data: &[u8]| {
+            chunk(
+                &store,
+                dir.path(),
+                "project",
+                &id,
+                "controller",
+                Some(0),
+                offset,
+                &URL_SAFE_NO_PAD.encode(data),
+            )
+        };
+        assert!(send(0, b"hello").unwrap().complete);
+        let marker = transfer_dir(dir.path(), &id).unwrap().join("verified/0");
+        let before = std::fs::metadata(&marker).unwrap().modified().unwrap();
+        assert!(send(3, b"lo").unwrap().complete);
+        assert_eq!(
+            std::fs::metadata(&marker).unwrap().modified().unwrap(),
+            before
+        );
+        assert!(commit(&store, dir.path(), "project", &id, "controller").is_ok());
     }
     #[test]
     fn local_import_copies_only_selected_verified_model_and_package_assets() {

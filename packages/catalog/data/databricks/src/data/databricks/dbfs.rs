@@ -1,11 +1,12 @@
 use super::provider::{DATABRICKS_PROVIDER_ID, DatabricksProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -130,9 +131,9 @@ impl NodeLogic for ListDatabricksDbfsNode {
 
         let url = provider.api_url("/dbfs/list");
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .query(&[("path", &path)])
             .send()
@@ -315,9 +316,9 @@ impl NodeLogic for ReadDatabricksDbfsNode {
 
         let url = provider.api_url("/dbfs/read");
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .query(&[
                 ("path", path.as_str()),
@@ -481,9 +482,9 @@ impl NodeLogic for GetDatabricksDbfsStatusNode {
 
         let url = provider.api_url("/dbfs/get-status");
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .query(&[("path", &path)])
             .send()

@@ -1,3 +1,9 @@
+use super::{COORDINATE_SPACE, add_screenshot_pins};
+#[cfg(feature = "execute")]
+use super::{
+    ModelView, SubmitTool, call_tool, missing_tool_call, parse_tool_args, require_screenshot,
+    vision_history,
+};
 use flow_like::{
     bit::Bit,
     flow::{
@@ -7,15 +13,7 @@ use flow_like::{
         variable::VariableType,
     },
 };
-#[cfg(feature = "execute")]
-use flow_like_types::anyhow;
 use flow_like_types::{async_trait, json};
-#[cfg(feature = "execute")]
-use rig::completion::{Completion, Message, ToolDefinition};
-#[cfg(feature = "execute")]
-use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
-#[cfg(feature = "execute")]
-use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -23,10 +21,14 @@ use serde::{Deserialize, Serialize};
 pub struct NextStepSuggestion {
     pub action_type: String,
     pub target_description: String,
+    /// Target point: desktop input coordinates when a frame was connected, otherwise
+    /// screenshot pixels.
     pub target_coordinates: Option<(i32, i32)>,
+    #[serde(default)]
     pub parameters: flow_like_types::Value,
     pub reasoning: String,
     pub confidence: f64,
+    #[serde(default)]
     pub alternatives: Vec<AlternativeAction>,
 }
 
@@ -38,47 +40,61 @@ pub struct AlternativeAction {
 }
 
 #[cfg(feature = "execute")]
-#[derive(Debug, Serialize, Deserialize)]
-struct SuggestNextStepTool {
+const TOOL: &str = "submit_next_step";
+
+#[cfg(feature = "execute")]
+#[derive(Debug, Deserialize)]
+struct NextStepArgs {
+    goal_reached: bool,
+    action_type: String,
+    target_description: String,
+    target_coordinates: Option<Vec<f64>>,
+    #[serde(default)]
     parameters: flow_like_types::Value,
+    reasoning: String,
+    confidence: f64,
+    #[serde(default)]
+    alternatives: Vec<AlternativeAction>,
 }
 
+/// Returns whether the goal was reached and the suggestion with its target point mapped to
+/// the node's coordinate space; a point off the screenshot is dropped, never passed on.
 #[cfg(feature = "execute")]
-#[derive(Debug)]
-struct SuggestNextStepError(String);
-
-#[cfg(feature = "execute")]
-impl std::fmt::Display for SuggestNextStepError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Suggest next step error: {}", self.0)
-    }
-}
-
-#[cfg(feature = "execute")]
-impl std::error::Error for SuggestNextStepError {}
-
-#[cfg(feature = "execute")]
-impl Tool for SuggestNextStepTool {
-    const NAME: &'static str = "submit_next_step";
-    type Error = SuggestNextStepError;
-    type Args = flow_like_types::Value;
-    type Output = flow_like_types::Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Submit the suggested next step".to_string(),
-            parameters: self.parameters.clone(),
+fn to_suggestion(args: NextStepArgs, view: &ModelView) -> (bool, NextStepSuggestion) {
+    let mut reasoning = args.reasoning;
+    let target_coordinates = match args.target_coordinates.as_deref() {
+        None | Some([]) => None,
+        Some(&[x, y]) => match view.point_from_model(x, y) {
+            Ok(point) => Some(point),
+            Err(error) => {
+                reasoning.push_str(&format!(" (target coordinates dropped: {error})"));
+                None
+            }
+        },
+        Some(other) => {
+            reasoning.push_str(&format!(
+                " (target coordinates dropped: expected [x, y], got {other:?})"
+            ));
+            None
         }
-    }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        Ok(args)
-    }
-
-    fn name(&self) -> String {
-        Self::NAME.to_string()
-    }
+    };
+    let parameters = if args.parameters.is_null() {
+        json::json!({})
+    } else {
+        args.parameters
+    };
+    (
+        args.goal_reached,
+        NextStepSuggestion {
+            action_type: args.action_type,
+            target_description: args.target_description,
+            target_coordinates,
+            parameters,
+            reasoning,
+            confidence: args.confidence,
+            alternatives: args.alternatives,
+        },
+    )
 }
 
 #[crate::register_node]
@@ -102,7 +118,7 @@ impl NodeLogic for LLMSuggestNextStepNode {
         );
         node.set_flowscript_name("automation.llm", "suggestNextStep");
         node.add_icon("/flow/icons/bot-plan.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()
@@ -126,12 +142,7 @@ impl NodeLogic for LLMSuggestNextStepNode {
         .set_schema::<Bit>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
-        node.add_input_pin(
-            "screenshot",
-            "Screenshot",
-            "Base64-encoded current screenshot",
-            VariableType::String,
-        );
+        add_screenshot_pins(&mut node, "Current screenshot", true);
 
         node.add_input_pin(
             "goal",
@@ -168,7 +179,7 @@ impl NodeLogic for LLMSuggestNextStepNode {
         node.add_output_pin(
             "suggestion",
             "Suggestion",
-            "Next step suggestion",
+            &format!("Next step suggestion; target_coordinates are in {COORDINATE_SPACE}"),
             VariableType::Struct,
         )
         .set_schema::<NextStepSuggestion>();
@@ -194,16 +205,10 @@ impl NodeLogic for LLMSuggestNextStepNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_model_provider::history::{
-            Content, ContentType, History, HistoryMessage, ImageUrl as HistoryImageUrl,
-            MessageContent, Role,
-        };
-
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_goal_reached").await?;
 
         let model_bit: Bit = context.evaluate_pin("model").await?;
-        let screenshot: String = context.evaluate_pin("screenshot").await?;
         let goal: String = context.evaluate_pin("goal").await?;
         let completed_actions: String = context
             .evaluate_pin("completed_actions")
@@ -213,8 +218,9 @@ impl NodeLogic for LLMSuggestNextStepNode {
             .evaluate_pin("last_result")
             .await
             .unwrap_or_default();
+        let screenshot = require_screenshot(context).await?;
 
-        let tool_params = json::json!({
+        let parameters = json::json!({
             "type": "object",
             "properties": {
                 "goal_reached": { "type": "boolean", "description": "Whether the goal appears to be reached" },
@@ -222,8 +228,10 @@ impl NodeLogic for LLMSuggestNextStepNode {
                 "target_description": { "type": "string", "description": "What to interact with" },
                 "target_coordinates": {
                     "type": "array",
-                    "items": { "type": "integer" },
-                    "description": "Approximate [x, y] coordinates if applicable"
+                    "items": { "type": "number" },
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "description": "[x, y] pixel of the target in the screenshot, if applicable"
                 },
                 "parameters": { "type": "object", "description": "Action-specific parameters" },
                 "reasoning": { "type": "string", "description": "Why this action is suggested" },
@@ -236,7 +244,8 @@ impl NodeLogic for LLMSuggestNextStepNode {
                             "action_type": { "type": "string" },
                             "description": { "type": "string" },
                             "confidence": { "type": "number" }
-                        }
+                        },
+                        "required": ["action_type", "description", "confidence"]
                     },
                     "description": "Alternative actions to consider"
                 }
@@ -244,101 +253,44 @@ impl NodeLogic for LLMSuggestNextStepNode {
             "required": ["goal_reached", "action_type", "target_description", "reasoning", "confidence"]
         });
 
-        let progress_context = if completed_actions == "[]" {
+        let progress_context = if completed_actions.trim() == "[]" {
             "This is the first action.".to_string()
         } else {
-            format!("Actions taken so far: {}", completed_actions)
+            format!("Actions taken so far: {completed_actions}")
         };
 
         let last_result_text = if last_result.is_empty() {
             String::new()
         } else {
-            format!("\nLast action result: {}", last_result)
+            format!("\nLast action result: {last_result}")
         };
 
-        let content_parts = vec![
-            Content::Image {
-                content_type: ContentType::ImageUrl,
-                image_url: HistoryImageUrl {
-                    url: format!("data:image/png;base64,{}", screenshot),
-                    detail: None,
-                    media_type: Some("image/png".to_string()),
-                    additional_params: None,
-                },
-            },
-            Content::Text {
-                content_type: ContentType::Text,
-                text: format!(
-                    "Goal: {}\n\n{}{}\n\nWhat should be the next action?",
-                    goal, progress_context, last_result_text
-                ),
-            },
-        ];
-
-        let history = History::new(
-            "".to_string(),
-            vec![HistoryMessage {
-                role: Role::User,
-                content: MessageContent::Contents(content_parts),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                annotations: None,
-            }],
+        let instructions = format!(
+            "Goal: {goal}\n\n{progress_context}{last_result_text}\n\nWhat should be the next action?\n\n{}",
+            screenshot.view.coordinate_hint()
         );
 
         let preamble = "You are an intelligent automation assistant. Given the current screen, goal, and progress, suggest the single best next action. If the goal is already achieved, indicate that. Be precise about what to interact with.";
 
-        let agent_builder = model_bit
-            .agent(context, &Some(history))
-            .await?
-            .preamble(preamble)
-            .tool(SuggestNextStepTool {
-                parameters: tool_params,
-            })
-            .tool_choice(ToolChoice::Required);
+        let arguments = call_tool(
+            context,
+            &model_bit,
+            vision_history(&[&screenshot.image], &instructions),
+            preamble,
+            SubmitTool {
+                name: TOOL,
+                description: "Submit the suggested next step",
+                parameters,
+            },
+        )
+        .await?
+        .ok_or_else(|| missing_tool_call(TOOL))?;
 
-        let agent = agent_builder.build();
-
-        let response = agent
-            .completion(goal.clone(), Vec::<Message>::new())
-            .await
-            .map_err(|e| anyhow!("LLM completion failed: {}", e))?
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to send request: {}", e))?;
-
-        let mut goal_reached = false;
-        let mut result: Option<NextStepSuggestion> = None;
-        for content in response.choice {
-            if let AssistantContent::ToolCall(ToolCall {
-                function: ToolFunction {
-                    name, arguments, ..
-                },
-                ..
-            }) = content
-                && name == "submit_next_step"
-            {
-                goal_reached = arguments
-                    .get("goal_reached")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                result = Some(json::from_value(arguments)?);
-            }
-        }
-
-        let suggestion = result.unwrap_or(NextStepSuggestion {
-            action_type: "wait".to_string(),
-            target_description: "Unable to determine next step".to_string(),
-            target_coordinates: None,
-            parameters: json::json!({}),
-            reasoning: "Could not analyze screen".to_string(),
-            confidence: 0.0,
-            alternatives: vec![],
-        });
+        let (goal_reached, suggestion) =
+            to_suggestion(parse_tool_args(TOOL, &arguments)?, &screenshot.view);
 
         context
-            .set_pin_value("suggestion", json::json!(suggestion.clone()))
+            .set_pin_value("suggestion", json::json!(suggestion))
             .await?;
         context
             .set_pin_value("action_type", json::json!(suggestion.action_type))
@@ -361,5 +313,44 @@ impl NodeLogic for LLMSuggestNextStepNode {
         Err(flow_like_types::anyhow!(
             "LLM processing requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+    use crate::types::screen_frame::ScreenFrame;
+
+    fn view() -> ModelView {
+        let frame = ScreenFrame::new(None, (-1440, 0, 1440, 900), (2880, 1800)).unwrap();
+        ModelView::new(frame.resized(1440, 900).unwrap())
+    }
+
+    fn suggest(arguments: flow_like_types::Value) -> (bool, NextStepSuggestion) {
+        to_suggestion(parse_tool_args(TOOL, &arguments).unwrap(), &view())
+    }
+
+    #[test]
+    fn target_coordinates_map_to_desktop_and_bad_ones_are_dropped() {
+        let base = json::json!({"goal_reached": false, "action_type": "click", "target_description": "OK", "reasoning": "r", "confidence": 0.9});
+        let (reached, suggestion) = suggest(base.clone());
+        assert!(!reached);
+        assert_eq!(suggestion.target_coordinates, None);
+        assert_eq!(suggestion.parameters, json::json!({}));
+        assert!(suggestion.alternatives.is_empty());
+
+        let mut with_point = base.clone();
+        with_point["target_coordinates"] = json::json!([100.6, 20]);
+        assert_eq!(suggest(with_point).1.target_coordinates, Some((-1339, 20)));
+
+        let mut off_image = base.clone();
+        off_image["target_coordinates"] = json::json!([5000, 20]);
+        let (_, dropped) = suggest(off_image);
+        assert_eq!(dropped.target_coordinates, None);
+        assert!(dropped.reasoning.contains("dropped"));
+
+        let mut malformed = base;
+        malformed["target_coordinates"] = json::json!([1, 2, 3]);
+        assert_eq!(suggest(malformed).1.target_coordinates, None);
     }
 }

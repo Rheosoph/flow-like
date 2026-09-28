@@ -133,11 +133,9 @@ impl NodeLogic for OsrmTileNode {
 
         let url = format!("{}/tile/v1/{}/{}/{}/{}.mvt", base_url, profile_str, z, x, y);
 
-        let client = reqwest::Client::builder()
-            .user_agent("FlowLike/1.0")
-            .build()?;
+        let client = crate::geo::routing::osrm::osrm_client(context.execution_environment())?;
 
-        let response = client.get(&url).send().await?;
+        let response = client.get(&url)?.send().await?;
         if !response.status().is_success() {
             return Err(flow_like_types::anyhow!(
                 "OSRM API returned status: {}",

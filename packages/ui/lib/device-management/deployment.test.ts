@@ -3,24 +3,32 @@ import type { IBoardState } from "../../state/backend-state/board-state";
 import type { IEventState } from "../../state/backend-state/event-state";
 import type { IEvent } from "../schema/flow/event";
 import {
+	DEPLOYMENT_CONFIG_BYTES,
 	type DeploymentEvent,
 	DeploymentPublicationFailedError,
+	DeploymentRejectedError,
 	DeploymentReviewRequiredError,
 	DeploymentRolloutEndedError,
+	type DeploymentRolloutStatus,
 	type DeploymentVariable,
 	type InstalledProject,
 	type PlacementConfiguration,
 	StaleDeploymentRevisionError,
+	approvedOnlineCatalog,
+	assertOfflineQueuesDrained,
 	cancelDeploymentRollout,
 	createDeploymentPlan,
 	discoverOfflineEvents,
 	discoverOnlineEvents,
 	discoverOnlineVariables,
+	discoverPreviousOfflineVariables,
+	discoverPreviousOnlineVariables,
 	executeDeploymentPlan,
 	mergeVariables,
 	offlineWritesSchema,
 	placementResourcesSchema,
 	readExistingDeployment,
+	removesOfflineBuffering,
 	validateVariableValue,
 	variableText,
 	variableValue,
@@ -52,75 +60,257 @@ const secret: DeploymentVariable = {
 	secret: true,
 };
 
-function onlineFixture() {
-	const time = { secs_since_epoch: 100, nanos_since_epoch: 0 };
-	const fixture = {
-		current: {
-			id: event.id,
-			name: event.name,
-			event_type: event.event_type,
-			event_version: [1, 2, 3],
-			board_id: "board",
-			board_version: [3, 2, 1],
-			active: true,
-			config: [],
-			created_at: time,
-			updated_at: time,
-			description: "",
-			node_id: "entry",
-			priority: 0,
-			variables: {},
-		} as IEvent,
-		eventReads: [] as unknown[][],
-		boardReads: [] as unknown[][],
+const time = { secs_since_epoch: 100, nanos_since_epoch: 0 };
+function approvedEvent(change: Partial<IEvent> = {}): IEvent {
+	return {
+		id: event.id,
+		name: event.name,
+		event_type: event.event_type,
+		event_version: [1, 2, 3],
+		board_id: "board",
+		board_version: [3, 2, 1],
+		active: true,
+		config: [],
+		created_at: time,
+		updated_at: time,
+		description: "",
+		node_id: "entry",
+		priority: 0,
+		variables: {},
+		...change,
+	} as IEvent;
+}
+function approvedBoard(version: number[], variables: DeploymentVariable[]) {
+	return {
+		id: "board",
+		version,
+		layers: {},
+		variables: Object.fromEntries(
+			variables.map((variable) => [
+				variable.id,
+				{ ...variable, exposed: true, editable: true, default_value: null },
+			]),
+		),
 	};
-	const events = {
-		getEventsAuthoritative: async () => [fixture.current],
-		getEventAuthoritative: async (
-			...args: [string, string, [number, number, number]?]
-		) => {
-			fixture.eventReads.push(args);
-			if (args[2] !== undefined)
-				throw new Error("The current event has no archive yet");
-			return fixture.current;
-		},
-	} as unknown as IEventState;
-	const boards = {
-		getBoardAuthoritative: async (
-			...args: [string, string, [number, number, number]?]
-		) => {
-			fixture.boardReads.push(args);
-			return {
-				id: "board",
-				version: [3, 2, 1],
-				layers: {},
-				variables: {
-					credential: {
-						...secret,
-						exposed: true,
-						editable: true,
-						default_value: [65, 66],
-					},
-				},
-			} as unknown as Awaited<ReturnType<IBoardState["getBoardAuthoritative"]>>;
-		},
-	} as IBoardState;
-	return { fixture, events, boards, time };
+}
+function approvedDocuments(
+	events: IEvent[] = [approvedEvent()],
+	variables: DeploymentVariable[] = [secret],
+): Record<string, unknown> {
+	return Object.fromEntries([
+		["app", { id: "project" }],
+		...events.map((value) => [
+			`events/${value.id}/versions/${value.event_version.join("/")}`,
+			value,
+		]),
+		...events.map((value) => [
+			`boards/${value.board_id}/versions/${value.board_version?.join("/")}`,
+			approvedBoard(value.board_version ?? [], variables),
+		]),
+	]);
+}
+function onlineInstalled(documents = approvedDocuments()): InstalledProject {
+	return {
+		...installed,
+		source: "online",
+		project_path: "/private/online/projects/project",
+		revision: "c".repeat(64),
+		online_catalog: approvedOnlineCatalog(documents),
+	};
 }
 
-test("online discovery reads an unarchived current event and still pins its board exactly", async () => {
-	const { fixture, events, boards } = onlineFixture();
-	const [selected] = await discoverOnlineEvents(events, "project");
+test("online discovery offers only the approved metadata installed on the device", () => {
+	const project = onlineInstalled();
+	const [selected] = discoverOnlineEvents(project);
 	expect(selected).toEqual({
 		...event,
 		readiness_kind: "listener",
 		rollout_supported: true,
 	});
+	expect(discoverOnlineVariables(project, selected)).toEqual([secret]);
+	const changes: Partial<DeploymentEvent>[] = [
+		{ event_version: [1, 2, 4] },
+		{ board_version: [3, 2, 2] },
+		{ id: "another-event" },
+	];
+	for (const change of changes)
+		expect(() =>
+			discoverOnlineVariables(project, { ...selected, ...change }),
+		).toThrow("Prepare and install the project again");
+	expect(() =>
+		discoverOnlineEvents({ ...project, online_catalog: undefined }),
+	).toThrow("Prepare and install this online project again");
+	expect(() => discoverOnlineEvents(installed)).toThrow(
+		"Prepare and install this online project again",
+	);
+});
+
+test("approved metadata keeps eligibility rules and rejects forged keys or missing boards", () => {
+	const catalog = approvedOnlineCatalog(
+		approvedDocuments([
+			approvedEvent(),
+			approvedEvent({ id: "paused", active: false }),
+			approvedEvent({ id: "worker", event_type: "daemon" }),
+		]),
+	);
 	expect(
-		await discoverOnlineVariables(events, boards, "project", selected),
+		catalog.events.map((value) => [
+			value.id,
+			value.eligible,
+			value.readiness_kind,
+		]),
+	).toEqual([
+		["api", true, "listener"],
+		["paused", false, "listener"],
+		["worker", true, "explicit"],
+	]);
+	const documents = approvedDocuments();
+	expect(() =>
+		approvedOnlineCatalog({
+			...documents,
+			"events/api/versions/1/2/4": documents["events/api/versions/1/2/3"],
+		}),
+	).toThrow("does not match its event identity");
+	const { "boards/board/versions/3/2/1": _board, ...missing } = documents;
+	expect(() => approvedOnlineCatalog(missing)).toThrow("missing board");
+});
+
+test("online plans pin only events from the installed approved metadata", () => {
+	const online = {
+		...input(),
+		replicas: 1,
+		installed: onlineInstalled(),
+		resourceGrant: { grant_id: "grant", authz_version: 1 },
+	};
+	expect(createDeploymentPlan(online).config.events).toEqual([
+		{ event_id: "api", event_version: [1, 2, 3], board_version: [3, 2, 1] },
+	]);
+	expect(() =>
+		createDeploymentPlan({
+			...online,
+			events: [{ ...event, event_version: [1, 3, 0] }],
+		}),
+	).toThrow("not in the approved metadata installed on the device");
+});
+
+test("kept secret references must match the type they were written for", async () => {
+	const base = await updateInput();
+	const previous = [{ ...secret, value_type: "HashMap" }];
+	expect(() =>
+		createDeploymentPlan({ ...base, previousVariables: previous }),
+	).toThrow(
+		"Stored secret credential was written for String/HashMap, but the selected event expects String/Normal",
+	);
+	expect(
+		createDeploymentPlan({ ...base, previousVariables: [secret] }).config
+			.secret_overrides,
+	).toEqual({ credential: "variable-stored" });
+	const replaced = createDeploymentPlan({
+		...base,
+		previousVariables: previous,
+		overrides: { ...base.overrides, credential: "new-value" },
+	});
+	expect(
+		(replaced.config.secret_overrides as Record<string, string>).credential,
+	).not.toBe("variable-stored");
+	expect(
+		createDeploymentPlan({
+			...base,
+			previousVariables: previous,
+			removeOverrides: [...base.removeOverrides, "credential"],
+		}).config.secret_overrides,
+	).toEqual({});
+});
+
+test("earlier secret definitions come from the deployed revision or its published archive", async () => {
+	const existing = await existingPlacement();
+	const requests: unknown[] = [];
+	const call: ManagementCall = async (command) => {
+		const request = command.request as Record<string, unknown>;
+		requests.push(request);
+		return {
+			operation_id: "describe",
+			state: "completed",
+			result: {
+				project_id: "project",
+				revision: request.revision,
+				event_id: request.event_id,
+				items: [{ ...secret, value_type: "HashMap" }, greeting],
+				next: null,
+			},
+		};
+	};
+	expect(
+		await discoverPreviousOfflineVariables(call, installed, existing),
+	).toEqual([{ ...secret, value_type: "HashMap" }]);
+	expect(requests).toEqual([
+		{
+			kind: "describe",
+			project_id: "project",
+			revision: "b".repeat(64),
+			event_id: "api",
+			after: null,
+		},
+	]);
+	expect(
+		await discoverPreviousOfflineVariables(
+			call,
+			{ ...installed, revision: "b".repeat(64) },
+			existing,
+		),
+	).toEqual([]);
+	expect(requests).toHaveLength(1);
+
+	const reads: unknown[][] = [];
+	const events = {
+		getEventAuthoritative: async (...args: unknown[]) => {
+			reads.push(args);
+			return approvedEvent({
+				event_version: [1, 0, 0],
+				board_version: [1, 0, 0],
+			});
+		},
+	} as unknown as IEventState;
+	const boards = {
+		getBoardAuthoritative: async (...args: unknown[]) => {
+			reads.push(args);
+			return approvedBoard([1, 0, 0], [{ ...secret, data_type: "Integer" }]);
+		},
+	} as unknown as IBoardState;
+	const online = {
+		...existing,
+		config: { ...existing.config, source: "online" },
+	} as PlacementConfiguration;
+	expect(
+		await discoverPreviousOnlineVariables(
+			events,
+			boards,
+			onlineInstalled(),
+			online,
+		),
+	).toEqual([{ ...secret, data_type: "Integer" }]);
+	expect(reads).toEqual([
+		["project", "api", [1, 0, 0]],
+		["project", "board", [1, 0, 0]],
+	]);
+	const unchanged = {
+		...online,
+		config: {
+			...online.config,
+			events: [
+				{ event_id: "api", event_version: [1, 2, 3], board_version: [3, 2, 1] },
+			],
+		},
+	} as PlacementConfiguration;
+	expect(
+		await discoverPreviousOnlineVariables(
+			events,
+			boards,
+			onlineInstalled(),
+			unchanged,
+		),
 	).toEqual([secret]);
-	expect(fixture.eventReads).toEqual([["project", event.id]]);
-	expect(fixture.boardReads).toEqual([["project", "board", [3, 2, 1]]]);
+	expect(reads).toHaveLength(2);
 });
 
 test("health-checked updates stage isolated secrets before activation and preserve the previous revision", async () => {
@@ -302,6 +492,29 @@ test("rollout observation rejects cross-project receipts and reports rollback as
 	}
 });
 
+test("a definitive refusal to read rollout status ends retries while a retryable one keeps them", async () => {
+	const scope = {
+		rollout_id: crypto.randomUUID(),
+		placement_id: "placement",
+		project_id: "project",
+	};
+	const denied = await waitForDeploymentRollout(
+		async () => rejected(undefined, "unauthorized", "Deploy access expired"),
+		scope,
+	).catch((error: unknown) => error);
+	expect(denied).toBeInstanceOf(DeploymentRejectedError);
+	expect(String(denied)).toContain(`rollout ${scope.rollout_id}`);
+	expect(String(denied)).toContain("Deploy access expired");
+	const failed = await waitForDeploymentRollout(
+		async () => rejected(undefined, "failed", "Rollout store is unreadable"),
+		scope,
+	).catch((error: unknown) => error);
+	expect(failed).toBeInstanceOf(Error);
+	expect(failed).not.toBeInstanceOf(DeploymentRejectedError);
+	expect(String(failed)).toContain("Rollout store is unreadable");
+	expect(String(failed)).toContain("retry the same rollout");
+});
+
 test("a stopped or expired staged rollout ends retries before activation", async () => {
 	for (const rejectSecret of [false, true]) {
 		const plan = createDeploymentPlan({
@@ -416,6 +629,48 @@ test("discard reads the exact rollout and handles activation races without stopp
 				: ["rollout", "cancel_rollout"],
 		);
 	}
+});
+
+test("a refused discard of a still staged update reports the device's reason instead of an activation race", async () => {
+	const scope = {
+		rollout_id: "staged-update",
+		placement_id: "placement",
+		project_id: "project",
+	};
+	const refuse =
+		(response: ReturnType<typeof rejected>): ManagementCall =>
+		async (command, id) =>
+			command.type === "rollout"
+				? {
+						operation_id: "read",
+						state: "completed",
+						result: { ...scope, state: "staged" },
+					}
+				: { ...response, operation_id: id ?? "read" };
+	const denied = await cancelDeploymentRollout(
+		refuse(rejected(undefined, "unauthorized", "Deploy access expired")),
+		scope,
+	).catch((error: unknown) => error);
+	expect(denied).toBeInstanceOf(DeploymentRejectedError);
+	expect(String(denied)).toContain("Deploy access expired");
+	expect(String(denied)).toContain("does not allow this change");
+	const busy = await cancelDeploymentRollout(
+		refuse(rejected(undefined, "busy", "Rollout store is locked")),
+		scope,
+	).catch((error: unknown) => error);
+	expect(busy).not.toBeInstanceOf(DeploymentRejectedError);
+	expect(String(busy)).toContain("did not discard staged update");
+	expect(String(busy)).toContain("Rollout store is locked");
+});
+
+test("device-supplied rejection codes never pick up inherited object members as hints", () => {
+	for (const code of ["constructor", "__proto__", "to_string"])
+		expect(
+			new DeploymentRejectedError(
+				{ code, error: "Refused.", retryable: false },
+				"the update",
+			).message,
+		).toBe("The device rejected the update: Refused.");
 });
 
 test("automatic startup checks reject stopped placements, unsupported agents and workflow-owned listeners", async () => {
@@ -587,18 +842,8 @@ test("manual conversion to workflow listeners removes obsolete native hosting se
 	expect(plan.steps.map((step) => step.command.type)).toEqual(["apply"]);
 });
 
-test("online discovery rejects changed event pins, type and eligibility before reading a board", async () => {
-	const { fixture, events, boards, time } = onlineFixture();
-	const initial = fixture.current;
-	const [selected] = await discoverOnlineEvents(events, "project");
+test("approved events with traffic variants, floating pins or unsupported types stay ineligible", () => {
 	const changes: Partial<IEvent>[] = [
-		{ id: "another-event" },
-		{ event_version: [1, 2, 4] },
-		{ board_version: [3, 2, 2] },
-		{ board_version: null },
-		{ event_version: [4294967295, 0, 0] },
-		{ active: false },
-		{ event_type: "mcp" },
 		{ event_type: "unsupported" },
 		{
 			canary: {
@@ -625,46 +870,101 @@ test("online discovery rejects changed event pins, type and eligibility before r
 		},
 	];
 	for (const change of changes) {
-		fixture.current = { ...initial, ...change };
-		await expect(
-			discoverOnlineVariables(events, boards, "project", selected),
-		).rejects.toThrow("Reload the project");
+		const project = onlineInstalled(approvedDocuments([approvedEvent(change)]));
+		const [selected] = discoverOnlineEvents(project);
+		expect(selected.eligible).toBe(false);
+		expect(() => discoverOnlineVariables(project, selected)).toThrow(
+			"not in the approved metadata",
+		);
 	}
-	expect(fixture.boardReads).toHaveLength(0);
-	fixture.current = { ...initial, event_type: "daemon" };
-	const [daemon] = await discoverOnlineEvents(events, "project");
-	fixture.current = { ...fixture.current, default_page_id: "new-page" };
-	await expect(
-		discoverOnlineVariables(events, boards, "project", daemon),
-	).rejects.toThrow("Reload the project");
-	expect(fixture.boardReads).toHaveLength(0);
+	expect(() =>
+		approvedOnlineCatalog(
+			approvedDocuments([approvedEvent({ board_version: null })]),
+		),
+	).toThrow("does not match its event identity");
 });
 
-test("online discovery propagates authority failure and refuses a different board snapshot", async () => {
-	const { fixture, events, boards } = onlineFixture();
-	const [selected] = await discoverOnlineEvents(events, "project");
-	const failure = new Error("Event read denied");
-	const refused = {
-		...events,
-		getEventAuthoritative: async () => {
-			throw failure;
+test("a board with unconfigurable variables blocks only its own approved event", () => {
+	const otherBoard = (variables: DeploymentVariable[], layers = {}) => ({
+		...approvedDocuments(),
+		"events/broken/versions/1/2/3": approvedEvent({
+			id: "broken",
+			board_id: "other",
+		}),
+		"boards/other/versions/3/2/1": {
+			...approvedBoard([3, 2, 1], variables),
+			id: "other",
+			layers,
 		},
-	};
+	});
+	const invalid = onlineInstalled(otherBoard([{ ...secret, id: "not an id" }]));
+	const events = discoverOnlineEvents(invalid);
+	expect(events.map((value) => [value.id, value.eligible])).toEqual([
+		["api", true],
+		["broken", false],
+	]);
+	expect(events[1]?.ineligible_reason).toContain(
+		"Board other 3.2.1 cannot be deployed",
+	);
+	expect(events[1]?.ineligible_reason).toContain('"Credential"');
+	expect(discoverOnlineVariables(invalid, events[0] ?? event)).toEqual([
+		secret,
+	]);
+	const layered = discoverOnlineEvents(
+		onlineInstalled(
+			otherBoard([secret], {
+				layer: {
+					variables: {
+						credential: { ...secret, data_type: "Integer", exposed: true },
+					},
+				},
+			}),
+		),
+	);
+	expect(layered[1]?.eligible).toBe(false);
+	expect(layered[1]?.ineligible_reason).toContain(
+		"define variable Credential differently",
+	);
+});
+
+test("earlier online definitions propagate archive failures and refuse a different board snapshot", async () => {
+	const existing = {
+		...(await existingPlacement()),
+		config: { ...(await existingPlacement()).config, source: "online" },
+	} as PlacementConfiguration;
+	const failure = new Error("Event read denied");
+	const archived = approvedEvent({
+		event_version: [1, 0, 0],
+		board_version: [1, 0, 0],
+	});
+	const events = (read: () => Promise<IEvent>) =>
+		({ getEventAuthoritative: read }) as unknown as IEventState;
+	const boards = (change: Record<string, unknown>) =>
+		({
+			getBoardAuthoritative: async () => ({
+				...approvedBoard([1, 0, 0], [secret]),
+				...change,
+			}),
+		}) as unknown as IBoardState;
 	await expect(
-		discoverOnlineVariables(refused, boards, "project", selected),
+		discoverPreviousOnlineVariables(
+			events(async () => {
+				throw failure;
+			}),
+			boards({}),
+			onlineInstalled(),
+			existing,
+		),
 	).rejects.toBe(failure);
-	expect(fixture.boardReads).toHaveLength(0);
-	for (const change of [{ id: "another-board" }, { version: [3, 2, 2] }]) {
-		const replaced = {
-			...boards,
-			getBoardAuthoritative: async (
-				...args: Parameters<IBoardState["getBoardAuthoritative"]>
-			) => ({ ...(await boards.getBoardAuthoritative(...args)), ...change }),
-		};
+	for (const change of [{ id: "another-board" }, { version: [1, 0, 1] }])
 		await expect(
-			discoverOnlineVariables(events, replaced, "project", selected),
+			discoverPreviousOnlineVariables(
+				events(async () => archived),
+				boards(change),
+				onlineInstalled(),
+				existing,
+			),
 		).rejects.toThrow("board pins differ");
-	}
 });
 function input() {
 	return {
@@ -699,6 +999,7 @@ test("offline writes are opt-in, scoped, and validated before a deployment is se
 	).toThrow("only to online");
 	const online = {
 		...input(),
+		replicas: 1,
 		installed: { ...installed, source: "online" as const },
 		resourceGrant: { grant_id: "grant", authz_version: 1 },
 	};
@@ -706,6 +1007,11 @@ test("offline writes are opt-in, scoped, and validated before a deployment is se
 		createDeploymentPlan({ ...online, offlineWrites: buffering }).config
 			.offline_writes,
 	).toEqual(buffering);
+	expect(() =>
+		createDeploymentPlan({ ...online, replicas: 3, offlineWrites: buffering }),
+	).toThrow(
+		"requires a placement with one replica, but this placement allows 3",
+	);
 	for (const prefix of [
 		"../escape",
 		"db/table.lance",
@@ -755,11 +1061,13 @@ test("deployment updates preserve buffering unless explicitly changed or disable
 	});
 	const online = {
 		...base,
+		replicas: 1,
 		installed: { ...base.installed, source: "online" as const },
 		existing: {
 			...base.existing,
 			config: {
 				...base.existing.config,
+				max_replicas: 1,
 				source: "online" as const,
 				offline_writes: buffering,
 			},
@@ -827,6 +1135,27 @@ test("selection forbids floating pins, replicated daemons, unknown overrides and
 	expect(() =>
 		createDeploymentPlan({ ...input(), host: "example.com" }),
 	).toThrow();
+});
+test("a placement pins one version per node package, as the device requires", () => {
+	const pin = (version: string) => ({
+		package_id: "tokenizer",
+		version,
+		wasm_sha256: "a".repeat(64),
+		manifest_sha256: "b".repeat(64),
+	});
+	const withPins = (versions: string[]) => ({
+		...input(),
+		installed: {
+			...installed,
+			assets: { bit_pins: [], package_pins: versions.map(pin) },
+		},
+	});
+	expect(createDeploymentPlan(withPins(["1.0.0"])).config.package_pins).toEqual(
+		[pin("1.0.0")],
+	);
+	expect(() => createDeploymentPlan(withPins(["1.0.0", "2.0.0"]))).toThrow(
+		"several versions of node package tokenizer",
+	);
 });
 test("variable parsing keeps literal strings and validates primitives and containers", () => {
 	expect(variableValue(secret, "${HOME}")).toBe("${HOME}");
@@ -1608,4 +1937,241 @@ test("failed secret receipts require reload and detect publication-time revision
 				: StaleDeploymentRevisionError,
 		);
 	}
+});
+
+function rejected(
+	id: string | undefined,
+	code: string,
+	error = `${code} cause`,
+	retryable = ["busy", "failed"].includes(code),
+) {
+	return {
+		operation_id: id ?? "read",
+		state: "rejected",
+		result: { error, code, retryable },
+	};
+}
+const currentPlacement = {
+	operation_id: "read",
+	state: "completed",
+	result: {
+		placement_id: "api-on-device",
+		project_id: "project",
+		deployment_id: "deployment",
+		config_revision: 4,
+		config: storedConfig,
+		desired_state: "running",
+	},
+};
+
+test("a definitive apply rejection ends retries with its reason while busy and older agents stay retryable", async () => {
+	const plan = createDeploymentPlan(await updateInput());
+	const types: unknown[] = [];
+	const refused = await executeDeploymentPlan(async (command, id) => {
+		types.push(command.type);
+		return command.type === "placement_configuration"
+			? currentPlacement
+			: rejected(id, "host_policy", "This host requires Linux isolation");
+	}, plan).catch((error: unknown) => error);
+	expect(refused).toBeInstanceOf(DeploymentRejectedError);
+	expect(String(refused)).toContain("This host requires Linux isolation");
+	expect(String(refused)).toContain("isolation settings");
+	expect(types).toEqual(["apply", "placement_configuration"]);
+	for (const response of [
+		(id?: string) => rejected(id, "busy"),
+		(id?: string) => ({
+			operation_id: id ?? "read",
+			state: "rejected",
+			result: { error: "Command rejected" },
+		}),
+	]) {
+		const retried = await executeDeploymentPlan(
+			async (command, id) =>
+				command.type === "placement_configuration"
+					? currentPlacement
+					: response(id),
+			createDeploymentPlan(await updateInput()),
+		).catch((error: unknown) => error);
+		expect(retried).not.toBeInstanceOf(DeploymentRejectedError);
+		expect(String(retried)).toContain("was not confirmed");
+	}
+	const failed = await executeDeploymentPlan(
+		async (command, id) =>
+			command.type === "placement_configuration"
+				? currentPlacement
+				: rejected(id, "failed", "Placement store is locked"),
+		createDeploymentPlan(await updateInput()),
+	).catch((error: unknown) => error);
+	expect(failed).not.toBeInstanceOf(DeploymentRejectedError);
+	expect(String(failed)).toContain(
+		"Device response: Placement store is locked",
+	);
+	expect(String(failed)).toContain("Retry to confirm the same operations");
+	const created = await executeDeploymentPlan(
+		async (_command, id) =>
+			rejected(id, "revision_conflict", "Placement exists"),
+		createDeploymentPlan(input()),
+	).catch((error: unknown) => error);
+	expect(created).toBeInstanceOf(DeploymentRejectedError);
+	expect(String(created)).toContain("creation of placement api-on-device");
+	expect(String(created)).toContain("choose another placement ID");
+});
+
+test("a definitive secret rejection after Apply requires reloading the applied placement", async () => {
+	const plan = createDeploymentPlan({
+		...(await updateInput()),
+		overrides: { credential: "new-secret" },
+	});
+	const error = await executeDeploymentPlan(async (command, id) => {
+		if (command.type === "placement_configuration")
+			return {
+				...currentPlacement,
+				result: { ...currentPlacement.result, config_revision: 5 },
+			};
+		if (command.type === "apply")
+			return {
+				operation_id: requiredOperationId(id),
+				state: "accepted",
+				result: { placement_id: plan.config.id, config_revision: 5 },
+			};
+		return rejected(id, "limit", "The secret store is full");
+	}, plan).catch((value: unknown) => value);
+	expect(error).toBeInstanceOf(DeploymentPublicationFailedError);
+	expect(String(error)).toContain("The secret store is full");
+});
+
+test("definitive rollout rejections stop retries and leave a staged update discardable", async () => {
+	const staged = createDeploymentPlan({
+		...(await updateInput()),
+		healthChecked: true,
+	});
+	await expect(
+		executeDeploymentPlan(
+			async (command, id) =>
+				command.type === "placement_configuration"
+					? currentPlacement
+					: rejected(id, "invalid", "Offline writes need one replica"),
+			staged,
+		),
+	).rejects.toBeInstanceOf(DeploymentRejectedError);
+	const plan = createDeploymentPlan({
+		...(await updateInput()),
+		healthChecked: true,
+		overrides: { credential: "replacement" },
+	});
+	const statuses: DeploymentRolloutStatus[] = [];
+	const scope = {
+		rollout_id: plan.rollout_id,
+		placement_id: plan.config.id,
+		project_id: plan.config.project_id,
+	};
+	const error = await executeDeploymentPlan(
+		async (command, id) => {
+			if (command.type === "stage_rollout")
+				return {
+					operation_id: requiredOperationId(id),
+					state: "accepted",
+					result: { ...scope, state: "staged" },
+				};
+			if (command.type === "rollout")
+				return {
+					operation_id: "read",
+					state: "completed",
+					result: { ...scope, state: "staged" },
+				};
+			return rejected(id, "limit", "Rollout secret budget exhausted");
+		},
+		plan,
+		undefined,
+		(status) => statuses.push(status),
+	).catch((value: unknown) => value);
+	expect(error).toBeInstanceOf(DeploymentRejectedError);
+	expect(String(error)).toContain("Rollout secret budget exhausted");
+	expect(String(error)).toContain("Discard the staged update");
+	expect(statuses.map((status) => status.state)).toEqual(["staged"]);
+});
+
+test("removing buffered resources requires an empty offline queue", async () => {
+	const buffering = offlineWritesSchema.parse({
+		tables: [
+			{
+				purpose: "storage",
+				database: "db",
+				table: "orders",
+				primary_key: "id",
+			},
+		],
+		files: [{ purpose: "files", prefix: "exports" }],
+	});
+	expect(removesOfflineBuffering(undefined, null)).toBe(false);
+	expect(removesOfflineBuffering(buffering, buffering)).toBe(false);
+	expect(
+		removesOfflineBuffering(buffering, { ...buffering, max_operations: 5 }),
+	).toBe(false);
+	expect(removesOfflineBuffering(buffering, null)).toBe(true);
+	expect(removesOfflineBuffering(buffering, { ...buffering, files: [] })).toBe(
+		true,
+	);
+	expect(
+		removesOfflineBuffering(buffering, {
+			...buffering,
+			tables: [{ ...buffering.tables[0], table: "invoices" }],
+		}),
+	).toBe(true);
+	const queues =
+		(pending: number[]): ManagementCall =>
+		async (command) => ({
+			operation_id: "queue",
+			state: "completed",
+			result: {
+				placement_id: command.placement_id,
+				queues: pending.map((count, index) => ({
+					scope: String(index).repeat(64),
+					quarantined: false,
+					pending_count: count,
+					pending_bytes: count * 10,
+					oldest_at: count ? 1 : null,
+					head: null,
+				})),
+				next: null,
+			},
+		});
+	await assertOfflineQueuesDrained(queues([0, 0]), "api-on-device");
+	await expect(
+		assertOfflineQueuesDrained(queues([0, 40]), "api-on-device"),
+	).rejects.toThrow("still has 40 buffered writes waiting to replay");
+	await expect(
+		assertOfflineQueuesDrained(
+			async () => rejected(undefined, "unauthorized", "Deploy access only"),
+			"api-on-device",
+		),
+	).rejects.toThrow("requires reading its offline queue first");
+});
+
+test("oversized configurations name the pins or values that exceed one management message", () => {
+	const bits = Array.from({ length: 120 }, (_, index) => ({
+		bit_id: `model-${index}`,
+		metadata_sha256: "e".repeat(64),
+	}));
+	expect(() =>
+		createDeploymentPlan({
+			...input(),
+			installed: { ...installed, assets: { bit_pins: bits, package_pins: [] } },
+		}),
+	).toThrow(
+		`one remote management message carries at most ${DEPLOYMENT_CONFIG_BYTES}`,
+	);
+	expect(() =>
+		createDeploymentPlan({
+			...input(),
+			installed: { ...installed, assets: { bit_pins: bits, package_pins: [] } },
+		}),
+	).toThrow("Remove Bits or node packages");
+	expect(() =>
+		createDeploymentPlan({
+			...input(),
+			variables: [secret, greeting],
+			overrides: { ...input().overrides, greeting: "x".repeat(12_000) },
+		}),
+	).toThrow("Shorten the public variable overrides");
 });

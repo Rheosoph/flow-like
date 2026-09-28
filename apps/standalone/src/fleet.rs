@@ -1,11 +1,12 @@
 use crate::{
-    enrollment::{DeviceSession, unix_time},
+    enrollment::{DeviceSession, api_status, device_proof_rejected, unix_time},
     state::StateStore,
 };
 use anyhow::{Context, Result, ensure};
 use flow_like_device_crypto::fleet::seal_fleet;
 use flow_like_device_protocol::*;
 use rand_core::RngCore;
+use reqwest::StatusCode;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -172,6 +173,39 @@ fn queue(
     ensure!(store.connection.execute("UPDATE fleet_publication SET pending=?1 WHERE singleton=1 AND pending IS NULL AND sequence=?2",params![serde_json::to_string(&pending)?,head.sequence])?==1,"Fleet publication already pending");
     Ok(pending)
 }
+/// The hub refused one stream's ciphertext without advancing the chain, for
+/// example because its reader renewed after the audience was sealed. Other
+/// streams do not depend on it, so the pass continues without backing off.
+fn stream_refused(error: &anyhow::Error) -> bool {
+    matches!(
+        api_status(error),
+        Some(StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN | StatusCode::CONFLICT)
+    )
+}
+/// Drops the definitely unsent ciphertext and records the attempt, so the
+/// stream yields to longer-waiting streams until it is due again.
+fn refuse_stream(
+    store: &StateStore,
+    pending: &Pending,
+    error: &anyhow::Error,
+    now: i64,
+) -> Result<()> {
+    tracing::warn!(
+        stream = %pending.stream,
+        "Fleet snapshot stream was refused by the hub; other streams continue: {error:#}"
+    );
+    let tx = store.connection.unchecked_transaction()?;
+    ensure!(
+        tx.execute(
+            "UPDATE fleet_publication SET pending=NULL WHERE singleton=1 AND pending=?1",
+            [serde_json::to_string(pending)?],
+        )? == 1,
+        "Fleet publication changed concurrently"
+    );
+    tx.execute("INSERT INTO fleet_published_streams(stream,content_digest,published_at) VALUES(?1,'',?2) ON CONFLICT(stream) DO UPDATE SET published_at=excluded.published_at",params![pending.stream,now])?;
+    tx.commit()?;
+    Ok(())
+}
 fn content_digest(value: &serde_json::Value) -> Result<String> {
     let mut value = value.clone();
     if let Some(object) = value.as_object_mut() {
@@ -213,49 +247,56 @@ pub async fn publish(
         };
         let jitter = u64::from(rand_core::OsRng.next_u32()) % 3;
         tokio::select! {_=cancel.cancelled()=>return Ok(()),_=tokio::time::sleep(Duration::from_secs(delay+jitter))=>()}
-        let now = unix_time()?;
-        let store = StateStore::open(&root.join("management.sqlite"))?;
-        if recipients.as_ref().is_none_or(|(_, at)| now - *at >= 30) || pending(&store)?.is_some() {
-            match tokio::select! {_=cancel.cancelled()=>return Ok(()),result=device.fleet_recipients()=>result}
-            {
-                Ok(current) => recipients = Some((current, now)),
-                Err(_) => {
-                    failures = failures.saturating_add(1);
-                    tracing::debug!("Fleet snapshot publication is waiting for the hub");
-                    continue;
+        match publish_round(&root, &device, &boot_id, &mut recipients, &cancel).await {
+            Ok(()) => failures = 0,
+            Err(error) => {
+                failures = failures.saturating_add(1);
+                recipients = None;
+                if hub_unreachable(&error) {
+                    tracing::debug!(failures, "{error:#}");
+                } else if device_proof_rejected(&error) {
+                    tracing::warn!(
+                        failures,
+                        "{error:#}; the device clock is probably skewed from the hub"
+                    );
+                } else {
+                    tracing::warn!(failures, "{error:#}");
                 }
             }
         }
-        let current = &mut recipients
-            .as_mut()
-            .context("Fleet recipients unavailable")?
-            .0;
-        let audiences = match current_audiences(&store, device.manifest(), current, now) {
-            Ok(a) => a,
-            Err(_) => {
-                failures = failures.saturating_add(1);
-                recipients = None;
-                tracing::warn!(
-                    "Fleet snapshot publication awaits current signed readers and policy"
-                );
-                continue;
-            }
-        };
-        let result = publish_pass(
-            &root, store, &device, &boot_id, current, &audiences, now, &cancel,
-        )
-        .await;
-        match result {
-            Ok(()) => failures = 0,
-            Err(_) => {
-                failures = failures.saturating_add(1);
-                recipients = None;
-                tracing::warn!(
-                    "Fleet snapshot publication paused; durable pending snapshot retained"
-                );
-            }
-        }
     }
+}
+fn hub_unreachable(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<reqwest::Error>().is_some())
+}
+async fn publish_round(
+    root: &Path,
+    device: &DeviceSession,
+    boot_id: &str,
+    recipients: &mut Option<(FleetRecipients, i64)>,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    let now = unix_time()?;
+    let store = StateStore::open(&root.join("management.sqlite"))
+        .context("Fleet snapshot publication cannot open the management database")?;
+    if recipients.as_ref().is_none_or(|(_, at)| now - *at >= 30) || pending(&store)?.is_some() {
+        let current = tokio::select! {_=cancel.cancelled()=>return Ok(()),result=device.fleet_recipients()=>result}
+            .context("Fleet snapshot publication is waiting for the hub")?;
+        *recipients = Some((current, now));
+    }
+    let current = &mut recipients
+        .as_mut()
+        .context("Fleet recipients unavailable")?
+        .0;
+    let audiences = current_audiences(&store, device.manifest(), current, now)
+        .context("Fleet snapshot publication awaits current signed readers and policy")?;
+    publish_pass(
+        root, store, device, boot_id, current, &audiences, now, cancel,
+    )
+    .await
+    .context("Fleet snapshot publication paused; durable pending snapshot retained")
 }
 #[allow(clippy::too_many_arguments)]
 async fn publish_pass(
@@ -287,9 +328,17 @@ async fn publish_pass(
                     && r.controller_key == manifest.controller_key
                     && a == &manifest.audience
             }) {
-                let ack = tokio::select! {_=cancel.cancelled()=>return Ok(()),result=device.upload_fleet(&pending.bundle)=>result}?;
-                acknowledge(&store, &pending, &ack, &key)?;
-                current.head = ack;
+                match tokio::select! {_=cancel.cancelled()=>return Ok(()),result=device.upload_fleet(&pending.bundle)=>result}
+                {
+                    Ok(ack) => {
+                        acknowledge(&store, &pending, &ack, &key)?;
+                        current.head = ack;
+                    }
+                    Err(error) if stream_refused(&error) => {
+                        refuse_stream(&store, &pending, &error, now)?
+                    }
+                    Err(error) => return Err(error),
+                }
             } else {
                 // The server attests the old head and this reader no longer has
                 // authority. Never send that ciphertext after revocation.
@@ -335,9 +384,9 @@ async fn publish_pass(
         .collect();
     ordered.sort_unstable_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
     let mut projections = BTreeMap::new();
-    let mut published = 0;
+    let mut attempts = 0;
     for (_, stream_id, (reader, _, audience)) in ordered {
-        if published >= 32 {
+        if attempts >= 32 {
             break;
         }
         // Metrics have a fixed interval, so no database projection is needed
@@ -386,10 +435,16 @@ async fn publish_pass(
             value.clone(),
             now,
         )?;
-        let ack = tokio::select! {_=cancel.cancelled()=>return Ok(()),result=device.upload_fleet(&pending.bundle)=>result}?;
-        acknowledge(&store, &pending, &ack, &key)?;
-        current.head = ack;
-        published += 1;
+        attempts += 1;
+        match tokio::select! {_=cancel.cancelled()=>return Ok(()),result=device.upload_fleet(&pending.bundle)=>result}
+        {
+            Ok(ack) => {
+                acknowledge(&store, &pending, &ack, &key)?;
+                current.head = ack;
+            }
+            Err(error) if stream_refused(&error) => refuse_stream(&store, &pending, &error, now)?,
+            Err(error) => return Err(error),
+        }
     }
     Ok(())
 }
@@ -658,6 +713,121 @@ mod tests {
             assert!(samples.windows(2).all(|pair| pair[1] - pair[0] <= 65));
             assert!(now + 75 - samples.last().unwrap() <= 65);
         }
+        Ok(())
+    }
+    #[tokio::test]
+    async fn refused_stream_neither_aborts_the_pass_nor_keeps_its_place() -> Result<()> {
+        use axum::{Json, Router, extract::State, http::StatusCode as HttpStatus, routing::post};
+        use std::sync::Mutex;
+        #[derive(Clone)]
+        struct Hub {
+            telemetry: Ed25519PublicKey,
+            head: Arc<Mutex<FleetHead>>,
+            attempted: Arc<Mutex<Vec<String>>>,
+        }
+        async fn upload(
+            State(hub): State<Hub>,
+            Json(body): Json<serde_json::Value>,
+        ) -> Result<Json<FleetHead>, HttpStatus> {
+            let bundle: EncryptedFleetSnapshot =
+                serde_json::from_value(body["bundle"].clone()).unwrap();
+            let manifest = verify_fleet_snapshot(&bundle, &hub.telemetry).unwrap();
+            hub.attempted
+                .lock()
+                .unwrap()
+                .push(manifest.audience.grant_id.clone());
+            if manifest.audience.grant_id == "renewing" {
+                return Err(HttpStatus::FORBIDDEN);
+            }
+            let mut head = hub.head.lock().unwrap();
+            assert_eq!(manifest.sequence, head.sequence + 1);
+            *head = FleetHead {
+                sequence: manifest.sequence,
+                manifest_digest: Some(compact_digest(&bundle.manifest_jws)),
+            };
+            Ok(Json(head.clone()))
+        }
+        let (root, _, mut reader, template) = fixture()?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        reader.api_base_url = format!("http://{}/api/v1", listener.local_addr()?);
+        let device = DeviceSession::test_management_session(
+            reader.api_base_url.clone(),
+            reader.device_id.clone(),
+            SigningKey::generate(),
+            reader.controller_key.clone(),
+        );
+        let attempted = Arc::new(Mutex::new(Vec::new()));
+        let hub = Hub {
+            telemetry: device.telemetry_signer().public_key(),
+            head: Arc::new(Mutex::new(FleetHead::default())),
+            attempted: attempted.clone(),
+        };
+        let router = Router::new()
+            .route("/api/v1/devices/{id}/fleet/snapshots", post(upload))
+            .with_state(hub);
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let database = root.path().join("management.sqlite");
+        let mut store = StateStore::open(&database)?;
+        let mut audiences = Vec::new();
+        for grant in ["renewing", "steady"] {
+            store.upsert_placement(
+                grant,
+                &serde_json::json!({"id":grant,"project_id":grant,"revision":"initial"}),
+                crate::state::DesiredState::Stopped,
+            )?;
+            let mut audience = template.clone();
+            audience.grant_id = grant.into();
+            audience.scope = ManagementScope::Project {
+                project_id: grant.into(),
+            };
+            audiences.push((reader.clone(), String::new(), audience));
+        }
+        drop(store);
+        let mut recipients = FleetRecipients {
+            readers: vec![],
+            policy_jws: None,
+            head: FleetHead::default(),
+        };
+        let now = unix_time()?;
+        // Stream ids hash a random controller key, so the steady stream gets an
+        // old but due publication time to make the refused stream go first.
+        let store = StateStore::open(&database)?;
+        store.connection.execute(
+            "INSERT INTO fleet_published_streams(stream,content_digest,published_at) VALUES(?1,'',?2)",
+            params![stream(&reader, &audiences[1].2)?, now - 120],
+        )?;
+        publish_pass(
+            root.path(),
+            store,
+            &device,
+            "boot",
+            &mut recipients,
+            &audiences,
+            now,
+            &CancellationToken::new(),
+        )
+        .await?;
+        server.abort();
+        assert_eq!(recipients.head.sequence, 1);
+        assert_eq!(*attempted.lock().unwrap(), ["renewing", "steady"]);
+        let store = StateStore::open(&database)?;
+        assert!(pending(&store)?.is_none());
+        assert_eq!(head(&store)?.sequence, 1);
+        let refused = stream(&reader, &audiences[0].2)?;
+        assert!(!due(
+            &store,
+            &refused,
+            FleetKind::Status,
+            "changed",
+            now + 4
+        )?);
+        assert!(due(
+            &store,
+            &refused,
+            FleetKind::Status,
+            "changed",
+            now + 5
+        )?);
         Ok(())
     }
     #[tokio::test]

@@ -176,8 +176,6 @@ impl NodeLogic for OsrmTableNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_types::reqwest;
-
         context.deactivate_exec_pin("exec_success").await?;
         context.activate_exec_pin("exec_error").await?;
 
@@ -239,11 +237,9 @@ impl NodeLogic for OsrmTableNode {
             query_parts.join("&")
         );
 
-        let client = reqwest::Client::builder()
-            .user_agent("FlowLike/1.0")
-            .build()?;
+        let client = crate::geo::routing::osrm::osrm_client(context.execution_environment())?;
 
-        let response = client.get(&url).send().await?;
+        let response = client.get(&url)?.send().await?;
         if !response.status().is_success() {
             return Err(flow_like_types::anyhow!(
                 "OSRM API returned status: {}",

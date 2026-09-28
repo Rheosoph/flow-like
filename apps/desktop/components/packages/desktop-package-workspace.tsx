@@ -5,15 +5,11 @@ import {
 	PackageWorkspace,
 	type PackageWorkspaceLocal,
 } from "@flow-like/flow-like-ui/components/store/package-workspace/package-workspace";
-import {
-	type RegistryPackageResult,
-	useRegistryPackage,
-} from "@flow-like/flow-like-ui/components/store/package-workspace/use-registry-package";
+import { useRegistryPackage } from "@flow-like/flow-like-ui/components/store/package-workspace/use-registry-package";
 import {
 	type WorkspaceTab,
 	workspaceTabFromParam,
 } from "@flow-like/flow-like-ui/components/store/package-workspace/workspace-href";
-import { workspaceAccess } from "@flow-like/flow-like-ui/components/store/package-workspace/workspace-model";
 import { StatePill } from "@flow-like/flow-like-ui/components/store/package-workspace/workspace-parts";
 import { isMaintainer } from "@flow-like/flow-like-ui/lib/permission/wasm-package-permission";
 import { TEMPLATE_LANGUAGES } from "@flow-like/flow-like-ui/lib/schema/developer";
@@ -22,7 +18,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { FolderPlus, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect } from "react";
 import { useAuth } from "react-oidc-context";
 import { fetcher } from "../../lib/api";
 import { lintCounts, projectRoutes } from "./local-projects";
@@ -112,29 +108,6 @@ function PlaceholderStatePill() {
 			{t("placeholderIdTitle", "Placeholder id")}
 		</StatePill>
 	);
-}
-
-/** True when the shell will show its "This id is taken" banner for this checkout. */
-function useIdTakenBanner(
-	packageId: string | undefined,
-	registry: RegistryPackageResult,
-): boolean {
-	const permission = registry.entry?.currentUserPermission;
-	return useMemo(() => {
-		const access = workspaceAccess({
-			packageId,
-			hasLocal: true,
-			auth: registry.authState,
-			remote: { status: registry.status, source: registry.source, permission },
-		});
-		return access.mode === "local" && access.banner === "id_taken";
-	}, [
-		packageId,
-		registry.authState,
-		registry.status,
-		registry.source,
-		permission,
-	]);
 }
 
 function WorkspacePrimaryAction({
@@ -239,7 +212,6 @@ export function DesktopPackageWorkspace({
 			: undefined;
 	const idKept = !!entry?.registry || !!maintainedEntry;
 	const placeholder = !idKept && isPlaceholderId(packageId);
-	const idTakenBanner = useIdTakenBanner(packageId, registry);
 	const headerAction =
 		entry && workspace.listed && checkoutPath
 			? workspaceHeaderAction(entry, checkoutPath, activeTab)
@@ -288,7 +260,7 @@ export function DesktopPackageWorkspace({
 						<LocalOverview
 							projectPath={checkoutPath}
 							packageId={packageId}
-							placeholder={placeholder && !idTakenBanner}
+							placeholder={placeholder}
 							version={manifest?.version ?? checkout?.version}
 							checkout={checkout}
 							checkoutCount={entry?.checkouts.length ?? 1}
@@ -312,6 +284,7 @@ export function DesktopPackageWorkspace({
 						flagPlaceholderId={!idKept}
 					/>
 				),
+				placeholderId: placeholder,
 			}
 		: undefined;
 

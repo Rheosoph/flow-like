@@ -106,9 +106,13 @@ public struct NativeCustomWidget: Codable, Sendable, Identifiable {
     public var action: NativeAction
     public var chart: NativeWidgetChart?
     public var page: NativeWidgetPageNode?
+    /// The app has no content for this widget yet and is loading it.
+    public var pending: Bool?
+    /// Fingerprint of the settings that decide the content, so a renamed widget keeps it and a retargeted one does not.
+    public var target: String?
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, kind, appId, updatedAt, staleAt, expiresAt, state, message, warnings, accent, action, chart, page
+        case id, title, kind, appId, updatedAt, staleAt, expiresAt, state, message, warnings, accent, action, chart, page, pending, target
     }
 
     // A malformed custom widget must not discard the account's other widgets.
@@ -128,6 +132,21 @@ public struct NativeCustomWidget: Codable, Sendable, Identifiable {
         action = (try? values?.decode(NativeAction.self, forKey: .action)) ?? NativeAction(kind: "")
         chart = try? values?.decodeIfPresent(NativeWidgetChart.self, forKey: .chart)
         page = try? values?.decodeIfPresent(NativeWidgetPageNode.self, forKey: .page)
+        pending = try? values?.decodeIfPresent(Bool.self, forKey: .pending)
+        target = try? values?.decodeIfPresent(String.self, forKey: .target)
+    }
+
+    func retainingContent(from previous: [NativeCustomWidget]?, now: Date) -> NativeCustomWidget {
+        guard pending == true, let target,
+              let last = previous?.first(where: {
+                  $0.id == id && $0.kind == kind && $0.appId == appId && $0.action == action && $0.target == target
+              }),
+              last.state == "ready", last.pending != true,
+              let expiry = NativeSnapshot.date(last.expiresAt), expiry > now else { return self }
+        var result = last
+        result.title = title
+        result.accent = accent
+        return result
     }
 
     fileprivate static func validateAction(_ action: NativeAction, appId: String) throws {
@@ -157,6 +176,7 @@ public struct NativeCustomWidget: Codable, Sendable, Identifiable {
         do {
             try Self.validateAction(action, appId: appId)
             guard ["ready", "empty", "error", "unsupported", "unavailable"].contains(state),
+                  (target?.utf8.count ?? 0) <= 64,
                   accent == nil || ["orange", "blue", "teal", "purple"].contains(accent!),
                   (message?.utf8.count ?? 0) <= 1024, (warnings?.count ?? 0) <= 8,
                   warnings?.allSatisfy({ $0.utf8.count <= 256 }) != false else { throw NativeIntegrationError.invalidAction }
@@ -176,7 +196,7 @@ public struct NativeCustomWidget: Codable, Sendable, Identifiable {
         } catch {
             result.state = "error"
             result.message = "Open Flow Like to update this widget."
-            result.chart = nil; result.page = nil; result.warnings = nil; result.accent = nil
+            result.chart = nil; result.page = nil; result.warnings = nil; result.accent = nil; result.pending = nil
             result.action = NativeAction(kind: "open_app", appId: appId)
         }
         return result

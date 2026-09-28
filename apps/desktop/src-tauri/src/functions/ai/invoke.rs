@@ -52,10 +52,20 @@ pub async fn find_best_model(
     let current_profile = TauriSettingsState::current_profile(&app_handle).await?;
     let http_client = TauriFlowLikeState::http_client(&app_handle).await?;
 
-    let best_model = current_profile
-        .hub_profile
-        .get_best_model(&preferences, multimodal, remote, http_client)
-        .await?;
+    let best_model = if remote {
+        current_profile
+            .hub_profile
+            .get_best_model(&preferences, multimodal, true, http_client)
+            .await?
+    } else {
+        let state = TauriFlowLikeState::construct(&app_handle).await?;
+        let capabilities =
+            flow_like::state::FlowLikeState::completion_model_capabilities(&state).await;
+        current_profile
+            .hub_profile
+            .resolve_completion_model(None, &preferences, multimodal, capabilities, http_client)
+            .await?
+    };
 
     Ok(best_model)
 }

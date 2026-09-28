@@ -71,6 +71,10 @@ pub use types::graph_overlay::{
     RESERVED_TABLE_PREFIX, RESERVED_TABLE_SUFFIX, SubgraphEdge, SubgraphNode, SubgraphPayload,
     is_reserved_table,
 };
+pub use types::inbound_email::{
+    InboundEmail, InboundEmailAddress, InboundEmailAttachment, InboundEmailAuthentication,
+    InboundEmailHeader, InboundEmailVerdict, MailMessageRef, MailSession,
+};
 pub use types::keypoint::{
     COCO_KEYPOINT_NAMES, COCO_SKELETON_CONNECTIONS, Keypoint, PoseDetection, SkeletonConnection,
 };

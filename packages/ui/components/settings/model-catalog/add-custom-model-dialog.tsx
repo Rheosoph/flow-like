@@ -18,6 +18,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useInvalidateInvoke } from "../../../hooks";
 import {
+	type ExternalModelCatalog,
+	type IProviderDef,
+	type IProviderField,
+	externalModelProviders,
+	providerFieldValues,
+	specificExternalModels,
+} from "../../../lib/bit/external-model-providers";
+import {
 	type HuggingFaceGgufRepositoryImport,
 	type HuggingFaceModelImport,
 	applyHuggingFaceMlxImportToUserBit,
@@ -59,30 +67,10 @@ import {
 const LOCAL_PROVIDER_NAME = "Local";
 const MLX_PROVIDER_NAME = "MLX";
 const DEFAULT_CONTEXT_LENGTH = "128000";
-
-interface IProviderField {
-	key: string;
-	label: string;
-	placeholder?: string;
-	/** Pre-filled value when the provider is picked (still editable). */
-	defaultValue?: string;
-	description?: string;
-	secret?: boolean;
-	required?: boolean;
-	multiline?: boolean;
-	advanced?: boolean;
-}
-
-interface IProviderDef {
-	key: string;
-	providerName: string;
-	label: string;
-	description: string;
-	primary: boolean;
-	isAzure?: boolean;
-	fields: IProviderField[];
-	validate?: (values: Record<string, string>, isEdit: boolean) => string | null;
-}
+const EXTERNAL_PROVIDERS = externalModelProviders(true);
+const EXTERNAL_PROVIDER_KEYS = new Set(
+	EXTERNAL_PROVIDERS.map((provider) => provider.key),
+);
 
 const apiKeyField = (placeholder: string): IProviderField => ({
 	key: "api_key",
@@ -119,6 +107,7 @@ const endpointField = (
 });
 
 const PROVIDERS: IProviderDef[] = [
+	...EXTERNAL_PROVIDERS,
 	{
 		key: "openai",
 		providerName: "custom:openai",
@@ -636,6 +625,19 @@ function AddCustomModelWizard({
 	const isEdit = !!existingBit;
 	const { canHostLlamaCPP, canHostMLX } = backend.capabilities();
 	const canHostLocal = !webMode && (canHostLlamaCPP || canHostMLX);
+	const canUseNativeProviders =
+		!webMode &&
+		!!backend.capabilities().canUseNativeAgentProviders &&
+		!!backend.bitState.listExternalModels;
+	const availableProviders = useMemo(
+		() => [
+			...externalModelProviders(canUseNativeProviders),
+			...PROVIDERS.filter(
+				(provider) => !EXTERNAL_PROVIDER_KEYS.has(provider.key),
+			),
+		],
+		[canUseNativeProviders],
+	);
 
 	const [step, setStep] = useState<WizardStep>("pick");
 	const [source, setSource] = useState<WizardSource>("provider");
@@ -672,8 +674,8 @@ function AddCustomModelWizard({
 	const hfInspectionSequence = useRef(0);
 
 	const providerDef = useMemo(
-		() => PROVIDERS.find((p) => p.key === providerKey) ?? null,
-		[providerKey],
+		() => availableProviders.find((p) => p.key === providerKey) ?? null,
+		[availableProviders, providerKey],
 	);
 
 	useEffect(() => {
@@ -769,17 +771,29 @@ function AddCustomModelWizard({
 		setFieldValues((prev) => ({ ...prev, [key]: value }));
 	}, []);
 
-	const pickProvider = useCallback((key: string) => {
-		setSource("provider");
-		setProviderKey(key);
-		const def = PROVIDERS.find((provider) => provider.key === key);
-		const seeded: Record<string, string> = {};
-		for (const field of def?.fields ?? []) {
-			if (field.defaultValue) seeded[field.key] = field.defaultValue;
-		}
-		setFieldValues(seeded);
-		setStep("form");
-	}, []);
+	const pickProvider = useCallback(
+		(key: string) => {
+			// A pending repository inspection must not replace this provider's metadata or type.
+			hfInspectionSequence.current += 1;
+			setInspectingHf(false);
+			setSource("provider");
+			setProviderKey(key);
+			const def = availableProviders.find((provider) => provider.key === key);
+			const seeded: Record<string, string> = {};
+			for (const field of def?.fields ?? []) {
+				if (field.defaultValue) seeded[field.key] = field.defaultValue;
+			}
+			setFieldValues(seeded);
+			setIsVision(false);
+			setClassification({
+				...defaultClassification(),
+				...(def?.key === "microsoft-copilot" ? { function_calling: 0 } : {}),
+			});
+			setDisplayName(def?.fixedModelId ? def.label : "");
+			setStep("form");
+		},
+		[availableProviders],
+	);
 
 	const pickHuggingFace = useCallback(() => {
 		setSource("huggingface");
@@ -1286,18 +1300,11 @@ function AddCustomModelWizard({
 
 			if (!isHf) {
 				if (!providerDef) return;
-				for (const field of providerDef.fields) {
-					const value = fieldValues[field.key]?.trim();
-					if (!value) continue;
-					if (field.secret) {
-						secrets[field.key] = value;
-						continue;
-					}
-					params[field.key] = value;
-					if (field.key === "model_id") modelId = value;
-					if (field.key === "version") version = value;
-				}
-				if (providerDef.isAzure) params.is_azure = true;
+				const connection = providerFieldValues(providerDef, fieldValues);
+				Object.assign(params, connection.params);
+				Object.assign(secrets, connection.secrets);
+				modelId = connection.modelId;
+				version = connection.version;
 			}
 
 			// llama.cpp needs the projector as its own artifact; it rides along in
@@ -1334,7 +1341,10 @@ function AddCustomModelWizard({
 
 			let bit: IBit = {
 				id: existingBit?.id ?? createId(),
-				type: isVision ? IBitTypes.Vlm : IBitTypes.Llm,
+				type:
+					isVision && !(source === "provider" && providerDef?.textOnly)
+						? IBitTypes.Vlm
+						: IBitTypes.Llm,
 				meta: { ...(existingBit?.meta ?? {}), en: meta },
 				parameters: {
 					context_length: Number.parseInt(contextLength, 10),
@@ -1497,8 +1507,8 @@ function AddCustomModelWizard({
 			);
 		if (step === "pick")
 			return t(
-				"bringYourOwnApiKeyOrRunAModelLocallyPrivateToYou",
-				"Bring your own API key or run a model locally. Private to you.",
+				"connectYourProviderAccountOrRunAModelLocallyPrivateToYou",
+				"Connect your provider account or run a model locally. Private to you.",
 			);
 		return source === "huggingface"
 			? localFormat === "mlx"
@@ -1538,6 +1548,7 @@ function AddCustomModelWizard({
 
 				{step === "pick" ? (
 					<SourcePickStep
+						providers={availableProviders}
 						canHostLocal={canHostLocal}
 						canHostLlamaCPP={canHostLlamaCPP}
 						canHostMLX={canHostMLX}
@@ -1548,10 +1559,15 @@ function AddCustomModelWizard({
 					<div className="space-y-6">
 						{source === "provider" && providerDef && (
 							<ProviderConnectionSection
+								key={providerDef.key}
 								def={providerDef}
 								values={fieldValues}
 								onChange={setFieldValue}
 								isEdit={isEdit}
+								canDiscover={canUseNativeProviders}
+								onModelSelected={(name) =>
+									setDisplayName((current) => current || name)
+								}
 							/>
 						)}
 						{source === "huggingface" && (
@@ -1669,6 +1685,7 @@ function AddCustomModelWizard({
 						)}
 
 						<ModelSettingsSection
+							textOnly={source === "provider" && providerDef?.textOnly}
 							contextLength={contextLength}
 							onContextLengthChange={setContextLength}
 							isVision={isVision}
@@ -1781,12 +1798,14 @@ function ProviderTile({
 }
 
 function SourcePickStep({
+	providers,
 	canHostLocal,
 	canHostLlamaCPP,
 	canHostMLX,
 	onPickProvider,
 	onPickHuggingFace,
 }: Readonly<{
+	providers: IProviderDef[];
 	canHostLocal: boolean;
 	canHostLlamaCPP: boolean;
 	canHostMLX: boolean;
@@ -1795,8 +1814,14 @@ function SourcePickStep({
 }>) {
 	const { t } = useTranslation("settings");
 	const [showMore, setShowMore] = useState(false);
-	const primary = useMemo(() => PROVIDERS.filter((p) => p.primary), []);
-	const secondary = useMemo(() => PROVIDERS.filter((p) => !p.primary), []);
+	const primary = useMemo(
+		() => providers.filter((p) => p.primary),
+		[providers],
+	);
+	const secondary = useMemo(
+		() => providers.filter((p) => !p.primary),
+		[providers],
+	);
 
 	return (
 		<div className="space-y-5">
@@ -1804,7 +1829,7 @@ function SourcePickStep({
 				<SectionHeading
 					icon={Plug}
 					label={t("connectAProvider", "Connect a provider")}
-					hint="Use your own API key — requests go directly to the provider."
+					hint="Connect with provider credentials or a supported desktop sign-in."
 				/>
 				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
 					{primary.map((def) => (
@@ -2207,14 +2232,48 @@ function ProviderConnectionSection({
 	values,
 	onChange,
 	isEdit,
+	canDiscover,
+	onModelSelected,
 }: Readonly<{
 	def: IProviderDef;
 	values: Record<string, string>;
 	onChange: (key: string, value: string) => void;
 	isEdit: boolean;
+	canDiscover: boolean;
+	onModelSelected: (name: string) => void;
 }>) {
 	const { t } = useTranslation("settings");
+	const backend = useBackend();
 	const [showAdvanced, setShowAdvanced] = useState(false);
+	const [catalog, setCatalog] = useState<ExternalModelCatalog | null>(null);
+	const [loadingModels, setLoadingModels] = useState(false);
+	const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+	const discoverySequence = useRef(0);
+	useEffect(
+		() => () => {
+			discoverySequence.current += 1;
+		},
+		[],
+	);
+	const discoverModels = async () => {
+		if (!def.discoveryProvider || !backend.bitState.listExternalModels) return;
+		const sequence = ++discoverySequence.current;
+		setLoadingModels(true);
+		setDiscoveryError(null);
+		try {
+			const result = await backend.bitState.listExternalModels(
+				def.discoveryProvider,
+			);
+			if (sequence !== discoverySequence.current) return;
+			setCatalog({ ...result, models: specificExternalModels(result.models) });
+		} catch (error) {
+			if (sequence !== discoverySequence.current) return;
+			setCatalog(null);
+			setDiscoveryError(error instanceof Error ? error.message : String(error));
+		} finally {
+			if (sequence === discoverySequence.current) setLoadingModels(false);
+		}
+	};
 	const basicFields = useMemo(
 		() => def.fields.filter((f) => !f.advanced),
 		[def],
@@ -2234,6 +2293,92 @@ function ProviderConnectionSection({
 					</Badge>
 				)}
 			</div>
+			{canDiscover && def.discoveryProvider && (
+				<div className="space-y-2 rounded-lg border p-3">
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={discoverModels}
+						disabled={loadingModels}
+					>
+						{loadingModels && (
+							<Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+						)}
+						{loadingModels
+							? "Checking local sign-in…"
+							: "Discover models on this device"}
+					</Button>
+					<p className="text-xs text-muted-foreground">
+						{def.discoveryProvider === "codex"
+							? "Uses the installed Codex account for discovery. A supplied access token may have different model access."
+							: "Uses the installed Claude Code account. Sign in with Claude Code before discovering models."}
+					</p>
+					{values.executable?.trim() && (
+						<p className="text-xs text-muted-foreground">
+							Discovery checks the default installation. Enter the model ID
+							manually for a custom executable.
+						</p>
+					)}
+					{catalog && (
+						<output className="block text-xs text-muted-foreground">
+							{!catalog.available
+								? catalog.message ||
+									"The runtime is not installed. You can save the configuration and install it later."
+								: !catalog.authenticated
+									? catalog.message ||
+										"Sign in with the installed runtime, then check again. You can save the configuration now."
+									: catalog.models.length > 0
+										? `${catalog.models.length} models available from the local account.`
+										: "The runtime returned no specific models. Enter a model ID from your account."}
+						</output>
+					)}
+					{discoveryError && (
+						<p role="alert" className="text-xs text-destructive">
+							{discoveryError}
+						</p>
+					)}
+					{!!catalog?.models.length && (
+						<div className="space-y-1.5">
+							<Label htmlFor="discovered-model" className="text-xs">
+								Available models
+							</Label>
+							<select
+								id="discovered-model"
+								className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+								value={
+									catalog.models.some((model) => model.id === values.model_id)
+										? values.model_id
+										: ""
+								}
+								onChange={(event) => {
+									const model = catalog.models.find(
+										(model) => model.id === event.target.value,
+									);
+									if (!model) return;
+									onChange("model_id", model.id);
+									onModelSelected(model.name);
+								}}
+							>
+								<option value="" disabled>
+									Choose a model
+								</option>
+								{catalog.models.map((model) => (
+									<option key={model.id} value={model.id}>
+										{model.name} ({model.id})
+									</option>
+								))}
+							</select>
+						</div>
+					)}
+				</div>
+			)}
+			{def.fixedModelId && (
+				<p className="text-xs text-muted-foreground">
+					Microsoft 365 Copilot selects the underlying model. This connection
+					supports text conversations.
+				</p>
+			)}
 			<div className="space-y-3">
 				{basicFields.map((field) => (
 					<ProviderFieldInput
@@ -2505,11 +2650,13 @@ function ProjectorSection({
 }
 
 function ModelSettingsSection({
+	textOnly,
 	contextLength,
 	onContextLengthChange,
 	isVision,
 	onVisionChange,
 }: Readonly<{
+	textOnly?: boolean;
 	contextLength: string;
 	onContextLengthChange: (value: string) => void;
 	isVision: boolean;
@@ -2552,16 +2699,19 @@ function ModelSettingsSection({
 								{t("supportsVision", "Supports vision")}
 							</Label>
 							<p className="text-xs text-muted-foreground/60">
-								{t(
-									"theModelAcceptsImagesAsInput",
-									"The model accepts images as input",
-								)}
+								{textOnly
+									? "This provider currently accepts text only."
+									: t(
+											"theModelAcceptsImagesAsInput",
+											"The model accepts images as input",
+										)}
 							</p>
 						</div>
 					</div>
 					<Switch
 						id="custom-model-vision"
-						checked={isVision}
+						disabled={textOnly}
+						checked={isVision && !textOnly}
 						onCheckedChange={onVisionChange}
 					/>
 				</div>

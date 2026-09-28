@@ -136,7 +136,7 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 			);
 			apps = apps
 				.filter(([app]) => order.has(app.id))
-				.sort(([a], [b]) => order.get(a.id)! - order.get(b.id)!);
+				.sort(([a], [b]) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 		}
 		if (!remote && source !== "manual") {
 			if (category)

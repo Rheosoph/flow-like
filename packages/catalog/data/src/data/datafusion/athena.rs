@@ -1,4 +1,6 @@
 use crate::data::datafusion::session::DataFusionSession;
+#[cfg(feature = "execute")]
+use crate::data::providers::util::ensure_host_fragment;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -190,6 +192,7 @@ impl NodeLogic for RegisterAthenaNode {
                 .execution_environment()
                 .ensure_no_ambient_credentials("Athena", &credential_mode)?;
         }
+        ensure_host_fragment("Athena", "region", &region)?;
 
         let cached_session = session.load_lazy(context).await?;
 
@@ -485,6 +488,7 @@ impl NodeLogic for MountAthenaQueryNode {
                 .execution_environment()
                 .ensure_no_ambient_credentials("Athena S3", &credential_mode)?;
         }
+        ensure_host_fragment("Athena S3", "region", &region)?;
 
         let cached_session = session.load_lazy(context).await?;
 

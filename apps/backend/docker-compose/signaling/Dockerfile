@@ -9,7 +9,11 @@ COPY apps/backend/signaling/package.json apps/backend/signaling/bun.lock ./
 
 RUN bun install --frozen-lockfile --production
 
-COPY --chown=bun:bun apps/backend/signaling/server.ts apps/backend/signaling/redis.ts apps/backend/signaling/auth.ts apps/backend/signaling/limits.ts ./
+# Every top-level module ships; tests live in tests/ and stay out of the image.
+COPY --chown=bun:bun apps/backend/signaling/*.ts ./
+# Bun resolves static imports only at startup, so a missing module must fail here.
+RUN bun build ./server.ts --target=bun --packages=external --outfile=/tmp/signaling-resolve-check.js && \
+    rm /tmp/signaling-resolve-check.js
 
 ENV NODE_ENV=production \
     PORT=4444 \

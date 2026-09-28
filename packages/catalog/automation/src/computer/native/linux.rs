@@ -1,5 +1,7 @@
 use super::*;
-use crate::computer::accessibility::AccessibilityBounds;
+use crate::computer::accessibility::{
+    AccessibilityBounds, atspi_state_names, normalize_action, normalize_role,
+};
 use atspi::{AccessibilityConnection, ObjectRef, zbus};
 
 async fn proxy<'a>(
@@ -23,18 +25,57 @@ fn walk<'a>(
         let role: String = accessible.call("GetRoleName", &()).await?;
         let name: Option<String> = accessible.get_property("Name").await.ok();
         let description: Option<String> = accessible.get_property("Description").await.ok();
-        let component = proxy(connection, &bus, &path, "org.a11y.atspi.Component").await?;
-        let bounds: Option<(i32, i32, i32, i32)> =
-            component.call("GetExtents", &(0u32,)).await.ok();
-        let action = proxy(connection, &bus, &path, "org.a11y.atspi.Action").await?;
-        let actions: Vec<(String, String, String)> =
-            action.call("GetActions", &()).await.unwrap_or_default();
+        let interfaces: Vec<String> = accessible
+            .call("GetInterfaces", &())
+            .await
+            .unwrap_or_default();
+        let offers = |interface: &str| {
+            interfaces.is_empty() || interfaces.iter().any(|name| name == interface)
+        };
+        let bounds: Option<(i32, i32, i32, i32)> = if offers("org.a11y.atspi.Component") {
+            let component = proxy(connection, &bus, &path, "org.a11y.atspi.Component").await?;
+            component.call("GetExtents", &(0u32,)).await.ok()
+        } else {
+            None
+        };
+        let actions: Vec<(String, String, String)> = if offers("org.a11y.atspi.Action") {
+            let action = proxy(connection, &bus, &path, "org.a11y.atspi.Action").await?;
+            action.call("GetActions", &()).await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let states: Vec<u32> = accessible.call("GetState", &()).await.unwrap_or_default();
+        let states = atspi_state_names(&states);
+        let value = if role == "password text" {
+            None
+        } else if interfaces.iter().any(|name| name == "org.a11y.atspi.Value") {
+            let value = proxy(connection, &bus, &path, "org.a11y.atspi.Value").await?;
+            value
+                .get_property::<f64>("CurrentValue")
+                .await
+                .ok()
+                .filter(|number| number.is_finite())
+                .map(|number| number.to_string())
+        } else if interfaces.iter().any(|name| name == "org.a11y.atspi.Text")
+            && (matches!(
+                normalize_role(&role),
+                "text_field" | "combo_box" | "spin_button"
+            ) || states.iter().any(|state| state == "editable"))
+        {
+            let text = proxy(connection, &bus, &path, "org.a11y.atspi.Text").await?;
+            let length: i32 = text.get_property("CharacterCount").await.unwrap_or(0);
+            let contents: Option<String> = text
+                .call("GetText", &(0i32, length.clamp(0, 2000)))
+                .await
+                .ok();
+            contents
+        } else {
+            None
+        };
         let mut node = AccessibilityNode {
-            native_id: None,
             role,
             name,
-            value: None,
+            value,
             description,
             bounds: bounds.map(|(x, y, width, height)| AccessibilityBounds {
                 x,
@@ -42,9 +83,9 @@ fn walk<'a>(
                 width,
                 height,
             }),
-            states: states.iter().map(|s| format!("bits:{s:08x}")).collect(),
+            states,
             actions: actions.into_iter().map(|a| a.0).collect(),
-            children: vec![],
+            ..Default::default()
         };
         identify(&mut node, &format!("atspi:{bus}|{path}"), vec![]);
         if depth > 0 {
@@ -196,12 +237,24 @@ pub async fn action(
             let available: Vec<(String, String, String)> = actions.call("GetActions", &()).await?;
             let index = available
                 .iter()
-                .position(|a| {
-                    a.0.eq_ignore_ascii_case(action)
-                        || (action == "invoke"
-                            && ["click", "press", "activate"].contains(&a.0.as_str()))
+                .position(|a| a.0.eq_ignore_ascii_case(action))
+                .or_else(|| {
+                    available
+                        .iter()
+                        .position(|a| normalize_action(&a.0) == Some(action))
                 })
-                .ok_or_else(|| anyhow!("Element does not offer action {}", action))?;
+                .or_else(|| (action == "invoke" && !available.is_empty()).then_some(0))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Element does not offer action {} (available: {})",
+                        action,
+                        available
+                            .iter()
+                            .map(|a| a.0.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })?;
             actions.call("DoAction", &(index as i32,)).await?
         }
     };

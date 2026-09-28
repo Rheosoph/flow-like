@@ -1,5 +1,5 @@
 use flow_like::flow::{
-    execution::context::ExecutionContext,
+    execution::{context::ExecutionContext, egress::GuardedHttpClient},
     node::{Node, NodeLogic},
     variable::VariableType,
 };
@@ -70,7 +70,9 @@ impl NodeLogic for ReadImageFromUrlNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
         let signed_url: String = context.evaluate_pin("signed_url").await?;
-        let bytes = flow_like_types::reqwest::get(&signed_url)
+        let bytes = GuardedHttpClient::new(context.execution_environment())?
+            .get(&signed_url)?
+            .send()
             .await
             .map_err(flow_like_types::reqwest::Error::without_url)?
             .bytes()

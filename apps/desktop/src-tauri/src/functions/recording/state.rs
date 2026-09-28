@@ -82,6 +82,9 @@ pub enum ActionType {
     },
     KeyType {
         text: String,
+        /// Typed into a password field: `text` stays empty and replay needs a connected secret.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        secure: bool,
     },
     KeyPress {
         key: String,
@@ -104,7 +107,19 @@ pub enum ActionType {
     Paste {
         /// The text content that was pasted
         clipboard_content: Option<String>,
+        /// Pasted into a password field: the clipboard content was discarded.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        secure: bool,
     },
+}
+
+impl ActionType {
+    pub fn is_secure_input(&self) -> bool {
+        matches!(
+            self,
+            Self::KeyType { secure: true, .. } | Self::Paste { secure: true, .. }
+        )
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -306,13 +321,47 @@ pub struct RecordingStateInner {
     completed_actions: HashMap<RecordingOwner, Vec<RecordedAction>>,
     owner: Option<RecordingOwner>,
     keystroke_buffer: String,
+    keystroke_secure: bool,
     last_keystroke_time: Option<DateTime<Utc>>,
     first_keystroke_time: Option<DateTime<Utc>>,
 }
 
+const SECURE_KEYSTROKE: char = '\u{2022}';
+
 impl RecordingStateInner {
     pub fn keystroke_buffer_len(&self) -> usize {
         self.keystroke_buffer.len()
+    }
+
+    /// Whether the pending keystrokes target a password field; `None` when nothing is buffered.
+    pub fn typing_secure(&self) -> Option<bool> {
+        (!self.keystroke_buffer.is_empty()).then_some(self.keystroke_secure)
+    }
+
+    /// Switch between password and plain typing, flushing keystrokes buffered in the other mode.
+    pub fn set_keystroke_secure(&mut self, secure: bool) -> Option<RecordedAction> {
+        if self.keystroke_secure == secure {
+            return None;
+        }
+        let flushed = self.flush_keystroke_buffer();
+        self.keystroke_secure = secure;
+        flushed
+    }
+
+    pub fn last_is_secure_input(&self) -> bool {
+        self.session
+            .as_ref()
+            .and_then(|session| session.actions.last())
+            .is_some_and(|action| action.action_type.is_secure_input())
+    }
+
+    /// The user is still entering a password: edits there are part of the secret, not steps.
+    pub fn in_secure_entry(&self) -> bool {
+        if self.keystroke_buffer.is_empty() {
+            self.last_is_secure_input()
+        } else {
+            self.keystroke_secure
+        }
     }
 }
 
@@ -324,6 +373,7 @@ impl Default for RecordingStateInner {
             completed_actions: HashMap::new(),
             owner: None,
             keystroke_buffer: String::new(),
+            keystroke_secure: false,
             last_keystroke_time: None,
             first_keystroke_time: None,
         }
@@ -474,6 +524,7 @@ impl RecordingStateInner {
         self.session = Some(session);
         self.status = RecordingStatus::Recording;
         self.keystroke_buffer.clear();
+        self.keystroke_secure = false;
         self.last_keystroke_time = None;
         self.first_keystroke_time = None;
 
@@ -585,14 +636,17 @@ impl RecordingStateInner {
         }
     }
 
+    /// Password keystrokes are always aggregated and only counted, never stored.
     pub fn buffer_keystroke_at(&mut self, ch: char, timestamp: DateTime<Utc>) {
-        if let Some(session) = &self.session
+        if !self.keystroke_secure
+            && let Some(session) = &self.session
             && !session.settings.aggregate_keystrokes
         {
             let mut action = RecordedAction::new(
                 flow_like_types::create_id(),
                 ActionType::KeyType {
                     text: ch.to_string(),
+                    secure: false,
                 },
             );
             action.timestamp = timestamp;
@@ -605,19 +659,38 @@ impl RecordingStateInner {
         if self.keystroke_buffer.is_empty() {
             self.first_keystroke_time = Some(timestamp);
         }
-        self.keystroke_buffer.push(ch);
+        self.keystroke_buffer.push(if self.keystroke_secure {
+            SECURE_KEYSTROKE
+        } else {
+            ch
+        });
         self.last_keystroke_time = Some(timestamp);
     }
 
+    /// A password entry interrupted by a typing pause continues the previous secret step.
     pub fn flush_keystroke_buffer(&mut self) -> Option<RecordedAction> {
         if self.keystroke_buffer.is_empty() {
             return None;
         }
 
         let text = std::mem::take(&mut self.keystroke_buffer);
-        let mut action =
-            RecordedAction::new(flow_like_types::create_id(), ActionType::KeyType { text });
-        if let Some(timestamp) = self.first_keystroke_time.take() {
+        let first_keystroke_time = self.first_keystroke_time.take();
+        if self.keystroke_secure && self.last_is_secure_input() {
+            return None;
+        }
+        let action_type = if self.keystroke_secure {
+            ActionType::KeyType {
+                text: String::new(),
+                secure: true,
+            }
+        } else {
+            ActionType::KeyType {
+                text,
+                secure: false,
+            }
+        };
+        let mut action = RecordedAction::new(flow_like_types::create_id(), action_type);
+        if let Some(timestamp) = first_keystroke_time {
             action.timestamp = timestamp;
         }
 
@@ -896,12 +969,56 @@ mod tests {
         assert_eq!(state.status, RecordingStatus::Idle);
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].timestamp, typed_at);
-        assert!(matches!(&actions[0].action_type, ActionType::KeyType { text } if text == "é文"));
+        assert!(
+            matches!(&actions[0].action_type, ActionType::KeyType { text, secure: false } if text == "é文")
+        );
         assert_eq!(
             state
                 .actions_for_context("profile-and-hub", Some("app"), Some("board"))
                 .len(),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn password_typing_is_never_stored_and_one_entry_stays_one_step() {
+        let mut state = started().await;
+        state.buffer_keystroke_at('u', Utc::now());
+        let plain = state.set_keystroke_secure(true).unwrap();
+        assert!(
+            matches!(&plain.action_type, ActionType::KeyType { text, secure: false } if text == "u")
+        );
+        for ch in "hunter".chars() {
+            state.buffer_keystroke_at(ch, Utc::now());
+        }
+        assert_eq!(state.typing_secure(), Some(true));
+        let secret = state.flush_keystroke_buffer().unwrap();
+        assert!(
+            matches!(&secret.action_type, ActionType::KeyType { text, secure: true } if text.is_empty())
+        );
+        assert!(state.in_secure_entry());
+        state.buffer_keystroke_at('Ω', Utc::now());
+        assert!(state.flush_keystroke_buffer().is_none());
+        assert!(state.set_keystroke_secure(false).is_none());
+        let actions = state.stop().await.unwrap();
+        assert_eq!(actions.len(), 2);
+        let serialized = serde_json::to_string(&actions).unwrap();
+        assert!(!serialized.contains("hunter") && !serialized.contains('Ω'));
+        assert!(!serialized.contains(SECURE_KEYSTROKE));
+        assert!(serialized.contains(r#""secure":true"#));
+    }
+
+    #[test]
+    fn secure_markers_are_optional_and_omitted_for_plain_input() {
+        let legacy: ActionType =
+            serde_json::from_value(serde_json::json!({"KeyType":{"text":"a"}})).unwrap();
+        assert!(matches!(legacy, ActionType::KeyType { secure: false, .. }));
+        let paste: ActionType =
+            serde_json::from_value(serde_json::json!({"Paste":{"clipboard_content":"a"}})).unwrap();
+        assert!(matches!(paste, ActionType::Paste { secure: false, .. }));
+        assert_eq!(
+            serde_json::to_value(&legacy).unwrap(),
+            serde_json::json!({"KeyType":{"text":"a"}})
         );
     }
 

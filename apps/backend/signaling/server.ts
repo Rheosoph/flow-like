@@ -1,23 +1,40 @@
 #!/usr/bin/env bun
-import { randomUUID } from "crypto";
+import { randomUUID } from "node:crypto";
 import { type ServerWebSocket, serve } from "bun";
 import {
 	REALTIME_PROTOCOL,
+	type RealtimeAuthorization,
 	createRealtimeAuthenticator,
 	parseRealtimeAuthConfig,
 } from "./auth";
-import { createDeviceAuthenticator } from "./device-auth";
+import {
+	type DeviceTransportAdmission,
+	createDeviceAuthenticator,
+} from "./device-auth";
 import {
 	DEVICE_SIGNALING_PROTOCOL,
 	DEVICE_TOPIC_PREFIX,
-	type DeviceAdmission,
 	type DeviceFanout,
 	MAX_DEVICE_FRAME_BYTES,
+	type RelayedDeviceFrame,
 	deviceInbox,
 	parseDeviceFanout,
 	relayDeviceFrame,
+	replicaIdentifier,
 } from "./device-frames";
-import { ConnectionRateLimiter } from "./limits";
+import {
+	CONTROLLER_OUTBOX_LIMITS,
+	ConnectionRateLimiter,
+	ConnectionSlots,
+	DEVICE_OUTBOX_LIMITS,
+	DiscardCounter,
+	FrameBudgets,
+	ManagementOutbox,
+	SenderShares,
+	connectionSlotsFor,
+	managementFrameBudgets,
+	soleAccount,
+} from "./limits";
 import {
 	type SignalRedisClient,
 	attachRedisLifecycleLogging,
@@ -34,7 +51,7 @@ const REDIS_CONFIG = FANOUT.mode === "redis" ? FANOUT.redis : null;
 const CHANNEL = process.env.SIGNAL_CHANNEL || "signal:publish";
 const DEVICE_CHANNEL = `${CHANNEL}:device-management:v1`;
 const PRESENCE_PREFIX = "topic:presence:";
-const NODE_ID = process.env.NODE_ID || randomUUID();
+const NODE_ID = replicaIdentifier(process.env.NODE_ID, randomUUID);
 const AUTH_CONFIG = parseRealtimeAuthConfig();
 const authorizeUpgrade = await createRealtimeAuthenticator(AUTH_CONFIG);
 const authorizeDeviceUpgrade = await createDeviceAuthenticator(AUTH_CONFIG);
@@ -58,14 +75,7 @@ function parseConnectionsPerSubject(raw: string | undefined): number {
 const MAX_CONNECTIONS_PER_SUB = parseConnectionsPerSubject(
 	process.env.REALTIME_MAX_CONNECTIONS_PER_SUB,
 );
-const liveConnectionsPerSubject = new Map<string, number>();
-
-function releaseSubjectConnection(subject: string) {
-	const live = liveConnectionsPerSubject.get(subject);
-	if (live === undefined) return;
-	if (live <= 1) liveConnectionsPerSubject.delete(subject);
-	else liveConnectionsPerSubject.set(subject, live - 1);
-}
+const connectionSlots = new ConnectionSlots();
 
 // -------------------- Redis ---------------------
 // In `local` fan-out mode no client is constructed, so nothing is dialled.
@@ -133,13 +143,21 @@ function onSubMessage(raw: string, ch: string) {
 		return;
 	}
 	if (ch === DEVICE_CHANNEL) {
+		let relayed: ReturnType<typeof parseDeviceFanout>;
 		try {
-			const relayed = parseDeviceFanout(raw);
-			if (relayed.origin !== NODE_ID && fanoutIsReady())
-				server.publish(relayed.topic, JSON.stringify(relayed.frame));
+			relayed = parseDeviceFanout(raw);
 		} catch {
 			// Opaque frames and their credentials never enter diagnostics.
+			discardedFrames.add("invalid-fanout-envelope");
+			return;
 		}
+		if (relayed.origin !== NODE_ID && fanoutIsReady())
+			deliverManagementFrame(
+				relayed.topic,
+				JSON.stringify(relayed.frame),
+				`participant:${relayed.frame.from}`,
+				null,
+			);
 		return;
 	}
 	try {
@@ -308,18 +326,27 @@ function inc(topic: string, delta: 1 | -1) {
 
 // -------------------- WebSocket server ----------
 type WSData = {
-	management: DeviceAdmission | null;
-	managementInFlight: number;
+	management: DeviceTransportAdmission | null;
+	outbox: ManagementOutbox | null;
+	senderShares: SenderShares | null;
 	subscribed: Set<string>;
 	allowedTopic: string | null;
-	subject: string | null;
+	slots: string[];
 	insecureLocalDev: boolean;
 	expiresAtMs: number | null;
 	expiryTimer: ReturnType<typeof setTimeout> | null;
 	rateLimiter: ConnectionRateLimiter;
 };
-const managementSockets = new Set<ServerWebSocket<WSData>>();
+type Socket = ServerWebSocket<WSData>;
+const managementSockets = new Set<Socket>();
+const managementInboxes = new Map<string, Set<Socket>>();
+const deviceSockets = new Map<string, Socket>();
+const frameBudgets = new FrameBudgets();
+const discardedFrames = new DiscardCounter();
 const MAX_MANAGEMENT_CONNECTIONS = 2_000;
+// Kept below the transport's close-on-backpressure limit so a congested device
+// socket is never closed; the frame that would overflow it is refused instead.
+const MANAGEMENT_SEND_BUFFER_BYTES = 512 * 1024;
 
 function closeForPolicy(ws: { close(code?: number, reason?: string): void }) {
 	ws.close(1008, "Policy violation");
@@ -341,6 +368,156 @@ function noStoreResponse(body: string, status: number, extraHeaders = {}) {
 			...extraHeaders,
 		},
 	});
+}
+
+/** Only this replica's controller sockets reveal a participant's account. */
+function targetAccount(
+	admission: DeviceTransportAdmission,
+	target: string,
+): string | null {
+	if (admission.role !== "device") return null;
+	const inbox = deviceInbox({
+		...admission,
+		role: "controller",
+		participantId: target,
+	});
+	return soleAccount(
+		Array.from(
+			managementInboxes.get(inbox) ?? [],
+			(socket) => socket.data.management?.subject,
+		),
+	);
+}
+
+/**
+ * Local delivery. A congested device keeps its socket and the frame is refused;
+ * its sender is closed only when it is among those filling the device's buffer.
+ */
+function deliverManagementFrame(
+	topic: string,
+	text: string,
+	contributor: string,
+	sender: Socket | null,
+) {
+	for (const recipient of managementInboxes.get(topic) ?? []) {
+		if (
+			recipient.getBufferedAmount() + text.length <=
+			MANAGEMENT_SEND_BUFFER_BYTES
+		) {
+			recipient.send(text);
+			recipient.data.senderShares?.add(contributor, text.length);
+			continue;
+		}
+		if (recipient.data.management?.role === "device") {
+			const flooding =
+				sender?.data.management?.role === "controller" &&
+				recipient.data.senderShares?.isTopContributor(contributor) === true;
+			discardedFrames.add(
+				flooding ? "device-congested-sender-closed" : "device-congested",
+			);
+			if (flooding) sender?.close(1013, "Device transport is congested");
+		} else {
+			discardedFrames.add("controller-congested");
+			recipient.close(1013, "Management transport is congested");
+		}
+	}
+}
+
+async function relayManagementFrame(
+	ws: Socket,
+	routed: { topic: string; frame: RelayedDeviceFrame },
+	text: string,
+) {
+	const admission = ws.data.management;
+	if (!admission) return;
+	try {
+		if (Date.now() >= admission.expiresAtMs) {
+			closeForPolicy(ws);
+			return;
+		}
+		// No delivery acknowledgement or server replay. Endpoints correlate
+		// encrypted requests and establish fresh sessions after reconnect.
+		if (pub) {
+			const envelope: DeviceFanout = {
+				type: "device-frame",
+				device_id: admission.deviceId,
+				device_auth_epoch: admission.deviceAuthEpoch,
+				expires_at_ms: Math.min(admission.expiresAtMs, Date.now() + 10_000),
+				_origin: NODE_ID,
+				frame: routed.frame,
+			};
+			await withDeadline(
+				pub.publish(DEVICE_CHANNEL, JSON.stringify(envelope)),
+				3_000,
+				"Device signaling fanout",
+			);
+		}
+		if (Date.now() >= admission.expiresAtMs) {
+			closeForPolicy(ws);
+			return;
+		}
+		if (!fanoutIsReady()) {
+			ws.close(1013, "Signaling temporarily unavailable");
+			return;
+		}
+		deliverManagementFrame(
+			routed.topic,
+			text,
+			`account:${admission.subject}`,
+			ws,
+		);
+	} catch {
+		ws.close(1013, "Signaling temporarily unavailable");
+	}
+}
+
+/** A device renewing its socket replaces the old one, so it is admitted at capacity. */
+function hasManagementCapacity(admission: DeviceTransportAdmission): boolean {
+	return (
+		managementSockets.size < MAX_MANAGEMENT_CONNECTIONS ||
+		(admission.role === "device" && deviceSockets.has(deviceInbox(admission)))
+	);
+}
+
+function openManagement(ws: Socket, admission: DeviceTransportAdmission) {
+	managementSockets.add(ws);
+	const inbox = deviceInbox(admission);
+	const members = managementInboxes.get(inbox) ?? new Set<Socket>();
+	members.add(ws);
+	managementInboxes.set(inbox, members);
+	ws.data.subscribed.add(inbox);
+	ws.data.outbox = new ManagementOutbox(
+		(frame, now) =>
+			frameBudgets.reserve(
+				managementFrameBudgets(
+					admission,
+					frame.target,
+					targetAccount(admission, frame.target),
+				),
+				frame.bytes,
+				now,
+			),
+		admission.role === "device"
+			? DEVICE_OUTBOX_LIMITS
+			: CONTROLLER_OUTBOX_LIMITS,
+	);
+	if (admission.role === "device") {
+		ws.data.senderShares = new SenderShares();
+		const replaced = deviceSockets.get(inbox);
+		deviceSockets.set(inbox, ws);
+		replaced?.close(4000, "Replaced by a newer device connection");
+	}
+}
+
+function closeManagement(ws: Socket) {
+	managementSockets.delete(ws);
+	ws.data.outbox?.close();
+	for (const inbox of ws.data.subscribed) {
+		const members = managementInboxes.get(inbox);
+		members?.delete(ws);
+		if (members?.size === 0) managementInboxes.delete(inbox);
+		if (deviceSockets.get(inbox) === ws) deviceSockets.delete(inbox);
+	}
 }
 
 const server = serve<WSData>({
@@ -381,14 +558,11 @@ const server = serve<WSData>({
 				});
 			}
 			const deviceRoute = pathname === "/ws/devices";
-			let management: DeviceAdmission | null = null;
-			let authorization;
+			let management: DeviceTransportAdmission | null = null;
+			let authorization: RealtimeAuthorization;
 			try {
 				if (deviceRoute) {
-					if (
-						new URL(req.url).search ||
-						managementSockets.size >= MAX_MANAGEMENT_CONNECTIONS
-					)
+					if (new URL(req.url).search)
 						return noStoreResponse("Service Unavailable", 503, {
 							"Retry-After": "5",
 						});
@@ -396,6 +570,10 @@ const server = serve<WSData>({
 						req.headers.get("origin"),
 						req.headers.get("sec-websocket-protocol"),
 					);
+					if (!hasManagementCapacity(management))
+						return noStoreResponse("Service Unavailable", 503, {
+							"Retry-After": "5",
+						});
 					authorization = {
 						allowedTopic: null,
 						subject: `device-signaling:${management.deviceId}:${management.role}:${management.subject}`,
@@ -411,24 +589,26 @@ const server = serve<WSData>({
 				return noStoreResponse("Unauthorized", 401);
 			}
 
-			const subject = authorization.subject;
-			if (subject !== null) {
-				const live = liveConnectionsPerSubject.get(subject) ?? 0;
-				if (live >= MAX_CONNECTIONS_PER_SUB) {
-					return noStoreResponse("Too Many Requests", 429, {
-						"Retry-After": "5",
-					});
-				}
-				liveConnectionsPerSubject.set(subject, live + 1);
+			const slots = connectionSlotsFor(
+				authorization.subject,
+				MAX_CONNECTIONS_PER_SUB,
+				management,
+			);
+			if (!connectionSlots.acquire(slots)) {
+				return noStoreResponse("Too Many Requests", 429, {
+					"Retry-After": "5",
+				});
 			}
+			const slotKeys = slots.map(([key]) => key);
 
 			const ok = s.upgrade(req, {
 				data: {
 					management,
-					managementInFlight: 0,
+					outbox: null,
+					senderShares: null,
 					subscribed: new Set<string>(),
 					allowedTopic: authorization.allowedTopic,
-					subject,
+					slots: slotKeys,
 					insecureLocalDev: authorization.insecureLocalDev,
 					expiresAtMs: authorization.expiresAtMs,
 					expiryTimer: null,
@@ -443,7 +623,7 @@ const server = serve<WSData>({
 						},
 			});
 			if (ok) return undefined;
-			if (subject !== null) releaseSubjectConnection(subject);
+			connectionSlots.release(slotKeys);
 			return noStoreResponse("Upgrade failed", 426, { Upgrade: "websocket" });
 		}
 		return noStoreResponse("Not Found", 404);
@@ -468,17 +648,11 @@ const server = serve<WSData>({
 				}, remaining);
 			}
 			if (ws.data.management) {
-				if (
-					!fanoutIsReady() ||
-					managementSockets.size >= MAX_MANAGEMENT_CONNECTIONS
-				) {
+				if (!fanoutIsReady() || !hasManagementCapacity(ws.data.management)) {
 					ws.close(1013, "Signaling temporarily unavailable");
 					return;
 				}
-				managementSockets.add(ws);
-				const topic = deviceInbox(ws.data.management);
-				ws.subscribe(topic);
-				ws.data.subscribed.add(topic);
+				openManagement(ws, ws.data.management);
 				ws.send(
 					JSON.stringify({
 						type: "ready",
@@ -498,7 +672,12 @@ const server = serve<WSData>({
 				ws.close(1009, "Message too large");
 				return;
 			}
-			let msg: any;
+			let msg: {
+				type?: unknown;
+				topics?: unknown;
+				topic?: unknown;
+				data?: unknown;
+			};
 			try {
 				msg = JSON.parse(
 					typeof data === "string" ? data : Buffer.from(data).toString("utf8"),
@@ -515,20 +694,18 @@ const server = serve<WSData>({
 				closeForPolicy(ws);
 				return;
 			}
-			if (
-				!ws.data.rateLimiter.consume(
-					msg.type === "publish" || msg.type === "frame",
-				)
-			) {
-				ws.close(1013, "Rate limit exceeded");
-				return;
-			}
-			if (ws.data.management) {
-				if (!fanoutIsReady()) {
+			const management = ws.data.management;
+			if (management) {
+				const outbox = ws.data.outbox;
+				if (!outbox || !fanoutIsReady()) {
 					ws.close(1013, "Signaling temporarily unavailable");
 					return;
 				}
 				if (msg.type === "ping" && Object.keys(msg).length === 1) {
+					if (!ws.data.rateLimiter.consume(false)) {
+						ws.close(1013, "Rate limit exceeded");
+						return;
+					}
 					ws.send(JSON.stringify({ type: "pong" }));
 					return;
 				}
@@ -540,53 +717,36 @@ const server = serve<WSData>({
 					ws.close(1009, "Management frame too large");
 					return;
 				}
-				if (ws.data.managementInFlight >= 16) {
-					ws.close(1013, "Too many pending frames");
-					return;
-				}
-				let routed;
+				let routed: { topic: string; frame: RelayedDeviceFrame };
 				try {
-					routed = relayDeviceFrame(ws.data.management, msg);
+					routed = relayDeviceFrame(management, msg);
 				} catch {
 					closeForPolicy(ws);
 					return;
 				}
-				ws.data.managementInFlight++;
-				try {
-					// No delivery acknowledgement or server replay. Endpoints correlate
-					// encrypted requests and establish fresh sessions after reconnect.
-					if (pub) {
-						const envelope: DeviceFanout = {
-							type: "device-frame",
-							device_id: ws.data.management.deviceId,
-							device_auth_epoch: ws.data.management.deviceAuthEpoch,
-							expires_at_ms: Math.min(
-								ws.data.management.expiresAtMs,
-								Date.now() + 10_000,
-							),
-							_origin: NODE_ID,
-							frame: routed.frame,
-						};
-						await withDeadline(
-							pub.publish(DEVICE_CHANNEL, JSON.stringify(envelope)),
-							3_000,
-							"Device signaling fanout",
-						);
-					}
-					if (Date.now() >= ws.data.management.expiresAtMs) {
-						closeForPolicy(ws);
-						return;
-					}
-					if (!fanoutIsReady()) {
-						ws.close(1013, "Signaling temporarily unavailable");
-						return;
-					}
-					ws.publish(routed.topic, JSON.stringify(routed.frame));
-				} catch {
-					ws.close(1013, "Signaling temporarily unavailable");
-				} finally {
-					ws.data.managementInFlight--;
+				const text = JSON.stringify(routed.frame);
+				// Over-budget frames wait in order instead of closing the socket.
+				if (
+					!outbox.enqueue({
+						target: routed.frame.to,
+						bytes: text.length,
+						deliver: () => relayManagementFrame(ws, routed, text),
+					})
+				) {
+					// A device socket carries every controller's session, so only
+					// the flooded participant loses this frame.
+					if (management.role === "device")
+						discardedFrames.add("device-outbox-full");
+					else ws.close(1013, "Too many pending frames");
 				}
+				return;
+			}
+			if (
+				!ws.data.rateLimiter.consume(
+					msg.type === "publish" || msg.type === "frame",
+				)
+			) {
+				ws.close(1013, "Rate limit exceeded");
 				return;
 			}
 
@@ -678,13 +838,10 @@ const server = serve<WSData>({
 		},
 
 		close(ws) {
-			managementSockets.delete(ws);
 			if (ws.data.expiryTimer !== null) clearTimeout(ws.data.expiryTimer);
-			if (ws.data.subject !== null) releaseSubjectConnection(ws.data.subject);
-			// remove from all topics
-			for (const t of ws.data.subscribed) {
-				if (!ws.data.management) inc(t, -1);
-			}
+			connectionSlots.release(ws.data.slots);
+			if (ws.data.management) closeManagement(ws);
+			else for (const t of ws.data.subscribed) inc(t, -1);
 			ws.data.subscribed.clear();
 		},
 	},
@@ -696,6 +853,13 @@ const managementReadinessTimer = setInterval(() => {
 		for (const socket of managementSockets)
 			socket.close(1013, "Signaling temporarily unavailable");
 }, 1_000);
+
+const managementMaintenanceTimer = setInterval(() => {
+	frameBudgets.sweep();
+	const discarded = discardedFrames.drain();
+	if (discarded)
+		console.warn(`[Device] Discarded management frames: ${discarded}`);
+}, 30_000);
 
 // The process is live (and /health green) as soon as it listens; fan-out
 // readiness is reported separately once Redis is up.
@@ -716,6 +880,7 @@ initializeFanout()
 // Graceful shutdown
 async function shutdown() {
 	clearInterval(managementReadinessTimer);
+	clearInterval(managementMaintenanceTimer);
 	console.log("[Shutdown] Closing server…");
 	server.stop?.();
 	// drop presence for all topics owned by this node

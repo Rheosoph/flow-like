@@ -80,7 +80,7 @@ impl Fixture {
             cancel.cancel();
             result
         };
-        let (supervised, observed) = tokio::time::timeout(Duration::from_secs(15), async {
+        let (supervised, observed) = tokio::time::timeout(Duration::from_secs(30), async {
             tokio::join!(
                 supervisor::run(self.directory.path(), &self.program, cancel.clone()),
                 observe
@@ -93,8 +93,16 @@ impl Fixture {
     }
 }
 
-async fn wait_for(label: &'static str, mut predicate: impl FnMut() -> Result<bool>) -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(8), async {
+async fn wait_for(label: &'static str, predicate: impl FnMut() -> Result<bool>) -> Result<()> {
+    wait_for_within(label, Duration::from_secs(8), predicate).await
+}
+
+async fn wait_for_within(
+    label: &'static str,
+    timeout: Duration,
+    mut predicate: impl FnMut() -> Result<bool>,
+) -> Result<()> {
+    tokio::time::timeout(timeout, async {
         loop {
             if predicate()? {
                 return Ok(());
@@ -469,4 +477,96 @@ exec /bin/sleep 30
         .await?;
     assert_eq!(store.get_placement("service")?.unwrap().running_replicas, 0);
     Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn locked_state_store_is_retried_without_restarting_the_agent() -> Result<()> {
+    let fixture = Fixture::new(PERSISTENT_WORKLOAD, DesiredState::Running)?;
+    let store = fixture.store()?;
+    let database = fixture.directory.path().join("management.sqlite");
+    let state_dir = fixture.directory.path().to_path_buf();
+    fixture
+        .supervise_until(async {
+            wait_for("first workload", || {
+                Ok(fixture.starts()? == 1
+                    && store
+                        .get_placement("service")?
+                        .unwrap()
+                        .process_id
+                        .is_some())
+            })
+            .await?;
+            let pid = store
+                .get_placement("service")?
+                .unwrap()
+                .process_id
+                .context("workload PID")?;
+            let starts = state_dir.join("starts");
+            // The supervisor's SQLite calls block its thread for the busy timeout,
+            // so the lock holder runs on a blocking-pool thread.
+            tokio::task::spawn_blocking(move || -> Result<()> {
+                let writer = rusqlite::Connection::open(&database)?;
+                writer.execute_batch("BEGIN IMMEDIATE")?;
+                // Signal zero checked above that this PID is the fixture's live worker.
+                ensure!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) } == 0);
+                // The exit observation waits out the 5 second busy timeout and fails.
+                std::thread::sleep(Duration::from_millis(6500));
+                ensure!(
+                    supervisor::agent_is_running(&state_dir)?,
+                    "a locked state store stopped the supervisor"
+                );
+                ensure!(std::fs::read_to_string(&starts)?.lines().count() == 1);
+                writer.execute_batch("ROLLBACK")?;
+                Ok(())
+            })
+            .await??;
+            wait_for("restart after the store unlocked", || {
+                let record = store.get_placement("service")?.unwrap();
+                Ok(fixture.starts()? == 2 && record.process_id.is_some_and(|next| next != pid))
+            })
+            .await?;
+            ensure!(
+                store.get_placement("service")?.unwrap().replicas[0]
+                    .last_error
+                    .is_none()
+            );
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn worker_that_loses_its_broker_channel_is_failed_visibly_and_restarted() -> Result<()> {
+    let fixture = Fixture::new(
+        "#!/bin/sh\nprintf '%s\\n' \"$$\" >> \"$2/starts\"\nexec 3<&-\nexec /bin/sleep 30\n",
+        DesiredState::Running,
+    )?;
+    let store = fixture.store()?;
+    fixture
+        .supervise_until(async {
+            // Each start waits out the broker-close grace before it counts as a loss.
+            wait_for_within(
+                "broker failure restart limit",
+                Duration::from_secs(20),
+                || {
+                    Ok(store.get_placement("service")?.unwrap().observed_state
+                        == ObservedState::Failed)
+                },
+            )
+            .await?;
+            let record = store.get_placement("service")?.unwrap();
+            ensure!(fixture.starts()? == 2, "worker was not restarted once");
+            ensure!(record.process_id.is_none());
+            ensure!(
+                record
+                    .last_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("broker channel closed")),
+                "{:?}",
+                record.last_error
+            );
+            ensure!(supervisor::agent_is_running(fixture.directory.path())?);
+            Ok(())
+        })
+        .await
 }

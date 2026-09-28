@@ -175,6 +175,10 @@ pub struct OutboxStatus {
     pub oldest_at: Option<i64>,
     pub head: Option<QueuedOperation>,
     pub mirror_error: Option<String>,
+    /// The oldest operation behind the head that needs an operator, such as one whose
+    /// local table view could not be updated. No payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<QueuedOperation>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -263,6 +267,7 @@ fn summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<OperationSummary> {
 const SELECT_SUMMARY: &str = "SELECT sequence,operation_id,resource,json_extract(CAST(payload AS TEXT),'$.mutation.kind'),state,attempts,created_at,bytes,error,error_code FROM operations";
 const LANE_HEADS: &str = "sequence IN (SELECT MIN(sequence) FROM operations WHERE state NOT IN ('applied','skipped','superseded') GROUP BY resource)";
 const GLOBAL_HEAD: &str = "sequence=(SELECT MIN(sequence) FROM operations WHERE state NOT IN ('applied','skipped','superseded'))";
+const NEEDS_OPERATOR: &str = "state IN ('blocked','conflict','outcome_unknown')";
 
 fn status_of(db: &Connection, scope: String) -> Result<OutboxStatus> {
     let (pending_count,pending_bytes,oldest_at) = db.query_row("SELECT COUNT(*),COALESCE(SUM(bytes),0),MIN(first_queued_at) FROM operations WHERE state NOT IN ('applied','skipped','superseded')", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
@@ -275,9 +280,10 @@ fn status_of(db: &Connection, scope: String) -> Result<OutboxStatus> {
         )
         .optional()?;
     let mut head = db.query_row(&format!("{SELECT_OPERATION} WHERE state NOT IN ('applied','skipped','superseded') ORDER BY sequence LIMIT 1"), [], operation).optional()?;
+    let mut blocked = db.query_row(&format!("{SELECT_OPERATION} WHERE {NEEDS_OPERATOR} AND NOT {GLOBAL_HEAD} ORDER BY sequence LIMIT 1"), [], operation).optional()?;
     // Management status never includes user rows or file bodies.
-    if let Some(head) = &mut head {
-        head.payload = Value::Null;
+    for operation in [&mut head, &mut blocked].into_iter().flatten() {
+        operation.payload = Value::Null;
     }
     Ok(OutboxStatus {
         scope,
@@ -287,6 +293,7 @@ fn status_of(db: &Connection, scope: String) -> Result<OutboxStatus> {
         oldest_at,
         head,
         mirror_error,
+        blocked,
     })
 }
 
@@ -481,7 +488,7 @@ impl Outbox {
         Ok(())
     }
 
-    fn limits(&self) -> Result<BufferingConfig> {
+    pub(crate) fn limits(&self) -> Result<BufferingConfig> {
         Ok(self
             .limits
             .read()
@@ -1080,7 +1087,8 @@ impl Outbox {
             .query_map([], summary)?
             .collect::<rusqlite::Result<Vec<_>>>()?)
     }
-    /// Lane heads in blocked|conflict|outcome_unknown, oldest first, no payloads.
+    /// Lane heads in blocked|conflict|outcome_unknown and later operations whose local table
+    /// view could not be updated, oldest first, no payloads.
     pub fn blocked_heads(&self, limit: u32) -> Result<Vec<OperationSummary>> {
         ensure!(
             (1..=256).contains(&limit),
@@ -1091,7 +1099,7 @@ impl Outbox {
             QueueLanes::Global => GLOBAL_HEAD,
             QueueLanes::PerResource => LANE_HEADS,
         };
-        let mut statement = db.prepare(&format!("{SELECT_SUMMARY} WHERE {heads} AND state IN ('blocked','conflict','outcome_unknown') ORDER BY sequence LIMIT ?1"))?;
+        let mut statement = db.prepare(&format!("{SELECT_SUMMARY} WHERE {NEEDS_OPERATOR} AND ({heads} OR local_version IS NULL) ORDER BY sequence LIMIT ?1"))?;
         Ok(statement
             .query_map([limit], summary)?
             .collect::<rusqlite::Result<Vec<_>>>()?)
@@ -1622,6 +1630,60 @@ mod tests {
             queue.head().unwrap().unwrap().operation_id,
             retry.operation_id
         );
+    }
+
+    #[test]
+    fn frozen_doubles_keep_their_digest_through_sqlite_and_restart() {
+        use flow_like_device_protocol::{
+            OfflineExpected, OfflineMutation, OfflineReplayRequest, OfflineResource,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let queue = open(root.path());
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let rows = (0..2048)
+            .filter_map(|id| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let value = f64::from_bits(state);
+                value
+                    .is_finite()
+                    .then(|| json!({"id": id, "value": value, "small": value * 1e-300}))
+            })
+            .collect();
+        let request = OfflineReplayRequest {
+            operation_id: uuid::Uuid::new_v4().to_string(),
+            resource: OfflineResource::Table {
+                purpose: StoragePurpose::Storage,
+                database: "db".into(),
+                table: "measurements".into(),
+            },
+            expected: OfflineExpected::TableVersion {
+                version: 0,
+                fingerprint: None,
+            },
+            mutation: OfflineMutation::TableInsert { rows },
+        };
+        let digest = request.digest().unwrap();
+        let operation = queue
+            .enqueue("table", serde_json::to_value(&request).unwrap(), None, 100)
+            .unwrap();
+        queue.mark_local(&operation.operation_id, 2).unwrap();
+        let queued: OfflineReplayRequest =
+            serde_json::from_value(queue.head().unwrap().unwrap().payload).unwrap();
+        assert_eq!(queued.digest().unwrap(), digest);
+        queue
+            .prepare_attempt(
+                &operation.operation_id,
+                &serde_json::to_value(&queued).unwrap(),
+            )
+            .unwrap();
+        drop(queue);
+        let queue = open(root.path());
+        let frozen: OfflineReplayRequest =
+            serde_json::from_value(queue.head().unwrap().unwrap().payload).unwrap();
+        assert_eq!(frozen, request);
+        assert_eq!(frozen.digest().unwrap(), digest);
     }
 
     fn open_lanes(root: &Path, limits: BufferingConfig) -> Outbox {

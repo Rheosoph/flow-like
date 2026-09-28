@@ -64,6 +64,11 @@ const SINK_TYPE_CONFIG: Record<
 		color: "bg-indigo-500/10 text-indigo-500",
 	},
 	email: { label: "Email", icon: Mail, color: "bg-red-500/10 text-red-500" },
+	inbound_email: {
+		label: "Inbound Email",
+		icon: Mail,
+		color: "bg-red-500/10 text-red-500",
+	},
 	slack: {
 		label: "Slack",
 		icon: MessageSquare,

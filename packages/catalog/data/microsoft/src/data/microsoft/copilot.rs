@@ -4,6 +4,7 @@ use super::{
 };
 use crate::events::chat_event::{Attachment, ComplexAttachment};
 use ahash::AHashSet;
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     board::Board,
     execution::{
@@ -245,7 +246,7 @@ impl NodeLogic for GetCopilotInteractionsNode {
         }
         let url = reqwest::Url::parse_with_params(&base_url, query_params)?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, url.to_string()).await {
             Ok(values) => {
                 let interactions: Vec<CopilotInteraction> =
@@ -335,7 +336,7 @@ impl NodeLogic for ListMeetingInsightsNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let meeting_id: String = context.evaluate_pin("meeting_id").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = graph_version_url(
             &provider,
             "beta",
@@ -440,7 +441,7 @@ impl NodeLogic for GetMeetingInsightNode {
         let meeting_id: String = context.evaluate_pin("meeting_id").await?;
         let insight_id: String = context.evaluate_pin("insight_id").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = graph_version_url(
             &provider,
             "beta",
@@ -858,7 +859,7 @@ impl NodeLogic for GraphSearchNode {
             .filter(|s| !s.is_empty())
             .collect();
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         // For driveItem-only searches, try the Drive API first (more reliable)
         let is_drive_only = entity_list.len() == 1 && entity_list[0] == "driveItem";
@@ -929,7 +930,7 @@ impl NodeLogic for GraphSearchNode {
             }
 
             let response = client
-                .post(provider.api_url("/search/query"))
+                .post(&provider.api_url("/search/query"))?
                 .header("Authorization", format!("Bearer {}", provider.access_token))
                 .header("Content-Type", "application/json")
                 .json(&request_body)
@@ -1029,7 +1030,7 @@ impl NodeLogic for GraphSearchNode {
 /// Search OneDrive using the Drive API (more reliable than Microsoft Search API)
 /// This uses GET /me/drive/root/search(q='{query}')
 async fn search_onedrive(
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     provider: &MicrosoftGraphProvider,
     query: &str,
     top: u32,
@@ -1045,6 +1046,7 @@ async fn search_onedrive(
 
     let response = client
         .get(&url)
+        .map_err(|e| e.to_string())?
         .header("Authorization", format!("Bearer {}", provider.access_token))
         .send()
         .await
@@ -1815,13 +1817,13 @@ pub(crate) async fn run_copilot_chat(
 
     let parent_node_id = context.node.node.lock().await.id.clone();
     let callback_count = Arc::new(AtomicUsize::new(0));
-    let client = reqwest::Client::new();
+    let client = GuardedHttpClient::new(context.execution_environment())?;
 
     // Step 1: Create or use existing conversation
     // https://learn.microsoft.com/en-us/microsoft-365-copilot/extensibility/api/ai-services/chat/copilotroot-post-conversations
     if conversation_id.is_empty() {
         let create_response = client
-            .post(&endpoint.conversations_url)
+            .post(&endpoint.conversations_url)?
             .header("Authorization", format!("Bearer {}", endpoint.access_token))
             .header("Content-Type", "application/json")
             .json(&json!({}))
@@ -1915,7 +1917,7 @@ pub(crate) async fn run_copilot_chat(
     );
 
     let response = client
-        .post(&chat_url)
+        .post(&chat_url)?
         .header("Authorization", format!("Bearer {}", endpoint.access_token))
         .header("Content-Type", "application/json")
         .json(&request_body)
@@ -2342,9 +2344,9 @@ impl NodeLogic for CopilotSemanticSearchNode {
             });
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(graph_version_url(&provider, "beta", "/copilot/search"))
+            .post(&graph_version_url(&provider, "beta", "/copilot/search"))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -2497,9 +2499,9 @@ impl NodeLogic for SubscribeCopilotNotificationsNode {
             request_body["clientState"] = json!(client_state);
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(graph_version_url(&provider, "beta", "/subscriptions"))
+            .post(&graph_version_url(&provider, "beta", "/subscriptions"))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -2598,7 +2600,7 @@ impl NodeLogic for GetUserCopilotSettingsNode {
 
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_json(
             &client,
             &provider,

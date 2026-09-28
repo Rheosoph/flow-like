@@ -26,6 +26,15 @@ struct Registry {
     replay: HashSet<String>,
     reject_next_heartbeat: bool,
     revoked: bool,
+    /// API time minus device time, as seen by a device whose clock runs slow.
+    api_clock_ahead: i64,
+}
+
+fn coded(code: &str) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({"error":{"code":code,"message":"Device request refused"}})),
+    )
 }
 type Shared = Arc<Mutex<Registry>>;
 
@@ -169,7 +178,7 @@ async fn token(
         access_token: format!("test-session-{}", state.token_requests),
         token_type: "DPoP".into(),
         expires_in: 600,
-        expires_at: enrollment::unix_time().unwrap() + 600,
+        expires_at: enrollment::unix_time().unwrap() + state.api_clock_ahead + 600,
     }))
 }
 
@@ -178,10 +187,10 @@ async fn heartbeat(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<DeviceHeartbeat>,
-) -> std::result::Result<Json<DeviceStatus>, StatusCode> {
+) -> std::result::Result<Json<DeviceStatus>, (StatusCode, Json<Value>)> {
     let mut state = state.lock().await;
     if state.revoked {
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(coded("DEVICE_REVOKED"));
     }
     let receipt = state.receipt.as_ref().unwrap();
     assert_eq!(body.version, 1);
@@ -207,7 +216,7 @@ async fn heartbeat(
     .unwrap();
     assert!(state.replay.insert(claims.jti));
     if std::mem::take(&mut state.reject_next_heartbeat) {
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(coded(enrollment::DEVICE_PROOF_INVALID));
     }
     state.heartbeats += 1;
     let receipt = state.receipt.as_ref().unwrap();
@@ -230,6 +239,7 @@ async fn package_recovery_session_renewal_and_revocation() {
     let base = format!("http://{}/api/v1", listener.local_addr().unwrap());
     let registry = Arc::new(Mutex::new(Registry {
         base: base.clone(),
+        api_clock_ahead: 45,
         ..Registry::default()
     }));
     let router = Router::new()
@@ -355,11 +365,15 @@ async fn package_recovery_session_renewal_and_revocation() {
     assert_eq!(registry.lock().await.token_requests, 1);
     assert_eq!(registry.lock().await.heartbeats, 8);
     registry.lock().await.reject_next_heartbeat = true;
-    assert!(session.heartbeat(&heartbeat).await.is_err());
+    let proof = session.heartbeat(&heartbeat).await.unwrap_err();
+    assert!(enrollment::device_proof_rejected(&proof), "{proof:#}");
+    assert!(!enrollment::is_access_denied(&proof));
     session.heartbeat(&heartbeat).await.unwrap();
     assert_eq!(registry.lock().await.token_requests, 2);
     registry.lock().await.revoked = true;
-    assert!(session.heartbeat(&heartbeat).await.is_err());
+    let denied = session.heartbeat(&heartbeat).await.unwrap_err();
+    assert!(enrollment::is_access_denied(&denied), "{denied:#}");
+    assert_eq!(enrollment::api_error_code(&denied), Some("DEVICE_REVOKED"));
     assert!(session.heartbeat(&heartbeat).await.is_err());
     assert_eq!(registry.lock().await.heartbeats, 9);
     server.abort();

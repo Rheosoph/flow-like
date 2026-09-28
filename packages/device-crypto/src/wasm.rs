@@ -14,8 +14,12 @@ use zeroize::Zeroizing;
 fn error(error: impl std::fmt::Display) -> JsValue {
     js_sys::Error::new(&error.to_string()).into()
 }
+/// Maps become plain objects and `None` becomes `null`, matching the JSON the
+/// UI types describe.
 fn encode(value: &impl Serialize) -> Result<JsValue> {
-    Ok(serde_wasm_bindgen::to_value(value).map_err(error_any)?)
+    Ok(value
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .map_err(error_any)?)
 }
 fn decode<T: DeserializeOwned>(value: JsValue) -> Result<T> {
     Ok(serde_wasm_bindgen::from_value(value).map_err(error_any)?)

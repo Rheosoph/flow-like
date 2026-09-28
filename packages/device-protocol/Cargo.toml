@@ -5,7 +5,8 @@ edition = "2024"
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
+# Offline replay digests hash re-parsed frozen requests; parsing must return the exact doubles.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 base64.workspace = true
 sha2 = "0.10"
 ed25519-dalek = { version = "2.2", features = ["rand_core"] }

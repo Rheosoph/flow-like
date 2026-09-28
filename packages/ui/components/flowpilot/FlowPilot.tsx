@@ -1132,14 +1132,15 @@ function FlowPilotImpl({
 	);
 
 	// Filter profile and custom models to runtimes supported by this host.
-	const { canHostLlamaCPP, canHostMLX } = backendContext.capabilities();
+	const { canHostLlamaCPP, canHostMLX, canUseNativeAgentProviders } =
+		backendContext.capabilities();
 	const bitsModels = useMemo(
 		() =>
 			selectProfileLlmModels(
 				foundBits.data,
 				customBits.data,
 				profile.data?.hub_profile.bits,
-				{ canHostLlamaCPP, canHostMLX },
+				{ canHostLlamaCPP, canHostMLX, canUseNativeAgentProviders },
 			),
 		[
 			foundBits.data,
@@ -1147,6 +1148,7 @@ function FlowPilotImpl({
 			profile.data?.hub_profile.bits,
 			canHostLlamaCPP,
 			canHostMLX,
+			canUseNativeAgentProviders,
 		],
 	);
 

@@ -14,7 +14,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
-    sync::Mutex,
+    sync::{Mutex, OwnedMutexGuard, mpsc, oneshot},
 };
 use tokio_util::sync::CancellationToken;
 use zeroize::{Zeroize, Zeroizing};
@@ -118,16 +118,24 @@ impl Drop for ParentResponse {
     }
 }
 
-async fn write_frame<T: Serialize>(stream: &mut UnixStream, message: &T) -> Result<()> {
+fn encode_frame<T: Serialize>(message: &T) -> Result<Zeroizing<Vec<u8>>> {
     let bytes = Zeroizing::new(serde_json::to_vec(message)?);
     ensure!(bytes.len() <= MAX_FRAME_BYTES, "Broker frame is too large");
+    Ok(bytes)
+}
+
+fn decode_frame<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    serde_json::from_slice(bytes).context("Invalid broker frame")
+}
+
+async fn write_raw_frame(stream: &mut UnixStream, bytes: &[u8]) -> Result<()> {
     stream.write_u32(bytes.len().try_into()?).await?;
-    stream.write_all(&bytes).await?;
+    stream.write_all(bytes).await?;
     stream.flush().await?;
     Ok(())
 }
 
-async fn read_frame<T: DeserializeOwned>(stream: &mut UnixStream) -> Result<T> {
+async fn read_raw_frame(stream: &mut UnixStream) -> Result<Zeroizing<Vec<u8>>> {
     let length = stream.read_u32().await? as usize;
     ensure!(
         length > 0 && length <= MAX_FRAME_BYTES,
@@ -135,7 +143,15 @@ async fn read_frame<T: DeserializeOwned>(stream: &mut UnixStream) -> Result<T> {
     );
     let mut bytes = Zeroizing::new(vec![0; length]);
     stream.read_exact(&mut bytes).await?;
-    serde_json::from_slice(&bytes).context("Invalid broker frame")
+    Ok(bytes)
+}
+
+async fn write_frame<T: Serialize>(stream: &mut UnixStream, message: &T) -> Result<()> {
+    write_raw_frame(stream, &encode_frame(message)?).await
+}
+
+async fn read_frame<T: DeserializeOwned>(stream: &mut UnixStream) -> Result<T> {
+    decode_frame(&read_raw_frame(stream).await?)
 }
 
 /// The parent endpoint never enters the child. CLOEXEC remains set except for
@@ -329,10 +345,35 @@ pub fn inherited_placement_lock(descriptor: i32) -> Result<std::fs::File> {
     }
 }
 
+struct Exchange {
+    frame: Zeroizing<Vec<u8>>,
+    reply: oneshot::Sender<Result<Zeroizing<Vec<u8>>>>,
+    _busy: OwnedMutexGuard<()>,
+}
+
+/// Owns the socket and completes every frame pair, even when its requester was
+/// cancelled or timed out, so an abandoned request cannot desynchronize or close
+/// the channel. Only a failed read or write, which leaves no usable framing, ends it.
+async fn run_channel(mut stream: UnixStream, mut exchanges: mpsc::Receiver<Exchange>) {
+    while let Some(exchange) = exchanges.recv().await {
+        let result = async {
+            write_raw_frame(&mut stream, &exchange.frame).await?;
+            read_raw_frame(&mut stream).await
+        }
+        .await;
+        let closed = result.is_err();
+        let _ = exchange.reply.send(result);
+        if closed {
+            return;
+        }
+    }
+}
+
 /// One channel is shared by retained clients. Serial requests prevent response
 /// confusion and cap the broker to one in-flight request per workload.
 pub struct ChildBroker {
-    stream: Mutex<Option<UnixStream>>,
+    exchanges: mpsc::Sender<Exchange>,
+    busy: Arc<Mutex<()>>,
     resource_base: Option<String>,
     identity: Option<crate::config::WorkloadIdentity>,
 }
@@ -392,53 +433,79 @@ impl ChildBroker {
         let identity = bootstrap.workload_identity.clone();
         Ok((
             bootstrap,
-            Arc::new(Self {
-                stream: Mutex::new(Some(stream)),
-                resource_base,
-                identity,
-            }),
+            Arc::new(Self::from_stream(stream, resource_base, identity)),
         ))
+    }
+
+    fn from_stream(
+        stream: UnixStream,
+        resource_base: Option<String>,
+        identity: Option<crate::config::WorkloadIdentity>,
+    ) -> Self {
+        let (exchanges, receiver) = mpsc::channel(1);
+        tokio::spawn(run_channel(stream, receiver));
+        Self {
+            exchanges,
+            busy: Arc::new(Mutex::new(())),
+            resource_base,
+            identity,
+        }
     }
 
     pub fn identity(&self) -> Option<crate::config::WorkloadIdentity> {
         self.identity.clone()
     }
 
-    async fn request(&self, request: &ChildRequest) -> Result<ParentResponse> {
-        let mut guard = self.stream.lock().await;
-        Self::exchange(&mut guard, request).await
+    /// True once the supervisor channel failed for good. A refused or timed out
+    /// request leaves it open, so periodic callers retry instead of stopping.
+    pub fn is_closed(&self) -> bool {
+        self.exchanges.is_closed()
     }
 
-    async fn exchange(
-        guard: &mut Option<UnixStream>,
-        request: &ChildRequest,
-    ) -> Result<ParentResponse> {
-        let mut stream = guard
-            .take()
-            .context("Credential broker channel is closed")?;
-        let response = tokio::time::timeout(REQUEST_TIMEOUT, async {
-            write_frame(&mut stream, request).await?;
-            read_frame::<ParentResponse>(&mut stream).await
+    async fn request(&self, request: &ChildRequest) -> Result<ParentResponse> {
+        let frame = encode_frame(request)?;
+        tokio::time::timeout(REQUEST_TIMEOUT, async {
+            let busy = self.busy.clone().lock_owned().await;
+            self.exchange(frame, busy).await
         })
         .await
-        .context("Credential broker timed out")??;
-        *guard = Some(stream);
-        Ok(response)
+        .context("Credential broker timed out")?
+    }
+
+    /// The channel task holds `busy` until the parent answers, so a later
+    /// request never reads the response of an abandoned one.
+    async fn exchange(
+        &self,
+        frame: Zeroizing<Vec<u8>>,
+        busy: OwnedMutexGuard<()>,
+    ) -> Result<ParentResponse> {
+        let (reply, response) = oneshot::channel();
+        self.exchanges
+            .send(Exchange {
+                frame,
+                reply,
+                _busy: busy,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Credential broker channel is closed"))?;
+        let bytes = response
+            .await
+            .map_err(|_| anyhow::anyhow!("Credential broker channel is closed"))??;
+        decode_frame(&bytes)
     }
 
     /// A busy resource exchange must not interrupt a still-valid TLS identity.
     /// Busy is distinct from an explicit supervisor denial or a closed channel.
     pub(crate) async fn try_tls_identity(&self, known_revision: u64) -> Result<TlsIdentityUpdate> {
-        let Ok(mut guard) = self.stream.try_lock() else {
+        let Ok(busy) = self.busy.clone().try_lock_owned() else {
             return Ok(TlsIdentityUpdate::Busy);
         };
-        match &mut Self::exchange(
-            &mut guard,
-            &ChildRequest::TlsIdentity {
-                known_revision: Some(known_revision),
-            },
-        )
-        .await?
+        let frame = encode_frame(&ChildRequest::TlsIdentity {
+            known_revision: Some(known_revision),
+        })?;
+        match &mut tokio::time::timeout(REQUEST_TIMEOUT, self.exchange(frame, busy))
+            .await
+            .context("Credential broker timed out")??
         {
             ParentResponse::TlsIdentity { identity } => Ok(match identity.take() {
                 Some(identity) => TlsIdentityUpdate::Changed(identity),
@@ -449,10 +516,8 @@ impl ChildBroker {
     }
 
     #[cfg(test)]
-    pub(crate) async fn lock_channel_for_test(
-        &self,
-    ) -> tokio::sync::MutexGuard<'_, Option<UnixStream>> {
-        self.stream.lock().await
+    pub(crate) async fn lock_channel_for_test(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.busy.lock().await
     }
 
     pub async fn tls_identity(
@@ -544,21 +609,42 @@ impl RequestAuthorizer for ChildBroker {
                     Some(dpop.clone()),
                     UNIX_EPOCH + Duration::from_secs(*expires_at),
                 ),
-                ParentResponse::Error { code } if code == "denied" => {
-                    Err(AuthorizationError::Denied)
-                }
-                ParentResponse::Error { code } if code == "expired" => {
-                    Err(AuthorizationError::Expired)
-                }
-                ParentResponse::Error { code } if code == "invalid_request" => {
-                    Err(AuthorizationError::InvalidRequest)
-                }
-                ParentResponse::Error { code } if code == "invalid_response" => {
-                    Err(AuthorizationError::InvalidResponse)
-                }
+                ParentResponse::Error { code } => Err(authorization_failure(code)),
                 _ => Err(AuthorizationError::Unavailable),
             }
         })
+    }
+}
+
+fn authorization_code(error: AuthorizationError) -> &'static str {
+    match error {
+        AuthorizationError::Denied => "denied",
+        AuthorizationError::Expired => "expired",
+        AuthorizationError::InvalidRequest => "invalid_request",
+        AuthorizationError::InvalidResponse => "invalid_response",
+        _ => "unavailable",
+    }
+}
+
+fn authorization_failure(code: &str) -> AuthorizationError {
+    match code {
+        "denied" => AuthorizationError::Denied,
+        "expired" => AuthorizationError::Expired,
+        "invalid_request" => AuthorizationError::InvalidRequest,
+        "invalid_response" => AuthorizationError::InvalidResponse,
+        _ => AuthorizationError::Unavailable,
+    }
+}
+
+#[cfg(feature = "runtime")]
+fn outage_failure(response: &ParentResponse) -> Option<AuthorizationError> {
+    match response {
+        ParentResponse::Error { code }
+            if matches!(code.as_str(), "denied" | "unavailable" | "expired") =>
+        {
+            Some(authorization_failure(code))
+        }
+        _ => None,
     }
 }
 
@@ -566,37 +652,31 @@ impl RequestAuthorizer for ChildBroker {
 #[async_trait::async_trait]
 impl crate::online::outage::OutageAuthority for ChildBroker {
     async fn seal(&self, claim: &crate::online::outage::SnapshotClaim) -> Result<String> {
-        match self
+        let response = self
             .request(&ChildRequest::OutageSeal {
                 claim: claim.clone(),
             })
-            .await?
-        {
+            .await?;
+        if let Some(failure) = outage_failure(&response) {
+            return Err(failure.into());
+        }
+        match response {
             ParentResponse::OutageSealed { ref seal } => Ok(seal.clone()),
-            ParentResponse::Error { ref code } if code == "denied" => {
-                Err(AuthorizationError::Denied.into())
-            }
-            ParentResponse::Error { ref code } if code == "unavailable" => {
-                Err(AuthorizationError::Unavailable.into())
-            }
             _ => anyhow::bail!("Supervisor did not authorize the outage snapshot"),
         }
     }
     async fn verify(&self, claim: &crate::online::outage::SnapshotClaim, seal: &str) -> Result<()> {
-        match self
+        let response = self
             .request(&ChildRequest::OutageVerify {
                 claim: claim.clone(),
                 seal: seal.into(),
             })
-            .await?
-        {
+            .await?;
+        if let Some(failure) = outage_failure(&response) {
+            return Err(failure.into());
+        }
+        match response {
             ParentResponse::OutageAccepted => Ok(()),
-            ParentResponse::Error { ref code } if code == "denied" => {
-                Err(AuthorizationError::Denied.into())
-            }
-            ParentResponse::Error { ref code } if code == "unavailable" => {
-                Err(AuthorizationError::Unavailable.into())
-            }
             _ => anyhow::bail!("Supervisor rejected the saved outage authorization"),
         }
     }
@@ -658,232 +738,285 @@ pub(crate) async fn serve_with_drain(
     };
     let mut usage_guard = crate::operational::UsageProcessGuard::new(&state_dir, &process_run_id);
     let mut usage_registered = false;
-    tokio::select! { _ = cancel.cancelled() => return Ok(()),
-    result = tokio::time::timeout(Duration::from_secs(15),write_frame(&mut stream,&bootstrap)) => result?? }
+    let handshake = tokio::time::timeout(
+        Duration::from_secs(15),
+        write_frame(&mut stream, &bootstrap),
+    );
+    tokio::select! {
+        _ = cancel.cancelled() => return Ok(()),
+        result = handshake => result??,
+    }
     loop {
         let request: ChildRequest = tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             request = read_frame(&mut stream) => request?,
         };
-        let store = StateStore::open(&state_dir.join("management.sqlite"))?;
         let is_usage = matches!(&request, ChildRequest::Usage { .. });
-        let current = store.replica_is_current(
-            &bootstrap.config.id,
-            bootstrap.replica_slot,
-            bootstrap.config_revision,
-            bootstrap.intent_revision,
-            process_id,
-        )?;
-        ensure!(
-            usage_binding.is_physically_bound(&store)?,
-            "Workload no longer has its original physical slot"
-        );
-        let mut response = if !is_usage && (drain.is_cancelled() || !current) {
-            ParentResponse::Error {
-                code: "unavailable".into(),
-            }
-        } else {
-            match request {
-                ChildRequest::TlsIdentity { known_revision } => {
-                    drop(store);
-                    match bootstrap
-                        .config
-                        .tls_certificate_id
-                        .as_deref()
-                        .ok_or_else(|| anyhow::anyhow!("No certificate assigned"))
-                        .and_then(|id| crate::certificates::load_identity(&state_dir, id))
-                    {
-                        Ok(identity) => ParentResponse::TlsIdentity {
-                            identity: (known_revision != Some(identity.revision))
-                                .then_some(identity),
-                        },
-                        Err(_) => ParentResponse::Error {
-                            code: "certificate_unavailable".into(),
-                        },
+        // Local state and telemetry failures answer this request as unavailable.
+        // Only a protocol violation, a lost physical slot or cancellation ends the channel.
+        let step: Result<Option<ParentResponse>> = async {
+            let store = StateStore::open(&state_dir.join("management.sqlite"))?;
+            let current = store.replica_is_current(
+                &bootstrap.config.id,
+                bootstrap.replica_slot,
+                bootstrap.config_revision,
+                bootstrap.intent_revision,
+                process_id,
+            )?;
+            require(
+                usage_binding.is_physically_bound(&store)?,
+                "Workload no longer has its original physical slot",
+            )?;
+            let response = if !is_usage && (drain.is_cancelled() || !current) {
+                unavailable()
+            } else {
+                match request {
+                    ChildRequest::TlsIdentity { known_revision } => {
+                        drop(store);
+                        match bootstrap
+                            .config
+                            .tls_certificate_id
+                            .as_deref()
+                            .ok_or_else(|| anyhow::anyhow!("No certificate assigned"))
+                            .and_then(|id| crate::certificates::load_identity(&state_dir, id))
+                        {
+                            Ok(identity) => ParentResponse::TlsIdentity {
+                                identity: (known_revision != Some(identity.revision))
+                                    .then_some(identity),
+                            },
+                            Err(_) => ParentResponse::Error {
+                                code: "certificate_unavailable".into(),
+                            },
+                        }
                     }
-                }
-                #[cfg(feature = "runtime")]
-                ChildRequest::OutageSeal { ref claim }
-                | ChildRequest::OutageVerify { ref claim, .. } => {
-                    use crate::online::outage::OutageAuthority;
-                    drop(store);
-                    if let Some(broker) = &broker {
-                        let result = match &request {
-                            ChildRequest::OutageSeal { .. } if !prepared => broker
-                                .seal(claim)
-                                .await
-                                .map(|seal| ParentResponse::OutageSealed { seal }),
-                            ChildRequest::OutageVerify { seal, .. } if !prepared => broker
-                                .verify(claim, seal)
-                                .await
-                                .map(|()| ParentResponse::OutageAccepted),
-                            _ => Err(AuthorizationError::InvalidRequest.into()),
-                        };
-                        result.unwrap_or_else(|error| ParentResponse::Error {
-                            code: match crate::online::authorization_error(&error) {
-                                AuthorizationError::Denied => "denied",
-                                AuthorizationError::Unavailable => "unavailable",
-                                _ => "invalid_response",
+                    #[cfg(feature = "runtime")]
+                    ChildRequest::OutageSeal { ref claim }
+                    | ChildRequest::OutageVerify { ref claim, .. } => {
+                        use crate::online::outage::OutageAuthority;
+                        drop(store);
+                        if let Some(broker) = &broker {
+                            let result = match &request {
+                                ChildRequest::OutageSeal { .. } if !prepared => broker
+                                    .seal(claim)
+                                    .await
+                                    .map(|seal| ParentResponse::OutageSealed { seal }),
+                                ChildRequest::OutageVerify { seal, .. } if !prepared => broker
+                                    .verify(claim, seal)
+                                    .await
+                                    .map(|()| ParentResponse::OutageAccepted),
+                                _ => Err(AuthorizationError::InvalidRequest.into()),
+                            };
+                            result.unwrap_or_else(|error| outage_error(&error))
+                        } else {
+                            ParentResponse::Error {
+                                code: "denied".into(),
                             }
-                            .into(),
-                        })
-                    } else {
-                        ParentResponse::Error {
-                            code: "denied".into(),
                         }
                     }
-                }
-                #[cfg(feature = "runtime")]
-                ChildRequest::OutageDeny { binding } => {
-                    use crate::online::outage::OutageAuthority;
-                    drop(store);
-                    if let Some(broker) = &broker {
-                        broker.deny(&binding).await?;
-                        ParentResponse::OutageAccepted
-                    } else {
-                        ParentResponse::Error {
-                            code: "denied".into(),
+                    #[cfg(feature = "runtime")]
+                    ChildRequest::OutageDeny { binding } => {
+                        use crate::online::outage::OutageAuthority;
+                        drop(store);
+                        if let Some(broker) = &broker {
+                            match broker.deny(&binding).await {
+                                Ok(()) => ParentResponse::OutageAccepted,
+                                Err(error) => {
+                                    tracing::warn!(
+                                        placement_id = %bootstrap.config.id,
+                                        "Outage revocation was not fully persisted: {error:#}"
+                                    );
+                                    outage_error(&error)
+                                }
+                            }
+                        } else {
+                            ParentResponse::Error {
+                                code: "denied".into(),
+                            }
                         }
                     }
-                }
-                ChildRequest::Usage {
-                    snapshot,
-                    finalized,
-                } => {
-                    let retry = last_usage.as_ref() == Some(&snapshot);
-                    ensure!(
-                        prepared && (retry || snapshot.validate_after(last_usage.as_ref())),
-                        "Invalid workload usage sequence or counters"
-                    );
-                    ensure!(
-                        retry
-                            || finalized
-                            || last_usage_at
-                                .is_none_or(|at| at.elapsed() >= Duration::from_secs(1)),
-                        "Workload usage exceeds its reporting rate"
-                    );
-                    drop(store);
-                    let telemetry = crate::telemetry::TelemetryStore::open(&state_dir)?;
-                    if !usage_registered {
-                        telemetry.begin_usage(&usage_binding)?;
+                    ChildRequest::Usage {
+                        snapshot,
+                        finalized,
+                    } => {
+                        let retry = last_usage.as_ref() == Some(&snapshot);
+                        require(
+                            prepared && (retry || snapshot.validate_after(last_usage.as_ref())),
+                            "Invalid workload usage sequence or counters",
+                        )?;
+                        require(
+                            retry
+                                || finalized
+                                || last_usage_at
+                                    .is_none_or(|at| at.elapsed() >= Duration::from_secs(1)),
+                            "Workload usage exceeds its reporting rate",
+                        )?;
+                        drop(store);
+                        let telemetry = crate::telemetry::TelemetryStore::open(&state_dir)?;
+                        if !usage_registered {
+                            telemetry.begin_usage(&usage_binding)?;
+                            usage_guard.arm();
+                            usage_registered = true;
+                        }
+                        telemetry.record_usage(&usage_binding, &snapshot, finalized)?;
+                        let sequence = snapshot.sequence;
+                        last_usage = Some(snapshot);
+                        last_usage_at = Some(std::time::Instant::now());
+                        ParentResponse::Usage { sequence }
+                    }
+                    ChildRequest::Ready => {
+                        drop(store);
+                        // Offline hosted-resource grants remain lazy: local service readiness
+                        // must not depend on cloud availability or resource capacity.
+                        if bootstrap.config.source == crate::config::ProjectSource::Online {
+                            if let Some(broker) = &broker {
+                                tokio::select! {
+                                    _ = cancel.cancelled() => return Ok(None),
+                                    result = broker.prepare() => result?,
+                                }
+                            }
+                        }
+                        let store = StateStore::open(&state_dir.join("management.sqlite"))?;
+                        require(
+                            !prepared
+                                && store.record_replica_prepared(
+                                    &bootstrap.config.id,
+                                    bootstrap.replica_slot,
+                                    bootstrap.config_revision,
+                                    bootstrap.intent_revision,
+                                    process_id,
+                                )?,
+                            "Workload readiness is stale or duplicated",
+                        )?;
+                        store.connection.execute(
+                            "DELETE FROM telemetry_records WHERE placement_id=?1 AND kind=?2",
+                            rusqlite::params![
+                                bootstrap.config.id,
+                                format!("usage-{}", bootstrap.replica_slot)
+                            ],
+                        )?;
+                        drop(store);
+                        crate::telemetry::TelemetryStore::open(&state_dir)?
+                            .begin_usage(&usage_binding)?;
                         usage_guard.arm();
                         usage_registered = true;
+                        prepared = true;
+                        ParentResponse::Ready
                     }
-                    telemetry.record_usage(&usage_binding, &snapshot, finalized)?;
-                    let sequence = snapshot.sequence;
-                    last_usage = Some(snapshot);
-                    last_usage_at = Some(std::time::Instant::now());
-                    ParentResponse::Usage { sequence }
-                }
-                ChildRequest::Ready => {
-                    drop(store);
-                    // Offline hosted-resource grants remain lazy: local service readiness
-                    // must not depend on cloud availability or resource capacity.
-                    if bootstrap.config.source == crate::config::ProjectSource::Online {
-                        if let Some(broker) = &broker {
-                            tokio::select! { _ = cancel.cancelled() => return Ok(()), result = broker.prepare() => result? }
-                        }
+                    ChildRequest::Authorize {
+                        ref method,
+                        ref url,
                     }
-                    let store = StateStore::open(&state_dir.join("management.sqlite"))?;
-                    ensure!(
-                        !prepared
-                            && store.record_replica_prepared(
-                                &bootstrap.config.id,
-                                bootstrap.replica_slot,
-                                bootstrap.config_revision,
-                                bootstrap.intent_revision,
-                                process_id
-                            )?,
-                        "Workload readiness is stale or duplicated"
-                    );
-                    store.connection.execute(
-                        "DELETE FROM telemetry_records WHERE placement_id=?1 AND kind=?2",
-                        rusqlite::params![
-                            bootstrap.config.id,
-                            format!("usage-{}", bootstrap.replica_slot)
-                        ],
-                    )?;
-                    drop(store);
-                    crate::telemetry::TelemetryStore::open(&state_dir)?
-                        .begin_usage(&usage_binding)?;
-                    usage_guard.arm();
-                    usage_registered = true;
-                    prepared = true;
-                    ParentResponse::Ready
-                }
-                ChildRequest::Authorize {
-                    ref method,
-                    ref url,
-                }
-                | ChildRequest::AuthorizeProject {
-                    ref method,
-                    ref url,
-                } => {
-                    drop(store);
-                    let audience = if matches!(&request, ChildRequest::AuthorizeProject { .. }) {
-                        ResourceAudience::ProjectApi
-                    } else {
-                        ResourceAudience::HostedModels
-                    };
-                    if !prepared && audience == ResourceAudience::HostedModels {
-                        ParentResponse::Error {
-                            code: "denied".into(),
-                        }
-                    } else if let Some(broker) = &broker {
-                        match tokio::select! { _ = cancel.cancelled() => return Ok(()), _ = drain.cancelled() => Err(AuthorizationError::Unavailable), result = broker.authorize(AuthorizationRequest {
-                            audience,method,url,
-                        }) => result }
+                    | ChildRequest::AuthorizeProject {
+                        ref method,
+                        ref url,
+                    } => {
+                        drop(store);
+                        let audience = if matches!(&request, ChildRequest::AuthorizeProject { .. })
                         {
-                            Ok(authorization) => ParentResponse::Authorization {
-                                authorization: authorization.authorization().into(),
-                                dpop: authorization
-                                    .dpop()
-                                    .context("Broker omitted request proof")?
-                                    .into(),
-                                expires_at: authorization
-                                    .expires_at()
-                                    .duration_since(UNIX_EPOCH)?
-                                    .as_secs(),
-                            },
-                            Err(error) => ParentResponse::Error {
-                                code: match error {
-                                    AuthorizationError::Denied => "denied",
-                                    AuthorizationError::Expired => "expired",
-                                    AuthorizationError::InvalidRequest => "invalid_request",
-                                    AuthorizationError::InvalidResponse => "invalid_response",
-                                    _ => "unavailable",
-                                }
-                                .into(),
-                            },
-                        }
-                    } else {
-                        ParentResponse::Error {
-                            code: "denied".into(),
+                            ResourceAudience::ProjectApi
+                        } else {
+                            ResourceAudience::HostedModels
+                        };
+                        if !prepared && audience == ResourceAudience::HostedModels {
+                            ParentResponse::Error {
+                                code: "denied".into(),
+                            }
+                        } else if let Some(broker) = &broker {
+                            let authorization = broker.authorize(AuthorizationRequest {
+                                audience,
+                                method,
+                                url,
+                            });
+                            match tokio::select! {
+                                _ = cancel.cancelled() => return Ok(None),
+                                _ = drain.cancelled() => Err(AuthorizationError::Unavailable),
+                                result = authorization => result,
+                            } {
+                                Ok(authorization) => ParentResponse::Authorization {
+                                    authorization: authorization.authorization().into(),
+                                    dpop: authorization
+                                        .dpop()
+                                        .context("Broker omitted request proof")?
+                                        .into(),
+                                    expires_at: authorization
+                                        .expires_at()
+                                        .duration_since(UNIX_EPOCH)?
+                                        .as_secs(),
+                                },
+                                Err(error) => ParentResponse::Error {
+                                    code: authorization_code(error).into(),
+                                },
+                            }
+                        } else {
+                            ParentResponse::Error {
+                                code: "denied".into(),
+                            }
                         }
                     }
                 }
+            };
+            let current = StateStore::open(&state_dir.join("management.sqlite"))?;
+            require(
+                usage_binding.is_physically_bound(&current)?,
+                "Workload physical slot changed while processing broker request",
+            )?;
+            if !is_usage
+                && (drain.is_cancelled()
+                    || !current.replica_is_current(
+                        &bootstrap.config.id,
+                        bootstrap.replica_slot,
+                        bootstrap.config_revision,
+                        bootstrap.intent_revision,
+                        process_id,
+                    )?)
+            {
+                return Ok(Some(unavailable()));
+            }
+            Ok(Some(response))
+        }
+        .await;
+        let response = match step {
+            Ok(Some(response)) => response,
+            Ok(None) => return Ok(()),
+            Err(error) if error.is::<ChannelViolation>() => return Err(error),
+            Err(error) => {
+                tracing::warn!(
+                    placement_id = %bootstrap.config.id,
+                    slot = bootstrap.replica_slot,
+                    "Workload broker request failed; answering unavailable: {error:#}"
+                );
+                unavailable()
             }
         };
-        let current = StateStore::open(&state_dir.join("management.sqlite"))?;
-        ensure!(
-            usage_binding.is_physically_bound(&current)?,
-            "Workload physical slot changed while processing broker request"
-        );
-        if !is_usage
-            && (drain.is_cancelled()
-                || !current.replica_is_current(
-                    &bootstrap.config.id,
-                    bootstrap.replica_slot,
-                    bootstrap.config_revision,
-                    bootstrap.intent_revision,
-                    process_id,
-                )?)
-        {
-            response = ParentResponse::Error {
-                code: "unavailable".into(),
-            };
+        tokio::select! {
+            _ = cancel.cancelled() => return Ok(()),
+            result = write_frame(&mut stream, &response) => result?,
         }
-        tokio::select! { _ = cancel.cancelled() => return Ok(()), result = write_frame(&mut stream,&response) => result? }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct ChannelViolation(&'static str);
+
+fn require(condition: bool, violation: &'static str) -> Result<()> {
+    if condition {
+        Ok(())
+    } else {
+        Err(ChannelViolation(violation).into())
+    }
+}
+
+fn unavailable() -> ParentResponse {
+    ParentResponse::Error {
+        code: "unavailable".into(),
+    }
+}
+
+#[cfg(feature = "runtime")]
+fn outage_error(error: &anyhow::Error) -> ParentResponse {
+    ParentResponse::Error {
+        code: authorization_code(crate::online::authorization_error(error)).into(),
     }
 }
 
@@ -1036,6 +1169,7 @@ mod tests {
             max_in_flight: 1,
             request_timeout_secs: 5,
             auth_secret: "test".into(),
+            ui_origins: Vec::new(),
         };
         let listener = inherited_listener(&hosting)?;
         let (mut stream, _) =
@@ -1566,6 +1700,154 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn transient_usage_store_failures_answer_unavailable_without_closing_the_channel()
+    -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let config: PlacementConfig = serde_json::from_value(serde_json::json!({"id":"placement",
+            "project_id":"project","deployment_id":"deployment","revision":"one","source":"offline",
+            "project_path":directory.path(),"events":[{"event_id":"daemon","event_version":[1,0,0],"board_version":[1,0,0]}]}))?;
+        let mut store = StateStore::open(&directory.path().join("management.sqlite"))?;
+        store.upsert_placement(
+            "placement",
+            &serde_json::to_value(&config)?,
+            crate::state::DesiredState::Running,
+        )?;
+        store.claim_replica("placement", 0, 1, 1)?;
+        store.record_replica(
+            "placement",
+            0,
+            1,
+            1,
+            crate::state::ObservedState::Starting,
+            Some(42),
+            None,
+        )?;
+        let bootstrap = ChildBootstrap {
+            config,
+            data_root: None,
+            replica_slot: 0,
+            inherited_listener: false,
+            config_revision: 1,
+            intent_revision: 1,
+            parent_pid: 1,
+            api_base_url: None,
+            workload_identity: None,
+        };
+        let (parent, child) = UnixStream::pair()?;
+        let cancel = CancellationToken::new();
+        let server = tokio::spawn(serve(
+            parent,
+            bootstrap,
+            directory.path().into(),
+            42,
+            None,
+            cancel.clone(),
+        ));
+        let (_, child) = ChildBroker::connect(child).await?;
+        child.ready().await?;
+        let usage = |sequence| crate::usage::RuntimeUsageSnapshot {
+            version: 1,
+            sequence,
+            invocations_started: sequence,
+            invocations_succeeded: sequence,
+            ..Default::default()
+        };
+        child.report_usage(usage(1)).await?;
+        let key = directory.path().join("telemetry.key");
+        let saved = directory.path().join("telemetry.key.saved");
+        std::fs::rename(&key, &saved)?;
+        crate::vault::write_new_private(&key, &[0; 16])?;
+        assert!(child.report_usage(usage(2)).await.is_err());
+        assert!(
+            !server.is_finished() && !child.is_closed(),
+            "A local telemetry failure closed the broker channel"
+        );
+        std::fs::rename(&saved, &key)?;
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        child.report_usage(usage(2)).await?;
+        let stored = crate::telemetry::TelemetryStore::open(directory.path())?.read(
+            Some("placement"),
+            "usage-0",
+            0,
+            10,
+        )?;
+        assert!(
+            stored["records"]
+                .as_array()
+                .context("Missing usage records")?
+                .iter()
+                .any(|record| record["data"]["counters"]["invocations_succeeded"] == 2)
+        );
+        cancel.cancel();
+        tokio::time::timeout(Duration::from_secs(2), server).await???;
+        assert!(child.report_usage(usage(3)).await.is_err());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !child.is_closed() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .context("A closed supervisor channel must be reported")?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn abandoned_requests_never_desynchronize_or_close_the_broker_channel() -> Result<()> {
+        let (client, mut server) = UnixStream::pair()?;
+        let client = Arc::new(ChildBroker::from_stream(
+            client,
+            Some("https://api.example/api/v1/instances".into()),
+            None,
+        ));
+        let authorize = |client: Arc<ChildBroker>| {
+            tokio::spawn(async move {
+                client
+                    .authorize(AuthorizationRequest {
+                        audience: ResourceAudience::HostedModels,
+                        method: "POST",
+                        url: "https://api.example/api/v1/instances/responses",
+                    })
+                    .await
+            })
+        };
+        let granted = |proof: &str| ParentResponse::Authorization {
+            authorization: format!("DPoP {proof}"),
+            dpop: proof.into(),
+            expires_at: (std::time::SystemTime::now() + Duration::from_secs(60))
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        };
+        let abandoned = authorize(client.clone());
+        let _: ChildRequest = read_frame(&mut server).await?;
+        abandoned.abort();
+        assert!(abandoned.await.unwrap_err().is_cancelled());
+        let next = authorize(client.clone());
+        write_frame(&mut server, &granted("stale-proof")).await?;
+        let _: ChildRequest = read_frame(&mut server).await?;
+        write_frame(&mut server, &granted("fresh-proof")).await?;
+        assert_eq!(next.await??.dpop(), Some("fresh-proof"));
+        let unknown = authorize(client.clone());
+        let _: ChildRequest = read_frame(&mut server).await?;
+        write_frame(
+            &mut server,
+            &serde_json::json!({"result":"future_response"}),
+        )
+        .await?;
+        assert_eq!(unknown.await?.unwrap_err(), AuthorizationError::Unavailable);
+        let recovered = authorize(client.clone());
+        let _: ChildRequest = read_frame(&mut server).await?;
+        write_frame(&mut server, &granted("recovered-proof")).await?;
+        assert_eq!(recovered.await??.dpop(), Some("recovered-proof"));
+        drop(server);
+        assert_eq!(
+            authorize(client).await?.unwrap_err(),
+            AuthorizationError::Unavailable
+        );
+        Ok(())
+    }
+
     #[test]
     fn missing_or_non_socket_descriptor_is_rejected_without_taking_ownership() {
         assert!(validate_inherited_socket(-1).is_err());
@@ -1586,11 +1868,11 @@ mod tests {
     #[tokio::test]
     async fn ipc_authorization_does_not_accept_ready_as_a_credential() {
         let (client, mut server) = UnixStream::pair().unwrap();
-        let client = ChildBroker {
-            stream: Mutex::new(Some(client)),
-            resource_base: Some("https://api.example/api/v1/instances".into()),
-            identity: None,
-        };
+        let client = ChildBroker::from_stream(
+            client,
+            Some("https://api.example/api/v1/instances".into()),
+            None,
+        );
         let peer = tokio::spawn(async move {
             let _: ChildRequest = read_frame(&mut server).await.unwrap();
             write_frame(&mut server, &ParentResponse::Ready)
@@ -1614,11 +1896,7 @@ mod tests {
     #[tokio::test]
     async fn ipc_transports_per_request_proofs_and_denials() {
         let (client, mut server) = UnixStream::pair().unwrap();
-        let client = ChildBroker {
-            stream: Mutex::new(Some(client)),
-            resource_base: None,
-            identity: None,
-        };
+        let client = ChildBroker::from_stream(client, None, None);
         assert_eq!(
             client.attribution(),
             AuthorizationAttribution::InstanceGrant

@@ -158,6 +158,8 @@ const capabilityIcons: Record<string, CapabilityInfo> = {
 const LLM_LIKE_TYPES = new Set([IBitTypes.Llm, IBitTypes.Vlm]);
 
 function isHostedModel(bit: IBit): boolean {
+	if (bit.parameters?.provider?.provider_name === "custom:claude-code")
+		return false;
 	// An MLX root looks artifact-free but downloads its inline manifest locally,
 	// so it is never hosted — and never runnable in the browser.
 	if (isMlxModelBit(bit)) return false;
@@ -267,14 +269,16 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		for (const bit of asArray(customBits.data)) merged.set(bit.id, bit);
 		return Array.from(merged.values());
 	}, [foundBits.data, customBits.data]);
-	const { canHostLlamaCPP, canHostMLX } = backend.capabilities();
+	const { canHostLlamaCPP, canHostMLX, canUseNativeAgentProviders } =
+		backend.capabilities();
 	const hostableBits = useMemo(
 		() =>
 			filterHostableLlmModels(allBits, {
 				canHostLlamaCPP,
 				canHostMLX,
+				canUseNativeAgentProviders: !webMode && canUseNativeAgentProviders,
 			}),
-		[allBits, canHostLlamaCPP, canHostMLX],
+		[allBits, canHostLlamaCPP, canHostMLX, canUseNativeAgentProviders, webMode],
 	);
 
 	const imageBlacklist = useCallback(async () => {

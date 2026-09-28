@@ -1,11 +1,12 @@
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 use super::{ConfluenceUser, parse_confluence_user};
@@ -96,7 +97,7 @@ impl NodeLogic for GetConfluenceCommentsNode {
             return Err(flow_like_types::anyhow!("Page ID is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let url = if provider.is_cloud {
             provider.confluence_api_url(&format!("/pages/{}/footer-comments", page_id))
@@ -108,7 +109,7 @@ impl NodeLogic for GetConfluenceCommentsNode {
         };
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;

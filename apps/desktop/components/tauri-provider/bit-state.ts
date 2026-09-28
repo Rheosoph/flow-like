@@ -17,6 +17,11 @@ import {
 	getTtsAssetRepairPlan,
 	localTtsAssetId,
 } from "@flow-like/flow-like-ui";
+import {
+	type ExternalModelCatalog,
+	type ExternalModelProvider,
+	discoverExternalModelCatalog,
+} from "@flow-like/flow-like-ui/lib/bit/external-model-providers";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IBitSearchQuery } from "@flow-like/flow-like-ui/lib/schema/hub/bit-search-query";
 import { invoke } from "@tauri-apps/api/core";
@@ -26,6 +31,20 @@ import type { TauriBackend } from "../tauri-provider";
 
 export class BitState implements IBitState {
 	constructor(private readonly backend: TauriBackend) {}
+
+	async listExternalModels(
+		provider: ExternalModelProvider,
+	): Promise<ExternalModelCatalog> {
+		if (!this.backend.capabilities().canUseNativeAgentProviders) {
+			return {
+				available: false,
+				authenticated: false,
+				models: [],
+				message: "Native model discovery is only available on desktop.",
+			};
+		}
+		return discoverExternalModelCatalog(provider, invoke);
+	}
 
 	private async upsertAdminBit(
 		profile: IProfile,

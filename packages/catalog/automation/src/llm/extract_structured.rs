@@ -1,3 +1,6 @@
+use super::add_screenshot_pins;
+#[cfg(feature = "execute")]
+use super::{SubmitTool, call_tool, missing_tool_call, require_screenshot, vision_history};
 use flow_like::{
     bit::Bit,
     flow::{
@@ -8,74 +11,38 @@ use flow_like::{
         variable::VariableType,
     },
 };
-#[cfg(feature = "execute")]
-use flow_like_types::anyhow;
-use flow_like_types::{Value, async_trait, json};
-#[cfg(feature = "execute")]
-use rig::completion::{Completion, Message, ToolDefinition};
-#[cfg(feature = "execute")]
-use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
-#[cfg(feature = "execute")]
-use rig::tool::Tool;
+use flow_like_types::{Value, anyhow, async_trait, json};
 
 #[cfg(feature = "execute")]
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct ExtractTool {
-    parameters: Value,
+const TOOL: &str = "submit_extraction";
+
+#[derive(Debug)]
+struct PreparedSchema {
     output_schema: Value,
 }
 
-#[cfg(feature = "execute")]
-#[derive(Debug)]
-struct ExtractError(String);
-
-#[cfg(feature = "execute")]
-impl std::fmt::Display for ExtractError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Extract error: {}", self.0)
+impl PreparedSchema {
+    /// Tool arguments must be an object, so other schemas are wrapped as `{ "value": … }`.
+    #[cfg(any(feature = "execute", test))]
+    fn wrapped(&self) -> bool {
+        self.output_schema.get("type").and_then(Value::as_str) != Some("object")
     }
-}
 
-#[cfg(feature = "execute")]
-impl std::error::Error for ExtractError {}
-
-#[cfg(feature = "execute")]
-impl Tool for ExtractTool {
-    const NAME: &'static str = "submit_extraction";
-    type Error = ExtractError;
-    type Args = Value;
-    type Output = Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Submit extracted structured data".to_string(),
-            parameters: self.parameters.clone(),
+    #[cfg(feature = "execute")]
+    fn tool_parameters(&self) -> Value {
+        if self.wrapped() {
+            json::json!({
+                "type": "object",
+                "properties": {"value": self.output_schema.clone()},
+                "required": ["value"],
+                "additionalProperties": false
+            })
+        } else {
+            self.output_schema.clone()
         }
     }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        jsonschema::validate(&self.output_schema, &args)
-            .map_err(|e| ExtractError(format!("Schema validation failed: {}", e)))?;
-        Ok(args)
-    }
-
-    fn name(&self) -> String {
-        Self::NAME.to_string()
-    }
 }
 
-#[crate::register_node]
-#[derive(Default)]
-pub struct LLMExtractFromScreenNode {}
-
-impl LLMExtractFromScreenNode {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-#[cfg(feature = "execute")]
 fn looks_like_schema(value: &Value) -> bool {
     const SCHEMA_KEYWORDS: &[&str] = &[
         "type",
@@ -97,32 +64,80 @@ fn looks_like_schema(value: &Value) -> bool {
         .is_some_and(|obj| SCHEMA_KEYWORDS.iter().any(|kw| obj.contains_key(*kw)))
 }
 
-#[cfg(feature = "execute")]
-fn prepare_schema(raw: &str) -> flow_like_types::Result<(Value, Value)> {
-    let user_json =
-        json::from_str::<Value>(raw.trim()).map_err(|e| anyhow!("Invalid JSON schema: {e}"))?;
-
-    let is_schema = looks_like_schema(&user_json)
-        && jsonschema::meta::try_is_valid(&user_json).unwrap_or(false);
-    let schema = if is_schema {
-        user_json
-    } else {
-        let inferred = schemars::schema_for_value!(&user_json);
-        json::from_str(&json::to_string_pretty(&inferred)?)?
-    };
-
-    let tool_params = if schema.get("type").and_then(|t| t.as_str()) == Some("object") {
-        schema.clone()
-    } else {
-        json::json!({
-            "type": "object",
-            "properties": {"value": schema.clone()},
-            "required": ["value"],
-            "additionalProperties": false
+/// Compiles the schema (meta-schema checked, remote `$ref`s refused, linear-time regexes) and
+/// lists up to five places where `instance` violates it. `None` only checks the schema.
+fn schema_violations(
+    schema: &Value,
+    instance: Option<&Value>,
+) -> flow_like_types::Result<Vec<String>> {
+    let validator = flow_like_catalog_core::ontology_action_parameter_validator(schema)
+        .map_err(|e| anyhow!("Schema is not a usable JSON Schema: {e}"))?;
+    Ok(instance
+        .map(|instance| {
+            validator
+                .iter_errors(instance)
+                .take(5)
+                .map(|error| {
+                    let path = error.instance_path.to_string();
+                    let path = if path.is_empty() { "/" } else { path.as_str() };
+                    format!("{path}: {error}")
+                })
+                .collect()
         })
-    };
+        .unwrap_or_default())
+}
 
-    Ok((tool_params, schema))
+/// Accepts a JSON Schema, or example JSON whose schema is inferred.
+fn prepare_schema(raw: &str) -> flow_like_types::Result<PreparedSchema> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("Schema cannot be empty"));
+    }
+    let user_json = json::from_str::<Value>(trimmed)
+        .map_err(|e| anyhow!("Schema must be valid JSON (a JSON Schema or example JSON): {e}"))?;
+
+    let output_schema =
+        if looks_like_schema(&user_json) && schema_violations(&user_json, None).is_ok() {
+            user_json
+        } else {
+            let inferred = json::to_value(schemars::schema_for_value!(&user_json))?;
+            schema_violations(&inferred, None)?;
+            inferred
+        };
+
+    Ok(PreparedSchema { output_schema })
+}
+
+/// Unwraps the tool arguments and checks them against the user's schema, naming each failing
+/// path.
+#[cfg(any(feature = "execute", test))]
+fn extracted_value(prepared: &PreparedSchema, arguments: Value) -> flow_like_types::Result<Value> {
+    let data = if prepared.wrapped() {
+        arguments
+            .get("value")
+            .cloned()
+            .ok_or_else(|| anyhow!("The model's `submit_extraction` call has no 'value' field"))?
+    } else {
+        arguments
+    };
+    let violations = schema_violations(&prepared.output_schema, Some(&data))?;
+    if !violations.is_empty() {
+        return Err(anyhow!(
+            "Extracted data does not match the schema: {}",
+            violations.join("; ")
+        ));
+    }
+    Ok(data)
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct LLMExtractFromScreenNode {}
+
+impl LLMExtractFromScreenNode {
+    pub fn new() -> Self {
+        Self {}
+    }
 }
 
 #[async_trait]
@@ -136,7 +151,7 @@ impl NodeLogic for LLMExtractFromScreenNode {
         );
         node.set_flowscript_name("automation.llm", "extractFromScreen");
         node.add_icon("/flow/icons/bot-search.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()
@@ -160,12 +175,7 @@ impl NodeLogic for LLMExtractFromScreenNode {
         .set_schema::<Bit>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
-        node.add_input_pin(
-            "screenshot",
-            "Screenshot",
-            "Base64-encoded screenshot",
-            VariableType::String,
-        );
+        add_screenshot_pins(&mut node, "Screenshot", false);
 
         node.add_input_pin(
             "schema",
@@ -187,7 +197,7 @@ impl NodeLogic for LLMExtractFromScreenNode {
         node.add_output_pin(
             "data",
             "Data",
-            "Extracted structured data",
+            "Extracted structured data, validated against the schema",
             VariableType::Generic,
         );
 
@@ -198,99 +208,41 @@ impl NodeLogic for LLMExtractFromScreenNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_model_provider::history::{
-            Content, ContentType, History, HistoryMessage, ImageUrl as HistoryImageUrl,
-            MessageContent, Role,
-        };
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let model_bit: Bit = context.evaluate_pin("model").await?;
-        let screenshot: String = context.evaluate_pin("screenshot").await?;
         let schema_str: String = context.evaluate_pin("schema").await?;
         let hint: String = context.evaluate_pin("hint").await.unwrap_or_default();
+        let prepared = prepare_schema(&schema_str)?;
+        let screenshot = require_screenshot(context).await?;
 
-        let (tool_params, output_schema) = prepare_schema(&schema_str)?;
-
-        let prompt = if hint.is_empty() {
-            "Extract the requested data from this screenshot according to the schema.".to_string()
+        let request = if hint.is_empty() {
+            "Extract the requested data from this screenshot.".to_string()
         } else {
-            format!("Extract data from this screenshot. Hint: {}", hint)
+            format!("Extract the requested data from this screenshot. Hint: {hint}")
         };
+        let instructions =
+            format!("{request}\n\nCall `{TOOL}` with data matching its parameter schema.");
 
-        let content_parts = vec![
-            Content::Image {
-                content_type: ContentType::ImageUrl,
-                image_url: HistoryImageUrl {
-                    url: format!("data:image/png;base64,{}", screenshot),
-                    detail: None,
-                    media_type: Some("image/png".to_string()),
-                    additional_params: None,
-                },
+        let preamble = "You are a data extraction expert. Extract structured data from screenshots according to the provided schema. Report only what is visible; never invent values.";
+
+        let arguments = call_tool(
+            context,
+            &model_bit,
+            vision_history(&[&screenshot.image], &instructions),
+            preamble,
+            SubmitTool {
+                name: TOOL,
+                description: "Submit extracted structured data",
+                parameters: prepared.tool_parameters(),
             },
-            Content::Text {
-                content_type: ContentType::Text,
-                text: prompt.clone(),
-            },
-        ];
+        )
+        .await?
+        .ok_or_else(|| missing_tool_call(TOOL))?;
 
-        let history = History::new(
-            "".to_string(),
-            vec![HistoryMessage {
-                role: Role::User,
-                content: MessageContent::Contents(content_parts),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                annotations: None,
-            }],
-        );
+        let data = extracted_value(&prepared, arguments)?;
 
-        let preamble = "You are a data extraction expert. Extract structured data from screenshots according to the provided schema.";
-
-        let agent_builder = model_bit
-            .agent(context, &Some(history))
-            .await?
-            .preamble(preamble)
-            .tool(ExtractTool {
-                parameters: tool_params,
-                output_schema: output_schema.clone(),
-            })
-            .tool_choice(ToolChoice::Required);
-
-        let agent = agent_builder.build();
-
-        let response = agent
-            .completion(prompt, Vec::<Message>::new())
-            .await
-            .map_err(|e| anyhow!("LLM completion failed: {}", e))?
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to send request: {}", e))?;
-
-        let mut extracted: Option<Value> = None;
-        for content in response.choice {
-            if let AssistantContent::ToolCall(ToolCall {
-                function: ToolFunction {
-                    name, arguments, ..
-                },
-                ..
-            }) = content
-                && name == "submit_extraction"
-            {
-                extracted = Some(arguments);
-            }
-        }
-
-        let data = extracted.ok_or_else(|| anyhow!("LLM did not return extracted data"))?;
-
-        let final_data = if output_schema.get("type").and_then(|t| t.as_str()) != Some("object") {
-            data.get("value").cloned().unwrap_or(data)
-        } else {
-            data
-        };
-
-        context.set_pin_value("data", final_data).await?;
+        context.set_pin_value("data", data).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
@@ -303,7 +255,6 @@ impl NodeLogic for LLMExtractFromScreenNode {
         ))
     }
 
-    #[cfg(feature = "execute")]
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         node.error = None;
         node.harmonize_type(vec!["data"], true);
@@ -317,38 +268,72 @@ impl NodeLogic for LLMExtractFromScreenNode {
             })
             .and_then(|value| value.as_str().map(|s| s.to_string()));
 
-        if let Some(raw) = schema_value {
-            if raw.trim().is_empty() {
-                node.error = Some("Schema cannot be empty".to_string());
-                return;
-            }
-            match prepare_schema(&raw) {
-                Ok((_, output_schema)) => {
-                    let schema_type = output_schema.get("type").and_then(|t| t.as_str());
-                    let (pin_schema, value_type) = match schema_type {
-                        Some("array") => {
-                            let items = output_schema
+        let Some(raw) = schema_value else {
+            return;
+        };
+        match prepare_schema(&raw) {
+            Ok(prepared) => {
+                let (pin_schema, value_type) =
+                    match prepared.output_schema.get("type").and_then(Value::as_str) {
+                        Some("array") => (
+                            prepared
+                                .output_schema
                                 .get("items")
                                 .cloned()
-                                .unwrap_or(json::json!({}));
-                            (items, ValueType::Array)
-                        }
-                        _ => (output_schema, ValueType::Normal),
+                                .unwrap_or(json::json!({})),
+                            ValueType::Array,
+                        ),
+                        _ => (prepared.output_schema, ValueType::Normal),
                     };
-                    if let Some(pin) = node.get_pin_mut_by_name("data") {
-                        pin.schema = json::to_string(&pin_schema).ok();
-                        pin.value_type = value_type;
-                        pin.data_type = VariableType::Struct;
-                    }
+                if let Some(pin) = node.get_pin_mut_by_name("data") {
+                    pin.schema = json::to_string(&pin_schema).ok();
+                    pin.value_type = value_type;
+                    pin.data_type = VariableType::Struct;
                 }
-                Err(e) => node.error = Some(format!("Schema error: {}", e)),
             }
+            Err(e) => node.error = Some(format!("Schema error: {e}")),
         }
     }
+}
 
-    #[cfg(not(feature = "execute"))]
-    async fn on_update(&self, node: &mut Node, _board: &Board) {
-        node.error = None;
-        node.harmonize_type(vec!["data"], true);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn object_schema_is_used_directly_and_violations_name_the_path() {
+        let prepared = prepare_schema(
+            r#"{"type":"object","properties":{"total":{"type":"number"},"items":{"type":"array","items":{"type":"string"}}},"required":["total"]}"#,
+        )
+        .unwrap();
+        assert!(!prepared.wrapped());
+        assert!(extracted_value(&prepared, json::json!({"total": 3, "items": ["a"]})).is_ok());
+        let error = extracted_value(&prepared, json::json!({"total": "3", "items": [1]}))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("/total"), "{error}");
+        assert!(error.contains("/items/0"), "{error}");
+        let missing = extracted_value(&prepared, json::json!({}))
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("total"), "{missing}");
+    }
+
+    #[test]
+    fn example_json_and_array_schemas_are_wrapped() {
+        let example = prepare_schema(r#"{"type": "invoice", "total": 3}"#).unwrap();
+        assert!(!example.wrapped());
+        assert!(example.output_schema["properties"]["total"].is_object());
+
+        let list = prepare_schema(r#"{"type":"array","items":{"type":"string"}}"#).unwrap();
+        assert!(list.wrapped());
+        assert_eq!(
+            extracted_value(&list, json::json!({"value": ["a", "b"]})).unwrap(),
+            json::json!(["a", "b"])
+        );
+        assert!(extracted_value(&list, json::json!({"value": [1]})).is_err());
+        assert!(extracted_value(&list, json::json!({"other": []})).is_err());
+        assert!(prepare_schema("  ").is_err());
+        assert!(prepare_schema("{not json").is_err());
     }
 }

@@ -47,7 +47,7 @@ impl NodeLogic for BrowserGetConsoleLogsNode {
         let mut node = Node::new(
             "browser_get_console_logs",
             "Get Console Logs",
-            "Retrieves console messages from the browser (logs, warnings, errors)",
+            "Retrieves captured console messages, uncaught page exceptions, and browser log entries such as failed resource loads. Requires a running console or network observer.",
             "Automation/Browser/Observe",
         );
         node.set_version(1);
@@ -123,7 +123,7 @@ impl NodeLogic for BrowserGetConsoleLogsNode {
         node.add_output_pin(
             "has_errors",
             "Has Errors",
-            "Whether there are error-level logs",
+            "Whether any returned entry is an error, including uncaught exceptions and failed resource loads",
             VariableType::Boolean,
         );
 
@@ -138,20 +138,16 @@ impl NodeLogic for BrowserGetConsoleLogsNode {
         let level_filter: String = context.evaluate_pin("level_filter").await?;
 
         let state = super::protocol::network_state(context, &session).await?;
-        let all_logs = {
+        let logs: Vec<ConsoleMessage> = {
             let state = state.lock().await;
             if let Some(error) = &state.failure {
                 return Err(flow_like_types::anyhow!(error.clone()));
             }
-            state.console_logs.clone()
-        };
-
-        let logs: Vec<ConsoleMessage> = if level_filter.is_empty() {
-            all_logs
-        } else {
-            all_logs
-                .into_iter()
-                .filter(|l| l.level == level_filter)
+            state
+                .console_logs
+                .iter()
+                .filter(|l| level_filter.is_empty() || l.level == level_filter)
+                .cloned()
                 .collect()
         };
 
@@ -275,7 +271,7 @@ impl NodeLogic for BrowserStartNetworkObserverNode {
         let mut node = Node::new(
             "browser_start_network_observer",
             "Start Network Observer",
-            "Starts observing network requests using the Performance API",
+            "Starts observing network requests and console output (including uncaught exceptions) through the Chrome DevTools Protocol. Chrome and Edge only.",
             "Automation/Browser/Observe",
         );
         node.set_version(1);
@@ -458,9 +454,9 @@ impl NodeLogic for BrowserGetNetworkRequestsNode {
             }
             if clear_after {
                 state.request_ids.clear();
-                std::mem::take(&mut state.requests)
+                Vec::from(std::mem::take(&mut state.requests))
             } else {
-                state.requests.clone()
+                state.requests.iter().cloned().collect::<Vec<_>>()
             }
         };
 

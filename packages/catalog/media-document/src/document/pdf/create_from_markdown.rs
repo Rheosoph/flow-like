@@ -205,11 +205,17 @@ async fn resolve_images(
     context: &mut ExecutionContext,
     urls: &[String],
 ) -> std::collections::HashMap<String, super::render::EmbeddedImage> {
-    use flow_like::flow::execution::LogLevel;
+    use flow_like::flow::execution::{LogLevel, egress::GuardedHttpClient};
     use std::collections::HashMap;
 
     let mut resolved = HashMap::new();
-    let client = flow_like_types::reqwest::Client::new();
+    let client = match GuardedHttpClient::new(context.execution_environment()) {
+        Ok(client) => client,
+        Err(err) => {
+            context.log_message(&format!("Skipping images: {err}"), LogLevel::Warn);
+            return resolved;
+        }
+    };
 
     for url in urls {
         if resolved.contains_key(url) {
@@ -243,7 +249,7 @@ async fn resolve_images(
 #[cfg(feature = "execute")]
 async fn fetch_image_bytes(
     context: &mut ExecutionContext,
-    client: &flow_like_types::reqwest::Client,
+    client: &flow_like::flow::execution::egress::GuardedHttpClient,
     url: &str,
 ) -> flow_like_types::Result<Vec<u8>> {
     if let Some(rest) = url.strip_prefix("data:") {
@@ -259,7 +265,7 @@ async fn fetch_image_bytes(
 
     if url.starts_with("http://") || url.starts_with("https://") {
         let response = client
-            .get(url)
+            .get(url)?
             .send()
             .await
             .map_err(flow_like_types::reqwest::Error::without_url)?;

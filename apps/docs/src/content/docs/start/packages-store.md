@@ -11,8 +11,8 @@ registry is part of the **Explore** hub alongside community Apps.
 ## Open the registry
 
 Open **Explore**, then select **Packages** in the header. The same destination
-is available from **Library → Packages → Browse Packages** in Flow-Like
-Desktop.
+is available from **Explore packages** in the header of the sidebar's
+**Packages** page.
 
 ## Browsing Packages
 
@@ -108,7 +108,7 @@ and the package works again. You can also select **Reactivate** on the
 
 ## Remove or update
 
-Open **Library → Packages** to search installed packages, apply available
+Open **Packages › Library** to search installed packages, apply available
 updates, inspect details, or uninstall a package from the device.
 
 Before uninstalling, check which Apps use the package. Removing the local copy

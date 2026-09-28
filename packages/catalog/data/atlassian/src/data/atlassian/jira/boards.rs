@@ -1,11 +1,12 @@
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 use super::JiraIssue;
@@ -145,7 +146,7 @@ impl NodeLogic for GetBoardsNode {
         let board_type: String = context.evaluate_pin("board_type").await.unwrap_or_default();
         let name: String = context.evaluate_pin("name").await.unwrap_or_default();
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let mut params = vec![];
         if !project_key.is_empty() {
@@ -167,7 +168,7 @@ impl NodeLogic for GetBoardsNode {
         }
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;
@@ -315,7 +316,7 @@ impl NodeLogic for GetBoardIssuesNode {
         let max_results: i64 = context.evaluate_pin("max_results").await.unwrap_or(50);
         let start_at: i64 = context.evaluate_pin("start_at").await.unwrap_or(0);
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let mut params = vec![
             format!("maxResults={}", max_results),
@@ -332,7 +333,7 @@ impl NodeLogic for GetBoardIssuesNode {
         );
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;
@@ -459,7 +460,7 @@ impl NodeLogic for GetBacklogNode {
         let board_id: i64 = context.evaluate_pin("board_id").await?;
         let max_results: i64 = context.evaluate_pin("max_results").await.unwrap_or(50);
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         let url = format!(
             "{}?maxResults={}",
@@ -468,7 +469,7 @@ impl NodeLogic for GetBacklogNode {
         );
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;

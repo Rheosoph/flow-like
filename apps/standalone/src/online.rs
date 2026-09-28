@@ -1,6 +1,8 @@
+pub(crate) use crate::broker::authorization_error;
 use crate::{
+    broker::instance_json,
     config::{PlacementConfig, WorkloadIdentity},
-    enrollment::{http_client, response_json, unix_time},
+    enrollment::{api_status, http_client, unix_time},
 };
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
@@ -37,7 +39,10 @@ use serde::de::DeserializeOwned;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicI64, Ordering},
+    },
     time::{Duration, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
@@ -48,10 +53,38 @@ mod metadata;
 pub mod outage;
 mod writes;
 
+#[cfg(not(test))]
+const REPLAY_BASE_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(test)]
+const REPLAY_BASE_TIMEOUT: Duration = Duration::from_secs(1);
+const REPLAY_MIN_BYTES_PER_SECOND: u64 = 16 * 1024;
+const REPLAY_MAX_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// Large buffered writes must stay deliverable on slow uplinks, so each replay
+/// gets a total deadline that scales with its body instead of the 20-second
+/// limit of small control requests. There is no read timeout: reqwest arms it
+/// once for the whole upload and commit, and upload progress never resets it.
+/// TCP keepalive detects a dead peer.
+fn replay_client() -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(Duration::from_secs(10))
+        .tcp_keepalive(Duration::from_secs(30))
+        .user_agent(concat!("flow-like-standalone/", env!("CARGO_PKG_VERSION")))
+        .build()?)
+}
+
+fn replay_timeout(body_bytes: usize) -> Duration {
+    (REPLAY_BASE_TIMEOUT + Duration::from_secs(body_bytes as u64 / REPLAY_MIN_BYTES_PER_SECOND))
+        .min(REPLAY_MAX_TIMEOUT)
+}
+
 #[derive(Clone)]
 struct ProjectClient {
     authorizer: Arc<dyn RequestAuthorizer>,
     client: reqwest::Client,
+    replay_client: reqwest::Client,
     base: String,
 }
 impl ProjectClient {
@@ -78,17 +111,23 @@ impl ProjectClient {
         Ok(Self {
             authorizer,
             client: http_client()?,
+            replay_client: replay_client()?,
             base,
         })
     }
     async fn fetch<T: DeserializeOwned>(&self, method: reqwest::Method, path: &str) -> Result<T> {
-        self.request(method, path, None).await
+        self.request(&self.client, method, path, None).await
+    }
+    async fn replay<T: DeserializeOwned>(&self, path: &str, body: Vec<u8>) -> Result<T> {
+        self.request(&self.replay_client, reqwest::Method::POST, path, Some(body))
+            .await
     }
     async fn request<T: DeserializeOwned>(
         &self,
+        client: &reqwest::Client,
         method: reqwest::Method,
         path: &str,
-        body: Option<&serde_json::Value>,
+        body: Option<Vec<u8>>,
     ) -> Result<T> {
         let url = format!("{}/{}", self.base, path);
         let authorization = self
@@ -107,15 +146,17 @@ impl ProjectClient {
                 .context("Missing project possession proof")?,
         )?;
         proof.set_sensitive(true);
-        let mut request = self
-            .client
+        let mut request = client
             .request(method, url)
             .header("authorization", auth)
             .header("dpop", proof);
         if let Some(body) = body {
-            request = request.json(body);
+            request = request
+                .timeout(replay_timeout(body.len()))
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body);
         }
-        response_json(request.send().await?).await
+        instance_json(request.send().await?).await
     }
 }
 
@@ -286,39 +327,22 @@ struct ProjectCredentials {
     cache: Arc<cache::CacheControl>,
     scope: String,
     cache_root: PathBuf,
-    grant_expires_at: Option<i64>,
+    /// The API may extend the grant deadline on renewal; 0 means none.
+    grant_expires_at: AtomicI64,
+    /// A read-only lease under a writable grant pauses writes, for example
+    /// while the project's storage quota is full.
+    writable: AtomicBool,
     snapshot: Option<Arc<outage::SnapshotStore>>,
     revoked: tokio_util::sync::CancellationToken,
 }
 
-pub(crate) fn authorization_error(error: &anyhow::Error) -> AuthorizationError {
-    if let Some(error) = error.downcast_ref::<AuthorizationError>() {
-        return *error;
-    }
-    match crate::enrollment::api_status(error) {
-        Some(reqwest::StatusCode::FORBIDDEN) => AuthorizationError::Denied,
-        Some(status)
-            if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS =>
-        {
-            AuthorizationError::Unavailable
-        }
-        Some(_) => AuthorizationError::InvalidResponse,
-        None if error.chain().any(|source| {
-            source
-                .downcast_ref::<reqwest::Error>()
-                .is_some_and(|error| {
-                    error.status().is_none()
-                        && (error.is_connect()
-                            || error.is_timeout()
-                            || error.is_body()
-                            || error.is_request())
-                })
-        }) =>
-        {
-            AuthorizationError::Unavailable
-        }
-        _ => AuthorizationError::InvalidResponse,
-    }
+const READ_ONLY_STORAGE: &str = "Project storage is read-only for this placement: the grant is read-only or the project's storage quota is full. Reads continue; free storage or raise the quota to resume writes";
+
+fn local_authorization_error(error: &anyhow::Error) -> AuthorizationError {
+    error
+        .downcast_ref::<AuthorizationError>()
+        .copied()
+        .unwrap_or(AuthorizationError::Unavailable)
 }
 
 impl ProjectCredentials {
@@ -386,7 +410,7 @@ impl ProjectCredentials {
                         snapshot.revoke().await?;
                     }
                 }
-                return Err(match crate::enrollment::api_status(&error) {
+                return Err(match api_status(&error) {
                     Some(
                         reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::METHOD_NOT_ALLOWED,
                     ) => anyhow::anyhow!(
@@ -410,9 +434,10 @@ impl ProjectCredentials {
             max_cache_bytes,
         )?;
         ensure!(
-            !cache.is_revoked(),
+            !cache.is_revoked()?,
             "Device storage authorization was revoked; deploy a new project grant"
         );
+        let writable = context.access == OnlineProjectAccess::ReadWrite;
         let provider = Arc::new(Self {
             client,
             config: config.clone(),
@@ -431,42 +456,34 @@ impl ProjectCredentials {
             cache,
             scope,
             cache_root: cache_root.to_path_buf(),
-            grant_expires_at: (context.grant_expires_at > 0).then_some(context.grant_expires_at),
+            grant_expires_at: AtomicI64::new(context.grant_expires_at.max(0)),
+            writable: AtomicBool::new(writable),
             snapshot,
             revoked: tokio_util::sync::CancellationToken::new(),
         });
-        if let Some(expiry) = provider.grant_expires_at {
-            let weak = Arc::downgrade(&provider);
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(
-                    (expiry - unix_time().unwrap_or(expiry)).max(0) as u64,
-                ))
-                .await;
-                if let Some(provider) = weak.upgrade() {
-                    // The authenticated deadline is already durable in the
-                    // supervisor. A slow refresh must not extend execution.
-                    let _ = provider.cache.revoke();
-                    provider.revoked.cancel();
-                    let _ = provider.revoke().await;
-                }
-            });
-        }
         let weak = Arc::downgrade(&provider);
         tokio::spawn(async move {
             loop {
                 let Some(provider) = weak.upgrade() else {
                     return;
                 };
-                if provider.cache.is_revoked() {
-                    let _ = provider.revoke().await;
-                    return;
+                match provider.cache.is_revoked() {
+                    Ok(true) => {
+                        let _ = provider.revoke().await;
+                        return;
+                    }
+                    Ok(false) => {}
+                    Err(error) => tracing::warn!(
+                        placement_id = %provider.config.id,
+                        "Unable to read the device cache authorization state; retrying: {error:#}"
+                    ),
                 }
                 let state = provider.state.lock().await;
-                if state.denied {
+                if state.denied || provider.revoked.is_cancelled() {
                     return;
                 }
                 let next = provider
-                    .grant_expires_at
+                    .grant_deadline()
                     .map_or(state.next_refresh, |expiry| expiry.min(state.next_refresh));
                 let wait = (next - unix_time().unwrap_or(0)).clamp(1, 5) as u64;
                 drop(state);
@@ -475,10 +492,31 @@ impl ProjectCredentials {
                 let Some(provider) = weak.upgrade() else {
                     return;
                 };
+                // Failures, including an expired broker token whose renewal
+                // failed, back off inside refresh. Only the grant deadline or a
+                // denial ends the loop, through the checks above.
                 let _ = provider.refresh(false).await;
             }
         });
         Ok((provider, metadata))
+    }
+
+    fn grant_deadline(&self) -> Option<i64> {
+        Some(self.grant_expires_at.load(Ordering::Acquire)).filter(|deadline| *deadline > 0)
+    }
+
+    /// The current deadline elapsed with no confirmed denial: stop serving in
+    /// this process only. A restart renews the grant or receives the denial.
+    fn grant_elapsed(&self, now: i64) -> bool {
+        if !self
+            .grant_deadline()
+            .is_some_and(|deadline| now >= deadline)
+        {
+            return false;
+        }
+        self.cache.suspend();
+        self.revoked.cancel();
+        true
     }
 
     fn provider(self: &Arc<Self>, purpose: StoragePurpose) -> Result<Arc<DirectoryCredentials>> {
@@ -505,18 +543,21 @@ impl ProjectCredentials {
         }))
     }
 
+    /// Only a durable revocation that was read is a denial; a local read
+    /// failure is an ordinary error.
     fn authorization_current(&self) -> Result<()> {
-        if self
-            .grant_expires_at
-            .is_some_and(|expiry| unix_time().map_or(true, |now| now >= expiry))
-        {
-            self.cache.revoke()?;
-            self.revoked.cancel();
-        }
-        if self.cache.is_revoked() {
+        let revoked = self.cache.is_revoked();
+        if matches!(revoked, Ok(true)) {
             return Err(AuthorizationError::Denied.into());
         }
-        Ok(())
+        if self.grant_elapsed(unix_time().unwrap_or(i64::MAX)) {
+            return Err(AuthorizationError::Expired.into());
+        }
+        revoked.map(|_| ())
+    }
+
+    fn writes_allowed(&self) -> bool {
+        self.writable.load(Ordering::Acquire)
     }
 
     async fn revoke(&self) -> Result<()> {
@@ -539,11 +580,8 @@ impl ProjectCredentials {
     async fn refresh(&self, force: bool) -> std::result::Result<(), AuthorizationError> {
         let _refresh = self.refreshing.lock().await;
         let now = unix_time().map_err(|_| AuthorizationError::Unavailable)?;
-        if self.grant_expires_at.is_some_and(|expiry| now >= expiry) {
-            self.revoke()
-                .await
-                .map_err(|_| AuthorizationError::Unavailable)?;
-            return Err(AuthorizationError::Denied);
+        if self.grant_elapsed(now) {
+            return Err(AuthorizationError::Expired);
         }
         {
             let state = self.state.lock().await;
@@ -562,15 +600,10 @@ impl ProjectCredentials {
             .and_then(|lease| {
                 validate_lease(&self.config, &self.identity, &lease)
                     .map_err(|_| AuthorizationError::InvalidResponse)?;
-                if self
-                    .grant_expires_at
-                    .zip(lease.grant_expires_at)
-                    .is_some_and(|(previous, current)| current < previous)
-                {
-                    return Err(AuthorizationError::Denied);
-                }
+                // The API narrows a writable grant to read-only while the storage
+                // quota is full and widens it again once storage frees; the
+                // directories and delegating user are the authorization binding.
                 if lease.locations != self.locations
-                    || lease.access != self.access
                     || lease.delegating_user_id != self.delegating_user_id
                 {
                     return Err(AuthorizationError::InvalidResponse);
@@ -580,6 +613,21 @@ impl ProjectCredentials {
         let mut state = self.state.lock().await;
         match result {
             Ok(lease) => {
+                // A renewed or shortened deadline replaces the previous one. An
+                // earlier deadline only stops serving sooner; durable fences
+                // are reserved for confirmed denials.
+                if let Some(deadline) = lease.grant_expires_at {
+                    self.grant_expires_at
+                        .store(deadline.max(1), Ordering::Release);
+                }
+                let writable = lease.access == OnlineProjectAccess::ReadWrite;
+                if self.writable.swap(writable, Ordering::AcqRel) != writable {
+                    tracing::warn!(
+                        placement_id = %self.config.id,
+                        "Project storage writes are {}",
+                        if writable { "available again" } else { "paused: the API issued read-only access, for example because the project's storage quota is full" }
+                    );
+                }
                 state.next_refresh = refresh_at(&lease);
                 state.lease = Some(lease);
                 state.failures = 0;
@@ -644,6 +692,10 @@ fn parse_read_cache_budget(value: Option<&str>) -> Result<u64> {
     Ok(budget.unwrap())
 }
 
+/// Reads are identical under both access levels, so a lease narrowed to
+/// read-only by a full storage quota keeps the writable scope's cache and
+/// outbox. Access stays in the digest as `read_write` so existing scopes keep
+/// their digests.
 pub(crate) fn cache_scope(
     config: &PlacementConfig,
     identity: &WorkloadIdentity,
@@ -659,7 +711,7 @@ pub(crate) fn cache_scope(
         "grant": lease.grant_id,
         "authz_version": lease.authz_version,
         "subject": lease.delegating_user_id,
-        "access": lease.access,
+        "access": OnlineProjectAccess::ReadWrite,
         "locations": lease.locations,
     }))?)
     .to_hex()
@@ -681,10 +733,10 @@ impl StorageCredentialProvider for DirectoryCredentials {
     async fn credential(&self) -> std::result::Result<StorageCredentialLease, AuthorizationError> {
         self.project
             .authorization_current()
-            .map_err(|_| AuthorizationError::Denied)?;
+            .map_err(|error| local_authorization_error(&error))?;
         let now = unix_time().map_err(|_| AuthorizationError::Unavailable)?;
         let mut state = self.project.state.lock().await;
-        if state.denied || self.project.cache.is_revoked() {
+        if state.denied {
             return Err(AuthorizationError::Denied);
         }
         if state
@@ -870,6 +922,100 @@ impl ObjectStore for ProjectStore {
     }
 }
 
+/// Refuses writes locally while the current lease is read-only, so they fail
+/// with a clear reason and leave no unresolved cache write behind.
+struct WriteGate {
+    inner: Arc<dyn ObjectStore>,
+    credentials: Arc<ProjectCredentials>,
+}
+impl std::fmt::Debug for WriteGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StandaloneWriteGate")
+    }
+}
+impl std::fmt::Display for WriteGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StandaloneWriteGate")
+    }
+}
+impl WriteGate {
+    fn check(&self, path: &ObjectPath) -> object_store::Result<()> {
+        if self.credentials.writes_allowed() {
+            return Ok(());
+        }
+        Err(object_store::Error::PermissionDenied {
+            path: path.to_string(),
+            source: READ_ONLY_STORAGE.into(),
+        })
+    }
+}
+#[async_trait]
+impl ObjectStore for WriteGate {
+    async fn put_opts(
+        &self,
+        path: &ObjectPath,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        self.check(path)?;
+        self.inner.put_opts(path, payload, opts).await
+    }
+    async fn put_multipart_opts(
+        &self,
+        path: &ObjectPath,
+        opts: PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.check(path)?;
+        self.inner.put_multipart_opts(path, opts).await
+    }
+    async fn get_opts(
+        &self,
+        path: &ObjectPath,
+        opts: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        self.inner.get_opts(path, opts).await
+    }
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<ObjectPath>>,
+    ) -> BoxStream<'static, object_store::Result<ObjectPath>> {
+        if let Err(error) = self.check(&ObjectPath::default()) {
+            return Box::pin(futures_util::stream::once(async move { Err(error) }));
+        }
+        self.inner.delete_stream(locations)
+    }
+    fn list(
+        &self,
+        prefix: Option<&ObjectPath>,
+    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&ObjectPath>,
+    ) -> object_store::Result<ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+    async fn copy_opts(
+        &self,
+        from: &ObjectPath,
+        to: &ObjectPath,
+        options: CopyOptions,
+    ) -> object_store::Result<()> {
+        self.check(to)?;
+        self.inner.copy_opts(from, to, options).await
+    }
+    async fn rename_opts(
+        &self,
+        from: &ObjectPath,
+        to: &ObjectPath,
+        options: RenameOptions,
+    ) -> object_store::Result<()> {
+        self.check(to)?;
+        self.inner.rename_opts(from, to, options).await
+    }
+}
+
 fn private_cache(root: &Path, placement: &str, instance: &str) -> Result<PathBuf> {
     let mut path = root.to_owned();
     for component in [".standalone-cache", placement, instance] {
@@ -967,7 +1113,7 @@ async fn retain_metadata(
     let Some(snapshot) = &credentials.snapshot else {
         return Ok(metadata);
     };
-    if credentials.grant_expires_at.is_none() {
+    if credentials.grant_deadline().is_none() {
         tracing::warn!(
             "API does not provide grant expiry; restart-safe outage recovery is unavailable until the API is updated"
         );
@@ -975,21 +1121,38 @@ async fn retain_metadata(
     }
     match snapshot.persist(credentials, &metadata).await {
         Ok(()) => Ok(metadata),
-        Err(error) if authorization_error(&error) == AuthorizationError::Unavailable => {
-            let restored = snapshot.restore().await?;
-            ensure!(
-                restored.context.scope == credentials.scope,
-                "Cached metadata authorization no longer matches cloud storage"
-            );
-            Ok(metadata)
-        }
-        Err(error) => {
-            if authorization_error(&error) == AuthorizationError::Denied {
+        Err(error) => match authorization_error(&error) {
+            // An older snapshot is kept only while it matches the live authorization.
+            AuthorizationError::Unavailable => match snapshot.restore().await {
+                Ok(restored) if restored.context.scope == credentials.scope => Ok(metadata),
+                Err(restore) if authorization_error(&restore) == AuthorizationError::Denied => {
+                    Err(restore)
+                }
+                _ => without_outage_recovery(credentials, &error, metadata),
+            },
+            AuthorizationError::Denied => {
                 credentials.revoke().await?;
+                Err(error)
             }
-            Err(error)
-        }
+            AuthorizationError::Expired => Err(error),
+            _ => without_outage_recovery(credentials, &error, metadata),
+        },
     }
+}
+
+/// The live grant was just authorized, so only restart-safe outage recovery is
+/// lost. An older snapshot must not outlive this run.
+fn without_outage_recovery(
+    credentials: &ProjectCredentials,
+    error: &anyhow::Error,
+    metadata: Arc<dyn ObjectStore>,
+) -> Result<Arc<dyn ObjectStore>> {
+    tracing::warn!(
+        placement_id = %credentials.config.id,
+        "Outage recovery is unavailable for this run; it resumes after a successful start: {error:#}"
+    );
+    outage::remove_snapshot(&credentials.cache_root, &credentials.config.id)?;
+    Ok(metadata)
 }
 
 pub(crate) struct PreflightCache {
@@ -1096,13 +1259,10 @@ pub(crate) async fn configure_with_local_data(
         .with_object_prefix(&location.prefix)?
         .with_http_connector(cache::OfflineConnector);
         let store = shared_cloud_store(location, &mut cloud_stores, || {
-            let store = binding.build_store()?;
-            let store = if credentials.access == OnlineProjectAccess::ReadOnly {
-                FlowLikeStore::Other(store).read_only().as_generic()
-            } else {
-                store
-            };
-            Ok(cache::ReadCache::new(store, credentials.cache.clone()))
+            Ok(Arc::new(WriteGate {
+                inner: cache::ReadCache::new(binding.build_store()?, credentials.cache.clone()),
+                credentials: credentials.clone(),
+            }))
         })?;
         routes.push((location.prefix.clone(), store.clone()));
         bindings.push(binding.with_store(store));
@@ -1144,21 +1304,30 @@ pub(crate) async fn configure_with_local_data(
     );
     let registry = scoped_registry(bindings)?;
     local_lance::configure(local_data, runtime, &registry)?;
-    if let Some(buffering) = &config.offline_writes {
-        let manager = writes::configure(
-            config,
-            identity,
-            buffering,
-            credentials.clone(),
-            runtime,
-            local_data,
-            registry.clone(),
-        )
-        .await?;
-        let files = writes::files::wrap(project, manager, &buffering.files)?;
-        runtime.register_app_storage_store(FlowLikeStore::Other(files.clone()));
-        runtime.register_user_store(FlowLikeStore::Other(files.clone()));
-        runtime.register_temporary_store(FlowLikeStore::Other(files));
+    match &config.offline_writes {
+        Some(_) if credentials.access != OnlineProjectAccess::ReadWrite => tracing::warn!(
+            placement_id = %config.id,
+            "Offline write buffering is disabled for this run: {READ_ONLY_STORAGE}"
+        ),
+        Some(buffering) => {
+            let manager = writes::configure(
+                config,
+                identity,
+                buffering,
+                credentials.clone(),
+                runtime,
+                local_data,
+                registry.clone(),
+            )
+            .await?;
+            if !buffering.files.is_empty() {
+                let files = writes::files::wrap(project, manager, &buffering.files)?;
+                runtime.register_app_storage_store(FlowLikeStore::Other(files.clone()));
+                runtime.register_user_store(FlowLikeStore::Other(files.clone()));
+                runtime.register_temporary_store(FlowLikeStore::Other(files));
+            }
+        }
+        None => {}
     }
     Ok(OnlineRuntime {
         registry,
@@ -1259,7 +1428,7 @@ mod tests {
             restart: Default::default(),
         }
     }
-    fn identity() -> WorkloadIdentity {
+    pub(super) fn identity() -> WorkloadIdentity {
         WorkloadIdentity {
             instance_id: "instance".into(),
             device_id: "device".into(),
@@ -1267,7 +1436,7 @@ mod tests {
             key_epoch: 1,
         }
     }
-    fn lease() -> InstanceStorageLease {
+    pub(super) fn lease() -> InstanceStorageLease {
         let prefixes = [
             (StoragePurpose::Files, "apps/project/upload/"),
             (StoragePurpose::Storage, "apps/project/storage/"),
@@ -1467,11 +1636,36 @@ mod tests {
             cache_scope(&config, &restarted, &original, "https://api.example").unwrap(),
             scope
         );
+        let legacy = serde_json::json!({
+            "api_base": "https://api.example",
+            "device": identity.device_id,
+            "device_auth_epoch": identity.device_auth_epoch,
+            "project": config.project_id,
+            "placement": config.id,
+            "grant": original.grant_id,
+            "authz_version": original.authz_version,
+            "subject": original.delegating_user_id,
+            "access": "read_write",
+            "locations": original.locations,
+        });
+        assert_eq!(
+            blake3::hash(&serde_json::to_vec(&legacy).unwrap())
+                .to_hex()
+                .to_string(),
+            scope,
+            "Existing writable scopes keep their cache and outbox digests"
+        );
+        let mut narrowed = original.clone();
+        narrowed.access = OnlineProjectAccess::ReadOnly;
+        assert_eq!(
+            cache_scope(&config, &identity, &narrowed, "https://api.example").unwrap(),
+            scope,
+            "A quota-narrowed lease keeps the writable scope's cache"
+        );
         for (field, value) in [
             ("delegating_user_id", serde_json::json!("other")),
             ("grant_id", serde_json::json!("other")),
             ("authz_version", serde_json::json!(2)),
-            ("access", serde_json::json!("read_only")),
         ] {
             let mut changed = serde_json::to_value(&original).unwrap();
             changed[field] = value;
@@ -1864,7 +2058,7 @@ mod tests {
         );
         status.store(403, Ordering::SeqCst);
         assert_eq!(second.refresh(true).await, Err(AuthorizationError::Denied));
-        assert!(second.cache.is_revoked());
+        assert!(second.cache.is_revoked()?);
         assert!(
             !root
                 .path()
@@ -1948,7 +2142,9 @@ mod tests {
             Box::pin(async move {
                 if request.audience != ResourceAudience::ProjectApi
                     || !((request.method == "POST"
-                        && request.url == format!("{}/storage", self.base))
+                        && ["storage", "offline/replay"]
+                            .iter()
+                            .any(|path| request.url == format!("{}/{path}", self.base)))
                         || (request.method == "GET"
                             && request.url.starts_with(&format!("{}/", self.base))))
                 {
@@ -2076,14 +2272,305 @@ mod tests {
                 .is_err()
         );
         assert!(
-            project.cache.is_revoked(),
+            project.cache.is_revoked().unwrap(),
             "A denied replacement wipes existing scope caches"
         );
         assert_eq!(project.refresh(true).await, Err(AuthorizationError::Denied));
-        assert!(project.cache.is_revoked());
+        assert!(project.cache.is_revoked().unwrap());
         assert!(project.state.lock().await.lease.is_none());
         assert!(retained.get_credential().await.is_err());
         server.abort();
+    }
+
+    pub(super) async fn lease_server(
+        response: Arc<Mutex<InstanceStorageLease>>,
+        status: Arc<std::sync::atomic::AtomicU16>,
+    ) -> Result<(ProjectClient, tokio::task::JoinHandle<()>)> {
+        use axum::response::IntoResponse;
+        let router = axum::Router::new().route(
+            "/instances/project/storage",
+            axum::routing::post(move || {
+                let response = response.clone();
+                let status = status.clone();
+                async move {
+                    let status =
+                        axum::http::StatusCode::from_u16(status.load(Ordering::SeqCst)).unwrap();
+                    if status.is_success() {
+                        axum::Json(response.lock().await.clone()).into_response()
+                    } else {
+                        status.into_response()
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}/instances/project", listener.local_addr()?);
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        Ok((
+            ProjectClient::new(Arc::new(TestAuthorizer { base }))?,
+            server,
+        ))
+    }
+
+    #[tokio::test]
+    async fn renewed_grant_deadlines_extend_access_and_expiry_is_never_durable() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let config = config(root.path());
+        let response = Arc::new(Mutex::new(lease()));
+        let status = Arc::new(std::sync::atomic::AtomicU16::new(200));
+        let first_deadline = unix_time()? + 60;
+        response.lock().await.grant_expires_at = Some(first_deadline);
+        let (client, server) = lease_server(response.clone(), status.clone()).await?;
+        let project =
+            ProjectCredentials::new(client.clone(), &config, &identity(), root.path()).await?;
+        assert_eq!(project.grant_deadline(), Some(first_deadline));
+        let renewed = unix_time()? + 86400;
+        response.lock().await.grant_expires_at = Some(renewed);
+        project.refresh(true).await?;
+        assert_eq!(project.grant_deadline(), Some(renewed));
+        project.authorization_current()?;
+        let shortened = renewed - 3600;
+        response.lock().await.grant_expires_at = Some(shortened);
+        project.refresh(true).await?;
+        assert_eq!(
+            project.grant_deadline(),
+            Some(shortened),
+            "A shortened future deadline narrows access instead of revoking it"
+        );
+        assert!(!project.state.lock().await.denied && !project.cache.is_revoked()?);
+        project.authorization_current()?;
+        status.store(402, Ordering::SeqCst);
+        assert_eq!(
+            project.refresh(true).await,
+            Err(AuthorizationError::Unavailable),
+            "A full storage quota on an older API is not a denial"
+        );
+        project
+            .grant_expires_at
+            .store(unix_time()? - 1, Ordering::Release);
+        assert_eq!(
+            local_authorization_error(&project.authorization_current().unwrap_err()),
+            AuthorizationError::Expired
+        );
+        assert!(project.revoked.is_cancelled());
+        assert_eq!(
+            project.refresh(true).await,
+            Err(AuthorizationError::Expired)
+        );
+        assert!(!project.state.lock().await.denied);
+        assert!(
+            !project.cache.is_revoked()?,
+            "An elapsed deadline must not persist a revocation"
+        );
+        status.store(200, Ordering::SeqCst);
+        let restarted = ProjectCredentials::new(client, &config, &identity(), root.path()).await?;
+        restarted.authorization_current()?;
+        server.abort();
+        Ok(())
+    }
+
+    struct ExpiringAuthorizer {
+        inner: TestAuthorizer,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+    impl RequestAuthorizer for ExpiringAuthorizer {
+        fn resource_base_url(&self, audience: ResourceAudience) -> Option<String> {
+            self.inner.resource_base_url(audience)
+        }
+        fn authorize<'a>(&'a self, request: AuthorizationRequest<'a>) -> AuthorizationFuture<'a> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                return Box::pin(async { Err(AuthorizationError::Expired) });
+            }
+            self.inner.authorize(request)
+        }
+    }
+
+    #[tokio::test]
+    async fn an_expired_broker_token_does_not_stop_background_refresh_before_the_deadline()
+    -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let config = config(root.path());
+        let response = Arc::new(Mutex::new(lease()));
+        let now = unix_time()?;
+        response.lock().await.expires_at = now + 2;
+        response.lock().await.grant_expires_at = Some(now + 4);
+        let status = Arc::new(std::sync::atomic::AtomicU16::new(200));
+        let (client, server) = lease_server(response, status).await?;
+        let authorizer = Arc::new(ExpiringAuthorizer {
+            inner: TestAuthorizer { base: client.base },
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let project = ProjectCredentials::new(
+            ProjectClient::new(authorizer.clone())?,
+            &config,
+            &identity(),
+            root.path(),
+        )
+        .await?;
+        tokio::time::timeout(Duration::from_secs(20), project.revoked.cancelled())
+            .await
+            .context("The refresh loop ended before enforcing the grant deadline")?;
+        assert!(
+            authorizer.calls.load(Ordering::SeqCst) > 1,
+            "The broker token expired during a background refresh"
+        );
+        assert!(!project.cache.is_revoked()?);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_only_lease_under_a_writable_grant_pauses_writes_but_keeps_reads() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let config = config(root.path());
+        let response = Arc::new(Mutex::new(lease()));
+        let status = Arc::new(std::sync::atomic::AtomicU16::new(200));
+        let (client, server) = lease_server(response.clone(), status).await?;
+        let project =
+            ProjectCredentials::new(client.clone(), &config, &identity(), root.path()).await?;
+        let cloud: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+        let gate = WriteGate {
+            inner: cloud.clone(),
+            credentials: project.clone(),
+        };
+        let path = ObjectPath::from("apps/project/storage/report.json");
+        gate.put(&path, "written".into()).await?;
+        response.lock().await.access = OnlineProjectAccess::ReadOnly;
+        project.refresh(true).await?;
+        assert!(!project.writes_allowed());
+        let refused = gate.put(&path, "refused".into()).await.unwrap_err();
+        assert!(refused.to_string().contains("storage quota"));
+        assert!(gate.delete(&path).await.is_err());
+        assert_eq!(gate.get(&path).await?.bytes().await?.as_ref(), b"written");
+        assert!(
+            project
+                .provider(StoragePurpose::Storage)?
+                .credential()
+                .await
+                .is_ok(),
+            "Reads keep a valid credential"
+        );
+        let restarted = ProjectCredentials::new(client, &config, &identity(), root.path()).await?;
+        assert!(!restarted.writes_allowed());
+        assert_eq!(
+            restarted.scope, project.scope,
+            "A read-only start keeps the writable scope's read cache"
+        );
+        response.lock().await.access = OnlineProjectAccess::ReadWrite;
+        project.refresh(true).await?;
+        gate.put(&path, "resumed".into()).await?;
+        server.abort();
+        Ok(())
+    }
+
+    #[test]
+    fn replay_deadline_scales_with_the_buffered_body() {
+        assert_eq!(replay_timeout(0), REPLAY_BASE_TIMEOUT);
+        let large = replay_timeout(11 * 1024 * 1024);
+        assert!(large > Duration::from_secs(600) && large < REPLAY_MAX_TIMEOUT);
+        assert_eq!(replay_timeout(usize::MAX), REPLAY_MAX_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn slow_replays_complete_within_their_scaled_deadline() -> Result<()> {
+        let stall = REPLAY_BASE_TIMEOUT * 2;
+        let router = axum::Router::new().route(
+            "/instances/project/offline/replay",
+            axum::routing::post(move |request: axum::extract::Request| async move {
+                tokio::time::sleep(stall).await;
+                let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                axum::Json(serde_json::json!({ "received": body.len() }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}/instances/project", listener.local_addr()?);
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let client = ProjectClient::new(Arc::new(TestAuthorizer { base }))?;
+        let large = vec![b' '; 4 * REPLAY_MIN_BYTES_PER_SECOND as usize];
+        assert!(replay_timeout(large.len()) > stall + REPLAY_BASE_TIMEOUT);
+        let accepted: serde_json::Value = client.replay("offline/replay", large.clone()).await?;
+        assert_eq!(accepted["received"], large.len());
+        let error = client
+            .replay::<serde_json::Value>("offline/replay", b"{}".to_vec())
+            .await
+            .unwrap_err();
+        assert_eq!(authorization_error(&error), AuthorizationError::Unavailable);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_snapshot_persistence_keeps_the_live_start_and_drops_stale_snapshots()
+    -> Result<()> {
+        struct RejectingSeal(Option<AuthorizationError>);
+        #[async_trait]
+        impl outage::OutageAuthority for RejectingSeal {
+            async fn seal(&self, _: &outage::SnapshotClaim) -> Result<String> {
+                match self.0 {
+                    Some(failure) => Err(failure.into()),
+                    None => anyhow::bail!("Pinned metadata exceeds the outage file limit"),
+                }
+            }
+            async fn verify(&self, _: &outage::SnapshotClaim, _: &str) -> Result<()> {
+                Ok(())
+            }
+            async fn deny(&self, _: &str) -> Result<()> {
+                anyhow::bail!("A persistence failure must not revoke")
+            }
+        }
+        for failure in [None, Some(AuthorizationError::Unavailable)] {
+            let root = tempfile::tempdir()?;
+            let config = config(root.path());
+            let status = Arc::new(std::sync::atomic::AtomicU16::new(200));
+            let (client, server) = lease_server(Arc::new(Mutex::new(lease())), status).await?;
+            let snapshot = outage::SnapshotStore::new(
+                root.path(),
+                &config,
+                &identity(),
+                &client.base,
+                Arc::new(RejectingSeal(failure)),
+            )?;
+            let (credentials, _) = ProjectCredentials::initialize(
+                client,
+                &config,
+                &identity(),
+                root.path(),
+                Some(snapshot),
+            )
+            .await?;
+            let stale = root
+                .path()
+                .join(".standalone-cache/placement/outage/snapshot.json");
+            crate::vault::write_new_private(&stale, b"{}")?;
+            let abandoned = stale.with_file_name(format!(
+                ".{}.partial.{}.tmp",
+                uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4()
+            ));
+            crate::vault::write_new_private(&abandoned, b"{}")?;
+            std::fs::File::options()
+                .write(true)
+                .open(&abandoned)?
+                .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))?;
+            let metadata: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+            metadata
+                .put(
+                    &ObjectPath::from("apps/project/manifest.app"),
+                    "pinned".into(),
+                )
+                .await?;
+            retain_metadata(&credentials, metadata).await?;
+            assert!(!stale.exists(), "{failure:?}");
+            assert!(
+                !abandoned.exists(),
+                "A staging copy outlived its snapshot: {failure:?}"
+            );
+            credentials.authorization_current()?;
+            server.abort();
+        }
+        Ok(())
     }
 
     #[tokio::test]
@@ -2741,6 +3228,7 @@ mod tests {
             max_in_flight: 1,
             request_timeout_secs: 5,
             auth_secret: "listener".into(),
+            ui_origins: Vec::new(),
         });
         crate::secrets::install(&placement, "listener", b"0123456789abcdef0123456789abcdef")
             .unwrap();

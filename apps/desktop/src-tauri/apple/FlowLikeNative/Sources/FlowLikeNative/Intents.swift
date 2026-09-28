@@ -319,7 +319,7 @@ public struct OpenNativeItemIntent: AppIntent {
     }
     public func perform() async throws -> some IntentResult {
         guard let snapshot = NativeStore.shared.snapshot(), snapshot.scope == scope,
-              let item = snapshot.sections.first(where: { $0.kind == section && $0.state == "ready" })?
+              let item = snapshot.sections.first(where: { $0.kind == section && $0.state != "signed_out" })?
                 .items.first(where: { $0.id == itemId }) else { throw NativeIntegrationError.expired }
         if let eventId = item.action.eventId {
             guard snapshot.events.contains(where: {

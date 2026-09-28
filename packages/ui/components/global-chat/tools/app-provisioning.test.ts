@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { IBackendState } from "../../../state/backend-state";
 import { CreatedArtifactJournal } from "../../flowpilot/board-edit-guard";
-import { createAppTool, type CreateAppToolOptions } from "./app-provisioning";
+import { type CreateAppToolOptions, createAppTool } from "./app-provisioning";
 
 describe("app provisioning recovery", () => {
 	test("replays profile association after partial creation without creating another app", async () => {

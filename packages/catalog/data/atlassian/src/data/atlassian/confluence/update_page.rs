@@ -1,12 +1,13 @@
 use super::{ConfluencePage, parse_confluence_page};
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json, reqwest};
+use flow_like_types::{Value, async_trait, json::json};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -132,7 +133,7 @@ impl NodeLogic for UpdateConfluencePageNode {
             return Ok(());
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         // First, get the current page to get version and current values
         let get_url = provider.confluence_rest_api_url(&format!(
@@ -141,7 +142,7 @@ impl NodeLogic for UpdateConfluencePageNode {
         ));
 
         let current_page = client
-            .get(&get_url)
+            .get(&get_url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/json")
             .send()
@@ -248,7 +249,7 @@ impl NodeLogic for UpdateConfluencePageNode {
         );
 
         let response = client
-            .put(&update_url)
+            .put(&update_url)?
             .header("Authorization", provider.auth_header())
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")

@@ -57,6 +57,9 @@ pub async fn delete_event(
         )
         .await?;
 
+    // Restored versions can change an event's type, so this runs for every event.
+    crate::teams::management::cleanup_event(&state, &event_id).await?;
+
     // Try to delete from bucket, but don't fail if file doesn't exist
     // The event might only exist in the database (e.g., if bucket sync failed)
     if let Err(e) = app.delete_event(&event_id).await {

@@ -1,11 +1,12 @@
 use crate::data::atlassian::provider::AtlassianProvider;
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{async_trait, reqwest};
+use flow_like_types::async_trait;
 
 /// Delete a Jira issue
 #[crate::register_node]
@@ -88,7 +89,7 @@ impl NodeLogic for DeleteJiraIssueNode {
             return Err(flow_like_types::anyhow!("Issue key is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let mut url = provider.jira_api_url(&format!("/issue/{}", issue_key));
 
         if delete_subtasks {
@@ -96,7 +97,7 @@ impl NodeLogic for DeleteJiraIssueNode {
         }
 
         let response = client
-            .delete(&url)
+            .delete(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;

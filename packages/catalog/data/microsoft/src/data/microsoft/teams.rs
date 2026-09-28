@@ -2,13 +2,14 @@ use super::{
     graph::{graph_error_message, graph_get_paginated_values},
     provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
 };
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -131,7 +132,7 @@ impl NodeLogic for ListJoinedTeamsNode {
 
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, provider.api_url("/me/joinedTeams"))
             .await
         {
@@ -212,7 +213,7 @@ impl NodeLogic for ListTeamChannelsNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let team_id: String = context.evaluate_pin("team_id").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(
             &client,
             &provider,
@@ -331,12 +332,12 @@ impl NodeLogic for SendChannelMessageNode {
             }
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url(&format!(
+            .post(&provider.api_url(&format!(
                 "/teams/{}/channels/{}/messages",
                 team_id, channel_id
-            )))
+            )))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -443,7 +444,7 @@ impl NodeLogic for GetChannelMessagesNode {
         let channel_id: String = context.evaluate_pin("channel_id").await?;
         let top: i64 = context.evaluate_pin("top").await.unwrap_or(50);
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.api_url(&format!(
             "/teams/{}/channels/{}/messages?$top={}",
             team_id, channel_id, top
@@ -563,9 +564,9 @@ impl NodeLogic for CreateTeamNode {
             "visibility": visibility
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url("/teams"))
+            .post(&provider.api_url("/teams"))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -703,9 +704,9 @@ impl NodeLogic for CreateChannelNode {
             "membershipType": membership_type
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url(&format!("/teams/{}/channels", team_id)))
+            .post(&provider.api_url(&format!("/teams/{}/channels", team_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)

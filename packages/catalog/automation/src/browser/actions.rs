@@ -183,8 +183,9 @@ impl NodeLogic for BrowserExecutePlanNode {
         let mut node = base_node(
             "browser_execute_plan",
             "Execute Browser Action Plan",
-            "Executes a validated LLM browser plan in order, stopping on the first failed action.",
+            "Executes a validated LLM browser plan in order, stopping on the first failed action. Navigate actions follow the session navigation policy (HTTP and HTTPS only when none is set), including the final URL after redirects.",
         );
+        node.set_version(2);
         node.set_flowscript_name("browser", "executePlan");
         node.add_input_pin(
             "plan",
@@ -229,7 +230,13 @@ impl NodeLogic for BrowserExecutePlanNode {
                 "Action limit must be 1 to 1000 and timeout positive"
             ));
         }
-        validate_plan(&plan, max_actions as usize)?;
+        let policy = super::policy::session_policy(
+            context,
+            &session,
+            super::policy::NavigationPolicy::plan_default(),
+        )
+        .await;
+        validate_plan(&plan, max_actions as usize, &policy)?;
         context.set_pin_value("executed_count", json!(0)).await?;
         if plan
             .actions
@@ -245,7 +252,7 @@ impl NodeLogic for BrowserExecutePlanNode {
             let result = tokio::select! {
                 biased;
                 _ = async { if let Some(token) = cancellation { token.cancelled().await } else { std::future::pending::<()>().await } } => Err(flow_like_types::anyhow!("Execution was cancelled")),
-                result = tokio::time::timeout(std::time::Duration::from_millis(timeout as u64), execute_action(context, &driver, action)) => result.map_err(|_| flow_like_types::anyhow!("Plan action {} timed out", index + 1)).and_then(|result| result),
+                result = tokio::time::timeout(std::time::Duration::from_millis(timeout as u64), execute_action(context, &driver, action, &policy)) => result.map_err(|_| flow_like_types::anyhow!("Plan action {} timed out", index + 1)).and_then(|result| result),
             };
             if result.is_err() {
                 let _ = tokio::time::timeout(
@@ -275,7 +282,11 @@ impl NodeLogic for BrowserExecutePlanNode {
 }
 
 #[cfg(any(feature = "execute", test))]
-fn validate_plan(plan: &ActionPlan, max_actions: usize) -> flow_like_types::Result<()> {
+fn validate_plan(
+    plan: &ActionPlan,
+    max_actions: usize,
+    policy: &super::policy::NavigationPolicy,
+) -> flow_like_types::Result<()> {
     if !plan.goal_understood {
         return Err(flow_like_types::anyhow!(
             "The planner did not understand the goal"
@@ -312,12 +323,9 @@ fn validate_plan(plan: &ActionPlan, max_actions: usize) -> flow_like_types::Resu
                 }
             }
             "navigate" => {
-                let url = flow_like_types::reqwest::Url::parse(text_parameter(action, "url")?)?;
-                if !matches!(url.scheme(), "http" | "https") {
-                    return Err(flow_like_types::anyhow!(
-                        "Plan navigation requires an HTTP or HTTPS URL"
-                    ));
-                }
+                let url =
+                    super::policy::NavigationPolicy::parse(text_parameter(action, "url")?)?;
+                policy.check_static(&url)?;
             }
             "wait" => {
                 wait_duration(action)?;
@@ -512,6 +520,7 @@ async fn execute_action(
     context: &ExecutionContext,
     driver: &thirtyfour::WebDriver,
     action: &PlannedAction,
+    policy: &super::policy::NavigationPolicy,
 ) -> flow_like_types::Result<()> {
     match action.action_type.as_str() {
         "wait" => {
@@ -522,7 +531,10 @@ async fn execute_action(
             .await;
         }
         "navigate" => {
-            driver.goto(text_parameter(action, "url")?).await?;
+            let url = text_parameter(action, "url")?;
+            let target = policy.check(url).await?;
+            driver.goto(target.as_str()).await?;
+            super::policy::verify_landing(driver, policy, url).await?;
             return Ok(());
         }
         "press" => {
@@ -604,10 +616,17 @@ mod tests {
             expected_result: String::new(),
         }
     }
+    fn validate(plan: &ActionPlan, max_actions: usize) -> flow_like_types::Result<()> {
+        validate_plan(
+            plan,
+            max_actions,
+            &super::super::policy::NavigationPolicy::plan_default(),
+        )
+    }
     #[test]
     fn validates_entire_plan_before_any_action() {
         assert!(
-            validate_plan(
+            validate(
                 &plan(vec![
                     action("click", json!({})),
                     action("custom_js", json!({}))
@@ -616,13 +635,13 @@ mod tests {
             )
             .is_err()
         );
-        assert!(validate_plan(&plan(vec![action("wait", json!({"duration_ms":-1}))]), 10).is_err());
-        assert!(validate_plan(&plan(vec![action("type", json!({}))]), 10).is_err());
-        assert!(validate_plan(&plan(vec![action("click", json!({}))]), 0).is_err());
-        assert!(validate_plan(&plan(vec![action("fill", json!({"text":"hello"}))]), 10).is_ok());
-        assert!(validate_plan(&plan(vec![action("press", json!({"key":"bad-key"}))]), 10).is_err());
+        assert!(validate(&plan(vec![action("wait", json!({"duration_ms":-1}))]), 10).is_err());
+        assert!(validate(&plan(vec![action("type", json!({}))]), 10).is_err());
+        assert!(validate(&plan(vec![action("click", json!({}))]), 0).is_err());
+        assert!(validate(&plan(vec![action("fill", json!({"text":"hello"}))]), 10).is_ok());
+        assert!(validate(&plan(vec![action("press", json!({"key":"bad-key"}))]), 10).is_err());
         assert!(
-            validate_plan(
+            validate(
                 &plan(vec![action(
                     "press",
                     json!({"key":"Enter","modifiers":["unknown"]})
@@ -632,7 +651,7 @@ mod tests {
             .is_err()
         );
         assert!(
-            validate_plan(
+            validate(
                 &plan(vec![action(
                     "navigate",
                     json!({"url":"javascript:alert(1)"})
@@ -642,12 +661,27 @@ mod tests {
             .is_err()
         );
         assert!(
-            validate_plan(
+            validate(
                 &plan(vec![action("click", json!({"button":"invalid"}))]),
                 10
             )
             .is_err()
         );
+    }
+    #[test]
+    fn plan_navigation_follows_the_session_policy() {
+        let navigate = |url: &str| plan(vec![action("navigate", json!({ "url": url }))]);
+        assert!(validate(&navigate("https://example.com"), 10).is_ok());
+        assert!(validate(&navigate("file:///etc/passwd"), 10).is_err());
+        let policy = super::super::policy::NavigationPolicy {
+            allowed_schemes: vec!["https".into()],
+            allowed_domains: vec!["*.example.com".into()],
+            blocked_domains: vec![],
+            block_private_networks: true,
+        };
+        assert!(validate_plan(&navigate("https://www.example.com"), 10, &policy).is_ok());
+        assert!(validate_plan(&navigate("https://example.org"), 10, &policy).is_err());
+        assert!(validate_plan(&navigate("http://www.example.com"), 10, &policy).is_err());
     }
 }
 

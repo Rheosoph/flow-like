@@ -1,0 +1,353 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: SES receipt storage, mail ingestion, and pending delivery recovery.
+
+Parameters:
+  ReceiptDomain:
+    Type: String
+    Description: Verified SES receiving domain in this region. Point its MX record to the regional SES receiving endpoint.
+    AllowedPattern: '[a-z0-9][a-z0-9.-]*[a-z0-9]'
+  ReceiptRuleSetName:
+    Type: String
+    Description: Existing active SES receipt rule set. This stack adds a domain-specific rule to it.
+  AfterReceiptRule:
+    Type: String
+    Default: ''
+    Description: Existing rule after which to insert this rule. Empty inserts first. This rule stops further processing of matching mail.
+  ApiBaseUrl:
+    Type: String
+    AllowedPattern: 'https://[^\s"\\]+'
+  ApiRoleName:
+    Type: String
+    Description: IAM role name used by the API. The stack attaches permission to read, decrypt, and delete the received MIME objects.
+  SecretPrefix:
+    Type: String
+    Description: Dedicated SSM path of this gateway, such as /flow-like/prod-mail. Store the registered inbound_email sink token as the SecureString SINK_TRIGGER_JWT below it before deploying; the stack writes MAIL_INGRESS_CONFIG next to it.
+    AllowedPattern: '(/[a-zA-Z0-9_.-]+)+'
+  SecretKmsKeyArn:
+    Type: String
+    Default: ''
+    Description: KMS key ARN encrypting the SINK_TRIGGER_JWT parameter. Empty allows any key in this account and Region, still limited to decrypting that parameter through SSM.
+    AllowedPattern: '(arn:[a-z-]+:kms:[a-z0-9-]+:[0-9]{12}:key/[a-zA-Z0-9-]+)?'
+  BootstrapVersion:
+    Type: String
+    Default: '1'
+    Description: Change after rotating the sink token or changing ApiBaseUrl so new Lambda environments load the parameters.
+    AllowedPattern: '[a-zA-Z0-9._-]{1,64}'
+  RawRetentionDays:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 7
+    Description: S3 lifecycle expiration age. Removal is asynchronous; this is not an exact deletion deadline. Replay failed receipts before expiry.
+  RawPrefix:
+    Type: String
+    Default: raw/
+    AllowedPattern: '[a-zA-Z0-9_-]+/'
+  AlarmTopicArn:
+    Type: String
+    Default: ''
+    Description: Optional existing SNS topic for ingestion failure alarms.
+
+Conditions:
+  HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, '']]
+  HasPreviousReceiptRule: !Not [!Equals [!Ref AfterReceiptRule, '']]
+  HasSecretKmsKey: !Not [!Equals [!Ref SecretKmsKeyArn, '']]
+
+Resources:
+  MailKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Encrypt temporary received email MIME objects.
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: '*'
+  MailBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt MailKey.Arn
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireReceivedMime
+            Status: Enabled
+            Prefix: !Ref RawPrefix
+            ExpirationInDays: !Ref RawRetentionDays
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+  MailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: RequireTls
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt MailBucket.Arn
+              - !Sub '${MailBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+  ReceiptTopic:
+    Type: AWS::SNS::Topic
+  SesWriteRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/${ReceiptRuleSetName}:receipt-rule/${AWS::StackName}-mail
+      Policies:
+        - PolicyName: StoreReceivedMail
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub '${MailBucket.Arn}/${RawPrefix}*'
+              - Effect: Allow
+                Action: ['kms:GenerateDataKey', 'kms:Decrypt']
+                Resource: !GetAtt MailKey.Arn
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub s3.${AWS::Region}.${AWS::URLSuffix}
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref ReceiptTopic
+  ApiReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Roles: [!Ref ApiRoleName]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: ['s3:GetObject', 's3:GetObjectVersion', 's3:DeleteObject']
+            Resource: !Sub '${MailBucket.Arn}/${RawPrefix}*'
+          - Effect: Allow
+            Action: kms:Decrypt
+            Resource: !GetAtt MailKey.Arn
+            Condition:
+              StringEquals:
+                kms:ViaService: !Sub s3.${AWS::Region}.${AWS::URLSuffix}
+  FailedReceipts:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+  FailedReceiptsPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref FailedReceipts]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt FailedReceipts.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref ReceiptTopic
+  MailLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-mail-ingress
+      RetentionInDays: 14
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LogsAndFailureQueue
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !GetAtt MailLogGroup.Arn
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt FailedReceipts.Arn
+        - PolicyName: GatewayParameters
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${GatewayConfig}
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SecretPrefix}/SINK_TRIGGER_JWT
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !If
+                  - HasSecretKmsKey
+                  - !Ref SecretKmsKeyArn
+                  - !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.${AWS::URLSuffix}
+                    kms:EncryptionContext:PARAMETER_ARN: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SecretPrefix}/SINK_TRIGGER_JWT
+  GatewayConfig:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub ${SecretPrefix}/MAIL_INGRESS_CONFIG
+      Type: String
+      Description: Mail ingress routing settings. The sink token is a separate SecureString.
+      Value: !Sub
+        - '{"api_base_url":"${ApiBaseUrl}","bucket":"${MailBucket}","prefix":"${RawPrefix}","topic_arn":"${ReceiptTopic}","dispatch_rule_arn":"${DispatchRuleArn}"}'
+        - DispatchRuleArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-mail-dispatch
+  MailIngress:
+    Type: AWS::Serverless::Function
+    Metadata:
+      Dockerfile: apps/backend/aws/mail-ingress/Dockerfile
+      DockerContext: ../../../..
+      DockerTag: mail-ingress
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-mail-ingress
+      PackageType: Image
+      Architectures: [arm64]
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 90
+      MemorySize: 256
+      ReservedConcurrentExecutions: 5
+      Environment:
+        Variables:
+          SECRET_PREFIX: !Ref SecretPrefix
+          BOOTSTRAP_VERSION: !Ref BootstrapVersion
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt FailedReceipts.Arn
+      EventInvokeConfig:
+        MaximumEventAgeInSeconds: 21600
+        MaximumRetryAttempts: 2
+  ReceiptPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref MailIngress
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref ReceiptTopic
+      SourceAccount: !Ref AWS::AccountId
+  ReceiptSubscription:
+    Type: AWS::SNS::Subscription
+    DependsOn: [ReceiptPermission, FailedReceiptsPolicy]
+    Properties:
+      TopicArn: !Ref ReceiptTopic
+      Protocol: lambda
+      Endpoint: !GetAtt MailIngress.Arn
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt FailedReceipts.Arn
+  ReceiptRule:
+    Type: AWS::SES::ReceiptRule
+    DependsOn: [MailBucketPolicy, ReceiptSubscription, ApiReadPolicy]
+    Properties:
+      RuleSetName: !Ref ReceiptRuleSetName
+      After: !If [HasPreviousReceiptRule, !Ref AfterReceiptRule, !Ref 'AWS::NoValue']
+      Rule:
+        Name: !Sub ${AWS::StackName}-mail
+        Enabled: true
+        ScanEnabled: true
+        Recipients: [!Ref ReceiptDomain]
+        Actions:
+          - S3Action:
+              BucketName: !Ref MailBucket
+              ObjectKeyPrefix: !Ref RawPrefix
+              IamRoleArn: !GetAtt SesWriteRole.Arn
+              TopicArn: !Ref ReceiptTopic
+              # Bucket default SSE-KMS is transparent to GetObject. Setting
+              # KmsKeyArn here would instead enable SES client-side encryption.
+          - StopAction:
+              Scope: RuleSet
+  DispatchSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub ${AWS::StackName}-mail-dispatch
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets:
+        - Id: DispatchPendingMail
+          Arn: !GetAtt MailIngress.Arn
+  DispatchPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref MailIngress
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DispatchSchedule.Arn
+      SourceAccount: !Ref AWS::AccountId
+  FailedReceiptAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Mail ingestion needs recovery. Replay failures before the raw MIME lifecycle expiration.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt FailedReceipts.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], []]
+
+Outputs:
+  InboundMailDomain:
+    Value: !Ref ReceiptDomain
+    Description: Set as domain in the API's MAIL_CONFIG.
+  InboundMailBucket:
+    Value: !Ref MailBucket
+    Description: Set as bucket in the API's MAIL_CONFIG. The API needs its SES feature.
+  InboundMailPrefix:
+    Value: !Ref RawPrefix
+    Description: Set as prefix in the API's MAIL_CONFIG.
+  SinkTokenParameter:
+    Value: !Sub ${SecretPrefix}/SINK_TRIGGER_JWT
+    Description: SecureString holding the registered inbound_email sink token.
+  ReceivingMxTarget:
+    Value: !Sub inbound-smtp.${AWS::Region}.amazonaws.com
+    Description: MX target for the verified receiving domain. SES receiving must be available in this region.
+  FailedReceiptsQueue:
+    Value: !Ref FailedReceipts

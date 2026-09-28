@@ -6,7 +6,7 @@ Package authoring lives behind Developer Mode. Open **Settings** in Flow-Like De
 
 @DeveloperModeSettings
 
-The screenshot shows the Settings page — Personalization, AI & Models, and System cards up top, and at the bottom the **Developer Mode** card with its toggle: "Enable developer mode — Unhides flows, events, data tooling, and package registries. Synced across your devices." Flip it on. **Library → Packages** becomes available, which is where you'll later inspect and publish your work. Developer Mode reveals authoring tools; it doesn't bypass registry permissions, package review, or runtime capability checks.
+The screenshot shows the Settings page — Personalization, AI & Models, and System cards up top, and at the bottom the **Developer Mode** card with its toggle: "Enable developer mode — Unhides flows, events, data tooling, and package registries. Synced across your devices." Flip it on. **Packages** appears in the sidebar; its **Mine** tab is where you'll later inspect and publish your work. Developer Mode reveals authoring tools; it doesn't bypass registry permissions, package review, or runtime capability checks.
 
 ## 2 · Claim your identity
 

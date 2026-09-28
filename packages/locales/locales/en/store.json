@@ -462,6 +462,7 @@
 	"publishPackagenameToTheRegistryForTheFirstTime": "Publish {{packageName}} to the registry for the first time.",
 	"purchaseCanceledTryAgainAnytime": "Purchase was canceled. You can try again anytime.",
 	"purchaseSuccessfulYouNowHaveAccessToThisPackage": "Purchase successful! You now have access to this package.",
+	"purchaseUnavailable": "Purchasing is unavailable in this app distribution.",
 	"quickActions": "Quick Actions",
 	"rateThisApp": "Rate This App",
 	"rating": "Rating",

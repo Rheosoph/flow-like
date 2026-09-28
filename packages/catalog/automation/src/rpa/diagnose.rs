@@ -90,11 +90,20 @@ impl NodeLogic for DiagnoseFailureNode {
         let error_message: String = context.evaluate_pin("error_message").await?;
         let screenshot_path: String = context.evaluate_pin("screenshot_path").await?;
 
-        let (screen_width, screen_height) = crate::types::screen_match::screen_dimensions();
-        if !screenshot_path.is_empty() {
-            let bytes = crate::types::screen_match::capture_screen_png().ok_or_else(|| {
-                flow_like_types::anyhow!("Could not capture diagnostic screenshot")
-            })?;
+        let capture = !screenshot_path.is_empty();
+        let ((screen_width, screen_height), bytes) = tokio::task::spawn_blocking(move || {
+            let dimensions = crate::types::screen_match::screen_dimensions();
+            let bytes = if capture {
+                Some(crate::types::screen_match::capture_screen_png().ok_or_else(|| {
+                    flow_like_types::anyhow!("Could not capture diagnostic screenshot")
+                })?)
+            } else {
+                None
+            };
+            flow_like_types::Ok((dimensions, bytes))
+        })
+        .await??;
+        if let Some(bytes) = bytes {
             tokio::fs::write(&screenshot_path, bytes).await?;
         }
 

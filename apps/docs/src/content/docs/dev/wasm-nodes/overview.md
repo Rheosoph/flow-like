@@ -129,7 +129,8 @@ See [Sandboxing & Permissions](/dev/wasm-nodes/sandboxing/) and [Package Manifes
 3. Implement `run` with the template SDK.
 4. Declare only the capabilities the node needs.
 5. Run the template's tests and build task.
-6. Publish the resulting `.wasm` through **Library → Packages → Publish**.
+6. Publish the resulting `.wasm` through **Packages › Mine → Publish…** on
+   the package card (Flow-Like Desktop).
 7. Install the approved or private package and test it in a real board.
 
 Installed packages are cached locally. Hosted execution resolves package versions and verified compiled artifacts through the registry.

@@ -68,6 +68,7 @@ pub async fn upsert_event(
     let mut event = params.event;
     event.id = event_id.clone();
     let saved_event = super::db::get_event_from_db_opt(&state.db, &event_id, &app_id).await?;
+    crate::teams::management::validate_event_type(&state, saved_event.as_ref(), &event).await?;
     if event.event_type == "ontology_action"
         || saved_event
             .as_ref()

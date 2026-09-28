@@ -1,3 +1,9 @@
+use super::{COORDINATE_SPACE, add_screenshot_pins};
+#[cfg(feature = "execute")]
+use super::{
+    ImageSource, ModelView, SubmitTool, call_tool, parse_point, parse_tool_args,
+    prepare_screenshot, require_screenshot, vision_history,
+};
 use flow_like::{
     bit::Bit,
     flow::{
@@ -10,12 +16,6 @@ use flow_like::{
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
 use flow_like_types::{async_trait, json};
-#[cfg(feature = "execute")]
-use rig::completion::{Completion, Message, ToolDefinition};
-#[cfg(feature = "execute")]
-use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
-#[cfg(feature = "execute")]
-use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,7 @@ pub struct HealedTemplate {
     pub confidence: f64,
     pub reasoning: String,
     pub suggested_region: Option<TemplateRegion>,
+    #[serde(default)]
     pub visual_changes_detected: Vec<String>,
 }
 
@@ -39,47 +40,74 @@ pub struct TemplateRegion {
 }
 
 #[cfg(feature = "execute")]
-#[derive(Debug, Serialize, Deserialize)]
-struct HealTemplateTool {
-    parameters: flow_like_types::Value,
+const TOOL: &str = "submit_healed_template";
+
+#[cfg(feature = "execute")]
+#[derive(Debug, Deserialize)]
+struct HealTemplateArgs {
+    healed: bool,
+    found_at_x: Option<f64>,
+    found_at_y: Option<f64>,
+    confidence: f64,
+    reasoning: String,
+    suggested_region: Option<RegionArgs>,
+    #[serde(default)]
+    visual_changes_detected: Vec<String>,
 }
 
 #[cfg(feature = "execute")]
-#[derive(Debug)]
-struct HealTemplateError(String);
+#[derive(Debug, Deserialize)]
+struct RegionArgs {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
 
 #[cfg(feature = "execute")]
-impl std::fmt::Display for HealTemplateError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Heal template error: {}", self.0)
+fn map_region(region: &RegionArgs, view: &ModelView) -> Option<TemplateRegion> {
+    let (x, y) = view.point_from_model(region.x, region.y).ok()?;
+    Some(TemplateRegion {
+        x,
+        y,
+        width: view.width_from_model(region.width).filter(|w| *w > 0)?,
+        height: view.height_from_model(region.height).filter(|h| *h > 0)?,
+    })
+}
+
+/// "Healed" needs a point on the screenshot; it is mapped to the node's coordinate space.
+#[cfg(feature = "execute")]
+fn to_healed(args: HealTemplateArgs, view: &ModelView) -> HealedTemplate {
+    let mut healed = HealedTemplate {
+        healed: false,
+        found_at_x: None,
+        found_at_y: None,
+        confidence: args.confidence,
+        reasoning: args.reasoning,
+        suggested_region: args
+            .suggested_region
+            .as_ref()
+            .and_then(|region| map_region(region, view)),
+        visual_changes_detected: args.visual_changes_detected,
+    };
+    if !args.healed {
+        return healed;
     }
-}
-
-#[cfg(feature = "execute")]
-impl std::error::Error for HealTemplateError {}
-
-#[cfg(feature = "execute")]
-impl Tool for HealTemplateTool {
-    const NAME: &'static str = "submit_healed_template";
-    type Error = HealTemplateError;
-    type Args = flow_like_types::Value;
-    type Output = flow_like_types::Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Submit the healed template match result".to_string(),
-            parameters: self.parameters.clone(),
+    let point = match (args.found_at_x, args.found_at_y) {
+        (Some(x), Some(y)) => view.point_from_model(x, y),
+        _ => Err(anyhow!(
+            "Model reported the element as found without coordinates"
+        )),
+    };
+    match point {
+        Ok((x, y)) => {
+            healed.healed = true;
+            healed.found_at_x = Some(x);
+            healed.found_at_y = Some(y);
         }
+        Err(error) => healed.reasoning = format!("{error}: {}", healed.reasoning),
     }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        Ok(args)
-    }
-
-    fn name(&self) -> String {
-        Self::NAME.to_string()
-    }
+    healed
 }
 
 #[crate::register_node]
@@ -103,7 +131,7 @@ impl NodeLogic for LLMHealTemplateNode {
         );
         node.set_flowscript_name("automation.llm", "healTemplate");
         node.add_icon("/flow/icons/bot-fix.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()
@@ -127,17 +155,12 @@ impl NodeLogic for LLMHealTemplateNode {
         .set_schema::<Bit>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
-        node.add_input_pin(
-            "screenshot",
-            "Screenshot",
-            "Base64-encoded current screenshot",
-            VariableType::String,
-        );
+        add_screenshot_pins(&mut node, "Current screenshot", true);
 
         node.add_input_pin(
             "template",
             "Template",
-            "Base64-encoded template image that failed to match",
+            "Base64-encoded template image (PNG, JPEG, WebP or GIF) that failed to match",
             VariableType::String,
         );
 
@@ -151,7 +174,7 @@ impl NodeLogic for LLMHealTemplateNode {
         node.add_input_pin(
             "last_known_position",
             "Last Known Position",
-            "Where the element was previously found (x,y)",
+            &format!("Where the element was previously found (x,y in {COORDINATE_SPACE})"),
             VariableType::String,
         )
         .set_default_value(Some(json::json!("")));
@@ -161,14 +184,14 @@ impl NodeLogic for LLMHealTemplateNode {
         node.add_output_pin(
             "exec_failed",
             "Failed",
-            "Could not heal",
+            "Could not heal, or the model gave no point on the screenshot",
             VariableType::Execution,
         );
 
         node.add_output_pin(
             "result",
             "Result",
-            "Healed template result",
+            &format!("Healed template result; points and regions are in {COORDINATE_SPACE}"),
             VariableType::Struct,
         )
         .set_schema::<HealedTemplate>();
@@ -176,14 +199,14 @@ impl NodeLogic for LLMHealTemplateNode {
         node.add_output_pin(
             "x",
             "X",
-            "X coordinate of found element",
+            &format!("X coordinate of the found element's center, in {COORDINATE_SPACE}"),
             VariableType::Integer,
         );
 
         node.add_output_pin(
             "y",
             "Y",
-            "Y coordinate of found element",
+            &format!("Y coordinate of the found element's center, in {COORDINATE_SPACE}"),
             VariableType::Integer,
         );
 
@@ -194,39 +217,42 @@ impl NodeLogic for LLMHealTemplateNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_model_provider::history::{
-            Content, ContentType, History, HistoryMessage, ImageUrl as HistoryImageUrl,
-            MessageContent, Role,
-        };
-
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_failed").await?;
 
         let model_bit: Bit = context.evaluate_pin("model").await?;
-        let screenshot: String = context.evaluate_pin("screenshot").await?;
         let template: String = context.evaluate_pin("template").await?;
         let element_description: String = context.evaluate_pin("element_description").await?;
         let last_known: String = context
             .evaluate_pin("last_known_position")
             .await
             .unwrap_or_default();
+        let screenshot = require_screenshot(context).await?;
+        let template = tokio::task::spawn_blocking(move || {
+            prepare_screenshot(ImageSource::Encoded(template), None)
+        })
+        .await
+        .map_err(|e| anyhow!("Template preparation task failed: {e}"))?
+        .map_err(|e| anyhow!("Template image: {e}"))?
+        .image;
 
-        let tool_params = json::json!({
+        let parameters = json::json!({
             "type": "object",
             "properties": {
                 "healed": { "type": "boolean", "description": "Whether the element was found" },
-                "found_at_x": { "type": "integer", "description": "X coordinate of the found element" },
-                "found_at_y": { "type": "integer", "description": "Y coordinate of the found element" },
+                "found_at_x": { "type": "number", "description": "X pixel of the found element's center in the first image" },
+                "found_at_y": { "type": "number", "description": "Y pixel of the found element's center in the first image" },
                 "confidence": { "type": "number", "description": "Confidence score 0-1" },
                 "reasoning": { "type": "string", "description": "Explanation of how the element was identified" },
                 "suggested_region": {
                     "type": "object",
                     "properties": {
-                        "x": { "type": "integer" },
-                        "y": { "type": "integer" },
-                        "width": { "type": "integer" },
-                        "height": { "type": "integer" }
+                        "x": { "type": "number", "description": "Left edge in pixels of the first image" },
+                        "y": { "type": "number", "description": "Top edge in pixels of the first image" },
+                        "width": { "type": "number" },
+                        "height": { "type": "number" }
                     },
+                    "required": ["x", "y", "width", "height"],
                     "description": "Suggested region for new template capture"
                 },
                 "visual_changes_detected": {
@@ -241,99 +267,53 @@ impl NodeLogic for LLMHealTemplateNode {
         let position_hint = if last_known.is_empty() {
             String::new()
         } else {
-            format!("\nThe element was previously located at: {}", last_known)
+            let position = parse_point(&last_known)
+                .and_then(|(x, y)| {
+                    screenshot
+                        .view
+                        .point_to_model(x.round() as i32, y.round() as i32)
+                })
+                .map_or_else(
+                    || last_known.clone(),
+                    |(x, y)| format!("{x},{y} (pixels of the first image)"),
+                );
+            format!("\nThe element was previously located at: {position}")
         };
 
-        let content_parts = vec![
-            Content::Image {
-                content_type: ContentType::ImageUrl,
-                image_url: HistoryImageUrl {
-                    url: format!("data:image/png;base64,{}", screenshot),
-                    detail: None,
-                    media_type: Some("image/png".to_string()),
-                    additional_params: None,
-                },
-            },
-            Content::Image {
-                content_type: ContentType::ImageUrl,
-                image_url: HistoryImageUrl {
-                    url: format!("data:image/png;base64,{}", template),
-                    detail: None,
-                    media_type: Some("image/png".to_string()),
-                    additional_params: None,
-                },
-            },
-            Content::Text {
-                content_type: ContentType::Text,
-                text: format!(
-                    "The first image is the current screen. The second image is a template that failed to match.\n\
-                    Element description: {}\n{}\n\n\
-                    Find where this element is now located on screen, accounting for possible visual changes.",
-                    element_description, position_hint
-                ),
-            },
-        ];
-
-        let history = History::new(
-            "".to_string(),
-            vec![HistoryMessage {
-                role: Role::User,
-                content: MessageContent::Contents(content_parts),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                annotations: None,
-            }],
+        let instructions = format!(
+            "The first image is the current screen. The second image is a template that failed to match.\nElement description: {element_description}{position_hint}\n\nFind where this element is now located on screen, accounting for possible visual changes. {}",
+            screenshot.view.coordinate_hint()
         );
 
         let preamble = "You are a visual UI analysis expert. When template matching fails due to visual changes (scaling, color changes, minor layout shifts), you can identify the same logical element by understanding its purpose and visual characteristics.";
 
-        let agent_builder = model_bit
-            .agent(context, &Some(history))
-            .await?
-            .preamble(preamble)
-            .tool(HealTemplateTool {
-                parameters: tool_params,
-            })
-            .tool_choice(ToolChoice::Required);
+        let arguments = call_tool(
+            context,
+            &model_bit,
+            vision_history(&[&screenshot.image, &template], &instructions),
+            preamble,
+            SubmitTool {
+                name: TOOL,
+                description: "Submit the healed template match result",
+                parameters,
+            },
+        )
+        .await?;
 
-        let agent = agent_builder.build();
+        let healed = match arguments {
+            Some(arguments) => to_healed(parse_tool_args(TOOL, &arguments)?, &screenshot.view),
+            None => HealedTemplate {
+                healed: false,
+                found_at_x: None,
+                found_at_y: None,
+                confidence: 0.0,
+                reasoning: format!("The model answered without calling `{TOOL}`"),
+                suggested_region: None,
+                visual_changes_detected: vec![],
+            },
+        };
 
-        let response = agent
-            .completion(element_description.clone(), Vec::<Message>::new())
-            .await
-            .map_err(|e| anyhow!("LLM completion failed: {}", e))?
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to send request: {}", e))?;
-
-        let mut result: Option<HealedTemplate> = None;
-        for content in response.choice {
-            if let AssistantContent::ToolCall(ToolCall {
-                function: ToolFunction {
-                    name, arguments, ..
-                },
-                ..
-            }) = content
-                && name == "submit_healed_template"
-            {
-                result = Some(json::from_value(arguments)?);
-            }
-        }
-
-        let healed = result.unwrap_or(HealedTemplate {
-            healed: false,
-            found_at_x: None,
-            found_at_y: None,
-            confidence: 0.0,
-            reasoning: "Could not locate element".to_string(),
-            suggested_region: None,
-            visual_changes_detected: vec![],
-        });
-
-        context
-            .set_pin_value("result", json::json!(healed.clone()))
-            .await?;
+        context.set_pin_value("result", json::json!(healed)).await?;
         context
             .set_pin_value("x", json::json!(healed.found_at_x.unwrap_or(0)))
             .await?;
@@ -355,5 +335,56 @@ impl NodeLogic for LLMHealTemplateNode {
         Err(flow_like_types::anyhow!(
             "LLM processing requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+    use crate::types::screen_frame::ScreenFrame;
+
+    fn view() -> ModelView {
+        let frame = ScreenFrame::new(Some(0), (0, 0, 1440, 900), (2880, 1800)).unwrap();
+        ModelView::new(frame.resized(1440, 900).unwrap())
+    }
+
+    #[test]
+    fn healed_point_and_region_map_to_desktop_input() {
+        let args: HealTemplateArgs = parse_tool_args(
+            TOOL,
+            &json::json!({
+                "healed": true, "found_at_x": 300.4, "found_at_y": 200, "confidence": 0.8, "reasoning": "moved",
+                "suggested_region": { "x": 280, "y": 190, "width": 40, "height": 20 }
+            }),
+        )
+        .unwrap();
+        let healed = to_healed(args, &view());
+        assert!(healed.healed);
+        assert_eq!(
+            (healed.found_at_x, healed.found_at_y),
+            (Some(300), Some(200))
+        );
+        let region = healed.suggested_region.unwrap();
+        assert_eq!(
+            (region.x, region.y, region.width, region.height),
+            (280, 190, 40, 20)
+        );
+    }
+
+    #[test]
+    fn healed_without_a_point_on_screen_fails() {
+        let args: HealTemplateArgs = parse_tool_args(
+            TOOL,
+            &json::json!({"healed": true, "found_at_x": 2000, "found_at_y": 10, "confidence": 0.8, "reasoning": "r"}),
+        )
+        .unwrap();
+        assert!(!to_healed(args, &view()).healed);
+        let args: HealTemplateArgs = parse_tool_args(
+            TOOL,
+            &json::json!({"healed": true, "confidence": 0.8, "reasoning": "r"}),
+        )
+        .unwrap();
+        let healed = to_healed(args, &view());
+        assert!(!healed.healed && healed.visual_changes_detected.is_empty());
     }
 }

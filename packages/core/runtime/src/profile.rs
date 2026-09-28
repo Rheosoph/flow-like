@@ -210,6 +210,14 @@ impl Profile {
 
     /// Check if a bit is a local model (requires local hosting capabilities)
     fn is_local_model(bit: &Bit) -> bool {
+        if bit.try_to_provider().is_some_and(|provider| {
+            flow_like_model_provider::llm::external::ExternalProvider::from_provider_name(
+                &provider.provider_name,
+            )
+            .is_some_and(|kind| kind.requires_local_credentials(&provider))
+        }) {
+            return true;
+        }
         if bit.bit_type == crate::bit::BitTypes::Tts {
             return true;
         }
@@ -231,6 +239,14 @@ impl Profile {
     }
 
     fn can_execute_completion_model(bit: &Bit, capabilities: CompletionModelCapabilities) -> bool {
+        if bit.try_to_provider().is_some_and(|provider| {
+            flow_like_model_provider::llm::external::ExternalProvider::from_provider_name(
+                &provider.provider_name,
+            )
+            .is_some_and(|kind| kind.requires_local_credentials(&provider))
+        }) {
+            return capabilities.local_credentials;
+        }
         if bit.is_mlx_model() {
             return capabilities.mlx;
         }
@@ -251,6 +267,32 @@ impl Profile {
         }
         capabilities
             .is_none_or(|capabilities| Self::can_execute_completion_model(bit, capabilities))
+    }
+
+    async fn external_model_available(
+        bit: &Bit,
+        capabilities: Option<CompletionModelCapabilities>,
+    ) -> bool {
+        let Some(provider) = bit.try_to_provider() else {
+            return true;
+        };
+        if flow_like_model_provider::llm::external::ExternalProvider::from_provider_name(
+            &provider.provider_name,
+        )
+        .is_none()
+        {
+            return true;
+        }
+        let available = flow_like_model_provider::llm::external::check_available(
+            &provider,
+            capabilities.is_some_and(|caps| caps.local_credentials),
+        )
+        .await;
+        if available.is_err() {
+            // Do not log provider parameters or upstream bodies: they can contain credentials.
+            tracing::debug!(bit_id = %bit.id, "Skipping unavailable external model");
+        }
+        available.is_ok()
     }
 
     /// Gets the best model based on the preference
@@ -284,14 +326,31 @@ impl Profile {
         capabilities: CompletionModelCapabilities,
         http_client: Arc<HTTPClient>,
     ) -> Result<Bit> {
+        let mut unavailable_model = None;
         if let Some(model_id) = model_id {
-            let bit = self.find_bit(model_id, http_client).await?;
-            if !Self::can_execute_completion_model(&bit, capabilities) {
+            let bit = self.find_bit(model_id, http_client.clone()).await?;
+            let external = bit.try_to_provider().is_some_and(|provider| {
+                flow_like_model_provider::llm::external::ExternalProvider::from_provider_name(
+                    &provider.provider_name,
+                )
+                .is_some()
+            });
+            if external {
+                if Self::can_execute_completion_model(&bit, capabilities)
+                    && Self::external_model_available(&bit, Some(capabilities)).await
+                {
+                    return Ok(bit);
+                }
+                // An unavailable personal provider must not strand a saved use-case preference.
+                tracing::debug!(bit_id = %bit.id, "Falling back from unavailable external model");
+                unavailable_model = Some(bit.id);
+            } else if !Self::can_execute_completion_model(&bit, capabilities) {
                 return Err(anyhow!(
                     "Model {model_id} requires a local completion runtime that this host cannot execute"
                 ));
+            } else {
+                return Ok(bit);
             }
-            return Ok(bit);
         }
 
         self.get_best_model_filtered_inner(
@@ -300,6 +359,7 @@ impl Profile {
             false,
             false,
             Some(capabilities),
+            unavailable_model.as_deref(),
             http_client,
         )
         .await
@@ -334,6 +394,7 @@ impl Profile {
             remote,
             only_hosted,
             None,
+            None,
             http_client,
         )
         .await
@@ -346,9 +407,11 @@ impl Profile {
         remote: bool,
         only_hosted: bool,
         capabilities: Option<CompletionModelCapabilities>,
+        unavailable_model: Option<&str>,
         http_client: Arc<HTTPClient>,
     ) -> Result<Bit> {
-        let mut best_bit = (0.0, None);
+        let mut candidates = Vec::new();
+        let multimodal = multimodal || preference.multimodal.unwrap_or(false);
 
         for bit in self.activated_custom_bits() {
             if !Self::model_matches_host_filter(bit, only_hosted, capabilities) {
@@ -357,10 +420,8 @@ impl Profile {
             if multimodal && !bit.is_multimodal() {
                 continue;
             }
-            if let Ok(score) = bit.score(preference)
-                && (best_bit.1.is_none() || score > best_bit.0)
-            {
-                best_bit = (score, Some(bit.clone()));
+            if let Ok(score) = bit.score(preference) {
+                candidates.push((score, bit.clone()));
             }
         }
 
@@ -385,14 +446,12 @@ impl Profile {
                 if multimodal && !bit.is_multimodal() {
                     continue;
                 }
-                if let Ok(score) = bit.score(preference)
-                    && (best_bit.1.is_none() || (score > best_bit.0))
-                {
-                    best_bit = (score, Some(bit.clone()));
+                if let Ok(score) = bit.score(preference) {
+                    candidates.push((score, bit));
                 }
             }
 
-            return best_bit.1.ok_or_else(|| anyhow!("No Model found"));
+            return Self::select_available_model(candidates, capabilities, unavailable_model).await;
         }
 
         let preference = preference.parse();
@@ -421,17 +480,31 @@ impl Profile {
                 continue;
             }
 
-            if let Ok(score) = bit.score(&preference)
-                && (best_bit.1.is_none() || score > best_bit.0)
-            {
-                best_bit = (score, Some(bit.clone()));
+            if let Ok(score) = bit.score(&preference) {
+                candidates.push((score, bit));
             }
         }
 
-        match best_bit.1 {
-            Some(bit) => Ok(bit),
-            None => Err(anyhow!("No Model found")),
+        Self::select_available_model(candidates, capabilities, unavailable_model).await
+    }
+
+    async fn select_available_model(
+        mut candidates: Vec<(f32, Bit)>,
+        capabilities: Option<CompletionModelCapabilities>,
+        unavailable_model: Option<&str>,
+    ) -> Result<Bit> {
+        // Stable sorting preserves profile order for equal scores. Probe only
+        // candidates that can win, and never probe a hydrated Bit twice.
+        candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let mut seen: HashSet<String> = unavailable_model.into_iter().map(String::from).collect();
+        for (_, bit) in candidates {
+            if seen.insert(bit.id.clone())
+                && Self::external_model_available(&bit, capabilities).await
+            {
+                return Ok(bit);
+            }
         }
+        Err(anyhow!("No available model found in this profile"))
     }
 
     /// Looks up a user-owned custom bit carried on this profile by id. Resolves
@@ -678,6 +751,71 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn unavailable_external_models_fall_back_for_discovery_and_explicit_preferences() {
+        for provider in [
+            "custom:claude-code",
+            "custom:codex",
+            "custom:github-copilot",
+            "custom:microsoft-copilot",
+        ] {
+            let profile = profile_with_models(vec![
+                completion_bit("personal", provider),
+                completion_bit("fallback", "hosted:openai"),
+            ]);
+            for requested in [None, Some("personal")] {
+                let selected = profile
+                    .resolve_completion_model(
+                        requested,
+                        &BitModelPreference::default(),
+                        false,
+                        CompletionModelCapabilities::default(),
+                        Arc::new(HTTPClient::new_without_refetch()),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(selected.id, "fallback", "provider {provider}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn unavailable_external_models_do_not_activate_other_library_models() {
+        let mut profile = profile_with_models(vec![
+            completion_bit("personal", "custom:claude-code"),
+            completion_bit("inactive", "hosted:openai"),
+        ]);
+        profile.bits = vec!["personal".into()];
+        assert!(
+            profile
+                .resolve_completion_model(
+                    None,
+                    &BitModelPreference::default(),
+                    false,
+                    CompletionModelCapabilities::default(),
+                    Arc::new(HTTPClient::new_without_refetch()),
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn local_account_providers_are_filtered_from_hosted_execution() {
+        assert!(Profile::is_local_model(&completion_bit(
+            "claude",
+            "custom:claude-code"
+        )));
+        assert!(Profile::is_local_model(&completion_bit(
+            "codex",
+            "custom:codex"
+        )));
+        assert!(!Profile::is_local_model(&completion_bit(
+            "microsoft",
+            "custom:microsoft-copilot"
+        )));
+    }
+
     #[test]
     fn split_profile_bit_reference_handles_hub_urls() {
         assert_eq!(
@@ -734,7 +872,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(err.to_string(), "No Model found");
+        assert_eq!(err.to_string(), "No available model found in this profile");
     }
 
     #[tokio::test]
@@ -770,6 +908,7 @@ mod tests {
                 CompletionModelCapabilities {
                     local_server: true,
                     mlx: false,
+                    local_credentials: false,
                 },
                 Arc::new(HTTPClient::new_without_refetch()),
             )
@@ -831,7 +970,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(error.to_string(), "No Model found");
+        assert_eq!(
+            error.to_string(),
+            "No available model found in this profile"
+        );
     }
 
     #[tokio::test]
@@ -871,6 +1013,7 @@ mod tests {
                 CompletionModelCapabilities {
                     local_server: false,
                     mlx: true,
+                    local_credentials: false,
                 },
                 Arc::new(HTTPClient::new_without_refetch()),
             )
@@ -895,6 +1038,7 @@ mod tests {
                 CompletionModelCapabilities {
                     local_server: true,
                     mlx: false,
+                    local_credentials: false,
                 },
                 Arc::new(HTTPClient::new_without_refetch()),
             )

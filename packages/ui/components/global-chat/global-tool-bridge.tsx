@@ -396,6 +396,22 @@ function parentRequestId(request: FrontendToolRequest) {
 	);
 }
 
+const HOME_LAYOUT_RESULT_FIELDS = new Set([
+	"current_layout",
+	"canonical_layout",
+	"base_layout",
+	"default_layout",
+]);
+
+/** Layouts go last so a size-truncated Home result still carries its guards and verdict. */
+function withHomeLayoutFieldsLast(result: object): Record<string, unknown> {
+	const entries = Object.entries(result);
+	return Object.fromEntries([
+		...entries.filter(([key]) => !HOME_LAYOUT_RESULT_FIELDS.has(key)),
+		...entries.filter(([key]) => HOME_LAYOUT_RESULT_FIELDS.has(key)),
+	]);
+}
+
 /** The files the user attached to the turn that owns `runId`. */
 function turnAttachments(runId: string | undefined): IAttachment[] {
 	return runId
@@ -2377,7 +2393,7 @@ export function GlobalToolBridge() {
 						argBoolean(args, "include_comparisons") ||
 							argBoolean(args, "includeComparisons"),
 					);
-					return {
+					return withHomeLayoutFieldsLast({
 						status: "ok",
 						profile_id: snapshot.profileId,
 						profile: {
@@ -2412,7 +2428,7 @@ export function GlobalToolBridge() {
 									route: "/",
 								}
 							: {}),
-					};
+					});
 				}
 				case "get_home_widget_catalog":
 					return getHomeWidgetCatalog(args);
@@ -2489,7 +2505,7 @@ export function GlobalToolBridge() {
 					}
 					const checked = withHomeReferenceIssues(validation, referenceIssues);
 					const publicChecked = publicHomeLayoutValidation(checked);
-					return {
+					return withHomeLayoutFieldsLast({
 						...publicChecked,
 						profile_id: latest.profileId,
 						current_fingerprint: latest.candidateFingerprint,
@@ -2501,7 +2517,7 @@ export function GlobalToolBridge() {
 									},
 								}
 							: {}),
-					};
+					});
 				}
 				case "apply_home_layout": {
 					const expectedProfileId =
@@ -2563,7 +2579,7 @@ export function GlobalToolBridge() {
 							latest.profileId !== initialSnapshot.profileId ||
 							latest.candidateFingerprint !==
 								initialSnapshot.candidateFingerprint;
-						return {
+						return withHomeLayoutFieldsLast({
 							...publicHomeLayoutValidation(checked),
 							...(changedDuringValidation
 								? {
@@ -2581,7 +2597,7 @@ export function GlobalToolBridge() {
 								: {}),
 							profile_id: latest.profileId,
 							current_fingerprint: latest.candidateFingerprint,
-						};
+						});
 					}
 					await assertHomeProfile(request, surface.getSnapshot().profileId);
 					assertRequestActive(request, "Home layout staging");

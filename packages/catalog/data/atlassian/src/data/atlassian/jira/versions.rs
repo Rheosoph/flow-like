@@ -1,11 +1,12 @@
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 /// Jira project version (release)
@@ -143,11 +144,11 @@ impl NodeLogic for GetVersionsNode {
             return Err(flow_like_types::anyhow!("Project key is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.jira_api_url(&format!("/project/{}/versions", project_key));
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;
@@ -307,7 +308,7 @@ impl NodeLogic for CreateVersionNode {
             return Err(flow_like_types::anyhow!("Project key is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.jira_api_url("/version");
 
         let mut body = json!({
@@ -327,7 +328,7 @@ impl NodeLogic for CreateVersionNode {
         }
 
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Content-Type", "application/json")
             .json(&body)
@@ -485,7 +486,7 @@ impl NodeLogic for BatchCreateVersionsNode {
             return Ok(());
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.jira_api_url("/version");
         let mut results: Vec<BatchVersionResult> = Vec::with_capacity(versions.len());
         let mut created_count = 0i64;
@@ -514,7 +515,7 @@ impl NodeLogic for BatchCreateVersionsNode {
             }
 
             let response = client
-                .post(&url)
+                .post(&url)?
                 .header("Authorization", provider.auth_header())
                 .header("Content-Type", "application/json")
                 .json(&body)
@@ -709,7 +710,7 @@ impl NodeLogic for UpdateVersionNode {
             return Err(flow_like_types::anyhow!("Version ID is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.jira_api_url(&format!("/version/{}", version_id));
 
         let mut body = json!({});
@@ -733,7 +734,7 @@ impl NodeLogic for UpdateVersionNode {
         }
 
         let response = client
-            .put(&url)
+            .put(&url)?
             .header("Authorization", provider.auth_header())
             .header("Content-Type", "application/json")
             .json(&body)

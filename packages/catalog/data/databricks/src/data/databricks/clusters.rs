@@ -1,11 +1,12 @@
 use super::provider::{DATABRICKS_PROVIDER_ID, DatabricksProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -156,9 +157,9 @@ impl NodeLogic for ListDatabricksClustersNode {
 
         let url = provider.api_url("/clusters/list");
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .send()
@@ -318,9 +319,9 @@ impl NodeLogic for GetDatabricksClusterNode {
 
         let url = provider.api_url("/clusters/get");
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .query(&[("cluster_id", &cluster_id)])
             .send()
@@ -470,9 +471,9 @@ impl NodeLogic for StartDatabricksClusterNode {
 
         let url = provider.api_url("/clusters/start");
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&json!({ "cluster_id": cluster_id }))
@@ -610,9 +611,9 @@ impl NodeLogic for StopDatabricksClusterNode {
 
         let url = provider.api_url("/clusters/delete");
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&json!({ "cluster_id": cluster_id }))

@@ -14,9 +14,10 @@ import { BUILTIN_RUNTIME_EVENT_TYPES } from "./runtime-route";
  * without an interface simply never renders.
  */
 export const USE_EVENT_CONFIG: IUseEventMapping = {
+	events_inbound_email: { eventTypes: ["inbound_email"], useInterfaces: {} },
 	events_location: { eventTypes: ["geolocation"], useInterfaces: {} },
 	events_chat: {
-		eventTypes: ["simple_chat", "discord", "telegram"],
+		eventTypes: ["simple_chat", "discord", "telegram", "teams"],
 		useInterfaces: {
 			[BUILTIN_RUNTIME_EVENT_TYPES.chat]: ChatInterface,
 		},

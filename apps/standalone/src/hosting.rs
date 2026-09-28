@@ -40,6 +40,9 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 const BODY_LIMIT: usize = 10 * 1024 * 1024;
+const PENDING_HANDSHAKES: usize = 256;
+const PENDING_HANDSHAKES_PER_SOURCE: usize = 16;
+const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(10);
 
 mod actions;
 mod channels;
@@ -149,6 +152,8 @@ struct HostState {
     #[cfg(unix)]
     reply_route: Option<Arc<forward::Route>>,
     inventory: Value,
+    #[cfg(feature = "frontend")]
+    ui_policy: axum::http::HeaderValue,
 }
 pub(crate) struct PreparedHost {
     listener: TcpListener,
@@ -161,12 +166,30 @@ struct ReadyListener {
     listener: TcpListener,
     ready: Option<oneshot::Sender<()>>,
     tls: Option<Arc<dyn flow_like_runtime::flow::execution::service::ServiceTlsProvider>>,
-    handshakes: tokio::task::JoinSet<
+    handshakes: crate::acme::PendingConnections<
         Result<(
             flow_like_runtime::flow::execution::service::BoxedServiceIo,
             std::net::SocketAddr,
         )>,
     >,
+}
+
+impl ReadyListener {
+    fn new(
+        listener: TcpListener,
+        ready: Option<oneshot::Sender<()>>,
+        tls: Option<Arc<dyn flow_like_runtime::flow::execution::service::ServiceTlsProvider>>,
+    ) -> Self {
+        Self {
+            listener,
+            ready,
+            tls,
+            handshakes: crate::acme::PendingConnections::new(
+                PENDING_HANDSHAKES,
+                PENDING_HANDSHAKES_PER_SOURCE,
+            ),
+        }
+    }
 }
 
 impl axum::serve::Listener for ReadyListener {
@@ -179,15 +202,16 @@ impl axum::serve::Listener for ReadyListener {
         if let Some(ready) = self.ready.take() {
             let _ = ready.send(());
         }
+        // Pending handshakes are unauthenticated; they never pause accepting.
         loop {
             tokio::select! {
-                result = self.handshakes.join_next(), if !self.handshakes.is_empty() => {
-                    if let Some(Ok(Ok(connection))) = result { return connection; }
+                Some(result) = self.handshakes.join_next(), if !self.handshakes.is_empty() => {
+                    if let Ok(connection) = result { return connection; }
                 }
-                (stream, addr) = axum::serve::Listener::accept(&mut self.listener), if self.handshakes.len() < 64 => {
+                (stream, addr) = axum::serve::Listener::accept(&mut self.listener) => {
                     let Some(tls) = self.tls.clone() else { return (Box::new(stream), addr); };
-                    self.handshakes.spawn(async move {
-                        let stream = tokio::time::timeout(std::time::Duration::from_secs(10), tls.accept(stream))
+                    self.handshakes.spawn(addr.ip(), async move {
+                        let stream = tokio::time::timeout(HANDSHAKE_DEADLINE, tls.accept(stream))
                             .await.context("TLS handshake timed out")??;
                         Ok((stream, addr))
                     });
@@ -349,6 +373,8 @@ impl PreparedHost {
                 #[cfg(unix)]
                 reply_route,
                 inventory: serde_json::json!({"project_id":config.project_id,"events":inventory}),
+                #[cfg(feature = "frontend")]
+                ui_policy: frontend::content_security_policy(&hosting.ui_origins)?,
             }),
         })
     }
@@ -374,12 +400,11 @@ impl PreparedHost {
             replies.spawn(listener.serve(self.state.clone()));
         }
         let result = axum::serve(
-            ReadyListener {
-                listener: self.listener,
+            ReadyListener::new(
+                self.listener,
                 ready,
-                tls: self.state.state.service_tls_provider.clone(),
-                handshakes: tokio::task::JoinSet::new(),
-            },
+                self.state.state.service_tls_provider.clone(),
+            ),
             Router::new()
                 .fallback(dispatch)
                 .layer(axum::middleware::from_fn(no_store))
@@ -409,7 +434,7 @@ async fn no_store(request: Request, next: axum::middleware::Next) -> Response {
 
 async fn dispatch(State(host): State<Arc<HostState>>, request: Request) -> Response {
     #[cfg(feature = "frontend")]
-    if let Some(response) = frontend::asset(&request) {
+    if let Some(response) = frontend::asset(&request, &host.ui_policy) {
         return response;
     }
     if let Some(id) = request
@@ -696,6 +721,19 @@ async fn invoke(
     result
 }
 
+/// The process-wide in-process channel registry only forgets a run when it is closed, and a
+/// request can end on any await point, including its deadline.
+struct CloseChannelOnDrop(Arc<flow_like_types::channel::InProcessChannel>);
+impl Drop for CloseChannelOnDrop {
+    fn drop(&mut self) {
+        use flow_like_types::channel::Channel;
+        let channel = self.0.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move { channel.close().await });
+        }
+    }
+}
+
 async fn invoke_inner(
     host: &HostState,
     prepared: &PreparedInvocation,
@@ -714,6 +752,7 @@ async fn invoke_inner(
         service_fingerprint,
     )?;
     let channel = InProcessChannel::register(run_id.clone(), host.timeout).await;
+    let _close_channel = CloseChannelOnDrop(channel.clone());
     let (producer, sealer) = host
         .pages
         .get(&prepared.event.id)
@@ -729,6 +768,7 @@ async fn invoke_inner(
                     .map(|node| node.id.to_string())
                     .collect(),
                 service_fingerprint,
+                host.timeout,
                 cancel.clone(),
             );
             (Some(producer), Some(Arc::new(sealer)))
@@ -736,14 +776,20 @@ async fn invoke_inner(
         .unwrap_or_default();
     let output = channels::wrap(callback, registration.grant.clone());
     let callback: InterComCallback = Some(Arc::new(move |mut event: InterComEvent| {
-        if let Some(sealer) = &sealer {
-            sealer.seal_payload(&event.event_type, &mut event.payload);
-        }
+        let unavailable = sealer.as_ref().and_then(|sealer| {
+            sealer
+                .seal_payload(&event.event_type, &mut event.payload)
+                .unavailable
+        });
         let output = output.clone();
         crate::usage::runtime_message();
         Box::pin(async move {
             if let Some(output) = output {
                 output(event).await?;
+            }
+            // The render still ships, but the run log names the actions left without authority.
+            if let Some(reason) = unavailable {
+                anyhow::bail!("Page actions were sent without a working capability: {reason}");
             }
             Ok(())
         })
@@ -824,6 +870,11 @@ mod tests {
         time::SystemTime,
     };
 
+    /// Run channels a Responder keeps past its run, so only an explicit close can
+    /// unregister them.
+    static RETAINED_CHANNELS: std::sync::Mutex<Vec<Arc<dyn flow_like_types::channel::Channel>>> =
+        std::sync::Mutex::new(Vec::new());
+
     struct Responder {
         calls: Arc<AtomicUsize>,
         entered: Arc<tokio::sync::Notify>,
@@ -858,6 +909,14 @@ mod tests {
                 assert!(
                     user.role.is_none(),
                     "a device grant does not grant the delegator's role"
+                );
+            }
+            if payload.get("retain_channel") == Some(&Value::Bool(true)) {
+                RETAINED_CHANNELS.lock().unwrap().push(
+                    context
+                        .channel
+                        .clone()
+                        .expect("hosted runs carry a channel"),
                 );
             }
             if payload.get("render") == Some(&Value::Bool(true)) {
@@ -996,6 +1055,7 @@ mod tests {
                 max_in_flight: 1,
                 request_timeout_secs: 1,
                 auth_secret: "listener".into(),
+                ui_origins: Vec::new(),
             }),
             variables: Default::default(),
             secret_overrides: Default::default(),
@@ -1124,7 +1184,7 @@ mod tests {
         let chat = client
             .post(format!("http://{address}/chat/chat"))
             .bearer_auth(&token)
-            .json(&serde_json::json!({"messages":[]}))
+            .json(&serde_json::json!({"messages":[], "retain_channel":true}))
             .send()
             .await
             .unwrap();
@@ -1141,6 +1201,36 @@ mod tests {
             .unwrap();
         assert!(body.contains("event: chat_stream_partial"));
         assert!(body.contains("event: done"));
+        let run_id = body
+            .split("\n\n")
+            .find(|frame| frame.contains("event: run_initiated"))
+            .and_then(|frame| frame.lines().find_map(|line| line.strip_prefix("data: ")))
+            .and_then(|data| serde_json::from_str::<Value>(data).ok())
+            .and_then(|data| data["run_id"].as_str().map(str::to_owned))
+            .expect("chat stream announces its run");
+        let retained = RETAINED_CHANNELS
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|channel| channel.channel_id() == run_id)
+            .cloned()
+            .expect("the chat run kept a strong reference to its channel");
+        let mut unregistered = false;
+        for _ in 0..50 {
+            if flow_like_types::channel::InProcessChannel::lookup(&run_id)
+                .await
+                .is_none()
+            {
+                unregistered = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            unregistered,
+            "a finished request closes its in-process channel while references remain"
+        );
+        drop(retained);
         let rotated = "r".repeat(32);
         std::fs::write(
             directory.path().join(".secrets/placement/listener.secret"),
@@ -1176,6 +1266,69 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
+    }
+
+    struct StalledTls;
+    impl flow_like_runtime::flow::execution::service::ServiceTlsProvider for StalledTls {
+        fn validate(
+            &self,
+        ) -> flow_like_runtime::flow::execution::service::ServiceTlsFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+        fn accept(
+            &self,
+            mut stream: tokio::net::TcpStream,
+        ) -> flow_like_runtime::flow::execution::service::ServiceTlsFuture<
+            '_,
+            flow_like_runtime::flow::execution::service::BoxedServiceIo,
+        > {
+            Box::pin(async move {
+                let mut hello = [0_u8; 1];
+                tokio::io::AsyncReadExt::read_exact(&mut stream, &mut hello).await?;
+                Ok(Box::new(stream) as flow_like_runtime::flow::execution::service::BoxedServiceIo)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn idle_handshakes_never_pause_the_tls_accept_loop() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut ready = ReadyListener::new(listener, None, Some(Arc::new(StalledTls)));
+        let mut idle = Vec::new();
+        for _ in 0..PENDING_HANDSHAKES_PER_SOURCE * 5 {
+            idle.push(tokio::net::TcpStream::connect(address).await.unwrap());
+        }
+        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+        tokio::io::AsyncWriteExt::write_all(&mut client, b"h")
+            .await
+            .unwrap();
+        let (_, peer) = tokio::time::timeout(
+            Duration::from_secs(2),
+            axum::serve::Listener::accept(&mut ready),
+        )
+        .await
+        .expect("idle handshakes kept a completed client in the backlog");
+        assert_eq!(peer, client.local_addr().unwrap());
+        drop(idle);
+    }
+
+    #[tokio::test]
+    async fn ending_a_request_closes_its_channel_even_while_references_remain() {
+        use flow_like_types::channel::InProcessChannel;
+        let channel =
+            InProcessChannel::register("hosted-close-on-drop", Duration::from_secs(60)).await;
+        drop(CloseChannelOnDrop(channel.clone()));
+        for _ in 0..50 {
+            if InProcessChannel::lookup("hosted-close-on-drop")
+                .await
+                .is_none()
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the in-process channel registry kept a finished request");
     }
 
     #[test]
@@ -1491,6 +1644,7 @@ mod tests {
             scope.clone(),
             ["entry".into()].into_iter().collect(),
             blake3::hash(&[b't'; 32]),
+            owner_state.timeout,
             source_cancel.clone(),
         );
         let dynamic_payload = || serde_json::json!({"type":"createElement", "component":{"id":"dynamic-button", "component":{"type":"button", "eventHandlers":{"click":[{"name":"workflow_event", "context":{"nodeId":"entry", "appId":"project", "boardId":"board"}}]}}}});
@@ -1562,6 +1716,7 @@ mod tests {
             scope.clone(),
             ["entry".into()].into_iter().collect(),
             fingerprint,
+            owner_state.timeout,
             failed_cancel.clone(),
         );
         let mut failed_payload = dynamic_payload();
@@ -1601,6 +1756,7 @@ mod tests {
             scope.clone(),
             ["entry".into()].into_iter().collect(),
             fingerprint,
+            owner_state.timeout,
             CancellationToken::new(),
         );
         let mut abandoned_payload = dynamic_payload();

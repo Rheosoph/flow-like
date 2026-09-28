@@ -240,6 +240,33 @@ declare namespace events {
     function generic(): Struct;
 
     /**
+     * Run a server workflow when an email arrives at its assigned address
+     * @node events_inbound_email @alias eventsInboundEmail
+     * @returns email — Email content, envelope recipients, headers and attachment storage paths
+     * @returns session — App and Event reference for sending through this automation address
+     * @returns message — Original inbound message reference for replies
+     * @returns attachments — Stored attachment paths for file and path nodes
+     * @returns attachmentMetadata — Attachment filenames, content types, byte sizes and storage paths
+     * @returns sender — Sender header, falling back to the first From address
+     * @returns from — From header addresses
+     * @returns to — To header addresses
+     * @returns cc — Carbon copy header addresses
+     * @returns replyTo — Addresses for replies
+     * @returns subject — Email subject, empty when absent
+     * @returns text — Plain text preview, empty when absent
+     * @returns html — HTML preview, empty when absent
+     * @returns envelopeFrom — SMTP envelope sender
+     * @returns recipient — The receiving automation address
+     * @returns raw — Complete MIME message stored as an EML file
+     * @returns textPath — Complete plain text body, when present
+     * @returns htmlPath — Complete HTML body, when present
+     * @returns textTruncated — Read Text File for the complete plain text body
+     * @returns htmlTruncated — Read HTML File for the complete HTML body
+     * @impure has side effects / drives control flow
+     */
+    function inboundEmail(): { email: Struct, session: Struct, message: Struct, attachments: Struct[], attachmentMetadata: Struct[], sender: Struct, from: Struct[], to: Struct[], cc: Struct[], replyTo: Struct[], subject: string, text: string, html: string, envelopeFrom: string, recipient: string, raw: Struct, textPath: Struct, htmlPath: Struct, textTruncated: bool, htmlTruncated: bool };
+
+    /**
      * Starts when the device enters or leaves a configured circular region. Configure foreground or background monitoring in the Event settings.
      * @node events_location @alias eventsLocation
      * @returns region — Center of the monitored circle as a WGS 84 Point. This is not a measured device position
@@ -372,4 +399,40 @@ declare namespace remote {
      * @impure has side effects / drives control flow
      */
     function callEvent({ flowRemoteAppId?: string, flowRemoteEvent?: string, flowRemoteEventMeta?: string, payload: any, waitForResult?: bool, timeoutSeconds?: int }): { runId: string, status: string, result: any };
+}
+
+declare namespace teams {
+    // === Events/Chat/Teams ===
+
+    /**
+     * Reply to the Teams conversation from a Chat Event session
+     * @node events_teams_send_card @alias eventsTeamsSendCard
+     * @param session — Local or global session from the Teams Chat Event
+     * @param text (optional) — Message text with Teams Markdown formatting
+     * @param card — Adaptive Card JSON. Use Interaction nodes for forms and approvals that resume this run.
+     * @returns messageId — The Teams message identifier
+     * @impure has side effects / drives control flow
+     */
+    function sendCard({ session: Struct, text?: string, card: Struct }): string;
+
+    /**
+     * Reply to the Teams conversation from a Chat Event session
+     * @node events_teams_send_message @alias eventsTeamsSendMessage
+     * @param session — Local or global session from the Teams Chat Event
+     * @param text (optional) — Message text with Teams Markdown formatting
+     * @returns messageId — The Teams message identifier
+     * @impure has side effects / drives control flow
+     */
+    function sendMessage({ session: Struct, text?: string }): string;
+
+    /**
+     * Reply to the Teams conversation from a Chat Event session
+     * @node events_teams_update_message @alias eventsTeamsUpdateMessage
+     * @param session — Local or global session from the Teams Chat Event
+     * @param text (optional) — Message text with Teams Markdown formatting
+     * @param messageId — Message returned by a Teams send node in this conversation
+     * @returns messageId — The Teams message identifier
+     * @impure has side effects / drives control flow
+     */
+    function updateMessage({ session: Struct, text?: string, messageId: string }): string;
 }

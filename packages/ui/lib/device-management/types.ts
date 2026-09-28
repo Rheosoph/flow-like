@@ -1,8 +1,8 @@
 import type {
-	CertificateAuthoritySpec,
 	CertificateAuthorityEnvelope,
 	CertificateAuthorityPublic,
 	CertificateAuthoritySigningRequest,
+	CertificateAuthoritySpec,
 	SignedCertificateChain,
 } from "./certificate-authority";
 export interface Ed25519PublicKey {
@@ -416,6 +416,45 @@ export interface ManagementResponse {
 	operation_id: string;
 	state: string;
 	result: Record<string, unknown>;
+}
+export type ManagementRejectionCode =
+	| "unauthorized"
+	| "revision_conflict"
+	| "invalid"
+	| "host_policy"
+	| "unsupported"
+	| "limit"
+	| "busy"
+	| "failed";
+export interface ManagementRejection {
+	code: ManagementRejectionCode | (string & {});
+	error: string;
+	retryable: boolean;
+}
+/** Older agents reject without a code; callers keep their previous handling for them. */
+export function managementRejection(response: {
+	state: string;
+	result: unknown;
+}): ManagementRejection | undefined {
+	if (response.state !== "rejected") return undefined;
+	const result = response.result;
+	if (!result || typeof result !== "object" || Array.isArray(result))
+		return undefined;
+	const { code, error, retryable } = result as Record<string, unknown>;
+	if (typeof code !== "string" || !/^[a-z_]{1,64}$/.test(code))
+		return undefined;
+	const message =
+		typeof error === "string" && error.trim()
+			? error.trim().slice(0, 1024)
+			: "The device rejected this operation.";
+	return {
+		code,
+		error: message,
+		retryable:
+			typeof retryable === "boolean"
+				? retryable
+				: code === "busy" || code === "failed",
+	};
 }
 export interface PlacementStatus {
 	id: string;

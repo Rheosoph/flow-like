@@ -49,9 +49,7 @@ runs:
       shell: bash
 
     - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
-      with:
-        toolchain: 1.97.1
+      uses: ./.github/actions/setup-rust
 
     - name: Configure CI Rust builds
       run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"

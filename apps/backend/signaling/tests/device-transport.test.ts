@@ -33,12 +33,13 @@ async function credential(
 	participant: string,
 	epoch = 1,
 	lifetime = 300,
+	account = "owner",
 ) {
 	const now = Math.floor(Date.now() / 1000);
 	return new SignJWT({
 		iss: "flow-like",
 		aud: DEVICE_SIGNALING_AUDIENCE,
-		sub: role === "device" ? "device" : "owner",
+		sub: role === "device" ? "device" : account,
 		typ: "device_signaling",
 		scope: DEVICE_SIGNALING_SCOPE,
 		device_id: "device",
@@ -101,8 +102,9 @@ async function connection(
 	participant: string,
 	epoch = 1,
 	lifetime = 300,
+	account = "owner",
 ) {
-	const token = await credential(role, participant, epoch, lifetime);
+	const token = await credential(role, participant, epoch, lifetime, account);
 	const socket = new WebSocket(`ws://127.0.0.1:${port}/ws/devices`, {
 		protocols: [DEVICE_SIGNALING_PROTOCOL, `flowlike.jwt.${token}`],
 		headers: role === "controller" ? { Origin: origin } : {},
@@ -336,3 +338,137 @@ test("opaque frames fan out across replicas and clients reconnect to a surviving
 		await redis.stop();
 	}
 }, 20_000);
+
+const indexed = (to: string, index: number) =>
+	JSON.stringify({
+		type: "frame",
+		to,
+		channel: "noise",
+		payload: Buffer.from([index & 255, index >> 8]).toString("base64url"),
+	});
+const indexOf = (message: Message) =>
+	Buffer.from(String(message.payload), "base64url").readUInt16LE(0);
+
+test("bursts beyond the frame budget are throttled in order and never close the device", async () => {
+	try {
+		const server = await replica();
+		const device = await connection(server.port, "device", "device");
+		const controller = await connection(server.port, "controller", "uploader");
+		// Device replies are budgeted per account, so the bystander is another user.
+		const bystander = await connection(
+			server.port,
+			"controller",
+			"bystander",
+			1,
+			300,
+			"grantee",
+		);
+		const burst = 300;
+		for (let index = 0; index < burst; index++)
+			controller.socket.send(indexed("device", index));
+		for (let index = 0; index < burst; index++)
+			device.socket.send(indexed("uploader", index));
+		device.socket.send(indexed("bystander", 7));
+		const received = (messages: Message[], from: string) =>
+			messages.filter(
+				(message) => message.type === "frame" && message.from === from,
+			);
+		await eventually(
+			() =>
+				received(device.messages, "uploader").length === burst &&
+				received(controller.messages, "device").length === burst
+					? true
+					: undefined,
+			"throttled bursts in both directions",
+		);
+		expect(received(device.messages, "uploader").map(indexOf)).toEqual([
+			...Array(burst).keys(),
+		]);
+		expect(received(controller.messages, "device").map(indexOf)).toEqual([
+			...Array(burst).keys(),
+		]);
+		expect(received(bystander.messages, "device").map(indexOf)).toEqual([7]);
+		expect(device.closed()).toBeUndefined();
+		expect(controller.closed()).toBeUndefined();
+	} finally {
+		await cleanup();
+	}
+}, 20_000);
+
+test("a newer device socket replaces the older one and controller tickets admit one socket", async () => {
+	try {
+		const server = await replica();
+		const stale = await connection(server.port, "device", "device");
+		const current = await connection(server.port, "device", "device");
+		expect(await eventually(stale.closed, "replaced device socket")).toBe(4000);
+		const controller = await connection(server.port, "controller", "owner-ui");
+		controller.socket.send(frame("device"));
+		await eventually(
+			() => current.messages.find((message) => message.type === "frame"),
+			"delivery to the replacing device socket",
+		);
+		expect(current.closed()).toBeUndefined();
+
+		const token = await credential("controller", "shared-ticket");
+		const open = (headers = { Origin: origin }) => {
+			const socket = new WebSocket(`ws://127.0.0.1:${server.port}/ws/devices`, {
+				protocols: [DEVICE_SIGNALING_PROTOCOL, `flowlike.jwt.${token}`],
+				headers,
+			});
+			channels.add(socket);
+			const state: { ready: boolean; closed: boolean } = {
+				ready: false,
+				closed: false,
+			};
+			socket.onmessage = (event) => {
+				if ((JSON.parse(String(event.data)) as Message).type === "ready")
+					state.ready = true;
+			};
+			socket.onclose = () => {
+				state.closed = true;
+			};
+			return { socket, state };
+		};
+		const first = open();
+		await eventually(() => (first.state.ready ? true : undefined), "ticket");
+		const reused = open();
+		await eventually(
+			() => (reused.state.closed ? true : undefined),
+			"reused ticket refusal",
+		);
+		expect(reused.state.ready).toBeFalse();
+		first.socket.close();
+		await eventually(() => (first.state.closed ? true : undefined), "close");
+		await Bun.sleep(50);
+		const reconnect = open();
+		await eventually(
+			() => (reconnect.state.ready ? true : undefined),
+			"ticket reuse after the earlier socket closed",
+		);
+	} finally {
+		await cleanup();
+	}
+}, 20_000);
+
+test("an invalid replica id stops the server before it listens", async () => {
+	const child = Bun.spawn(
+		["bun", new URL("../server.ts", import.meta.url).pathname],
+		{
+			cwd: new URL("..", import.meta.url).pathname,
+			env: {
+				PATH: process.env.PATH,
+				PORT: "0",
+				SIGNAL_HOST: "127.0.0.1",
+				REALTIME_FANOUT_MODE: "local",
+				REALTIME_ALLOWED_ORIGINS: origin,
+				BACKEND_PUB: publicKey,
+				NODE_ID: "replica:one",
+			},
+			stdout: "pipe",
+			stderr: "pipe",
+		},
+	);
+	expect(await child.exited).not.toBe(0);
+	expect(await new Response(child.stderr).text()).toContain("NODE_ID");
+	expect(await new Response(child.stdout).text()).not.toContain("on :");
+});

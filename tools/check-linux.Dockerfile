@@ -1,4 +1,5 @@
 FROM ubuntu:24.04
+COPY rust-toolchain.toml /rust-toolchain.toml
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CARGO_TARGET_DIR=/cargo-target
@@ -20,7 +21,8 @@ RUN lib_dir="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)" \
     && test -e "$lib_dir/libOpenCL.so"
 
 RUN curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --default-toolchain 1.97.1 -q
+    | sh -s -- -y --default-toolchain none -q && \
+    /root/.cargo/bin/rustup toolchain install
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 

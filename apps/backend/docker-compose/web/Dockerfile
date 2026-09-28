@@ -3,7 +3,31 @@
 FROM node:24.20.0-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS node
 
 # ============================================================
-# Stage 1: Builder
+# Stage 1: Device cryptography WebAssembly bundle
+# ============================================================
+# The browser loads every device-management primitive from /device-crypto.
+# The output is generated (and gitignored), so the image builds it the same way
+# the published web build does, with the toolchain pinned in rust-toolchain.toml.
+FROM rust:1.97.1-bookworm AS device-crypto
+COPY rust-toolchain.toml /rust-toolchain.toml
+RUN rustup toolchain install
+
+# ring compiles C for wasm32, which needs clang with a WebAssembly backend.
+RUN apt-get update && apt-get install -y --no-install-recommends clang llvm && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+
+WORKDIR /app
+COPY . .
+RUN rm -rf apps/web/public/device-crypto apps/desktop/public/device-crypto
+RUN --mount=type=cache,target=/cargo-home,id=cargo-home-rust-beta-2026-09-27,sharing=shared \
+    --mount=type=cache,target=/app/target,id=cargo-target-device-crypto-web-rust-beta-2026-09-27,sharing=locked \
+    CARGO_HOME=/cargo-home node packages/device-crypto/build-web.mjs && \
+    test -s apps/web/public/device-crypto/flow_like_device_crypto_bg.wasm && \
+    test -s apps/web/public/device-crypto/flow_like_device_crypto.js
+
+# ============================================================
+# Stage 2: Builder
 # ============================================================
 FROM oven/bun:1.3.8-debian AS builder
 
@@ -20,6 +44,7 @@ WORKDIR /app
 # Use the reviewed root context so the frozen workspace graph includes locales,
 # widget SDK, root build scripts, and patched dependencies.
 COPY . .
+RUN rm -rf apps/web/public/device-crypto
 RUN bun install --frozen-lockfile
 
 # Deployment URLs are public runtime settings, never image build arguments.
@@ -29,14 +54,16 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # Build the static export
 WORKDIR /app/apps/web
 RUN bun ../../scripts/sync-node-icons.ts
+COPY --from=device-crypto /app/apps/web/public/device-crypto /app/apps/web/public/device-crypto
 ARG TARGETARCH
 # Local/persistent builders retain compilation work across retries. The exported
 # /app/apps/web/out directory is outside the mount and remains in the image layer.
 RUN --mount=type=cache,id=flow-like-next-node24-next16-${TARGETARCH},target=/app/apps/web/.next,sharing=locked \
-    /opt/node/bin/node /app/node_modules/next/dist/bin/next build --turbopack
+    /opt/node/bin/node /app/node_modules/next/dist/bin/next build --turbopack && \
+    test -s out/device-crypto/flow_like_device_crypto_bg.wasm
 
 # ============================================================
-# Stage 2: Runtime (nginx to serve static files)
+# Stage 3: Runtime (nginx to serve static files)
 # ============================================================
 FROM nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
 

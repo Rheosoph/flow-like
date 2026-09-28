@@ -14,10 +14,10 @@ use url::Url;
 
 mod payments;
 mod standalone;
-pub use standalone::StandaloneConfig;
 pub use payments::{
     PaymentFeeBasis, PaymentLegalText, PaymentTaxMode, PaymentsConfig, valid_product_tax_code,
 };
+pub use standalone::StandaloneConfig;
 
 #[derive(Clone, Copy, Debug, Serialize, JsonSchema, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -685,7 +685,7 @@ pub type OAuthProviderConfigs = HashMap<String, OAuthProviderConfig>;
 
 /// Configuration for supported server-side event sinks.
 /// When a hub is deployed, only sinks listed here will be available for server-side execution.
-/// The desktop app always has access to all sinks.
+/// Desktop availability is defined by each sink type.
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, Default)]
 pub struct SupportedSinks {
     /// HTTP/REST API endpoint sink
@@ -718,6 +718,12 @@ pub struct SupportedSinks {
     /// Email/IMAP polling
     #[serde(default)]
     pub email: bool,
+    /// Email received at an address issued by the server
+    #[serde(default)]
+    pub inbound_email: bool,
+    /// Microsoft Teams bot webhook
+    #[serde(default)]
+    pub teams: bool,
 }
 
 impl SupportedSinks {
@@ -754,6 +760,12 @@ impl SupportedSinks {
         if self.email {
             sinks.push("email");
         }
+        if self.inbound_email {
+            sinks.push("inbound_email");
+        }
+        if self.teams {
+            sinks.push("teams");
+        }
         sinks
     }
 
@@ -770,6 +782,8 @@ impl SupportedSinks {
             "slack" => self.slack,
             "telegram" => self.telegram,
             "email" => self.email,
+            "inbound_email" => self.inbound_email,
+            "teams" => self.teams,
             _ => false,
         }
     }
@@ -797,6 +811,8 @@ impl SupportedSinks {
             slack: true,
             telegram: true,
             email: true,
+            inbound_email: true,
+            teams: true,
         }
     }
 }
@@ -927,6 +943,114 @@ pub fn hub_origin(hub: &str, secure: bool) -> Option<String> {
 
     let scheme = if secure { "https" } else { "http" };
     Some(format!("{scheme}://{hub}"))
+}
+
+const HUB_ERROR_MESSAGE_BYTES: usize = 512;
+
+/// `{origin}/api/v1/{segments}` for a hub given as a host or URL, with or
+/// without the `/api/v1` base. Segments are percent-encoded individually.
+pub fn hub_api_url(hub: &str, secure: bool, segments: &[&str]) -> Result<Url> {
+    let origin = hub_origin(hub, secure)
+        .ok_or_else(|| flow_like_types::anyhow!("No hub API URL is configured"))?;
+    let mut url = Url::parse(&origin)
+        .map_err(|error| flow_like_types::anyhow!("Invalid hub API URL '{origin}': {error}"))?;
+    let needs_api_prefix = !url.path().trim_end_matches('/').ends_with("/api/v1");
+    let mut path = url
+        .path_segments_mut()
+        .map_err(|_| flow_like_types::anyhow!("Hub API URL '{origin}' cannot carry a path"))?;
+    path.pop_if_empty();
+    if needs_api_prefix {
+        path.extend(["api", "v1"]);
+    }
+    path.extend(segments);
+    drop(path);
+    Ok(url)
+}
+
+/// Which hub responses [`send_hub_request`] repeats, how often, and how long
+/// it may wait between attempts in total.
+#[derive(Clone, Copy, Debug)]
+pub struct HubRetry {
+    pub retryable: fn(flow_like_types::reqwest::StatusCode) -> bool,
+    pub retries: u32,
+    pub max_wait: std::time::Duration,
+}
+
+/// Send a hub request, repeating a retryable response after its `Retry-After`
+/// seconds (else 1, 2, 4 … s) while attempts and total wait stay within `retry`.
+/// `build` runs once per attempt so per-request proofs are never replayed.
+/// The last response is returned whatever its status.
+pub async fn send_hub_request<F, Fut>(
+    client: &flow_like_types::reqwest::Client,
+    retry: HubRetry,
+    mut build: F,
+) -> Result<flow_like_types::reqwest::Response>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<flow_like_types::reqwest::Request>>,
+{
+    let mut waited = std::time::Duration::ZERO;
+    let mut attempt = 0;
+    loop {
+        let response = client.execute(build().await?).await?;
+        let status = response.status();
+        if status.is_success() || attempt >= retry.retries || !(retry.retryable)(status) {
+            return Ok(response);
+        }
+        let delay = retry_after(response.headers())
+            .unwrap_or_else(|| std::time::Duration::from_secs(1 << attempt.min(5)));
+        if waited + delay > retry.max_wait {
+            return Ok(response);
+        }
+        drop(response);
+        flow_like_types::tokio::time::sleep(delay).await;
+        waited += delay;
+        attempt += 1;
+    }
+}
+
+/// `Retry-After` given in seconds.
+pub fn retry_after(
+    headers: &flow_like_types::reqwest::header::HeaderMap,
+) -> Option<std::time::Duration> {
+    headers
+        .get(flow_like_types::reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+        .map(std::time::Duration::from_secs)
+}
+
+/// Error for a failed hub response carrying the API's public message
+/// (`{"error":{"message":…}}`, else the raw body), bounded to 512 bytes.
+pub async fn hub_response_error(
+    operation: &str,
+    response: flow_like_types::reqwest::Response,
+) -> flow_like_types::Error {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    match hub_error_message(&body) {
+        message if message.is_empty() => {
+            flow_like_types::anyhow!("{operation} was rejected by the server ({status})")
+        }
+        message => {
+            flow_like_types::anyhow!("{operation} was rejected by the server ({status}): {message}")
+        }
+    }
+}
+
+fn hub_error_message(body: &str) -> String {
+    let message = flow_like_types::json::from_str::<flow_like_types::Value>(body)
+        .ok()
+        .and_then(|value| value.pointer("/error/message")?.as_str().map(str::to_owned))
+        .unwrap_or_else(|| body.trim().to_owned());
+    let mut end = message.len().min(HUB_ERROR_MESSAGE_BYTES);
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    message[..end].to_owned()
 }
 
 impl Hub {
@@ -1195,7 +1319,121 @@ impl Hub {
 
 #[cfg(test)]
 mod tests {
-    use super::hub_origin;
+    use super::{HubRetry, hub_api_url, hub_error_message, hub_origin, send_hub_request};
+    use flow_like_types::{
+        reqwest::{Client, StatusCode},
+        tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        },
+    };
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    #[test]
+    fn hub_api_url_adds_the_api_base_once_and_encodes_segments() {
+        for hub in ["example.com", "https://example.com/api/v1/"] {
+            assert_eq!(
+                hub_api_url(hub, true, &["apps", "app/1", "mail", "send"])
+                    .unwrap()
+                    .as_str(),
+                "https://example.com/api/v1/apps/app%2F1/mail/send"
+            );
+        }
+        assert_eq!(
+            hub_api_url("http://api:8080", true, &["execution", "events"])
+                .unwrap()
+                .as_str(),
+            "http://api:8080/api/v1/execution/events"
+        );
+        assert!(hub_api_url(" ", true, &["apps"]).is_err());
+    }
+
+    #[test]
+    fn hub_error_message_prefers_the_public_message_and_stays_bounded() {
+        assert_eq!(
+            hub_error_message(r#"{"error":{"code":"BAD_REQUEST","message":"Recipient refused"}}"#),
+            "Recipient refused"
+        );
+        assert_eq!(
+            hub_error_message("  upstream timeout \n"),
+            "upstream timeout"
+        );
+        let long = "é".repeat(400);
+        let message = hub_error_message(&long);
+        assert!(message.len() <= 512);
+        assert!(long.starts_with(&message));
+    }
+
+    async fn serve(responses: Vec<&'static str>) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        flow_like_types::tokio::spawn(async move {
+            for response in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                let _ = socket.read(&mut request).await;
+                counter.fetch_add(1, Ordering::SeqCst);
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        (url, hits)
+    }
+
+    const TOO_MANY: &str = "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+    const OK: &str = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+
+    fn only_429(retries: u32, max_wait: Duration) -> HubRetry {
+        HubRetry {
+            retryable: |status| status == StatusCode::TOO_MANY_REQUESTS,
+            retries,
+            max_wait,
+        }
+    }
+
+    async fn get(url: &str, retry: HubRetry) -> (StatusCode, usize) {
+        let client = Client::new();
+        let builds = AtomicUsize::new(0);
+        let (client_ref, builds_ref) = (&client, &builds);
+        let response = send_hub_request(&client, retry, move || async move {
+            builds_ref.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, flow_like_types::Error>(client_ref.get(url).build()?)
+        })
+        .await
+        .unwrap();
+        (response.status(), builds.load(Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn send_hub_request_rebuilds_each_attempt_within_its_attempt_budget() {
+        let (url, hits) = serve(vec![TOO_MANY, TOO_MANY, OK]).await;
+        let (status, builds) = get(&url, only_429(3, Duration::from_secs(60))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!((hits.load(Ordering::SeqCst), builds), (3, 3));
+
+        let (url, hits) = serve(vec![TOO_MANY, TOO_MANY, OK]).await;
+        let (status, builds) = get(&url, only_429(1, Duration::from_secs(60))).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!((hits.load(Ordering::SeqCst), builds), (2, 2));
+    }
+
+    #[tokio::test]
+    async fn send_hub_request_stops_when_the_wait_budget_is_spent() {
+        let (url, hits) = serve(vec![
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 61\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        ])
+        .await;
+        let (status, _) = get(&url, only_429(3, Duration::from_secs(60))).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn hub_origin_attaches_the_scheme_the_profile_selected() {

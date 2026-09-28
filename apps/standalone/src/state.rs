@@ -5,8 +5,33 @@ use serde_json::Value;
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 const APPLICATION_ID: i64 = 0x464c5341;
+
+// Sealed rows bind to the identity that existed when this database was created,
+// because enrollment later replaces device_id with the hub-issued identity.
+// A database enrolled before this binding existed may hold rows sealed under a
+// local identity that is gone, so its first telemetry open sweeps them once.
+const STORAGE_IDENTITY_SCHEMA: &str = "
+    ALTER TABLE device_identity ADD COLUMN storage_id TEXT;
+    ALTER TABLE device_identity ADD COLUMN seal_repair_pending INTEGER NOT NULL DEFAULT 0
+        CHECK(seal_repair_pending IN (0,1));
+    UPDATE device_identity SET storage_id=device_id,
+        seal_repair_pending=EXISTS(SELECT 1 FROM registration);
+    CREATE TRIGGER device_storage_identity_immutable BEFORE UPDATE OF storage_id ON device_identity
+    WHEN OLD.storage_id IS NOT NEW.storage_id BEGIN
+        SELECT RAISE(ABORT,'Device storage identity is immutable');
+    END;
+    CREATE TABLE telemetry_evictions (
+        scope TEXT NOT NULL, kind TEXT NOT NULL,
+        evicted_through INTEGER NOT NULL, evicted INTEGER NOT NULL,
+        PRIMARY KEY(scope,kind)
+    );
+    ALTER TABLE archive_rosters ADD COLUMN dropped INTEGER NOT NULL DEFAULT 0;
+    DELETE FROM placement_rollouts
+        WHERE state NOT IN ('staged','validating','activating','rolling_back')
+        AND NOT EXISTS(SELECT 1 FROM placements p WHERE p.id=placement_rollouts.placement_id);
+";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,6 +129,8 @@ pub struct RegistrationRecord {
 pub struct StateStore {
     pub(crate) connection: Connection,
     device_id: String,
+    storage_id: String,
+    pub(crate) seal_repair_pending: bool,
 }
 
 impl StateStore {
@@ -340,13 +367,24 @@ impl StateStore {
             transaction.execute_batch(crate::acme::SCHEMA)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
+        if version < 12 {
+            transaction
+                .execute_batch(STORAGE_IDENTITY_SCHEMA)
+                .context("Bind sealed telemetry to the database storage identity")?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
 
-        let device_id: String = transaction.query_row(
-            "SELECT device_id FROM device_identity WHERE singleton = 1",
-            [],
-            |row| row.get(0),
-        )?;
+        let (device_id, storage_id, seal_repair_pending): (String, Option<String>, bool) =
+            transaction.query_row(
+                "SELECT device_id,storage_id,seal_repair_pending FROM device_identity WHERE singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
         Uuid::parse_str(&device_id).context("invalid device identity in management database")?;
+        let storage_id =
+            storage_id.context("management database has no sealed storage identity")?;
+        Uuid::parse_str(&storage_id)
+            .context("invalid sealed storage identity in management database")?;
         transaction.commit()?;
 
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -354,11 +392,18 @@ impl StateStore {
         Ok(Self {
             connection,
             device_id,
+            storage_id,
+            seal_repair_pending,
         })
     }
 
     pub fn device_id(&self) -> &str {
         &self.device_id
+    }
+
+    /// Immutable across enrollment; sealed operational and telemetry rows bind to it.
+    pub(crate) fn storage_id(&self) -> &str {
+        &self.storage_id
     }
 
     pub fn check_placement_identity(&self, id: &str, config: &Value) -> Result<()> {
@@ -769,6 +814,8 @@ impl StateStore {
             changed == 1,
             "placement must be stopped before removal: {id}"
         );
+        self.connection
+            .execute("DELETE FROM placement_rollouts WHERE placement_id=?1", [id])?;
         Ok(())
         })
     }
@@ -824,9 +871,64 @@ fn decode_placement(row: &rusqlite::Row<'_>) -> Result<PlacementRecord> {
 }
 
 #[cfg(test)]
+pub(crate) fn test_registration(device_id: &str) -> RegistrationRecord {
+    use flow_like_device_protocol::{OnboardingManifest, SigningKey};
+    RegistrationRecord {
+        manifest: OnboardingManifest {
+            version: 1,
+            enrollment_id: Uuid::new_v4().to_string(),
+            device_id: device_id.into(),
+            owner_id: "owner".into(),
+            name: "Test device".into(),
+            api_base_url: "https://example.test/api/v1".into(),
+            bootstrap_key: SigningKey::generate().public_key(),
+            controller_key: SigningKey::generate().public_key(),
+            owner_invitation_key: SigningKey::generate().public_key(),
+            issued_at: 0,
+            expires_at: 3600,
+        },
+        manifest_jws: "manifest".into(),
+        binding_jws: None,
+        attempted_bindings: Vec::new(),
+        receipt: None,
+        last_contact_at: None,
+        connection_status: "pending".into(),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn sealed_storage_identity_survives_enrollment_and_is_immutable() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("management.sqlite");
+        let mut store = StateStore::open(&path)?;
+        let local = store.device_id().to_owned();
+        assert_eq!(store.storage_id(), local);
+        assert!(!store.seal_repair_pending);
+        let enrolled = Uuid::new_v4().to_string();
+        store.begin_registration(&test_registration(&enrolled))?;
+        assert_eq!(store.device_id(), enrolled);
+        assert_eq!(store.storage_id(), local);
+        drop(store);
+        let store = StateStore::open(&path)?;
+        assert_eq!(store.device_id(), enrolled);
+        assert_eq!(store.storage_id(), local);
+        assert!(!store.seal_repair_pending);
+        assert!(
+            store
+                .connection
+                .execute(
+                    "UPDATE device_identity SET storage_id=?1",
+                    [Uuid::new_v4().to_string()]
+                )
+                .is_err()
+        );
+        Ok(())
+    }
 
     #[test]
     fn placement_identity_cannot_change_or_be_reused_after_removal() -> Result<()> {
@@ -896,7 +998,7 @@ mod tests {
         let config = json!({"id":"active","project_id":"project","deployment_id":"deployment"});
         store.upsert_placement("active", &config, DesiredState::Stopped)?;
         store.connection.execute("INSERT INTO telemetry_records(placement_id,kind,created_at,ciphertext) VALUES('removed','log',0,x'')", [])?;
-        store.connection.execute_batch("DROP TABLE certificate_acme; DROP TABLE certificate_issuers; DROP TABLE certificate_requests; DROP TABLE device_certificates; DROP TABLE certificate_inventory; DROP TABLE fleet_published_streams; DROP TABLE fleet_publication; DROP TABLE placement_rollouts; DROP TRIGGER operational_command_insert; DROP TRIGGER operational_command_update; DROP TRIGGER operational_replica_insert; DROP TRIGGER operational_replica_update; DROP TRIGGER operational_replica_delete; DROP TRIGGER operational_outbox_bound; DROP TABLE operational_message_scopes; DROP TABLE operational_outbox; DROP TABLE operational_coverage; DROP TABLE usage_processes; DROP TABLE usage_totals; DROP TRIGGER placement_identity_insert; DROP TRIGGER placement_identity_remember; DROP TRIGGER placement_identity_update; DROP TRIGGER placement_identity_retire; DROP TABLE placement_identities; PRAGMA user_version=4;")?;
+        store.connection.execute_batch("DROP TRIGGER device_storage_identity_immutable; ALTER TABLE device_identity DROP COLUMN storage_id; ALTER TABLE device_identity DROP COLUMN seal_repair_pending; DROP TABLE telemetry_evictions; ALTER TABLE archive_rosters DROP COLUMN dropped; DROP TABLE certificate_acme; DROP TABLE certificate_issuers; DROP TABLE certificate_requests; DROP TABLE device_certificates; DROP TABLE certificate_inventory; DROP TABLE fleet_published_streams; DROP TABLE fleet_publication; DROP TABLE placement_rollouts; DROP TRIGGER operational_command_insert; DROP TRIGGER operational_command_update; DROP TRIGGER operational_replica_insert; DROP TRIGGER operational_replica_update; DROP TRIGGER operational_replica_delete; DROP TRIGGER operational_outbox_bound; DROP TABLE operational_message_scopes; DROP TABLE operational_outbox; DROP TABLE operational_coverage; DROP TABLE usage_processes; DROP TABLE usage_totals; DROP TRIGGER placement_identity_insert; DROP TRIGGER placement_identity_remember; DROP TRIGGER placement_identity_update; DROP TRIGGER placement_identity_retire; DROP TABLE placement_identities; PRAGMA user_version=4;")?;
         drop(store);
         let mut store = StateStore::open(&path)?;
         assert!(
@@ -1184,7 +1286,7 @@ mod tests {
         let device_id = store.device_id().to_owned();
         store.upsert_placement("rest", &json!({"revision":"one"}), DesiredState::Stopped)?;
         store.connection.execute_batch(
-            "DROP TABLE certificate_acme; DROP TABLE certificate_issuers; DROP TABLE certificate_requests; DROP TABLE device_certificates; DROP TABLE certificate_inventory; DROP TABLE fleet_published_streams; DROP TABLE fleet_publication; DROP TABLE placement_rollouts; DROP TRIGGER operational_command_insert; DROP TRIGGER operational_command_update; DROP TRIGGER operational_replica_insert; DROP TRIGGER operational_replica_update; DROP TRIGGER operational_replica_delete; DROP TRIGGER operational_outbox_bound; DROP TABLE operational_message_scopes; DROP TABLE operational_outbox; DROP TABLE operational_coverage; DROP TABLE usage_processes; DROP TABLE usage_totals; DROP TRIGGER placement_identity_insert; DROP TRIGGER placement_identity_remember; DROP TRIGGER placement_identity_update; DROP TRIGGER placement_identity_retire; DROP TABLE placement_identities; DROP TABLE placement_replicas; ALTER TABLE placements DROP COLUMN desired_replicas; DROP TABLE registration; DROP TABLE workload_instances; DROP TABLE management_policy; DROP TABLE management_operations; DROP TABLE telemetry_audiences; DROP TABLE telemetry_records; DROP TABLE host_operations; DROP TABLE secret_operations; DROP TABLE archive_rosters; DROP TABLE archive_outbox; DROP TABLE project_artifact_transfers; PRAGMA user_version = 1;",
+            "DROP TRIGGER device_storage_identity_immutable; ALTER TABLE device_identity DROP COLUMN storage_id; ALTER TABLE device_identity DROP COLUMN seal_repair_pending; DROP TABLE telemetry_evictions; DROP TABLE certificate_acme; DROP TABLE certificate_issuers; DROP TABLE certificate_requests; DROP TABLE device_certificates; DROP TABLE certificate_inventory; DROP TABLE fleet_published_streams; DROP TABLE fleet_publication; DROP TABLE placement_rollouts; DROP TRIGGER operational_command_insert; DROP TRIGGER operational_command_update; DROP TRIGGER operational_replica_insert; DROP TRIGGER operational_replica_update; DROP TRIGGER operational_replica_delete; DROP TRIGGER operational_outbox_bound; DROP TABLE operational_message_scopes; DROP TABLE operational_outbox; DROP TABLE operational_coverage; DROP TABLE usage_processes; DROP TABLE usage_totals; DROP TRIGGER placement_identity_insert; DROP TRIGGER placement_identity_remember; DROP TRIGGER placement_identity_update; DROP TRIGGER placement_identity_retire; DROP TABLE placement_identities; DROP TABLE placement_replicas; ALTER TABLE placements DROP COLUMN desired_replicas; DROP TABLE registration; DROP TABLE workload_instances; DROP TABLE management_policy; DROP TABLE management_operations; DROP TABLE telemetry_audiences; DROP TABLE telemetry_records; DROP TABLE host_operations; DROP TABLE secret_operations; DROP TABLE archive_rosters; DROP TABLE archive_outbox; DROP TABLE project_artifact_transfers; PRAGMA user_version = 1;",
         )?;
         drop(store);
         let store = StateStore::open(&path)?;

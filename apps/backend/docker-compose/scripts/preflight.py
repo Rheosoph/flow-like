@@ -202,7 +202,7 @@ def validate(values, config):
             errors.append(f"{name} has an invalid execution or shutdown duration")
     for name, service in services.items():
         for port in service.get("ports", []):
-            if name not in {"api-gateway", "object-gateway", "grafana"}:
+            if name not in {"api-gateway", "object-gateway", "grafana", "mail-postfix"}:
                 errors.append(f"{name} must not publish infrastructure ports in the production stack")
             if name == "grafana" and port.get("host_ip") != "127.0.0.1":
                 errors.append("Grafana must bind to loopback")

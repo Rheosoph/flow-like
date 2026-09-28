@@ -481,6 +481,8 @@ pub async fn push_events(
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to push events: {}", e)))?;
 
+    crate::teams::runtime::output(&state, &claims, &body.events).await?;
+
     Ok(Json(PushEventsResponse {
         accepted,
         next_sequence: next_seq,

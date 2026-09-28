@@ -13,7 +13,7 @@ use reqwest::{Method, StatusCode, Url, header::HeaderMap};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{EmailMessage, MailClient};
+use super::{AutomationEmailMessage, MailClient};
 
 const ACS_SCOPE: &str = "https://communication.azure.com//.default";
 const API_VERSION: &str = "2025-09-01";
@@ -213,9 +213,9 @@ impl AzureCommunicationServicesMailClient {
 
 #[async_trait::async_trait]
 impl MailClient for AzureCommunicationServicesMailClient {
-    async fn send(&self, message: EmailMessage) -> Result<()> {
+    async fn send_automation(&self, message: AutomationEmailMessage) -> Result<()> {
         validate_message(&message)?;
-        let payload = AcsEmailRequest::new(&self.sender, &message);
+        let payload = AcsEmailRequest::new(&self.sender, &message)?;
         let operation_url = self.submit(&payload, Uuid::new_v4()).await?;
         self.await_completion(operation_url).await
     }
@@ -235,12 +235,18 @@ struct AcsEmailRequest<'a> {
     sender_address: &'a str,
     content: AcsEmailContent<'a>,
     recipients: AcsRecipients<'a>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    reply_to: Vec<AcsEmailAddress<'a>>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    headers: std::collections::BTreeMap<String, String>,
     user_engagement_tracking_disabled: bool,
 }
 
 impl<'a> AcsEmailRequest<'a> {
-    fn new(sender: &'a str, message: &'a EmailMessage) -> Self {
-        Self {
+    fn new(sender: &'a str, message: &'a AutomationEmailMessage) -> Result<Self> {
+        let sender = message.from_email.as_deref().unwrap_or(sender);
+        validate_email_address("email sender", sender)?;
+        Ok(Self {
             sender_address: sender,
             content: AcsEmailContent {
                 subject: &message.subject,
@@ -248,12 +254,30 @@ impl<'a> AcsEmailRequest<'a> {
                 html: message.body_html.as_deref(),
             },
             recipients: AcsRecipients {
-                to: vec![AcsEmailAddress {
-                    address: &message.to,
-                }],
+                to: message
+                    .to
+                    .iter()
+                    .map(|address| AcsEmailAddress { address })
+                    .collect(),
+                cc: message
+                    .cc
+                    .iter()
+                    .map(|address| AcsEmailAddress { address })
+                    .collect(),
+                bcc: message
+                    .bcc
+                    .iter()
+                    .map(|address| AcsEmailAddress { address })
+                    .collect(),
             },
+            reply_to: message
+                .reply_to
+                .iter()
+                .map(|address| AcsEmailAddress { address })
+                .collect(),
             user_engagement_tracking_disabled: true,
-        }
+            headers: message.headers()?,
+        })
     }
 }
 
@@ -270,6 +294,10 @@ struct AcsEmailContent<'a> {
 #[derive(Debug, Serialize)]
 struct AcsRecipients<'a> {
     to: Vec<AcsEmailAddress<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    cc: Vec<AcsEmailAddress<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    bcc: Vec<AcsEmailAddress<'a>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -375,13 +403,23 @@ fn validate_email_address(label: &str, address: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_message(message: &EmailMessage) -> Result<()> {
-    validate_email_address("email recipient", message.to.trim())?;
-
-    if message.to != message.to.trim() {
-        return Err(flow_like_types::anyhow!(
-            "email recipient must not contain surrounding whitespace"
-        ));
+fn validate_message(message: &AutomationEmailMessage) -> Result<()> {
+    if message.to.is_empty() {
+        return Err(flow_like_types::anyhow!("email requires a recipient"));
+    }
+    for address in message
+        .to
+        .iter()
+        .chain(&message.cc)
+        .chain(&message.bcc)
+        .chain(message.reply_to.iter())
+    {
+        validate_email_address("email recipient", address.trim())?;
+        if address != address.trim() {
+            return Err(flow_like_types::anyhow!(
+                "email recipient must not contain surrounding whitespace"
+            ));
+        }
     }
     if message.subject.trim().is_empty() || message.subject.len() > 998 {
         return Err(flow_like_types::anyhow!(
@@ -513,19 +551,27 @@ fn sanitize_service_text(value: &str) -> String {
 mod tests {
     use super::*;
 
-    fn message() -> EmailMessage {
-        EmailMessage {
-            to: "recipient@example.com".to_string(),
+    fn message() -> AutomationEmailMessage {
+        AutomationEmailMessage {
+            from_email: None,
+            from_name: None,
+            to: vec!["recipient@example.com".to_string()],
+            cc: Vec::new(),
+            bcc: Vec::new(),
+            reply_to: None,
             subject: "Security alert".to_string(),
             body_html: Some("<p>Review the alert.</p>".to_string()),
             body_text: Some("Review the alert.".to_string()),
+            in_reply_to: None,
+            references: Vec::new(),
+            auto_submitted: None,
         }
     }
 
     #[test]
     fn serializes_the_acs_contract_and_disables_tracking() {
         let message = message();
-        let payload = AcsEmailRequest::new("DoNotReply@example.azurecomm.net", &message);
+        let payload = AcsEmailRequest::new("DoNotReply@example.azurecomm.net", &message).unwrap();
         let value = serde_json::to_value(payload).expect("payload must serialize");
 
         assert_eq!(value["senderAddress"], "DoNotReply@example.azurecomm.net");
@@ -536,6 +582,36 @@ mod tests {
             "recipient@example.com"
         );
         assert_eq!(value["userEngagementTrackingDisabled"], true);
+    }
+
+    #[test]
+    fn automation_preserves_copy_recipients_and_reply_address() {
+        let mut message = message();
+        message.cc = vec!["copy@example.com".into()];
+        message.bcc = vec!["hidden@example.com".into()];
+        message.reply_to = Some("replies@example.com".into());
+        message.from_email = Some("event@example.com".into());
+        message.in_reply_to = Some("<received@example.net>".into());
+        message.references = vec![
+            "<first@example.net>".into(),
+            "<received@example.net>".into(),
+        ];
+        message.auto_submitted = Some(crate::mail::AutoSubmitted::Replied);
+        let payload = AcsEmailRequest::new("platform@example.com", &message).unwrap();
+        let value = serde_json::to_value(payload).unwrap();
+        assert_eq!(value["senderAddress"], "event@example.com");
+        assert_eq!(value["headers"]["Auto-Submitted"], "auto-replied");
+        assert_eq!(value["recipients"]["cc"][0]["address"], "copy@example.com");
+        assert_eq!(
+            value["recipients"]["bcc"][0]["address"],
+            "hidden@example.com"
+        );
+        assert_eq!(value["replyTo"][0]["address"], "replies@example.com");
+        assert_eq!(value["headers"]["In-Reply-To"], "<received@example.net>");
+        assert_eq!(
+            value["headers"]["References"],
+            "<first@example.net> <received@example.net>"
+        );
     }
 
     #[test]
@@ -578,7 +654,7 @@ mod tests {
         assert!(validate_message(&invalid).is_err());
 
         let mut invalid = message();
-        invalid.to = "recipient@example.com\r\n".to_string();
+        invalid.to = vec!["recipient@example.com\r\n".to_string()];
         assert!(validate_message(&invalid).is_err());
 
         let mut invalid = message();

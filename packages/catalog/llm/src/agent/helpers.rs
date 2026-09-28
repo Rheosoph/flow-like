@@ -53,11 +53,19 @@ use rmcp::{
 };
 #[cfg(feature = "execute")]
 use std::{collections::HashMap, sync::Arc, time::Instant};
+#[cfg(feature = "execute")]
+use tool_images::{ToolCallOutcome, ToolResultOrigin};
+
+#[cfg(feature = "execute")]
+pub mod tool_images;
 
 #[cfg(feature = "execute")]
 const DEFAULT_MAX_CONTEXT_TOKENS: u32 = 32000;
 #[cfg(feature = "execute")]
 const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
+/// Vision models bill a model-budget image (≤1.15 MP) at roughly this many tokens.
+#[cfg(feature = "execute")]
+const IMAGE_TOKEN_ESTIMATE: usize = 1_600;
 
 /// Bound network waits on remote MCP servers so a hung peer can never stall the
 /// whole agent run. Values are per awaited call, not per whole registration.
@@ -110,9 +118,14 @@ fn estimate_message_tokens(msg: &rig::message::Message) -> usize {
                     .iter()
                     .map(|trc| match trc {
                         rig::message::ToolResultContent::Text(t) => t.text.len(),
-                        _ => 50,
+                        rig::message::ToolResultContent::Image(_) => {
+                            IMAGE_TOKEN_ESTIMATE * CHARS_PER_TOKEN_ESTIMATE
+                        }
                     })
                     .sum(),
+                rig::message::UserContent::Image(_) => {
+                    IMAGE_TOKEN_ESTIMATE * CHARS_PER_TOKEN_ESTIMATE
+                }
                 _ => 100,
             })
             .sum(),
@@ -421,6 +434,27 @@ async fn manage_context_budget(
             let (h, evicted) = truncate_history_to_budget(history, max_tokens);
             Ok((h, evicted, None))
         }
+    }
+}
+
+#[cfg(feature = "execute")]
+fn prune_tool_images_in_flight(
+    context: &mut ExecutionContext,
+    history: &mut [rig::message::Message],
+) {
+    let pruned = tool_images::prune_tool_images(
+        history,
+        tool_images::TOOL_IMAGE_KEEP_RECENT,
+        tool_images::TOOL_IMAGE_PRUNE_SLACK,
+    );
+    if pruned > 0 {
+        context.log_message(
+            &format!(
+                "Replaced {} older tool image(s) with text stubs to bound the context",
+                pruned
+            ),
+            LogLevel::Debug,
+        );
     }
 }
 
@@ -1686,6 +1720,7 @@ pub async fn execute_agent_streaming(
             LogLevel::Debug,
         );
     }
+    prune_tool_images_in_flight(context, &mut current_history);
     context.log_message(
         &format!(
             "Filtered history: {} messages sent to LLM",
@@ -1701,6 +1736,8 @@ pub async fn execute_agent_streaming(
 
     let mut full_history = history.clone();
     let mut iteration = 0;
+    let deliver_tool_images = agent.model.is_multimodal();
+    let mut next_tool_image_index = 1usize;
     let agent_start = Instant::now();
     let mut accumulated_stats = LLMUsageStats {
         usage: ResponseUsage::default(),
@@ -1993,7 +2030,7 @@ pub async fn execute_agent_streaming(
         };
 
         let mut tool_calls_found = false;
-        let mut tool_results: Vec<(String, Option<String>, String, Value, Value)> = Vec::new();
+        let mut tool_results: Vec<ToolCallOutcome> = Vec::new();
 
         for content in response_contents.iter() {
             if let AssistantContent::ToolCall(RigToolCall {
@@ -2008,11 +2045,22 @@ pub async fn execute_agent_streaming(
             {
                 tool_calls_found = true;
 
-                let tool_output = if let Some(referenced_node) = tool_name_to_node.get(name) {
+                let (tool_output, tool_images) = if let Some(referenced_node) =
+                    tool_name_to_node.get(name)
+                {
                     let result = execute_tool_call(context, referenced_node, name, arguments).await;
                     match result {
-                        Ok(value) => value,
-                        Err(error) => json::json!(format!("Error: {:?}", error)),
+                        Ok(value) => {
+                            tool_images::extract_tool_images(
+                                context,
+                                value,
+                                ToolResultOrigin::FlowFunction,
+                                deliver_tool_images,
+                                &mut next_tool_image_index,
+                            )
+                            .await
+                        }
+                        Err(error) => (json::json!(format!("Error: {:?}", error)), Vec::new()),
                     }
                 } else if let Some((mcp_peer, server_tool_name)) = mcp_tool_clients.get(name) {
                     context.log_message(
@@ -2029,16 +2077,25 @@ pub async fn execute_agent_streaming(
                         .await
                     {
                         Ok(Ok(result)) => {
+                            let value = json::to_value(result)
+                                .unwrap_or_else(|_| json::json!({"message": "Tool executed"}));
+                            let (value, images) = tool_images::extract_tool_images(
+                                context,
+                                value,
+                                ToolResultOrigin::Mcp,
+                                deliver_tool_images,
+                                &mut next_tool_image_index,
+                            )
+                            .await;
+                            let serialized = json::to_string(&value).unwrap_or_default();
                             context.log_message(
                                 &format!(
-                                    "MCP tool '{}' returned successfully with result {:?}",
-                                    name, result
+                                    "MCP tool '{}' returned successfully with result {}",
+                                    name, serialized
                                 ),
                                 LogLevel::Debug,
                             );
-                            let value = json::to_value(result)
-                                .unwrap_or_else(|_| json::json!({"message": "Tool executed"}));
-                            let byte_len = json::to_string(&value).map(|s| s.len()).unwrap_or(0);
+                            let byte_len = serialized.len();
                             if byte_len > MCP_MAX_RESULT_BYTES {
                                 context.log_message(
                                     &format!(
@@ -2047,14 +2104,17 @@ pub async fn execute_agent_streaming(
                                     ),
                                     LogLevel::Warn,
                                 );
-                                json::json!({
-                                    "error": format!(
-                                        "Tool result too large ({} bytes, limit {}). Ask the tool to return less data or paginate.",
-                                        byte_len, MCP_MAX_RESULT_BYTES
-                                    )
-                                })
+                                (
+                                    json::json!({
+                                        "error": format!(
+                                            "Tool result too large ({} bytes, limit {}). Ask the tool to return less data or paginate.",
+                                            byte_len, MCP_MAX_RESULT_BYTES
+                                        )
+                                    }),
+                                    Vec::new(),
+                                )
                             } else {
-                                value
+                                (value, images)
                             }
                         }
                         Ok(Err(error)) => {
@@ -2062,7 +2122,7 @@ pub async fn execute_agent_streaming(
                                 &format!("MCP tool '{}' call failed: {}", name, error),
                                 LogLevel::Error,
                             );
-                            json::json!({"error": format!("{}", error)})
+                            (json::json!({"error": format!("{}", error)}), Vec::new())
                         }
                         Err(_) => {
                             context.log_message(
@@ -2072,12 +2132,15 @@ pub async fn execute_agent_streaming(
                                 ),
                                 LogLevel::Error,
                             );
-                            json::json!({
-                                "error": format!(
-                                    "Tool '{}' timed out after {:?}",
-                                    name, MCP_CALL_TOOL_TIMEOUT
-                                )
-                            })
+                            (
+                                json::json!({
+                                    "error": format!(
+                                        "Tool '{}' timed out after {:?}",
+                                        name, MCP_CALL_TOOL_TIMEOUT
+                                    )
+                                }),
+                                Vec::new(),
+                            )
                         }
                     }
                 } else if name == "think" && agent.thinking_enabled {
@@ -2089,7 +2152,10 @@ pub async fn execute_agent_streaming(
                         &format!("Think tool called with thought: {}", thought),
                         LogLevel::Debug,
                     );
-                    json::json!(format!("<think>{}</think>", thought))
+                    (
+                        json::json!(format!("<think>{}</think>", thought)),
+                        Vec::new(),
+                    )
                 } else if name == "_lazy_search_tools" && !agent.lazy_function_refs.is_empty() {
                     let query = arguments
                         .get("query")
@@ -2101,7 +2167,7 @@ pub async fn execute_agent_streaming(
                         .and_then(|v| v.as_u64())
                         .unwrap_or(5)
                         .min(20) as usize;
-                    handle_lazy_tool_search(
+                    let output = handle_lazy_tool_search(
                         context,
                         agent,
                         &query,
@@ -2112,11 +2178,13 @@ pub async fn execute_agent_streaming(
                     .await
                     .unwrap_or_else(
                         |e| json::json!({ "error": format!("Lazy tool search failed: {}", e) }),
-                    )
+                    );
+                    (output, Vec::new())
                 } else if name.starts_with("_memory_") && agent.memory.is_some() {
-                    handle_memory_tool_call(context, agent, name, arguments)
+                    let output = handle_memory_tool_call(context, agent, name, arguments)
                         .await
-                        .unwrap_or_else(|e| json::json!({ "error": format!("{}", e) }))
+                        .unwrap_or_else(|e| json::json!({ "error": format!("{}", e) }));
+                    (output, Vec::new())
                 } else {
                     return Err(anyhow!(
                         "Tool '{}' not found in referenced functions or MCP servers",
@@ -2124,12 +2192,13 @@ pub async fn execute_agent_streaming(
                     ));
                 };
 
-                tool_results.push((
+                tool_results.push(ToolCallOutcome::new(
                     id.clone(),
                     call_id.clone(),
                     name.clone(),
                     arguments.clone(),
-                    tool_output,
+                    &tool_output,
+                    tool_images,
                 ));
             }
         }
@@ -2140,21 +2209,19 @@ pub async fn execute_agent_streaming(
                 iteration,
                 tool_results.len()
             );
-            for (id, _call_id, name, args, output) in &tool_results {
+            for outcome in &tool_results {
                 let args_preview = {
-                    let s = json::to_string(args).unwrap_or_default();
+                    let s = json::to_string(&outcome.arguments).unwrap_or_default();
                     s.chars().take(300).collect::<String>()
                 };
-                let result_preview = match output.as_str() {
-                    Some(s) => s.chars().take(200).collect::<String>(),
-                    None => {
-                        let s = json::to_string(output).unwrap_or_default();
-                        s.chars().take(200).collect()
-                    }
-                };
+                let result_preview = outcome.text.chars().take(200).collect::<String>();
                 tools_summary.push_str(&format!(
-                    "\n  tool {}(id={}) args={} → '{}'",
-                    name, id, args_preview, result_preview
+                    "\n  tool {}(id={}) args={} images={} → '{}'",
+                    outcome.name,
+                    outcome.id,
+                    args_preview,
+                    outcome.images.len(),
+                    result_preview
                 ));
             }
             context.log_message(&tools_summary, LogLevel::Debug);
@@ -2192,55 +2259,29 @@ pub async fn execute_agent_streaming(
         let assistant_history_msg: HistoryMessage = assistant_clone.into();
         full_history.push_message(assistant_history_msg);
 
-        use rig::message::{ToolResult as RigToolResult, ToolResultContent, UserContent};
-
-        // Collect all tool results into a single User message
-        // This is required for Gemini API which expects tool results to immediately follow
-        // the assistant's tool call message in a single message
-        let mut tool_result_contents: Vec<UserContent> = Vec::new();
-
-        for (tool_id, tool_call_id, tool_name, _tool_args, tool_output) in &tool_results {
-            let tool_result_str = match tool_output.as_str() {
-                Some(s) => s.to_string(),
-                None => json::to_string(tool_output).unwrap_or_default(),
-            };
-
-            tool_result_contents.push(UserContent::ToolResult(RigToolResult {
-                id: tool_id.clone(),
-                call_id: tool_call_id.clone().or_else(|| Some(tool_id.clone())),
-                content: OneOrMany::one(ToolResultContent::text(tool_result_str.clone())),
-            }));
-
-            let tool_msg = HistoryMessage {
+        for outcome in &tool_results {
+            full_history.push_message(HistoryMessage {
                 role: Role::Tool,
                 content: MessageContent::Contents(vec![Content::Text {
                     content_type: ContentType::Text,
-                    text: tool_result_str,
+                    text: outcome.text.clone(),
                 }]),
-                name: Some(tool_name.clone()),
-                tool_call_id: Some(tool_id.clone()),
+                name: Some(outcome.name.clone()),
+                tool_call_id: Some(outcome.id.clone()),
                 tool_calls: None,
                 annotations: None,
-            };
-            full_history.push_message(tool_msg);
+            });
         }
 
-        // Add all tool results as a single User message
-        if !tool_result_contents.is_empty() {
-            let combined_tool_results = if tool_result_contents.len() == 1 {
-                OneOrMany::one(tool_result_contents.into_iter().next().unwrap())
-            } else {
-                // For multiple tool results, create a Many variant
-                // This should never fail since we already checked len > 1
-                OneOrMany::many(tool_result_contents)
-                    .expect("tool_result_contents should have at least 2 elements")
-            };
-
-            let tool_result_msg = rig::message::Message::User {
-                content: combined_tool_results,
-            };
-            current_history.push(tool_result_msg);
+        // All tool results go into one User message (Gemini requires them to directly follow
+        // the tool calls); tool images follow in a separate User message.
+        for message in tool_images::tool_turn_messages(&tool_results) {
+            if tool_images::is_tool_image_message(&message) {
+                full_history.push_message(HistoryMessage::from(message.clone()));
+            }
+            current_history.push(message);
         }
+        prune_tool_images_in_flight(context, &mut current_history);
 
         // Apply context management after adding tool results if infinite context is enabled
         if agent.infinite_context {

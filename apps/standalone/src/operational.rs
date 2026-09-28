@@ -213,40 +213,43 @@ struct Totals {
 }
 
 impl TelemetryStore {
-    fn transaction<T>(&self, work: impl FnOnce() -> Result<T>) -> Result<T> {
-        self.store.connection.execute_batch("BEGIN IMMEDIATE")?;
-        match work() {
-            Ok(value) => {
-                self.store.connection.execute_batch("COMMIT")?;
-                Ok(value)
-            }
+    /// An unreadable checkpoint is removed instead of blocking admission,
+    /// reconciliation or usage reads for every later process.
+    fn process(&self, run: &str) -> Result<Option<Process>> {
+        let row: Option<(String,String,i64,Vec<u8>)> = self.store.connection.query_row("SELECT placement_id,state,updated_at,ciphertext FROM usage_processes WHERE run_id=?1", [run], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional()?;
+        let Some((placement, state, updated, bytes)) = row else {
+            return Ok(None);
+        };
+        let opened = self
+            .open_payload::<Process>(
+                "usage-process",
+                &json!([run, placement, state, updated]),
+                &bytes,
+            )
+            .and_then(|process| {
+                ensure!(
+                    process.binding.run_id == run
+                        && process.binding.placement_id == placement
+                        && process.state == state
+                        && process.updated_at == updated,
+                    "Usage checkpoint binding differs"
+                );
+                Ok(process)
+            });
+        match opened {
+            Ok(process) => Ok(Some(process)),
             Err(error) => {
-                let _ = self.store.connection.execute_batch("ROLLBACK");
-                Err(error)
+                self.store
+                    .connection
+                    .execute("DELETE FROM usage_processes WHERE run_id=?1", [run])?;
+                tracing::warn!(run_id = run, placement = %placement, "Quarantined an unreadable usage checkpoint: {error:#}");
+                Ok(None)
             }
         }
     }
 
-    fn process(&self, run: &str) -> Result<Option<Process>> {
-        let row: Option<(String,String,i64,Vec<u8>)> = self.store.connection.query_row("SELECT placement_id,state,updated_at,ciphertext FROM usage_processes WHERE run_id=?1", [run], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional()?;
-        row.map(|(placement, state, updated, bytes)| {
-            let process: Process = self.open_payload(
-                "usage-process",
-                &json!([run, placement, state, updated]),
-                &bytes,
-            )?;
-            ensure!(
-                process.binding.run_id == run
-                    && process.binding.placement_id == placement
-                    && process.state == state
-                    && process.updated_at == updated,
-                "Usage checkpoint binding differs"
-            );
-            Ok(process)
-        })
-        .transpose()
-    }
-
+    /// Unreadable totals restart their retained window instead of blocking
+    /// worker admission; the new window's `since` shows the reset.
     fn totals(&self, placement: &str, project: &str, now: i64) -> Result<Totals> {
         let row: Option<(String, i64, Vec<u8>)> = self
             .store
@@ -258,35 +261,53 @@ impl TelemetryStore {
             )
             .optional()?;
         if let Some((stored_project, updated, bytes)) = row {
-            ensure!(stored_project == project, "Retained usage project differs");
-            let value: Totals = self.open_payload(
-                "usage-totals",
-                &json!([placement, project, updated]),
-                &bytes,
-            )?;
             ensure!(
-                value.version == 1
-                    && value.placement_id == placement
-                    && value.project_id == project
-                    && value.through == updated,
-                "Retained usage binding differs"
+                stored_project == project,
+                "Retained usage for placement {placement} belongs to another project"
             );
-            Ok(value)
-        } else {
-            Ok(Totals {
-                version: 1,
-                placement_id: placement.into(),
-                project_id: project.into(),
-                since: now,
-                through: now,
-                counters: Default::default(),
-                registered_runs: 0,
-                reported_runs: 0,
-                finalized_runs: 0,
-                incomplete_runs: 0,
-                unreported_runs: 0,
-            })
+            let opened = self
+                .open_payload::<Totals>(
+                    "usage-totals",
+                    &json!([placement, project, updated]),
+                    &bytes,
+                )
+                .and_then(|value| {
+                    ensure!(
+                        value.version == 1
+                            && value.placement_id == placement
+                            && value.project_id == project
+                            && value.through == updated,
+                        "Retained usage binding differs"
+                    );
+                    Ok(value)
+                });
+            match opened {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    self.store.connection.execute(
+                        "DELETE FROM usage_totals WHERE placement_id=?1",
+                        [placement],
+                    )?;
+                    tracing::warn!(
+                        placement,
+                        "Reset unreadable retained usage totals: {error:#}"
+                    );
+                }
+            }
         }
+        Ok(Totals {
+            version: 1,
+            placement_id: placement.into(),
+            project_id: project.into(),
+            since: now,
+            through: now,
+            counters: Default::default(),
+            registered_runs: 0,
+            reported_runs: 0,
+            finalized_runs: 0,
+            incomplete_runs: 0,
+            unreported_runs: 0,
+        })
     }
 
     fn save_usage(&self, process: &Process, totals: &Totals) -> Result<()> {
@@ -469,6 +490,39 @@ impl TelemetryStore {
         self.prune_usage_checkpoints(unix_time()?)
     }
 
+    /// Returns how many unreadable usage rows were removed.
+    pub(crate) fn quarantine_unreadable_usage(&self) -> Result<usize> {
+        let count = |table: &str| -> Result<i64> {
+            Ok(self.store.connection.query_row(
+                &format!("SELECT COUNT(*) FROM {table}"),
+                [],
+                |row| row.get(0),
+            )?)
+        };
+        let before = count("usage_totals")? + count("usage_processes")?;
+        let now = unix_time()?;
+        let totals: Vec<(String, String)> = self
+            .store
+            .connection
+            .prepare("SELECT placement_id,project_id FROM usage_totals")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<std::result::Result<_, _>>()?;
+        for (placement, project) in totals {
+            self.totals(&placement, &project, now)?;
+        }
+        let runs: Vec<String> = self
+            .store
+            .connection
+            .prepare("SELECT run_id FROM usage_processes")?
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        for run in runs {
+            self.process(&run)?;
+        }
+        let after = count("usage_totals")? + count("usage_processes")?;
+        Ok(usize::try_from(before - after)?)
+    }
+
     fn prune_usage_checkpoints(&self, now: i64) -> Result<()> {
         self.transaction(|| {
             self.store.connection.execute("DELETE FROM usage_processes WHERE state!='active' AND (updated_at<?1 OR run_id IN (SELECT run_id FROM usage_processes WHERE state!='active' ORDER BY updated_at DESC,run_id DESC LIMIT -1 OFFSET 10000))",[now.saturating_sub(86400)])?;
@@ -515,7 +569,9 @@ impl TelemetryStore {
         let mut ended_pending = 0u64;
         let runs: Vec<String> = self.store.connection.prepare("SELECT p.run_id FROM usage_processes p JOIN placement_identities i ON i.id=p.placement_id COLLATE BINARY WHERE p.state='active' AND (?1 IS NULL OR p.placement_id=?1 COLLATE BINARY) AND (?2 IS NULL OR i.project_id=?2 COLLATE BINARY)")?.query_map(params![placement,project], |r|r.get(0))?.collect::<std::result::Result<_,_>>()?;
         for run in runs {
-            let p = self.process(&run)?.context("Usage process disappeared")?;
+            let Some(p) = self.process(&run)? else {
+                continue;
+            };
             if !self.process_is_bound(&p.binding)? {
                 ended_pending += 1;
             } else if p.snapshot.is_none() {
@@ -709,11 +765,15 @@ impl TelemetryStore {
         self.transaction(|| {
             type Row = (i64,String,String,Option<String>,Option<String>,String,Option<i64>,Option<i64>,Option<i64>,Option<i64>,i64);
             let rows: Vec<Row> = self.store.connection.prepare("SELECT sequence,kind,source_id,placement_id,project_id,state,config_revision,intent_revision,slot,process_id,created_at FROM operational_outbox ORDER BY sequence LIMIT 256")?.query_map([], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?,r.get(10)?)))?.collect::<std::result::Result<_,_>>()?;
+            let mut partitions = std::collections::BTreeSet::new();
             for (id,kind,source,placement,project,state,config,intent,slot,pid,time) in rows {
                 let value=json!({"version":1,"transition_id":id,"kind":kind,"source_id":source,"placement_id":placement,"project_id":project,"state":state,"config_revision":config,"intent_revision":intent,"replica_slot":slot,"process_id":pid});
-                let sequence=self.append_in_transaction(placement.as_deref(),"message",&value,time)?;
-                self.store.connection.execute("INSERT INTO operational_message_scopes(sequence,project_id) VALUES(?1,?2)",params![sequence,project])?;
+                self.insert_message(placement.as_deref(),project.as_deref(),&value,time)?;
                 self.store.connection.execute("DELETE FROM operational_outbox WHERE sequence=?1",[id])?;
+                partitions.insert((placement,project));
+            }
+            for (placement,project) in partitions {
+                self.trim_messages(placement.as_deref(),project.as_deref())?;
             }
             Ok(())
         })
@@ -736,7 +796,7 @@ impl TelemetryStore {
             )?;
             result["outbox_dropped"] = json!(dropped);
         }
-        result["retention_limit"] = json!(10000);
+        result["retention_limit"] = json!(crate::telemetry::MESSAGE_RETENTION);
         Ok(result)
     }
 }
@@ -1172,6 +1232,110 @@ mod tests {
         state.record_replica("service", 1, 1, 1, ObservedState::Stopped, None, None)?;
         telemetry.reconcile_usage()?;
         assert_eq!(telemetry.process(&run.run_id)?.unwrap().state, "incomplete");
+        Ok(())
+    }
+
+    #[test]
+    fn enrollment_keeps_sealed_usage_and_telemetry_readable() -> Result<()> {
+        let (dir, mut state, telemetry) = fixture()?;
+        let local = binding("service", 0);
+        telemetry.begin_usage(&local)?;
+        telemetry.record_usage(&local, &snapshot(1, 4), true)?;
+        telemetry.append(
+            Some("service"),
+            "log",
+            &json!({"message":"before enrollment"}),
+        )?;
+        drop(telemetry);
+        let enrolled = uuid::Uuid::new_v4().to_string();
+        state.begin_registration(&crate::state::test_registration(&enrolled))?;
+        let telemetry = TelemetryStore::open(dir.path())?;
+        assert_eq!(telemetry.store.device_id(), enrolled);
+        telemetry.begin_usage(&binding("service", 1))?;
+        let retained = telemetry.retained_usage(Some("service"), None)?;
+        assert_eq!(retained["counters"]["invocations_started"], 4);
+        assert_eq!(retained["coverage"]["registered_runs"], 2);
+        let logs = telemetry.read(Some("service"), "log", 0, 10)?;
+        assert!(
+            logs["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|record| record["data"]["message"] == "before enrollment")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn database_enrolled_before_storage_binding_drops_unreadable_seals_once() -> Result<()> {
+        let (dir, state, telemetry) = fixture()?;
+        let local = binding("service", 0);
+        telemetry.begin_usage(&local)?;
+        telemetry.record_usage(&local, &snapshot(1, 4), false)?;
+        telemetry.append(Some("service"), "log", &json!({"message":"sealed locally"}))?;
+        drop(telemetry);
+        let enrolled = uuid::Uuid::new_v4().to_string();
+        state.connection.execute_batch(
+            "DROP TRIGGER device_storage_identity_immutable; ALTER TABLE device_identity DROP COLUMN storage_id; ALTER TABLE device_identity DROP COLUMN seal_repair_pending; DROP TABLE telemetry_evictions; ALTER TABLE archive_rosters DROP COLUMN dropped; PRAGMA user_version=11;",
+        )?;
+        state
+            .connection
+            .execute("UPDATE device_identity SET device_id=?1", [&enrolled])?;
+        state.connection.execute(
+            "INSERT INTO registration VALUES(1,?1)",
+            [serde_json::to_string(&crate::state::test_registration(
+                &enrolled,
+            ))?],
+        )?;
+        drop(state);
+        let telemetry = TelemetryStore::open(dir.path())?;
+        assert_eq!(telemetry.store.storage_id(), enrolled);
+        let pending: bool = telemetry.store.connection.query_row(
+            "SELECT seal_repair_pending FROM device_identity",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(!pending);
+        let logs = telemetry.read(Some("service"), "log", 0, 10)?;
+        assert!(logs["records"].as_array().unwrap().is_empty());
+        assert!(logs["evicted_through"].as_u64().is_some());
+        assert!(telemetry.process(&local.run_id)?.is_none());
+        telemetry.begin_usage(&binding("service", 1))?;
+        assert_eq!(
+            telemetry.retained_usage(Some("service"), None)?["coverage"]["registered_runs"],
+            1
+        );
+        telemetry.append(Some("service"), "log", &json!({"message":"after repair"}))?;
+        drop(telemetry);
+        let reopened = TelemetryStore::open(dir.path())?;
+        assert!(!reopened.store.seal_repair_pending);
+        assert_eq!(
+            reopened.read(Some("service"), "log", 0, 10)?["records"][0]["data"]["message"],
+            "after repair"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unreadable_usage_rows_are_quarantined_instead_of_blocking_workers() -> Result<()> {
+        let (_dir, state, telemetry) = fixture()?;
+        let first = binding("service", 0);
+        telemetry.begin_usage(&first)?;
+        telemetry.record_usage(&first, &snapshot(1, 4), false)?;
+        state.connection.execute(
+            "UPDATE usage_totals SET ciphertext=zeroblob(64) WHERE placement_id='service'",
+            [],
+        )?;
+        state.connection.execute(
+            "UPDATE usage_processes SET ciphertext=zeroblob(64) WHERE run_id=?1",
+            [&first.run_id],
+        )?;
+        telemetry.reconcile_usage()?;
+        assert!(telemetry.process(&first.run_id)?.is_none());
+        telemetry.begin_usage(&binding("service", 1))?;
+        let retained = telemetry.retained_usage(Some("service"), None)?;
+        assert_eq!(retained["coverage"]["registered_runs"], 1);
+        assert_eq!(retained["counters"], Value::Null);
         Ok(())
     }
 
