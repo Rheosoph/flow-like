@@ -8,5 +8,9 @@ pub mod session;
 pub mod wait;
 pub mod window;
 
+pub mod capture_state;
+pub mod ocr;
+pub mod stability;
+pub mod zoom;
 #[cfg(feature = "execute")]
 pub mod native;

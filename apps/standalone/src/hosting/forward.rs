@@ -19,6 +19,7 @@ use tokio::{
 const TIMEOUT: Duration = Duration::from_secs(10);
 const HEADER_LIMIT: usize = 4096;
 const FORWARD_LIMIT: usize = 64;
+const ACCEPT_BACKOFF: Duration = Duration::from_secs(1);
 
 pub(super) struct Route {
     directory: PathBuf,
@@ -114,9 +115,21 @@ impl Listener {
                 _ = host.cancel.cancelled() => break,
                 _ = requests.join_next(), if !requests.is_empty() => {},
                 accepted = self.socket.accept() => {
-                    let Ok((socket, _)) = accepted else {
-                        host.cancel.cancel();
-                        break;
+                    let socket = match accepted {
+                        Ok((socket, _)) => socket,
+                        Err(error) if listener_broken(&error) => {
+                            tracing::error!(%error, "Replica reply socket is no longer usable; stopping this replica");
+                            host.cancel.cancel();
+                            break;
+                        }
+                        Err(error) if transient_connection_error(&error) => continue,
+                        Err(error) => {
+                            tracing::warn!(%error, "Replica reply socket could not accept a connection; retrying");
+                            tokio::select! {
+                                _ = host.cancel.cancelled() => break,
+                                _ = tokio::time::sleep(ACCEPT_BACKOFF) => continue,
+                            }
+                        }
                     };
                     let Ok(permit) = capacity.clone().try_acquire_owned() else { continue };
                     let host = host.clone();
@@ -129,6 +142,24 @@ impl Listener {
         }
         requests.abort_all();
     }
+}
+
+/// Descriptor exhaustion and aborted peers are transient; only an invalid listener is fatal.
+fn listener_broken(error: &std::io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::EBADF | libc::EINVAL | libc::ENOTSOCK | libc::EOPNOTSUPP | libc::EFAULT)
+    )
+}
+
+fn transient_connection_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::Interrupted
+    )
 }
 
 impl Drop for Listener {
@@ -350,4 +381,24 @@ fn check_directory(path: &Path) -> Result<()> {
         "Replica reply directory must be private and owned by this user"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_an_invalid_reply_socket_stops_the_replica() {
+        for code in [libc::EBADF, libc::EINVAL, libc::ENOTSOCK] {
+            assert!(listener_broken(&std::io::Error::from_raw_os_error(code)));
+        }
+        for code in [libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM] {
+            let error = std::io::Error::from_raw_os_error(code);
+            assert!(!listener_broken(&error) && !transient_connection_error(&error));
+        }
+        for code in [libc::ECONNABORTED, libc::EINTR] {
+            let error = std::io::Error::from_raw_os_error(code);
+            assert!(!listener_broken(&error) && transient_connection_error(&error));
+        }
+    }
 }

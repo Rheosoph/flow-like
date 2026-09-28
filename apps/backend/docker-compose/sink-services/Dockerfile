@@ -3,6 +3,8 @@
 # Stage 1: Builder
 # ============================================================
 FROM rust:1.97.1-bookworm AS builder
+COPY rust-toolchain.toml /rust-toolchain.toml
+RUN rustup toolchain install
 
 RUN apt-get update && apt-get install -y \
     pkg-config \
@@ -17,8 +19,8 @@ ARG CARGO_BUILD_JOBS=2
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
 # Use BuildKit cache mounts for faster rebuilds
-RUN --mount=type=cache,target=/cargo-home,id=cargo-home,sharing=shared \
-    --mount=type=cache,target=/app/target,id=cargo-target-sink-services,sharing=locked \
+RUN --mount=type=cache,target=/cargo-home,id=cargo-home-rust-beta-2026-09-27,sharing=shared \
+    --mount=type=cache,target=/app/target,id=cargo-target-sink-services-rust-beta-2026-09-27,sharing=locked \
     CARGO_HOME=/cargo-home cargo build --locked --release --package docker-compose-sink-services && \
     cp /app/target/release/docker-compose-sink-services /tmp/docker-compose-sink-services
 

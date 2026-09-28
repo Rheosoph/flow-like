@@ -1,13 +1,16 @@
+import { isTauri } from "../platform";
+import type { LocalCertificateAuthority } from "./certificate-authority";
 import type {
 	AccountRecoveryWrite,
-	FleetLocalState,
 	BrowserMlsEndpoint,
 	Checkpoint,
 	ControllerPublic,
+	DeviceReceipt,
 	Ed25519PublicKey,
+	FleetLocalState,
+	OnboardingManifest,
 	ProtectedSnapshot,
 } from "./types";
-import type { LocalCertificateAuthority } from "./certificate-authority";
 
 export interface DeviceAccountScope {
 	issuer: string;
@@ -44,6 +47,73 @@ export function accountStorageKey(scope: DeviceAccountScope): string {
 }
 function itemKey(scope: DeviceAccountScope, ...ids: string[]): string {
 	return JSON.stringify([accountStorageKey(scope), ...ids]);
+}
+
+export function deviceApiBase(scope: DeviceAccountScope): string {
+	return `${scope.apiOrigin.replace(/\/$/u, "")}/api/v1`;
+}
+
+export function isPublicKey(value: unknown): value is Ed25519PublicKey {
+	const key = value as Ed25519PublicKey | undefined;
+	return (
+		!!key &&
+		typeof key === "object" &&
+		key.kty === "OKP" &&
+		key.crv === "Ed25519" &&
+		typeof key.x === "string" &&
+		/^[A-Za-z0-9_-]{43}$/u.test(key.x)
+	);
+}
+
+/** Reads a manifest payload without verifying it; callers verify its signature before trusting it. */
+export function unsignedManifest(compact: string): OnboardingManifest {
+	let value: unknown;
+	try {
+		const part = compact.split(".")[1] ?? "";
+		const bytes = Uint8Array.from(
+			atob(part.replaceAll("-", "+").replaceAll("_", "/")),
+			(c) => c.charCodeAt(0),
+		);
+		value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+	} catch {
+		value = undefined;
+	}
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		throw new Error("The device vault's onboarding manifest is unreadable.");
+	return value as OnboardingManifest;
+}
+
+/** Owner vaults anchor on their own controller key; shared vaults on the owner's key only. */
+export function assertVaultAuthority(
+	scope: DeviceAccountScope,
+	vault: LocalDeviceVault,
+	manifest: OnboardingManifest,
+): void {
+	const owner = vault.grantId === "owner";
+	const local = vault.controllerPublic.controller_key;
+	if (
+		!/^[A-Za-z0-9_:.-]{1,128}$/u.test(vault.grantId) ||
+		!isPublicKey(local) ||
+		(owner
+			? vault.ownerControllerKey !== undefined
+			: !isPublicKey(vault.ownerControllerKey) ||
+				vault.invitationVault !== undefined)
+	)
+		throw new Error(
+			`The vault for device ${vault.deviceId} mixes owner and shared-access authority (grant ${vault.grantId}).`,
+		);
+	const anchor = owner ? local : vault.ownerControllerKey;
+	if (
+		manifest.device_id !== vault.deviceId ||
+		manifest.api_base_url !== deviceApiBase(scope) ||
+		manifest.controller_key?.x !== anchor?.x ||
+		(owner
+			? manifest.owner_id !== scope.account
+			: manifest.controller_key.x === local.x)
+	)
+		throw new Error(
+			`The onboarding manifest for device ${vault.deviceId} does not match this vault's ${owner ? "owner" : "shared"} authority, account or hub.`,
+		);
 }
 
 function vaultIdentity(vault: LocalDeviceVault): string {
@@ -257,10 +327,97 @@ export function addDeviceVault(
 		!vault.manifestJws
 	)
 		return Promise.reject(new Error("Invalid encrypted device vault."));
-	return transact("vaults", "readwrite", (store, set) => {
-		store.add(vault, itemKey(scope, vault.deviceId));
+	return transact("vaults", "readwrite", (store, set, fail) => {
+		const request = store.add(vault, itemKey(scope, vault.deviceId));
+		request.onerror = (event) => {
+			if (request.error?.name !== "ConstraintError") return;
+			event.preventDefault();
+			fail(new DeviceVaultExistsError(vault.deviceId));
+		};
 		set(undefined);
 	});
+}
+
+export class DeviceVaultExistsError extends Error {
+	constructor(readonly deviceId: string) {
+		super(
+			`This app already holds encrypted keys for device ${deviceId}. Open device management to use them instead of creating new ones.`,
+		);
+		this.name = "DeviceVaultExistsError";
+	}
+}
+
+interface DeviceIdentityPin {
+	identity: string;
+	pinnedAt: number;
+}
+
+function identityFingerprint(identity: DeviceReceipt["identity"]): string {
+	return JSON.stringify([
+		identity.auth_key.x,
+		identity.telemetry_key.x,
+		Array.from(identity.management_key),
+	]);
+}
+
+/** Call only with a verified receipt: its first-seen keys become the device's pinned identity. */
+export function pinDeviceIdentity(
+	scope: DeviceAccountScope,
+	deviceId: string,
+	receipt: DeviceReceipt,
+): Promise<void> {
+	if (receipt.device_id !== deviceId)
+		return Promise.reject(
+			new Error(
+				`The device identity for ${receipt.device_id} cannot be pinned for device ${deviceId}.`,
+			),
+		);
+	const identity = identityFingerprint(receipt.identity);
+	return transact(
+		"vaults",
+		"readwrite",
+		(store, set, fail) => {
+			const key = itemKey(scope, deviceId, "identity", receipt.enrollment_id);
+			const read = store.get(key);
+			read.onsuccess = () => {
+				const pinned = read.result as DeviceIdentityPin | undefined;
+				if (pinned && pinned.identity !== identity) {
+					fail(
+						new Error(
+							`Device ${deviceId} presented keys that differ from the identity this app first verified. Management stays blocked because the hub or relay may be impersonating the device.`,
+						),
+					);
+					return;
+				}
+				if (!pinned) store.put({ identity, pinnedAt: Date.now() }, key);
+				set(undefined);
+			};
+		},
+		{ durability: "strict" },
+	);
+}
+
+export type DeviceStoragePersistence = "persisted" | "denied" | "unavailable";
+
+export function deviceStorageWarning(
+	persistence: DeviceStoragePersistence | undefined,
+): string | undefined {
+	return persistence && persistence !== "persisted"
+		? "This browser has not granted persistent storage, so it may delete this app's encrypted device keys when space runs low or after a period without use. Keep a controller backup or an account backup to restore management."
+		: undefined;
+}
+
+/** Browsers may evict unpersisted IndexedDB data, which holds the only copy of these keys. */
+export async function requestPersistentDeviceStorage(): Promise<DeviceStoragePersistence> {
+	if (isTauri()) return "persisted";
+	const storage = globalThis.navigator?.storage;
+	if (!storage?.persist) return "unavailable";
+	try {
+		if (await storage.persisted?.()) return "persisted";
+		return (await storage.persist()) ? "persisted" : "denied";
+	} catch {
+		return "unavailable";
+	}
 }
 
 export function addCertificateAuthority(
@@ -370,7 +527,9 @@ export function controllerBackup(
 ): LocalDeviceVault {
 	if (new TextEncoder().encode(text).length > 1024 * 1024)
 		throw new Error("Controller backups must be smaller than 1 MiB.");
-	const value = JSON.parse(text) as Record<string, unknown>;
+	const value = JSON.parse(text) as Record<string, unknown> | null;
+	if (!value || typeof value !== "object")
+		throw new Error("Invalid encrypted controller backup.");
 	const bytes = (value: unknown): Uint8Array => {
 		if (
 			!Array.isArray(value) ||
@@ -389,10 +548,11 @@ export function controllerBackup(
 		value.manifestJws.length > 16_384 ||
 		typeof value.grantId !== "string" ||
 		!value.controllerPublic ||
-		typeof value.controllerPublic !== "object"
+		typeof value.controllerPublic !== "object" ||
+		(value.controllerPublic as ControllerPublic).device_id !== deviceId
 	)
 		throw new Error("This backup belongs to another device or hub.");
-	return {
+	const vault: LocalDeviceVault = {
 		deviceId,
 		controllerPublic: value.controllerPublic as ControllerPublic,
 		controllerVault: bytes(value.controllerVault),
@@ -401,11 +561,13 @@ export function controllerBackup(
 			: undefined,
 		manifestJws: value.manifestJws,
 		grantId: value.grantId,
-		ownerControllerKey: value.ownerControllerKey as
+		ownerControllerKey: (value.ownerControllerKey ?? undefined) as
 			| Ed25519PublicKey
 			| undefined,
 		requiresFreshEndpoint: true,
 	};
+	assertVaultAuthority(scope, vault, unsignedManifest(vault.manifestJws));
+	return vault;
 }
 
 export function replaceRestoredVault(

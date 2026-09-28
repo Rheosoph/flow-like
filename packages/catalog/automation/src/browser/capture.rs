@@ -5,7 +5,105 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::NodeImage;
+#[cfg(any(feature = "execute", test))]
+use flow_like_types::Value;
 use flow_like_types::{async_trait, json::json};
+
+/// Clip covering the whole scrollable document, from `Page.getLayoutMetrics`.
+#[cfg(any(feature = "execute", test))]
+pub(crate) fn full_page_clip(metrics: &Value) -> flow_like_types::Result<Value> {
+    let size = metrics
+        .get("cssContentSize")
+        .filter(|size| size.is_object())
+        .or_else(|| metrics.get("contentSize"))
+        .ok_or_else(|| {
+            flow_like_types::anyhow!("Page.getLayoutMetrics returned no content size: {metrics}")
+        })?;
+    let dimension = |name: &str| {
+        size[name]
+            .as_f64()
+            .filter(|value| value.is_finite() && *value >= 1.0)
+            .map(f64::ceil)
+            .ok_or_else(|| {
+                flow_like_types::anyhow!(
+                    "Page.getLayoutMetrics returned an unusable content {name}: {size}"
+                )
+            })
+    };
+    Ok(json!({
+        "x": 0,
+        "y": 0,
+        "width": dimension("width")?,
+        "height": dimension("height")?,
+        "scale": 1,
+    }))
+}
+
+#[cfg(feature = "execute")]
+pub(crate) async fn capture_png_via_cdp(
+    driver: &thirtyfour::WebDriver,
+    clip: Value,
+    capture_beyond_viewport: bool,
+) -> flow_like_types::Result<Vec<u8>> {
+    use flow_like_types::base64::Engine;
+    let shot = super::cdp::cdp(
+        driver,
+        "Page.captureScreenshot",
+        json!({
+            "format": "png",
+            "captureBeyondViewport": capture_beyond_viewport,
+            "clip": clip,
+        }),
+    )
+    .await?;
+    let data = shot["data"].as_str().ok_or_else(|| {
+        flow_like_types::anyhow!("Page.captureScreenshot returned no image data for clip {clip}")
+    })?;
+    Ok(flow_like_types::base64::engine::general_purpose::STANDARD.decode(data)?)
+}
+
+/// Writes the `screenshot` (base64 PNG) and `image` (NodeImage) outputs.
+#[cfg(feature = "execute")]
+pub(crate) async fn set_screenshot_outputs(
+    context: &mut ExecutionContext,
+    png: Vec<u8>,
+) -> flow_like_types::Result<()> {
+    use flow_like_types::base64::Engine;
+    let (encoded, image) = tokio::task::spawn_blocking(move || {
+        let image = flow_like_types::image::load_from_memory(&png)
+            .map_err(|e| flow_like_types::anyhow!("Failed to decode screenshot PNG: {e}"))?;
+        let encoded = flow_like_types::base64::engine::general_purpose::STANDARD.encode(&png);
+        Ok::<_, flow_like_types::Error>((encoded, image))
+    })
+    .await??;
+    let node_image = NodeImage::new(context, image).await;
+    context.set_pin_value("screenshot", json!(encoded)).await?;
+    context.set_pin_value("image", json!(node_image)).await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_page_clip_uses_css_content_size() {
+        let clip = full_page_clip(&json!({
+            "cssContentSize": {"x": 0, "y": 0, "width": 1280.4, "height": 5000},
+            "contentSize": {"x": 0, "y": 0, "width": 2561, "height": 10000},
+        }))
+        .unwrap();
+        assert_eq!(
+            clip,
+            json!({"x": 0, "y": 0, "width": 1281.0, "height": 5000.0, "scale": 1})
+        );
+        let legacy =
+            full_page_clip(&json!({"contentSize": {"width": 800, "height": 600}})).unwrap();
+        assert_eq!(legacy["width"], json!(800.0));
+        assert!(full_page_clip(&json!({"cssContentSize": {"width": 0, "height": 10}})).is_err());
+        assert!(full_page_clip(&json!({})).is_err());
+    }
+}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -54,7 +152,7 @@ impl NodeLogic for BrowserScreenshotNode {
         node.add_input_pin(
             "full_page",
             "Full Page",
-            "Capture entire scrollable page",
+            "Capture the entire scrollable page instead of the viewport (Chrome and Edge only)",
             VariableType::Boolean,
         )
         .set_default_value(Some(json!(false)));
@@ -89,34 +187,29 @@ impl NodeLogic for BrowserScreenshotNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_types::base64::Engine;
-        use flow_like_types::image;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
-        let _full_page: bool = context.evaluate_pin("full_page").await?;
+        let full_page: bool = context.evaluate_pin("full_page").await?;
+        if full_page {
+            super::emulation::require_chromium(&session, "Full-page screenshots")?;
+        }
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let screenshot_bytes = driver
-            .screenshot_as_png()
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to take screenshot: {}", e))?;
+        let screenshot_bytes = if full_page {
+            let metrics = super::cdp::cdp(&driver, "Page.getLayoutMetrics", json!({})).await?;
+            capture_png_via_cdp(&driver, full_page_clip(&metrics)?, true).await?
+        } else {
+            driver
+                .screenshot_as_png()
+                .await
+                .map_err(|e| flow_like_types::anyhow!("Failed to take screenshot: {}", e))?
+        };
+        drop(driver);
 
-        let base64_screenshot =
-            flow_like_types::base64::engine::general_purpose::STANDARD.encode(&screenshot_bytes);
-
-        // Create NodeImage from the screenshot bytes
-        let dyn_image = image::load_from_memory(&screenshot_bytes)
-            .map_err(|e| flow_like_types::anyhow!("Failed to decode screenshot: {}", e))?;
-        let node_image = NodeImage::new(context, dyn_image).await;
-
+        set_screenshot_outputs(context, screenshot_bytes).await?;
         context.set_pin_value("session_out", json!(session)).await?;
-        context
-            .set_pin_value("screenshot", json!(base64_screenshot))
-            .await?;
-        context.set_pin_value("image", json!(node_image)).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
@@ -213,9 +306,6 @@ impl NodeLogic for BrowserScreenshotElementNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_types::base64::Engine;
-        use flow_like_types::image;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
@@ -234,20 +324,10 @@ impl NodeLogic for BrowserScreenshotElementNode {
             .screenshot_as_png()
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to take element screenshot: {}", e))?;
+        drop(driver);
 
-        let base64_screenshot =
-            flow_like_types::base64::engine::general_purpose::STANDARD.encode(&screenshot_bytes);
-
-        // Create NodeImage from the screenshot bytes
-        let dyn_image = image::load_from_memory(&screenshot_bytes)
-            .map_err(|e| flow_like_types::anyhow!("Failed to decode screenshot: {}", e))?;
-        let node_image = NodeImage::new(context, dyn_image).await;
-
+        set_screenshot_outputs(context, screenshot_bytes).await?;
         context.set_pin_value("session_out", json!(session)).await?;
-        context
-            .set_pin_value("screenshot", json!(base64_screenshot))
-            .await?;
-        context.set_pin_value("image", json!(node_image)).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())

@@ -1,3 +1,4 @@
+import { externalModelProviders } from "../../lib/bit/external-model-providers";
 import type { IBit, IMetadata } from "../../lib/schema/bit/bit";
 import { IBitTypes } from "../../lib/schema/bit/bit";
 import type { IApiState } from "../../state/backend-state/api-state";
@@ -141,9 +142,32 @@ export function validateBitDraft(
 			params.context_length <= 0
 		)
 			return "Context length must be a positive whole number.";
-		const providerName = record(params.provider).provider_name;
+		const connection = record(params.provider);
+		const providerName = connection.provider_name;
 		if (typeof providerName !== "string" || !providerName.trim())
 			return "Enter a provider name in Parameters.";
+		const external = externalModelProviders(true).find(
+			(provider) => provider.providerName === providerName.trim().toLowerCase(),
+		);
+		if (external) {
+			if (external.textOnly && bit.type === IBitTypes.Vlm)
+				return `${external.label} currently accepts text only. Set the bit type to LLM.`;
+			const modelIds = [connection.model_id, record(connection.params).model_id]
+				.filter(
+					(value): value is string =>
+						typeof value === "string" && !!value.trim(),
+				)
+				.map((value) => value.trim());
+			if (!modelIds.length)
+				return `Enter a model ID for ${external.label} in Parameters.`;
+			if (
+				external.fixedModelId &&
+				modelIds.some((id) => id !== external.fixedModelId)
+			)
+				return `${external.label} uses the fixed model ID ${external.fixedModelId}.`;
+			if (modelIds.some((id) => id !== modelIds[0]))
+				return "Model ID must match in Connection and Provider settings.";
+		}
 	}
 	const provider = String(
 		record(params.provider).provider_name ?? "",

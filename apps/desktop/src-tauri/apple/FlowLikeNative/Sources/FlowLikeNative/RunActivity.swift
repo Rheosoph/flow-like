@@ -21,8 +21,10 @@ public struct FlowRunAttributes: ActivityAttributes {
             for activity in current { await activity.end(nil, dismissalPolicy: .immediate) }
             return
         }
-        let active = snapshot.sections.first(where: { $0.kind == "recent_runs" })?.items.filter {
-            ["running", "pending", "queued"].contains($0.status ?? "")
+        // Carried sections repeat an unconfirmed status, so only live runs and this publish's reads count.
+        let runs = snapshot.sections.first(where: { $0.kind == "recent_runs" })
+        let active = runs?.items.filter {
+            ["running", "pending", "queued"].contains($0.status ?? "") && ($0.live == true || runs?.updatedAt == nil)
         } ?? []
         for activity in current {
             guard activity.attributes.scope == snapshot.scope,

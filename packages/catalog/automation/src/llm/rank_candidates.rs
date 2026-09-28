@@ -1,3 +1,9 @@
+use super::{COORDINATE_SPACE, add_screenshot_pins};
+#[cfg(feature = "execute")]
+use super::{
+    ModelView, SubmitTool, call_tool, missing_tool_call, parse_tool_args, require_screenshot,
+    vision_history,
+};
 use flow_like::{
     bit::Bit,
     flow::{
@@ -10,12 +16,6 @@ use flow_like::{
 #[cfg(feature = "execute")]
 use flow_like_types::anyhow;
 use flow_like_types::{async_trait, json};
-#[cfg(feature = "execute")]
-use rig::completion::{Completion, Message, ToolDefinition};
-#[cfg(feature = "execute")]
-use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
-#[cfg(feature = "execute")]
-use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -47,47 +47,84 @@ pub struct RankingResult {
 }
 
 #[cfg(feature = "execute")]
-#[derive(Debug, Serialize, Deserialize)]
-struct RankCandidatesTool {
-    parameters: flow_like_types::Value,
-}
+const TOOL: &str = "submit_ranking";
 
 #[cfg(feature = "execute")]
-#[derive(Debug)]
-struct RankCandidatesError(String);
-
-#[cfg(feature = "execute")]
-impl std::fmt::Display for RankCandidatesError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Rank candidates error: {}", self.0)
+fn check_candidates(candidates: &[CandidateInput]) -> flow_like_types::Result<()> {
+    if candidates.is_empty() {
+        return Err(anyhow!("No candidates to rank"));
     }
-}
-
-#[cfg(feature = "execute")]
-impl std::error::Error for RankCandidatesError {}
-
-#[cfg(feature = "execute")]
-impl Tool for RankCandidatesTool {
-    const NAME: &'static str = "submit_ranking";
-    type Error = RankCandidatesError;
-    type Args = flow_like_types::Value;
-    type Output = flow_like_types::Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Submit the candidate ranking".to_string(),
-            parameters: self.parameters.clone(),
+    let mut seen = std::collections::HashSet::new();
+    for candidate in candidates {
+        if !seen.insert(candidate.id.as_str()) {
+            return Err(anyhow!(
+                "Candidate id '{}' appears more than once; every candidate needs a unique id",
+                candidate.id
+            ));
         }
     }
+    Ok(())
+}
 
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        Ok(args)
-    }
+#[cfg(feature = "execute")]
+fn describe_candidates(candidates: &[CandidateInput], view: &ModelView) -> String {
+    candidates
+        .iter()
+        .map(|candidate| {
+            let mut line = format!("- [{}]: {}", candidate.id, candidate.description);
+            if let (Some(x), Some(y)) = (candidate.x, candidate.y) {
+                match view.point_to_model(x, y) {
+                    Some((x, y)) => line.push_str(&format!(" at ({x}, {y})")),
+                    None => line.push_str(" (outside the screenshot)"),
+                }
+            }
+            if let Some(selector) = &candidate.selector {
+                line.push_str(&format!("; selector: {selector}"));
+            }
+            if let Some(info) = &candidate.additional_info {
+                line.push_str(&format!("; info: {info}"));
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
-    fn name(&self) -> String {
-        Self::NAME.to_string()
+/// Keeps only rankings of given candidates (first entry per id), orders them by rank and
+/// makes sure the best match is one of them. Returns the ranking and the ids the model invented.
+#[cfg(feature = "execute")]
+fn validate_ranking(
+    mut ranking: RankingResult,
+    candidates: &[CandidateInput],
+) -> flow_like_types::Result<(RankingResult, Vec<String>)> {
+    let known: std::collections::HashSet<&str> = candidates.iter().map(|c| c.id.as_str()).collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut unknown = Vec::new();
+    ranking.ranked_candidates.retain(|ranked| {
+        if !known.contains(ranked.id.as_str()) {
+            unknown.push(ranked.id.clone());
+            return false;
+        }
+        seen.insert(ranked.id.clone())
+    });
+    ranking.ranked_candidates.sort_by_key(|ranked| ranked.rank);
+    for (position, ranked) in ranking.ranked_candidates.iter_mut().enumerate() {
+        ranked.rank = position + 1;
     }
+    if !known.contains(ranking.best_match_id.as_str()) {
+        let Some(first) = ranking.ranked_candidates.first() else {
+            return Err(anyhow!(
+                "The model ranked none of the {} given candidates (best match '{}')",
+                candidates.len(),
+                ranking.best_match_id
+            ));
+        };
+        let invented = std::mem::replace(&mut ranking.best_match_id, first.id.clone());
+        if !unknown.contains(&invented) {
+            unknown.push(invented);
+        }
+    }
+    Ok((ranking, unknown))
 }
 
 #[crate::register_node]
@@ -111,7 +148,7 @@ impl NodeLogic for LLMRankCandidatesNode {
         );
         node.set_flowscript_name("automation.llm", "rankCandidates");
         node.add_icon("/flow/icons/bot-search.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.set_scores(
             NodeScores::new()
@@ -135,17 +172,14 @@ impl NodeLogic for LLMRankCandidatesNode {
         .set_schema::<Bit>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
-        node.add_input_pin(
-            "screenshot",
-            "Screenshot",
-            "Base64-encoded screenshot",
-            VariableType::String,
-        );
+        add_screenshot_pins(&mut node, "Screenshot", true);
 
         node.add_input_pin(
             "candidates",
             "Candidates",
-            "Array of candidate elements to rank",
+            &format!(
+                "Candidate elements to rank, each with a unique id. Optional x/y are in {COORDINATE_SPACE}"
+            ),
             VariableType::Struct,
         )
         .set_schema::<CandidateInput>()
@@ -171,7 +205,7 @@ impl NodeLogic for LLMRankCandidatesNode {
         node.add_output_pin(
             "result",
             "Result",
-            "Full ranking result",
+            "Full ranking result; only given candidate ids appear",
             VariableType::Struct,
         )
         .set_schema::<RankingResult>();
@@ -199,20 +233,18 @@ impl NodeLogic for LLMRankCandidatesNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_model_provider::history::{
-            Content, ContentType, History, HistoryMessage, ImageUrl as HistoryImageUrl,
-            MessageContent, Role,
-        };
+        use flow_like::flow::execution::LogLevel;
 
         context.deactivate_exec_pin("exec_out").await?;
 
         let model_bit: Bit = context.evaluate_pin("model").await?;
-        let screenshot: String = context.evaluate_pin("screenshot").await?;
         let candidates: Vec<CandidateInput> = context.evaluate_pin("candidates").await?;
         let criteria: String = context.evaluate_pin("criteria").await?;
         let ctx: String = context.evaluate_pin("context").await.unwrap_or_default();
+        check_candidates(&candidates)?;
+        let screenshot = require_screenshot(context).await?;
 
-        let tool_params = json::json!({
+        let parameters = json::json!({
             "type": "object",
             "properties": {
                 "ranked_candidates": {
@@ -220,7 +252,7 @@ impl NodeLogic for LLMRankCandidatesNode {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "id": { "type": "string", "description": "Candidate ID" },
+                            "id": { "type": "string", "description": "Candidate ID, exactly as listed" },
                             "rank": { "type": "integer", "description": "Rank (1 = best)" },
                             "score": { "type": "number", "description": "Match score 0-1" },
                             "reasoning": { "type": "string", "description": "Why this ranking" },
@@ -236,98 +268,46 @@ impl NodeLogic for LLMRankCandidatesNode {
             "required": ["ranked_candidates", "best_match_id", "confidence"]
         });
 
-        let candidates_desc = candidates
-            .iter()
-            .map(|c| {
-                let pos =
-                    c.x.map(|x| format!(" at ({}, {})", x, c.y.unwrap_or(0)))
-                        .unwrap_or_default();
-                format!("- [{}]: {}{}", c.id, c.description, pos)
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
         let context_text = if ctx.is_empty() {
             String::new()
         } else {
-            format!("\nAdditional context: {}", ctx)
+            format!("\nAdditional context: {ctx}")
         };
 
-        let content_parts = vec![
-            Content::Image {
-                content_type: ContentType::ImageUrl,
-                image_url: HistoryImageUrl {
-                    url: format!("data:image/png;base64,{}", screenshot),
-                    detail: None,
-                    media_type: Some("image/png".to_string()),
-                    additional_params: None,
-                },
-            },
-            Content::Text {
-                content_type: ContentType::Text,
-                text: format!(
-                    "Criteria: {}\n\nCandidates:\n{}{}\n\nRank these candidates from best to worst match.",
-                    criteria, candidates_desc, context_text
-                ),
-            },
-        ];
-
-        let history = History::new(
-            "".to_string(),
-            vec![HistoryMessage {
-                role: Role::User,
-                content: MessageContent::Contents(content_parts),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                annotations: None,
-            }],
+        let instructions = format!(
+            "Criteria: {criteria}\n\nCandidates (positions are pixels of the screenshot):\n{}{context_text}\n\nRank these candidates from best to worst match, using their ids exactly as listed.",
+            describe_candidates(&candidates, &screenshot.view)
         );
 
         let preamble = "You are an element matching expert. Rank multiple candidate elements based on how well they match the given criteria. Consider visual appearance, position, context, and semantics.";
 
-        let agent_builder = model_bit
-            .agent(context, &Some(history))
-            .await?
-            .preamble(preamble)
-            .tool(RankCandidatesTool {
-                parameters: tool_params,
-            })
-            .tool_choice(ToolChoice::Required);
+        let arguments = call_tool(
+            context,
+            &model_bit,
+            vision_history(&[&screenshot.image], &instructions),
+            preamble,
+            SubmitTool {
+                name: TOOL,
+                description: "Submit the candidate ranking",
+                parameters,
+            },
+        )
+        .await?
+        .ok_or_else(|| missing_tool_call(TOOL))?;
 
-        let agent = agent_builder.build();
-
-        let response = agent
-            .completion(criteria.clone(), Vec::<Message>::new())
-            .await
-            .map_err(|e| anyhow!("LLM completion failed: {}", e))?
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to send request: {}", e))?;
-
-        let mut result: Option<RankingResult> = None;
-        for content in response.choice {
-            if let AssistantContent::ToolCall(ToolCall {
-                function: ToolFunction {
-                    name, arguments, ..
-                },
-                ..
-            }) = content
-                && name == "submit_ranking"
-            {
-                result = Some(json::from_value(arguments)?);
-            }
+        let (ranking, unknown) = validate_ranking(parse_tool_args(TOOL, &arguments)?, &candidates)?;
+        if !unknown.is_empty() {
+            context.log_message(
+                &format!(
+                    "Ignored candidate ids the model invented: {}",
+                    unknown.join(", ")
+                ),
+                LogLevel::Warn,
+            );
         }
 
-        let ranking = result.unwrap_or(RankingResult {
-            ranked_candidates: vec![],
-            best_match_id: String::new(),
-            confidence: 0.0,
-            ambiguity_warning: Some("Could not rank candidates".to_string()),
-        });
-
         context
-            .set_pin_value("result", json::json!(ranking.clone()))
+            .set_pin_value("result", json::json!(ranking))
             .await?;
         context
             .set_pin_value("best_match", json::json!(ranking.best_match_id))
@@ -346,5 +326,69 @@ impl NodeLogic for LLMRankCandidatesNode {
         Err(flow_like_types::anyhow!(
             "LLM processing requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+
+    fn candidate(id: &str) -> CandidateInput {
+        CandidateInput {
+            id: id.into(),
+            description: id.into(),
+            x: None,
+            y: None,
+            selector: None,
+            additional_info: None,
+        }
+    }
+
+    fn ranked(id: &str, rank: usize) -> RankedCandidate {
+        RankedCandidate {
+            id: id.into(),
+            rank,
+            score: 0.5,
+            reasoning: String::new(),
+            is_recommended: true,
+        }
+    }
+
+    #[test]
+    fn ranking_keeps_only_given_candidates_in_rank_order() {
+        let candidates = [candidate("a"), candidate("b")];
+        let ranking = RankingResult {
+            ranked_candidates: vec![
+                ranked("b", 2),
+                ranked("ghost", 1),
+                ranked("a", 3),
+                ranked("b", 4),
+            ],
+            best_match_id: "ghost".into(),
+            confidence: 0.7,
+            ambiguity_warning: None,
+        };
+        let (ranking, unknown) = validate_ranking(ranking, &candidates).unwrap();
+        let order: Vec<_> = ranking
+            .ranked_candidates
+            .iter()
+            .map(|r| (r.id.as_str(), r.rank))
+            .collect();
+        assert_eq!(order, vec![("b", 1), ("a", 2)]);
+        assert_eq!(ranking.best_match_id, "b");
+        assert_eq!(unknown, vec!["ghost".to_string()]);
+    }
+
+    #[test]
+    fn ranking_without_any_given_candidate_is_an_error() {
+        let ranking = RankingResult {
+            ranked_candidates: vec![ranked("ghost", 1)],
+            best_match_id: "ghost".into(),
+            confidence: 0.7,
+            ambiguity_warning: None,
+        };
+        assert!(validate_ranking(ranking, &[candidate("a")]).is_err());
+        assert!(check_candidates(&[]).is_err());
+        assert!(check_candidates(&[candidate("a"), candidate("a")]).is_err());
     }
 }

@@ -84,10 +84,10 @@ type ActionType =
 	| { MouseMove: { x: number; y: number } }
 	| { Wait: { milliseconds: number } }
 	| { Scroll: { direction: string; amount: number } }
-	| { KeyType: { text: string } }
+	| { KeyType: { text: string; secure?: boolean } }
 	| { KeyPress: { key: string; modifiers: string[] } }
 	| { Copy: { clipboard_content: string | null } }
-	| { Paste: { clipboard_content: string | null } }
+	| { Paste: { clipboard_content: string | null; secure?: boolean } }
 	| { AppLaunch: { app_name: string; app_path: string } }
 	| { WindowFocus: { window_title: string; process: string } };
 
@@ -503,6 +503,11 @@ export function RecordingDock({
 				amount: type.Scroll.amount,
 			});
 		if ("KeyType" in type) {
+			if (type.KeyType.secure)
+				return t(
+					"secretInputConnectASecret",
+					"Secret input (connect a secret)",
+				);
 			const text = type.KeyType.text;
 			return text.length > MAX_LABEL_LENGTH
 				? `"${text.slice(0, MAX_LABEL_LENGTH)}..."`
@@ -512,7 +517,10 @@ export function RecordingDock({
 		if ("Browser" in type) return `Browser: ${type.Browser.action.kind}`;
 		if ("BrowserAttach" in type) return "Attach browser";
 		if ("Copy" in type) return "Copy";
-		if ("Paste" in type) return "Paste";
+		if ("Paste" in type)
+			return type.Paste.secure
+				? t("secretInputConnectASecret", "Secret input (connect a secret)")
+				: "Paste";
 		if ("AppLaunch" in type) return type.AppLaunch.app_name;
 		if ("WindowFocus" in type)
 			return (

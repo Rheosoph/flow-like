@@ -59,6 +59,7 @@ rig.workspace = true
 rig-vertexai.workspace = true
 google-cloud-auth.workspace = true
 http = "1.4.0"
+jsonschema.workspace = true
 reqwest = { workspace = true, features = ["stream", "gzip", "brotli", "socks", "http2", "multipart"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

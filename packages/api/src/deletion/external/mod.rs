@@ -100,6 +100,20 @@ pub async fn run(
     let root_id = pass.root_id.clone();
     match step {
         ExternalStep::AppSinkSchedules => {
+            // Teams cleanup deletes each connection even when Microsoft refuses, so this drains.
+            loop {
+                let events = crate::teams::app_event_ids(state, &root_id).await?;
+                if events.is_empty() {
+                    break;
+                }
+                for event in events {
+                    if pass.exhausted() {
+                        return Ok(Flow::Suspend);
+                    }
+                    pass.checkpoint().await?;
+                    crate::teams::management::cleanup_event(state, &event).await?;
+                }
+            }
             app::delete_sink_schedules(state, &root_id).await?;
             Ok(Flow::Continue)
         }

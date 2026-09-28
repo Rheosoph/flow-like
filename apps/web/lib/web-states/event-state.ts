@@ -40,6 +40,11 @@ import {
 	runTimingNow,
 	timeRunStep,
 } from "@flow-like/flow-like-ui/lib/run-timing";
+import type {
+	TeamsBotConnection,
+	TeamsBotPackage,
+	TeamsBotSetup,
+} from "@flow-like/flow-like-ui/lib/teams-bot";
 import type { IOAuthCheckResult } from "@flow-like/flow-like-ui/state/backend-state/event-state";
 import type {
 	ICanaryExplainResult,
@@ -54,6 +59,7 @@ import type {
 	IEventVariantSharePatch,
 	IEventVariantStatsResult,
 	IEventVariantStatsWindow,
+	IInboundEmailAddress,
 	IListRegistrationsResponse,
 	IPutRegressionSuiteRequest,
 	IRegressionCorpusPayload,
@@ -827,6 +833,81 @@ export class WebEventState implements IEventState {
 		const qs = params.size > 0 ? `?${params.toString()}` : "";
 		return apiGet<IListRegistrationsResponse>(
 			`apps/${appId}/events/${eventId}/registrations${qs}`,
+			this.backend.auth,
+		);
+	}
+
+	async getTeamsBot(
+		appId: string,
+		eventId: string,
+	): Promise<TeamsBotConnection> {
+		return apiGet<TeamsBotConnection>(
+			`apps/${appId}/events/${eventId}/teams`,
+			this.backend.auth,
+		);
+	}
+
+	async setupTeamsBot(
+		appId: string,
+		eventId: string,
+		input: TeamsBotSetup,
+	): Promise<TeamsBotConnection> {
+		return apiPut<TeamsBotConnection>(
+			`apps/${appId}/events/${eventId}/teams`,
+			input,
+			this.backend.auth,
+		);
+	}
+
+	async getTeamsBotPackage(
+		appId: string,
+		eventId: string,
+	): Promise<TeamsBotPackage> {
+		return apiGet<TeamsBotPackage>(
+			`apps/${appId}/events/${eventId}/teams/package`,
+			this.backend.auth,
+		);
+	}
+
+	async rotateTeamsBotSecret(
+		appId: string,
+		eventId: string,
+	): Promise<TeamsBotConnection> {
+		return apiPost<TeamsBotConnection>(
+			`apps/${appId}/events/${eventId}/teams/rotate`,
+			{},
+			this.backend.auth,
+		);
+	}
+
+	async disconnectTeamsBot(
+		appId: string,
+		eventId: string,
+	): Promise<TeamsBotConnection> {
+		return apiDelete<TeamsBotConnection>(
+			`apps/${appId}/events/${eventId}/teams`,
+			this.backend.auth,
+		);
+	}
+
+	async getInboundEmailAddress(
+		appId: string,
+		eventId: string,
+	): Promise<IInboundEmailAddress> {
+		return apiGet<IInboundEmailAddress>(
+			`apps/${appId}/events/${eventId}/email-address`,
+			this.backend.auth,
+		);
+	}
+
+	async updateInboundEmailAlias(
+		appId: string,
+		eventId: string,
+		alias: string | null,
+	): Promise<IInboundEmailAddress> {
+		return apiPut<IInboundEmailAddress>(
+			`apps/${appId}/events/${eventId}/email-address`,
+			{ alias },
 			this.backend.auth,
 		);
 	}

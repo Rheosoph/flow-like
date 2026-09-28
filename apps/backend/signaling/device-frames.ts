@@ -43,6 +43,19 @@ export function deviceIdentifier(value: unknown): value is string {
 	);
 }
 
+/** Replicas stamp fan-out envelopes with this id, and peers reject any other shape. */
+export function replicaIdentifier(
+	configured: string | undefined,
+	generate: () => string,
+): string {
+	const value = configured?.trim() || generate();
+	if (!deviceIdentifier(value))
+		throw new Error(
+			"NODE_ID must be 1-128 characters from A-Z, a-z, 0-9, '_', '.' and '-'",
+		);
+	return value;
+}
+
 function exactKeys(
 	value: unknown,
 	keys: string[],

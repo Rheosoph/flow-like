@@ -1216,7 +1216,7 @@ Send the same board/page/UI contract to this tool and `flowpilot_board` in one w
         },
         PlatformToolSpec {
             name: "flowpilot_home",
-            description: r#"The Home specialist for creating or adjusting the CURRENT profile's personal Home landing-page layout. It inspects the visible Home JSON, including unsaved edits, plus the supported widget catalog, visible apps, and relevant tables, ontologies, or saved queries before composing a complete version 1 layout.
+            description: r#"The Home specialist for creating or adjusting the CURRENT profile's personal Home landing-page layout. It inspects the visible Home JSON, including unsaved edits, plus the supported widget catalog, visible apps, and relevant tables, ontologies, or saved queries before composing a complete version 1 layout. Pass the user's classes, CSS, colors, and visual direction verbatim.
 
 Use this directly for Home layout and Home widget requests. Do not send personal Home work through the app-page UI specialist or the BUILD intake/scout pipeline. The specialist validates the full profile-bound layout and can stage it in the live Home editor after nested approval. Staged is not saved or published; the user must review it and choose Save. It never creates apps or data sources and never changes administrator Home defaults."#,
             schema: || {
@@ -2412,7 +2412,8 @@ fn home_layout_schema() -> Value {
                             "properties": {
                                 "variant": { "type": "string", "minLength": 1, "description": "Exact supported variant from the widget catalog." },
                                 "accent": { "type": "string", "minLength": 1, "description": "Exact supported accent from the widget catalog." },
-                                "className": { "type": "string", "maxLength": 1024, "description": "Optional Tailwind CSS v4 utility classes for the widget root surface, compiled at runtime and applied over variant and accent. Prefer theme tokens such as bg-card or border-primary/30. The layout controls position, grid span, height, and alignment. Preserve an existing value unless asked to restyle." }
+                                "className": { "type": "string", "maxLength": 1024, "description": "Optional Tailwind CSS v4 utilities for the widget surface, compiled at runtime (arbitrary values work) over variant and accent. Style descendants with variants such as [&_h2]:text-lg and pseudo-elements with before:/after:. Background, border, radius, text color, and shadow utilities replace the built-in ones. The layout owns the surface's position, grid span, height, and self-alignment, so positioning, z-*, col-*/row-*, and self-* do nothing on it (they work behind variants that target other elements); never use fixed. Theme shadow-2xs to shadow-2xl are transparent; use a colored shadow such as shadow-[0_12px_32px_-16px_rgb(0_0_0/0.35)]. On a dark or saturated fill also redefine [--muted-foreground:...]. tw-animate classes are not compiled. Prefer theme tokens and accent variables such as text-(--home-accent) unless the user asks for a polished or branded look. Preserve an existing value unless asked to restyle." },
+                                "css": { "type": "string", "maxLength": 8192, "description": "Optional plain CSS scoped to this widget; @apply, @theme, @utility, theme(), and --alpha() do nothing and @import is removed. :root is the widget surface and :root:is(.dark *) its dark mode; other selectors match inside the widget; rules override className; @keyframes names stay local. Wrap motion in @media (prefers-reduced-motion: no-preference). The surface is position:relative and clips overflow, so :root::before/::after may use content, position:absolute, inset, z-index, width, and height (isolation:isolate on :root for a z-index:-1 layer). Theme colors such as var(--primary) are complete colors: use them directly or in color-mix(in oklab, var(--primary) 30%, transparent), never inside hsl(), rgb(), or oklch(). Accent variables such as var(--home-accent) follow the accent setting; redefine one on :root to retint. Never put + or ~ after :root, never use @property, @font-face, @counter-style, @page, or position:fixed, and never set position, inset, z-index, grid placement, order, width, or height on :root. Preserve an existing value unless asked to restyle." }
                             },
                             "required": ["variant", "accent"]
                         },
@@ -3052,6 +3053,19 @@ mod tests {
                 ["appearance"];
             assert_eq!(appearance["properties"]["className"]["type"], "string");
             assert_eq!(appearance["properties"]["className"]["maxLength"], 1024);
+            assert_eq!(appearance["properties"]["css"]["type"], "string");
+            assert_eq!(appearance["properties"]["css"]["maxLength"], 8192);
+            let class_name = appearance["properties"]["className"]["description"]
+                .as_str()
+                .unwrap();
+            assert!(class_name.contains("shadow-[0_12px_32px_-16px_rgb(0_0_0/0.35)]"));
+            assert!(class_name.contains("text-(--home-accent)"));
+            let css = appearance["properties"]["css"]["description"]
+                .as_str()
+                .unwrap();
+            assert!(css.contains(":root:is(.dark *) its dark mode"));
+            assert!(css.contains("never inside hsl(), rgb(), or oklch()"));
+            assert!(css.contains("position:fixed"));
             assert_eq!(appearance["required"], json!(["variant", "accent"]));
         }
         assert!(missing_required_args(&apply, &json!({ "layout": {} })).is_some());
@@ -3599,6 +3613,10 @@ mod tests {
             home.description
                 .contains("Staged is not saved or published")
         );
+        assert!(
+            home.description
+                .contains("Pass the user's classes, CSS, colors, and visual direction verbatim.")
+        );
 
         let chat = find_global_tool_spec("call_app_chat").unwrap();
         assert!(
@@ -3626,9 +3644,11 @@ mod tests {
         // contract (one card, ordering, recommended defaults, user-vocabulary phrasing).
         // Reviewed 2026-09-26: +~0.1 KB on `data_studio_agent`: attachments reach Data Studio only
         // through `forward_files`, and without saying so the orchestrator never forwards them.
+        // Reviewed 2026-09-28: +~0.1 KB on `flowpilot_home`: the Home specialist sees only the
+        // delegated instruction, so a paraphrase loses the user's own classes, CSS, and colors.
         assert!(
-            total <= 15_600,
-            "global tool descriptions grew beyond the reviewed 15.6 KB budget: {total} bytes"
+            total <= 15_700,
+            "global tool descriptions grew beyond the reviewed 15.7 KB budget: {total} bytes"
         );
         for spec in specs {
             assert!(

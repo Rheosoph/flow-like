@@ -2,10 +2,55 @@ import { describe, expect, test } from "bun:test";
 import { base64url, unbase64url, withPassword } from "./crypto";
 import { accountStorageKey, controllerBackup, sameCheckpoint } from "./storage";
 import {
+	DeviceManagementConnection,
 	FrameQueue,
+	MAX_MANAGEMENT_PLAINTEXT,
+	ManagementRequestNotSentError,
+	ManagementUnconfirmedError,
 	matchesOperationResponse,
+	rejectionMessage,
 	signalingUrl,
 } from "./transport";
+
+function connection(options: {
+	send?: () => void;
+	next?: () => Promise<string>;
+}) {
+	const events: string[] = [];
+	const pipe = {
+		kind: "websocket",
+		send: () => {
+			events.push("send");
+			options.send?.();
+		},
+		next: options.next ?? (() => new Promise<string>(() => {})),
+		close: () => events.push("pipe-close"),
+	};
+	const session = {
+		encrypt: (bytes: Uint8Array) => {
+			events.push("encrypt");
+			return bytes.slice(0, 16);
+		},
+		decrypt: () => new Uint8Array(),
+		close: () => events.push("session-close"),
+		free: () => {},
+	};
+	const Connection = DeviceManagementConnection as unknown as new (
+		...args: unknown[]
+	) => DeviceManagementConnection;
+	return {
+		events,
+		value: new Connection(
+			pipe,
+			{ close: () => events.push("relay-close") },
+			session,
+			"session",
+			"device",
+			Math.floor(Date.now() / 1000) + 300,
+			"boot",
+		),
+	};
+}
 
 describe("browser management boundaries", () => {
 	test("operation queries bind the stored operation ID without relaxing other replies", () => {
@@ -129,6 +174,66 @@ describe("browser management boundaries", () => {
 		closed.close();
 		await expect(waiting).rejects.toThrow("closed");
 	});
+	test("oversized requests fail locally without sending or losing the session", async () => {
+		const { events, value } = connection({});
+		const error = await value
+			.request(
+				{ type: "apply", config: "字".repeat(MAX_MANAGEMENT_PLAINTEXT / 3) },
+				"op-large",
+			)
+			.catch((failure) => failure);
+		expect(error).toBeInstanceOf(ManagementRequestNotSentError);
+		expect(error.message).toContain("op-large was not sent");
+		expect(events).toEqual([]);
+		expect(value.open).toBe(true);
+	});
+	test("an unsent encrypted request closes the session without claiming an unconfirmed operation", async () => {
+		const { events, value } = connection({
+			send: () => {
+				throw new Error("busy");
+			},
+		});
+		const error = await value
+			.request({ type: "stop" }, "op-unsent")
+			.catch((failure) => failure);
+		expect(error).toBeInstanceOf(ManagementRequestNotSentError);
+		expect(error.message).toContain("op-unsent was not sent");
+		expect(value.open).toBe(false);
+		expect(events).toContain("session-close");
+	});
+	test("a sent request without a reply is reported as unconfirmed with its operation id", async () => {
+		const { value } = connection({
+			next: () => Promise.reject(new Error("relay dropped")),
+		});
+		const error = await value
+			.request({ type: "stop" }, "op-lost")
+			.catch((failure) => failure);
+		expect(error).toBeInstanceOf(ManagementUnconfirmedError);
+		expect(error.operationId).toBe("op-lost");
+		expect(value.open).toBe(false);
+	});
+	test("coded rejections surface the device reason, and older agents keep the legacy path", () => {
+		expect(
+			rejectionMessage({
+				state: "rejected",
+				result: {
+					error: "Unknown command",
+					code: "unsupported",
+					retryable: false,
+				},
+			}),
+		).toContain("Update the device's standalone agent");
+		expect(
+			rejectionMessage({
+				state: "rejected",
+				result: { error: "journal full", code: "limit", retryable: false },
+			}),
+		).toBe("journal full");
+		expect(rejectionMessage({ state: "rejected", result: {} })).toBeUndefined();
+		expect(
+			rejectionMessage({ state: "completed", result: { code: "limit" } }),
+		).toBeUndefined();
+	});
 	test("backup imports select only protected fields and reject another hub or device", () => {
 		const scope = {
 			issuer: "issuer",
@@ -136,13 +241,25 @@ describe("browser management boundaries", () => {
 			apiOrigin: "https://hub.test",
 			profileId: "profile",
 		};
+		const controller_key = {
+			kty: "OKP",
+			crv: "Ed25519",
+			x: base64url(new Uint8Array(32).fill(4)),
+		};
+		const manifest = (value: Record<string, unknown>) =>
+			`header.${base64url(new TextEncoder().encode(JSON.stringify(value)))}.signature`;
 		const record = {
 			version: 1,
 			apiOrigin: scope.apiOrigin,
 			deviceId: "device",
-			controllerPublic: { device_id: "device" },
+			controllerPublic: { device_id: "device", controller_key },
 			controllerVault: Array(64).fill(1),
-			manifestJws: "signed",
+			manifestJws: manifest({
+				device_id: "device",
+				api_base_url: "https://hub.test/api/v1",
+				owner_id: scope.account,
+				controller_key,
+			}),
 			grantId: "owner",
 			plaintextSecret: "must be discarded",
 		};
@@ -166,5 +283,26 @@ describe("browser management boundaries", () => {
 				"device",
 			),
 		).toThrow();
+		for (const substituted of [
+			{ ownerControllerKey: { ...controller_key, x: "A".repeat(43) } },
+			{ grantId: "shared", ownerControllerKey: controller_key },
+			{ manifestJws: "signed" },
+			{
+				manifestJws: manifest({
+					device_id: "device",
+					api_base_url: "https://other.test/api/v1",
+					owner_id: scope.account,
+					controller_key,
+				}),
+			},
+		])
+			expect(() =>
+				controllerBackup(
+					JSON.stringify({ ...record, ...substituted }),
+					scope,
+					"device",
+				),
+			).toThrow();
+		expect(() => controllerBackup("null", scope, "device")).toThrow();
 	});
 });

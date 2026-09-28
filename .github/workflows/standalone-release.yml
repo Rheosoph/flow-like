@@ -28,6 +28,9 @@ env:
   DOCKER_BUILD_RECORD_UPLOAD: 'false'
 
 jobs:
+  compiler-checks:
+    uses: ./.github/workflows/compiler-reproducibility.yml
+
   prepare:
     if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
@@ -49,10 +52,8 @@ jobs:
           RELEASE_PREFIX: ${{ vars.STANDALONE_RELEASE_PREFIX }}
           RELEASE_PUBLIC_KEYS: ${{ vars.STANDALONE_RELEASE_PUBLIC_KEYS }}
           RELEASE_REGION: ${{ vars.STANDALONE_RELEASE_REGION }}
-          RELEASE_ROLE: ${{ vars.STANDALONE_RELEASE_ROLE_ARN }}
-          RELEASE_ACCESS_KEY_PRESENT: ${{ secrets.STANDALONE_RELEASE_ACCESS_KEY_ID != '' }}
-          RELEASE_SECRET_KEY_PRESENT: ${{ secrets.STANDALONE_RELEASE_SECRET_ACCESS_KEY != '' }}
-          RELEASE_KEY_PRESENT: ${{ secrets.STANDALONE_RELEASE_SIGNING_KEY != '' }}
+        # Signing and publisher secrets live in the standalone-release environment and are
+        # validated by the jobs that are allowed to read them.
         run: |
           python3 - <<'PY'
           import os, subprocess, json, base64, re
@@ -70,15 +71,10 @@ jobs:
           keys = json.loads(os.environ['RELEASE_PUBLIC_KEYS'])
           if not isinstance(keys, list) or not 1 <= len(keys) <= 8 or any(not isinstance(k, str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', k) or len(base64.urlsafe_b64decode(k + '=')) != 32 for k in keys):
               raise SystemExit('STANDALONE_RELEASE_PUBLIC_KEYS must be a JSON array of raw Ed25519 base64url public keys')
-          static = os.environ['RELEASE_ACCESS_KEY_PRESENT'] == 'true' and os.environ['RELEASE_SECRET_KEY_PRESENT'] == 'true'
-          if bool(os.environ['RELEASE_ROLE']) == static or (os.environ['RELEASE_ACCESS_KEY_PRESENT'] == 'true') != (os.environ['RELEASE_SECRET_KEY_PRESENT'] == 'true'):
-              raise SystemExit('Configure one publisher identity: STANDALONE_RELEASE_ROLE_ARN or both dedicated S3 access-key secrets')
           if not 0 < sequence <= 9007199254740991:
               raise SystemExit('Invalid release sequence')
           if parsed.scheme != 'https' or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment or base.endswith('/') or len(base) > 800 or any(c.isspace() for c in base):
               raise SystemExit('Expected a direct HTTPS artifact prefix')
-          if os.environ['RELEASE_KEY_PRESENT'] != 'true':
-              raise SystemExit('Configure STANDALONE_RELEASE_SIGNING_KEY before building a signed release')
           epoch = subprocess.check_output(['git', 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
           image = 'ghcr.io/' + os.environ['GITHUB_REPOSITORY'].lower() + '-standalone'
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
@@ -114,7 +110,7 @@ jobs:
           if-no-files-found: error
 
   binaries:
-    needs: [prepare, frontend]
+    needs: [prepare, frontend, compiler-checks]
     strategy:
       fail-fast: false
       matrix:
@@ -159,9 +155,8 @@ jobs:
       - name: Install macOS native dependencies
         if: runner.os == 'macOS'
         run: brew install cmake pkg-config protobuf
-      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7
+      - uses: ./.github/actions/setup-rust
         with:
-          toolchain: 1.97.1
           targets: ${{ matrix.target }}
       - name: Download shared embedded frontend
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -251,6 +246,7 @@ jobs:
   signed-bundle:
     needs: [prepare, binaries, container]
     runs-on: ubuntu-24.04
+    environment: standalone-release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -260,19 +256,24 @@ jobs:
           pattern: standalone-*
           path: release-bundle
           merge-multiple: true
-      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7
-        with:
-          toolchain: 1.97.1
+      - uses: ./.github/actions/setup-rust
       - name: Bind binary hashes and exact container digest
         env:
           ARTIFACT_BASE: ${{ needs.prepare.outputs.base }}
           RELEASE_SEQUENCE: ${{ needs.prepare.outputs.sequence }}
           RELEASE_IMAGE: ${{ needs.prepare.outputs.image }}@${{ needs.container.outputs.digest }}
         run: python3 .github/scripts/standalone_release.py manifest --artifacts release-bundle --base-url "$ARTIFACT_BASE/releases/$RELEASE_SEQUENCE" --sequence "$RELEASE_SEQUENCE" --image "$RELEASE_IMAGE" --output release-bundle/release.json
+      # Build scripts and proc macros run here, before any key material exists on the runner.
+      - name: Build the release signer
+        run: CARGO_TARGET_DIR="$RUNNER_TEMP/release-signer" cargo build --locked --package flow-like-device-protocol --example sign-release
       - name: Sign the release manifest using the configured private release key
         env:
           STANDALONE_RELEASE_SIGNING_KEY: ${{ secrets.STANDALONE_RELEASE_SIGNING_KEY }}
         run: |
+          if [ -z "$STANDALONE_RELEASE_SIGNING_KEY" ]; then
+            echo "::error::Configure STANDALONE_RELEASE_SIGNING_KEY as a secret of the standalone-release environment"
+            exit 1
+          fi
           python3 - <<'PY'
           import os
           path = os.path.join(os.environ['RUNNER_TEMP'], 'standalone-signing-key')
@@ -281,7 +282,7 @@ jobs:
           PY
           unset STANDALONE_RELEASE_SIGNING_KEY
           trap 'rm -f "$RUNNER_TEMP/standalone-signing-key"' EXIT
-          cargo run --locked --package flow-like-device-protocol --example sign-release -- "$RUNNER_TEMP/standalone-signing-key" release-bundle/release.json release-bundle/release.jws
+          "$RUNNER_TEMP/release-signer/debug/examples/sign-release" "$RUNNER_TEMP/standalone-signing-key" release-bundle/release.json release-bundle/release.jws
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: standalone-signed-release-${{ needs.prepare.outputs.sequence }}
@@ -293,6 +294,7 @@ jobs:
   publish:
     needs: [prepare, signed-bundle]
     runs-on: ubuntu-24.04
+    environment: standalone-release
     permissions:
       contents: read
       id-token: write
@@ -304,6 +306,19 @@ jobs:
         with:
           name: standalone-signed-release-${{ needs.prepare.outputs.sequence }}
           path: release-bundle
+      - name: Require exactly one publisher identity
+        env:
+          RELEASE_ROLE: ${{ vars.STANDALONE_RELEASE_ROLE_ARN }}
+          RELEASE_ACCESS_KEY_PRESENT: ${{ secrets.STANDALONE_RELEASE_ACCESS_KEY_ID != '' }}
+          RELEASE_SECRET_KEY_PRESENT: ${{ secrets.STANDALONE_RELEASE_SECRET_ACCESS_KEY != '' }}
+        run: |
+          python3 - <<'PY'
+          import os
+          access = os.environ['RELEASE_ACCESS_KEY_PRESENT'] == 'true'
+          secret = os.environ['RELEASE_SECRET_KEY_PRESENT'] == 'true'
+          if access != secret or bool(os.environ['RELEASE_ROLE']) == (access and secret):
+              raise SystemExit('Configure one publisher identity: STANDALONE_RELEASE_ROLE_ARN or both dedicated S3 access-key secrets of the standalone-release environment')
+          PY
       - name: Obtain short-lived AWS publisher credentials
         if: vars.STANDALONE_RELEASE_ROLE_ARN != ''
         uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502

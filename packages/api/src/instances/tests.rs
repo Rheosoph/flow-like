@@ -695,6 +695,34 @@ async fn signed_instances_enforce_consent_scope_leases_and_revocation() {
         register(&state, &device_id, bad_registration).await,
         StatusCode::UNAUTHORIZED,
     );
+    let replayed = registration(
+        &grant,
+        &billing,
+        "replayed-replica",
+        &device_key,
+        &SigningKey::generate(),
+    );
+    let replayed_binding = verify_instance_registration(
+        &replayed.registration_jws,
+        &device_key.public_key(),
+        &device_id,
+        &endpoint_url(API, &format!("/devices/{device_id}/instances")).unwrap(),
+        now(),
+    )
+    .unwrap();
+    db.execute_raw(sql(
+        r#"INSERT INTO "DeviceProofReplay" ("deviceId","authEpoch","proofId","expiresAt") VALUES ($1,1,$2,$3)"#,
+        [
+            device_id.clone().into(),
+            replayed_binding.jti.into(),
+            (now() + 60).into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    let replay_error = register(&state, &device_id, replayed).await.unwrap_err();
+    assert_eq!(replay_error.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(replay_error.public_code(), INSTANCE_PROOF_INVALID);
     let registered = register(&state, &device_id, valid_registration)
         .await
         .unwrap();
@@ -868,11 +896,23 @@ async fn signed_instances_enforce_consent_scope_leases_and_revocation() {
         &device_id,
         "replica-two",
         ReceiptRequest {
-            client_assertion: retire_assertion,
+            client_assertion: retire_assertion.clone(),
         },
     )
     .await
     .unwrap();
+    let replayed_retire = retire(
+        &state,
+        &device_id,
+        "replica-two",
+        ReceiptRequest {
+            client_assertion: retire_assertion,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(replayed_retire.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(replayed_retire.public_code(), INSTANCE_PROOF_INVALID);
     let renewed = token(&state, id, token_request(id, &workload))
         .await
         .unwrap();
@@ -1616,9 +1656,19 @@ async fn distinct_host_project_and_payer_consent(
     revoke_billing(state, "owner", &device_id, &billing.billing_grant_id)
         .await
         .unwrap();
-    revoke_grant(state, "other", &device_id, &grant.grant_id)
+    let revoked = revoke_grant(state, "other", &device_id, &grant.grant_id)
         .await
         .unwrap();
+    assert_eq!(revoked.status, "revoked");
+    assert!(revoked.authz_version > grant.authz_version);
+    assert!(
+        !consent_devices(state, "other")
+            .await
+            .unwrap()
+            .iter()
+            .any(|device| device.device_id == device_id),
+        "a former delegate with nothing left to revoke no longer sees the device"
+    );
     policy.policy_version = 3;
     policy.previous_policy_digest = Some(compact_digest(&signed));
     policy.grants.push(ManagementGrant {
@@ -1654,10 +1704,39 @@ async fn distinct_host_project_and_payer_consent(
     ))
     .await
     .unwrap();
-    revoke_billing(state, "other", &device_id, &billing.billing_grant_id)
-        .await
-        .unwrap();
     revoke_grant(state, "other", &device_id, &grant.grant_id)
         .await
         .unwrap();
+    let device = device_id.as_str();
+    let sees_device = move || async move {
+        consent_devices(state, "other")
+            .await
+            .unwrap()
+            .iter()
+            .any(|status| status.device_id == device)
+    };
+    assert!(
+        sees_device().await,
+        "a payer whose sponsorship is still active keeps seeing the device"
+    );
+    let set_billing_expiry = |expires_at: i64| {
+        db.execute_raw(sql(
+            r#"UPDATE "PlacementBillingGrant" SET "expiresAt"=$2 WHERE id=$1"#,
+            [billing.billing_grant_id.clone().into(), expires_at.into()],
+        ))
+    };
+    set_billing_expiry(now() - 1).await.unwrap();
+    assert!(
+        !sees_device().await,
+        "an expired sponsorship gives the payer no view"
+    );
+    set_billing_expiry(billing.expires_at).await.unwrap();
+    assert!(sees_device().await);
+    revoke_billing(state, "other", &device_id, &billing.billing_grant_id)
+        .await
+        .unwrap();
+    assert!(
+        !sees_device().await,
+        "a revoked sponsorship gives the payer no view"
+    );
 }

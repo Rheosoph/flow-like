@@ -1,3 +1,9 @@
+use super::add_screenshot_pins;
+#[cfg(feature = "execute")]
+use super::{
+    SubmitTool, call_tool, load_screenshot, parse_tool_args, truncate_on_char_boundary,
+    vision_history,
+};
 use flow_like::{
     bit::Bit,
     flow::{
@@ -7,15 +13,7 @@ use flow_like::{
         variable::VariableType,
     },
 };
-#[cfg(feature = "execute")]
-use flow_like_types::anyhow;
 use flow_like_types::{async_trait, json};
-#[cfg(feature = "execute")]
-use rig::completion::{Completion, Message, ToolDefinition};
-#[cfg(feature = "execute")]
-use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
-#[cfg(feature = "execute")]
-use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -23,54 +21,37 @@ use serde::{Deserialize, Serialize};
 pub struct HealedSelector {
     pub healed: bool,
     pub new_selector: Option<String>,
+    #[serde(default)]
     pub selector_type: String,
     pub confidence: f64,
     pub reasoning: String,
+    #[serde(default)]
     pub alternatives: Vec<String>,
 }
 
 #[cfg(feature = "execute")]
-#[derive(Debug, Serialize, Deserialize)]
-struct HealSelectorTool {
-    parameters: flow_like_types::Value,
-}
-
+const TOOL: &str = "submit_healed_selector";
 #[cfg(feature = "execute")]
-#[derive(Debug)]
-struct HealSelectorError(String);
+const MAX_HTML_BYTES: usize = 50_000;
 
+/// "Healed" needs a non-empty selector; the requested selector type fills an omitted one.
 #[cfg(feature = "execute")]
-impl std::fmt::Display for HealSelectorError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Heal selector error: {}", self.0)
+fn settle(mut healed: HealedSelector, selector_type: &str) -> HealedSelector {
+    if healed.selector_type.is_empty() {
+        healed.selector_type = selector_type.to_string();
     }
-}
-
-#[cfg(feature = "execute")]
-impl std::error::Error for HealSelectorError {}
-
-#[cfg(feature = "execute")]
-impl Tool for HealSelectorTool {
-    const NAME: &'static str = "submit_healed_selector";
-    type Error = HealSelectorError;
-    type Args = flow_like_types::Value;
-    type Output = flow_like_types::Value;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Submit the healed selector".to_string(),
-            parameters: self.parameters.clone(),
-        }
+    healed.new_selector = healed
+        .new_selector
+        .map(|selector| selector.trim().to_string())
+        .filter(|selector| !selector.is_empty());
+    if healed.healed && healed.new_selector.is_none() {
+        healed.healed = false;
+        healed.reasoning = format!(
+            "Model reported success without a selector: {}",
+            healed.reasoning
+        );
     }
-
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        Ok(args)
-    }
-
-    fn name(&self) -> String {
-        Self::NAME.to_string()
-    }
+    healed
 }
 
 #[crate::register_node]
@@ -94,7 +75,7 @@ impl NodeLogic for LLMHealSelectorNode {
         );
         node.set_flowscript_name("automation.llm", "healSelector");
         node.add_icon("/flow/icons/bot-fix.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()
@@ -118,18 +99,12 @@ impl NodeLogic for LLMHealSelectorNode {
         .set_schema::<Bit>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
-        node.add_input_pin(
-            "screenshot",
-            "Screenshot",
-            "Base64-encoded screenshot (optional but recommended)",
-            VariableType::String,
-        )
-        .set_default_value(Some(json::json!("")));
+        add_screenshot_pins(&mut node, "Optional (recommended) screenshot", false);
 
         node.add_input_pin(
             "page_html",
             "Page HTML",
-            "Current page HTML or DOM structure",
+            "Current page HTML or DOM structure; only the first 50,000 bytes are sent",
             VariableType::String,
         );
 
@@ -186,16 +161,10 @@ impl NodeLogic for LLMHealSelectorNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_model_provider::history::{
-            Content, ContentType, History, HistoryMessage, ImageUrl as HistoryImageUrl,
-            MessageContent, Role,
-        };
-
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_failed").await?;
 
         let model_bit: Bit = context.evaluate_pin("model").await?;
-        let screenshot: String = context.evaluate_pin("screenshot").await.unwrap_or_default();
         let page_html: String = context.evaluate_pin("page_html").await?;
         let broken_selector: String = context.evaluate_pin("broken_selector").await?;
         let element_description: String = context.evaluate_pin("element_description").await?;
@@ -203,8 +172,9 @@ impl NodeLogic for LLMHealSelectorNode {
             .evaluate_pin("selector_type")
             .await
             .unwrap_or_else(|_| "css".to_string());
+        let screenshot = load_screenshot(context).await?;
 
-        let tool_params = json::json!({
+        let parameters = json::json!({
             "type": "object",
             "properties": {
                 "healed": { "type": "boolean", "description": "Whether a working selector was found" },
@@ -221,99 +191,56 @@ impl NodeLogic for LLMHealSelectorNode {
             "required": ["healed", "confidence", "reasoning"]
         });
 
-        let truncated_html = if page_html.len() > 50000 {
-            format!("{}...[truncated]", &page_html[..50000])
+        let html = if page_html.len() > MAX_HTML_BYTES {
+            format!(
+                "{}...[truncated]",
+                truncate_on_char_boundary(&page_html, MAX_HTML_BYTES)
+            )
         } else {
             page_html
         };
 
-        let mut content_items = vec![];
-
-        if !screenshot.is_empty() {
-            content_items.push(Content::Image {
-                content_type: ContentType::ImageUrl,
-                image_url: HistoryImageUrl {
-                    url: format!("data:image/png;base64,{}", screenshot),
-                    detail: None,
-                    media_type: Some("image/png".to_string()),
-                    additional_params: None,
-                },
-            });
-        }
-
-        content_items.push(Content::Text {
-            content_type: ContentType::Text,
-            text: format!(
-                "Fix this broken {} selector:\n\nBroken selector: {}\nElement description: {}\n\nPage HTML:\n{}",
-                selector_type, broken_selector, element_description, truncated_html
-            ),
-        });
-
-        let history = History::new(
-            "".to_string(),
-            vec![HistoryMessage {
-                role: Role::User,
-                content: MessageContent::Contents(content_items),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                annotations: None,
-            }],
+        let instructions = format!(
+            "Fix this broken {selector_type} selector:\n\nBroken selector: {broken_selector}\nElement description: {element_description}\n\nPage HTML:\n{html}"
         );
 
         let preamble = format!(
-            "You are a web automation expert specializing in {} selectors. Analyze the page structure and fix the broken selector. Consider:\n\
+            "You are a web automation expert specializing in {selector_type} selectors. Analyze the page structure and fix the broken selector. Consider:\n\
             1. Changes in element IDs, classes, or structure\n\
             2. More robust selector strategies (data attributes, aria labels)\n\
-            3. Unique identifying characteristics of the target element",
-            selector_type
+            3. Unique identifying characteristics of the target element"
         );
 
-        let agent_builder = model_bit
-            .agent(context, &Some(history))
-            .await?
-            .preamble(&preamble)
-            .tool(HealSelectorTool {
-                parameters: tool_params,
-            })
-            .tool_choice(ToolChoice::Required);
+        let images: Vec<_> = screenshot
+            .iter()
+            .map(|screenshot| &screenshot.image)
+            .collect();
+        let arguments = call_tool(
+            context,
+            &model_bit,
+            vision_history(&images, &instructions),
+            &preamble,
+            SubmitTool {
+                name: TOOL,
+                description: "Submit the healed selector",
+                parameters,
+            },
+        )
+        .await?;
 
-        let agent = agent_builder.build();
+        let healed = match arguments {
+            Some(arguments) => settle(parse_tool_args(TOOL, &arguments)?, &selector_type),
+            None => HealedSelector {
+                healed: false,
+                new_selector: None,
+                selector_type,
+                confidence: 0.0,
+                reasoning: format!("The model answered without calling `{TOOL}`"),
+                alternatives: vec![],
+            },
+        };
 
-        let response = agent
-            .completion(element_description.clone(), Vec::<Message>::new())
-            .await
-            .map_err(|e| anyhow!("LLM completion failed: {}", e))?
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to send request: {}", e))?;
-
-        let mut result: Option<HealedSelector> = None;
-        for content in response.choice {
-            if let AssistantContent::ToolCall(ToolCall {
-                function: ToolFunction {
-                    name, arguments, ..
-                },
-                ..
-            }) = content
-                && name == "submit_healed_selector"
-            {
-                result = Some(json::from_value(arguments)?);
-            }
-        }
-
-        let healed = result.unwrap_or(HealedSelector {
-            healed: false,
-            new_selector: None,
-            selector_type,
-            confidence: 0.0,
-            reasoning: "Could not heal selector".to_string(),
-            alternatives: vec![],
-        });
-
-        context
-            .set_pin_value("result", json::json!(healed.clone()))
-            .await?;
+        context.set_pin_value("result", json::json!(healed)).await?;
         context
             .set_pin_value(
                 "new_selector",
@@ -335,5 +262,30 @@ impl NodeLogic for LLMHealSelectorNode {
         Err(flow_like_types::anyhow!(
             "LLM processing requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn omitted_fields_default_and_success_needs_a_selector() {
+        let parsed: HealedSelector = parse_tool_args(
+            TOOL,
+            &json::json!({"healed": true, "confidence": 0.9, "reasoning": "ok", "new_selector": "  "}),
+        )
+        .unwrap();
+        let settled = settle(parsed, "xpath");
+        assert_eq!(settled.selector_type, "xpath");
+        assert!(settled.alternatives.is_empty());
+        assert!(!settled.healed && settled.new_selector.is_none());
+
+        let parsed: HealedSelector = parse_tool_args(
+            TOOL,
+            &json::json!({"healed": true, "confidence": 0.9, "reasoning": "ok", "new_selector": "#go"}),
+        )
+        .unwrap();
+        assert!(settle(parsed, "css").healed);
     }
 }

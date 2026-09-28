@@ -32,9 +32,27 @@ The generated provider catalog currently includes model builders for:
 | Hosted inference and routing | Groq, OpenRouter, Together AI, Perplexity, Huggingface |
 | Other hosted providers | Cohere, Deepseek, Mistral, Moonshot AI, xAI, Hyperbolic, VoyageAI |
 | Local or compatible endpoints | Ollama, LM Studio, Mozilla any-llm |
+| Personal agent accounts | Claude Code, Codex (ChatGPT), GitHub Copilot, Microsoft 365 Copilot |
 | Additional catalog providers | Galadriel, Mira |
 
 Browse [Generative model provider nodes](/nodes/ai/generative/provider/) for the current set and each node's inputs. Provider availability and model lists can change independently of the docs.
+
+## Add models from an agent account
+
+In the model catalog, choose **Add model**, select the provider, and enter a model ID and its credentials. Save the model and activate it in the profile you run workflows with. These entries are ordinary model Bits, so they connect to **Invoke Model** and **Agent from Model** through the existing Model pin. Provider nodes can also build a Bit directly and report whether its provider is available.
+
+| Provider | Setup and execution |
+|----------|---------------------|
+| Claude Code | Desktop only. Install and sign in to the Claude CLI, then select a discovered model or enter its ID. Flow-Like launches the CLI for each completion; an open terminal is unnecessary. |
+| Codex (ChatGPT) | Supply a ChatGPT access token, or use the desktop's cached Codex `auth.json` credentials. Local credential lookup does not refresh tokens or read OS keychain storage. |
+| GitHub Copilot | Supply a GitHub token authorized for Copilot, or an already exchanged Copilot API token. This model provider does not reuse FlowPilot's Copilot SDK session. |
+| Microsoft 365 Copilot | Supply a delegated Microsoft Graph token with Copilot Chat access. The provider selects its own underlying model. This adapter supports text conversations and streaming, without caller-defined tools or model sampling controls. |
+
+Explicit-token providers can execute through the browser's server backend. Claude Code and local Codex credential lookup require desktop execution. Server runs never use the server operator's CLI login.
+
+Claude Code's adapter sends the full Flow-Like conversation in a fresh CLI prompt and returns a validated assistant turn, including requested Flow-Like tool calls. Flow-Like executes those tools. Its stream output arrives after the full turn has been validated. Codex and GitHub Copilot use Rig's model providers and retain Flow-Like's existing agent loop. Provider controls differ: the Claude Code adapter does not apply model sampling settings, and the Codex subscription backend does not honor temperature or maximum output tokens.
+
+**Find Model** skips external providers that fail the execution host's readiness check. A saved use-case selection also falls back to another active profile model when its external provider is unavailable. Missing credentials, expired tokens, unavailable CLI authentication, and unsupported local execution can trigger fallback. Readiness does not guarantee remaining quota, model entitlement, or a successful later network request. Errors after generation starts are returned to the workflow; the runtime does not replay tool actions on another model.
 
 ## Explicit model selection
 

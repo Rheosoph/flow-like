@@ -62,6 +62,8 @@ const HEADLESS_EVENT_TYPES = new Set([
 	"discord",
 	"telegram",
 	"email",
+	"inbound_email",
+	"teams",
 	"geolocation",
 ]);
 

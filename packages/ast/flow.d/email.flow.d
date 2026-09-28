@@ -7,6 +7,37 @@
 // camelCase spelling (`@alias`), which is still accepted.
 
 declare namespace email {
+    // === Email ===
+
+    /**
+     * Reply to a received email and preserve its thread
+     * @node email_platform_reply @receiver session @alias emailPlatformReply
+     * @param session — Mail session from an inbound email event (receiver: `this` in `x.replyPlatform(...)`)
+     * @param message — Received message reference from an inbound email event
+     * @param text (optional) — Plain text reply body
+     * @param html (optional) — HTML reply body
+     * @returns requestId — Server identifier for this submission
+     * @returns sessionOut — Mail session used for this submission
+     * @impure has side effects / drives control flow
+     */
+    function replyPlatform(this: MailSession, { session: Struct, message: Struct, text?: string, html?: string }): { requestId: string, sessionOut: Struct };
+
+    /**
+     * Send email from an authorized event's address
+     * @node email_platform_send @receiver session @alias emailPlatformSend
+     * @param session — Mail session from an inbound email event (receiver: `this` in `x.sendPlatform(...)`)
+     * @param to (optional) — Recipient email addresses
+     * @param cc (optional) — Visible copy recipients
+     * @param bcc (optional) — Hidden copy recipients
+     * @param subject (optional) — Email subject
+     * @param text (optional) — Plain text body
+     * @param html (optional) — HTML body
+     * @returns requestId — Server identifier for this submission
+     * @returns sessionOut — Mail session used for this submission
+     * @impure has side effects / drives control flow
+     */
+    function sendPlatform(this: MailSession, { session: Struct, to?: string[], cc?: string[], bcc?: string[], subject?: string, text?: string, html?: string }): { requestId: string, sessionOut: Struct };
+
     // === Email/Access ===
 
     /**

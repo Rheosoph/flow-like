@@ -9,7 +9,12 @@ export interface IHomeWidget {
 		heightMode?: "auto" | "content" | "fixed";
 		height?: number;
 	};
-	appearance: { variant: string; accent: string; className?: string };
+	appearance: {
+		variant: string;
+		accent: string;
+		className?: string;
+		css?: string;
+	};
 	config: Record<string, unknown>;
 }
 

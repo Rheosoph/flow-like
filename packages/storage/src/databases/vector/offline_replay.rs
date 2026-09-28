@@ -222,11 +222,7 @@ pub async fn reconcile(table: &Table, marker: &ReplayMarker) -> Result<ReplayOut
     }
     let committed = match latest.checkout_version(target).await {
         Ok(dataset) => dataset,
-        Err(error) => {
-            return Ok(ReplayOutcome::Unknown {
-                reason: format!("cannot inspect offline operation manifest {target}: {error}"),
-            });
-        }
+        Err(error) => return carried_outcome(&latest, marker, target, &error).await,
     };
     if marker.matches(committed.metadata()) {
         return applied(&committed).await;
@@ -237,6 +233,39 @@ pub async fn reconcile(table: &Table, marker: &ReplayMarker) -> Result<ReplayOut
     Ok(ReplayOutcome::Conflict {
         actual_version: version,
     })
+}
+
+/// History cleanup removed the target manifest. Lance carries `table_metadata` into every
+/// later manifest, so `latest` holds the marker of the last guarded commit.
+async fn carried_outcome(
+    latest: &Dataset,
+    marker: &ReplayMarker,
+    target: u64,
+    error: &lance::Error,
+) -> Result<ReplayOutcome> {
+    let carried = latest.metadata();
+    if marker.matches(carried) {
+        // The target manifest's own fingerprint is gone. The latest fingerprint paired with
+        // the target version never names a live revision, so a later change conflicts and
+        // the device refreshes instead of trusting a base it never saw.
+        return Ok(ReplayOutcome::Applied {
+            version: target,
+            fingerprint: fingerprint(latest).await?,
+        });
+    }
+    // A guarded commit at `target` would have replaced any older carried marker, and
+    // another guarded commit at `target` excludes this one.
+    match carried
+        .get(VERSION_KEY)
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        Some(carried_target) if carried_target <= target => Ok(ReplayOutcome::Conflict {
+            actual_version: latest.manifest().version,
+        }),
+        _ => Ok(ReplayOutcome::Unknown {
+            reason: format!("cannot inspect offline operation manifest {target}: {error}"),
+        }),
+    }
 }
 
 #[derive(Debug)]
@@ -726,6 +755,18 @@ impl WriteBudget {
                 store: "offline-materialization",
                 source: "offline snapshot exceeds its disk write budget".into(),
             })
+    }
+}
+
+/// Shared disk budget of one `budgeted_local_connection`.
+#[derive(Clone, Debug)]
+pub struct LocalBudget(Arc<WriteBudget>);
+
+impl LocalBudget {
+    pub fn available(&self) -> u64 {
+        self.0
+            .maximum
+            .saturating_sub(self.0.used.load(std::sync::atomic::Ordering::Acquire))
     }
 }
 
@@ -1323,6 +1364,16 @@ pub async fn budgeted_local_connection(
     root: &std::path::Path,
     maximum_bytes: u64,
 ) -> Result<Connection> {
+    Ok(budgeted_local_connection_with_budget(root, maximum_bytes)
+        .await?
+        .0)
+}
+
+/// `budgeted_local_connection` and the budget every write through it is charged to.
+pub async fn budgeted_local_connection_with_budget(
+    root: &std::path::Path,
+    maximum_bytes: u64,
+) -> Result<(Connection, LocalBudget)> {
     ensure!(
         maximum_bytes > 0,
         "offline local database budget must be positive"
@@ -1385,7 +1436,7 @@ pub async fn budgeted_local_connection(
         inner: Arc::new(object_store::local::LocalFileSystem::new()),
         prefix: Path::from_absolute_path(&root)?,
         root: root.clone(),
-        budget,
+        budget: budget.clone(),
         locks: (0..64)
             .map(|_| Arc::new(futures::lock::Mutex::new(())))
             .collect(),
@@ -1404,7 +1455,10 @@ pub async fn budgeted_local_connection(
     // The native `file` scheme bypasses ObjectStore wrappers for reads, writes
     // and copies. This scheme routes every operation through the budget.
     let uri = uri.as_str().replacen("file:", "file-object-store:", 1);
-    Ok(connect_lance(&uri).session(session).execute().await?)
+    Ok((
+        connect_lance(&uri).session(session).execute().await?,
+        LocalBudget(budget),
+    ))
 }
 
 /// Prune obsolete history without rewriting the current local table or changing
@@ -1629,6 +1683,116 @@ mod tests {
         assert_eq!(replay(&table, &marker, operation).await?, first);
         table.checkout_latest().await?;
         assert_eq!(table.count_rows(None).await?, 3);
+        Ok(())
+    }
+
+    async fn private_connection() -> Result<(Directory, Connection, LocalBudget)> {
+        let (directory, _) = connection().await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory.0, std::fs::Permissions::from_mode(0o700))?;
+        }
+        let (connection, budget) =
+            budgeted_local_connection_with_budget(&directory.0, 8 * 1024 * 1024).await?;
+        Ok((directory, connection, budget))
+    }
+
+    async fn other_writer(table: &Table, id: i64) -> Result<()> {
+        table
+            .add(crate::arrow_utils::value_to_batch_reader_with_fields(
+                vec![json!({"id": id, "value": "other writer"})],
+                Some(table.schema().await?.fields().iter().cloned().collect()),
+            )?)
+            .execute()
+            .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn carried_marker_proves_a_replay_whose_manifest_was_pruned() -> Result<()> {
+        let (_directory, connection, _) = private_connection().await?;
+        let table = table(&connection).await?;
+        let marker = marker(&table).await?;
+        let ReplayOutcome::Applied {
+            version: 2,
+            fingerprint: committed,
+        } = replay(
+            &table,
+            &marker,
+            ReplayMutation::Insert {
+                items: vec![json!({"id": 2, "value": "offline"})],
+            },
+        )
+        .await?
+        else {
+            anyhow::bail!("offline insert was not applied at version 2")
+        };
+        other_writer(&table, 3).await?;
+        other_writer(&table, 4).await?;
+        table.checkout_latest().await?;
+        assert!(compact_idle_local(&table).await?.old_versions > 0);
+
+        let ReplayOutcome::Applied {
+            version: 2,
+            fingerprint: reported,
+        } = reconcile(&table, &marker).await?
+        else {
+            anyhow::bail!("the carried marker did not prove the pruned commit")
+        };
+        assert_ne!(reported, committed);
+        assert_eq!(
+            reconcile(
+                &table,
+                &ReplayMarker {
+                    operation_id: flow_like_types::create_id(),
+                    digest: "next-payload".into(),
+                    expected_version: 2,
+                    expected_fingerprint: Some(reported),
+                },
+            )
+            .await?,
+            ReplayOutcome::Conflict { actual_version: 4 }
+        );
+        assert_eq!(
+            reconcile(
+                &table,
+                &ReplayMarker {
+                    operation_id: flow_like_types::create_id(),
+                    ..marker
+                },
+            )
+            .await?,
+            ReplayOutcome::Conflict { actual_version: 4 }
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_budget_tracks_writes_and_drops() -> Result<()> {
+        let (_directory, connection, budget) = private_connection().await?;
+        let empty = budget.available();
+        table(&connection).await?;
+        let written = budget.available();
+        assert!(written < empty);
+        connection.drop_table("records", &[]).await?;
+        assert!(budget.available() > written);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pruned_history_without_a_carried_marker_stays_unknown() -> Result<()> {
+        let (_directory, connection, _) = private_connection().await?;
+        let table = table(&connection).await?;
+        let marker = marker(&table).await?;
+        other_writer(&table, 2).await?;
+        other_writer(&table, 3).await?;
+        table.checkout_latest().await?;
+        assert!(compact_idle_local(&table).await?.old_versions > 0);
+        assert!(matches!(
+            reconcile(&table, &marker).await?,
+            ReplayOutcome::Unknown { .. }
+        ));
         Ok(())
     }
 

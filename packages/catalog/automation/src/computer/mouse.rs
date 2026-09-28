@@ -5,7 +5,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::FlowPath;
-use flow_like_types::{async_trait, json::json, rand};
+use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
+use flow_like_types::rand;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -253,17 +255,17 @@ impl NodeLogic for ComputerNaturalMouseMoveNode {
         let overshoot: bool = context.evaluate_pin("overshoot").await.unwrap_or(false);
 
         let mut enigo = session.create_enigo(context).await?;
-        let start = enigo.location().map_err(|error| {
-            flow_like_types::anyhow!(
-                "Cannot read cursor position for natural movement: {}",
-                error
-            )
-        })?;
         let end = (i32::try_from(target_x)?, i32::try_from(target_y)?);
         let dur = duration_ms.clamp(0, 60_000) as u64;
         let cancellation = context.get_cancellation_token();
 
         flow_like_types::tokio::task::spawn_blocking(move || {
+            let start = enigo.location().map_err(|error| {
+                flow_like_types::anyhow!(
+                    "Cannot read cursor position for natural movement: {}",
+                    error
+                )
+            })?;
             perform_natural_move(
                 &mut enigo,
                 start,
@@ -1078,10 +1080,10 @@ impl NodeLogic for ComputerMouseDragNode {
         let mut node = Node::new(
             "computer_mouse_drag",
             "Mouse Drag",
-            "Drags the mouse from one position to another",
+            "Presses the button at the start point, moves to the end point in small steps over the duration, pauses, and releases so applications register a real drag",
             "Automation/Computer/Mouse",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("computer", "mouseDrag");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -1137,7 +1139,11 @@ impl NodeLogic for ComputerMouseDragNode {
         )
         .set_options(
             flow_like::flow::pin::PinOptions::new()
-                .set_valid_values(vec!["left".to_string(), "right".to_string()])
+                .set_valid_values(vec![
+                    "left".to_string(),
+                    "right".to_string(),
+                    "middle".to_string(),
+                ])
                 .build(),
         )
         .set_default_value(Some(json!("left")));
@@ -1149,6 +1155,15 @@ impl NodeLogic for ComputerMouseDragNode {
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "duration_ms",
+            "Duration (ms)",
+            "Time spent moving from start to end (0-60000 ms); the pointer moves in steps of about 16 ms",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(300)));
+
         node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
 
         node.add_output_pin(
@@ -1164,8 +1179,6 @@ impl NodeLogic for ComputerMouseDragNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use enigo::{Coordinate, Mouse};
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
@@ -1176,6 +1189,15 @@ impl NodeLogic for ComputerMouseDragNode {
         let to_x: i64 = context.evaluate_pin("to_x").await?;
         let to_y: i64 = context.evaluate_pin("to_y").await?;
         let button_str: String = context.evaluate_pin("button").await?;
+        let duration_ms: i64 = context.evaluate_pin("duration_ms").await.unwrap_or(300);
+        if !(0..=60_000).contains(&duration_ms) {
+            return Err(flow_like_types::anyhow!(
+                "Drag duration must be between 0 and 60000 ms, got {}",
+                duration_ms
+            ));
+        }
+        let from = (i32::try_from(from_x)?, i32::try_from(from_y)?);
+        let to = (i32::try_from(to_x)?, i32::try_from(to_y)?);
 
         let button = parse_button(&button_str)?;
 
@@ -1184,24 +1206,14 @@ impl NodeLogic for ComputerMouseDragNode {
         tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
             check_cancellation(cancellation.as_ref())?;
             enigo.modifiers(&modifiers)?;
-            enigo
-                .move_mouse(
-                    i32::try_from(from_x)?,
-                    i32::try_from(from_y)?,
-                    Coordinate::Abs,
-                )
-                .map_err(|e| flow_like_types::anyhow!("Failed to move mouse: {}", e))?;
-            enigo
-                .button(button, enigo::Direction::Press)
-                .map_err(|e| flow_like_types::anyhow!("Failed to press mouse: {}", e))?;
-            enigo
-                .move_mouse(i32::try_from(to_x)?, i32::try_from(to_y)?, Coordinate::Abs)
-                .map_err(|e| flow_like_types::anyhow!("Failed to move mouse: {}", e))?;
-            enigo
-                .button(button, enigo::Direction::Release)
-                .map_err(|e| flow_like_types::anyhow!("Failed to release mouse: {}", e))?;
-
-            Ok(())
+            perform_drag(
+                &mut enigo,
+                from,
+                to,
+                button,
+                duration_ms as u64,
+                cancellation.as_ref(),
+            )
         })
         .await??;
 
@@ -1236,10 +1248,10 @@ impl NodeLogic for ComputerScrollNode {
         let mut node = Node::new(
             "computer_scroll",
             "Scroll",
-            "Scrolls the mouse wheel",
+            "Scrolls the mouse wheel at the current pointer position, one wheel tick at a time. Positive Delta Y scrolls down (towards the end of a page); note that RPA Scroll uses the opposite sign",
             "Automation/Computer/Mouse",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("computer", "scroll");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -1268,7 +1280,7 @@ impl NodeLogic for ComputerScrollNode {
         node.add_input_pin(
             "dx",
             "Delta X",
-            "Horizontal scroll amount (positive = right)",
+            "Horizontal wheel ticks: positive scrolls right, negative scrolls left (-1000 to 1000)",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(0)));
@@ -1276,7 +1288,7 @@ impl NodeLogic for ComputerScrollNode {
         node.add_input_pin(
             "dy",
             "Delta Y",
-            "Vertical scroll amount (positive = down)",
+            "Vertical wheel ticks: positive scrolls DOWN (content moves up), negative scrolls up (-1000 to 1000)",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(3)));
@@ -1365,8 +1377,517 @@ impl NodeLogic for ComputerScrollNode {
     }
 }
 
+/// Evenly spaced points from `from` (exclusive) to `to` (inclusive).
+#[cfg(any(feature = "execute", test))]
+pub(crate) fn drag_path(from: (i32, i32), to: (i32, i32), steps: u32) -> Vec<(i32, i32)> {
+    let steps = steps.max(1);
+    (1..=steps)
+        .map(|step| {
+            let t = step as f64 / steps as f64;
+            (
+                (from.0 as f64 + (to.0 as f64 - from.0 as f64) * t).round() as i32,
+                (from.1 as f64 + (to.1 as f64 - from.1 as f64) * t).round() as i32,
+            )
+        })
+        .collect()
+}
+
+/// Press, pause, move in ~16 ms steps, pause over the target, release. The pauses let
+/// applications pass their drag thresholds and let drop targets register the hover.
 #[cfg(feature = "execute")]
-fn parse_button(value: &str) -> flow_like_types::Result<enigo::Button> {
+pub(crate) fn perform_drag(
+    input: &mut super::native::input::DesktopInput,
+    from: (i32, i32),
+    to: (i32, i32),
+    button: enigo::Button,
+    duration_ms: u64,
+    cancellation: Option<&flow_like_types::tokio_util::sync::CancellationToken>,
+) -> flow_like_types::Result<()> {
+    use enigo::{Coordinate, Direction, Mouse};
+    input
+        .move_mouse(from.0, from.1, Coordinate::Abs)
+        .map_err(|e| flow_like_types::anyhow!("Failed to move to drag start {:?}: {}", from, e))?;
+    interruptible_sleep(50, cancellation)?;
+    input
+        .button(button, Direction::Press)
+        .map_err(|e| flow_like_types::anyhow!("Failed to press {:?} for drag: {}", button, e))?;
+    interruptible_sleep(80, cancellation)?;
+    let steps = (duration_ms / 16).clamp(8, 3750) as u32;
+    let pause = duration_ms / steps as u64;
+    for point in drag_path(from, to, steps) {
+        check_cancellation(cancellation)?;
+        input
+            .move_mouse(point.0, point.1, Coordinate::Abs)
+            .map_err(|e| flow_like_types::anyhow!("Failed to move drag to {:?}: {}", point, e))?;
+        interruptible_sleep(pause, cancellation)?;
+    }
+    interruptible_sleep(80, cancellation)?;
+    input
+        .button(button, Direction::Release)
+        .map_err(|e| flow_like_types::anyhow!("Failed to release {:?} after drag: {}", button, e))?;
+    Ok(())
+}
+
+/// Moves to `point` (desktop input coordinates), waits the session's click delay and clicks
+/// `clicks` times 70 ms apart while `modifiers` (comma-separated) are held. Cancellation stops it
+/// between steps; held modifiers and buttons are released even on failure. The caller applies
+/// the session's post-action delay.
+#[cfg(feature = "execute")]
+pub(crate) async fn click_at(
+    context: &ExecutionContext,
+    session: &AutomationSession,
+    point: (i32, i32),
+    button: enigo::Button,
+    clicks: u32,
+    modifiers: &str,
+) -> flow_like_types::Result<()> {
+    use enigo::{Coordinate, Direction, Mouse};
+    let mut input = session.create_enigo(context).await?;
+    let cancellation = context.get_cancellation_token();
+    let click_delay_ms = session.click_delay_ms.min(5000);
+    let modifiers = modifiers.to_owned();
+    tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
+        check_cancellation(cancellation.as_ref())?;
+        input.modifiers(&modifiers)?;
+        input
+            .move_mouse(point.0, point.1, Coordinate::Abs)
+            .map_err(|e| flow_like_types::anyhow!("Failed to move mouse to {:?}: {}", point, e))?;
+        interruptible_sleep(click_delay_ms, cancellation.as_ref())?;
+        for click in 0..clicks {
+            if click > 0 {
+                interruptible_sleep(70, cancellation.as_ref())?;
+            }
+            check_cancellation(cancellation.as_ref())?;
+            input.button(button, Direction::Click).map_err(|e| {
+                flow_like_types::anyhow!(
+                    "Failed click {} of {} at {:?}: {}",
+                    click + 1,
+                    clicks,
+                    point,
+                    e
+                )
+            })?;
+        }
+        Ok(())
+    })
+    .await?
+}
+
+fn add_session_pins(node: &mut Node) {
+    node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
+    node.add_input_pin(
+        "session",
+        "Session",
+        "Computer session handle",
+        VariableType::Struct,
+    )
+    .set_schema::<AutomationSession>();
+}
+
+fn add_session_outputs(node: &mut Node) {
+    node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
+    node.add_output_pin(
+        "session_out",
+        "Session",
+        "Computer session handle (pass-through)",
+        VariableType::Struct,
+    )
+    .set_schema::<AutomationSession>();
+}
+
+fn add_button_pin(node: &mut Node, description: &str) {
+    node.add_input_pin("button", "Button", description, VariableType::String)
+        .set_options(
+            flow_like::flow::pin::PinOptions::new()
+                .set_valid_values(vec!["left".into(), "right".into(), "middle".into()])
+                .build(),
+        )
+        .set_default_value(Some(json!("left")));
+}
+
+fn add_optional_position_pins(node: &mut Node) {
+    for (name, label) in [("x", "X"), ("y", "Y")] {
+        node.add_input_pin(
+            name,
+            label,
+            "Optional desktop coordinate to move to first; leave both X and Y empty to use the current pointer position",
+            VariableType::Integer,
+        )
+        .set_options(
+            flow_like::flow::pin::PinOptions::new()
+                .set_optional(true)
+                .build(),
+        );
+    }
+}
+
+fn mouse_scores(performance: u8) -> flow_like::flow::node::NodeScores {
+    flow_like::flow::node::NodeScores::new()
+        .set_privacy(2)
+        .set_security(3)
+        .set_performance(performance)
+        .set_governance(5)
+        .set_reliability(8)
+        .set_cost(10)
+        .build()
+}
+
+#[cfg(feature = "execute")]
+async fn optional_position(
+    context: &ExecutionContext,
+) -> flow_like_types::Result<Option<(i32, i32)>> {
+    let x = context.evaluate_pin::<i64>("x").await.ok();
+    let y = context.evaluate_pin::<i64>("y").await.ok();
+    match (x, y) {
+        (Some(x), Some(y)) => Ok(Some((i32::try_from(x)?, i32::try_from(y)?))),
+        (None, None) => Ok(None),
+        _ => Err(flow_like_types::anyhow!(
+            "Set both X and Y, or leave both empty to use the current pointer position"
+        )),
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct ComputerMouseTripleClickNode {}
+
+impl ComputerMouseTripleClickNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for ComputerMouseTripleClickNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "computer_mouse_triple_click",
+            "Mouse Triple Click",
+            "Triple-clicks at desktop coordinates, e.g. to select a whole line or paragraph of text",
+            "Automation/Computer/Mouse",
+        );
+        node.set_version(1);
+        node.set_flowscript_name("computer", "mouseTripleClick");
+        node.add_icon("/flow/icons/computer.svg");
+        node.set_scores(mouse_scores(8));
+        node.set_only_offline(true);
+
+        add_session_pins(&mut node);
+        node.add_input_pin("x", "X", "Desktop X coordinate", VariableType::Integer)
+            .set_default_value(Some(json!(0)));
+        node.add_input_pin("y", "Y", "Desktop Y coordinate", VariableType::Integer)
+            .set_default_value(Some(json!(0)));
+        add_button_pin(&mut node, "Mouse button to click");
+        node.add_input_pin(
+            "modifiers",
+            "Modifiers",
+            "Comma-separated ctrl, shift, alt, meta held during the clicks",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        add_session_outputs(&mut node);
+        node
+    }
+
+    #[cfg(feature = "execute")]
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+        let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
+        let x = i32::try_from(context.evaluate_pin::<i64>("x").await?)?;
+        let y = i32::try_from(context.evaluate_pin::<i64>("y").await?)?;
+        let button_name: String = context.evaluate_pin("button").await?;
+        let button = parse_button(&button_name)?;
+        let modifiers: String = context.evaluate_pin("modifiers").await.unwrap_or_default();
+
+        click_at(context, &session, (x, y), button, 3, &modifiers).await?;
+
+        session.apply_delay(context).await?;
+        context.set_pin_value("session_out", json!(session)).await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Computer automation requires the 'execute' feature"
+        ))
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct ComputerMouseDownNode {}
+
+impl ComputerMouseDownNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for ComputerMouseDownNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "computer_mouse_down",
+            "Mouse Down",
+            "Presses and keeps a mouse button down, optionally after moving to X/Y. Release it with Mouse Up; it is released automatically if the session closes or the run is cancelled",
+            "Automation/Computer/Mouse",
+        );
+        node.set_version(1);
+        node.set_flowscript_name("computer", "mouseDown");
+        node.add_icon("/flow/icons/computer.svg");
+        node.set_scores(mouse_scores(9));
+        node.set_only_offline(true);
+
+        add_session_pins(&mut node);
+        add_button_pin(&mut node, "Mouse button to press");
+        add_optional_position_pins(&mut node);
+        add_session_outputs(&mut node);
+        node
+    }
+
+    #[cfg(feature = "execute")]
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        use enigo::{Coordinate, Direction, Mouse};
+
+        context.deactivate_exec_pin("exec_out").await?;
+        let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
+        let button_name: String = context.evaluate_pin("button").await?;
+        let button = parse_button(&button_name)?;
+        let position = optional_position(context).await?;
+
+        let mut input = session.create_enigo(context).await?;
+        let cancellation = context.get_cancellation_token();
+        tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
+            check_cancellation(cancellation.as_ref())?;
+            if let Some((x, y)) = position {
+                input.move_mouse(x, y, Coordinate::Abs).map_err(|e| {
+                    flow_like_types::anyhow!("Failed to move mouse to ({x}, {y}): {e}")
+                })?;
+            }
+            input
+                .button(button, Direction::Press)
+                .map_err(|e| flow_like_types::anyhow!("Failed to press {}: {}", button_name, e))?;
+            input.latch_button(button);
+            Ok(())
+        })
+        .await??;
+
+        session.apply_delay(context).await?;
+        context.set_pin_value("session_out", json!(session)).await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Computer automation requires the 'execute' feature"
+        ))
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct ComputerMouseUpNode {}
+
+impl ComputerMouseUpNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for ComputerMouseUpNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "computer_mouse_up",
+            "Mouse Up",
+            "Releases a mouse button, optionally after moving to X/Y (for example to finish a drag started with Mouse Down)",
+            "Automation/Computer/Mouse",
+        );
+        node.set_version(1);
+        node.set_flowscript_name("computer", "mouseUp");
+        node.add_icon("/flow/icons/computer.svg");
+        node.set_scores(mouse_scores(9));
+        node.set_only_offline(true);
+
+        add_session_pins(&mut node);
+        add_button_pin(&mut node, "Mouse button to release");
+        add_optional_position_pins(&mut node);
+        add_session_outputs(&mut node);
+        node
+    }
+
+    #[cfg(feature = "execute")]
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        use enigo::{Coordinate, Direction, Mouse};
+
+        context.deactivate_exec_pin("exec_out").await?;
+        let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
+        let button_name: String = context.evaluate_pin("button").await?;
+        let button = parse_button(&button_name)?;
+        let position = optional_position(context).await?;
+
+        let mut input = session.create_enigo(context).await?;
+        let cancellation = context.get_cancellation_token();
+        tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
+            check_cancellation(cancellation.as_ref())?;
+            if let Some((x, y)) = position {
+                input.move_mouse(x, y, Coordinate::Abs).map_err(|e| {
+                    flow_like_types::anyhow!("Failed to move mouse to ({x}, {y}): {e}")
+                })?;
+                interruptible_sleep(50, cancellation.as_ref())?;
+            }
+            input
+                .button(button, Direction::Release)
+                .map_err(|e| flow_like_types::anyhow!("Failed to release {}: {}", button_name, e))?;
+            input.unlatch_button(button);
+            Ok(())
+        })
+        .await??;
+
+        session.apply_delay(context).await?;
+        context.set_pin_value("session_out", json!(session)).await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Computer automation requires the 'execute' feature"
+        ))
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct ComputerCursorPositionNode {}
+
+impl ComputerCursorPositionNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for ComputerCursorPositionNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "computer_cursor_position",
+            "Cursor Position",
+            "Reads the mouse pointer position in desktop input coordinates and the display it is on. Not available on Wayland, which does not expose the global pointer",
+            "Automation/Computer/Mouse",
+        );
+        node.set_version(1);
+        node.set_flowscript_name("computer", "cursorPosition");
+        node.add_icon("/flow/icons/computer.svg");
+        node.set_scores(
+            flow_like::flow::node::NodeScores::new()
+                .set_privacy(6)
+                .set_security(7)
+                .set_performance(9)
+                .set_governance(6)
+                .set_reliability(8)
+                .set_cost(10)
+                .build(),
+        );
+        node.set_only_offline(true);
+
+        add_session_pins(&mut node);
+        add_session_outputs(&mut node);
+        node.add_output_pin(
+            "x",
+            "X",
+            "Pointer X in desktop input coordinates",
+            VariableType::Integer,
+        );
+        node.add_output_pin(
+            "y",
+            "Y",
+            "Pointer Y in desktop input coordinates",
+            VariableType::Integer,
+        );
+        node.add_output_pin(
+            "display_index",
+            "Display Index",
+            "Index (as in List Displays) of the display under the pointer, or -1 if none",
+            VariableType::Integer,
+        );
+        node.add_output_pin(
+            "frame",
+            "Frame",
+            "Frame of that display (input rectangle and pixel size), or null",
+            VariableType::Struct,
+        )
+        .set_schema::<crate::types::screen_frame::ScreenFrame>();
+        node
+    }
+
+    #[cfg(feature = "execute")]
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        use enigo::Mouse;
+
+        context.deactivate_exec_pin("exec_out").await?;
+        let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
+
+        let input = session.create_enigo(context).await?;
+        let ((x, y), frame) = tokio::task::spawn_blocking(move || {
+            let position = input
+                .location()
+                .map_err(|e| flow_like_types::anyhow!("Cannot read the pointer position: {}", e))?;
+            let frame = crate::types::screen_frame::display_frames()?
+                .into_iter()
+                .find(|frame| frame.contains_input(position.0, position.1));
+            flow_like_types::Ok((position, frame))
+        })
+        .await??;
+
+        let display_index = frame
+            .as_ref()
+            .and_then(|frame| frame.display_index)
+            .map_or(-1, i64::from);
+        context.set_pin_value("x", json!(x)).await?;
+        context.set_pin_value("y", json!(y)).await?;
+        context
+            .set_pin_value("display_index", json!(display_index))
+            .await?;
+        context.set_pin_value("frame", json!(frame)).await?;
+        context.set_pin_value("session_out", json!(session)).await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Computer automation requires the 'execute' feature"
+        ))
+    }
+}
+
+#[cfg(test)]
+mod drag_tests {
+    use super::drag_path;
+
+    #[test]
+    fn drag_path_is_monotonic_and_ends_on_target() {
+        let path = drag_path((10, 20), (110, -80), 8);
+        assert_eq!(path.len(), 8);
+        assert_eq!(*path.last().unwrap(), (110, -80));
+        assert!(path.windows(2).all(|pair| pair[1].0 >= pair[0].0 && pair[1].1 <= pair[0].1));
+        assert_eq!(drag_path((5, 5), (5, 5), 0), vec![(5, 5)]);
+    }
+}
+
+#[cfg(feature = "execute")]
+pub(crate) fn parse_button(value: &str) -> flow_like_types::Result<enigo::Button> {
     match value.to_lowercase().as_str() {
         "left" => Ok(enigo::Button::Left),
         "right" => Ok(enigo::Button::Right),

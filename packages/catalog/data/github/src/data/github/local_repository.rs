@@ -146,13 +146,15 @@ where
     F: FnOnce(&Path) -> flow_like_types::Result<LocalResult> + Send + 'static,
 {
     let result = async {
-        let path = repository::local_path(context, repository_path).await?;
-        flow_like_types::tokio::task::spawn_blocking(move || {
-            git::ensure_repository(&path)?;
-            operation(&path)
+        let workspace = repository::Workspace::open(context, repository_path).await?;
+        let (workspace, result) = flow_like_types::tokio::task::spawn_blocking(move || {
+            let result =
+                git::ensure_repository(workspace.path()).and_then(|()| operation(workspace.path()));
+            (workspace, result)
         })
         .await
-        .map_err(|error| flow_like_types::anyhow!("Git operation task failed: {error}"))?
+        .map_err(|error| flow_like_types::anyhow!("Git operation task failed: {error}"))?;
+        workspace.finish(result).await
     }
     .await;
     let result = match result {
@@ -1754,7 +1756,7 @@ impl NodeLogic for ListLocalGitTagsNode {
         let mut node = repository::node(
             "data_github_list_local_tags",
             "List Local Tags",
-            "List tags stored in the local repository. Fetch with tags enabled to refresh tags from a remote.",
+            "List tags stored in the repository. Fetch with tags enabled to refresh tags from a remote.",
             "listLocalTags",
         );
         node.add_output_pin(

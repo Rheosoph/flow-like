@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { IApiState } from "../../state/backend-state/api-state";
 import type { IProfile } from "../../types";
 import { checkFleetAnchor, readFleet, registerFleetReader } from "./fleet";
-import { updateFleetState, type LocalDeviceVault } from "./storage";
+import { type LocalDeviceVault, updateFleetState } from "./storage";
 import { digestText } from "./telemetry";
 import type {
 	BrowserController,
@@ -21,7 +21,16 @@ const account = {
 	profileId: "profile",
 };
 const profile = {} as IProfile;
-const receipt = {} as DeviceReceipt;
+const identity = (management = 1) => ({
+	auth_key: { kty: "OKP" as const, crv: "Ed25519" as const, x: "auth" },
+	telemetry_key: { kty: "OKP" as const, crv: "Ed25519" as const, x: "tel" },
+	management_key: Array(32).fill(management),
+});
+const receipt = {
+	device_id: "device",
+	enrollment_id: "enrollment",
+	identity: identity(),
+} as DeviceReceipt;
 const vault = {
 	deviceId: "device",
 	grantId: "owner",
@@ -198,13 +207,14 @@ test("lost fleet registration response retries the exact persisted declaration",
 	};
 	await expect(f.register()).rejects.toThrow("lost response");
 	const pending = (await state()).pending;
-	expect(pending?.revision).toBe(1);
+	if (!pending) throw new Error("Expected a pending reader registration");
+	expect(pending.revision).toBe(1);
 	f.api.put = put;
 	await f.register();
 	expect(f.creations()).toBe(1);
-	expect(f.uploads).toEqual([pending!.reader_jws]);
+	expect(f.uploads).toEqual([pending.reader_jws]);
 	expect((await state()).pending).toBeUndefined();
-	expect((await state()).readerJws).toBe(pending?.reader_jws);
+	expect((await state()).readerJws).toBe(pending.reader_jws);
 });
 
 test("an unavailable registration API never creates a competing declaration", async () => {
@@ -219,8 +229,8 @@ test("an unavailable registration API never creates a competing declaration", as
 
 test("registration cannot lower a trust floor advanced while its GET was pending", async () => {
 	const f = fixture();
-	const older = declared(1),
-		newer = declared(2);
+	const older = declared(1);
+	const newer = declared(2);
 	await set({ revision: 1, readerJws: older, anchors: {} });
 	f.api.get = async () => {
 		await set({ revision: 2, readerJws: newer, anchors: {} });
@@ -229,6 +239,38 @@ test("registration cannot lower a trust floor advanced while its GET was pending
 	await expect(f.register()).rejects.toThrow();
 	expect((await state()).revision).toBe(2);
 	expect((await state()).readerJws).toBe(newer);
+});
+
+test("a pending registration superseded by a verified copy of this controller is adopted", async () => {
+	const f = fixture();
+	const put = f.api.put;
+	f.api.put = async () => {
+		throw new Error("offline");
+	};
+	await expect(f.register()).rejects.toThrow("offline");
+	expect((await state()).pending?.revision).toBe(1);
+	const restored = declared(1, "restored-browser");
+	f.remote({ revision: 1, reader_jws: restored, deleted: false });
+	f.api.put = put;
+	await f.register();
+	expect(await state()).toMatchObject({ revision: 1, readerJws: restored });
+	expect((await state()).pending).toBeUndefined();
+	expect(f.uploads).toEqual([]);
+});
+
+test("a superseding registration that fails verification keeps the pending declaration", async () => {
+	const f = fixture();
+	f.api.put = async () => {
+		throw new Error("offline");
+	};
+	await expect(f.register()).rejects.toThrow("offline");
+	const pending = (await state()).pending;
+	f.controller.verifyFleetReader = () => {
+		throw new Error("Fleet reader identity changed");
+	};
+	f.remote({ revision: 2, reader_jws: declared(2, "forged"), deleted: false });
+	await expect(f.register()).rejects.toThrow("identity changed");
+	expect((await state()).pending).toEqual(pending);
 });
 
 test("same revision reader substitution is rejected even when both signatures are valid", async () => {
@@ -348,6 +390,37 @@ test("fleet reading zeroes opened plaintext and pins each stream before returnin
 	await expect(f.read()).rejects.toThrow("missing");
 });
 
+test("owner audiences without a policy digest still detect an omitted snapshot", async () => {
+	const f = readerFixture();
+	await f.read();
+	const controller = f.controller as unknown as {
+		verifyFleetView: () => { audiences: Record<string, unknown>[] };
+	};
+	const verify = controller.verifyFleetView;
+	controller.verifyFleetView = () => {
+		const verified = verify();
+		return {
+			...verified,
+			audiences: verified.audiences.map(
+				({ policy_digest: _omitted, ...audience }) => audience,
+			),
+		};
+	};
+	f.view.snapshots = [];
+	await expect(f.read()).rejects.toThrow("missing");
+});
+
+test("fleet reading stops when the hub presents different device keys", async () => {
+	const f = readerFixture();
+	await f.read();
+	receipt.identity = identity(2);
+	try {
+		await expect(f.read()).rejects.toThrow("first verified");
+	} finally {
+		receipt.identity = identity();
+	}
+});
+
 test("a replacement grant may start its own stream while old grant rollback floors remain", async () => {
 	await readerFixture("old-grant").read();
 	const replacement = readerFixture("new-grant");
@@ -383,7 +456,7 @@ test("reader renewal allows repeated pending views after registration without re
 	});
 	await registration.register();
 	expect((await state()).revision).toBe(2);
-	f.view.reader_jws = (await state()).readerJws!;
+	f.view.reader_jws = (await state()).readerJws ?? "";
 	f.audience.reader_digest = await digestText(f.view.reader_jws);
 	f.view.snapshots = [];
 	for (let poll = 0; poll < 2; poll++) {

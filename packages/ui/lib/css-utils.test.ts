@@ -2,6 +2,22 @@ import { describe, expect, test } from "bun:test";
 import { safeScopedCss } from "./css-utils";
 
 describe("safeScopedCss", () => {
+	test("inserts scope selectors literally, even when they contain replacement patterns", () => {
+		for (const scope of [
+			'[data-x="a$\'"]',
+			'[data-x="a$`"]',
+			'[data-x="a$&"]',
+		]) {
+			const css = safeScopedCss(
+				':root"]{}nav{display:none}[x="{ color: red; } body { color: blue; }',
+				scope,
+				{ scopeRoot: true },
+			);
+			expect(css.startsWith(`${scope}"]{}nav`)).toBe(true);
+			expect(css).toContain(`${scope} { color: blue; }`);
+		}
+	});
+
 	test("can map :root to an isolated surface", () => {
 		const result = safeScopedCss(
 			":root { --primary: rebeccapurple; } .message { color: red; }",

@@ -1724,6 +1724,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-mail-ingress"
+version = "0.1.0"
+dependencies = [
+ "flow-like-mail-ingress",
+ "flow-like-secrets",
+ "lambda_runtime 1.1.2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "aws-maintenance"
 version = "0.1.0"
 dependencies = [
@@ -8294,10 +8308,12 @@ dependencies = [
  "hyper-util",
  "image",
  "ipnetwork",
+ "jsonschema",
  "jsonwebtoken",
  "k8s-openapi",
  "kube 0.98.0",
  "lettre",
+ "mail-parser",
  "moka",
  "opentelemetry",
  "p256",
@@ -8328,6 +8344,7 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid 1.23.1",
  "webp",
+ "zip 8.5.1",
  "zstd",
 ]
 
@@ -8455,17 +8472,26 @@ dependencies = [
  "flow-like-storage",
  "flow-like-types",
  "futures 0.3.32",
+ "hmac 0.12.1",
+ "htmd",
  "http 1.4.0",
  "image",
  "imageproc",
  "jsonschema",
  "libwayshot-xcap",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "objc2-vision",
  "rdev",
  "rig-core",
  "rustautogui",
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "sha1 0.10.6",
+ "sha2 0.10.9",
  "thirtyfour",
  "tokio",
  "tokio-tungstenite 0.28.0",
@@ -8626,6 +8652,7 @@ dependencies = [
  "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",
+ "futures 0.3.32",
  "schemars 1.2.1",
  "serde",
  "urlencoding",
@@ -9581,6 +9608,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-mail-ingress"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "blake3",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "flow-like-model-protocol"
 version = "0.1.0"
 dependencies = [
@@ -9610,6 +9653,7 @@ dependencies = [
  "google-cloud-auth",
  "http 1.4.0",
  "image",
+ "jsonschema",
  "ndarray 0.17.2",
  "ndk-sys",
  "ort",
@@ -12815,7 +12859,7 @@ dependencies = [
  "log",
  "rustls 0.23.38",
  "rustls-native-certs 0.8.3",
- "rustls-platform-verifier 0.7.1",
+ "rustls-platform-verifier",
  "tokio",
  "tokio-rustls 0.26.4",
  "tower-service",
@@ -18633,6 +18677,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-vision"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfc194758a2d5d7540b1ad283bfb9ca318ec608991892326e95b428230b2689b"
+dependencies = [
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-web-kit"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -22080,7 +22136,7 @@ dependencies = [
  "quinn",
  "rustls 0.23.38",
  "rustls-pki-types",
- "rustls-platform-verifier 0.6.2",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -23071,27 +23127,6 @@ dependencies = [
 
 [[package]]
 name = "rustls-platform-verifier"
-version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d99feebc72bae7ab76ba994bb5e121b8d83d910ca40b36e0921f53becc41784"
-dependencies = [
- "core-foundation 0.10.1",
- "core-foundation-sys",
- "jni 0.21.1",
- "log",
- "once_cell",
- "rustls 0.23.38",
- "rustls-native-certs 0.8.3",
- "rustls-platform-verifier-android 0.1.1",
- "rustls-webpki 0.103.13",
- "security-framework 3.7.0",
- "security-framework-sys",
- "webpki-root-certs",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "rustls-platform-verifier"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1167586491e2b18b8bfbb293e8180ec17c201c4f076d7cb3070ca964e7598f98"
@@ -23103,19 +23138,13 @@ dependencies = [
  "once_cell",
  "rustls 0.23.38",
  "rustls-native-certs 0.8.3",
- "rustls-platform-verifier-android 0.2.0",
+ "rustls-platform-verifier-android",
  "rustls-webpki 0.103.13",
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
  "windows-sys 0.61.2",
 ]
-
-[[package]]
-name = "rustls-platform-verifier-android"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-platform-verifier-android"

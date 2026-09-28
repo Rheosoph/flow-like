@@ -1,4 +1,6 @@
-use crate::data::providers::util::get_pin_string_value;
+use crate::data::providers::util::{
+    WithEgressGuard, ensure_host_fragment, ensure_store_endpoint_allowed, get_pin_string_value,
+};
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -67,7 +69,7 @@ impl AwsProvider {
     ///
     /// Every mode except `access_key` is refused when running server-side —
     /// see [`ExecutionEnvironment::ensure_no_ambient_credentials`](flow_like::flow::execution::ExecutionEnvironment::ensure_no_ambient_credentials).
-    pub fn apply_to_s3_builder(
+    pub async fn apply_to_s3_builder(
         &self,
         context: &ExecutionContext,
         builder: flow_like_storage::object_store::aws::AmazonS3Builder,
@@ -100,14 +102,19 @@ impl AwsProvider {
         };
 
         if !self.region.is_empty() {
+            if self.endpoint_url.is_none() {
+                ensure_host_fragment("AwsProvider", "region", &self.region)?;
+            }
             b = b.with_region(&self.region);
         }
         if let Some(endpoint) = &self.endpoint_url {
+            ensure_store_endpoint_allowed(context.execution_environment(), "AwsProvider", endpoint)
+                .await?;
             b = b
                 .with_endpoint(endpoint)
                 .with_allow_http(endpoint.starts_with("http://"));
         }
-        Ok(b)
+        Ok(b.with_egress_guard(context.execution_environment()))
     }
 
     /// Return `true` when this provider can't fully configure object_store

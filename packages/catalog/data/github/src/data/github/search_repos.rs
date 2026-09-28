@@ -2,13 +2,14 @@ use super::{
     list_repos::GitHubRepository,
     provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider},
 };
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json, reqwest};
+use flow_like_types::{Value, async_trait, json::json};
 
 fn parse_repo(repo: &Value) -> Option<GitHubRepository> {
     Some(GitHubRepository {
@@ -238,9 +239,9 @@ impl NodeLogic for SearchGitHubReposNode {
 
         let full_url = provider.api_url(&url);
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&full_url)
+            .get(&full_url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)

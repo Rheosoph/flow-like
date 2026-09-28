@@ -6,8 +6,13 @@ import { useEffect, useState } from "react";
 import type { IOAuthConsentStore } from "../../db/oauth-db";
 import { useInvoke } from "../../hooks";
 import type { IEvent, IOAuthProvider, IOAuthToken } from "../../lib";
+import {
+	isServerOnlyEventType,
+	serverEventBlocker,
+	serverEventBlockerMessage,
+	sinkSupportsEventExecution,
+} from "../../lib/event-definitions";
 import { formatEventTypeLabel } from "../../lib/event-type-label";
-import { sinkSupportsEventExecution } from "../../lib/event-definitions";
 import { checkOAuthTokens } from "../../lib/oauth/helpers";
 import type { IOAuthTokenStoreWithPending } from "../../lib/oauth/types";
 import type { IStoredOAuthToken } from "../../lib/oauth/types";
@@ -172,6 +177,14 @@ export function EventForm({
 
 	const boardExecutionMode = board.data?.execution_mode;
 	const canExecuteLocally = backend.capabilities().canExecuteLocally;
+	const offline = useInvoke(backend.isOffline, backend, [appId], !!appId);
+	const isServerEvent = isServerOnlyEventType(formData.event_type);
+	const serverBlocker = serverEventBlocker(offline.data, boardExecutionMode);
+	const serverEventError =
+		isServerEvent && serverBlocker
+			? serverEventBlockerMessage(t, serverBlocker, formData.event_type ?? "")
+			: undefined;
+	const serverEventChecking = isServerEvent && offline.isLoading;
 
 	// Lock the event's execution mode when the board constrains it. Boards in
 	// Hybrid mode let the user pick; Local/Remote boards propagate to events.
@@ -184,7 +197,7 @@ export function EventForm({
 					execution_mode: IEventExecutionMode.Local,
 				}));
 			}
-		} else if (boardExecutionMode === IExecutionMode.Remote) {
+		} else if (boardExecutionMode === IExecutionMode.Remote || isServerEvent) {
 			if (formData.execution_mode !== IEventExecutionMode.Remote) {
 				setFormData((prev) => ({
 					...prev,
@@ -192,7 +205,7 @@ export function EventForm({
 				}));
 			}
 		}
-	}, [boardExecutionMode, formData.execution_mode]);
+	}, [boardExecutionMode, formData.execution_mode, isServerEvent]);
 
 	const executionModeLocked =
 		boardExecutionMode === IExecutionMode.Local ||
@@ -228,6 +241,7 @@ export function EventForm({
 
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
+		if (serverEventError || serverEventChecking) return;
 
 		// Validate route path for UI events
 		if (shouldRequireRoutePath) {
@@ -607,7 +621,7 @@ export function EventForm({
 					{/* Execution mode — where the event runs. Locked to match the
 					    board when the board is Local/Remote; user-selectable when
 					    the board is Hybrid. */}
-					{formData.board_id && (
+					{formData.board_id && !isServerEvent && (
 						<div className="space-y-2">
 							<Label htmlFor="execution_mode">
 								{t("executionMode", "Execution Mode")}
@@ -654,6 +668,25 @@ export function EventForm({
 				</>
 			)}
 
+			{isServerEvent && (
+				<p className="text-sm text-muted-foreground">
+					{formData.event_type === "teams"
+						? t(
+								"teamsBotsRunOnTheServerSaveTheEventThenConnectTheBot",
+								"Teams bots run on the server. Save the event, then connect the bot in its trigger settings.",
+							)
+						: t(
+								"inboundEmailRunsOnTheServerSaveTheEventToReceiveItsAddress",
+								"Inbound email runs on the server. Save the event to receive its email address.",
+							)}
+				</p>
+			)}
+			{serverEventError && (
+				<p role="alert" className="text-sm text-destructive">
+					{serverEventError}
+				</p>
+			)}
+
 			{/* Node and Board Selection */}
 			{!isPageEvent && board.data && isRecord(board.data.nodes) && (
 				<div className="space-y-4">
@@ -686,7 +719,13 @@ export function EventForm({
 								{Object.values(board.data.nodes)
 									.filter((node) => node.start)
 									.map((node) => (
-										<SelectItem key={node.id} value={node.id}>
+										<SelectItem
+											key={node.id}
+											value={node.id}
+											disabled={
+												node.name === "events_inbound_email" && !!serverBlocker
+											}
+										>
 											{node?.friendly_name || node?.name}
 										</SelectItem>
 									))}
@@ -707,6 +746,10 @@ export function EventForm({
 
 							const visibleTypes = nodeEventConfig.eventTypes.filter((type) => {
 								if (!nodeEventConfig.withSink?.includes(type)) return true;
+								// Server-only types are listed in any mode; choosing one
+								// switches the event to Remote.
+								if (isServerOnlyEventType(type))
+									return !hub || hub.supported_sinks?.[type] === true;
 								return sinkSupportsEventExecution(
 									nodeEventConfig.sinkAvailability?.[type],
 									formData.execution_mode,
@@ -809,6 +852,8 @@ export function EventForm({
 					className="h-10 sm:h-9"
 					disabled={
 						isSubmitting ||
+						!!serverEventError ||
+						serverEventChecking ||
 						!formData.name ||
 						(isPageEvent
 							? !formData.default_page_id

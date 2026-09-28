@@ -399,6 +399,14 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/ai/generative/provider/ai-generative-build-atlascloud"
               },
               {
+                "label": "Claude Code Model",
+                "slug": "nodes/ai/generative/provider/ai-generative-build-claude-code"
+              },
+              {
+                "label": "Codex (ChatGPT) Model",
+                "slug": "nodes/ai/generative/provider/ai-generative-build-codex"
+              },
+              {
                 "label": "Cohere Model",
                 "slug": "nodes/ai/generative/provider/ai-generative-build-cohere"
               },
@@ -415,6 +423,10 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/ai/generative/provider/ai-generative-build-gemini"
               },
               {
+                "label": "GitHub Copilot Model",
+                "slug": "nodes/ai/generative/provider/ai-generative-build-github-copilot"
+              },
+              {
                 "label": "Groq Model",
                 "slug": "nodes/ai/generative/provider/ai-generative-build-groq"
               },
@@ -429,6 +441,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "LM Studio Model",
                 "slug": "nodes/ai/generative/provider/ai-generative-build-lmstudio"
+              },
+              {
+                "label": "Microsoft 365 Copilot Model",
+                "slug": "nodes/ai/generative/provider/ai-generative-build-microsoft-copilot"
               },
               {
                 "label": "MiniMax Model",
@@ -1605,12 +1621,24 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/automation/browser/auth/browser-load-cookies"
               },
               {
+                "label": "Load Storage State",
+                "slug": "nodes/automation/browser/auth/browser-load-storage-state"
+              },
+              {
                 "label": "Save Cookies",
                 "slug": "nodes/automation/browser/auth/browser-save-cookies"
               },
               {
+                "label": "Save Storage State",
+                "slug": "nodes/automation/browser/auth/browser-save-storage-state"
+              },
+              {
                 "label": "Set Basic Auth",
                 "slug": "nodes/automation/browser/auth/browser-set-basic-auth"
+              },
+              {
+                "label": "TOTP Code",
+                "slug": "nodes/automation/browser/auth/totp-code"
               }
             ]
           },
@@ -1623,12 +1651,42 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/automation/browser/capture"
               },
               {
+                "label": "Save Page as PDF",
+                "slug": "nodes/automation/browser/capture/browser-print-pdf"
+              },
+              {
                 "label": "Screenshot Element",
                 "slug": "nodes/automation/browser/capture/browser-screenshot-element"
               },
               {
                 "label": "Take Screenshot",
                 "slug": "nodes/automation/browser/capture/browser-screenshot"
+              },
+              {
+                "label": "Zoom Screenshot",
+                "slug": "nodes/automation/browser/capture/browser-zoom-screenshot"
+              }
+            ]
+          },
+          {
+            "label": "Emulation",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/automation/browser/emulation"
+              },
+              {
+                "label": "Block URLs",
+                "slug": "nodes/automation/browser/emulation/browser-block-urls"
+              },
+              {
+                "label": "Set Emulation",
+                "slug": "nodes/automation/browser/emulation/browser-set-emulation"
+              },
+              {
+                "label": "Set Extra Headers",
+                "slug": "nodes/automation/browser/emulation/browser-set-extra-headers"
               }
             ]
           },
@@ -1641,6 +1699,10 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/automation/browser/extract"
               },
               {
+                "label": "Count Elements",
+                "slug": "nodes/automation/browser/extract/browser-count-elements"
+              },
+              {
                 "label": "Execute JavaScript",
                 "slug": "nodes/automation/browser/extract/browser-execute-js"
               },
@@ -1649,12 +1711,24 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/automation/browser/extract/browser-get-attribute"
               },
               {
+                "label": "Get Element State",
+                "slug": "nodes/automation/browser/extract/browser-get-element-state"
+              },
+              {
                 "label": "Get HTML",
                 "slug": "nodes/automation/browser/extract/browser-get-html"
               },
               {
+                "label": "Get Page Text",
+                "slug": "nodes/automation/browser/extract/browser-get-page-text"
+              },
+              {
                 "label": "Get Text",
                 "slug": "nodes/automation/browser/extract/browser-get-text"
+              },
+              {
+                "label": "List Elements",
+                "slug": "nodes/automation/browser/extract/browser-list-elements"
               }
             ]
           },
@@ -1697,12 +1771,20 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/automation/browser/input"
               },
               {
+                "label": "Fill Form",
+                "slug": "nodes/automation/browser/input/browser-fill-form"
+              },
+              {
                 "label": "Press Key",
                 "slug": "nodes/automation/browser/input/browser-press-key"
               },
               {
                 "label": "Select Option",
                 "slug": "nodes/automation/browser/input/browser-select-option"
+              },
+              {
+                "label": "Type Secret",
+                "slug": "nodes/automation/browser/input/browser-type-secret"
               },
               {
                 "label": "Type Text",
@@ -1719,6 +1801,10 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/automation/browser/interact"
               },
               {
+                "label": "Click At Point",
+                "slug": "nodes/automation/browser/interact/browser-click-at-point"
+              },
+              {
                 "label": "Click Element",
                 "slug": "nodes/automation/browser/interact/browser-click"
               },
@@ -1733,6 +1819,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Scroll Into View",
                 "slug": "nodes/automation/browser/interact/browser-scroll-into-view"
+              },
+              {
+                "label": "Scroll Page",
+                "slug": "nodes/automation/browser/interact/browser-scroll-page"
               }
             ]
           },
@@ -1759,6 +1849,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Reload",
                 "slug": "nodes/automation/browser/navigation/browser-reload"
+              },
+              {
+                "label": "Set Navigation Policy",
+                "slug": "nodes/automation/browser/navigation/browser-set-navigation-policy"
               }
             ]
           },
@@ -1799,6 +1893,14 @@ export const generatedNodeSidebar = [
               {
                 "label": "Overview",
                 "slug": "nodes/automation/browser/snapshot"
+              },
+              {
+                "label": "Browser Snapshot",
+                "slug": "nodes/automation/browser/snapshot/browser-snapshot"
+              },
+              {
+                "label": "Find Elements",
+                "slug": "nodes/automation/browser/snapshot/browser-find-elements"
               },
               {
                 "label": "Get Accessibility Snapshot",
@@ -1859,6 +1961,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Wait Delay",
                 "slug": "nodes/automation/browser/wait/browser-wait-delay"
+              },
+              {
+                "label": "Wait For Condition",
+                "slug": "nodes/automation/browser/wait/browser-wait-for-condition"
               },
               {
                 "label": "Wait For Selector",
@@ -1971,6 +2077,20 @@ export const generatedNodeSidebar = [
             ]
           },
           {
+            "label": "Agent",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/automation/computer/agent"
+              },
+              {
+                "label": "Computer Use Agent",
+                "slug": "nodes/automation/computer/agent/computer-use-agent"
+              }
+            ]
+          },
+          {
             "label": "Capture",
             "collapsed": true,
             "items": [
@@ -1979,8 +2099,16 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/automation/computer/capture"
               },
               {
+                "label": "Capture Screen State",
+                "slug": "nodes/automation/computer/capture/computer-capture-state"
+              },
+              {
                 "label": "Screenshot",
                 "slug": "nodes/automation/computer/capture/computer-screenshot"
+              },
+              {
+                "label": "Zoom Screen Region",
+                "slug": "nodes/automation/computer/capture/computer-zoom"
               }
             ]
           },
@@ -2041,8 +2169,20 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/automation/computer/keyboard"
               },
               {
+                "label": "Hold Key",
+                "slug": "nodes/automation/computer/keyboard/computer-hold-key"
+              },
+              {
+                "label": "Key Chord",
+                "slug": "nodes/automation/computer/keyboard/computer-key-chord"
+              },
+              {
                 "label": "Key Press",
                 "slug": "nodes/automation/computer/keyboard/computer-key-press"
+              },
+              {
+                "label": "Type Secret",
+                "slug": "nodes/automation/computer/keyboard/computer-type-secret"
               },
               {
                 "label": "Type Text",
@@ -2059,12 +2199,24 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/automation/computer/mouse"
               },
               {
+                "label": "Click Screen Element",
+                "slug": "nodes/automation/computer/mouse/computer-click-element"
+              },
+              {
+                "label": "Cursor Position",
+                "slug": "nodes/automation/computer/mouse/computer-cursor-position"
+              },
+              {
                 "label": "Mouse Click",
                 "slug": "nodes/automation/computer/mouse/computer-mouse-click"
               },
               {
                 "label": "Mouse Double Click",
                 "slug": "nodes/automation/computer/mouse/computer-mouse-double-click"
+              },
+              {
+                "label": "Mouse Down",
+                "slug": "nodes/automation/computer/mouse/computer-mouse-down"
               },
               {
                 "label": "Mouse Drag",
@@ -2075,12 +2227,42 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/automation/computer/mouse/computer-mouse-move"
               },
               {
+                "label": "Mouse Triple Click",
+                "slug": "nodes/automation/computer/mouse/computer-mouse-triple-click"
+              },
+              {
+                "label": "Mouse Up",
+                "slug": "nodes/automation/computer/mouse/computer-mouse-up"
+              },
+              {
                 "label": "Natural Mouse Move",
                 "slug": "nodes/automation/computer/mouse/computer-natural-mouse-move"
               },
               {
                 "label": "Scroll",
                 "slug": "nodes/automation/computer/mouse/computer-scroll"
+              }
+            ]
+          },
+          {
+            "label": "Vision",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/automation/computer/vision"
+              },
+              {
+                "label": "Click Text",
+                "slug": "nodes/automation/computer/vision/computer-click-text"
+              },
+              {
+                "label": "Find Text on Screen",
+                "slug": "nodes/automation/computer/vision/computer-find-text"
+              },
+              {
+                "label": "Read Text (OCR)",
+                "slug": "nodes/automation/computer/vision/computer-ocr"
               }
             ]
           },
@@ -2095,6 +2277,14 @@ export const generatedNodeSidebar = [
               {
                 "label": "Wait",
                 "slug": "nodes/automation/computer/wait/computer-wait"
+              },
+              {
+                "label": "Wait For Screen Change",
+                "slug": "nodes/automation/computer/wait/computer-wait-screen-change"
+              },
+              {
+                "label": "Wait For Stable Screen",
+                "slug": "nodes/automation/computer/wait/computer-wait-screen-stable"
               }
             ]
           },
@@ -5895,6 +6085,14 @@ export const generatedNodeSidebar = [
             "slug": "nodes/email/smtp/email-smtp-send"
           }
         ]
+      },
+      {
+        "label": "Reply Platform Email",
+        "slug": "nodes/email/email-platform-reply"
+      },
+      {
+        "label": "Send Platform Email",
+        "slug": "nodes/email/email-platform-send"
       }
     ]
   },
@@ -5955,6 +6153,28 @@ export const generatedNodeSidebar = [
               {
                 "label": "Single Choice",
                 "slug": "nodes/events/chat/interaction/interaction-single-choice"
+              }
+            ]
+          },
+          {
+            "label": "Teams",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/events/chat/teams"
+              },
+              {
+                "label": "Send Teams Card",
+                "slug": "nodes/events/chat/teams/events-teams-send-card"
+              },
+              {
+                "label": "Send Teams Message",
+                "slug": "nodes/events/chat/teams/events-teams-send-message"
+              },
+              {
+                "label": "Update Teams Message",
+                "slug": "nodes/events/chat/teams/events-teams-update-message"
               }
             ]
           },
@@ -6081,6 +6301,10 @@ export const generatedNodeSidebar = [
       {
         "label": "Generic Event",
         "slug": "nodes/events/events-generic"
+      },
+      {
+        "label": "Inbound Email Event",
+        "slug": "nodes/events/events-inbound-email"
       },
       {
         "label": "Location Event",

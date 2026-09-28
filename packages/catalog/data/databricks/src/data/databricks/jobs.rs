@@ -1,11 +1,12 @@
 use super::provider::{DATABRICKS_PROVIDER_ID, DatabricksProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -235,9 +236,9 @@ impl NodeLogic for ListDatabricksJobsNode {
             url.push_str(&format!("&name={}", urlencoding::encode(&name)));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .send()
@@ -417,9 +418,9 @@ impl NodeLogic for RunDatabricksJobNode {
             body["job_parameters"] = job_parameters;
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -583,9 +584,9 @@ impl NodeLogic for GetDatabricksJobRunNode {
 
         let url = provider.api_url_v21("/jobs/runs/get");
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .query(&[("run_id", run_id.to_string())])
             .send()
@@ -747,9 +748,9 @@ impl NodeLogic for CancelDatabricksJobRunNode {
 
         let url = provider.api_url_v21("/jobs/runs/cancel");
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&json!({ "run_id": run_id }))

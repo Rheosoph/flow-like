@@ -2,6 +2,7 @@ use flow_like_types::Value;
 use std::collections::HashSet;
 
 pub const MAX_HOME_LAYOUT_BYTES: usize = 128 * 1024;
+pub const MAX_HOME_WIDGET_CSS_BYTES: usize = 8 * 1024;
 
 /// Validate saved home configuration without depending on the current widget catalog.
 /// Unknown widget types survive upgrades and can render an unavailable state.
@@ -48,6 +49,7 @@ pub fn validate_home_layout(layout: &Value) -> Result<(), String> {
         required_text(appearance.get("variant"), 80)?;
         required_text(appearance.get("accent"), 128)?;
         optional_text(appearance.get("className"), 1024)?;
+        optional_text(appearance.get("css"), MAX_HOME_WIDGET_CSS_BYTES)?;
         if !widget.get("config").is_some_and(Value::is_object) {
             return Err("Widget config must be an object".into());
         }
@@ -123,6 +125,17 @@ mod tests {
         assert!(validate_home_layout(&styled).is_ok());
         for class_name in [json!(42), json!("x".repeat(1025))] {
             styled["widgets"][0]["appearance"]["className"] = class_name;
+            assert!(validate_home_layout(&styled).is_err());
+        }
+    }
+
+    #[test]
+    fn widget_css_is_optional_text_within_its_limit() {
+        let mut styled = layout();
+        styled["widgets"][0]["appearance"]["css"] = json!("x".repeat(MAX_HOME_WIDGET_CSS_BYTES));
+        assert!(validate_home_layout(&styled).is_ok());
+        for css in [json!(42), json!("x".repeat(MAX_HOME_WIDGET_CSS_BYTES + 1))] {
+            styled["widgets"][0]["appearance"]["css"] = css;
             assert!(validate_home_layout(&styled).is_err());
         }
     }

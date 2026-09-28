@@ -94,6 +94,16 @@ enum Phase {
     RolledBack,
     Failed,
 }
+impl Phase {
+    fn terminal(self) -> bool {
+        matches!(self, Phase::Completed | Phase::RolledBack | Phase::Failed)
+    }
+}
+
+const ACTIVATION_WINDOW: i64 = 600;
+const WATCHDOG_RUNTIME: i64 = 120;
+/// A watchdog must start within the activation window and lives at most its runtime.
+const WATCHDOG_HORIZON: i64 = ACTIVATION_WINDOW + WATCHDOG_RUNTIME + 60;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Journal {
@@ -298,6 +308,100 @@ fn copy_executable(source: &Path, destination: &Path, expected: &StandaloneArtif
     Ok(())
 }
 
+fn remove_leftover(path: &Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) => tracing::info!(path = %path.display(), "Removed leftover update file"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            tracing::warn!(path = %path.display(), "Cannot remove leftover update file: {error}")
+        }
+    }
+}
+
+fn rollback_temporary(executable: &Path, operation_id: &str) -> Result<PathBuf> {
+    Ok(executable
+        .parent()
+        .context("Executable has no parent")?
+        .join(format!(".flow-like-rollback-{operation_id}")))
+}
+
+fn discard_candidate(journal: &Journal) {
+    if journal.candidate != journal.executable {
+        remove_leftover(&journal.candidate);
+    }
+}
+
+fn is_download_leftover(name: &str) -> bool {
+    (name.starts_with(".standalone-release-") || name.starts_with(".update-"))
+        && name.ends_with(".tmp")
+}
+
+/// Remove update binaries that no journal can still use. The active operation keeps its backup.
+pub fn collect_garbage(state_dir: &Path) -> Result<()> {
+    let _lock = supervisor::lock_file(&state_dir.join("release.lock"))?;
+    collect_garbage_locked(state_dir)
+}
+
+fn collect_garbage_locked(state_dir: &Path) -> Result<()> {
+    let entries = match std::fs::read_dir(state_dir.join("updates")) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("List update operations for cleanup"),
+    };
+    let active = active(state_dir)?;
+    let executable = std::env::current_exe()?;
+    for entry in entries {
+        let entry = entry?;
+        let Some(operation) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Ok(directory) = operation_directory(state_dir, &operation) else {
+            continue;
+        };
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let is_active = active.as_deref() == Some(operation.as_str());
+        let (installed, candidate) = if journal_path(state_dir, &operation)?.try_exists()? {
+            let journal = match load(state_dir, &operation) {
+                Ok(journal) => journal,
+                Err(error) => {
+                    tracing::warn!(operation_id = %operation, "Skipping cleanup of an unreadable update journal: {error:#}");
+                    continue;
+                }
+            };
+            if !journal.phase.terminal() {
+                continue;
+            }
+            (journal.executable, journal.candidate)
+        } else if is_active {
+            continue;
+        } else {
+            let candidate = executable
+                .parent()
+                .context("Executable has no parent")?
+                .join(format!(".flow-like-update-{operation}"));
+            (executable.clone(), candidate)
+        };
+        let mut leftovers = vec![candidate, rollback_temporary(&installed, &operation)?];
+        if !is_active {
+            leftovers.push(directory.join("previous-binary"));
+        }
+        for file in std::fs::read_dir(&directory)? {
+            let file = file?;
+            if file.file_type()?.is_file()
+                && file.file_name().to_str().is_some_and(is_download_leftover)
+            {
+                leftovers.push(file.path());
+            }
+        }
+        for path in leftovers.iter().filter(|path| **path != installed) {
+            remove_leftover(path);
+        }
+    }
+    Ok(())
+}
+
 /// Download and verify while workloads continue. Activation is a separate drained-host step.
 pub async fn stage(
     state_dir: &Path,
@@ -327,11 +431,14 @@ pub async fn stage(
             return Ok(journal.ticket);
         }
         ensure!(
-            matches!(
-                journal.phase,
-                Phase::Completed | Phase::RolledBack | Phase::Failed
-            ),
+            journal.phase.terminal(),
             "An update is already staged or awaiting confirmation"
+        );
+    }
+    if let Err(error) = collect_garbage_locked(&state_dir) {
+        tracing::warn!(
+            operation_id,
+            "Leftover update files were not removed: {error:#}"
         );
     }
     let trust = ReleaseTrust::load(trust_file)?;
@@ -351,6 +458,7 @@ pub async fn stage(
     let executable = std::env::current_exe()?;
     private_executable(&executable)?;
     service::verify_user_service(&executable, &state_dir).await?;
+    service::verify_update_watchdog().await?;
     verify_artifact_file(&executable, artifact(&old)?)?;
     verify_running_artifact(artifact(&old)?)?;
     let directory = supervisor::prepare_state_dir(&operation_directory(&state_dir, operation_id)?)?;
@@ -430,17 +538,14 @@ async fn command(program: &str, args: &[std::ffi::OsString]) -> Result<()> {
     );
     Ok(())
 }
-async fn restart() -> Result<()> {
-    command(
-        "systemctl",
-        &[
-            "--user".into(),
-            "--no-ask-password".into(),
-            "restart".into(),
-            service::SYSTEMD_UNIT_NAME.into(),
-        ],
-    )
-    .await
+/// The agent is the unit's main process, so it only queues its own restart and exits.
+async fn restart_service(wait: bool) -> Result<()> {
+    let mut args: Vec<std::ffi::OsString> = vec!["--user".into(), "--no-ask-password".into()];
+    if !wait {
+        args.push("--no-block".into());
+    }
+    args.extend(["restart".into(), service::SYSTEMD_UNIT_NAME.into()]);
+    command("systemctl", &args).await
 }
 
 /// Arm an independent watchdog before atomically replacing a drained agent's executable.
@@ -453,10 +558,37 @@ pub async fn activate(state_dir: &Path, operation_id: &str) -> Result<()> {
     let _lock = supervisor::lock_file(&state_dir.join("release.lock"))?;
     let mut journal = load(&state_dir, operation_id)?;
     ensure!(
-        journal.phase == Phase::Staged && unix_time()?.saturating_sub(journal.created_at) <= 600,
-        "Update is not staged or its activation window expired"
+        journal.phase == Phase::Staged,
+        "Update {operation_id} cannot activate from phase {:?}",
+        journal.phase
     );
-    service::verify_user_service(&journal.executable, &state_dir).await?;
+    if let Err(error) = prepare_swap(&state_dir, &mut journal).await {
+        // Nothing was swapped, so no watchdog may act on this update any more.
+        journal.phase = Phase::Failed;
+        save(&state_dir, &journal).with_context(|| {
+            format!("Record failed activation of update {operation_id} after: {error:#}")
+        })?;
+        discard_candidate(&journal);
+        return Err(error);
+    }
+    std::fs::rename(&journal.candidate, &journal.executable)?;
+    File::open(
+        journal
+            .executable
+            .parent()
+            .context("Executable has no parent")?,
+    )?
+    .sync_all()?;
+    restart_service(false).await
+}
+
+async fn prepare_swap(state_dir: &Path, journal: &mut Journal) -> Result<()> {
+    let operation_id = journal.ticket.operation_id.clone();
+    ensure!(
+        unix_time()?.saturating_sub(journal.created_at) <= ACTIVATION_WINDOW,
+        "Update {operation_id} activation window of {ACTIVATION_WINDOW}s expired"
+    );
+    service::verify_user_service(&journal.executable, state_dir).await?;
     private_executable(&journal.executable)?;
     let release = VerifiedRelease::verify(journal.new_release_jws.clone(), &journal.trust)?;
     verify_artifact_file(&journal.candidate, artifact(release.manifest())?)?;
@@ -465,7 +597,7 @@ pub async fn activate(state_dir: &Path, operation_id: &str) -> Result<()> {
         artifact(&historical(&journal.old_release_jws, &journal.trust)?)?,
     )?;
     journal.phase = Phase::Armed;
-    save(&state_dir, &journal)?;
+    save(state_dir, journal)?;
     let args = vec![
         "--user".into(),
         "--collect".into(),
@@ -473,7 +605,7 @@ pub async fn activate(state_dir: &Path, operation_id: &str) -> Result<()> {
         "--expand-environment=no".into(),
         format!("--unit=flow-like-standalone-update-{operation_id}").into(),
         "--property=Type=exec".into(),
-        "--property=RuntimeMaxSec=120s".into(),
+        format!("--property=RuntimeMaxSec={WATCHDOG_RUNTIME}s").into(),
         "--property=KillMode=control-group".into(),
         "--property=UMask=0077".into(),
         journal.backup.as_os_str().to_owned(),
@@ -481,14 +613,12 @@ pub async fn activate(state_dir: &Path, operation_id: &str) -> Result<()> {
         state_dir.as_os_str().to_owned(),
         "update-guard".into(),
         "--operation-id".into(),
-        operation_id.into(),
+        operation_id.as_str().into(),
     ];
-    if let Err(error) = command("systemd-run", &args).await {
-        journal.phase = Phase::Failed;
-        save(&state_dir, &journal)?;
-        return Err(error.context("Starting the update watchdog requires systemd 254 or newer"));
-    }
-    let ready_path = operation_directory(&state_dir, operation_id)?.join("watchdog-ready.json");
+    command("systemd-run", &args)
+        .await
+        .context("Start the update watchdog as a transient user service")?;
+    let ready_path = operation_directory(state_dir, &operation_id)?.join("watchdog-ready.json");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         if ready_path.try_exists()? {
@@ -515,16 +645,7 @@ pub async fn activate(state_dir: &Path, operation_id: &str) -> Result<()> {
     )?;
     verify_artifact_file(&journal.candidate, artifact(release.manifest())?)?;
     journal.phase = Phase::Swapped;
-    save(&state_dir, &journal)?;
-    std::fs::rename(&journal.candidate, &journal.executable)?;
-    File::open(
-        journal
-            .executable
-            .parent()
-            .context("Executable has no parent")?,
-    )?
-    .sync_all()?;
-    restart().await
+    save(state_dir, journal)
 }
 
 fn readiness_matches(journal: &Journal, ready: &Readiness) -> bool {
@@ -583,7 +704,8 @@ pub async fn guard(state_dir: &Path, operation_id: &str) -> Result<()> {
     );
     let mut journal = load(state_dir, operation_id)?;
     ensure!(
-        journal.phase == Phase::Armed && unix_time()?.saturating_sub(journal.created_at) <= 600,
+        journal.phase == Phase::Armed
+            && unix_time()?.saturating_sub(journal.created_at) <= ACTIVATION_WINDOW,
         "Update watchdog was not freshly armed"
     );
     ensure!(
@@ -600,10 +722,7 @@ pub async fn guard(state_dir: &Path, operation_id: &str) -> Result<()> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
         journal = load(state_dir, operation_id)?;
-        if matches!(
-            journal.phase,
-            Phase::Completed | Phase::RolledBack | Phase::Failed
-        ) {
+        if journal.phase.terminal() {
             return Ok(());
         }
         let ready_path = operation_directory(state_dir, operation_id)?.join("agent-ready.json");
@@ -621,22 +740,17 @@ pub async fn guard(state_dir: &Path, operation_id: &str) -> Result<()> {
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 continue;
             }
-            let release = historical(&journal.new_release_jws, &journal.trust)?;
-            verify_artifact_file(&journal.executable, artifact(&release)?)?;
-            atomic(
-                &state_dir.join("active-release.jws"),
-                journal.new_release_jws.as_bytes(),
-            )?;
-            journal.trust.minimum_sequence =
-                journal.trust.minimum_sequence.max(journal.ticket.sequence);
-            atomic(
-                &state_dir.join("release-trust.json"),
-                &serde_json::to_vec_pretty(&journal.trust)?,
-            )?;
-            journal.phase = Phase::Completed;
-            save(state_dir, &journal)?;
-            // The old image remains available until a later operator cleanup, including this running guard.
-            return Ok(());
+            match commit(state_dir, &mut journal) {
+                // The old image stays as this operation's backup until a later update's cleanup.
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    tracing::warn!(
+                        operation_id,
+                        "Confirmed update could not be committed; restoring the previous release: {error:#}"
+                    );
+                    break;
+                }
+            }
         }
         if tokio::time::Instant::now() >= deadline {
             break;
@@ -644,13 +758,67 @@ pub async fn guard(state_dir: &Path, operation_id: &str) -> Result<()> {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     rollback(state_dir, &mut journal)?;
-    restart().await
+    restart_service(true).await
+}
+
+fn promoted_trust(journal: &Journal) -> ReleaseTrust {
+    let mut trust = journal.trust.clone();
+    trust.minimum_sequence = trust.minimum_sequence.max(journal.ticket.sequence);
+    trust
+}
+
+fn commit(state_dir: &Path, journal: &mut Journal) -> Result<()> {
+    let release = historical(&journal.new_release_jws, &journal.trust)?;
+    verify_artifact_file(&journal.executable, artifact(&release)?)?;
+    atomic(
+        &state_dir.join("active-release.jws"),
+        journal.new_release_jws.as_bytes(),
+    )?;
+    atomic(
+        &state_dir.join("release-trust.json"),
+        &serde_json::to_vec_pretty(&promoted_trust(journal))?,
+    )?;
+    journal.phase = Phase::Completed;
+    if let Err(error) = save(state_dir, journal) {
+        journal.phase = Phase::Swapped;
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Undo a partial commit so the release records always describe the binary on disk.
+fn restore_release_records(state_dir: &Path, journal: &Journal) -> Result<()> {
+    let records = [
+        (
+            "active-release.jws",
+            journal.new_release_jws.as_bytes().to_vec(),
+            journal.old_release_jws.as_bytes().to_vec(),
+        ),
+        (
+            "release-trust.json",
+            serde_json::to_vec_pretty(&promoted_trust(journal))?,
+            serde_json::to_vec_pretty(&journal.trust)?,
+        ),
+    ];
+    for (name, promoted, previous) in records {
+        let path = state_dir.join(name);
+        if promoted != previous
+            && path.try_exists()?
+            && vault::read_private(&path)?.as_slice() == promoted.as_slice()
+        {
+            atomic(&path, &previous)?;
+        }
+    }
+    Ok(())
 }
 
 fn rollback(state_dir: &Path, journal: &mut Journal) -> Result<()> {
     let old = historical(&journal.old_release_jws, &journal.trust)?;
-    verify_artifact_file(&journal.backup, artifact(&old)?)?;
-    if journal.phase == Phase::Swapped {
+    let expected = artifact(&old)?;
+    // A rollback interrupted after its rename already left the old image installed.
+    if journal.phase == Phase::Swapped
+        && verify_artifact_file(&journal.executable, expected).is_err()
+    {
         let present = file_identity(&journal.executable)?;
         ensure!(
             present.is_none()
@@ -658,16 +826,24 @@ fn rollback(state_dir: &Path, journal: &mut Journal) -> Result<()> {
                 || present == journal.candidate_file,
             "Installed binary was replaced outside this update; rollback needs operator review"
         );
-        let temporary = journal
-            .executable
-            .parent()
-            .context("Executable has no parent")?
-            .join(format!(
-                ".flow-like-rollback-{}",
-                journal.ticket.operation_id
-            ));
-        copy_executable(&journal.backup, &temporary, artifact(&old)?)?;
-        std::fs::rename(temporary, &journal.executable)?;
+        let temporary = rollback_temporary(&journal.executable, &journal.ticket.operation_id)?;
+        match std::fs::remove_file(&temporary) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "Remove the interrupted rollback copy {}",
+                        temporary.display()
+                    )
+                });
+            }
+        }
+        if let Err(error) = copy_executable(&journal.backup, &temporary, expected) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
+        std::fs::rename(&temporary, &journal.executable)?;
         File::open(
             journal
                 .executable
@@ -676,8 +852,42 @@ fn rollback(state_dir: &Path, journal: &mut Journal) -> Result<()> {
         )?
         .sync_all()?;
     }
+    restore_release_records(state_dir, journal)?;
     journal.phase = Phase::RolledBack;
-    save(state_dir, journal)
+    save(state_dir, journal)?;
+    discard_candidate(journal);
+    Ok(())
+}
+
+/// Fail an update that no activation or watchdog can still advance. The installed binary stays.
+pub fn abandon(state_dir: &Path, operation_id: &str) -> Result<Option<UpdateOutcome>> {
+    if !journal_path(state_dir, operation_id)?.try_exists()? {
+        return Ok(None);
+    }
+    let _lock = supervisor::lock_file(&state_dir.join("release.lock"))?;
+    let mut journal = load(state_dir, operation_id)?;
+    let abandonable = match journal.phase {
+        Phase::Staged => true,
+        Phase::Armed => watchdog_gone(&journal)?,
+        _ => false,
+    };
+    if !abandonable {
+        return Ok(None);
+    }
+    journal.phase = Phase::Failed;
+    save(state_dir, &journal)?;
+    discard_candidate(&journal);
+    Ok(Some(operation_outcome(state_dir, operation_id)?))
+}
+
+fn watchdog_gone(journal: &Journal) -> Result<bool> {
+    Ok(unix_time()?.saturating_sub(journal.created_at) > WATCHDOG_HORIZON)
+}
+
+/// A swapped update whose watchdog is gone stays unconfirmed until boot recovery restores it.
+pub fn orphaned_swap(state_dir: &Path, operation_id: &str) -> Result<bool> {
+    let journal = load(state_dir, operation_id)?;
+    Ok(journal.phase == Phase::Swapped && watchdog_gone(&journal)?)
 }
 
 /// A transient watchdog does not survive an OS reboot. Recover its journal before opening the DB.
@@ -692,6 +902,7 @@ pub fn recover_after_boot(state_dir: &Path, boot_id: &str) -> Result<bool> {
     if journal.phase == Phase::Staged {
         journal.phase = Phase::Failed;
         save(state_dir, &journal)?;
+        discard_candidate(&journal);
         return Ok(false);
     }
     if !matches!(journal.phase, Phase::Armed | Phase::Swapped) {
@@ -888,6 +1099,155 @@ mod tests {
             "failed"
         );
         assert!(!directory.path().join("management.sqlite").exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn replace_executable(journal: &Journal, bytes: &[u8]) -> Result<()> {
+        let replacement = journal.executable.with_extension("replacement");
+        std::fs::write(&replacement, bytes)?;
+        std::fs::rename(replacement, &journal.executable)?;
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rollback_resumes_after_an_interrupted_copy_or_rename() -> Result<()> {
+        let (directory, mut journal) = swapped_fixture()?;
+        let temporary = rollback_temporary(&journal.executable, &journal.ticket.operation_id)?;
+        std::fs::write(&temporary, b"old-")?;
+        rollback(directory.path(), &mut journal)?;
+        assert_eq!(std::fs::read(&journal.executable)?, b"old-image");
+        assert!(!temporary.exists());
+        assert!(load(directory.path(), &journal.ticket.operation_id)?.phase == Phase::RolledBack);
+
+        let (directory, mut journal) = swapped_fixture()?;
+        replace_executable(&journal, b"old-image")?;
+        std::fs::remove_file(&journal.backup)?;
+        assert!(recover_after_boot(directory.path(), "new-boot")?);
+        assert_eq!(std::fs::read(&journal.executable)?, b"old-image");
+        journal = load(directory.path(), &journal.ticket.operation_id)?;
+        assert!(journal.phase == Phase::RolledBack);
+        assert!(!recover_after_boot(directory.path(), "new-boot")?);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rollback_restores_release_records_of_an_interrupted_commit() -> Result<()> {
+        let (directory, mut journal) = swapped_fixture()?;
+        let active = directory.path().join("active-release.jws");
+        let trust = directory.path().join("release-trust.json");
+        vault::write_new_private(&active, journal.new_release_jws.as_bytes())?;
+        vault::write_new_private(
+            &trust,
+            &serde_json::to_vec_pretty(&promoted_trust(&journal))?,
+        )?;
+        rollback(directory.path(), &mut journal)?;
+        assert_eq!(
+            vault::read_private(&active)?.as_slice(),
+            journal.old_release_jws.as_bytes()
+        );
+        let restored = ReleaseTrust::load(&trust)?;
+        assert_eq!(restored.minimum_sequence, journal.trust.minimum_sequence);
+
+        let (directory, mut journal) = swapped_fixture()?;
+        let active = directory.path().join("active-release.jws");
+        let unrelated = b"operator-installed-release";
+        vault::write_new_private(&active, unrelated)?;
+        rollback(directory.path(), &mut journal)?;
+        assert_eq!(vault::read_private(&active)?.as_slice(), unrelated);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn abandoned_updates_fail_only_without_a_live_watchdog() -> Result<()> {
+        let (directory, mut journal) = swapped_fixture()?;
+        let operation = journal.ticket.operation_id.clone();
+        replace_executable(&journal, b"old-image")?;
+        std::fs::write(&journal.candidate, b"new-image")?;
+        assert!(abandon(directory.path(), &operation)?.is_none());
+
+        journal.phase = Phase::Armed;
+        save(directory.path(), &journal)?;
+        assert!(abandon(directory.path(), &operation)?.is_none());
+        journal.created_at -= WATCHDOG_HORIZON + 1;
+        save(directory.path(), &journal)?;
+        assert_eq!(
+            abandon(directory.path(), &operation)?.unwrap().state,
+            "failed"
+        );
+        assert!(!journal.candidate.exists());
+        assert_eq!(std::fs::read(&journal.executable)?, b"old-image");
+
+        journal.phase = Phase::Staged;
+        journal.created_at = unix_time()?;
+        save(directory.path(), &journal)?;
+        std::fs::write(&journal.candidate, b"new-image")?;
+        assert_eq!(
+            abandon(directory.path(), &operation)?.unwrap().state,
+            "failed"
+        );
+        assert!(!journal.candidate.exists());
+        assert!(abandon(directory.path(), &uuid::Uuid::new_v4().to_string())?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn only_a_swap_outliving_every_watchdog_is_orphaned() -> Result<()> {
+        let (directory, mut journal) = swapped_fixture()?;
+        let operation = journal.ticket.operation_id.clone();
+        assert!(!orphaned_swap(directory.path(), &operation)?);
+        journal.created_at -= WATCHDOG_HORIZON + 1;
+        save(directory.path(), &journal)?;
+        assert!(orphaned_swap(directory.path(), &operation)?);
+        journal.phase = Phase::Armed;
+        save(directory.path(), &journal)?;
+        assert!(!orphaned_swap(directory.path(), &operation)?);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cleanup_removes_terminal_binaries_but_keeps_the_active_backup() -> Result<()> {
+        let (directory, mut active) = swapped_fixture()?;
+        let finished = uuid::Uuid::new_v4().to_string();
+        let finished_directory = operation_directory(directory.path(), &finished)?;
+        std::fs::create_dir_all(&finished_directory)?;
+        let finished_backup = finished_directory.join("previous-binary");
+        let finished_candidate = directory
+            .path()
+            .join(format!(".flow-like-update-{finished}"));
+        let finished_download = finished_directory.join(".standalone-release-partial.tmp");
+        for path in [&finished_backup, &finished_candidate, &finished_download] {
+            std::fs::write(path, b"leftover")?;
+        }
+        let mut journal = load(directory.path(), &active.ticket.operation_id)?;
+        journal.ticket.operation_id = finished.clone();
+        journal.candidate = finished_candidate.clone();
+        journal.backup = finished_backup.clone();
+        journal.phase = Phase::Failed;
+        save(directory.path(), &journal)?;
+
+        collect_garbage(directory.path())?;
+        assert!(
+            active.backup.exists(),
+            "a non-terminal update keeps its files"
+        );
+        assert!(!finished_backup.exists());
+        assert!(!finished_candidate.exists());
+        assert!(!finished_download.exists());
+        assert!(journal_path(directory.path(), &finished)?.exists());
+
+        active.phase = Phase::Completed;
+        save(directory.path(), &active)?;
+        std::fs::write(&active.candidate, b"new-image")?;
+        collect_garbage(directory.path())?;
+        assert!(active.backup.exists(), "the active update keeps its backup");
+        assert!(!active.candidate.exists());
+        assert_eq!(std::fs::read(&active.executable)?, b"new-image");
         Ok(())
     }
 }

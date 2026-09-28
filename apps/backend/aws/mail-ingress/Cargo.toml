@@ -1,0 +1,17 @@
+[package]
+name = "aws-mail-ingress"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+flow-like-mail-ingress = { path = "../../mail-ingress" }
+flow-like-secrets = { path = "../../../../packages/secrets", features = ["aws"] }
+lambda_runtime = { version = "1.0.2", features = ["anyhow"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[dev-dependencies]
+tempfile = "3.20.0"
+tokio = { workspace = true, features = ["net", "io-util"] }

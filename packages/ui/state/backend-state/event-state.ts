@@ -10,6 +10,11 @@ import type {
 	IVersionType,
 	PageTrigger,
 } from "../../lib";
+import type {
+	TeamsBotConnection,
+	TeamsBotPackage,
+	TeamsBotSetup,
+} from "../../lib/teams-bot";
 import type { IPrerunEventResponse } from "./types";
 
 export interface IUserSchedule {
@@ -431,7 +436,32 @@ export interface IRegressionSuiteRunDetail {
 	cases: IRegressionCaseResult[];
 }
 
+export interface IInboundEmailAddress {
+	configured: boolean;
+	domain: string | null;
+	address: string | null;
+	/** Optional local part, without the domain. */
+	alias: string | null;
+	active: boolean;
+}
+
 export interface IEventState {
+	getTeamsBot?(appId: string, eventId: string): Promise<TeamsBotConnection>;
+	setupTeamsBot?(
+		appId: string,
+		eventId: string,
+		input: TeamsBotSetup,
+	): Promise<TeamsBotConnection>;
+	getTeamsBotPackage?(appId: string, eventId: string): Promise<TeamsBotPackage>;
+	rotateTeamsBotSecret?(
+		appId: string,
+		eventId: string,
+	): Promise<TeamsBotConnection>;
+	disconnectTeamsBot?(
+		appId: string,
+		eventId: string,
+	): Promise<TeamsBotConnection>;
+
 	/** Whether events always execute remotely (server-side). When true, secrets are handled server-side and don't need to be prompted or sent from the client. */
 	readonly alwaysRemote?: boolean;
 
@@ -561,6 +591,16 @@ export interface IEventState {
 
 	/** List vanity aliases for an event. */
 	listEventAliases?(appId: string, eventId: string): Promise<IEventAlias[]>;
+
+	getInboundEmailAddress?(
+		appId: string,
+		eventId: string,
+	): Promise<IInboundEmailAddress>;
+	updateInboundEmailAlias?(
+		appId: string,
+		eventId: string,
+		alias: string | null,
+	): Promise<IInboundEmailAddress>;
 
 	/** Create or replace the event's vanity alias. */
 	upsertEventAlias?(

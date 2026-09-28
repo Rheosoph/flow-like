@@ -5,7 +5,7 @@ and the Component Model (`wasm32-wasip2`).
 
 ## Prerequisites
 
-- Rust 1.97.1, matching the version in `mise.toml`
+- Rust beta-2026-09-27, matching the version in `mise.toml`
 - WASM target: `rustup target add wasm32-wasip2`
 - Or use mise: `mise run setup`
 
@@ -295,6 +295,6 @@ panic = "abort"
 ## Publishing
 
 1. Build: `mise run build`
-2. Navigate to **Library → Packages → Publish** in Flow-Like Desktop
-3. Select the `.wasm` file and the `flow-like.toml` manifest
+2. In Flow-Like Desktop, open **Packages › Mine** and add this folder with **Add folder** if it is not listed yet
+3. Select **Publish…** on the package card; the wizard reads `flow-like.toml` and the built `.wasm` from the folder
 4. Submit for review

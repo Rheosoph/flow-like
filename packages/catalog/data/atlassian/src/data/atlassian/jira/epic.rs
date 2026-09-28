@@ -1,11 +1,12 @@
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json, reqwest};
+use flow_like_types::{Value, async_trait, json::json};
 
 use super::{JiraIssue, build_jira_search_body};
 
@@ -107,7 +108,7 @@ impl NodeLogic for LinkToEpicNode {
             return Err(flow_like_types::anyhow!("Epic key is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         // For cloud, use the parent field; for server, use epic link custom field
         if provider.is_cloud {
@@ -122,7 +123,7 @@ impl NodeLogic for LinkToEpicNode {
             });
 
             let response = client
-                .put(&url)
+                .put(&url)?
                 .header("Authorization", provider.auth_header())
                 .header("Content-Type", "application/json")
                 .json(&body)
@@ -146,7 +147,7 @@ impl NodeLogic for LinkToEpicNode {
             });
 
             let response = client
-                .post(&url)
+                .post(&url)?
                 .header("Authorization", provider.auth_header())
                 .header("Content-Type", "application/json")
                 .json(&body)
@@ -256,7 +257,7 @@ impl NodeLogic for UnlinkFromEpicNode {
             return Err(flow_like_types::anyhow!("Issue key is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         if provider.is_cloud {
             // Cloud: Clear the parent field
@@ -268,7 +269,7 @@ impl NodeLogic for UnlinkFromEpicNode {
             });
 
             let response = client
-                .put(&url)
+                .put(&url)?
                 .header("Authorization", provider.auth_header())
                 .header("Content-Type", "application/json")
                 .json(&body)
@@ -292,7 +293,7 @@ impl NodeLogic for UnlinkFromEpicNode {
             });
 
             let response = client
-                .post(&url)
+                .post(&url)?
                 .header("Authorization", provider.auth_header())
                 .header("Content-Type", "application/json")
                 .json(&body)
@@ -417,7 +418,7 @@ impl NodeLogic for GetEpicIssuesNode {
             return Err(flow_like_types::anyhow!("Epic key is required"));
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         // Use JQL search to find issues with this epic as parent
         let jql = if provider.is_cloud {
@@ -431,7 +432,7 @@ impl NodeLogic for GetEpicIssuesNode {
             build_jira_search_body(&provider, jql, max_results, 0, Vec::new(), String::new());
 
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")

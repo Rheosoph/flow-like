@@ -5,11 +5,18 @@ use flow_like_secrets::SecretStore;
 use serde::Deserialize;
 use std::collections::HashMap;
 
+pub(crate) mod mail;
 mod source;
 use source::MAX_CONFIG_BYTES;
 pub(crate) use source::{ConfigError, ConfigSource};
 
 const EMBEDDED_CONFIG: &str = include_str!("../../../flow-like.config.json");
+
+pub(crate) fn configure_mail_capability(hub: &mut Hub, enabled: bool) {
+    hub.supported_sinks
+        .get_or_insert_with(Default::default)
+        .inbound_email = enabled;
+}
 
 impl ConfigSource {
     pub(crate) async fn load(self, secrets: &SecretStore) -> Result<EffectiveConfig, ConfigError> {
@@ -24,6 +31,7 @@ pub(crate) struct EffectiveConfig {
     pub(crate) hub: Hub,
     pub(crate) oauth_providers: HashMap<String, OAuthProviderConfig>,
     pub(crate) openid: OpenIdValidationOverrides,
+    pub(crate) mail_automation: Option<mail::MailAutomationConfig>,
 }
 
 impl EffectiveConfig {
@@ -51,10 +59,18 @@ impl EffectiveConfig {
             }
             _ => OpenIdValidationOverrides::default(),
         };
+        let mail_automation = match document.get("mail_automation") {
+            Some(value) if !value.is_null() => Some(
+                mail::MailAutomationConfig::parse(&value.to_string())
+                    .map_err(|_| ConfigError::Schema)?,
+            ),
+            _ => None,
+        };
         Ok(Self {
             hub,
             oauth_providers,
             openid,
+            mail_automation,
         })
     }
 }
@@ -118,6 +134,20 @@ mod tests {
             "../../../apps/backend/kubernetes/flow-like.config.example.json"
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn resolved_mail_configuration_controls_advertised_inbound_capability() {
+        let mut hub = EffectiveConfig::parse(EMBEDDED_CONFIG).unwrap().hub;
+        let http = hub.supported_sinks.as_ref().map(|sinks| sinks.http);
+        configure_mail_capability(&mut hub, false);
+        assert!(!hub.supported_sinks.as_ref().unwrap().inbound_email);
+        assert_eq!(hub.supported_sinks.as_ref().map(|sinks| sinks.http), http);
+        configure_mail_capability(&mut hub, true);
+        assert!(hub.supported_sinks.as_ref().unwrap().inbound_email);
+        hub.supported_sinks = None;
+        configure_mail_capability(&mut hub, true);
+        assert!(hub.supported_sinks.as_ref().unwrap().inbound_email);
     }
 
     fn error<T>(result: Result<T, ConfigError>) -> ConfigError {

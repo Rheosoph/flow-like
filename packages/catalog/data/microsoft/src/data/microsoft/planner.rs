@@ -2,13 +2,14 @@ use super::{
     graph::{graph_error_message, graph_get_json, graph_get_paginated_values},
     provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
 };
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -134,7 +135,7 @@ impl NodeLogic for ListMyPlansNode {
 
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, provider.api_url("/me/planner/plans"))
             .await
         {
@@ -213,7 +214,7 @@ impl NodeLogic for GetPlanNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let plan_id: String = context.evaluate_pin("plan_id").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_json(
             &client,
             &provider,
@@ -302,7 +303,7 @@ impl NodeLogic for ListPlanTasksNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let plan_id: String = context.evaluate_pin("plan_id").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(
             &client,
             &provider,
@@ -387,7 +388,7 @@ impl NodeLogic for ListPlanBucketsNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let plan_id: String = context.evaluate_pin("plan_id").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(
             &client,
             &provider,
@@ -509,9 +510,9 @@ impl NodeLogic for CreatePlannerTaskNode {
             request_body["dueDateTime"] = json!(due_date);
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url("/planner/tasks"))
+            .post(&provider.api_url("/planner/tasks"))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -646,9 +647,9 @@ impl NodeLogic for UpdatePlannerTaskNode {
             request_body["priority"] = json!(priority);
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .patch(provider.api_url(&format!("/planner/tasks/{}", task_id)))
+            .patch(&provider.api_url(&format!("/planner/tasks/{}", task_id)))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .header("If-Match", etag)
@@ -742,9 +743,9 @@ impl NodeLogic for CreateBucketNode {
             "orderHint": " !"
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(provider.api_url("/planner/buckets"))
+            .post(&provider.api_url("/planner/buckets"))?
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -838,7 +839,7 @@ impl NodeLogic for ListMyTasksNode {
 
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         match graph_get_paginated_values(&client, &provider, provider.api_url("/me/planner/tasks"))
             .await
         {

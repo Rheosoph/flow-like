@@ -1,11 +1,12 @@
 use super::provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -167,9 +168,9 @@ impl NodeLogic for ListGitHubBranchesNode {
 
         let full_url = provider.api_url(&url);
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&full_url)
+            .get(&full_url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -326,9 +327,9 @@ impl NodeLogic for GetGitHubBranchNode {
             urlencoding::encode(&branch)
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -497,9 +498,9 @@ impl NodeLogic for CreateGitHubBranchNode {
             "sha": from_sha
         });
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -642,9 +643,9 @@ impl NodeLogic for DeleteGitHubBranchNode {
             urlencoding::encode(&branch)
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .delete(&url)
+            .delete(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)

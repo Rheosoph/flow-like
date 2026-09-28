@@ -1,6 +1,6 @@
 use crate::BufferedTable;
 use flow_like_device_protocol::{
-    OfflineExpected, OfflineReplayRequest, OfflineReplayResponse, StoragePurpose,
+    OfflineExpected, OfflineReplayRequest, OfflineReplayResponse, StoragePurpose, format_limit,
 };
 use flow_like_storage::{
     lancedb::Table,
@@ -33,6 +33,21 @@ pub struct ReplayError {
     /// "endpoint_missing", "subject_mismatch", "invalid", "digest_reused".
     pub code: Option<String>,
     pub message: String,
+}
+
+impl ReplayError {
+    /// HTTP 413 for a replay body of `body_bytes`, from the hub or a proxy in front of it.
+    /// Body limits reject the request before any handler runs, so nothing was claimed.
+    pub fn hub_limit(body_bytes: usize) -> Self {
+        Self {
+            kind: ReplayErrorKind::NotClaimed,
+            code: Some("hub_limit".into()),
+            message: format!(
+                "The hub refused this {} offline change as too large (HTTP 413). Ask the hub operator to raise its request size limit, then retry, or skip the change.",
+                format_limit(body_bytes)
+            ),
+        }
+    }
 }
 
 #[async_trait::async_trait]

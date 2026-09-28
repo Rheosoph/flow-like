@@ -1,0 +1,36 @@
+{
+  "main": {
+    "nodes": [
+      {"nodeId": "1", "ignored": false, "role": {"type": "internalRole", "value": "RootWebArea"}, "name": {"type": "computedString", "value": "Login – Example"}, "properties": [{"name": "focusable", "value": {"type": "booleanOrUndefined", "value": true}}], "childIds": ["2"], "backendDOMNodeId": 1, "frameId": "MAIN"},
+      {"nodeId": "2", "ignored": true, "ignoredReasons": [{"name": "uninteresting", "value": {"type": "boolean", "value": true}}], "role": {"type": "role", "value": "none"}, "parentId": "1", "childIds": ["3", "5", "7", "19", "22", "24", "26"], "backendDOMNodeId": 2},
+      {"nodeId": "3", "ignored": false, "role": {"type": "role", "value": "heading"}, "name": {"type": "computedString", "value": "Welcome back"}, "properties": [{"name": "level", "value": {"type": "integer", "value": 1}}], "parentId": "2", "childIds": ["4"], "backendDOMNodeId": 10},
+      {"nodeId": "4", "ignored": false, "role": {"type": "internalRole", "value": "StaticText"}, "name": {"type": "computedString", "value": "Welcome back"}, "parentId": "3", "childIds": ["4a"], "backendDOMNodeId": 11},
+      {"nodeId": "4a", "ignored": false, "role": {"type": "internalRole", "value": "InlineTextBox"}, "name": {"type": "computedString", "value": "Welcome back"}, "parentId": "4", "childIds": [], "backendDOMNodeId": 11},
+      {"nodeId": "5", "ignored": false, "role": {"type": "role", "value": "paragraph"}, "name": {"type": "computedString", "value": ""}, "parentId": "2", "childIds": ["6"], "backendDOMNodeId": 12},
+      {"nodeId": "6", "ignored": false, "role": {"type": "internalRole", "value": "StaticText"}, "name": {"type": "computedString", "value": "Please sign in\n   to continue."}, "parentId": "5", "childIds": [], "backendDOMNodeId": 13},
+      {"nodeId": "7", "ignored": false, "role": {"type": "role", "value": "form"}, "name": {"type": "computedString", "value": "Login"}, "parentId": "2", "childIds": ["8", "10", "13", "15"], "backendDOMNodeId": 14},
+      {"nodeId": "8", "ignored": false, "role": {"type": "internalRole", "value": "LabelText"}, "parentId": "7", "childIds": ["9"], "backendDOMNodeId": 15},
+      {"nodeId": "9", "ignored": false, "role": {"type": "internalRole", "value": "StaticText"}, "name": {"type": "computedString", "value": "Email"}, "parentId": "8", "childIds": [], "backendDOMNodeId": 16},
+      {"nodeId": "10", "ignored": false, "role": {"type": "role", "value": "textbox"}, "name": {"type": "computedString", "value": "Email"}, "value": {"type": "string", "value": "ada@example.com"}, "properties": [{"name": "focusable", "value": {"type": "booleanOrUndefined", "value": true}}, {"name": "focused", "value": {"type": "booleanOrUndefined", "value": true}}, {"name": "editable", "value": {"type": "token", "value": "plaintext"}}, {"name": "required", "value": {"type": "boolean", "value": true}}], "parentId": "7", "childIds": ["11"], "backendDOMNodeId": 17},
+      {"nodeId": "11", "ignored": false, "role": {"type": "role", "value": "generic"}, "parentId": "10", "childIds": ["12"], "backendDOMNodeId": 18},
+      {"nodeId": "12", "ignored": false, "role": {"type": "internalRole", "value": "StaticText"}, "name": {"type": "computedString", "value": "ada@example.com"}, "parentId": "11", "childIds": [], "backendDOMNodeId": 19},
+      {"nodeId": "13", "ignored": false, "role": {"type": "role", "value": "checkbox"}, "name": {"type": "computedString", "value": "Remember me"}, "properties": [{"name": "focusable", "value": {"type": "booleanOrUndefined", "value": true}}, {"name": "checked", "value": {"type": "tristate", "value": "true"}}], "parentId": "7", "childIds": [], "backendDOMNodeId": 20},
+      {"nodeId": "15", "ignored": false, "role": {"type": "role", "value": "button"}, "name": {"type": "computedString", "value": "Sign in"}, "properties": [{"name": "disabled", "value": {"type": "boolean", "value": true}}, {"name": "expanded", "value": {"type": "booleanOrUndefined"}}], "parentId": "7", "childIds": ["16"], "backendDOMNodeId": 21},
+      {"nodeId": "16", "ignored": false, "role": {"type": "internalRole", "value": "StaticText"}, "name": {"type": "computedString", "value": "Sign in"}, "parentId": "15", "childIds": [], "backendDOMNodeId": 22},
+      {"nodeId": "19", "ignored": false, "role": {"type": "role", "value": "link"}, "name": {"type": "computedString", "value": "Forgot password?"}, "properties": [{"name": "focusable", "value": {"type": "booleanOrUndefined", "value": true}}, {"name": "url", "value": {"type": "string", "value": "https://example.com/forgot"}}], "parentId": "2", "childIds": ["20"], "backendDOMNodeId": 30},
+      {"nodeId": "20", "ignored": false, "role": {"type": "internalRole", "value": "StaticText"}, "name": {"type": "computedString", "value": "Forgot password?"}, "parentId": "19", "childIds": [], "backendDOMNodeId": 31},
+      {"nodeId": "22", "ignored": false, "role": {"type": "role", "value": "generic"}, "name": {"type": "computedString", "value": ""}, "parentId": "2", "childIds": ["23"], "backendDOMNodeId": 50},
+      {"nodeId": "23", "ignored": false, "role": {"type": "internalRole", "value": "StaticText"}, "name": {"type": "computedString", "value": "Open menu"}, "parentId": "22", "childIds": [], "backendDOMNodeId": 51},
+      {"nodeId": "24", "ignored": true, "ignoredReasons": [{"name": "ariaHiddenElement", "value": {"type": "boolean", "value": true}}], "role": {"type": "role", "value": "none"}, "parentId": "2", "childIds": ["25"], "backendDOMNodeId": 60},
+      {"nodeId": "25", "ignored": true, "ignoredReasons": [{"name": "ariaHiddenSubtree", "value": {"type": "idref", "value": "24"}}], "role": {"type": "role", "value": "button"}, "name": {"type": "computedString", "value": "Hidden"}, "parentId": "24", "childIds": [], "backendDOMNodeId": 61},
+      {"nodeId": "26", "ignored": false, "role": {"type": "internalRole", "value": "Iframe"}, "name": {"type": "computedString", "value": "Widget"}, "parentId": "2", "childIds": [], "backendDOMNodeId": 90}
+    ]
+  },
+  "frame": {
+    "nodes": [
+      {"nodeId": "f1", "ignored": false, "role": {"type": "internalRole", "value": "RootWebArea"}, "name": {"type": "computedString", "value": "Widget frame"}, "childIds": ["f2"], "backendDOMNodeId": 100},
+      {"nodeId": "f2", "ignored": false, "role": {"type": "role", "value": "button"}, "name": {"type": "computedString", "value": "Inside frame"}, "parentId": "f1", "childIds": ["f3"], "backendDOMNodeId": 91},
+      {"nodeId": "f3", "ignored": false, "role": {"type": "internalRole", "value": "StaticText"}, "name": {"type": "computedString", "value": "Inside frame"}, "parentId": "f2", "childIds": [], "backendDOMNodeId": 92}
+    ]
+  }
+}

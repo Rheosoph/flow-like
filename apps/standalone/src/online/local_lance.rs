@@ -6,11 +6,146 @@ use flow_like_storage::{
     lance_io::object_store::{
         ObjectStore as LanceStore, ObjectStoreParams, ObjectStoreProvider, ObjectStoreRegistry,
     },
+    object_store::{
+        self, CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, PutMode,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, UploadPart,
+    },
 };
+use futures_util::stream::BoxStream;
 use std::{collections::HashMap, path::Path, sync::Arc};
 use url::Url;
 
 const SCHEME: &str = "standalone-local";
+
+/// Lance selects its unsafe commit handler for this custom scheme, which writes
+/// each version manifest with a plain put. Creating manifests conditionally
+/// makes a concurrent commit of the same version fail instead of silently
+/// replacing the winner and orphaning its rows.
+#[derive(Debug)]
+struct ConditionalManifests(Arc<dyn ObjectStore>);
+
+impl std::fmt::Display for ConditionalManifests {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ConditionalManifests({})", self.0)
+    }
+}
+
+/// Lance switches to a multipart upload once a manifest outgrows one part.
+/// Buffering it keeps the whole manifest a single conditional create.
+#[derive(Debug)]
+struct ManifestUpload {
+    store: Arc<dyn ObjectStore>,
+    path: ObjectPath,
+    opts: PutOptions,
+    parts: Vec<bytes::Bytes>,
+}
+
+#[async_trait::async_trait]
+impl MultipartUpload for ManifestUpload {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
+        self.parts.extend(data);
+        Box::pin(std::future::ready(Ok(())))
+    }
+    async fn complete(&mut self) -> object_store::Result<PutResult> {
+        let payload = std::mem::take(&mut self.parts)
+            .into_iter()
+            .collect::<PutPayload>();
+        self.store
+            .put_opts(&self.path, payload, std::mem::take(&mut self.opts))
+            .await
+    }
+    async fn abort(&mut self) -> object_store::Result<()> {
+        self.parts.clear();
+        Ok(())
+    }
+}
+
+fn is_manifest(path: &ObjectPath) -> bool {
+    let mut parts = path.parts().collect::<Vec<_>>();
+    let Some(file) = parts.pop() else {
+        return false;
+    };
+    file.as_ref().ends_with(".manifest")
+        && parts
+            .last()
+            .is_some_and(|directory| directory.as_ref() == "_versions")
+}
+
+#[async_trait::async_trait]
+impl ObjectStore for ConditionalManifests {
+    async fn put_opts(
+        &self,
+        path: &ObjectPath,
+        payload: PutPayload,
+        mut opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        if is_manifest(path) && matches!(opts.mode, PutMode::Overwrite) {
+            opts.mode = PutMode::Create;
+        }
+        self.0.put_opts(path, payload, opts).await
+    }
+    async fn put_multipart_opts(
+        &self,
+        path: &ObjectPath,
+        opts: PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        if !is_manifest(path) {
+            return self.0.put_multipart_opts(path, opts).await;
+        }
+        Ok(Box::new(ManifestUpload {
+            store: self.0.clone(),
+            path: path.clone(),
+            opts: PutOptions {
+                mode: PutMode::Create,
+                tags: opts.tags,
+                attributes: opts.attributes,
+                extensions: opts.extensions,
+            },
+            parts: Vec::new(),
+        }))
+    }
+    async fn get_opts(
+        &self,
+        path: &ObjectPath,
+        opts: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        self.0.get_opts(path, opts).await
+    }
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<ObjectPath>>,
+    ) -> BoxStream<'static, object_store::Result<ObjectPath>> {
+        self.0.delete_stream(locations)
+    }
+    fn list(
+        &self,
+        prefix: Option<&ObjectPath>,
+    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        self.0.list(prefix)
+    }
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&ObjectPath>,
+    ) -> object_store::Result<ListResult> {
+        self.0.list_with_delimiter(prefix).await
+    }
+    async fn copy_opts(
+        &self,
+        from: &ObjectPath,
+        to: &ObjectPath,
+        options: CopyOptions,
+    ) -> object_store::Result<()> {
+        self.0.copy_opts(from, to, options).await
+    }
+    async fn rename_opts(
+        &self,
+        from: &ObjectPath,
+        to: &ObjectPath,
+        options: RenameOptions,
+    ) -> object_store::Result<()> {
+        self.0.rename_opts(from, to, options).await
+    }
+}
 
 #[derive(Clone, Debug)]
 struct LocalProvider {
@@ -82,7 +217,9 @@ pub(super) fn configure(
     runtime: &mut FlowLikeConfig,
     registry: &Arc<ObjectStoreRegistry>,
 ) -> anyhow::Result<()> {
-    let store: Arc<dyn ObjectStore> = Arc::new(LocalObjectStore::new(local_data.to_path_buf())?);
+    let store: Arc<dyn ObjectStore> = Arc::new(ConditionalManifests(Arc::new(
+        LocalObjectStore::new(local_data.to_path_buf())?,
+    )));
     let provider = LocalProvider {
         store: Arc::new(ProjectStore {
             routes: vec![("logs/".into(), store)],
@@ -176,5 +313,99 @@ mod tests {
                 .await
                 .unwrap();
         assert!(connection.table_names().execute().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn concurrent_manifest_commits_cannot_replace_each_other() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = Arc::new(ObjectStoreRegistry::empty());
+        configure(directory.path(), &mut FlowLikeConfig::new(), &registry).unwrap();
+        let store = registry
+            .get_store(
+                Url::parse("standalone-local://runtime/logs/history").unwrap(),
+                &ObjectStoreParams::default(),
+            )
+            .await
+            .unwrap();
+        let manifest = ObjectPath::from("logs/history/run.lance/_versions/2.manifest");
+        store
+            .inner
+            .put(&manifest, bytes::Bytes::from_static(b"first").into())
+            .await
+            .unwrap();
+        assert!(matches!(
+            store
+                .inner
+                .put(&manifest, bytes::Bytes::from_static(b"second").into())
+                .await
+                .unwrap_err(),
+            object_store::Error::AlreadyExists { .. }
+        ));
+        assert_eq!(
+            store
+                .inner
+                .get(&manifest)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+            "first"
+        );
+        let hint = ObjectPath::from("logs/history/run.lance/_versions/version_hint.json");
+        for value in [&b"1"[..], &b"2"[..]] {
+            store
+                .inner
+                .put(&hint, bytes::Bytes::copy_from_slice(value).into())
+                .await
+                .unwrap();
+        }
+        assert!(!is_manifest(&ObjectPath::from(
+            "logs/history/run.lance/data/2.manifest"
+        )));
+    }
+
+    #[tokio::test]
+    async fn large_manifests_uploaded_in_parts_are_created_conditionally() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = Arc::new(ObjectStoreRegistry::empty());
+        configure(directory.path(), &mut FlowLikeConfig::new(), &registry).unwrap();
+        let store = registry
+            .get_store(
+                Url::parse("standalone-local://runtime/logs/history").unwrap(),
+                &ObjectStoreParams::default(),
+            )
+            .await
+            .unwrap();
+        let manifest = ObjectPath::from("logs/history/run.lance/_versions/3.manifest");
+        let upload = |parts: [&'static [u8]; 2]| {
+            let store = store.inner.clone();
+            let manifest = manifest.clone();
+            async move {
+                let mut upload = store.put_multipart(&manifest).await?;
+                for part in parts {
+                    upload
+                        .put_part(bytes::Bytes::from_static(part).into())
+                        .await?;
+                }
+                upload.complete().await
+            }
+        };
+        upload([b"first ", b"winner"]).await.unwrap();
+        assert!(matches!(
+            upload([b"second ", b"loser"]).await.unwrap_err(),
+            object_store::Error::AlreadyExists { .. }
+        ));
+        assert_eq!(
+            store
+                .inner
+                .get(&manifest)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+            "first winner"
+        );
     }
 }

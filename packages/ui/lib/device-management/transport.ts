@@ -1,13 +1,14 @@
 import type { IApiState } from "../../state/backend-state/api-state";
 import type { IProfile } from "../../types";
 import { base64url, unbase64url } from "./crypto";
-import type {
-	BrowserController,
-	DeviceReceipt,
-	ManagementResponse,
-	NoiseHandshake,
-	NoiseSession,
-	SignalingAdmission,
+import {
+	type BrowserController,
+	type DeviceReceipt,
+	type ManagementResponse,
+	type NoiseHandshake,
+	type NoiseSession,
+	type SignalingAdmission,
+	managementRejection,
 } from "./types";
 
 const PROTOCOL = "flowlike.device-management.v1";
@@ -396,6 +397,38 @@ async function authenticate(
 	}
 }
 
+/** Matches the device's Noise plaintext bound; larger requests are refused before sending. */
+export const MAX_MANAGEMENT_PLAINTEXT = 16 * 1024;
+
+/** Coded rejections carry the device's reason; older agents send none and yield undefined. */
+export function rejectionMessage(
+	response: Pick<ManagementResponse, "state" | "result">,
+): string | undefined {
+	const rejection = managementRejection(response);
+	if (!rejection) return undefined;
+	return rejection.code === "unsupported"
+		? `${rejection.error} Update the device's standalone agent to use this operation.`
+		: rejection.error;
+}
+
+/** Nothing reached the device, so the same request may be retried after fixing its cause. */
+export class ManagementRequestNotSentError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "ManagementRequestNotSentError";
+	}
+}
+
+/** The request left this app but no authenticated reply arrived; its outcome is unknown. */
+export class ManagementUnconfirmedError extends Error {
+	constructor(readonly operationId: string) {
+		super(
+			`Device operation ${operationId} has no confirmed result. Reconnect and inspect its status before retrying.`,
+		);
+		this.name = "ManagementUnconfirmedError";
+	}
+}
+
 export function matchesOperationResponse(
 	command: Record<string, unknown>,
 	requestId: string,
@@ -423,6 +456,9 @@ export class DeviceManagementConnection {
 	) {}
 	get transport(): "webrtc" | "websocket" {
 		return this.pipe.kind;
+	}
+	get open(): boolean {
+		return !this.closed && this.expiresAt > now();
 	}
 	static async connect(
 		api: IApiState,
@@ -549,6 +585,7 @@ export class DeviceManagementConnection {
 		if (this.busy)
 			throw new Error("Wait for the current device operation to finish.");
 		this.busy = true;
+		let sent = false;
 		try {
 			const issued = now();
 			const bytes = encoder.encode(
@@ -560,6 +597,12 @@ export class DeviceManagementConnection {
 					command,
 				}),
 			);
+			if (bytes.length > MAX_MANAGEMENT_PLAINTEXT) {
+				bytes.fill(0);
+				throw new ManagementRequestNotSentError(
+					`Device operation ${operationId} was not sent: it needs ${bytes.length} bytes, but one management message carries at most ${MAX_MANAGEMENT_PLAINTEXT}. Reduce its size and retry.`,
+				);
+			}
 			let encrypted: Uint8Array;
 			try {
 				encrypted = this.session.encrypt(bytes, now());
@@ -571,6 +614,7 @@ export class DeviceManagementConnection {
 				session_id: this.sessionId,
 				data: base64url(encrypted),
 			});
+			sent = true;
 			const response = parseEnvelope(await this.pipe.next());
 			if (response.kind !== "message" || response.session_id !== this.sessionId)
 				throw new Error("Management response does not match this session.");
@@ -594,11 +638,15 @@ export class DeviceManagementConnection {
 					"Management response does not match the requested operation.",
 				);
 			return value as unknown as ManagementResponse;
-		} catch {
+		} catch (error) {
+			if (error instanceof ManagementRequestNotSentError) throw error;
+			// An encrypted but unsent message has consumed a Noise nonce the device never saw.
 			this.close();
-			throw new Error(
-				`Device operation ${operationId} has no confirmed result. Reconnect and inspect its status before retrying.`,
-			);
+			if (!sent)
+				throw new ManagementRequestNotSentError(
+					`Device operation ${operationId} was not sent because the management session failed locally. Reconnect and retry.`,
+				);
+			throw new ManagementUnconfirmedError(operationId);
 		} finally {
 			this.busy = false;
 		}

@@ -108,7 +108,6 @@ pub(crate) async fn reserve_budget(
                 "Operation already has different instance authority",
             ));
         }
-        live(usage.proof_expires_at)?;
         live(
             graph
                 .grant
@@ -117,6 +116,7 @@ pub(crate) async fn reserve_budget(
                 .min(require_billing(&graph)?.info.expires_at)
                 .min(graph.instance.receipt.lease_expires_at),
         )?;
+        proof_live(usage.proof_expires_at)?;
         return Ok(());
     }
     let billing = &require_billing(&graph)?.info;
@@ -138,7 +138,6 @@ pub(crate) async fn reserve_budget(
     .await?;
     tx.execute_raw(sql(r#"INSERT INTO "InstanceUsageAdmission" ("operationId","billingGrantId","instanceId","payerId",authority,"requiredModelTier","ceilingMicros","usedMicros","reservedMicros",status,"createdAt") VALUES ($1,$2,$3,$4,$5,$6,$7,0,$7,'reserved',$8)"#,
         [operation_id.into(),billing.billing_grant_id.clone().into(),usage.instance_id.clone().into(),billing.payer_id.clone().into(),serde_json::to_string(usage)?.into(),required_model_tier.into(),reserve_micros.into(),now().into()])).await?;
-    live(usage.proof_expires_at)?;
     live(
         graph
             .grant
@@ -147,6 +146,7 @@ pub(crate) async fn reserve_budget(
             .min(require_billing(&graph)?.info.expires_at)
             .min(graph.instance.receipt.lease_expires_at),
     )?;
+    proof_live(usage.proof_expires_at)?;
     Ok(())
 }
 

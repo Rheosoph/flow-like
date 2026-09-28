@@ -29,6 +29,9 @@ flow-like-wasm-schema = { workspace = true, features = ["bundle", "nodes", "open
 tempfile = "3"
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 base64.workspace = true
+mail-parser = "0.11"
+zip = { version = "8.5.1", default-features = false }
+jsonschema.workspace = true
 jsonwebtoken.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
@@ -143,7 +146,7 @@ azure = [
 gcp = ["rsa", "urlencoding", "dep:tokio"]
 r2 = []  # Cloudflare R2 with proprietary temp credentials API
 cognito = ["aws-sdk-cognitoidentityprovider", "aws-config"]
-ses = ["aws-sdk-sesv2", "aws-config"]
+ses = ["aws-sdk-sesv2", "aws-config", "aws-sdk-s3"]
 smtp = ["lettre"]
 sendgrid = []
 acs-email = ["dep:azure_core", "dep:azure_identity", "dep:tokio"]

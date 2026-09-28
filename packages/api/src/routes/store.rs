@@ -185,3 +185,11 @@ pub async fn get_store_db(
     });
     Ok(response)
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_store_router_has_no_conflicting_routes() {
+        let _ = super::routes();
+    }
+}

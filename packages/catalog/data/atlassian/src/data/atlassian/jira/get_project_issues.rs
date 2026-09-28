@@ -3,13 +3,14 @@ use super::{
     parse_jira_issue,
 };
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json, reqwest};
+use flow_like_types::{Value, async_trait, json::json};
 
 /// Get all issues for a specific Jira project
 #[crate::register_node]
@@ -167,7 +168,7 @@ impl NodeLogic for GetProjectIssuesNode {
             return Ok(());
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
 
         // Build JQL query
         let jql = if jql_filter.is_empty() {
@@ -199,7 +200,7 @@ impl NodeLogic for GetProjectIssuesNode {
             next_page_token,
         );
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")

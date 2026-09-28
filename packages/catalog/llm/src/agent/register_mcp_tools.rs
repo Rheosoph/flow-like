@@ -4,6 +4,8 @@
 /// - Automatic: Uses all available tools from the MCP server
 /// - Manual: Lets the user enable individual tools via dynamic boolean pins
 use crate::generative::agent::Agent;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::ExecutionEnvironment;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -74,7 +76,7 @@ impl NodeLogic for RegisterMcpToolsNode {
     }
 
     #[cfg(feature = "execute")]
-    async fn on_update(&self, node: &mut Node, _board: &Board) {
+    async fn on_update(&self, node: &mut Node, board: &Board) {
         node.error = None;
 
         if !read_pin_string(node, "mode")
@@ -96,7 +98,13 @@ impl NodeLogic for RegisterMcpToolsNode {
             }
         };
 
-        if let Err(error) = refresh_manual_tool_pins(node, &uri).await {
+        let environment = board
+            .app_state
+            .as_ref()
+            .map(|state| state.execution_environment)
+            .or_else(ExecutionEnvironment::from_env)
+            .unwrap_or_default();
+        if let Err(error) = refresh_manual_tool_pins(node, &uri, environment).await {
             node.error = Some(error);
         }
     }
@@ -252,8 +260,12 @@ async fn collect_manual_tool_selection(context: &mut ExecutionContext) -> HashSe
 }
 
 #[cfg(feature = "execute")]
-async fn refresh_manual_tool_pins(node: &mut Node, uri: &str) -> Result<(), String> {
-    match list_all_tools(uri).await {
+async fn refresh_manual_tool_pins(
+    node: &mut Node,
+    uri: &str,
+    environment: ExecutionEnvironment,
+) -> Result<(), String> {
+    match list_all_tools(uri, environment).await {
         Ok(tools) if tools.is_empty() => {
             cleanup_tool_pins(node, &HashSet::new());
             Err("The MCP server reported no available tools".into())
@@ -271,7 +283,10 @@ async fn refresh_manual_tool_pins(node: &mut Node, uri: &str) -> Result<(), Stri
 }
 
 #[cfg(feature = "execute")]
-async fn list_all_tools(uri: &str) -> Result<Vec<Tool>, String> {
+async fn list_all_tools(uri: &str, environment: ExecutionEnvironment) -> Result<Vec<Tool>, String> {
+    super::ensure_mcp_uri_allowed(environment, uri)
+        .await
+        .map_err(|error| error.to_string())?;
     let mut implementation = Implementation::new("Flow-Like", "alpha");
     implementation.website_url = Some("https://flow-like.com".to_string());
     let client_info = ClientInfo::new(ClientCapabilities::default(), implementation);

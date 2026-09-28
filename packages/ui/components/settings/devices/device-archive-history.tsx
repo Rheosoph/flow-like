@@ -9,6 +9,7 @@ import {
 	digestText,
 	readTelemetryChunks,
 } from "../../../lib/device-management/telemetry";
+import { rejectionMessage } from "../../../lib/device-management/transport";
 import type {
 	ArchiveRecipient,
 	ArchiveRoster,
@@ -214,7 +215,10 @@ export function DeviceArchiveHistory({
 					);
 				const response = await call({ type: "archive_policy", policy_jws });
 				if (response.state !== "completed" && response.state !== "accepted")
-					throw new Error("The device rejected the archive roster.");
+					throw new Error(
+						rejectionMessage(response) ??
+							"The device rejected the archive roster.",
+					);
 				if (alive.current)
 					setStatus(
 						`Archive recipient policy ${next.policy_version} applied. It expires ${new Date(expires * 1000).toLocaleString()}.`,

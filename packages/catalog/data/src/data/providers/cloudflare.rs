@@ -1,7 +1,7 @@
-use crate::data::providers::util::get_pin_string_value;
+use crate::data::providers::util::{WithEgressGuard, ensure_host_fragment, get_pin_string_value};
 use flow_like::flow::{
     board::Board,
-    execution::context::ExecutionContext,
+    execution::{ExecutionEnvironment, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores, remove_pin_by_name},
     pin::PinOptions,
     variable::VariableType,
@@ -54,6 +54,7 @@ impl CloudflareProvider {
     /// path-style requests. Requires `auth_mode == "r2"`.
     pub fn apply_to_s3_builder_for_r2(
         &self,
+        environment: ExecutionEnvironment,
         builder: flow_like_storage::object_store::aws::AmazonS3Builder,
     ) -> flow_like_types::Result<flow_like_storage::object_store::aws::AmazonS3Builder> {
         if self.auth_mode.as_str() != CF_R2 {
@@ -65,6 +66,11 @@ impl CloudflareProvider {
         let endpoint = self.r2_endpoint().ok_or_else(|| {
             flow_like_types::anyhow!("CloudflareProvider: account_id is required for R2")
         })?;
+        ensure_host_fragment(
+            "CloudflareProvider",
+            "account_id",
+            self.account_id.as_deref().unwrap_or_default(),
+        )?;
         let key = self.r2_access_key_id.as_deref().ok_or_else(|| {
             flow_like_types::anyhow!("CloudflareProvider: r2_access_key_id is required")
         })?;
@@ -76,7 +82,8 @@ impl CloudflareProvider {
             .with_region("auto")
             .with_access_key_id(key)
             .with_secret_access_key(secret)
-            .with_virtual_hosted_style_request(false))
+            .with_virtual_hosted_style_request(false)
+            .with_egress_guard(environment))
     }
 }
 
@@ -438,5 +445,38 @@ mod tests {
 
         let empty = CloudflareProvider::default();
         assert!(empty.r2_endpoint().is_none());
+    }
+
+    #[test]
+    fn r2_account_id_cannot_rewrite_the_endpoint_host() {
+        use flow_like_storage::object_store::aws::AmazonS3Builder;
+
+        let provider = |account_id: &str| CloudflareProvider {
+            auth_mode: CF_R2.to_string(),
+            account_id: Some(account_id.to_string()),
+            r2_access_key_id: Some("key".to_string()),
+            r2_secret_access_key: Some("secret".to_string()),
+            ..Default::default()
+        };
+        for account_id in [
+            "169.254.169.254/latest/meta-data?",
+            "evil.example#",
+            "user@169.254.169.254",
+        ] {
+            assert!(
+                provider(account_id)
+                    .apply_to_s3_builder_for_r2(
+                        ExecutionEnvironment::Server,
+                        AmazonS3Builder::new()
+                    )
+                    .is_err(),
+                "{account_id} must be refused"
+            );
+        }
+        assert!(
+            provider("abcdef1234567890")
+                .apply_to_s3_builder_for_r2(ExecutionEnvironment::Server, AmazonS3Builder::new())
+                .is_ok()
+        );
     }
 }

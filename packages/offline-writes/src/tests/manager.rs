@@ -11,9 +11,9 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use flow_like_device_protocol::{
-    DESKTOP_OFFLINE_LIMITS, MAX_OFFLINE_OPERATION_BYTES, OfflineExpected, OfflineLimits,
-    OfflineMutation, OfflineReplayRequest, OfflineReplayResponse, OfflineReplayStatus,
-    OfflineResource, StoragePurpose, format_limit, request_wire_bytes,
+    DESKTOP_OFFLINE_LIMITS, INSTANCE_OFFLINE_LIMITS, MAX_OFFLINE_OPERATION_BYTES, OfflineExpected,
+    OfflineLimits, OfflineMutation, OfflineReplayRequest, OfflineReplayResponse,
+    OfflineReplayStatus, OfflineResource, StoragePurpose, format_limit, request_wire_bytes,
 };
 use flow_like_storage::{
     databases::vector::{
@@ -50,6 +50,7 @@ pub(super) struct ReplayServer {
     pub(super) unavailable: Arc<AtomicBool>,
     pub(super) lose_ack: Arc<AtomicBool>,
     pub(super) not_claimed: Arc<AtomicBool>,
+    pub(super) hub_limit: Arc<AtomicBool>,
     pub(super) files: Arc<Mutex<FileReplay>>,
 }
 
@@ -102,6 +103,13 @@ impl OfflineHost for TestHost {
         };
         if state.unavailable.load(Ordering::Acquire) {
             return Err(unavailable("Replay endpoint is unavailable"));
+        }
+        if state.hub_limit.load(Ordering::Acquire) {
+            return Err(ReplayError::hub_limit(
+                serde_json::to_vec(request)
+                    .map_err(|error| unavailable(error.to_string()))?
+                    .len(),
+            ));
         }
         if state.not_claimed.load(Ordering::Acquire) {
             return Err(ReplayError {
@@ -343,6 +351,7 @@ pub(super) fn replay_server(cloud: Connection, unavailable: bool, lose_ack: bool
         unavailable: Arc::new(AtomicBool::new(unavailable)),
         lose_ack: Arc::new(AtomicBool::new(lose_ack)),
         not_claimed: Arc::new(AtomicBool::new(false)),
+        hub_limit: Arc::new(AtomicBool::new(false)),
         files: Arc::new(Mutex::new(FileReplay::Apply)),
     }
 }
@@ -879,6 +888,194 @@ async fn lowered_limits_block_the_head_as_unclaimed_hub_limit() -> Result<()> {
     writer.set_limits(limits(), DESKTOP_OFFLINE_LIMITS).await?;
     assert!(writer.drain_once().await?);
     assert_eq!(cloud_rows(&remote).await?.len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn hub_body_limit_blocks_the_head_as_unclaimed_hub_limit() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let cloud = tempfile::tempdir()?;
+    let remote = seed(cloud.path()).await?;
+    let server = replay_server(remote.clone(), false, false);
+    server.hub_limit.store(true, Ordering::Release);
+    let (writer, table) = manager(root.path(), remote.clone(), Some(server.clone())).await?;
+    let id = insert(&table, 3, 30).await?;
+    assert!(writer.drain_once().await.is_err());
+    let head = writer.queue.head()?.unwrap();
+    assert_eq!((head.state.as_str(), head.attempts), ("blocked", 0));
+    let lookup = writer.queue.operation_state(&id)?.unwrap();
+    assert_eq!(lookup.error_code.as_deref(), Some("hub_limit"));
+    assert!(lookup.error.unwrap().contains("too large (HTTP 413)"));
+    server.hub_limit.store(false, Ordering::Release);
+    writer.queue.retry(&id)?;
+    assert!(writer.drain_once().await?);
+    assert_eq!(cloud_rows(&remote).await?.len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_later_unmaterializable_change_does_not_hold_back_the_head() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let cloud = tempfile::tempdir()?;
+    let remote = seed(cloud.path()).await?;
+    let (writer, table) = manager(
+        root.path(),
+        remote.clone(),
+        Some(replay_server(remote.clone(), false, false)),
+    )
+    .await?;
+    let head = insert(&table, 3, 30).await?;
+    let request = OfflineReplayRequest {
+        operation_id: uuid::Uuid::new_v4().to_string(),
+        resource: table.resource.clone(),
+        expected: serde_json::from_value(writer.queue.resource_revision(&table.key)?.unwrap())?,
+        mutation: OfflineMutation::TableInsert {
+            rows: vec![json!({"id": 4, "value": {"nested": "not an integer"}})],
+        },
+    };
+    let later = writer
+        .queue
+        .enqueue(
+            &table.key,
+            serde_json::to_value(&request)?,
+            None,
+            unix_time()?,
+        )?
+        .operation_id;
+    assert!(table.recover_local(&writer).await.is_err());
+    let status = writer.queue.status()?;
+    assert_eq!(status.head.as_ref().unwrap().operation_id, head);
+    let blocked = status.blocked.context("blocked change is not reported")?;
+    assert_eq!(
+        (blocked.operation_id.as_str(), blocked.state.as_str()),
+        (later.as_str(), "blocked")
+    );
+    assert!(blocked.payload.is_null());
+    assert_eq!(
+        writer
+            .queue
+            .blocked_heads(10)?
+            .into_iter()
+            .map(|operation| operation.operation_id)
+            .collect::<Vec<_>>(),
+        vec![later.clone()]
+    );
+
+    assert!(writer.drain_once().await?);
+    assert_eq!(cloud_rows(&remote).await?.len(), 3);
+    let status = writer.queue.status()?;
+    assert_eq!(status.head.unwrap().operation_id, later);
+    assert!(status.blocked.is_none());
+    assert!(!writer.drain_once().await?);
+    writer
+        .queue
+        .request_skip(&later, "Discard the malformed row", false)?;
+    assert!(!writer.drain_once().await?);
+    assert_eq!(writer.queue.status()?.pending_count, 0);
+    assert_eq!(
+        table.read_table().await?.unwrap().count_rows(None).await?,
+        3
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn standalone_keeps_superseded_snapshots_only_for_the_grace() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let cloud = tempfile::tempdir()?;
+    let remote = seed(cloud.path()).await?;
+    assert!(options(root.path()).retired_snapshot_grace.is_some());
+    let (writer, _table) = manager(root.path(), remote.clone(), None).await?;
+    let old = writer
+        .queue
+        .local_view(&resource_key(&selection()))?
+        .0
+        .unwrap();
+    remote
+        .open_table("measurements")
+        .execute()
+        .await?
+        .delete("id = 2")
+        .await?;
+    assert!(matches!(
+        writer.refresh_table(&selection()).await?,
+        RefreshOutcome::Refreshed { .. }
+    ));
+    assert_eq!(
+        writer
+            .queue
+            .retired_tables()?
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>(),
+        vec![old.clone()]
+    );
+    writer.idle_pass().await;
+    assert!(
+        writer
+            .root()
+            .join("tables")
+            .join(format!("{old}.lance"))
+            .exists()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn refreshes_leave_the_queue_budget_for_accepted_writes() -> Result<()> {
+    const MIB: u64 = 1024 * 1024;
+    let root = tempfile::tempdir()?;
+    let cloud = tempfile::tempdir()?;
+    let remote = seed(cloud.path()).await?;
+    let (writer, _table) = manager(root.path(), remote.clone(), None).await?;
+    let queue_budget = |max_queue_bytes| BufferingConfig {
+        max_queue_bytes,
+        ..limits()
+    };
+    writer
+        .set_limits(queue_budget(4 * MIB), INSTANCE_OFFLINE_LIMITS)
+        .await?;
+    let budget = writer.refresh_snapshot_budget()?;
+    assert!(budget < 28 * MIB);
+    writer
+        .set_limits(queue_budget(8 * MIB), INSTANCE_OFFLINE_LIMITS)
+        .await?;
+    assert_eq!(writer.refresh_snapshot_budget()?, budget - 4 * MIB);
+    writer
+        .set_limits(queue_budget(64 * MIB), INSTANCE_OFFLINE_LIMITS)
+        .await?;
+    assert_eq!(writer.refresh_snapshot_budget()?, budget - 12 * MIB);
+
+    let small = tempfile::tempdir()?;
+    let (writer, table) = open_table(
+        WriteManagerOptions {
+            limits: BufferingConfig {
+                max_mirror_bytes: 2 * MIB,
+                ..queue_budget(MIB)
+            },
+            ..options(small.path())
+        },
+        TestHost::new(remote.clone(), None),
+        active(),
+    )
+    .await?;
+    remote
+        .open_table("measurements")
+        .execute()
+        .await?
+        .delete("id = 2")
+        .await?;
+    let refused = writer
+        .refresh_table(&selection())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("kept for queued writes"), "{refused}");
+    insert(&table, 3, 30).await?;
+    assert_eq!(
+        table.read_table().await?.unwrap().count_rows(None).await?,
+        3
+    );
     Ok(())
 }
 

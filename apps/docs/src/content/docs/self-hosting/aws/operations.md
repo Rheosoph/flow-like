@@ -1,6 +1,6 @@
 ---
 title: AWS service operations
-description: Configure Lambda execution, storage accounting, and scheduled maintenance for the AWS backend.
+description: Configure Lambda execution, email automation, storage accounting, and scheduled maintenance for the AWS backend.
 sidebar:
   order: 20
 ---
@@ -63,6 +63,197 @@ For local invocation, use `cargo lambda watch` and pass an SQS event fixture to
 the actual execution request; an API Gateway fixture does not exercise this
 handler. The [SQS handler](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/aws/executor-async/src/main.rs)
 defines the batch response behavior.
+
+## Email automation
+
+Inbound email events run on the server. SES stores the complete MIME message,
+including attachments, in a temporary S3 bucket. The receipt action publishes
+an SNS notification after storage; a Lambda passes the object reference and
+SMTP envelope to the API. This preserves recipients such as BCC addresses that
+may be absent from the message headers. The API records pending deliveries
+before returning HTTP 202, then dispatches them through the existing
+asynchronous executor. Repeated receipt notifications use the same delivery ID.
+
+### Deploy receiving
+
+1. Apply the current database migrations and deploy the API with its `ses`
+   feature. The `aws-api` package already enables it. Configure `SINK_SECRET`
+   and the asynchronous execution backend first. The API advertises
+   `supported_sinks.inbound_email` when its resolved mail configuration is
+   enabled.
+2. Choose a dedicated domain such as `events.example.com`, verify it with SES
+   in a [region that supports receiving](https://docs.aws.amazon.com/ses/latest/dg/regions.html#region-receive-email),
+   and create or select an active receipt rule set. The mail stack adds a rule
+   to this existing set; it does not activate or replace the set.
+3. As a platform administrator, register a service token with
+   `POST /api/v1/admin/sinks` and the body below. Mail ingress requires a
+   registered token so revocation takes effect immediately.
+
+   ```json
+   { "sink_type": "inbound_email", "name": "AWS mail ingress" }
+   ```
+
+   Store the returned token as an SSM SecureString named `SINK_TRIGGER_JWT`
+   below a path dedicated to the gateway, such as `/flow-like/prod-mail`. Do
+   not reuse the API's `SECRET_PREFIX`.
+
+   ```sh
+   aws ssm put-parameter --type SecureString \
+     --name /flow-like/prod-mail/SINK_TRIGGER_JWT --value file://sink-token.txt
+   ```
+
+   Without `--key-id`, SSM encrypts it with the AWS managed `aws/ssm` key. When
+   you pass a customer managed key, also pass its ARN as the stack's
+   `SecretKmsKeyArn`.
+4. Build and deploy
+   [the SAM template](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/aws/mail-ingress/template.yaml)
+   from the repository root. AWS SAM CLI and Docker are required.
+
+   ```sh
+   sam build --template-file apps/backend/aws/mail-ingress/template.yaml
+   sam deploy --guided --resolve-image-repos --capabilities CAPABILITY_IAM
+   ```
+
+   Set `ReceiptDomain`, `ReceiptRuleSetName`, the API's HTTPS `ApiBaseUrl`, its
+   existing IAM `ApiRoleName`, and `SecretPrefix` to the path from step 3. The
+   stack writes the gateway's routing settings to `MAIL_INGRESS_CONFIG` below
+   that path. The function reads both parameters at startup: it may call
+   `ssm:GetParameter` on them and `kms:Decrypt` only for the token through SSM.
+   The token is never a stack parameter or Lambda environment variable. After
+   rotating the token or changing `ApiBaseUrl`, redeploy with a new
+   `BootstrapVersion` so new Lambda environments load the parameters. Stacks
+   deployed before this change passed the token as `SinkTriggerJwt`: store it
+   in SSM first and remove that parameter from `samconfig.toml`.
+
+   `AfterReceiptRule` places the new rule after a named existing rule; empty
+   inserts it first. Review the order before deployment: this rule stops
+   further rule-set processing for matching mail. Earlier rules that stop
+   processing can prevent delivery to Flow-Like.
+5. Store one `MAIL_CONFIG` JSON document in the API's existing secret store.
+   On AWS, use an SSM SecureString named `${SECRET_PREFIX}/MAIL_CONFIG` with
+   the API's existing parameter encryption key. Substitute the domain and
+   bucket from the stack outputs:
+
+   ```json
+   {
+     "enabled": true,
+     "domain": "events.example.com",
+     "bucket": "your-receipt-bucket"
+   }
+   ```
+
+   No additional API environment variables are required. The defaults are
+   `prefix: "raw/"`, `ttl_seconds: 3600`, `max_bytes: 10485760`,
+   `sending_enabled: true`, and `min_send_interval_seconds: 5`. Add these
+   fields only when the deployment needs a different limit. Without a
+   configured mail document or legacy environment settings, automation is
+   disabled. The same settings can be supplied in the private
+   `mail_automation` section of the runtime configuration document;
+   `MAIL_CONFIG` takes precedence. Existing `INBOUND_MAIL_*` and
+   `MAIL_AUTOMATION_*` environment overrides remain supported. When only the
+   legacy `INBOUND_MAIL_DOMAIN` variable enables mail, `sending_enabled`
+   defaults to `false`; `MAIL_AUTOMATION_ENABLED=true` turns sending on.
+
+   Settings are loaded at API startup. Recycle the API after changing the
+   parameter. Terraform deployments include its version in the existing
+   configuration revision, so a parameter change causes that update.
+
+   The stack grants the API role read, decrypt, and delete access to this
+   receipt prefix. Its bucket uses default SSE-KMS encryption. Keep the SES S3
+   action's `KmsKeyArn` unset: that option enables SES client-side encryption,
+   which requires a different reader. The SES writer role has the data-key and
+   decrypt permissions needed for the bucket's server-side encryption.
+   See [SES receiving permissions](https://docs.aws.amazon.com/ses/latest/dg/receiving-email-permissions.html).
+6. Publish an MX record for the receiving domain, priority `10`, using the
+   `ReceivingMxTarget` output. Create an active inbound email event with server
+   execution enabled, then send a test message to its generated address or
+   alias. Verify one run and readable attachments. SES accepts the configured
+   domain; the API discards unknown or disabled addresses.
+
+### Use the event outputs
+
+The inbound event exposes concrete types that connect directly to mail and
+file nodes:
+
+| Output | Type | Use |
+| --- | --- | --- |
+| Session | `MailSession` | Identifies the app and event that own the sending address |
+| Message | `MailMessageRef` | Identifies the stored inbound delivery and its session for replies |
+| Email | `InboundEmail` | Sender and recipient metadata, subject, body previews, headers, authentication verdicts, and attachment metadata |
+| Attachments | `FlowPath[]` | Paths to decoded attachment files |
+
+`Email.raw_path` points to the original MIME message. `text_path` and
+`html_path`, when present, point to complete bodies; the inline text and HTML
+fields contain bounded previews. Attachment metadata includes filenames,
+content types, sizes, and paths. The paths and mail references are serializable
+locators without credentials. Passing a reference does not grant access: the
+backend checks app, event, and execution ownership when sending or replying.
+Read or copy files needed later before their receipt expires.
+
+### Recovery and retention
+
+The stack retries failed Lambda invocations and records exhausted deliveries
+in the `FailedReceiptsQueue`. Set `AlarmTopicArn` to receive its queue alarm.
+Repair the failure and replay the original SNS Lambda event while its S3
+object still exists. A one-minute EventBridge schedule independently calls
+the dispatch endpoint to recover pending deliveries and remove expired mail
+files. Disabling this schedule also stops that cleanup.
+
+Only ingestion failures fail a receipt invocation. The function also requests
+dispatch right after ingestion; when that request fails or would outlast the
+invocation, it logs a warning and leaves the delivery to the schedule. Failed
+scheduled invocations land in the same queue. They carry no mail and can be
+deleted instead of replayed.
+
+`RawRetentionDays` defaults to one day. The original SES object is shared by
+all recipients of a message. The API deletes it when it cleans up or expires
+the delivery; the stack grants the API role `s3:DeleteObject` on the receipt
+prefix for this. The S3 lifecycle expiration removes objects that cleanup
+missed. S3 removal is asynchronous, so this is an expiration age rather than
+an exact deletion deadline. The failure queue retains metadata for 14 days,
+which can outlive the raw message.
+Replaying that metadata cannot recover an expired object.
+
+The API also writes decoded bodies, attachments, and a raw-message copy to
+the platform's temporary store. Configure encryption at rest and a lifecycle
+rule on that store as a fallback for interrupted cleanup. Set its expiration
+age long enough for `MAIL_CONFIG.ttl_seconds` and active runs. The API removes
+these files after the receipt expires; event payloads, run logs, user-created
+copies, and execution history follow their own retention settings. Receipt
+expiration does not erase those copies. SES spam and authentication verdicts
+are available to the flow as metadata.
+
+### Enable sending
+
+Sending requires the platform mail configuration with `provider: "ses"` and
+the receiving domain verified for sending in the selected AWS region. Grant
+the API role `ses:SendEmail` for that domain identity. Sending is enabled with
+the mail document above; set `sending_enabled: false` for receive-only
+deployments. A [verified SES domain](https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html)
+allows the API to send from each event address. Platform transactional messages
+continue to use the configured `from_email`.
+
+Connect the inbound event's Session output to Send Platform Email. To answer
+the received message, connect both Session and Message to Reply Platform Email.
+The backend checks that the session belongs to the current app and event, and
+chooses the event's active From address. A reply derives its recipient, subject,
+and threading headers from the stored original message. Reply requires that
+the original receipt has not expired. Callers provide neither sender addresses
+nor raw headers.
+
+The corresponding endpoints are `POST /api/v1/apps/{app_id}/mail/send` with
+`{session,to,cc,bcc,subject,text,html}` and
+`POST /api/v1/apps/{app_id}/mail/reply` with `{session,message,text,html}`.
+Both return the session and a request ID after provider acceptance. The default
+limit is one message per app every five seconds, configured with
+`MAIL_CONFIG.min_send_interval_seconds`. A message can address at most 20
+recipients across To, CC, and BCC, with at most 1 MiB of body content. The send
+endpoint and node currently support text and HTML bodies without attachments.
+
+Request [SES production access](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html)
+in the sending region before sending to arbitrary recipients. In the sandbox,
+recipients must be verified or use the SES mailbox simulator. Sender identities
+must remain verified after production access is granted.
 
 ## Storage accounting
 

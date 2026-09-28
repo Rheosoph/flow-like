@@ -45,6 +45,24 @@ use datafusion_table_providers::{
     util::secrets::to_secret_map as clickhouse_to_secret_map,
 };
 
+/// HTTP-based drivers (ClickHouse, Flight SQL) bring their own clients, so a
+/// flow-supplied endpoint is vetted against the egress policy before connecting.
+#[cfg(all(feature = "execute", any(feature = "clickhouse", feature = "flight")))]
+async fn ensure_endpoint_allowed(
+    context: &ExecutionContext,
+    driver: &str,
+    endpoint: &str,
+) -> flow_like_types::Result<()> {
+    let url = flow_like_types::reqwest::Url::parse(endpoint).map_err(|error| {
+        flow_like_types::anyhow!("{driver} endpoint '{endpoint}' is not a valid URL: {error}")
+    })?;
+    flow_like::flow::execution::egress::ensure_url_resolves_allowed(
+        context.execution_environment(),
+        &url,
+    )
+    .await
+}
+
 // ============================================================================
 // PostgreSQL Node
 // ============================================================================
@@ -1023,6 +1041,7 @@ impl NodeLogic for RegisterClickhouseNode {
             use std::collections::HashMap;
 
             let url = format!("http://{}:{}", host, port);
+            ensure_endpoint_allowed(context, "ClickHouse", &url).await?;
 
             let mut params = HashMap::new();
             params.insert("url".to_string(), url);
@@ -1522,6 +1541,7 @@ impl NodeLogic for RegisterFlightSqlNode {
             };
             use std::collections::HashMap;
 
+            ensure_endpoint_allowed(context, "Flight SQL", &endpoint).await?;
             let driver = FlightSqlDriver::new();
             let factory = FlightTableFactory::new(Arc::new(driver));
 

@@ -2,10 +2,17 @@ import { afterAll, beforeEach, expect, test } from "bun:test";
 import type { IApiState } from "../../state/backend-state/api-state";
 import type { IProfile } from "../../types";
 import { base64url } from "./crypto";
-import { restoreAccountRecovery, saveAccountRecovery } from "./recovery";
+import {
+	openControllerBackup,
+	readControllerBackupFile,
+	restoreAccountRecovery,
+	saveAccountRecovery,
+	sealedControllerBackup,
+} from "./recovery";
 import {
 	type LocalDeviceVault,
 	addDeviceVault,
+	encryptedControllerBackup,
 	readAccountRecoveryState,
 	readDeviceVault,
 	replaceRewrappedVault,
@@ -76,9 +83,23 @@ Object.defineProperty(globalThis, "indexedDB", {
 										return result;
 									},
 									add(value: unknown, key: string) {
-										if (staged.has(key)) throw new Error("duplicate");
+										const request = {
+											error: null as { name: string } | null,
+											onerror: undefined as
+												| ((event: { preventDefault(): void }) => void)
+												| undefined,
+										};
+										if (staged.has(key)) {
+											request.error = { name: "ConstraintError" };
+											queueMicrotask(() => {
+												request.onerror?.({ preventDefault() {} });
+												tx.abort();
+											});
+											return request;
+										}
 										staged.set(key, structuredClone(value));
 										finish();
+										return request;
 									},
 									put(value: unknown, key: string) {
 										staged.set(key, structuredClone(value));
@@ -145,6 +166,10 @@ beforeEach(() => {
 	lockHeld = false;
 });
 
+function unsignedJws(value: Record<string, unknown>): string {
+	return `header.${base64url(new TextEncoder().encode(JSON.stringify(value)))}.signature`;
+}
+
 function fixture(): LocalDeviceVault {
 	const key = {
 		kty: "OKP" as const,
@@ -153,9 +178,13 @@ function fixture(): LocalDeviceVault {
 	};
 	return {
 		deviceId: "device",
-		grantId: "reader-grant",
-		manifestJws: "signed-manifest",
-		ownerControllerKey: key,
+		grantId: "owner",
+		manifestJws: unsignedJws({
+			device_id: "device",
+			api_base_url: "https://hub.test/api/v1",
+			owner_id: scope.account,
+			controller_key: key,
+		}),
 		controllerPublic: {
 			device_id: "device",
 			endpoint_id: "endpoint",
@@ -461,4 +490,122 @@ test("a failed reconciliation keeps existing local keys and pending ciphertext t
 		(await readAccountRecoveryState(scope, "device")).pending,
 	).toBeUndefined();
 	expect((await readAccountRecoveryState(scope, "device")).revision).toBe(1);
+});
+
+test("a sealed controller backup restores only with its password and untouched trust anchors", async () => {
+	const original = fixture();
+	const server = services();
+	const text = await (
+		await sealedControllerBackup(
+			scope,
+			original,
+			"correct device password",
+			server.module,
+		)
+	).text();
+	expect(text).not.toContain(original.manifestJws);
+	const file = readControllerBackupFile(text, scope, "device");
+	if (!file.sealed) throw new Error("expected a sealed backup");
+	await expect(
+		openControllerBackup(
+			scope,
+			"device",
+			file,
+			"wrong password",
+			server.module,
+		),
+	).rejects.toThrow("Wrong password");
+	const restored = await openControllerBackup(
+		scope,
+		"device",
+		file,
+		"correct device password",
+		server.module,
+	);
+	expect(restored).toEqual({
+		...original,
+		ownerControllerKey: undefined,
+		requiresFreshEndpoint: true,
+	});
+	const swapped = JSON.parse(text);
+	swapped.controllerKey = {
+		...swapped.controllerKey,
+		x: base64url(new Uint8Array(32).fill(9)),
+	};
+	const forged = readControllerBackupFile(
+		JSON.stringify(swapped),
+		scope,
+		"device",
+	);
+	if (!forged.sealed) throw new Error("expected a sealed backup");
+	await expect(
+		openControllerBackup(
+			scope,
+			"device",
+			forged,
+			"correct device password",
+			server.module,
+		),
+	).rejects.toThrow("scope");
+	expect(() =>
+		readControllerBackupFile(
+			text,
+			{ ...scope, apiOrigin: "https://other.test" },
+			"device",
+		),
+	).toThrow("another device or hub");
+});
+
+test("legacy plaintext backups import only owner authority that unlock can verify", async () => {
+	const owner = fixture();
+	const legacy = await encryptedControllerBackup(scope, owner).text();
+	const imported = readControllerBackupFile(legacy, scope, "device");
+	expect(imported.sealed).toBe(false);
+	const ownerKey = {
+		kty: "OKP" as const,
+		crv: "Ed25519" as const,
+		x: base64url(new Uint8Array(32).fill(3)),
+	};
+	const shared = {
+		...owner,
+		grantId: "reader-grant",
+		invitationVault: undefined,
+		ownerControllerKey: ownerKey,
+		manifestJws: unsignedJws({
+			device_id: "device",
+			api_base_url: "https://hub.test/api/v1",
+			owner_id: "device-owner",
+			controller_key: ownerKey,
+		}),
+	};
+	const sharedText = await encryptedControllerBackup(scope, shared).text();
+	expect(() => readControllerBackupFile(sharedText, scope, "device")).toThrow(
+		"cannot be verified",
+	);
+	for (const forged of [
+		{ ...owner, ownerControllerKey: ownerKey },
+		{
+			...owner,
+			manifestJws: unsignedJws({
+				device_id: "device",
+				api_base_url: "https://hub.test/api/v1",
+				owner_id: "someone-else",
+				controller_key: owner.controllerPublic.controller_key,
+			}),
+		},
+		{
+			...owner,
+			manifestJws: unsignedJws({
+				device_id: "device",
+				api_base_url: "https://hub.test/api/v1",
+				owner_id: scope.account,
+				controller_key: ownerKey,
+			}),
+		},
+	]) {
+		const text = await encryptedControllerBackup(scope, forged).text();
+		expect(() => readControllerBackupFile(text, scope, "device")).toThrow(
+			"for device device",
+		);
+	}
 });

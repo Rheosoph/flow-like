@@ -26,6 +26,15 @@ execute = [
     "dep:x11rb",
     "dep:http",
     "dep:windows",
+    "dep:htmd",
+    "dep:hmac",
+    "dep:sha1",
+    "dep:sha2",
+    "dep:objc2",
+    "dep:objc2-core-foundation",
+    "dep:objc2-core-graphics",
+    "dep:objc2-foundation",
+    "dep:objc2-vision",
 ]
 
 [dependencies]
@@ -45,12 +54,16 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "pr
 uuid.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
+hmac = { version = "0.12", optional = true }
+sha1 = { version = "0.10", optional = true }
+sha2 = { version = "0.10", optional = true }
 
 # LLM integration for self-healing automation
 rig = { workspace = true, optional = true }
 jsonschema = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true, optional = true }
 http = { version = "1", optional = true }
+htmd = { version = "0.5.0", optional = true }
 
 # Image encoding
 image = { workspace = true }
@@ -67,10 +80,18 @@ arboard = { version = "3.5", optional = true }
 rustautogui = { version = "2.5", optional = true, features = ["dev"] }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", optional = true, features = ["Win32_UI_Accessibility", "Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.61", optional = true, features = ["Win32_UI_Accessibility", "Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_WindowsAndMessaging", "Foundation", "Foundation_Collections", "Globalization", "Graphics_Imaging", "Media_Ocr", "Storage_Streams"] }
 
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
 rdev = { workspace = true, optional = true }
+
+# Apple Vision text recognition
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.2", optional = true }
+objc2-core-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "CFData"] }
+objc2-core-graphics = { version = "0.3.2", optional = true, default-features = false, features = ["std", "CGColorSpace", "CGDataProvider", "CGImage"] }
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "NSArray", "NSDictionary", "NSEnumerator", "NSError", "NSObject", "NSRange", "NSString"] }
+objc2-vision = { version = "0.3.2", optional = true, default-features = false, features = ["std", "objc2-core-foundation", "objc2-core-graphics", "VNObservation", "VNRecognizeTextRequest", "VNRequest", "VNRequestHandler", "VNTypes"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 atspi = { version = "0.25", features = ["zbus"], optional = true }
@@ -81,6 +102,9 @@ rdev = { workspace = true, optional = true, features = ["x11", "wayland"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
 
 [build-dependencies]
 flow-like-catalog-build-helper.workspace = true

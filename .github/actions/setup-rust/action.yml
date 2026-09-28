@@ -1,0 +1,27 @@
+name: Setup repository Rust toolchain
+description: Installs the compiler and components pinned in rust-toolchain.toml.
+
+inputs:
+  targets:
+    description: Additional compilation targets, separated by commas
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Install pinned Rust toolchain
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        RUST_TARGETS: ${{ inputs.targets }}
+      run: |
+        unset RUSTUP_TOOLCHAIN
+        rustup toolchain install
+        toolchain="$(rustup show active-toolchain | cut -d ' ' -f 1)"
+        echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+        if [ -n "$RUST_TARGETS" ]; then
+          IFS=',' read -r -a targets <<< "$RUST_TARGETS"
+          rustup target add "${targets[@]}"
+        fi
+        rustc --version --verbose

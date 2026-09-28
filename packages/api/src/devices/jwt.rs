@@ -117,7 +117,11 @@ pub fn is_device_credential(token: &str) -> bool {
     if jsonwebtoken::decode_header(token)
         .ok()
         .and_then(|header| header.typ)
-        .is_some_and(|typ| typ.starts_with("flow-like-device-") || typ.starts_with("flow-like-instance-") || typ == "dpop+jwt")
+        .is_some_and(|typ| {
+            typ.starts_with("flow-like-device-")
+                || typ.starts_with("flow-like-instance-")
+                || typ == "dpop+jwt"
+        })
     {
         return true;
     }

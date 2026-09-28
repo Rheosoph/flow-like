@@ -4,7 +4,7 @@ use flow_like::flow_like_storage::files::store::FlowLikeStore;
 use flow_like_types::tokio::sync::{RwLock, mpsc};
 use serde::{Deserialize, Serialize};
 
-use super::fingerprint::extract_fingerprint_at;
+use super::fingerprint::{extract_fingerprint_at, focused_element_is_secure, is_password_role};
 use super::screenshot::{capture_region_image, store_region};
 use super::state::RecordingSettings;
 use super::state::{
@@ -582,10 +582,11 @@ impl EventCapture {
         }
     }
 
+    /// Key names accepted by the Key Press node; `None` for keys it cannot replay.
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-    fn key_to_string(key: &rdev::Key) -> String {
+    fn key_to_string(key: &rdev::Key) -> Option<String> {
         use rdev::Key;
-        match key {
+        Some(match key {
             // Letters
             Key::KeyA => "a".to_string(),
             Key::KeyB => "b".to_string(),
@@ -639,6 +640,18 @@ impl EventCapture {
             Key::F10 => "F10".to_string(),
             Key::F11 => "F11".to_string(),
             Key::F12 => "F12".to_string(),
+            Key::F13 => "F13".to_string(),
+            Key::F14 => "F14".to_string(),
+            Key::F15 => "F15".to_string(),
+            Key::F16 => "F16".to_string(),
+            Key::F17 => "F17".to_string(),
+            Key::F18 => "F18".to_string(),
+            Key::F19 => "F19".to_string(),
+            Key::F20 => "F20".to_string(),
+            Key::F21 => "F21".to_string(),
+            Key::F22 => "F22".to_string(),
+            Key::F23 => "F23".to_string(),
+            Key::F24 => "F24".to_string(),
 
             // Special keys
             Key::Alt => "Alt".to_string(),
@@ -664,6 +677,17 @@ impl EventCapture {
             Key::Space => "Space".to_string(),
             Key::Tab => "Tab".to_string(),
             Key::UpArrow => "Up".to_string(),
+            Key::Insert => "Insert".to_string(),
+            Key::PrintScreen => "PrintScreen".to_string(),
+            Key::ScrollLock => "ScrollLock".to_string(),
+            Key::Pause => "Pause".to_string(),
+            Key::NumLock => "NumLock".to_string(),
+            Key::VolumeUp => "VolumeUp".to_string(),
+            Key::VolumeDown => "VolumeDown".to_string(),
+            Key::VolumeMute => "VolumeMute".to_string(),
+            Key::PlayPause => "MediaPlayPause".to_string(),
+            Key::NextTrack => "MediaNext".to_string(),
+            Key::PreviousTrack => "MediaPrev".to_string(),
 
             // Punctuation
             Key::Comma => ",".to_string(),
@@ -696,9 +720,12 @@ impl EventCapture {
             Key::Kp9 => "9".to_string(),
             Key::KpDelete => "Delete".to_string(),
 
-            // Default for unknown keys
-            _ => format!("{:?}", key),
-        }
+            #[cfg(target_os = "macos")]
+            Key::Unknown(code) => macos_virtual_key_name(*code)?.to_string(),
+
+            // Function, brightness, IntlBackslash and unnamed keys have no replayable name.
+            _ => return None,
+        })
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -809,7 +836,7 @@ impl EventCapture {
                     if !held_keys.contains(&key) {
                         held_keys.push(key);
                     }
-                    let key_str = Self::key_to_string(&key);
+                    let key_name = Self::key_to_string(&key);
                     let modifiers = held_modifiers(&held_keys);
                     let is_shift_held = modifiers.contains(&KeyModifier::Shift);
                     let has_ctrl = modifiers.contains(&KeyModifier::Control);
@@ -827,6 +854,7 @@ impl EventCapture {
                             | Key::MetaRight
                             | Key::Alt
                             | Key::AltGr
+                            | Key::Function
                     );
 
                     if is_modifier_key {
@@ -834,45 +862,27 @@ impl EventCapture {
                         return;
                     }
 
-                    // Check if this is a special key or has modifiers (excluding just Shift for typing)
+                    // Named non-text keys replay as key presses. Space stays text, and Caps Lock
+                    // is left out because macOS reports only its press that turns it on.
                     let has_cmd_or_ctrl = has_ctrl || has_meta;
-                    let is_special_key = matches!(
-                        key,
-                        Key::Return
-                            | Key::Tab
-                            | Key::Escape
-                            | Key::Backspace
-                            | Key::Delete
-                            | Key::UpArrow
-                            | Key::DownArrow
-                            | Key::LeftArrow
-                            | Key::RightArrow
-                            | Key::Home
-                            | Key::End
-                            | Key::PageUp
-                            | Key::PageDown
-                            | Key::F1
-                            | Key::F2
-                            | Key::F3
-                            | Key::F4
-                            | Key::F5
-                            | Key::F6
-                            | Key::F7
-                            | Key::F8
-                            | Key::F9
-                            | Key::F10
-                            | Key::F11
-                            | Key::F12
-                    );
+                    let is_special_key = key_name.as_deref().is_some_and(|name| {
+                        name.chars().count() > 1 && !matches!(name, "Space" | "CapsLock")
+                    });
 
                     // If Ctrl/Cmd/Alt is held, send as KeyDown (for shortcuts like Ctrl+C)
                     // If it's a special key, send as KeyDown
                     // Otherwise, try to get character for text input
                     if has_cmd_or_ctrl || has_alt || is_special_key {
-                        // Send as KeyDown event (will be handled as special key or shortcut)
-                        Some(CapturedEvent::KeyDown {
-                            key: key_str,
-                            modifiers,
+                        Some(match key_name {
+                            Some(name) => CapturedEvent::KeyDown {
+                                key: name,
+                                modifiers,
+                            },
+                            None => CapturedEvent::Unsupported {
+                                message: format!(
+                                    "The {key:?} key cannot be replayed, so it was not recorded. Add that step explicitly."
+                                ),
+                            },
                         })
                     } else {
                         // Try to get character for text input.
@@ -893,8 +903,9 @@ impl EventCapture {
                 EventType::KeyRelease(key) => {
                     held_keys.retain(|held| *held != key);
 
-                    let key_str = Self::key_to_string(&key);
-                    Some(CapturedEvent::KeyUp { key: key_str })
+                    Some(CapturedEvent::KeyUp {
+                        key: Self::key_to_string(&key).unwrap_or_default(),
+                    })
                 }
             };
 
@@ -1037,6 +1048,7 @@ impl EventCapture {
         let mut pending_mouse: Option<InputEvent> = None;
         let mut last_focus: Option<FocusedWindow> = None;
         let mut last_click: Option<RecordedAction> = None;
+        let mut secure_target = false;
         let mut uploads = flow_like_types::tokio::task::JoinSet::new();
         let mut timer =
             flow_like_types::tokio::time::interval(std::time::Duration::from_millis(100));
@@ -1087,6 +1099,7 @@ impl EventCapture {
                 state.add_action(action.clone());
                 emit_recorded_action(&app_handle, &action);
                 last_focus = Some(focused.clone());
+                secure_target = false;
             }
             let mut pending_screenshot = None;
             let mut recorded_focus = input.focused.clone();
@@ -1170,6 +1183,11 @@ impl EventCapture {
                     } else {
                         last_click = None;
                     }
+                    secure_target = action
+                        .fingerprint
+                        .as_ref()
+                        .and_then(|fingerprint| fingerprint.role.as_deref())
+                        .is_some_and(is_password_role);
                     action
                 }
                 CapturedEvent::Scroll { x, y, dx, dy } => {
@@ -1190,26 +1208,31 @@ impl EventCapture {
                     last_click = None;
                     continue;
                 }
-                CapturedEvent::Character { ch } => {
-                    if !ch.is_control() {
-                        let mut state = state.write().await;
-                        state.buffer_keystroke_at(*ch, input.timestamp);
-                    }
+                CapturedEvent::Character { .. } | CapturedEvent::Text { .. } => {
                     last_click = None;
+                    if let Some(text) = typed_text(&input.event) {
+                        let secure = typing_is_secure(&state, secure_target).await;
+                        buffer_typing(&state, &app_handle, &text, input.timestamp, secure).await;
+                    }
                     continue;
                 }
-                CapturedEvent::Text { text } => {
-                    let mut state = state.write().await;
-                    for ch in text.chars().filter(|ch| !ch.is_control()) {
-                        state.buffer_keystroke_at(ch, input.timestamp);
+                CapturedEvent::KeyDown { key, modifiers } => {
+                    last_click = None;
+                    if matches!(key.as_str(), "Tab" | "Enter" | "Escape") {
+                        secure_target = false;
                     }
-                    last_click = None;
-                    continue;
-                }
-                CapturedEvent::KeyDown { .. } => {
-                    last_click = None;
+                    if is_editing_key(key) && state.read().await.in_secure_entry() {
+                        continue;
+                    }
+                    let text_chord = is_text_chord(key, modifiers);
+                    let secure = (text_chord || is_paste_shortcut(&input.event))
+                        && typing_is_secure(&state, secure_target).await;
+                    if text_chord && secure {
+                        buffer_typing(&state, &app_handle, key, input.timestamp, true).await;
+                        continue;
+                    }
                     let Some(action_type) =
-                        recorded_key_action(&input.event, input.clipboard.clone())
+                        recorded_key_action(&input.event, input.clipboard.clone(), secure)
                     else {
                         continue;
                     };
@@ -1230,6 +1253,9 @@ impl EventCapture {
             let mut state = state.write().await;
             if let Some(typed) = state.flush_keystroke_buffer() {
                 emit_recorded_action(&app_handle, &typed);
+            }
+            if action.action_type.is_secure_input() && state.last_is_secure_input() {
+                continue;
             }
             state.add_action(action.clone());
             emit_recorded_action(&app_handle, &action);
@@ -1284,6 +1310,29 @@ impl EventCapture {
     }
 }
 
+/// Virtual key codes (HIToolbox `kVK_*`) that rdev reports as `Key::Unknown` on macOS.
+#[cfg(target_os = "macos")]
+fn macos_virtual_key_name(code: u32) -> Option<&'static str> {
+    Some(match code {
+        0x40 => "F17",
+        0x4C => "Enter",
+        0x4F => "F18",
+        0x50 => "F19",
+        0x5A => "F20",
+        0x69 => "F13",
+        0x6A => "F16",
+        0x6B => "F14",
+        0x71 => "F15",
+        0x72 => "Help",
+        0x73 => "Home",
+        0x74 => "PageUp",
+        0x75 => "Delete",
+        0x77 => "End",
+        0x79 => "PageDown",
+        _ => return None,
+    })
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn held_modifiers(keys: &[rdev::Key]) -> Vec<KeyModifier> {
     use rdev::Key;
@@ -1313,7 +1362,64 @@ fn is_copy_shortcut(event: &CapturedEvent) -> bool {
 fn is_paste_shortcut(event: &CapturedEvent) -> bool {
     is_plain_shortcut(event, "v")
 }
-fn recorded_key_action(event: &CapturedEvent, clipboard: Option<String>) -> Option<ActionType> {
+/// A character produced with Alt/Option or AltGr (reported as Ctrl+Alt) is typed text.
+fn is_text_chord(key: &str, modifiers: &[KeyModifier]) -> bool {
+    key.chars().count() == 1 && modifiers.contains(&KeyModifier::Alt)
+}
+fn is_editing_key(key: &str) -> bool {
+    matches!(
+        key,
+        "Backspace" | "Delete" | "Left" | "Right" | "Up" | "Down" | "Home" | "End"
+    )
+}
+fn typed_text(event: &CapturedEvent) -> Option<String> {
+    let text: String = match event {
+        CapturedEvent::Character { ch } => ch.to_string(),
+        CapturedEvent::Text { text } => text.clone(),
+        _ => return None,
+    }
+    .chars()
+    .filter(|ch| !ch.is_control())
+    .collect();
+    (!text.is_empty()).then_some(text)
+}
+async fn focused_input_is_secure() -> bool {
+    matches!(
+        flow_like_types::tokio::time::timeout(
+            std::time::Duration::from_millis(600),
+            flow_like_types::tokio::task::spawn_blocking(focused_element_is_secure),
+        )
+        .await,
+        Ok(Ok(Some(true)))
+    )
+}
+/// Keystrokes continuing a buffered entry keep its mode; a new entry asks the focused element.
+async fn typing_is_secure(state: &RwLock<RecordingStateInner>, secure_target: bool) -> bool {
+    if let Some(secure) = state.read().await.typing_secure() {
+        return secure;
+    }
+    secure_target || focused_input_is_secure().await
+}
+async fn buffer_typing(
+    state: &RwLock<RecordingStateInner>,
+    app_handle: &tauri::AppHandle,
+    text: &str,
+    timestamp: DateTime<Utc>,
+    secure: bool,
+) {
+    let mut state = state.write().await;
+    if let Some(action) = state.set_keystroke_secure(secure) {
+        emit_recorded_action(app_handle, &action);
+    }
+    for ch in text.chars() {
+        state.buffer_keystroke_at(ch, timestamp);
+    }
+}
+fn recorded_key_action(
+    event: &CapturedEvent,
+    clipboard: Option<String>,
+    secure: bool,
+) -> Option<ActionType> {
     let CapturedEvent::KeyDown { key, modifiers } = event else {
         return None;
     };
@@ -1322,11 +1428,18 @@ fn recorded_key_action(event: &CapturedEvent, clipboard: Option<String>) -> Opti
             clipboard_content: None,
         });
     }
+    if is_paste_shortcut(event) && secure {
+        return Some(ActionType::Paste {
+            clipboard_content: None,
+            secure: true,
+        });
+    }
     if is_paste_shortcut(event)
         && let Some(clipboard_content) = clipboard
     {
         return Some(ActionType::Paste {
             clipboard_content: Some(clipboard_content),
+            secure: false,
         });
     }
     Some(ActionType::KeyPress {
@@ -1461,10 +1574,64 @@ mod tests {
             modifiers: vec![KeyModifier::Meta],
         };
         assert!(
-            matches!(recorded_key_action(&event, None), Some(ActionType::KeyPress { key, modifiers }) if key == "v" && modifiers == [KeyModifier::Meta])
+            matches!(recorded_key_action(&event, None, false), Some(ActionType::KeyPress { key, modifiers }) if key == "v" && modifiers == [KeyModifier::Meta])
         );
         assert!(
-            matches!(recorded_key_action(&event, Some("captured text".into())), Some(ActionType::Paste { clipboard_content: Some(text) }) if text == "captured text")
+            matches!(recorded_key_action(&event, Some("captured text".into()), false), Some(ActionType::Paste { clipboard_content: Some(text), secure: false }) if text == "captured text")
+        );
+    }
+
+    #[test]
+    fn password_field_input_is_never_captured_as_text() {
+        let paste = CapturedEvent::KeyDown {
+            key: "v".into(),
+            modifiers: vec![KeyModifier::Control],
+        };
+        for clipboard in [Some("hunter2".to_string()), None] {
+            assert!(matches!(
+                recorded_key_action(&paste, clipboard, true),
+                Some(ActionType::Paste {
+                    clipboard_content: None,
+                    secure: true
+                })
+            ));
+        }
+        assert!(is_text_chord(
+            "@",
+            &[KeyModifier::Control, KeyModifier::Alt]
+        ));
+        assert!(!is_text_chord("c", &[KeyModifier::Control]));
+        assert!(!is_text_chord("Tab", &[KeyModifier::Alt]));
+        assert_eq!(
+            typed_text(&CapturedEvent::Text {
+                text: "a\u{7}b".into()
+            })
+            .as_deref(),
+            Some("ab")
+        );
+        assert!(typed_text(&CapturedEvent::Character { ch: '\n' }).is_none());
+    }
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    fn only_replayable_keys_get_a_key_press_name() {
+        use rdev::Key;
+        for (key, name) in [
+            (Key::Insert, "Insert"),
+            (Key::PrintScreen, "PrintScreen"),
+            (Key::F24, "F24"),
+            (Key::PlayPause, "MediaPlayPause"),
+            (Key::KpReturn, "Enter"),
+        ] {
+            assert_eq!(EventCapture::key_to_string(&key).as_deref(), Some(name));
+        }
+        for key in [Key::Function, Key::BrightnessUp, Key::Unknown(0xFFFF)] {
+            assert!(EventCapture::key_to_string(&key).is_none());
+        }
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            EventCapture::key_to_string(&Key::Unknown(0x73)).as_deref(),
+            Some("Home")
         );
     }
 

@@ -1,0 +1,15 @@
+[package]
+name = "compiler-reproducibility"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+fast_image_resize = "=5.5.0"
+
+[profile.release]
+opt-level = 3
+debug = false
+incremental = false

@@ -95,13 +95,83 @@ pub struct AutomationSession {
     pub browser_frame_selectors: Vec<crate::types::selectors::Selector>,
 }
 
+/// WebDriver server process (chromedriver, geckodriver, …) started for one session.
+#[cfg(feature = "execute")]
+pub(crate) struct DriverServer {
+    child: tokio::process::Child,
+}
+
+#[cfg(feature = "execute")]
+impl DriverServer {
+    pub(crate) fn new(child: tokio::process::Child) -> Self {
+        Self { child }
+    }
+
+    pub(crate) fn has_exited(&mut self) -> flow_like_types::Result<bool> {
+        Ok(self.child.try_wait()?.is_some())
+    }
+}
+
+#[cfg(feature = "execute")]
+impl Drop for DriverServer {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+    }
+}
+
+/// The server must outlive the WebDriver session: killing chromedriver before its
+/// session is deleted orphans the browser it launched.
+#[cfg(feature = "execute")]
+#[derive(Default)]
+struct BrowserState {
+    driver: Option<Arc<thirtyfour::WebDriver>>,
+    owned: bool,
+    server: Option<Arc<DriverServer>>,
+}
+
+#[cfg(feature = "execute")]
+impl Drop for BrowserState {
+    fn drop(&mut self) {
+        let Some(driver) = self.driver.take() else {
+            return;
+        };
+        let server = self.server.take();
+        let owned = self.owned;
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn(async move {
+                    let _ = end_driver_session(&driver, owned).await;
+                    drop(driver);
+                    drop(server);
+                });
+            }
+            Err(_) => {
+                drop(driver);
+                drop(server);
+            }
+        }
+    }
+}
+
+/// Marks the session inactive once the last wrapper clone is gone (the run ended without
+/// Stop Session), so watchers such as a latched Mouse Down release what they hold.
+#[cfg(feature = "execute")]
+struct SessionLifetime(Arc<std::sync::atomic::AtomicBool>);
+
+#[cfg(feature = "execute")]
+impl Drop for SessionLifetime {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 #[cfg(feature = "execute")]
 #[derive(Clone)]
 pub struct AutomationSessionWrapper {
-    browser_driver: Arc<tokio::sync::RwLock<Option<Arc<thirtyfour::WebDriver>>>>,
+    browser: Arc<tokio::sync::RwLock<BrowserState>>,
     browser_lock: Arc<tokio::sync::Mutex<()>>,
-    browser_owned: Arc<std::sync::atomic::AtomicBool>,
     active: Arc<std::sync::atomic::AtomicBool>,
+    _lifetime: Arc<SessionLifetime>,
 }
 
 #[cfg(feature = "execute")]
@@ -144,11 +214,12 @@ impl AutomationSession {
         } else {
             Platform::Linux
         };
+        let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let wrapper = AutomationSessionWrapper {
-            browser_driver: Arc::new(tokio::sync::RwLock::new(None)),
-            browser_owned: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            browser: Arc::new(tokio::sync::RwLock::new(BrowserState::default())),
             browser_lock: Arc::new(tokio::sync::Mutex::new(())),
-            active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            active: active.clone(),
+            _lifetime: Arc::new(SessionLifetime(active)),
         };
         ctx.cache
             .write()
@@ -222,23 +293,7 @@ impl AutomationSession {
         driver: thirtyfour::WebDriver,
         options: &BrowserContextOptions,
     ) -> flow_like_types::Result<()> {
-        let wrapper = self.wrapper(ctx).await?;
-        let _operation = wrapper.browser_lock.lock().await;
-        let mut current = wrapper.browser_driver.write().await;
-        if current.is_some() {
-            return Err(flow_like_types::anyhow!(
-                "Close the attached browser before replacing it"
-            ));
-        }
-        wrapper
-            .browser_owned
-            .store(true, std::sync::atomic::Ordering::Release);
-        *current = Some(Arc::new(driver));
-        self.browser_type = Some(options.browser_type.clone());
-        self.browser_headless = Some(options.headless);
-        self.browser_user_data_dir = options.user_data_dir.clone();
-        self.clear_current_page();
-        Ok(())
+        self.attach(ctx, driver, options, true).await
     }
 
     #[cfg(feature = "execute")]
@@ -250,11 +305,73 @@ impl AutomationSession {
     ) -> flow_like_types::Result<()> {
         // Prevent the WebDriver destructor from closing a browser owned by the user.
         driver.clone().leak()?;
-        self.attach_browser(ctx, driver, options).await?;
-        self.wrapper(ctx)
+        self.attach(ctx, driver, options, false).await
+    }
+
+    #[cfg(feature = "execute")]
+    async fn attach(
+        &mut self,
+        ctx: &mut ExecutionContext,
+        driver: thirtyfour::WebDriver,
+        options: &BrowserContextOptions,
+        owned: bool,
+    ) -> flow_like_types::Result<()> {
+        let wrapper = self.wrapper(ctx).await?;
+        let _operation = wrapper.browser_lock.lock().await;
+        let mut state = wrapper.browser.write().await;
+        if state.driver.is_some() {
+            return Err(flow_like_types::anyhow!(
+                "Close the attached browser before replacing it"
+            ));
+        }
+        state.driver = Some(Arc::new(driver));
+        state.owned = owned;
+        self.browser_type = Some(options.browser_type.clone());
+        self.browser_headless = Some(options.headless);
+        self.browser_user_data_dir = options.user_data_dir.clone();
+        self.clear_current_page();
+        Ok(())
+    }
+
+    #[cfg(feature = "execute")]
+    pub(crate) async fn has_driver_server(
+        &self,
+        ctx: &ExecutionContext,
+    ) -> flow_like_types::Result<bool> {
+        Ok(self
+            .wrapper(ctx)
             .await?
-            .browser_owned
-            .store(false, std::sync::atomic::Ordering::Release);
+            .browser
+            .read()
+            .await
+            .server
+            .is_some())
+    }
+
+    /// Ties the WebDriver server to this session so it is stopped only after the browser session ends.
+    #[cfg(feature = "execute")]
+    pub(crate) async fn set_driver_server(
+        &self,
+        ctx: &ExecutionContext,
+        server: DriverServer,
+    ) -> flow_like_types::Result<()> {
+        let wrapper = self.wrapper(ctx).await?;
+        let mut state = wrapper.browser.write().await;
+        if state.server.is_some() {
+            return Err(flow_like_types::anyhow!(
+                "Stop this session's WebDriver before starting another"
+            ));
+        }
+        state.server = Some(Arc::new(server));
+        Ok(())
+    }
+
+    #[cfg(feature = "execute")]
+    pub(crate) async fn stop_driver_server(
+        &self,
+        ctx: &ExecutionContext,
+    ) -> flow_like_types::Result<()> {
+        self.wrapper(ctx).await?.browser.write().await.server = None;
         Ok(())
     }
 
@@ -274,9 +391,10 @@ impl AutomationSession {
             return Err(flow_like_types::anyhow!("Automation session is closed"));
         }
         let driver = wrapper
-            .browser_driver
+            .browser
             .read()
             .await
+            .driver
             .clone()
             .ok_or_else(|| flow_like_types::anyhow!("No browser attached to this session"))?;
         Ok(BrowserOperationGuard {
@@ -337,73 +455,73 @@ impl AutomationSession {
         ctx: &mut ExecutionContext,
     ) -> flow_like_types::Result<()> {
         let wrapper = self.wrapper(ctx).await?;
-        let _guard = wrapper.browser_lock.lock().await;
-        let driver = wrapper.browser_driver.write().await.take();
         self.browser_type = None;
         self.browser_headless = None;
         self.browser_user_data_dir = None;
         self.clear_current_page();
-        if let Some(driver) = driver {
-            if wrapper
-                .browser_owned
-                .load(std::sync::atomic::Ordering::Acquire)
-            {
-                ignore_closed_driver((*driver).clone().quit().await)?;
-            } else {
-                // Chromium's remote-debugging backend deletes the driver session without closing the attached browser.
-                ignore_closed_driver(
-                    driver
-                        .handle
-                        .cmd(thirtyfour::common::command::Command::DeleteSession)
-                        .await
-                        .map(|_| ()),
-                )?;
-            }
-        }
-        Ok(())
+        take_and_end_browser(&wrapper).await
     }
 
+    /// Ends the browser session while its WebDriver server is still running, then
+    /// drops the session's cached resources, which stops the server.
     #[cfg(feature = "execute")]
     pub async fn close(&self, ctx: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let wrapper = self.wrapper(ctx).await?;
         wrapper
             .active
             .store(false, std::sync::atomic::Ordering::Release);
-        let mut cache = ctx.cache.write().await;
+        let ended = take_and_end_browser(&wrapper).await;
+        let server = wrapper.browser.write().await.server.take();
         let prefixes = [
             "automation:auth:",
             "automation:network:",
-            "automation:driver:",
             "automation:download:",
             "automation:debugger:",
+            "automation:refs:",
+            "automation:policy:",
+            "automation:screen_state:",
         ]
         .map(|prefix| format!("{}{}", prefix, self.session_ref));
-        cache.retain(|key, _| {
+        ctx.cache.write().await.retain(|key, _| {
             key != &self.session_ref
                 && !prefixes
                     .iter()
                     .any(|prefix| key == prefix || key.starts_with(&format!("{}:", prefix)))
         });
-        drop(cache);
-        let _guard = wrapper.browser_lock.lock().await;
-        if let Some(driver) = wrapper.browser_driver.write().await.take() {
-            if wrapper
-                .browser_owned
-                .load(std::sync::atomic::Ordering::Acquire)
-            {
-                ignore_closed_driver((*driver).clone().quit().await)?;
-            } else {
-                // Chromium's remote-debugging backend deletes the driver session without closing the attached browser.
-                ignore_closed_driver(
-                    driver
-                        .handle
-                        .cmd(thirtyfour::common::command::Command::DeleteSession)
-                        .await
-                        .map(|_| ()),
-                )?;
-            }
-        }
-        Ok(())
+        drop(server);
+        ended
+    }
+}
+
+#[cfg(feature = "execute")]
+async fn take_and_end_browser(wrapper: &AutomationSessionWrapper) -> flow_like_types::Result<()> {
+    let _guard = wrapper.browser_lock.lock().await;
+    let (driver, owned) = {
+        let mut state = wrapper.browser.write().await;
+        (state.driver.take(), state.owned)
+    };
+    match driver {
+        Some(driver) => end_driver_session(&driver, owned).await,
+        None => Ok(()),
+    }
+}
+
+#[cfg(feature = "execute")]
+async fn end_driver_session(
+    driver: &thirtyfour::WebDriver,
+    owned: bool,
+) -> flow_like_types::Result<()> {
+    if owned {
+        ignore_closed_driver(driver.clone().quit().await)
+    } else {
+        // Chromium's remote-debugging backend deletes the driver session without closing the attached browser.
+        ignore_closed_driver(
+            driver
+                .handle
+                .cmd(thirtyfour::common::command::Command::DeleteSession)
+                .await
+                .map(|_| ()),
+        )
     }
 }
 

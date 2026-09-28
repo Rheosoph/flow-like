@@ -1,13 +1,15 @@
 use crate::data::path::FlowPath;
-use crate::data::providers::util::get_pin_string_value;
+use crate::data::providers::util::{
+    WithEgressGuard, ensure_store_endpoint_allowed, get_pin_string_value,
+};
 use flow_like::flow::{
     board::Board,
-    execution::context::ExecutionContext,
+    execution::{ExecutionEnvironment, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores, remove_pin_by_name},
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, async_trait, json::json};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 pub const GCP_ADC: &str = "application_default";
@@ -88,6 +90,7 @@ impl GcpProvider {
                 let key: ServiceAccountKey = flow_like_types::json::from_str(raw).map_err(|e| {
                     flow_like_types::anyhow!("Invalid service account JSON key: {}", e)
                 })?;
+                ensure_token_uri_allowed(context, &key).await?;
                 Client::from_service_account_key(key, self.readonly)
                     .await
                     .map_err(|e| flow_like_types::anyhow!("Service account auth failed: {}", e))
@@ -111,6 +114,7 @@ impl GcpProvider {
                             e
                         )
                     })?;
+                ensure_token_uri_allowed(context, &key).await?;
                 Client::from_service_account_key(key, self.readonly)
                     .await
                     .map_err(|e| {
@@ -126,6 +130,21 @@ impl GcpProvider {
             )),
         }
     }
+}
+
+/// The BigQuery client posts its signed assertion to the key's own
+/// `token_uri`, a flow-supplied URL its HTTP client never vets.
+#[cfg(feature = "bigquery")]
+async fn ensure_token_uri_allowed(
+    context: &ExecutionContext,
+    key: &gcp_bigquery_client::yup_oauth2::ServiceAccountKey,
+) -> flow_like_types::Result<()> {
+    ensure_store_endpoint_allowed(
+        context.execution_environment(),
+        "GcpProvider service account token_uri",
+        &key.token_uri,
+    )
+    .await
 }
 
 impl GcpProvider {
@@ -145,13 +164,12 @@ impl GcpProvider {
     {
         use flow_like_storage::object_store::gcp::GoogleCloudStorageBuilder;
 
+        let environment = context.execution_environment();
         if self.relies_on_env_chain() {
-            context
-                .execution_environment()
-                .ensure_no_ambient_credentials("GcpProvider", &self.auth_mode)?;
+            environment.ensure_no_ambient_credentials("GcpProvider", &self.auth_mode)?;
         }
 
-        match self.auth_mode.as_str() {
+        let builder = match self.auth_mode.as_str() {
             GCP_SA_JSON => {
                 let raw = self.service_account_json.as_deref().unwrap_or_default();
                 if raw.trim().is_empty() {
@@ -159,7 +177,8 @@ impl GcpProvider {
                         "GcpProvider: service_account_json is empty"
                     ));
                 }
-                Ok(builder.with_service_account_key(raw))
+                ensure_gcs_base_url_allowed(environment, raw).await?;
+                builder.with_service_account_key(raw)
             }
             GCP_SA_FILE => {
                 let path = self.service_account_file.as_ref().ok_or_else(|| {
@@ -176,21 +195,48 @@ impl GcpProvider {
                 let raw = String::from_utf8(bytes).map_err(|e| {
                     flow_like_types::anyhow!("Service account key file is not valid UTF-8: {}", e)
                 })?;
-                Ok(builder.with_service_account_key(raw))
+                ensure_gcs_base_url_allowed(environment, &raw).await?;
+                builder.with_service_account_key(raw)
             }
             GCP_ADC | GCP_WORKLOAD => {
                 // Let object_store resolve via GOOGLE_APPLICATION_CREDENTIALS,
                 // gcloud-cached creds, or the GCE/GKE metadata server.
-                Ok(GoogleCloudStorageBuilder::from_env())
+                GoogleCloudStorageBuilder::from_env()
             }
-            GCP_ACCESS_TOKEN => Err(flow_like_types::anyhow!(
-                "GcpProvider: 'access_token' mode is not yet wired into object_store (no static-token constructor on GoogleCloudStorageBuilder). Use application_default or service_account_json instead."
-            )),
-            other => Err(flow_like_types::anyhow!(
-                "GcpProvider: unknown auth_mode '{}'",
-                other
-            )),
+            GCP_ACCESS_TOKEN => {
+                return Err(flow_like_types::anyhow!(
+                    "GcpProvider: 'access_token' mode is not yet wired into object_store (no static-token constructor on GoogleCloudStorageBuilder). Use application_default or service_account_json instead."
+                ));
+            }
+            other => {
+                return Err(flow_like_types::anyhow!(
+                    "GcpProvider: unknown auth_mode '{}'",
+                    other
+                ));
+            }
+        };
+        Ok(builder.with_egress_guard(environment))
+    }
+}
+
+/// object_store sends every GCS request to a service-account key's own
+/// `gcs_base_url` when one is set.
+async fn ensure_gcs_base_url_allowed(
+    environment: ExecutionEnvironment,
+    raw_key: &str,
+) -> flow_like_types::Result<()> {
+    let key: Value = flow_like_types::json::from_str(raw_key)
+        .map_err(|e| flow_like_types::anyhow!("Invalid service account JSON key: {e}"))?;
+    match key.get("gcs_base_url") {
+        Some(Value::String(base_url)) => {
+            ensure_store_endpoint_allowed(
+                environment,
+                "GcpProvider service account gcs_base_url",
+                base_url,
+            )
+            .await
         }
+        _ => Ok(()),
     }
 }
 
@@ -464,6 +510,49 @@ mod tests {
         assert!(node.get_pin_by_name("service_account_json").is_none());
         assert!(node.get_pin_by_name("service_account_file").is_none());
         assert!(node.get_pin_by_name("access_token").is_none());
+    }
+
+    #[tokio::test]
+    async fn gcs_base_url_in_a_service_account_key_is_vetted_server_side() {
+        let key = |base_url: &str| {
+            json!({
+                "private_key": "",
+                "private_key_id": "",
+                "client_email": "",
+                "disable_oauth": true,
+                "gcs_base_url": base_url,
+            })
+            .to_string()
+        };
+        for base_url in ["https://127.0.0.1:8443", "http://169.254.169.254"] {
+            assert!(
+                ensure_gcs_base_url_allowed(ExecutionEnvironment::Server, &key(base_url))
+                    .await
+                    .is_err(),
+                "{base_url} must be refused server-side"
+            );
+            assert!(
+                ensure_gcs_base_url_allowed(ExecutionEnvironment::Local, &key(base_url))
+                    .await
+                    .is_ok()
+            );
+        }
+        assert!(
+            ensure_gcs_base_url_allowed(ExecutionEnvironment::Server, &key("https://203.0.113.10"))
+                .await
+                .is_ok()
+        );
+        let plain = json!({"private_key": "", "private_key_id": "", "client_email": ""});
+        assert!(
+            ensure_gcs_base_url_allowed(ExecutionEnvironment::Server, &plain.to_string())
+                .await
+                .is_ok()
+        );
+        assert!(
+            ensure_gcs_base_url_allowed(ExecutionEnvironment::Server, "not json")
+                .await
+                .is_err()
+        );
     }
 
     #[test]

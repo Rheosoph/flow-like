@@ -2173,6 +2173,33 @@ declare namespace events {
     function generic(): Struct;
 
     /**
+     * Run a server workflow when an email arrives at its assigned address
+     * @node events_inbound_email @alias eventsInboundEmail
+     * @returns email — Email content, envelope recipients, headers and attachment storage paths
+     * @returns session — App and Event reference for sending through this automation address
+     * @returns message — Original inbound message reference for replies
+     * @returns attachments — Stored attachment paths for file and path nodes
+     * @returns attachmentMetadata — Attachment filenames, content types, byte sizes and storage paths
+     * @returns sender — Sender header, falling back to the first From address
+     * @returns from — From header addresses
+     * @returns to — To header addresses
+     * @returns cc — Carbon copy header addresses
+     * @returns replyTo — Addresses for replies
+     * @returns subject — Email subject, empty when absent
+     * @returns text — Plain text preview, empty when absent
+     * @returns html — HTML preview, empty when absent
+     * @returns envelopeFrom — SMTP envelope sender
+     * @returns recipient — The receiving automation address
+     * @returns raw — Complete MIME message stored as an EML file
+     * @returns textPath — Complete plain text body, when present
+     * @returns htmlPath — Complete HTML body, when present
+     * @returns textTruncated — Read Text File for the complete plain text body
+     * @returns htmlTruncated — Read HTML File for the complete HTML body
+     * @impure has side effects / drives control flow
+     */
+    function inboundEmail(): { email: Struct, session: Struct, message: Struct, attachments: Struct[], attachmentMetadata: Struct[], sender: Struct, from: Struct[], to: Struct[], cc: Struct[], replyTo: Struct[], subject: string, text: string, html: string, envelopeFrom: string, recipient: string, raw: Struct, textPath: Struct, htmlPath: Struct, textTruncated: bool, htmlTruncated: bool };
+
+    /**
      * A simple event without input or output
      * @node events_simple @alias eventsSimple
      * @impure has side effects / drives control flow
@@ -2746,7 +2773,7 @@ declare namespace github {
     function addIssueComment({ provider: Struct, owner: string, repo: string, issueNumber: int, body: string }): { comment: Struct, commentId: int };
 
     /**
-     * Clone a GitHub repository. Works with any FlowPath store type (local, S3, memory, etc.). For non-local stores, clones to a temp directory first, then copies files into the target store.
+     * Clone a GitHub repository into any FlowPath store. Cloud and memory stores retain the checkout and Git metadata for subsequent repository operations.
      * @node data_github_clone_repo @alias dataGithubCloneRepo
      * @param provider — GitHub provider for authentication
      * @param owner — Repository owner
@@ -2754,7 +2781,7 @@ declare namespace github {
      * @param targetDir — FlowPath directory to clone into (supports any store type)
      * @param branch (optional) — Branch to clone (leave empty for default branch)
      * @param depth (optional) — Shallow clone depth (0 for full clone)
-     * @param includeGit (optional) — Copy .git metadata into non-local stores. Local clones always retain their Git metadata.
+     * @param includeGit (optional) — Retain Git metadata so repository operations can use cloud and memory clones. Disable for a file-only snapshot. Local clones always retain their Git metadata.
      * @returns repoPath — FlowPath to the cloned repository
      * @impure has side effects / drives control flow
      */
@@ -3404,8 +3431,8 @@ declare namespace github {
     /**
      * Cancel an unfinished merge and restore the pre-merge state. Returns an error when no merge is in progress.
      * @node data_github_abort_local_merge @alias dataGithubAbortLocalMerge
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
-     * @returns repoPath — Local working tree for the next repository node
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3413,12 +3440,12 @@ declare namespace github {
     function abortMerge({ repository: Struct }): { repoPath: Struct, output: string, errorMessage: string };
 
     /**
-     * Add a named HTTPS remote to a local repository without storing credentials.
+     * Add a named HTTPS remote to a repository without storing credentials.
      * @node data_github_add_repo_remote @alias dataGithubAddRepoRemote
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param remote (optional) — Configured remote name
      * @param url (optional) — HTTPS repository URL without embedded credentials
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3428,10 +3455,10 @@ declare namespace github {
     /**
      * Check out a commit or tag with detached HEAD. Use Switch Branch to resume work on a local branch.
      * @node data_github_checkout_local_revision @alias dataGithubCheckoutLocalRevision
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param revision (optional) — Commit, tag, or revision to check out
      * @param requireClean (optional) — Reject tracked changes and untracked files before checking out
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3441,12 +3468,12 @@ declare namespace github {
     /**
      * Commit the staged changes. Uses the repository identity unless an author name and email are provided. Commit signing is disabled for unattended execution.
      * @node data_github_commit_local_repository @alias dataGithubCommitLocalRepository
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param message (optional) — Required commit message
      * @param authorName (optional) — Optional author and committer name; requires Author Email
      * @param authorEmail (optional) — Optional author and committer email; requires Author Name
      * @param allowEmpty (optional) — Allow creating a commit with no staged changes
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @returns commit — Created commit SHA
@@ -3457,11 +3484,11 @@ declare namespace github {
     /**
      * Create a local branch at a commit, tag, or branch without changing a GitHub API branch directly.
      * @node data_github_create_local_branch @alias dataGithubCreateLocalBranch
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param branch (optional) — New local branch name
      * @param startPoint (optional) — Commit, tag, or existing branch for the new branch
      * @param switch (optional) — Switch to the new branch; requires a clean working tree
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3471,11 +3498,11 @@ declare namespace github {
     /**
      * Create a tag at a commit. A nonempty message creates an unsigned annotated tag; an empty message creates a lightweight tag. Existing tags are never overwritten.
      * @node data_github_create_local_tag @alias dataGithubCreateLocalTag
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param name (optional) — New local tag name
      * @param revision (optional) — Commit, branch, or tag to tag
      * @param message (optional) — Annotation message; leave empty for a lightweight tag
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3485,10 +3512,10 @@ declare namespace github {
     /**
      * Delete a local branch. Git rejects unmerged branches unless Force is enabled and always protects branches checked out in a worktree.
      * @node data_github_delete_local_branch @alias dataGithubDeleteLocalBranch
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param branch (optional) — Local branch to delete
      * @param force (optional) — Allow deleting an unmerged branch; its commits may become unreachable
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3498,9 +3525,9 @@ declare namespace github {
     /**
      * Delete a named local tag. Remote tags are unchanged.
      * @node data_github_delete_local_tag @alias dataGithubDeleteLocalTag
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param name (optional) — Existing local tag name
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3510,11 +3537,11 @@ declare namespace github {
     /**
      * Read the tracked-file diff for a working tree or its staged changes. Untracked files are available from Repository Status.
      * @node data_github_local_diff @alias dataGithubLocalDiff
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param staged (optional) — Compare staged changes against the revision instead of working tree changes
      * @param revision (optional) — Optional commit or revision to compare against; empty uses the index or HEAD
      * @param paths (optional) — Literal paths relative to the repository root. Wildcards are not expanded.
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3522,15 +3549,15 @@ declare namespace github {
     function diffRepository({ repository: Struct, staged?: bool, revision?: string, paths?: string[] }): { repoPath: Struct, output: string, errorMessage: string };
 
     /**
-     * Download remote branches and tags into a local repository without changing checked-out files.
+     * Download remote branches and tags into a repository without changing checked-out files.
      * @node data_github_fetch_repo @alias dataGithubFetchRepo
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param provider — GitHub authentication for this operation
      * @param remote (optional) — Configured remote name
      * @param prune (optional) — Remove stale remote-tracking references
      * @param tags (optional) — Fetch all tags in addition to configured branches
      * @param unshallow (optional) — Fetch complete history from a complete remote; fails if this clone is already complete
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3538,11 +3565,11 @@ declare namespace github {
     function fetchRepo({ repository: Struct, provider: Struct, remote?: string, prune?: bool, tags?: bool, unshallow?: bool }): { repoPath: Struct, output: string, errorMessage: string };
 
     /**
-     * Initialize a new local Git working tree at the supplied directory. Refuses an existing repository.
+     * Initialize a new Git working tree at the supplied directory. Refuses an existing repository.
      * @node data_github_init_repo @alias dataGithubInitRepo
-     * @param repository — Local FlowPath for the exact repository directory, not its parent. The directory may be missing. Requires Git on the runtime host.
+     * @param repository — FlowPath for the exact repository directory in a local, cloud, or memory store. The directory may be missing. Requires Git on the runtime host.
      * @param branch (optional) — Initial branch name for the new repository
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3552,9 +3579,9 @@ declare namespace github {
     /**
      * List local branches and optionally cached remote branches. Fetch first to refresh remote branches.
      * @node data_github_list_local_branches @alias dataGithubListLocalBranches
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param includeRemote (optional) — Include branches under refs/remotes
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @returns branches — Branches, their commits, and upstream configuration
@@ -3564,10 +3591,10 @@ declare namespace github {
     function listLocalBranches({ repository: Struct, includeRemote?: bool }): { repoPath: Struct, output: string, errorMessage: string, branches: Struct[], count: int };
 
     /**
-     * List tags stored in the local repository. Fetch with tags enabled to refresh tags from a remote.
+     * List tags stored in the repository. Fetch with tags enabled to refresh tags from a remote.
      * @node data_github_list_local_tags @alias dataGithubListLocalTags
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
-     * @returns repoPath — Local working tree for the next repository node
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @returns tags — Tag names in lexicographic order
@@ -3579,8 +3606,8 @@ declare namespace github {
     /**
      * List configured fetch and push URLs with embedded credentials removed.
      * @node data_github_list_local_remotes @alias dataGithubListLocalRemotes
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
-     * @returns repoPath — Local working tree for the next repository node
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @returns remotes — Configured remote names and URLs
@@ -3592,8 +3619,8 @@ declare namespace github {
     /**
      * List saved local stashes in newest-first order.
      * @node data_github_list_local_stashes @alias dataGithubListLocalStashes
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
-     * @returns repoPath — Local working tree for the next repository node
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @returns stashes — Stash references, commits, and messages
@@ -3605,10 +3632,10 @@ declare namespace github {
     /**
      * Merge a branch or revision into the current branch. Requires a clean working tree. Conflicts route to Error; Abort Merge cancels an unfinished merge.
      * @node data_github_merge_local_repository @alias dataGithubMergeLocalRepository
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param revision (optional) — Branch, tag, or revision to merge
      * @param fastForwardOnly (optional) — Reject divergent history instead of creating a merge commit
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3618,10 +3645,10 @@ declare namespace github {
     /**
      * Apply a stash and remove it after success. Conflicts route to Error and preserve the stash for recovery.
      * @node data_github_pop_local_stash @alias dataGithubPopLocalStash
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param index (optional) — Zero-based stash index; 0 is the newest stash
      * @param restoreIndex (optional) — Attempt to restore which changes were staged
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3629,13 +3656,13 @@ declare namespace github {
     function popStash({ repository: Struct, index?: int, restoreIndex?: bool }): { repoPath: Struct, output: string, errorMessage: string };
 
     /**
-     * Fetch and fast-forward the current branch of a clean local repository. Divergent history produces an error.
+     * Fetch and fast-forward the current branch of a clean repository. Divergent history produces an error.
      * @node data_github_pull_repo @alias dataGithubPullRepo
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param provider — GitHub authentication for this operation
      * @param remote (optional) — Configured remote name
      * @param branch (optional) — Remote branch name; empty uses the current branch's upstream, or current branch name if no upstream is configured
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3645,13 +3672,13 @@ declare namespace github {
     /**
      * Push the current local branch to GitHub. Does not force-push or delete remote branches.
      * @node data_github_push_repo @alias dataGithubPushRepo
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param provider — GitHub authentication for this operation
      * @param remote (optional) — Configured remote name
      * @param branch (optional) — Remote branch name; empty uses the current branch's upstream, or current branch name if no upstream is configured
      * @param setUpstream (optional) — Record tracking information for the pushed branch
      * @param followTags (optional) — Also push reachable annotated tags missing from the remote
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3659,11 +3686,11 @@ declare namespace github {
     function pushRepo({ repository: Struct, provider: Struct, remote?: string, branch?: string, setUpstream?: bool, followTags?: bool }): { repoPath: Struct, output: string, errorMessage: string };
 
     /**
-     * Remove a remote and its tracking references from the local repository. Does not delete the remote repository.
+     * Remove a remote and its tracking references from the checkout. Does not delete the remote repository.
      * @node data_github_remove_repo_remote @alias dataGithubRemoveRepoRemote
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param remote (optional) — Configured remote name
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3673,10 +3700,10 @@ declare namespace github {
     /**
      * Read recent commits from a local branch, tag, or revision.
      * @node data_github_local_log @alias dataGithubLocalLog
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param revision (optional) — Branch, tag, or revision to read
      * @param maxCount (optional) — Maximum commits to return, from 1 to 10000
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @returns commits — Commits in newest-first order
@@ -3688,8 +3715,8 @@ declare namespace github {
     /**
      * Inspect local changes, the current branch, and the checked out commit. Handles repositories before their first commit.
      * @node data_github_local_status @alias dataGithubLocalStatus
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
-     * @returns repoPath — Local working tree for the next repository node
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @returns status — Structured repository state and file changes
@@ -3703,11 +3730,11 @@ declare namespace github {
     /**
      * Move the current branch to a revision. Soft preserves staged changes; mixed unstages changes; hard discards tracked changes and may remove obstructing untracked files.
      * @node data_github_reset_local_repository @alias dataGithubResetLocalRepository
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param revision (optional) — Commit, branch, or tag to reset to
      * @param mode (optional) — soft, mixed, or hard
      * @param allowDestructive (optional) — Required for hard reset, which can discard local file contents
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3717,10 +3744,10 @@ declare namespace github {
     /**
      * Change a named remote's fetch URL. A separately configured push URL is left unchanged.
      * @node data_github_set_repo_remote_url @alias dataGithubSetRepoRemoteUrl
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param remote (optional) — Configured remote name
      * @param url (optional) — HTTPS repository URL without embedded credentials
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3730,10 +3757,10 @@ declare namespace github {
     /**
      * Stage additions, modifications, and deletions for a commit. Provide literal paths or explicitly enable All.
      * @node data_github_stage_local_files @alias dataGithubStageLocalFiles
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param paths (optional) — Literal paths relative to the repository root. Wildcards are not expanded.
      * @param all (optional) — Stage every non-ignored change; leave Paths empty
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3743,10 +3770,10 @@ declare namespace github {
     /**
      * Save tracked worktree and staged changes in a stash. Untracked files are included only when requested; ignored files are preserved.
      * @node data_github_save_local_stash @alias dataGithubSaveLocalStash
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param message (optional) — Optional stash description
      * @param includeUntracked (optional) — Also stash and remove untracked files from the working tree
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3756,10 +3783,10 @@ declare namespace github {
     /**
      * Switch an existing local branch. Local changes are rejected by default; disabling Require Clean retains normal Git overwrite checks.
      * @node data_github_switch_local_branch @alias dataGithubSwitchLocalBranch
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param branch (optional) — Existing local branch name
      * @param requireClean (optional) — Reject tracked changes and untracked files before switching
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3767,16 +3794,16 @@ declare namespace github {
     function switchBranch({ repository: Struct, branch?: string, requireClean?: bool }): { repoPath: Struct, output: string, errorMessage: string };
 
     /**
-     * Clone a missing local working tree, or fetch and fast-forward an existing clone of the same GitHub repository. Local changes and divergent history produce an error.
+     * Clone a missing working tree, or fetch and fast-forward an existing clone of the same GitHub repository. Uncommitted changes and divergent history produce an error.
      * @node data_github_sync_repo @alias dataGithubSyncRepo
-     * @param repository — Local FlowPath for the exact repository directory, not its parent. The directory may be missing. Requires Git on the runtime host.
+     * @param repository — FlowPath for the exact repository directory in a local, cloud, or memory store. The directory may be missing. Requires Git on the runtime host.
      * @param provider — GitHub authentication for this operation
      * @param owner (optional) — GitHub repository owner
      * @param repo (optional) — GitHub repository name
      * @param branch (optional) — Branch to clone or switch to; empty keeps the current branch or clones the default branch
      * @param depth (optional) — Clone depth when creating the repository; 0 clones full history
      * @param prune (optional) — Remove stale origin tracking references when updating
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -3786,10 +3813,10 @@ declare namespace github {
     /**
      * Remove selected changes from the staging area while preserving working files, including before the first commit.
      * @node data_github_unstage_local_files @alias dataGithubUnstageLocalFiles
-     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param repository — FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.
      * @param paths (optional) — Literal paths relative to the repository root. Wildcards are not expanded.
      * @param all (optional) — Unstage every staged change; leave Paths empty
-     * @returns repoPath — Local working tree for the next repository node
+     * @returns repoPath — Repository in the original store for the next repository node
      * @returns output — Git output with credentials removed
      * @returns errorMessage — Failure details, empty on success
      * @impure has side effects / drives control flow
@@ -7343,4 +7370,40 @@ declare namespace remote {
      * @impure has side effects / drives control flow
      */
     function callEvent({ flowRemoteAppId?: string, flowRemoteEvent?: string, flowRemoteEventMeta?: string, payload: any, waitForResult?: bool, timeoutSeconds?: int }): { runId: string, status: string, result: any };
+}
+
+declare namespace teams {
+    // === Events/Chat/Teams ===
+
+    /**
+     * Reply to the Teams conversation from a Chat Event session
+     * @node events_teams_send_card @alias eventsTeamsSendCard
+     * @param session — Local or global session from the Teams Chat Event
+     * @param text (optional) — Message text with Teams Markdown formatting
+     * @param card — Adaptive Card JSON. Use Interaction nodes for forms and approvals that resume this run.
+     * @returns messageId — The Teams message identifier
+     * @impure has side effects / drives control flow
+     */
+    function sendCard({ session: Struct, text?: string, card: Struct }): string;
+
+    /**
+     * Reply to the Teams conversation from a Chat Event session
+     * @node events_teams_send_message @alias eventsTeamsSendMessage
+     * @param session — Local or global session from the Teams Chat Event
+     * @param text (optional) — Message text with Teams Markdown formatting
+     * @returns messageId — The Teams message identifier
+     * @impure has side effects / drives control flow
+     */
+    function sendMessage({ session: Struct, text?: string }): string;
+
+    /**
+     * Reply to the Teams conversation from a Chat Event session
+     * @node events_teams_update_message @alias eventsTeamsUpdateMessage
+     * @param session — Local or global session from the Teams Chat Event
+     * @param text (optional) — Message text with Teams Markdown formatting
+     * @param messageId — Message returned by a Teams send node in this conversation
+     * @returns messageId — The Teams message identifier
+     * @impure has side effects / drives control flow
+     */
+    function updateMessage({ session: Struct, text?: string, messageId: string }): string;
 }

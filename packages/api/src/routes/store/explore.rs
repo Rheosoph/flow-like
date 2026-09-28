@@ -55,6 +55,7 @@ pub struct ExploreQuery {
     /// Viewer language such as `de` or `de-AT` (default `en`); languages the hub does not offer fall back to `en`.
     pub language: Option<String>,
     /// `true` when the viewer has developer mode on: packages and package rails appear.
+    #[param(value_type = Option<bool>)]
     pub dev: Option<String>,
 }
 
@@ -72,6 +73,7 @@ pub struct ExploreSearchQuery {
     /// `free` or `paid`.
     pub price: Option<String>,
     /// `true` shows verified packages only.
+    #[param(value_type = Option<bool>)]
     pub verified: Option<String>,
     /// Comma-separated package permission groups: `none`, `network`, `models`, `storage`.
     pub permissions: Option<String>,
@@ -92,6 +94,7 @@ pub struct ExploreSearchQuery {
     /// Viewer language (default `en`); languages the hub does not offer fall back to `en`.
     pub language: Option<String>,
     /// `true` when the viewer has developer mode on.
+    #[param(value_type = Option<bool>)]
     pub dev: Option<String>,
 }
 
@@ -375,8 +378,8 @@ impl SearchScope {
     }
 }
 
-/// Which kinds the category and price facets count: apps only for non-developers and `type=apps`, packages
-/// only for `type=packages`, both otherwise (and then app rows also count the packages they expand to).
+/// Which kinds the category and price facets list and count: apps only for non-developers and `type=apps`,
+/// packages only for `type=packages`, both otherwise (and then app rows also count the packages they expand to).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FacetScope {
     apps: bool,
@@ -580,11 +583,10 @@ impl SearchRequest {
 }
 
 /// Category rows from `(primary, secondary)` pair counts: each pair adds its count to every category of the
-/// set {primary, secondary}, so primary-or-secondary filters and counts agree. With both kinds in scope, an app
-/// row also counts the packages whose categories expand to it, each package once. Every selected value keeps a
-/// row, even one of a kind the view does not list, so an active filter can always be cleared there; a selected
-/// `app:` row in the packages view counts the packages it expands to, which is what it filters. Other empty
-/// rows are dropped. App rows come first, each kind by count, then value.
+/// set {primary, secondary}, so primary-or-secondary filters and counts agree. Only the kinds in `scope` get
+/// rows. With both kinds in scope (the developer `all` view), an app row also counts the packages whose
+/// categories expand to it, each package once. Selected values of a listed kind keep their row at 0; other
+/// empty rows are dropped. App rows come first, each kind by count, then value.
 fn category_facets(
     app_pairs: &[AppCategoryPair],
     package_pairs: &[PackageCategoryPair],
@@ -606,25 +608,21 @@ fn category_facets(
                 *packages.entry(name).or_default() += count;
             }
         }
-        let selected_app = |name: &str| {
-            selected
-                .iter()
-                .any(|filter| matches!(filter, CategoryFilter::App(value) if value == name))
-        };
+    }
+    if scope.apps && scope.packages {
         for (name, count) in rails::packages_per_app_category(package_pairs) {
-            if scope.apps || selected_app(name) {
-                *apps.entry(name.to_owned()).or_default() += count;
-            }
+            *apps.entry(name.to_owned()).or_default() += count;
         }
     }
     for filter in selected {
         match filter {
-            CategoryFilter::App(name) => {
+            CategoryFilter::App(name) if scope.apps => {
                 apps.entry(name.clone()).or_default();
             }
-            CategoryFilter::Package(category) => {
+            CategoryFilter::Package(category) if scope.packages => {
                 packages.entry(category.to_string()).or_default();
             }
+            CategoryFilter::App(_) | CategoryFilter::Package(_) => {}
         }
     }
     let selected: HashSet<String> = selected.iter().map(CategoryFilter::value).collect();
@@ -719,6 +717,58 @@ fn package_mentions(package: &PackageSummary, text: &str) -> bool {
         .any(|value| value.to_lowercase().contains(&needle))
 }
 
+fn members<'a>(placement: &'a PlacementDoc, rules: &'a RuleItems) -> Vec<(ItemKind, &'a str)> {
+    let ruled = rules.get(&placement.id).map_or(&[][..], Vec::as_slice);
+    resolve::collection_refs(placement, ruled)
+}
+
+/// The collections among `matched` with a member in `apps` or `packages`, in page order.
+fn with_visible_members<'a>(
+    matched: &[&'a PlacementDoc],
+    rules: &RuleItems,
+    apps: &HashSet<String>,
+    packages: &HashSet<String>,
+) -> Vec<&'a PlacementDoc> {
+    matched
+        .iter()
+        .copied()
+        .filter(|placement| {
+            members(placement, rules)
+                .into_iter()
+                .any(|(kind, id)| match kind {
+                    ItemKind::App => apps.contains(id),
+                    ItemKind::Package => packages.contains(id),
+                    ItemKind::Collection => false,
+                })
+        })
+        .collect()
+}
+
+/// Rule results for `matched`, and the collections among them that show at least one item in the `all` view
+/// (the Collections type), in page order. Only ids are checked; the listed collections are hydrated later.
+async fn collection_hits<'a>(
+    state: &AppState,
+    matched: &[&'a PlacementDoc],
+    viewer: &Viewer,
+) -> Result<(RuleItems, Vec<&'a PlacementDoc>), ApiError> {
+    let rules = hydrate::rule_items(&state.db, matched, viewer, 1).await?;
+    let mut wanted = Wanted::default();
+    for placement in matched {
+        wanted.add_all(members(placement, &rules));
+    }
+    let packages = async {
+        if viewer.dev {
+            query::public_package_ids(&state.db, &wanted.packages).await
+        } else {
+            Ok(HashSet::new())
+        }
+    };
+    let (apps, packages) =
+        futures::try_join!(query::public_app_ids(&state.db, &wanted.apps), packages)?;
+    let visible = with_visible_members(matched, &rules, &apps, &packages);
+    Ok((rules, visible))
+}
+
 /// Package id → title of the first collection listing it, hand-picked items before rule results.
 fn packages_of_collections(
     collections: &[&PlacementDoc],
@@ -730,15 +780,9 @@ fn packages_of_collections(
         let PlacementContent::Collection { title, .. } = &placement.content else {
             continue;
         };
-        let picked = placement.items.iter().map(|item| (item.kind, &item.id));
-        let ruled = rules
-            .get(&placement.id)
-            .into_iter()
-            .flatten()
-            .map(|(kind, id)| (*kind, id));
-        for (kind, id) in picked.chain(ruled) {
-            if kind == ItemKind::Package && seen.insert(id.clone()) {
-                out.push((id.clone(), title.clone()));
+        for (kind, id) in members(placement, rules) {
+            if kind == ItemKind::Package && seen.insert(id) {
+                out.push((id.to_owned(), title.clone()));
             }
         }
     }
@@ -976,8 +1020,8 @@ fn related_categories(apps: &[ResolvedItem], packages: &[PackageSummary]) -> Vec
         .collect()
 }
 
-/// "You might also like": the most installed apps in the matched items' categories (or overall when nothing
-/// matched), excluding the matches.
+/// "You might also like": the most installed apps in the matched items' categories, excluding the matches;
+/// none when the matches name no category.
 async fn related(
     state: &AppState,
     viewer: &Viewer,
@@ -985,8 +1029,11 @@ async fn related(
     packages: &[PackageSummary],
 ) -> Result<Vec<ResolvedItem>, ApiError> {
     let categories = related_categories(apps, packages);
+    if categories.is_empty() {
+        return Ok(Vec::new());
+    }
     let filter = AppFilter {
-        categories: (!categories.is_empty()).then_some(categories),
+        categories: Some(categories),
         exclude: apps.iter().map(|item| item.id().to_owned()).collect(),
         ..AppFilter::new(&viewer.language)
     };
@@ -1034,17 +1081,14 @@ async fn search(
     }
     let facets = FacetScope::of(request.scope, viewer.dev);
     let matched = matching_collections(&live.layout, viewer, now, request.text.as_deref());
-    let featured: Vec<&PlacementDoc> = matched.iter().take(COLLECTION_HITS_MAX).copied().collect();
 
-    let (rules, apps) = futures::try_join!(
-        timed(
-            "rules",
-            hydrate::rule_items(&state.db, &featured, viewer, 1)
-        ),
+    let ((rules, shown), apps) = futures::try_join!(
+        timed("collections", collection_hits(state, &matched, viewer)),
         timed("apps", apps_part(state, request, viewer, facets)),
     )?;
+    let featured = &shown[..shown.len().min(COLLECTION_HITS_MAX)];
     let via_collection = if request.text.is_some() && viewer.dev {
-        packages_of_collections(&featured, &rules)
+        packages_of_collections(featured, &rules)
     } else {
         Vec::new()
     };
@@ -1063,19 +1107,10 @@ async fn search(
             .iter()
             .map(|package| package.id.as_str())
             .collect();
-        for placement in &featured {
-            let picked = placement
-                .items
-                .iter()
-                .map(|item| (item.kind, item.id.as_str()));
-            let ruled = rules
-                .get(&placement.id)
-                .into_iter()
-                .flatten()
-                .map(|(kind, id)| (*kind, id.as_str()));
+        for placement in featured {
             wanted.add_all(
-                picked
-                    .chain(ruled)
+                members(placement, &rules)
+                    .into_iter()
                     .filter(|(kind, id)| *kind != ItemKind::Package || !page_packages.contains(id)),
             );
         }
@@ -1124,7 +1159,7 @@ async fn search(
         rails: HashMap::new(),
     };
     let collections = if request.scope.lists_collections() {
-        resolved_collections(&featured, &hydrated, viewer, request.scope.projection())
+        resolved_collections(featured, &hydrated, viewer, request.scope.projection())
     } else {
         Vec::new()
     };
@@ -1155,7 +1190,7 @@ async fn search(
             types: TypeFacet {
                 apps: apps.total,
                 packages: packages.total,
-                collections: count_of(matched.len()),
+                collections: count_of(shown.len()),
             },
             categories: category_facets(&apps.pairs, &packages.pairs, facets, &request.categories),
             price: price(apps.price, packages.price),
@@ -1541,11 +1576,6 @@ mod tests {
                     kind: FacetKind::App,
                     count: 0
                 },
-                FacetCount {
-                    value: "package:LEGAL".into(),
-                    kind: FacetKind::Package,
-                    count: 0
-                },
             ]
         );
         let packages_only = category_facets(
@@ -1557,11 +1587,6 @@ mod tests {
         assert_eq!(
             packages_only,
             [
-                FacetCount {
-                    value: "app:Games".into(),
-                    kind: FacetKind::App,
-                    count: 0
-                },
                 FacetCount {
                     value: "package:EDUCATION".into(),
                     kind: FacetKind::Package,
@@ -1602,7 +1627,7 @@ mod tests {
     }
 
     #[test]
-    fn selections_outside_the_view_keep_a_row_that_matches_their_filter() {
+    fn selections_of_a_kind_the_view_does_not_list_get_no_row() {
         let non_dev = SearchRequest::parse(&params("/?categories=package:EDUCATION")).unwrap();
         assert_eq!(non_dev.app_categories(), Some(Vec::new()));
         assert_eq!(
@@ -1612,18 +1637,11 @@ mod tests {
                 FacetScope::of(non_dev.scope, false),
                 &non_dev.categories,
             ),
-            [
-                FacetCount {
-                    value: "app:Finance".into(),
-                    kind: FacetKind::App,
-                    count: 3
-                },
-                FacetCount {
-                    value: "package:EDUCATION".into(),
-                    kind: FacetKind::Package,
-                    count: 0
-                },
-            ]
+            [FacetCount {
+                value: "app:Finance".into(),
+                kind: FacetKind::App,
+                count: 3
+            }]
         );
 
         let packages =
@@ -1650,11 +1668,6 @@ mod tests {
                 &packages.categories,
             ),
             [
-                FacetCount {
-                    value: "app:Finance".into(),
-                    kind: FacetKind::App,
-                    count: 1
-                },
                 FacetCount {
                     value: "package:LEGAL".into(),
                     kind: FacetKind::Package,
@@ -1835,6 +1848,47 @@ mod tests {
             package_hit(package("pdf", "PDF"), None, &via).matched_via,
             MatchedVia::Name
         );
+    }
+
+    #[test]
+    fn collections_count_only_with_a_visible_member() {
+        let mut picks = collection("picks", "Picks", json!({}));
+        picks.items = vec![PlacementItemDoc::from_row(
+            ItemKind::Package,
+            "pdf".into(),
+            ItemOverrides::default(),
+        )];
+        let mut gone = collection("gone", "Gone", json!({}));
+        gone.items = vec![PlacementItemDoc::from_row(
+            ItemKind::App,
+            "private".into(),
+            ItemOverrides::default(),
+        )];
+        let mut ruled = collection("ruled", "Ruled", json!({}));
+        if let PlacementContent::Collection { source, .. } = &mut ruled.content {
+            *source = CollectionSource::Rule;
+        }
+        let empty = collection("empty", "Empty", json!({}));
+        let rules: RuleItems =
+            HashMap::from([("ruled".to_owned(), vec![(ItemKind::App, "a".to_owned())])]);
+        let apps = HashSet::from(["a".to_owned()]);
+        let ids = |packages: HashSet<String>| -> Vec<String> {
+            with_visible_members(&[&picks, &gone, &ruled, &empty], &rules, &apps, &packages)
+                .into_iter()
+                .map(|placement| placement.id.clone())
+                .collect()
+        };
+        assert_eq!(ids(HashSet::new()), ["ruled"]);
+        assert_eq!(ids(HashSet::from(["pdf".to_owned()])), ["picks", "ruled"]);
+    }
+
+    /// axum panics on overlapping routes while building a router, so nesting both routers the way lib.rs does
+    /// guards the Explore paths.
+    #[test]
+    fn the_explore_routes_do_not_conflict() {
+        let _: axum::Router<AppState> = axum::Router::new()
+            .nest("/store", crate::routes::store::routes())
+            .nest("/admin", crate::routes::admin::routes());
     }
 
     #[test]

@@ -299,6 +299,18 @@ const TRIGGER_LABELS: Record<
 		icon: "mail",
 		blurb: "The account, the IMAP connection and which messages start a run.",
 	},
+	teams: {
+		label: "Teams bot",
+		icon: "message-square",
+		blurb:
+			"Choose who manages the bot, connect Microsoft, and download the Teams app.",
+	},
+	inbound_email: {
+		label: "Email address",
+		icon: "mail",
+		blurb:
+			"The generated address and optional alias that receive email for this event.",
+	},
 	daemon: {
 		label: "Supervision",
 		icon: "server",
@@ -647,6 +659,55 @@ const EVENT_GUIDES: Record<string, IEventGuideStep[]> = {
 			why: "Preview shows layout; only a real run shows latency and answer quality.",
 		},
 	],
+	teams: [
+		...FLOW_STEPS,
+		{
+			id: "teams-connect",
+			title: "Connect the bot",
+			why: "Choose who manages it and complete the Microsoft setup.",
+			section: "trigger",
+		},
+		{
+			id: "teams-install",
+			title: "Install the app in Teams",
+			why: "Download the ZIP and upload it to Teams, or send it to your Teams admin.",
+			external: true,
+			where: "Microsoft Teams → Apps → Manage your apps",
+		},
+		{
+			id: "activate",
+			title: "Activate the event",
+			why: "Teams messages start a server run while the event is active.",
+			auto: (_c, event) => !!event.active,
+		},
+		{
+			id: "teams-test",
+			title: "Send a test message",
+			why: "Message or mention the installed bot, then check the run history.",
+			section: "history",
+		},
+	],
+	inbound_email: [
+		...FLOW_STEPS,
+		{
+			id: "address",
+			title: "Save the event and copy its email address",
+			why: "The server assigns a stable address after the event is saved.",
+			section: "trigger",
+		},
+		{
+			id: "activate",
+			title: "Activate the event",
+			why: "Incoming email starts a server run while the event is active.",
+			auto: (_c, event) => !!event.active,
+		},
+		{
+			id: "send-test",
+			title: "Send a test email",
+			why: "Check the run history to confirm delivery and inspect the message payload.",
+			section: "history",
+		},
+	],
 	email: [
 		{
 			id: "address",
@@ -882,6 +943,16 @@ const TRIGGER_GUIDANCE: Record<string, ISectionGuidance> = {
 		what: "The mailbox, its credentials and which messages are worth a run.",
 		mistake:
 			"No filter at all: every newsletter in the folder becomes a flow run.",
+	},
+	teams: {
+		what: "Teams messages start this Chat Event on the server.",
+		mistake:
+			"Using the customer tenant as the home tenant when the bot identity is registered elsewhere.",
+	},
+	inbound_email: {
+		what: "Email received at either address starts this event on the server.",
+		mistake:
+			"Changing an alias before updating the people and services that send to it.",
 	},
 	daemon: {
 		what: "How the long-running process is kept alive.",

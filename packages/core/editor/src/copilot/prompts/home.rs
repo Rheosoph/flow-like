@@ -35,11 +35,44 @@ Turn the user's goal into a coherent landing page, not a pile of interchangeable
   equally weighted cards.
 - Use only catalog-supported sizes, variants, accents, and config fields. Prefer `auto` or `content`
   height. Use a fixed height only when the content needs a stable viewport such as a chart or embed.
-- `appearance.className` is the one free-form styling field: optional Tailwind CSS v4 utility
-  classes for the widget root surface, at most 1024 bytes. Keep a catalog variant and accent as the
-  base and prefer theme tokens such as `bg-card` or `border-primary/30` over arbitrary colors. Use
-  it for deliberate emphasis, not decoration on every card. Never use positioning, z-index, or
-  grid-span utilities. Preserve an existing widget's `className` unless the user asks to restyle it.
+- Style with `appearance.className` (Tailwind CSS v4 utilities, at most 1024 bytes) and
+  `appearance.css` (plain CSS scoped to one widget, at most 8192 bytes). Both style the widget
+  surface over its catalog variant and accent. The catalog `layout_contract` lists the inner
+  `targets`, `surface_variables`, and `theme_colors`. Preserve an existing widget's `className`
+  and `css` unless the user asks to restyle it.
+- `className` compiles at runtime, so arbitrary values work. Reach descendants with variants such
+  as `[&_h2]:text-lg` and pseudo-elements with `before:` or `after:`. Surface background, border,
+  radius, text color, and shadow utilities replace the built-in ones. The layout owns the surface's
+  position, grid span, height, and self-alignment, so positioning, `z-*`, `col-*`, `row-*`, and
+  `self-*` do nothing on the surface itself; they work behind variants that target other elements.
+  tw-animate classes such as `animate-in` and `fade-in-*` are not compiled.
+- The theme's `shadow-2xs` to `shadow-2xl` are transparent. For elevation use a shadow that
+  carries its color, such as `shadow-[0_12px_32px_-16px_rgb(0_0_0/0.35)]`.
+- A surface text color reaches only inheriting text; descriptions, dates, and metadata read
+  `var(--muted-foreground)`. On a dark or saturated fill, redefine it on the surface too, such as
+  `[--muted-foreground:color-mix(in_oklab,var(--primary-foreground)_75%,transparent)]`.
+- `css` is plain CSS, not Tailwind: `@apply`, `@tailwind`, `@theme`, `@variant`, `@utility`,
+  `theme()`, and `--alpha()` do nothing there. `:root` is the widget surface and
+  `:root:is(.dark *)` targets dark mode; other selectors match inside the widget, rules override
+  `className`, and `@keyframes` names stay local. Put custom motion in `@keyframes` wrapped in
+  `@media (prefers-reduced-motion: no-preference)`. The surface is `position: relative` and clips
+  overflow, so `:root::before` and `:root::after` may use `content`, `position: absolute`,
+  `inset`, `z-index`, `width`, and `height` for decoration; add `isolation: isolate` to `:root`
+  for a `z-index: -1` layer.
+- Never use `fixed` or `position: fixed`, never put `+` or `~` after `:root`, never use
+  `@property`, `@font-face`, `@counter-style`, or `@page`, and never set position, inset, z-index,
+  grid placement, order, width, or height on `:root` itself. `@import` is removed.
+- Theme colors such as `var(--primary)`, `var(--muted)`, and `var(--chart-1)` hold complete
+  colors. Use them directly or in `color-mix(in oklab, var(--primary) 30%, transparent)`, never
+  inside `hsl()`, `rgb()`, or `oklch()`. Accent variables such as `--home-accent` and
+  `--home-surface-background` follow the chosen variant and accent. Use them, as in
+  `text-(--home-accent)` or `border-(--home-accent)/40`, and redefine one on the surface to retint
+  the widget's own content.
+- When the user asks for a neat, polished, modern, or branded look, style deliberately: surface
+  fill or gradient, border, radius, elevation, typography, a decorative pseudo-element, and any
+  colors the user supplies. Otherwise prefer theme tokens and accent variables so light and dark
+  mode and the accent setting keep working. Keep styling coherent across widgets rather than
+  decorating every card differently.
 - Keep titles short, descriptions useful, and quick actions concrete. Do not fabricate user data,
   metrics, activity, or personalized copy that the available sources cannot provide.
 - Use profile name, description, interests, and tags from Home context as design signals when they

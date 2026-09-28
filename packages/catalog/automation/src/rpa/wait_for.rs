@@ -296,7 +296,10 @@ impl NodeLogic for WaitForColorNode {
 
         loop {
             context.check_cancelled()?;
-            let [r, g, b] = crate::types::screen_match::capture_pixel(x, y)?;
+            let [r, g, b] = tokio::task::spawn_blocking(move || {
+                crate::types::screen_match::capture_pixel(x, y)
+            })
+            .await??;
             let color_matches = (r as i64 - target_r).abs() <= tolerance
                 && (g as i64 - target_g).abs() <= tolerance
                 && (b as i64 - target_b).abs() <= tolerance;

@@ -99,6 +99,10 @@ fn validate(value: &RecoveryBackup, scope: &RecoveryContext, password: &[u8]) ->
             value.owner_controller_key.is_some() && value.invitation_vault.is_none(),
             "Shared recovery cannot contain owner invitation authority"
         );
+        ensure!(
+            manifest.controller_key != scope.controller_key,
+            "Shared recovery must anchor on the owner's controller, not its own"
+        );
     }
     if let Some(ciphertext) = &value.invitation_vault {
         let seed = vault::open(
@@ -249,5 +253,22 @@ mod tests {
         *changed.last_mut().unwrap() ^= 1;
         assert!(open(&scope, password, &changed).is_err());
         assert!(seal(&scope, b"wrong recovery password", &backup).is_err());
+    }
+
+    #[test]
+    fn shared_recovery_cannot_anchor_on_its_own_controller() {
+        let (scope, backup) = fixture();
+        let mut shared: RecoveryBackup = serde_json::from_slice(&backup).unwrap();
+        shared.grant_id = "reader".into();
+        shared.invitation_vault = None;
+        shared.owner_controller_key = Some(scope.controller_key.clone());
+        let error = seal(
+            &scope,
+            b"test recovery password",
+            &serde_json::to_vec(&shared).unwrap(),
+        )
+        .err()
+        .unwrap();
+        assert!(error.to_string().contains("owner's controller"), "{error}");
     }
 }

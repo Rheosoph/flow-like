@@ -6,6 +6,10 @@ use std::{collections::HashSet, sync::Arc};
 pub(crate) struct Report {
     pub sealed: usize,
     pub rejected: usize,
+    /// Allowed actions that could not be issued a capability; their components ship disabled.
+    pub unavailable_actions: usize,
+    /// The first reason an allowed action shipped without a capability.
+    pub unavailable: Option<String>,
 }
 
 pub(crate) struct Sealer {
@@ -130,6 +134,7 @@ impl Sealer {
             return;
         };
 
+        let unavailable = report.unavailable_actions;
         self.seal_legacy_actions(component, report);
         for field in ["eventHandlers", "event_handlers"] {
             self.seal_event_handlers(component, field, report);
@@ -142,7 +147,14 @@ impl Sealer {
             for field in ["actionBindings", "action_bindings"] {
                 self.seal_action_bindings(component, field, report);
             }
-
+        }
+        if report.unavailable_actions > unavailable {
+            component.insert(
+                "disabled".to_string(),
+                serde_json::json!({ "literalBool": true }),
+            );
+        }
+        if is_widget {
             for field in ["inlineWidgetDef", "inline_widget_def"] {
                 if let Some(definition) = component.get_mut(field).and_then(Value::as_object_mut) {
                     self.seal_surface_components(definition, "components", report);
@@ -347,23 +359,7 @@ impl Sealer {
             return;
         };
 
-        match self.registry.issue(&self.run, target_node_id) {
-            Ok((action_id, capability)) => {
-                action.insert(
-                    "pageAction".to_string(),
-                    serde_json::json!({
-                        "actionId": action_id,
-                        "manifestRevision": self.scope.manifest_revision,
-                        "capabilityJwt": capability,
-                    }),
-                );
-                report.sealed += 1;
-            }
-            Err(error) => {
-                tracing::error!(error = %error, "failed to register local dynamic Page action");
-                report.rejected += 1;
-            }
-        }
+        self.attach_capability(action, target_node_id, report);
     }
 
     fn seal_binding(&self, binding: &mut Map<String, Value>, report: &mut Report) {
@@ -398,9 +394,18 @@ impl Sealer {
             return;
         };
 
+        self.attach_capability(binding, target_node_id, report);
+    }
+
+    fn attach_capability(
+        &self,
+        owner: &mut Map<String, Value>,
+        target_node_id: &str,
+        report: &mut Report,
+    ) {
         match self.registry.issue(&self.run, target_node_id) {
             Ok((action_id, capability)) => {
-                binding.insert(
+                owner.insert(
                     "pageAction".to_string(),
                     serde_json::json!({
                         "actionId": action_id,
@@ -411,8 +416,10 @@ impl Sealer {
                 report.sealed += 1;
             }
             Err(error) => {
-                tracing::error!(error = %error, "failed to register local Page widget action");
+                tracing::error!(error = %error, target_node_id, "Page action capability could not be issued");
                 report.rejected += 1;
+                report.unavailable_actions += 1;
+                report.unavailable.get_or_insert_with(|| error.to_string());
             }
         }
     }

@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { IIntercomEvent } from "@flow-like/flow-like-ui/lib/schema/events/intercom-event";
+import type { IEvent } from "@flow-like/flow-like-ui/lib/schema/flow/event";
 import {
 	type Inventory,
+	MAX_ATTACHMENT_BYTES,
+	MAX_REQUEST_BYTES,
 	type PageBootstrap,
 	createServiceBackend,
 } from "./backend";
@@ -205,5 +208,52 @@ describe("standalone service transport", () => {
 				payload: { value: 2 },
 			},
 		});
+	});
+	test("attachment and request limits match the service body limit", async () => {
+		const encoded = Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4;
+		expect(encoded * 2).toBeLessThan(MAX_REQUEST_BYTES - 256 * 1024);
+		const chat = {
+			id: "chat",
+			event_type: "simple_chat",
+			name: "Chat",
+		} as unknown as IEvent;
+		const sent: string[] = [];
+		const request = createServiceRequest("t".repeat(32), (async (path) => {
+			sent.push(String(path));
+			return new Response("", { status: 413 });
+		}) as typeof fetch);
+		const { backend } = createServiceBackend(
+			{ project_id: "project", events: [chat] },
+			request,
+			new AbortController().signal,
+		);
+		let dispatched = 0;
+		await expect(
+			backend.eventState.executeEvent(
+				"project",
+				"chat",
+				{
+					id: "",
+					payload: { messages: [{ content: "x".repeat(MAX_REQUEST_BYTES) }] },
+				},
+				false,
+				undefined,
+				undefined,
+				false,
+				undefined,
+				() => {
+					dispatched += 1;
+				},
+			),
+		).rejects.toThrow("exceeds the service's 10 MB limit");
+		expect(dispatched).toBe(0);
+		expect(sent).toHaveLength(0);
+		await expect(
+			backend.helperState.fileToUrl(
+				new File([new Uint8Array(MAX_ATTACHMENT_BYTES + 1)], "report.pdf"),
+				false,
+			),
+		).rejects.toThrow("smaller than 3.5 MB");
+		await expect(request("/services")).rejects.toThrow("size limit");
 	});
 });

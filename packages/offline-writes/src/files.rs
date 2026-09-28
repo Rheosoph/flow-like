@@ -714,6 +714,67 @@ impl FileOverlay {
     fn is_commit(&self, path: &ObjectPath) -> object_store::Result<bool> {
         Ok(matches!(self.target(path)?, Target::Commit))
     }
+    /// False for a cloud object that a queued operation replaces or deletes.
+    fn cloud_visible(&self, location: &ObjectPath) -> object_store::Result<bool> {
+        let key = match self.target(location)? {
+            Target::Buffered { key, .. } => Some(key),
+            Target::Lance if self.connectivity().is_none() => {
+                self.resource(location)?.map(|(key, _, _)| key)
+            }
+            _ => None,
+        };
+        match key {
+            Some(key) => Ok(self.latest(&key)?.is_none()),
+            None => Ok(true),
+        }
+    }
+    /// One page of queued puts under `prefix` and the cursor of the next page; None once
+    /// every pending file resource was visited.
+    fn pending_page(
+        &self,
+        prefix: Option<&ObjectPath>,
+        after: Option<&str>,
+    ) -> object_store::Result<Option<(Vec<ObjectMeta>, String)>> {
+        let resources = self
+            .queue
+            .pending_file_resources(after, 64)
+            .map_err(error)?;
+        let Some(last) = resources.last().cloned() else {
+            return Ok(None);
+        };
+        let mut metas = Vec::new();
+        for key in &resources {
+            let resource: OfflineResource = serde_json::from_str(key).map_err(error)?;
+            let OfflineResource::File { purpose, path } = resource else {
+                continue;
+            };
+            let Some(route) = self
+                .routes
+                .iter()
+                .find(|route| route.purpose == purpose && path.starts_with(&route.prefix))
+            else {
+                continue;
+            };
+            let path = ObjectPath::parse(format!("{}{path}", route.root)).map_err(error)?;
+            if prefix.is_some_and(|prefix| !path.prefix_matches(prefix)) {
+                continue;
+            }
+            if let Some((operation, request)) = self.latest(key)?
+                && let Some(meta) = Self::pending_meta(&path, &operation, &request)?
+            {
+                metas.push(meta);
+            }
+        }
+        Ok(Some((metas, last)))
+    }
+    /// True when a buffered directory lies inside, or contains, the listed directory `root`
+    /// ("" for the whole store, otherwise ending in '/').
+    fn overlaps_routes(&self, root: &str) -> bool {
+        self.routes.iter().any(|route| {
+            let directory = format!("{}{}", route.root, route.prefix);
+            directory.starts_with(root) || root.starts_with(&directory)
+        })
+    }
 }
 
 #[async_trait]
@@ -903,62 +964,54 @@ impl ObjectStore for FileOverlay {
             while let Some(meta) = cloud.next().await {
                 let meta = meta?;
                 (store.authorize)().map_err(error)?;
-                let key = match store.target(&meta.location)? {
-                    Target::Buffered { key, .. } => Some(key),
-                    Target::Lance if store.connectivity().is_none() => store.resource(&meta.location)?.map(|(key, _, _)| key),
-                    _ => None,
-                };
-                if let Some(key) = key {
-                    if store.latest(&key)?.is_some() { continue; }
+                if store.cloud_visible(&meta.location)? {
+                    yield meta;
                 }
-                yield meta;
             }
             let mut after = None;
-            loop {
-                let resources = store.queue.pending_file_resources(after.as_deref(), 64).map_err(error)?;
-                if resources.is_empty() { break; }
-                for key in &resources {
-                    let resource: OfflineResource = serde_json::from_str(key).map_err(error)?;
-                    let OfflineResource::File { purpose, path } = resource else { continue };
-                    let Some(route) = store.routes.iter().find(|route| route.purpose == purpose && path.starts_with(&route.prefix)) else { continue };
-                    let path = ObjectPath::parse(format!("{}{path}", route.root)).map_err(error)?;
-                    if prefix.as_ref().is_some_and(|prefix| !path.prefix_matches(prefix)) { continue; }
-                    if let Some((operation, request)) = store.latest(key)? {
-                        if let Some(meta) = Self::pending_meta(&path, &operation, &request)? {
-                            (store.authorize)().map_err(error)?;
-                            yield meta;
-                        }
-                    }
+            while let Some((pending, last)) = store.pending_page(prefix.as_ref(), after.as_deref())? {
+                for meta in pending {
+                    (store.authorize)().map_err(error)?;
+                    yield meta;
                 }
-                after = resources.last().cloned();
+                after = Some(last);
             }
         })
     }
+    /// One level from the cloud, merged with the queued puts and deletes of that level.
     async fn list_with_delimiter(
         &self,
         prefix: Option<&ObjectPath>,
     ) -> object_store::Result<ListResult> {
-        let mut objects = Vec::new();
-        let mut prefixes = BTreeSet::new();
-        let mut bytes = 0usize;
         let root = prefix.map_or(String::new(), |prefix| format!("{prefix}/"));
-        let mut stream = self.list(prefix);
-        while let Some(meta) = stream.next().await {
-            let meta = meta?;
-            bytes += meta.location.as_ref().len() + 128;
-            if bytes > 8 * 1024 * 1024 {
-                return Err(error(
-                    "Offline file listing exceeds 8 MiB; use a narrower prefix",
-                ));
-            }
-            let Some(relative) = meta.location.as_ref().strip_prefix(&root) else {
-                continue;
-            };
-            if let Some((directory, _)) = relative.split_once('/') {
-                prefixes.insert(ObjectPath::parse(format!("{root}{directory}")).map_err(error)?);
-            } else {
+        if !self.overlaps_routes(&root) {
+            return self.inner.list_with_delimiter(prefix).await;
+        }
+        (self.authorize)().map_err(error)?;
+        let listed = self.inner.list_with_delimiter(prefix).await?;
+        let mut prefixes = listed.common_prefixes.into_iter().collect::<BTreeSet<_>>();
+        let mut objects = Vec::with_capacity(listed.objects.len());
+        for meta in listed.objects {
+            if self.cloud_visible(&meta.location)? {
                 objects.push(meta);
             }
+        }
+        let mut after = None;
+        while let Some((pending, last)) = self.pending_page(prefix, after.as_deref())? {
+            for meta in pending {
+                let Some(relative) = meta.location.as_ref().strip_prefix(&root) else {
+                    continue;
+                };
+                match relative.split_once('/') {
+                    Some((directory, _)) => {
+                        prefixes.insert(
+                            ObjectPath::parse(format!("{root}{directory}")).map_err(error)?,
+                        );
+                    }
+                    None => objects.push(meta),
+                }
+            }
+            after = Some(last);
         }
         Ok(ListResult {
             common_prefixes: prefixes.into_iter().collect(),

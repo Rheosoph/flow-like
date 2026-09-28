@@ -2,12 +2,18 @@ import { expect, test } from "bun:test";
 import { sha256 } from "@noble/hashes/sha2";
 import {
 	ARTIFACT_CHUNK_BYTES,
+	ArtifactAbortError,
 	type ArtifactManagementCall,
 	type ArtifactTransferStatus,
 	ArtifactUploadError,
 	type PreparedProjectArtifact,
+	abortProjectArtifact,
+	abortRefusalSettles,
+	forgetArtifactTransfer,
 	parseProjectArtifactAssets,
+	pendingArtifactTransfers,
 	prepareProjectArtifact,
+	rememberArtifactTransfer,
 	selectedProjectAssetFiles,
 	uploadProjectArtifact,
 	validateProjectArtifactPath,
@@ -165,7 +171,7 @@ test("a lost accepted chunk keeps a resumable identity and never retries automat
 		throw new Error("expected interruption");
 	} catch (error) {
 		expect(error).toBeInstanceOf(ArtifactUploadError);
-		transfer = (error as ArtifactUploadError).transferId;
+		transfer = (error as ArtifactUploadError).transferId ?? "";
 		expect((error as Error).message).not.toContain("private diagnostic");
 	}
 	const accepted = fake.buffers.get(1)?.length;
@@ -332,5 +338,298 @@ test("pinned nested Bit metadata cannot authorize traversal or private paths", a
 				assets,
 			),
 		).rejects.toThrow();
+	}
+});
+
+test("asset pins are rebuilt in the device's canonical field order", () => {
+	const digest = "a".repeat(64);
+	const selection = parseProjectArtifactAssets(
+		JSON.stringify({
+			package_pins: [
+				{
+					manifest_sha256: digest,
+					wasm_sha256: digest,
+					version: "1.0.0",
+					package_id: "package",
+				},
+			],
+			bit_pins: [{ metadata_sha256: digest, bit_id: "model" }],
+		}),
+	);
+	expect(JSON.stringify(selection)).toBe(
+		JSON.stringify({
+			bit_pins: [{ bit_id: "model", metadata_sha256: digest }],
+			package_pins: [
+				{
+					package_id: "package",
+					version: "1.0.0",
+					wasm_sha256: digest,
+					manifest_sha256: digest,
+				},
+			],
+		}),
+	);
+	const packages = Array.from({ length: 65 }, (_, index) => ({
+		package_id: `package-${index}`,
+		version: "1.0.0",
+		wasm_sha256: digest,
+		manifest_sha256: digest,
+	}));
+	expect(() =>
+		parseProjectArtifactAssets(JSON.stringify({ package_pins: packages })),
+	).toThrow("at most 256 Bits and 64 WASM packages");
+});
+
+test("asset pins with several versions of one node package fail before any upload", () => {
+	const digest = "a".repeat(64);
+	const pin = (version: string) => ({
+		package_id: "tokenizer",
+		version,
+		wasm_sha256: digest,
+		manifest_sha256: digest,
+	});
+	expect(
+		parseProjectArtifactAssets(JSON.stringify({ package_pins: [pin("1.0.0")] }))
+			.package_pins,
+	).toEqual([pin("1.0.0")]);
+	expect(() =>
+		parseProjectArtifactAssets(
+			JSON.stringify({ package_pins: [pin("1.0.0"), pin("2.0.0")] }),
+		),
+	).toThrow("several versions of node package tokenizer");
+});
+
+function rejection(code: string, error = `${code} cause`) {
+	return {
+		state: "rejected",
+		result: { error, code, retryable: ["busy", "failed"].includes(code) },
+	};
+}
+
+test("busy artifact requests back off and retry while the device lock is held", async () => {
+	const artifact = await prepared();
+	const fake = server(artifact);
+	let busy = 2;
+	const result = await uploadProjectArtifact({
+		prepared: artifact,
+		request: async (command, id) => {
+			const request = command.request as Record<string, unknown>;
+			if (request.kind === "chunk" && busy > 0) {
+				busy--;
+				return rejection("busy");
+			}
+			return fake.request(command, id);
+		},
+	});
+	expect(result.state).toBe("committed");
+	expect(busy).toBe(0);
+});
+
+test("definitive artifact rejections carry their reason and whether a transfer exists", async () => {
+	const artifact = await prepared();
+	const begin = (await uploadProjectArtifact({
+		prepared: artifact,
+		request: async () => rejection("limit", "Artifact staging quota exceeded"),
+	}).catch((error: unknown) => error)) as ArtifactUploadError;
+	expect(begin).toBeInstanceOf(ArtifactUploadError);
+	expect(begin.transferId).toBeUndefined();
+	expect(begin.message).toContain("Artifact staging quota exceeded");
+	expect(begin.message).toContain("Abort unfinished uploads");
+	const fake = server(artifact);
+	const binding = (await uploadProjectArtifact({
+		prepared: artifact,
+		request: async (command, id) =>
+			(command.request as Record<string, unknown>).kind === "commit"
+				? rejection("invalid", "Artifact manifest binding differs")
+				: fake.request(command, id),
+	}).catch((error: unknown) => error)) as ArtifactUploadError;
+	expect(binding.transferId).toBeString();
+	expect(binding.message).toContain("Artifact manifest binding differs");
+	expect(binding.message).toContain("Abort this transfer");
+	const transferId = crypto.randomUUID();
+	const refused = (await abortProjectArtifact(
+		async () => rejection("unauthorized", "Only its uploader can abort"),
+		"project",
+		transferId,
+	).catch((error: unknown) => error)) as ArtifactAbortError;
+	expect(refused).toBeInstanceOf(ArtifactAbortError);
+	expect(refused.rejection?.code).toBe("unauthorized");
+	expect(refused.message).toContain("Only its uploader can abort");
+});
+
+test("retryable artifact rejections keep the transfer resumable and show the device's reason", async () => {
+	const artifact = await prepared();
+	const failed = (await uploadProjectArtifact({
+		prepared: artifact,
+		request: async () => rejection("failed", "Artifact staging disk is full"),
+	}).catch((error: unknown) => error)) as ArtifactUploadError;
+	expect(failed).toBeInstanceOf(ArtifactUploadError);
+	expect(failed.transferId).toBeString();
+	expect(failed.rejection?.retryable).toBe(true);
+	expect(failed.message).toContain("Artifact staging disk is full");
+	expect(failed.message).toContain("Resume this transfer");
+	const legacy = (await uploadProjectArtifact({
+		prepared: artifact,
+		request: async () => ({
+			state: "rejected",
+			result: { error: "Command rejected" },
+		}),
+	}).catch((error: unknown) => error)) as ArtifactUploadError;
+	expect(legacy.transferId).toBeString();
+	expect(legacy.rejection).toBeUndefined();
+	expect(legacy.message).toContain("no confirmed completion");
+	const transferId = crypto.randomUUID();
+	const unconfirmed = (await abortProjectArtifact(
+		async () => rejection("failed", "Staging database is locked"),
+		"project",
+		transferId,
+	).catch((error: unknown) => error)) as ArtifactAbortError;
+	expect(unconfirmed).toBeInstanceOf(ArtifactAbortError);
+	expect(unconfirmed.rejection).toBeUndefined();
+	expect(unconfirmed.message).toContain("Staging database is locked");
+	expect(unconfirmed.message).toContain("Reconnect and try again");
+});
+
+test("resuming a transfer whose begin never reached the device begins it under the same id", async () => {
+	const artifact = await prepared();
+	const fake = server(artifact);
+	const transferId = crypto.randomUUID();
+	const request: ArtifactManagementCall = async (command, id) =>
+		(command.request as Record<string, unknown>).kind === "status" &&
+		!fake.calls.some((call) => call.kind === "begin")
+			? rejection("failed", "Unknown artifact transfer")
+			: fake.request(command, id);
+	const confirmed = (await uploadProjectArtifact({
+		prepared: artifact,
+		request,
+		transferId,
+	}).catch((error: unknown) => error)) as ArtifactUploadError;
+	expect(confirmed).toBeInstanceOf(ArtifactUploadError);
+	expect(confirmed.transferId).toBe(transferId);
+	expect(fake.calls).toHaveLength(0);
+	const result = await uploadProjectArtifact({
+		prepared: artifact,
+		request,
+		transferId,
+		confirmed: false,
+	});
+	expect(result.state).toBe("committed");
+	expect(result.transfer_id).toBe(transferId);
+	expect(fake.calls.filter((call) => call.kind === "begin")).toHaveLength(1);
+});
+
+test("an unacknowledged transfer the device refuses to begin again is no longer resumable", async () => {
+	const artifact = await prepared();
+	const transferId = crypto.randomUUID();
+	const kinds: unknown[] = [];
+	const journaled = (await uploadProjectArtifact({
+		prepared: artifact,
+		request: async (command) => {
+			const { kind } = command.request as Record<string, unknown>;
+			kinds.push(kind);
+			return kind === "status"
+				? rejection("failed", "Unknown artifact transfer")
+				: rejection(
+						"invalid",
+						`Operation ID ${transferId} already belongs to a different request`,
+					);
+		},
+		transferId,
+		confirmed: false,
+	}).catch((error: unknown) => error)) as ArtifactUploadError;
+	expect(kinds).toEqual(["status", "begin"]);
+	expect(journaled.transferId).toBeUndefined();
+	expect(journaled.message).toContain("already belongs to a different request");
+	kinds.length = 0;
+	const denied = (await uploadProjectArtifact({
+		prepared: artifact,
+		request: async (command) => {
+			kinds.push((command.request as Record<string, unknown>).kind);
+			return rejection("unauthorized", "Deploy access expired");
+		},
+		transferId,
+		confirmed: false,
+	}).catch((error: unknown) => error)) as ArtifactUploadError;
+	expect(kinds).toEqual(["status"]);
+	expect(denied.transferId).toBeUndefined();
+});
+
+test("refused aborts settle unknown transfers but keep busy ones and acknowledged ones an older agent refuses", async () => {
+	const refuse = (response: { state: string; result: unknown }) =>
+		abortProjectArtifact(
+			async () => response,
+			"project",
+			crypto.randomUUID(),
+		).catch((error: unknown) => error);
+	const missing = await refuse(
+		rejection("failed", "Unknown artifact transfer"),
+	);
+	expect(abortRefusalSettles(missing, true)).toBe(true);
+	expect(abortRefusalSettles(missing, false)).toBe(true);
+	expect(
+		abortRefusalSettles(await refuse(rejection("unauthorized")), true),
+	).toBe(true);
+	const legacy = await refuse({
+		state: "rejected",
+		result: { error: "Command rejected" },
+	});
+	expect(abortRefusalSettles(legacy, false)).toBe(true);
+	expect(abortRefusalSettles(legacy, true)).toBe(false);
+	const busy = new ArtifactAbortError(crypto.randomUUID(), {
+		code: "busy",
+		error: "Artifact lock is held",
+		retryable: true,
+	});
+	expect(abortRefusalSettles(busy, false)).toBe(false);
+	expect(
+		abortRefusalSettles(
+			await refuse({ state: "completed", result: { state: "receiving" } }),
+			false,
+		),
+	).toBe(false);
+	expect(abortRefusalSettles(new Error("session closed"), false)).toBe(false);
+});
+
+test("unfinished transfers persist per device until committed, aborted or expired", () => {
+	const values = new Map<string, string>();
+	const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+	Object.defineProperty(globalThis, "localStorage", {
+		configurable: true,
+		value: {
+			getItem: (key: string) => values.get(key) ?? null,
+			setItem: (key: string, value: string) => values.set(key, value),
+			removeItem: (key: string) => values.delete(key),
+		},
+	});
+	try {
+		const transfer = {
+			transfer_id: crypto.randomUUID(),
+			project_id: "project",
+			manifest_sha256: "a".repeat(64),
+		};
+		rememberArtifactTransfer("device", transfer);
+		rememberArtifactTransfer("device", transfer);
+		expect(pendingArtifactTransfers("device", "project")).toHaveLength(1);
+		expect(pendingArtifactTransfers("device", "other")).toHaveLength(0);
+		expect(pendingArtifactTransfers("another-device")).toHaveLength(0);
+		const [first] = pendingArtifactTransfers("device");
+		expect(first?.confirmed).toBeUndefined();
+		rememberArtifactTransfer("device", { ...transfer, confirmed: true });
+		rememberArtifactTransfer("device", { ...transfer, confirmed: false });
+		expect(pendingArtifactTransfers("device")).toEqual([
+			{ ...transfer, confirmed: true, expires_at: first?.expires_at ?? 0 },
+		]);
+		forgetArtifactTransfer("device", transfer.transfer_id);
+		expect(pendingArtifactTransfers("device")).toHaveLength(0);
+		values.set(
+			"flow-like.device-artifact-transfers.device",
+			JSON.stringify([{ ...transfer, expires_at: 1 }, { broken: true }]),
+		);
+		expect(pendingArtifactTransfers("device")).toHaveLength(0);
+		values.set("flow-like.device-artifact-transfers.device", "{not json");
+		expect(pendingArtifactTransfers("device")).toEqual([]);
+	} finally {
+		if (previous) Object.defineProperty(globalThis, "localStorage", previous);
+		else Reflect.deleteProperty(globalThis, "localStorage");
 	}
 });

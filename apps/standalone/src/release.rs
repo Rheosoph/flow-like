@@ -138,18 +138,30 @@ pub fn install_package_trust(state_dir: &Path, package_dir: &Path) -> Result<()>
     Ok(())
 }
 
-fn client() -> Result<reqwest::Client> {
+const METADATA_TIMEOUT: Duration = Duration::from_secs(300);
+const DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const ARTIFACT_MINIMUM_BYTES_PER_SECOND: u64 = 32 * 1024;
+
+fn client(total_timeout: Duration) -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(300))
+        .read_timeout(DOWNLOAD_IDLE_TIMEOUT)
+        .timeout(total_timeout)
         .build()?)
+}
+
+/// Slow links stay usable while a stalled transfer still ends at the idle timeout.
+fn artifact_timeout(size: u64) -> Duration {
+    METADATA_TIMEOUT.saturating_add(Duration::from_secs(
+        size / ARTIFACT_MINIMUM_BYTES_PER_SECOND,
+    ))
 }
 
 pub async fn fetch_release(trust: &ReleaseTrust) -> Result<VerifiedRelease> {
     trust.keys()?;
-    let mut response = client()?
+    let mut response = client(METADATA_TIMEOUT)?
         .get(&trust.manifest_url)
         .send()
         .await
@@ -208,7 +220,7 @@ pub async fn download_artifact(
     let file = options.open(&path)?;
     let downloaded = DownloadedArtifact { path };
     let mut file = tokio::fs::File::from_std(file);
-    let mut response = client()?
+    let mut response = client(artifact_timeout(artifact.size))?
         .get(&artifact.url)
         .send()
         .await
@@ -225,7 +237,12 @@ pub async fn download_artifact(
     );
     let mut size = 0u64;
     let mut digest = Sha256::new();
-    while let Some(chunk) = response.chunk().await? {
+    while let Some(chunk) = response.chunk().await.with_context(|| {
+        format!(
+            "Standalone artifact download stopped after {size} of {} bytes",
+            artifact.size
+        )
+    })? {
         size = size
             .checked_add(chunk.len() as u64)
             .context("Artifact size overflow")?;
@@ -427,6 +444,18 @@ fn script(directory: &Path, name: &str, text: &str) -> Result<()> {
 mod tests {
     use super::*;
     use flow_like_device_protocol::{SigningKey, sign_standalone_release};
+
+    #[test]
+    fn artifact_downloads_scale_their_deadline_to_the_signed_size() {
+        assert_eq!(artifact_timeout(0), METADATA_TIMEOUT);
+        let linux_binary = 256 * 1024 * 1024;
+        let three_megabit_seconds = linux_binary / (3_000_000 / 8);
+        assert!(artifact_timeout(linux_binary) > Duration::from_secs(three_megabit_seconds));
+        let largest = 2 * 1024 * 1024 * 1024;
+        assert!(artifact_timeout(largest) < Duration::from_secs(24 * 60 * 60));
+        assert!(artifact_timeout(u64::MAX) >= artifact_timeout(largest));
+    }
+
     #[test]
     fn pinned_release_and_file_check_reject_changed_and_linked_artifacts() -> Result<()> {
         let directory = tempfile::tempdir()?;

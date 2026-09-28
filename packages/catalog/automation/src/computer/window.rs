@@ -128,7 +128,7 @@ impl NodeLogic for GetActiveWindowNode {
         let mut node = Node::new(
             "computer_get_active_window",
             "Get Active Window",
-            "Gets information about the currently focused window",
+            "Gets the focused window of another application (Flow-Like's own windows are skipped), falling back to the front-most visible window",
             "Automation/Computer/Window",
         );
         node.set_version(1);
@@ -187,12 +187,14 @@ impl NodeLogic for GetActiveWindowNode {
         let _session: AutomationSession = context.evaluate_pin("session").await?;
         _session.ensure_active(context).await?;
 
-        let active = super::native::select_window_async("", "", "", true).await?;
+        let active = tokio::task::spawn_blocking(|| {
+            super::native::select_target_window("")
+                .map(|window| window.as_ref().map(super::native::window_info))
+        })
+        .await??;
 
         match active {
-            Some(w) => {
-                let info = super::native::window_info(&w);
-
+            Some(info) => {
                 context.set_pin_value("window", json!(info.clone())).await?;
                 context.set_pin_value("title", json!(info.title)).await?;
                 context.activate_exec_pin("exec_out").await?;
@@ -506,10 +508,10 @@ impl NodeLogic for CaptureWindowNode {
         let mut node = Node::new(
             "computer_capture_window",
             "Capture Window",
-            "Captures a screenshot of a specific window",
+            "Captures a screenshot of a specific window. Frame maps image pixels to the desktop coordinates the mouse nodes use",
             "Automation/Computer/Window",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("computer", "captureWindow");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -566,14 +568,20 @@ impl NodeLogic for CaptureWindowNode {
         )
         .set_schema::<NodeImage>();
 
+        node.add_output_pin(
+            "frame",
+            "Frame",
+            "The window's desktop rectangle and the image's pixel size, or null when the window reports no geometry",
+            VariableType::Struct,
+        )
+        .set_schema::<crate::types::screen_frame::ScreenFrame>();
+
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use image::ImageEncoder;
-        use image::codecs::png::PngEncoder;
-        use xcap::Window;
+        use flow_like_types::base64::{Engine, engine::general_purpose::STANDARD};
 
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_error").await?;
@@ -582,34 +590,12 @@ impl NodeLogic for CaptureWindowNode {
         _session.ensure_active(context).await?;
         let window_id: String = context.evaluate_pin("window_id").await?;
 
-        let windows =
-            Window::all().map_err(|e| flow_like_types::anyhow!("Failed to list windows: {}", e))?;
+        let target = window_id.clone();
+        let captured = tokio::task::spawn_blocking(move || capture_window(&target)).await??;
 
-        let target = windows
-            .iter()
-            .find(|w| w.id().map(|id| id.to_string()).unwrap_or_default() == window_id);
-
-        match target {
-            Some(window) => {
-                let capture = window
-                    .capture_image()
-                    .map_err(|e| flow_like_types::anyhow!("Failed to capture window: {}", e))?;
-
-                let mut png_data = Vec::new();
-                let encoder = PngEncoder::new(&mut png_data);
-                encoder
-                    .write_image(
-                        capture.as_raw(),
-                        capture.width(),
-                        capture.height(),
-                        image::ExtendedColorType::Rgba8,
-                    )
-                    .map_err(|e| flow_like_types::anyhow!("Failed to encode PNG: {}", e))?;
-
-                use flow_like_types::base64::{Engine, engine::general_purpose::STANDARD};
+        match captured {
+            Some((capture, png_data, frame)) => {
                 let base64_str = STANDARD.encode(&png_data);
-
-                // Create NodeImage from the captured image
                 let dyn_image = flow_like_types::image::DynamicImage::ImageRgba8(capture);
                 let node_image = NodeImage::new(context, dyn_image).await;
 
@@ -617,11 +603,17 @@ impl NodeLogic for CaptureWindowNode {
                     .set_pin_value("screenshot", json!(base64_str))
                     .await?;
                 context.set_pin_value("image", json!(node_image)).await?;
+                context.set_pin_value("frame", json!(frame)).await?;
                 context.activate_exec_pin("exec_out").await?;
             }
             None => {
+                context.log_message(
+                    &format!("Window {} was not found", window_id),
+                    flow_like::flow::execution::LogLevel::Warn,
+                );
                 context.set_pin_value("screenshot", json!("")).await?;
                 context.set_pin_value("image", json!(null)).await?;
+                context.set_pin_value("frame", json!(null)).await?;
                 context.activate_exec_pin("exec_error").await?;
             }
         }
@@ -656,7 +648,7 @@ impl NodeLogic for FocusWindowNode {
             "Brings a window to the front and gives it focus",
             "Automation/Computer/Window",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("computer", "focusWindow");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -715,7 +707,7 @@ impl NodeLogic for FocusWindowNode {
         node.add_input_pin(
             "launch_if_not_found",
             "Launch If Not Found",
-            "Try to launch the application if no window is found",
+            "Launch the program named in Application when no window matches (requires Application; the title is never executed)",
             VariableType::Boolean,
         )
         .set_default_value(Some(json!(false)));
@@ -759,9 +751,14 @@ impl NodeLogic for FocusWindowNode {
             .unwrap_or(false);
         let mut found = super::native::select_window_async(&id, &title, &process, exact).await?;
         if found.is_none() && launch {
-            let application = if process.is_empty() { &title } else { &process };
+            if process.trim().is_empty() {
+                return Err(flow_like_types::anyhow!(
+                    "No window matches '{}' and Launch If Not Found needs the Application pin to name the program to start; the window title is never launched",
+                    title
+                ));
+            }
             launch_application_async(
-                application.to_owned(),
+                process.clone(),
                 vec![],
                 context.get_cancellation_token(),
             )
@@ -798,6 +795,91 @@ impl NodeLogic for FocusWindowNode {
 }
 
 #[cfg(feature = "execute")]
+type WindowCapture = (
+    image::RgbaImage,
+    Vec<u8>,
+    Option<crate::types::screen_frame::ScreenFrame>,
+);
+
+/// Captures a window by native ID with its PNG encoding and desktop frame. Blocking.
+#[cfg(feature = "execute")]
+fn capture_window(window_id: &str) -> flow_like_types::Result<Option<WindowCapture>> {
+    let windows = xcap::Window::all()
+        .map_err(|e| flow_like_types::anyhow!("Failed to list windows: {}", e))?;
+    let Some(window) = windows
+        .iter()
+        .find(|w| w.id().is_ok_and(|id| id.to_string() == window_id))
+    else {
+        return Ok(None);
+    };
+    let capture = window
+        .capture_image()
+        .map_err(|e| flow_like_types::anyhow!("Failed to capture window {}: {}", window_id, e))?;
+    let mut png_data = Vec::new();
+    capture
+        .write_with_encoder(image::codecs::png::PngEncoder::new(&mut png_data))
+        .map_err(|e| flow_like_types::anyhow!("Failed to encode window {}: {}", window_id, e))?;
+    let rect = (
+        window.x().unwrap_or_default(),
+        window.y().unwrap_or_default(),
+        window.width().unwrap_or_default(),
+        window.height().unwrap_or_default(),
+    );
+    let centre = (
+        rect.0.saturating_add((rect.2 / 2) as i32),
+        rect.1.saturating_add((rect.3 / 2) as i32),
+    );
+    let display_index = crate::types::screen_frame::display_frames()
+        .ok()
+        .and_then(|frames| {
+            frames
+                .into_iter()
+                .find(|frame| frame.contains_input(centre.0, centre.1))
+        })
+        .and_then(|frame| frame.display_index);
+    let frame = crate::types::screen_frame::ScreenFrame::new(
+        display_index,
+        rect,
+        (capture.width(), capture.height()),
+    )
+    .ok();
+    Ok(Some((capture, png_data, frame)))
+}
+
+/// Picks the window a title/application query refers to. Title matches case-insensitively as a
+/// substring (or the application name when no application is given); the application matches
+/// exactly. Among several matches the focused window wins, otherwise the first in the
+/// operating system's window order (front to back). `require_focus` only accepts the focused one.
+#[cfg(any(feature = "execute", test))]
+pub(crate) fn pick_window(
+    windows: Vec<WindowInfo>,
+    title: &str,
+    process: &str,
+    require_focus: bool,
+) -> Option<WindowInfo> {
+    let title = title.to_lowercase();
+    let process = process.to_lowercase();
+    let matches = windows.into_iter().filter(|window| {
+        let name = window.title.to_lowercase();
+        let app = window.app_name.as_deref().unwrap_or_default().to_lowercase();
+        let title_matches = title.is_empty()
+            || name.contains(&title)
+            || (process.is_empty() && app.contains(&title));
+        title_matches && (process.is_empty() || app == process)
+    });
+    let mut first = None;
+    for window in matches {
+        if window.is_focused {
+            return Some(window);
+        }
+        if first.is_none() && !require_focus {
+            first = Some(window);
+        }
+    }
+    first
+}
+
+#[cfg(feature = "execute")]
 async fn launch_application_async(
     path: String,
     arguments: Vec<String>,
@@ -813,6 +895,7 @@ async fn launch_application_async(
 }
 
 /// Parses legacy arguments without executing a shell. New flows should use Argument List.
+#[cfg(any(feature = "execute", test))]
 fn parse_arguments(text: &str) -> flow_like_types::Result<Vec<String>> {
     let mut args = Vec::new();
     let mut current = String::new();
@@ -894,7 +977,7 @@ fn launch_application(path: &str, arguments: &[String]) -> flow_like_types::Resu
 
 #[cfg(test)]
 mod tests {
-    use super::parse_arguments;
+    use super::{WindowInfo, parse_arguments, pick_window};
     #[test]
     fn arguments_preserve_quoted_spaces_and_metacharacters() {
         assert_eq!(
@@ -902,6 +985,48 @@ mod tests {
             vec!["--file", "a b.txt", "$HOME", ""]
         );
         assert!(parse_arguments("'unfinished").is_err());
+    }
+
+    fn window(id: &str, title: &str, app: &str, focused: bool) -> WindowInfo {
+        WindowInfo {
+            id: id.into(),
+            title: title.into(),
+            app_name: Some(app.into()),
+            x: 0,
+            y: 0,
+            width: 800,
+            height: 600,
+            is_focused: focused,
+            is_minimized: false,
+        }
+    }
+
+    #[test]
+    fn several_matching_windows_resolve_deterministically() {
+        let windows = vec![
+            window("1", "Report.xlsx - Excel", "Excel", false),
+            window("2", "Budget.xlsx - Excel", "Excel", true),
+            window("3", "Notes", "TextEdit", false),
+        ];
+        assert_eq!(
+            pick_window(windows.clone(), "xlsx", "", false).unwrap().id,
+            "2"
+        );
+        let unfocused = vec![windows[0].clone(), windows[2].clone()];
+        assert_eq!(
+            pick_window(unfocused.clone(), "excel", "", false)
+                .unwrap()
+                .id,
+            "1"
+        );
+        assert!(pick_window(unfocused, "excel", "", true).is_none());
+        assert_eq!(
+            pick_window(windows.clone(), "", "textedit", false)
+                .unwrap()
+                .id,
+            "3"
+        );
+        assert!(pick_window(windows, "Report", "TextEdit", false).is_none());
     }
 }
 
@@ -1030,10 +1155,10 @@ impl NodeLogic for ComputerWaitForWindowNode {
         let mut node = Node::new(
             "computer_wait_for_window",
             "Wait for Window",
-            "Waits for a uniquely matching window or a timeout",
+            "Waits until a window matches the title and application, or the timeout passes. When several windows match, the focused one is returned, otherwise the first in the operating system's window order (front to back)",
             "Automation/Computer/Window",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("computer", "waitForWindow");
         node.add_icon("/flow/icons/computer.svg");
         node.set_only_offline(true);
@@ -1096,16 +1221,11 @@ impl NodeLogic for ComputerWaitForWindowNode {
         loop {
             context.check_cancelled()?;
             session.ensure_active(context).await?;
-            if let Some(window) =
-                super::native::select_window_async("", &title, &process, false).await?
-            {
-                if !focused || window.is_focused().unwrap_or(false) {
-                    context
-                        .set_pin_value("window", json!(super::native::window_info(&window)))
-                        .await?;
-                    context.activate_exec_pin("exec_out").await?;
-                    return Ok(());
-                }
+            let windows = super::native::windows_async().await?;
+            if let Some(window) = pick_window(windows, &title, &process, focused) {
+                context.set_pin_value("window", json!(window)).await?;
+                context.activate_exec_pin("exec_out").await?;
+                return Ok(());
             }
             if std::time::Instant::now() >= deadline {
                 context.set_pin_value("window", json!(null)).await?;

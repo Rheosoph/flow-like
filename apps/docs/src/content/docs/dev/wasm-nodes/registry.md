@@ -18,7 +18,7 @@ Use the desktop app's **Store → Packages** view to search the registry and ope
 - access or purchase requirements;
 - installation state.
 
-Installing a package downloads the selected version into the local registry cache. Installed packages appear under **Library → Packages**, where you can check for updates, update a package, or uninstall it.
+Installing a package downloads the selected version into the local registry cache. Installed packages appear under **Packages › Library**, where you can check for updates, update a package, or uninstall it.
 
 :::note
 Only active versions that the current user can access are downloadable. Private and request-access packages apply their package membership rules before download.
@@ -26,12 +26,13 @@ Only active versions that the current user can access are downloadable. Private 
 
 ## Publish a package
 
-Open **Library → Packages → Publish**. The current wizard has four steps:
+In Flow-Like Desktop, select **Publish…** on the package card in **Packages › Mine**, or the publish action in the package workspace header. Publishing works from the package folder, so the web has no publish action. The wizard has three steps:
 
-1. **Upload WASM** — select a file with a valid WebAssembly header.
-2. **Manifest** — enter the package ID, name, version, description, license, links, and keywords.
-3. **Permissions** — choose the memory and timeout tiers and the allowed hosts. Capabilities come from the node definitions in the binary.
-4. **Review** — verify the binary and metadata, then submit.
+1. **Package Information** — confirm the package ID and version (both are checked for availability) and review the name, description, license, links, and keywords.
+2. **Permissions & Resources** — review the memory and timeout tiers and the allowed hosts. Capabilities come from the node definitions in the binary.
+3. **Review & Submit** — build the release artifact if needed, then publish it as private.
+
+See [Packages](/start/packages-library/#publish) for what happens in the workspace afterwards.
 
 The client uploads the binary and submits a versioned manifest to the registry. The backend hashes the binary, rejects duplicate package versions, extracts node definitions, and prepares a platform artifact when compilation is configured. When compilation succeeds, the registry derives the package's capability listing from the permissions those node definitions declare.
 

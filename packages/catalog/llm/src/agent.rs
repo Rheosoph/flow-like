@@ -125,7 +125,10 @@ pub(crate) async fn mcp_transport_config_for_execution(
         config.remote_app_id.as_deref(),
         config.remote_event_id.as_deref(),
     ) {
-        (None, None) => Ok(mcp_transport_config(config)),
+        (None, None) => {
+            ensure_mcp_uri_allowed(context.execution_environment(), &config.uri).await?;
+            Ok(mcp_transport_config(config))
+        }
         (Some(remote_app_id), Some(remote_event_id)) => {
             let remote_app_id = flow_like_catalog_data_support::remote_util::validate_path_id(
                 remote_app_id,
@@ -151,6 +154,24 @@ pub(crate) async fn mcp_transport_config_for_execution(
             "Remote MCP configuration requires both a remote project and event"
         )),
     }
+}
+
+/// rmcp brings its own HTTP client (reqwest 0.13, which follows redirects and
+/// resolves again per connection), so a flow-supplied MCP server URI is vetted
+/// against the egress policy before any transport connects to it. A redirect or
+/// DNS rebinding after this check is outside the in-process guard. rmcp drops
+/// successful replies that are not JSON or SSE, which covers metadata
+/// credentials; the OS-level egress boundary is what closes the rest.
+#[cfg(feature = "execute")]
+pub(crate) async fn ensure_mcp_uri_allowed(
+    environment: flow_like::flow::execution::ExecutionEnvironment,
+    uri: &str,
+) -> flow_like_types::Result<()> {
+    let url = flow_like_types::reqwest::Url::parse(uri).map_err(|error| {
+        let without_query = uri.split(['?', '#']).next().unwrap_or_default();
+        flow_like_types::anyhow!("MCP server URI '{without_query}' is invalid: {error}")
+    })?;
+    flow_like::flow::execution::egress::ensure_url_resolves_allowed(environment, &url).await
 }
 
 /// MCP endpoints that may receive an OAuth provider's run token.
@@ -630,6 +651,42 @@ mod tests {
         let serialized = flow_like_types::json::to_value(&config).unwrap();
         assert_eq!(serialized["oauth_provider_id"], "microsoft_workiq");
         assert!(serialized.get("auth_header").is_none());
+    }
+
+    #[cfg(feature = "execute")]
+    #[tokio::test]
+    async fn mcp_uris_on_the_host_plane_are_refused_server_side() {
+        use flow_like::flow::execution::ExecutionEnvironment;
+
+        for uri in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://127.0.0.1:8080/mcp",
+            "http://localhost:3000/mcp",
+            "http://metadata.google.internal/mcp",
+        ] {
+            assert!(
+                ensure_mcp_uri_allowed(ExecutionEnvironment::Server, uri)
+                    .await
+                    .is_err(),
+                "{uri} must be refused server-side"
+            );
+            assert!(
+                ensure_mcp_uri_allowed(ExecutionEnvironment::Desktop, uri)
+                    .await
+                    .is_ok()
+            );
+        }
+        assert!(
+            ensure_mcp_uri_allowed(ExecutionEnvironment::Server, "https://203.0.113.4/mcp")
+                .await
+                .is_ok()
+        );
+        let invalid =
+            ensure_mcp_uri_allowed(ExecutionEnvironment::Server, "not a uri?token=mcp-secret")
+                .await
+                .unwrap_err()
+                .to_string();
+        assert!(!invalid.contains("mcp-secret"), "{invalid}");
     }
 
     #[cfg(feature = "execute")]

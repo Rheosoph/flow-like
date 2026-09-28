@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 pub const OFFLINE_REPLAY_PATH: &str = "/instances/project/offline/replay";
+pub const OFFLINE_CAPABILITIES_PATH: &str = "/instances/project/offline/capabilities";
 pub const MAX_OFFLINE_OPERATION_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_OFFLINE_REPLAY_HTTP_BYTES: usize = 12 * 1024 * 1024;
 
@@ -93,6 +94,15 @@ pub struct DesktopOfflineCapabilities {
     pub version: u32,
     pub limits: OfflineLimits,
     pub provider: OfflineContentProvider,
+}
+
+/// `OFFLINE_CAPABILITIES_PATH` response. Without `deny_unknown_fields`: newer hubs may add
+/// fields. Hubs without the route accept `INSTANCE_OFFLINE_LIMITS`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceOfflineCapabilities {
+    pub version: u32,
+    pub limits: OfflineLimits,
 }
 
 fn is_canonical_uuid(value: &str) -> bool {
@@ -755,6 +765,72 @@ mod tests {
             (OfflineContentProvider::Gs, "\"gs\""),
         ] {
             assert_eq!(serde_json::to_string(&provider).unwrap(), text);
+        }
+        let instance: InstanceOfflineCapabilities = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "limits": {
+                "maxOperationBytes": MAX_OFFLINE_OPERATION_BYTES,
+                "maxFileBytes": 3145728,
+                "maxRequestBytes": 5000000
+            },
+            "provider": "s3"
+        }))
+        .unwrap();
+        assert_eq!(
+            instance,
+            InstanceOfflineCapabilities {
+                version: 1,
+                limits: OfflineLimits {
+                    max_operation_bytes: MAX_OFFLINE_OPERATION_BYTES,
+                    max_file_bytes: 3 * 1024 * 1024,
+                    max_request_bytes: Some(5_000_000),
+                },
+            }
+        );
+    }
+
+    fn doubles() -> Vec<f64> {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut values = vec![
+            5e-324,
+            f64::MIN_POSITIVE,
+            1e-7,
+            0.1 + 0.2,
+            1.0 / 3.0,
+            -2.638_344_616_030_823e-256,
+            f64::MAX,
+        ];
+        while values.len() < 4096 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let value = f64::from_bits(state);
+            if value.is_finite() {
+                values.push(value);
+            }
+        }
+        values
+    }
+
+    #[test]
+    fn digest_survives_repeated_json_round_trips_of_doubles() {
+        let request = OfflineReplayRequest {
+            mutation: OfflineMutation::TableInsert {
+                rows: doubles()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(id, value)| serde_json::json!({ "id": id, "value": value }))
+                    .collect(),
+            },
+            ..table_request(String::new())
+        };
+        let digest = request.digest().unwrap();
+        let mut frozen = serde_json::to_vec(&request).unwrap();
+        for _ in 0..2 {
+            let reparsed: OfflineReplayRequest = serde_json::from_slice(&frozen).unwrap();
+            assert_eq!(reparsed, request);
+            assert_eq!(reparsed.digest().unwrap(), digest);
+            frozen = serde_json::to_vec(&serde_json::to_value(&reparsed).unwrap()).unwrap();
         }
     }
 

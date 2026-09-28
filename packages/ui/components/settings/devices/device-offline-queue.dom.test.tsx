@@ -24,9 +24,12 @@ document.body.append(container);
 const root = createRoot(container);
 let commands: Record<string, unknown>[] = [];
 let quarantined = false;
+let refusal: Record<string, unknown> | undefined;
 const operation = "00000000-0000-4000-8000-000000000001";
 const call: ManagementCall = async (command) => {
 	commands.push(command);
+	if (refusal && command.type !== "offline_queue")
+		return { operation_id: "management", state: "rejected", result: refusal };
 	return {
 		operation_id: "management",
 		state: "completed",
@@ -88,6 +91,7 @@ afterEach(async () => {
 	await act(async () => root.render(null));
 	commands = [];
 	quarantined = false;
+	refusal = undefined;
 });
 afterAll(async () => {
 	await act(async () => root.unmount());
@@ -145,6 +149,33 @@ test("skipping an attempted write requires a reason and explicit uncertainty ack
 		acknowledge_uncertain: true,
 	});
 	expect(container.textContent).toContain("Skip requested");
+});
+
+test("a definitive refusal shows the device's reason while older agents keep the generic hint", async () => {
+	refusal = {
+		error: "Offline writes belong to another placement",
+		code: "invalid",
+		retryable: false,
+	};
+	await render();
+	await click("Refresh offline queues");
+	await click("Retry queued write");
+	expect(container.textContent).toContain(
+		"The device rejected this queue action: Offline writes belong to another placement",
+	);
+	refusal = {
+		error: "Offline queue store is locked",
+		code: "busy",
+		retryable: true,
+	};
+	await click("Retry queued write");
+	expect(container.textContent).toContain(
+		"did not confirm this queue action. Device response: Offline queue store is locked",
+	);
+	refusal = { error: "Command rejected" };
+	await click("Retry queued write");
+	expect(container.textContent).toContain("did not confirm this queue action");
+	expect(container.textContent).not.toContain("Device response");
 });
 
 test("quarantined scopes remain visible without replay controls", async () => {

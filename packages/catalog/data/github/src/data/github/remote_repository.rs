@@ -39,13 +39,13 @@ fn definition(operation: Operation) -> Node {
         Operation::Fetch => (
             "data_github_fetch_repo",
             "Fetch Repository",
-            "Download remote branches and tags into a local repository without changing checked-out files.",
+            "Download remote branches and tags into a repository without changing checked-out files.",
             "fetchRepo",
         ),
         Operation::Pull => (
             "data_github_pull_repo",
             "Pull Repository",
-            "Fetch and fast-forward the current branch of a clean local repository. Divergent history produces an error.",
+            "Fetch and fast-forward the current branch of a clean repository. Divergent history produces an error.",
             "pullRepo",
         ),
         Operation::Push => (
@@ -57,19 +57,19 @@ fn definition(operation: Operation) -> Node {
         Operation::Sync => (
             "data_github_sync_repo",
             "Sync Repository",
-            "Clone a missing local working tree, or fetch and fast-forward an existing clone of the same GitHub repository. Local changes and divergent history produce an error.",
+            "Clone a missing working tree, or fetch and fast-forward an existing clone of the same GitHub repository. Uncommitted changes and divergent history produce an error.",
             "syncRepo",
         ),
         Operation::Init => (
             "data_github_init_repo",
             "Init Repository",
-            "Initialize a new local Git working tree at the supplied directory. Refuses an existing repository.",
+            "Initialize a new Git working tree at the supplied directory. Refuses an existing repository.",
             "initRepo",
         ),
         Operation::AddRemote => (
             "data_github_add_repo_remote",
             "Add Repository Remote",
-            "Add a named HTTPS remote to a local repository without storing credentials.",
+            "Add a named HTTPS remote to a repository without storing credentials.",
             "addRepoRemote",
         ),
         Operation::SetRemoteUrl => (
@@ -81,7 +81,7 @@ fn definition(operation: Operation) -> Node {
         Operation::RemoveRemote => (
             "data_github_remove_repo_remote",
             "Remove Repository Remote",
-            "Remove a remote and its tracking references from the local repository. Does not delete the remote repository.",
+            "Remove a remote and its tracking references from the checkout. Does not delete the remote repository.",
             "removeRepoRemote",
         ),
     };
@@ -89,7 +89,7 @@ fn definition(operation: Operation) -> Node {
     if matches!(operation, Operation::Sync | Operation::Init)
         && let Some(pin) = node.pins.values_mut().find(|pin| pin.name == "repository")
     {
-        pin.description = "Local FlowPath for the exact repository directory, not its parent. The directory may be missing. Requires Git on the runtime host.".into();
+        pin.description = "FlowPath for the exact repository directory in a local, cloud, or memory store. The directory may be missing. Requires Git on the runtime host.".into();
     }
     if matches!(
         operation,
@@ -237,12 +237,13 @@ async fn execute(
     repository::begin(context).await?;
     let path: FlowPath = context.evaluate_pin("repository").await?;
     let result = async {
-        let local = repository::local_path(context, &path).await?;
         let provider = if matches!(
             operation,
             Operation::Fetch | Operation::Pull | Operation::Push | Operation::Sync
         ) {
-            Some(context.evaluate_pin::<GitHubProvider>("provider").await?)
+            let provider: GitHubProvider = context.evaluate_pin("provider").await?;
+            git::ensure_origin_allowed(context.execution_environment(), &provider).await?;
+            Some(provider)
         } else {
             None
         };
@@ -277,10 +278,14 @@ async fn execute(
             }
             _ => {}
         }
-        flow_like_types::tokio::task::spawn_blocking(move || {
-            perform(operation, &local, provider.as_ref(), &inputs)
+        let workspace = repository::Workspace::open(context, &path).await?;
+        let (workspace, result) = flow_like_types::tokio::task::spawn_blocking(move || {
+            let result = perform(operation, workspace.path(), provider.as_ref(), &inputs);
+            (workspace, result)
         })
-        .await?
+        .await
+        .map_err(|error| flow_like_types::anyhow!("Git operation task failed: {error}"))?;
+        workspace.finish(result).await
     }
     .await;
     repository::finish(context, result, &path).await

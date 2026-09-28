@@ -40,6 +40,11 @@ import {
 	runTimingNow,
 	timeRunStep,
 } from "@flow-like/flow-like-ui/lib/run-timing";
+import type {
+	TeamsBotConnection,
+	TeamsBotPackage,
+	TeamsBotSetup,
+} from "@flow-like/flow-like-ui/lib/teams-bot";
 import type { IBoardRunRequirements } from "@flow-like/flow-like-ui/state/backend-state/board-state";
 import type {
 	IEventAlias,
@@ -48,6 +53,7 @@ import type {
 	IEventSinkStatusContext,
 	IEventTimeline,
 	IEventTimelineRun,
+	IInboundEmailAddress,
 	IListRegistrationsResponse,
 	IPutRegressionSuiteRequest,
 	IRegressionCorpusPayload,
@@ -1887,6 +1893,102 @@ export class EventState implements IEventState {
 			registrations: asArray(response.registrations),
 			auths: asArray(response.auths),
 		};
+	}
+
+	async getTeamsBot(
+		appId: string,
+		eventId: string,
+	): Promise<TeamsBotConnection> {
+		return this.teamsRequest<TeamsBotConnection>(appId, eventId, "", {
+			method: "GET",
+		});
+	}
+
+	async setupTeamsBot(
+		appId: string,
+		eventId: string,
+		input: TeamsBotSetup,
+	): Promise<TeamsBotConnection> {
+		return this.teamsRequest<TeamsBotConnection>(appId, eventId, "", {
+			method: "PUT",
+			body: JSON.stringify(input),
+		});
+	}
+
+	async getTeamsBotPackage(
+		appId: string,
+		eventId: string,
+	): Promise<TeamsBotPackage> {
+		return this.teamsRequest<TeamsBotPackage>(appId, eventId, "/package", {
+			method: "GET",
+		});
+	}
+
+	async rotateTeamsBotSecret(
+		appId: string,
+		eventId: string,
+	): Promise<TeamsBotConnection> {
+		return this.teamsRequest<TeamsBotConnection>(appId, eventId, "/rotate", {
+			method: "POST",
+			body: JSON.stringify({}),
+		});
+	}
+
+	async disconnectTeamsBot(
+		appId: string,
+		eventId: string,
+	): Promise<TeamsBotConnection> {
+		return this.teamsRequest<TeamsBotConnection>(appId, eventId, "", {
+			method: "DELETE",
+		});
+	}
+
+	private async teamsRequest<T>(
+		appId: string,
+		eventId: string,
+		suffix: "" | "/package" | "/rotate",
+		init: RequestInit,
+	): Promise<T> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Teams bots require an online profile");
+		}
+		return fetcher<T>(
+			this.backend.profile,
+			`apps/${appId}/events/${eventId}/teams${suffix}`,
+			init,
+			this.backend.auth,
+		);
+	}
+
+	async getInboundEmailAddress(
+		appId: string,
+		eventId: string,
+	): Promise<IInboundEmailAddress> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Inbound email requires an online profile");
+		}
+		return fetcher<IInboundEmailAddress>(
+			this.backend.profile,
+			`apps/${appId}/events/${eventId}/email-address`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async updateInboundEmailAlias(
+		appId: string,
+		eventId: string,
+		alias: string | null,
+	): Promise<IInboundEmailAddress> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Inbound email requires an online profile");
+		}
+		return fetcher<IInboundEmailAddress>(
+			this.backend.profile,
+			`apps/${appId}/events/${eventId}/email-address`,
+			{ method: "PUT", body: JSON.stringify({ alias }) },
+			this.backend.auth,
+		);
 	}
 
 	async listEventAliases(

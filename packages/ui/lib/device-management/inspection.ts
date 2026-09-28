@@ -1,5 +1,9 @@
 import type { ManagementCall } from "./telemetry";
-import type { Inspection, PlacementStatus } from "./types";
+import {
+	type Inspection,
+	type PlacementStatus,
+	managementRejection,
+} from "./types";
 
 function identifier(value: unknown): value is string {
 	return typeof value === "string" && /^[A-Za-z0-9_:.-]{1,128}$/u.test(value);
@@ -58,8 +62,12 @@ export async function readDeviceInspection(
 	let canDelegateCertificateRenewal = false;
 	for (let page = 0; page < 512; page++) {
 		const response = await call({ type: "inspect_page", after, limit: 2 });
-		if (response.state !== "completed")
-			throw new Error("This controller cannot read device placement status.");
+		if (response.state !== "completed") {
+			const rejection = managementRejection(response);
+			throw new Error(
+				`This controller cannot read device placement status.${rejection ? ` ${rejection.error}` : ""}`,
+			);
+		}
 		const result = response.result;
 		if (
 			result.device_id !== expectedDevice ||

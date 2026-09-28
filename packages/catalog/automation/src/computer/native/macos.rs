@@ -184,6 +184,7 @@ pub struct NativeWindow {
     bounds: (f64, f64, f64, f64),
     focused: bool,
     minimized: bool,
+    onscreen: bool,
 }
 
 impl NativeWindow {
@@ -242,6 +243,11 @@ impl NativeWindow {
                 ),
                 focused: false,
                 minimized: false,
+                onscreen: dictionary_value(entry.0, "kCGWindowIsOnscreen").is_some_and(
+                    |value| unsafe {
+                        CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue(value)
+                    },
+                ),
             };
             if let Ok((app, element)) = window_element(&window) {
                 window.title = attribute_text(element.0, "AXTitle");
@@ -288,6 +294,9 @@ impl NativeWindow {
     }
     pub fn is_minimized(&self) -> Result<bool> {
         Ok(self.minimized)
+    }
+    pub fn is_onscreen(&self) -> bool {
+        self.onscreen
     }
     pub fn current_monitor(&self) -> Result<xcap::Monitor> {
         let mut best = None;
@@ -377,10 +386,10 @@ fn node(e: Ref) -> AccessibilityNode {
             } =>
         {
             Some(AccessibilityBounds {
-                x: position.x as i32,
-                y: position.y as i32,
-                width: size.width as i32,
-                height: size.height as i32,
+                x: position.x.round() as i32,
+                y: position.y.round() as i32,
+                width: size.width.round() as i32,
+                height: size.height.round() as i32,
             })
         }
         _ => None,
@@ -393,29 +402,64 @@ fn node(e: Ref) -> AccessibilityNode {
         } else {
             vec![]
         };
-    let states = ["AXEnabled", "AXFocused", "AXSelected", "AXExpanded"]
-        .iter()
-        .filter_map(|key| {
-            attr(e, key).and_then(|v| {
-                if unsafe { CFGetTypeID(v.0) == CFBooleanGetTypeID() && CFBooleanGetValue(v.0) } {
-                    Some(key.trim_start_matches("AX").to_lowercase())
-                } else {
-                    None
-                }
-            })
-        })
-        .collect();
+    let role = attribute_text(e, "AXRole").unwrap_or_default();
+    let value = attr(e, "AXValue").and_then(|v| scalar_text(v.0));
+    let mut states = Vec::new();
+    match attr(e, "AXEnabled").and_then(|v| boolean_value(v.0)) {
+        Some(true) => states.push("enabled".to_string()),
+        Some(false) => states.push("disabled".to_string()),
+        None => {}
+    }
+    for key in ["AXFocused", "AXSelected", "AXExpanded"] {
+        if boolean(e, key) {
+            states.push(key.trim_start_matches("AX").to_lowercase());
+        }
+    }
+    if matches!(role.as_str(), "AXCheckBox" | "AXRadioButton") {
+        match value.as_deref() {
+            Some("1") => states.push("checked".to_string()),
+            Some("2") => states.push("mixed".to_string()),
+            _ => {}
+        }
+    }
+    let non_empty = |key: &str| attribute_text(e, key).filter(|text| !text.trim().is_empty());
     AccessibilityNode {
-        native_id: None,
-        role: attribute_text(e, "AXRole").unwrap_or_default(),
-        name: attribute_text(e, "AXTitle").or_else(|| attribute_text(e, "AXDescription")),
-        value: attribute_text(e, "AXValue"),
+        role,
+        name: non_empty("AXTitle")
+            .or_else(|| non_empty("AXDescription"))
+            .or_else(|| non_empty("AXPlaceholderValue")),
+        value,
         description: attribute_text(e, "AXHelp"),
         bounds,
         states,
         actions,
-        children: vec![],
+        ..Default::default()
     }
+}
+fn boolean_value(value: Ref) -> Option<bool> {
+    (!value.is_null() && unsafe { CFGetTypeID(value) == CFBooleanGetTypeID() })
+        .then(|| unsafe { CFBooleanGetValue(value) })
+}
+fn scalar_text(value: Ref) -> Option<String> {
+    if let Some(text) = text(value) {
+        return Some(text);
+    }
+    if let Some(flag) = boolean_value(value) {
+        return Some(flag.to_string());
+    }
+    let mut number = 0f64;
+    if unsafe {
+        CFGetTypeID(value) == CFNumberGetTypeID()
+            && CFNumberGetValue(value, 13, (&mut number as *mut f64).cast())
+    } && number.is_finite()
+    {
+        return Some(if number.fract() == 0.0 && number.abs() < 1e15 {
+            format!("{}", number as i64)
+        } else {
+            number.to_string()
+        });
+    }
+    None
 }
 fn walk(e: Ref, id: &str, path: Vec<usize>, depth: usize, budget: &mut usize) -> AccessibilityNode {
     *budget = budget.saturating_sub(1);
@@ -469,7 +513,8 @@ pub async fn action(
                 .nth(*i)
                 .ok_or_else(|| anyhow!("Element no longer exists"))?;
         }
-        verify(&node(element.0), &locator)?;
+        let current = node(element.0);
+        verify(&current, &locator)?;
         if cancellation
             .as_ref()
             .is_some_and(|token| token.is_cancelled())
@@ -477,7 +522,13 @@ pub async fn action(
             return Err(anyhow!("Automation cancelled"));
         }
         match action.as_str() {
-            "invoke" => perform(element.0, "AXPress"),
+            "invoke" => perform(
+                element.0,
+                ["AXPress", "AXConfirm", "AXOpen", "AXPick"]
+                    .into_iter()
+                    .find(|name| current.actions.iter().any(|a| a == name))
+                    .unwrap_or("AXPress"),
+            ),
             "focus" => set(element.0, "AXFocused", unsafe { kCFBooleanTrue }),
             "select" => set(element.0, "AXSelected", unsafe { kCFBooleanTrue }),
             "expand" => set(element.0, "AXExpanded", unsafe { kCFBooleanTrue }),

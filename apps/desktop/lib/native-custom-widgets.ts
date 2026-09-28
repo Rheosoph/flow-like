@@ -1,3 +1,4 @@
+import { isHubUnavailable } from "@flow-like/flow-like-ui/lib/api-error";
 import {
 	NATIVE_WIDGETS_CHANGED,
 	NATIVE_WIDGETS_REFRESH,
@@ -23,6 +24,11 @@ import {
 } from "@flow-like/flow-like-ui/lib/native-widget-page";
 import type { IBackendState } from "@flow-like/flow-like-ui/state/backend-state";
 import { createNativeNotificationIconResolver } from "./native-notification-icons";
+
+/** Failures that say nothing about access; the refresh deadline aborts with an AbortError. */
+export const isTransientWidgetFailure = (error: unknown): boolean =>
+	isHubUnavailable(error) ||
+	(error instanceof DOMException && error.name === "AbortError");
 
 interface CachedWidget {
 	captured?: boolean;
@@ -254,6 +260,7 @@ export function createNativeCustomWidgetPublisher(options: {
 					widget: {
 						...nativeWidgetShell(definition),
 						message: "Open Flow Like to refresh this widget.",
+						pending: true as const,
 					},
 				},
 		);
@@ -320,6 +327,32 @@ export function createNativeCustomWidgetPublisher(options: {
 			(item) =>
 				item.id === definition.id && item.updatedAt === definition.updatedAt,
 		);
+	// A transient failure keeps what is published: ready content shows with its age, and a
+	// pending placeholder keeps the native store's last content. Any other failure may mean
+	// lost access, so it replaces the content.
+	const recordFailure = (
+		definition: NativeWidgetDefinition,
+		error: unknown,
+	): boolean => {
+		lastChecked.set(definition.id, {
+			revision: definition.updatedAt,
+			at: Date.now(),
+		});
+		if (
+			isTransientWidgetFailure(error) &&
+			matching(definition)?.widget.state !== "error"
+		)
+			return false;
+		cache.set(definition.id, {
+			revision: definition.updatedAt,
+			widget: {
+				...nativeWidgetShell(definition),
+				state: "error",
+				message: message(error),
+			},
+		});
+		return true;
+	};
 	const refreshOne = async (definition: NativeWidgetDefinition) => {
 		if (
 			!active() ||
@@ -401,17 +434,11 @@ export function createNativeCustomWidgetPublisher(options: {
 				await publish();
 			}
 		} catch (error) {
-			if (requestCurrent(definition, controller)) {
-				cache.set(definition.id, {
-					revision: definition.updatedAt,
-					widget: {
-						...nativeWidgetShell(definition),
-						state: "error",
-						message: message(error),
-					},
-				});
+			if (
+				requestCurrent(definition, controller) &&
+				recordFailure(definition, error)
+			)
 				await publish();
-			}
 		} finally {
 			clearTimeout(timeout);
 			if (running.get(definition.id) === controller)
@@ -423,17 +450,22 @@ export function createNativeCustomWidgetPublisher(options: {
 		reload();
 		await publish();
 		if (navigator.onLine === false) return;
+		const stale = (definition: NativeWidgetDefinition) => {
+			const entry = matching(definition);
+			return !entry || Date.parse(entry.widget.staleAt) <= Date.now();
+		};
+		// Failed refreshes back off like successful ones instead of retrying every tick.
+		const checkedRecently = (definition: NativeWidgetDefinition) => {
+			const checked = lastChecked.get(definition.id);
+			return (
+				checked?.revision === definition.updatedAt &&
+				Date.now() - checked.at < definition.refreshMinutes * 60_000
+			);
+		};
 		const due = definitions.filter(
 			(definition) =>
 				!running.has(definition.id) &&
-				(force ||
-					!matching(definition) ||
-					(Date.parse(matching(definition)?.widget.staleAt ?? "") <=
-						Date.now() &&
-						(lastChecked.get(definition.id)?.revision !==
-							definition.updatedAt ||
-							Date.now() - (lastChecked.get(definition.id)?.at ?? 0) >=
-								definition.refreshMinutes * 60_000))),
+				(force || (stale(definition) && !checkedRecently(definition))),
 		);
 		for (let offset = 0; offset < due.length && active(); offset += 2)
 			await Promise.allSettled(due.slice(offset, offset + 2).map(refreshOne));
@@ -517,17 +549,11 @@ export function createNativeCustomWidgetPublisher(options: {
 			});
 			await publish();
 		} catch (error) {
-			if (requestCurrent(definition, controller)) {
-				cache.set(definition.id, {
-					revision: definition.updatedAt,
-					widget: {
-						...nativeWidgetShell(definition),
-						state: "error",
-						message: message(error),
-					},
-				});
+			if (
+				requestCurrent(definition, controller) &&
+				recordFailure(definition, error)
+			)
 				await publish();
-			}
 		} finally {
 			clearTimeout(timeout);
 			if (running.get(definition.id) === controller)

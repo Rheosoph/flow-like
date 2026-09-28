@@ -8,6 +8,11 @@ use flow_like::flow::{
 };
 #[cfg(feature = "execute")]
 use flow_like_types::json::json;
+#[cfg(any(feature = "execute", test))]
+#[path = "repository_workspace.rs"]
+mod workspace;
+#[cfg(feature = "execute")]
+pub(crate) use workspace::Workspace;
 
 pub(crate) fn node(id: &str, title: &str, description: &str, script: &str) -> Node {
     let mut node = Node::new(id, title, description, "Data/GitHub/Repository");
@@ -23,7 +28,7 @@ pub(crate) fn node(id: &str, title: &str, description: &str, script: &str) -> No
     node.add_input_pin(
         "repository",
         "Repository",
-        "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "FlowPath to a Git working tree in local, cloud, or memory storage. Requires Git on the runtime host.",
         VariableType::Struct,
     )
     .set_schema::<FlowPath>()
@@ -43,7 +48,7 @@ pub(crate) fn node(id: &str, title: &str, description: &str, script: &str) -> No
     node.add_output_pin(
         "repo_path",
         "Repository Path",
-        "Local working tree for the next repository node",
+        "Repository in the original store for the next repository node",
         VariableType::Struct,
     )
     .set_schema::<FlowPath>();
@@ -70,21 +75,6 @@ pub(crate) fn node(id: &str, title: &str, description: &str, script: &str) -> No
             .build(),
     );
     node
-}
-
-#[cfg(feature = "execute")]
-pub(crate) async fn local_path(
-    context: &mut ExecutionContext,
-    path: &FlowPath,
-) -> flow_like_types::Result<std::path::PathBuf> {
-    use flow_like_storage::files::store::FlowLikeStore;
-    let store = path.to_store(context).await?;
-    let FlowLikeStore::Local(local) = store else {
-        flow_like_types::bail!(
-            "Repository operations require a local filesystem store. Cloud and memory clones are file snapshots."
-        );
-    };
-    resolve_local_path(&local, &path.object_path())
 }
 
 #[cfg(any(feature = "execute", test))]

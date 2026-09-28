@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ManagementCall } from "./telemetry";
+import { managementRejection } from "./types";
 
 const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const scope = z.string().regex(/^[a-f0-9]{64}$/);
@@ -49,8 +50,12 @@ export async function readOfflineQueues(
 			placement_id: placement,
 			after,
 		});
-		if (response.state !== "completed")
-			throw new Error("The device could not read its offline queues.");
+		if (response.state !== "completed") {
+			const rejection = managementRejection(response);
+			throw new Error(
+				`The device could not read the offline queues of placement ${placement}.${rejection ? ` ${rejection.error}` : ""}`,
+			);
+		}
 		const current = page.parse(response.result);
 		if (current.placement_id !== placement)
 			throw new Error("Offline queues belong to another placement.");

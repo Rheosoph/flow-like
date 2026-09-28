@@ -89,6 +89,9 @@ async fn run_maintenance_job(
             )))
         }
         MaintenanceRunRequest::CacheCleanup => {
+            if let Err(error) = crate::teams::sweep(&state).await {
+                tracing::error!(%error, "Teams state cleanup failed");
+            }
             // Channel rows are expiring coordination state with no native TTL either; they ride
             // the same scheduled job so serverless deployments need no second trigger.
             match sweep_channels_once(&state.db, state.db_dialect).await {

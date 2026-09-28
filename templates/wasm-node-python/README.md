@@ -212,5 +212,5 @@ The output is placed in `build/node.wasm`.
 ## Publishing
 
 1. Open Flow-Like Desktop
-2. Go to **Library → Packages → Publish**
-3. Select your `.wasm` file from `build/`
+2. In **Packages › Mine**, add this folder with **Add folder** if it is not listed yet
+3. Select **Publish…** on the package card; the wizard reads `flow-like.toml` and `build/node.wasm` from the folder

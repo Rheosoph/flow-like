@@ -125,6 +125,9 @@ pub(super) async fn serve(
                 DataChannelEvent::OnMessage(message) => {
                     ensure!(message.is_string, "Management data channel requires text envelopes");
                     let envelope = NoiseEnvelope::parse(&message.data)?;
+                    if matches!(envelope, NoiseEnvelope::Close { .. }) {
+                        break;
+                    }
                     let response = noise.receive(envelope).await?;
                     let text = std::str::from_utf8(&response)?;
                     tokio::select! {

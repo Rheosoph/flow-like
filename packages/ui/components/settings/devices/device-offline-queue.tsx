@@ -8,6 +8,7 @@ import {
 	skipOfflineQueue,
 } from "../../../lib/device-management/offline-queue";
 import type { ManagementCall } from "../../../lib/device-management/telemetry";
+import { managementRejection } from "../../../lib/device-management/types";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 
@@ -205,10 +206,14 @@ export function DeviceOfflineQueue({
 					? retryOfflineQueue(placement, queue)
 					: skipOfflineQueue(placement, queue, reason, acknowledged);
 			const response = await call(command);
-			if (response.state !== "completed")
+			if (response.state !== "completed") {
+				const rejection = managementRejection(response);
 				throw new Error(
-					"The device did not confirm this queue action. Refresh its status before trying again.",
+					rejection && !rejection.retryable
+						? `The device rejected this queue action: ${rejection.error}`
+						: `The device did not confirm this queue action.${rejection ? ` Device response: ${rejection.error}` : ""} Refresh its status before trying again.`,
 				);
+			}
 			if (alive.current)
 				setNotice(
 					kind === "skip"

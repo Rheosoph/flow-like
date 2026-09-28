@@ -12,7 +12,7 @@ fn command(directory: &Path) -> Command {
     command
 }
 
-fn unit(output: Output, state: &Path) -> Result<String> {
+fn definition(output: Output, state: &Path) -> Result<String> {
     assert!(
         output.status.success(),
         "{}",
@@ -32,8 +32,38 @@ fn unit(output: Output, state: &Path) -> Result<String> {
         )),
         "{text}"
     );
+    Ok(text)
+}
+
+fn unit(output: Output, state: &Path) -> Result<String> {
+    let text = definition(output, state)?;
     assert!(!state.exists());
     Ok(text)
+}
+
+#[cfg(unix)]
+#[test]
+fn service_definitions_name_the_canonical_state_directory_used_by_updates() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let cwd = directory.path().canonicalize()?;
+    let real = cwd.join("real");
+    std::fs::create_dir_all(real.join("state"))?;
+    std::os::unix::fs::symlink(&real, cwd.join("linked"))?;
+    for argument in ["linked/state", "linked/state/", "./linked//state/"] {
+        definition(
+            command(&cwd)
+                .args(["--state-dir", argument, "service-unit"])
+                .output()?,
+            &real.join("state"),
+        )?;
+    }
+    unit(
+        command(&cwd)
+            .args(["--state-dir", "linked/not-created/", "service-unit"])
+            .output()?,
+        &real.join("not-created"),
+    )?;
+    Ok(())
 }
 
 #[cfg(unix)]

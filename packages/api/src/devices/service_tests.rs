@@ -128,6 +128,20 @@ async fn signed_enrollment_session_presence_and_revocation() {
     )
     .await
     .unwrap();
+    // A second request, including one made with a leaked enrollment token, is
+    // answered with the same challenge and cannot invalidate the device's redemption.
+    assert_eq!(
+        super::challenge(
+            &state,
+            enrollment_id,
+            ChallengeRequest {
+                enrollment_token: package.enrollment_token.clone(),
+            },
+        )
+        .await
+        .unwrap(),
+        challenge
+    );
     let auth = SigningKey::generate();
     let now = chrono::Utc::now().timestamp();
     let binding = EnrollmentBinding {
@@ -221,18 +235,19 @@ async fn signed_enrollment_session_presence_and_revocation() {
         &SigningKey::generate(),
         &heartbeat_path,
     );
-    assert_status(
-        device_principal(
-            &state,
-            device_id,
-            &wrong_headers,
-            "POST",
-            &heartbeat_path,
-            true,
-        )
-        .await,
-        StatusCode::UNAUTHORIZED,
-    );
+    let rejected = device_principal(
+        &state,
+        device_id,
+        &wrong_headers,
+        "POST",
+        &heartbeat_path,
+        true,
+    )
+    .await
+    .err()
+    .expect("a proof from another key must fail");
+    assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(rejected.public_code(), DEVICE_PROOF_INVALID);
     let mut malformed_headers = headers.clone();
     malformed_headers.insert("dpop", HeaderValue::from_static("malformed-proof"));
     assert_status(
@@ -252,10 +267,12 @@ async fn signed_enrollment_session_presence_and_revocation() {
         .unwrap();
     assert_eq!(principal.status.device_id, *device_id);
     assert!(principal.status.last_seen_at.is_some());
-    assert_status(
-        device_principal(&state, device_id, &headers, "POST", &heartbeat_path, true).await,
-        StatusCode::UNAUTHORIZED,
-    );
+    let replayed = device_principal(&state, device_id, &headers, "POST", &heartbeat_path, true)
+        .await
+        .err()
+        .expect("a replayed proof must fail");
+    assert_eq!(replayed.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(replayed.public_code(), DEVICE_PROOF_INVALID);
 
     let receipt_path = format!("/devices/{device_id}/receipt");
     let recover = ReceiptRequest {
@@ -273,10 +290,12 @@ async fn signed_enrollment_session_presence_and_revocation() {
     );
     repository(&state).revoke("owner", device_id).await.unwrap();
     let headers = request_headers(&session.access_token, &auth, &heartbeat_path);
-    assert_status(
-        device_principal(&state, device_id, &headers, "POST", &heartbeat_path, true).await,
-        StatusCode::UNAUTHORIZED,
-    );
+    let revoked = device_principal(&state, device_id, &headers, "POST", &heartbeat_path, true)
+        .await
+        .err()
+        .expect("a revoked device must be denied");
+    assert_eq!(revoked.status(), StatusCode::UNAUTHORIZED);
+    assert_ne!(revoked.public_code(), DEVICE_PROOF_INVALID);
     assert_status(
         token(
             &state,

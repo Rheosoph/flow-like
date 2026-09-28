@@ -2,14 +2,20 @@
 //! version; mutable project objects must keep their revisions throughout export.
 
 use super::{App, AppVisibility, FlowLikeState};
-use crate::flow::{board::Board, node::Node};
+use crate::flow::{
+    board::Board,
+    event::{Event, filter_event_secrets},
+    node::Node,
+};
 use flow_like_storage::{
     Path,
     databases::vector::offline_replay::{budgeted_local_connection, materialize, revision},
     files::store::FlowLikeStore,
     object_store::{GetOptions, ObjectMeta, ObjectStore},
 };
-use flow_like_types::{FromProto, Message, Result, anyhow, bail, tokio::io::AsyncWriteExt};
+use flow_like_types::{
+    FromProto, Message, Result, ToProto, anyhow, bail, tokio::io::AsyncWriteExt,
+};
 use futures::TryStreamExt;
 use serde::Serialize;
 use std::{
@@ -21,6 +27,8 @@ use std::{
 pub const MAX_DEVICE_EXPORT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 pub const MAX_DEVICE_EXPORT_FILES: usize = 8192;
 pub const MAX_DEVICE_EXPORT_CHUNK: usize = 1024 * 1024;
+const MAX_VALIDATED_COMPRESSED: u64 = 16 * 1024 * 1024;
+const MAX_VALIDATED_EXPANDED: u32 = 64 * 1024 * 1024;
 
 pub fn validate_local_source(store: &FlowLikeStore, location: &Path) -> Result<()> {
     if let FlowLikeStore::Local(local) = store {
@@ -116,6 +124,15 @@ impl DeviceProjectSnapshot {
         }
         flow_like_types::tokio::fs::write(destination, bytes).await?;
         Ok(())
+    }
+
+    async fn replace_bytes(&mut self, path: &str, bytes: &[u8]) -> Result<()> {
+        let previous = self
+            .files
+            .remove(path)
+            .ok_or_else(|| anyhow!("Cannot replace {path}: it is outside this export session"))?;
+        self.bytes -= previous;
+        self.add_bytes(path, bytes).await
     }
 
     pub async fn add_object(
@@ -231,6 +248,42 @@ fn included(relative: &str) -> bool {
         })
 }
 
+fn is_event_document(relative: &str) -> bool {
+    let Some(rest) = relative.strip_prefix("events/") else {
+        return false;
+    };
+    match rest.strip_prefix("versions/") {
+        Some(archived) => archived.split('/').count() == 2,
+        None => rest.ends_with(".event") && !rest.contains('/'),
+    }
+}
+
+/// Matches every sink's credential field (endpoint, bot and access tokens,
+/// webhook secrets, passwords, API keys) but no routing or display key.
+fn is_credential_config_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    matches!(key.as_str(), "token" | "secret" | "password")
+        || key.starts_with("secret_")
+        || ["_token", "_secret", "_password", "api_key"]
+            .iter()
+            .any(|suffix| key.ends_with(suffix))
+}
+
+/// The device listener owns its own endpoint secret and placements supply
+/// secrets privately, so saved event credentials never enter a revision.
+fn device_event(mut event: Event) -> Result<Event> {
+    if let Ok(serde_json::Value::Object(mut config)) =
+        serde_json::from_slice::<serde_json::Value>(&event.config)
+    {
+        let before = config.len();
+        config.retain(|key, _| !is_credential_config_key(key));
+        if config.len() != before {
+            event.config = serde_json::to_vec(&config)?;
+        }
+    }
+    Ok(filter_event_secrets(event))
+}
+
 fn snapshot_node_ready(node: &Node) -> Result<()> {
     if node.name.starts_with("database_")
         || matches!(
@@ -300,32 +353,72 @@ fn snapshot_board_ready(board: &Board, has_tables: bool) -> Result<()> {
 }
 
 impl DeviceProjectSnapshot {
+    fn read_compressed(&self, path: &str) -> Result<Vec<u8>> {
+        let size = *self
+            .files
+            .get(path)
+            .ok_or_else(|| anyhow!("File is outside this export session"))?;
+        if size > MAX_VALIDATED_COMPRESSED {
+            bail!("Project document {path} is too large for deployment validation ({size} bytes)");
+        }
+        let mut bytes = Vec::with_capacity(size as usize);
+        let mut offset = 0;
+        while offset < size {
+            let length = (size - offset).min(MAX_DEVICE_EXPORT_CHUNK as u64) as usize;
+            bytes.extend(self.read_chunk(path, offset, length)?);
+            offset += length as u64;
+        }
+        let declared = bytes
+            .get(..4)
+            .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+            .map(u32::from_le_bytes)
+            .ok_or_else(|| anyhow!("Project document {path} is not a compressed document"))?;
+        if declared > MAX_VALIDATED_EXPANDED {
+            bail!(
+                "Project document {path} expands to {declared} bytes, beyond the deployment validation limit"
+            );
+        }
+        Ok(lz4_flex::decompress_size_prepended(&bytes)?)
+    }
+
     fn validate_boards(&self, has_tables: bool) -> Result<()> {
-        for (path, size) in &self.files {
+        for path in self.files.keys() {
             if !path.ends_with(".board") && !path.ends_with(".template") {
                 continue;
             }
-            if *size > 16 * 1024 * 1024 {
-                bail!("Board is too large for deployment readiness validation");
-            }
-            let mut bytes = Vec::with_capacity(*size as usize);
-            let mut offset = 0;
-            while offset < *size {
-                let length = (*size - offset).min(MAX_DEVICE_EXPORT_CHUNK as u64) as usize;
-                bytes.extend(self.read_chunk(path, offset, length)?);
-                offset += length as u64;
-            }
-            let declared = bytes
-                .get(..4)
-                .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
-                .map(u32::from_le_bytes)
-                .ok_or_else(|| anyhow!("Invalid compressed project board"))?;
-            if declared > 64 * 1024 * 1024 {
-                bail!("Expanded board exceeds deployment validation limit");
-            }
-            let plain = lz4_flex::decompress_size_prepended(&bytes)?;
+            let plain = self.read_compressed(path)?;
             let board = Board::from_proto(flow_like_types::proto::Board::decode(plain.as_slice())?);
             snapshot_board_ready(&board, has_tables)?;
+        }
+        Ok(())
+    }
+
+    /// Rewrites staged live and archived events before the client hashes them.
+    /// Pinned-version loads compare decoded events, so re-encoding keeps them valid.
+    async fn redact_events(&mut self, base: &Path) -> Result<()> {
+        let prefix = format!("{base}/");
+        let paths = self
+            .files
+            .keys()
+            .filter(|path| path.strip_prefix(&prefix).is_some_and(is_event_document))
+            .cloned()
+            .collect::<Vec<_>>();
+        for path in paths {
+            let plain = self.read_compressed(&path)?;
+            let proto =
+                flow_like_types::proto::Event::decode(plain.as_slice()).map_err(|error| {
+                    anyhow!("Cannot decode event {path} for deployment export: {error}")
+                })?;
+            let stored = Event::from_proto(proto);
+            let original = stored.to_proto();
+            let redacted = device_event(stored)?.to_proto();
+            if redacted != original {
+                self.replace_bytes(
+                    &path,
+                    &lz4_flex::compress_prepend_size(&redacted.encode_to_vec()),
+                )
+                .await?;
+            }
         }
         Ok(())
     }
@@ -414,6 +507,7 @@ impl App {
                 )
                 .await?;
         }
+        snapshot.redact_events(&base).await?;
         // Export exactly the selected account. The target runs offline as `local`;
         // placement initialization remaps this project-scoped payload to that identity.
         let user_source = FlowLikeState::user_store(&state).await?;
@@ -722,6 +816,245 @@ mod tests {
                 .files()
                 .iter()
                 .all(|file| !file.path.contains("logs/"))
+        );
+        Ok(())
+    }
+
+    fn test_event(id: &str) -> Event {
+        use crate::flow::event::{EventExecutionMode, EventExposure};
+        Event {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: String::new(),
+            board_id: "board".to_string(),
+            board_version: Some((1, 0, 0)),
+            node_id: "node".to_string(),
+            variables: Default::default(),
+            config: Vec::new(),
+            active: true,
+            canary: None,
+            variants: Vec::new(),
+            priority: 0,
+            event_type: "http".to_string(),
+            notes: None,
+            event_version: (1, 0, 0),
+            created_at: std::time::SystemTime::UNIX_EPOCH,
+            updated_at: std::time::SystemTime::UNIX_EPOCH,
+            default_page_id: None,
+            inputs: Vec::new(),
+            route: None,
+            is_default: false,
+            execution_mode: EventExecutionMode::Local,
+            exposure: EventExposure::Public,
+            correlation_mappings: None,
+        }
+    }
+
+    fn staged_event(snapshot: &DeviceProjectSnapshot, path: &str) -> Result<Event> {
+        let plain = snapshot.read_compressed(path)?;
+        Ok(Event::from_proto(flow_like_types::proto::Event::decode(
+            plain.as_slice(),
+        )?))
+    }
+
+    #[test]
+    fn event_documents_are_live_and_archived_events_only() {
+        assert!(is_event_document("events/hook.event"));
+        assert!(is_event_document("events/versions/hook/1.0.0"));
+        assert!(is_event_document("events/versions.event"));
+        assert!(!is_event_document("events/versions/hook"));
+        assert!(!is_event_document("events/nested/hook.event"));
+        assert!(!is_event_document("deployment-user-data/events/hook.event"));
+        assert!(!is_event_document("boards/board.board"));
+    }
+
+    #[test]
+    fn device_event_keeps_non_json_and_credential_free_configs() -> Result<()> {
+        let mut opaque = test_event("opaque");
+        opaque.config = b"not json".to_vec();
+        assert_eq!(device_event(opaque)?.config, b"not json");
+        let mut routed = test_event("routed");
+        routed.config = br#"{"path":"/hook","method":"POST"}"#.to_vec();
+        assert_eq!(
+            device_event(routed)?.config,
+            br#"{"path":"/hook","method":"POST"}"#
+        );
+        let mut mail = test_event("mail");
+        mail.config =
+            br#"{"imap_server":"imap.example","Secret_IMAP_Password":"x","AUTH_TOKEN":"y"}"#
+                .to_vec();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&device_event(mail)?.config)?,
+            serde_json::json!({"imap_server":"imap.example"})
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn every_sink_credential_field_is_stripped_and_settings_survive() -> Result<()> {
+        let credentials = [
+            "auth_token",
+            "token",
+            "bot_token",
+            "app_token",
+            "integration_token",
+            "personal_access_token",
+            "webhook_secret",
+            "secret",
+            "password",
+            "api_key",
+            "secret_smtp_password",
+        ];
+        let settings = serde_json::json!({
+            "path": "/hook",
+            "bot_name": "Helper",
+            "username": "robot",
+            "smtp_username": "robot",
+            "key_combination": "Cmd+K",
+            "respond_to_mentions": true,
+            "public_endpoint": false,
+            "command_prefix": "!",
+            "tools": [{"name": "lookup", "token": "tool-parameter-schema"}]
+        });
+        let mut config = settings.as_object().cloned().unwrap_or_default();
+        for key in credentials {
+            config.insert(key.to_string(), serde_json::json!("leaked"));
+        }
+        let mut event = test_event("sink");
+        event.config = serde_json::to_vec(&config)?;
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&device_event(event)?.config)?,
+            settings
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn staged_events_drop_saved_secrets_and_endpoint_credentials() -> Result<()> {
+        use crate::{
+            bit::Metadata,
+            flow::{
+                event::{CanaryEvent, EventVariant, EventVariantMode},
+                pin::ValueType,
+                variable::{Variable, VariableType},
+            },
+            state::FlowLikeConfig,
+            utils::http::HTTPClient,
+        };
+        use flow_like_storage::files::store::FlowLikeStore;
+        let store = Arc::new(InMemory::new());
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(FlowLikeStore::Memory(store.clone())),
+            HTTPClient::new_without_refetch(),
+        ));
+        let app = App::new(Some("project".into()), Metadata::default(), vec![], state).await?;
+        app.save().await?;
+
+        let mut secret = Variable::new("api_key", VariableType::String, ValueType::Normal);
+        secret
+            .set_secret(true)
+            .set_default_value(serde_json::json!("sk-desktop-secret"));
+        let mut plain = Variable::new("region", VariableType::String, ValueType::Normal);
+        plain.set_default_value(serde_json::json!("eu"));
+        let only_secret = || [(secret.id.clone(), secret.clone())].into_iter().collect();
+
+        let mut event = test_event("hook");
+        event.config = serde_json::to_vec(&serde_json::json!({
+            "path": "/hook",
+            "method": "POST",
+            "auth_token": "endpoint-secret",
+            "secret_smtp_password": "hunter2"
+        }))?;
+        event.variables = [
+            (secret.id.clone(), secret.clone()),
+            (plain.id.clone(), plain.clone()),
+        ]
+        .into_iter()
+        .collect();
+        event.canary = Some(CanaryEvent {
+            weight: 0.5,
+            variables: only_secret(),
+            board_id: "board".into(),
+            board_version: Some((1, 0, 0)),
+            node_id: "node".into(),
+            created_at: std::time::SystemTime::UNIX_EPOCH,
+            updated_at: std::time::SystemTime::UNIX_EPOCH,
+        });
+        event.variants = vec![EventVariant {
+            name: "shadow".into(),
+            board_id: "board".into(),
+            board_version: Some((1, 0, 0)),
+            node_id: "node".into(),
+            variables: only_secret(),
+            default_page_id: None,
+            mode: EventVariantMode::Shadow { sample_rate: 0.1 },
+            created_at: std::time::SystemTime::UNIX_EPOCH,
+            updated_at: std::time::SystemTime::UNIX_EPOCH,
+        }];
+        event.save(&app, None).await?;
+        event.save(&app, Some((1, 0, 0))).await?;
+
+        let mut clean = test_event("clean");
+        clean.config = br#"{"path":"/clean","method":"GET"}"#.to_vec();
+        clean.variables = [(plain.id.clone(), plain.clone())].into_iter().collect();
+        clean.save(&app, None).await?;
+
+        let snapshot = app.export_device_snapshot("auth0|selected").await?;
+        let live = staged_event(&snapshot, "apps/project/events/hook.event")?;
+        let archived = staged_event(&snapshot, "apps/project/events/versions/hook/1.0.0")?;
+        assert_eq!(
+            serde_json::to_value(&live)?,
+            serde_json::to_value(&archived)?
+        );
+        for staged in [&live, &archived] {
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&staged.config)?,
+                serde_json::json!({"path": "/hook", "method": "POST"})
+            );
+            assert_eq!(staged.variables[&secret.id].default_value, None);
+            assert!(staged.variables[&secret.id].secret);
+            assert_eq!(
+                staged.variables[&plain.id].default_value,
+                plain.default_value
+            );
+            let canary = staged.canary.as_ref().expect("canary survives redaction");
+            assert_eq!(canary.variables[&secret.id].default_value, None);
+            assert_eq!(staged.variants[0].variables[&secret.id].default_value, None);
+        }
+        for path in [
+            "apps/project/events/hook.event",
+            "apps/project/events/versions/hook/1.0.0",
+        ] {
+            let plain_bytes = snapshot.read_compressed(path)?;
+            for leaked in [&b"sk-desktop-secret"[..], b"endpoint-secret", b"hunter2"] {
+                assert!(
+                    !plain_bytes
+                        .windows(leaked.len())
+                        .any(|window| window == leaked)
+                );
+            }
+        }
+
+        let files = snapshot
+            .files()
+            .into_iter()
+            .map(|file| (file.path, file.size))
+            .collect::<BTreeMap<_, _>>();
+        let hook_size = std::fs::metadata(
+            snapshot
+                .directory
+                .path()
+                .join("apps/project/events/hook.event"),
+        )?
+        .len();
+        assert_eq!(files["apps/project/events/hook.event"], hook_size);
+        assert_eq!(snapshot.bytes, files.values().sum::<u64>());
+
+        let clean_path = "apps/project/events/clean.event";
+        let source = store.get(&Path::from(clean_path)).await?.bytes().await?;
+        assert_eq!(
+            snapshot.read_chunk(clean_path, 0, files[clean_path] as usize)?,
+            source.to_vec()
         );
         Ok(())
     }

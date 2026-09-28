@@ -343,6 +343,10 @@ pub struct EmailEventParameters {
     pub secret_imap_password: Option<String>,
 }
 
+/// Settings for an address issued by the server. Addresses and aliases are managed separately.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default)]
+pub struct InboundEmailEventParameters {}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct ApiEventParameters {
     pub path_suffix: Option<String>,
@@ -803,6 +807,7 @@ impl Event {
                 .filter(|pin| {
                     pin.pin_type == target_pin_type
                         && pin.data_type != super::variable::VariableType::Execution
+                        && (self.event_type != "inbound_email" || pin.name == "email")
                 })
                 .map(|pin| EventInput {
                     id: pin.id.clone(),
@@ -1410,13 +1415,20 @@ impl Event {
         Ok(versions)
     }
 
-    /// Force the event's `execution_mode` to match the board when the board
-    /// is locked to `Local` or `Remote`. Events are never Hybrid — when the
-    /// board allows either, whatever the caller supplied is kept.
+    /// Match the Event mode to a Local or Remote board. Hybrid boards retain
+    /// the selected mode, except Teams and inbound email Events always run remotely.
     pub async fn reconcile_execution_mode_with_board(
         &mut self,
         app: &App,
     ) -> flow_like_types::Result<()> {
+        if matches!(self.event_type.as_str(), "inbound_email" | "teams") {
+            if matches!(app.visibility, crate::app::AppVisibility::Offline) {
+                return Err(flow_like_types::anyhow!(
+                    "Server bot and inbound email Events require an online app"
+                ));
+            }
+            self.execution_mode = EventExecutionMode::Remote;
+        }
         if self.board_id.is_empty() {
             return Ok(());
         }
@@ -1432,6 +1444,11 @@ impl Event {
 
         match board_mode {
             super::board::ExecutionMode::Local => {
+                if matches!(self.event_type.as_str(), "inbound_email" | "teams") {
+                    return Err(flow_like_types::anyhow!(
+                        "Server bot and inbound email Events require a Remote or Hybrid board"
+                    ));
+                }
                 if self.execution_mode != EventExecutionMode::Local {
                     self.execution_mode = EventExecutionMode::Local;
                 }
@@ -1447,6 +1464,38 @@ impl Event {
         Ok(())
     }
 
+    fn validate_server_event_target(
+        &self,
+        board: &super::board::Board,
+        node_id: &str,
+        page_id: Option<&str>,
+    ) -> flow_like_types::Result<()> {
+        if !matches!(self.event_type.as_str(), "inbound_email" | "teams") {
+            return Ok(());
+        }
+        if matches!(board.execution_mode, super::board::ExecutionMode::Local) {
+            return Err(flow_like_types::anyhow!(
+                "Server bot and inbound email Events require a Remote or Hybrid board"
+            ));
+        }
+        let expected = if self.event_type == "teams" {
+            "events_chat"
+        } else {
+            "events_inbound_email"
+        };
+        if page_id.is_some()
+            || !board
+                .nodes
+                .get(node_id)
+                .is_some_and(|node| node.name == expected)
+        {
+            return Err(flow_like_types::anyhow!(
+                "Teams Events must target a Chat Event node; inbound email must target an Inbound Email Event node"
+            ));
+        }
+        Ok(())
+    }
+
     /// Resolve every variant's target: its board (at its pinned version), then
     /// its page when it carries one, else its node. Runs under the same
     /// active-only gating as the primary checks.
@@ -1456,6 +1505,11 @@ impl Event {
                 .open_board(variant.board_id.clone(), Some(false), variant.board_version)
                 .await?;
             let variant_board = variant_board.snapshot();
+            self.validate_server_event_target(
+                &variant_board,
+                &variant.node_id,
+                variant.default_page_id.as_deref(),
+            )?;
             if let Some(page_id) = variant.default_page_id.as_deref() {
                 if !variant_board
                     .page_ids
@@ -1488,7 +1542,19 @@ impl Event {
     /// with dangling primary or variant targets saves unvalidated. Known and
     /// accepted: it is validated on the save that activates it.
     pub async fn validate_event_references(&self, app: &App) -> flow_like_types::Result<()> {
+        if matches!(self.event_type.as_str(), "inbound_email" | "teams")
+            && matches!(app.visibility, crate::app::AppVisibility::Offline)
+        {
+            return Err(flow_like_types::anyhow!(
+                "Server bot and inbound email Events require an online app"
+            ));
+        }
         if let Some(page_id) = self.default_page_id.as_deref() {
+            if matches!(self.event_type.as_str(), "inbound_email" | "teams") {
+                return Err(flow_like_types::anyhow!(
+                    "Teams Events must target a Chat Event node; inbound email must target an Inbound Email Event node"
+                ));
+            }
             if self.board_id.trim().is_empty() {
                 return Err(flow_like_types::anyhow!(
                     "Page Event '{}' must identify its owning board",
@@ -1556,6 +1622,7 @@ impl Event {
             .open_board(self.board_id.clone(), Some(false), self.board_version)
             .await?;
 
+        self.validate_server_event_target(&board.snapshot(), &self.node_id, None)?;
         board.snapshot().nodes.get(&self.node_id).ok_or_else(|| {
             flow_like_types::anyhow!(
                 "Node with id {} not found in board {}",
@@ -1569,6 +1636,7 @@ impl Event {
                 .open_board(canary.board_id.clone(), Some(false), canary.board_version)
                 .await?;
 
+            self.validate_server_event_target(&canary_board.snapshot(), &canary.node_id, None)?;
             canary_board
                 .snapshot()
                 .nodes
@@ -1776,6 +1844,256 @@ mod tests {
             created_at: SystemTime::UNIX_EPOCH,
             updated_at: SystemTime::UNIX_EPOCH,
         }
+    }
+
+    async fn inbound_email_fixture(
+        mode: crate::flow::board::ExecutionMode,
+    ) -> (crate::app::App, Event) {
+        let mut app = test_app().await;
+        app.visibility = crate::app::AppVisibility::Private;
+        let created = app.create_board(None, None).await.unwrap();
+        let board = app
+            .open_board(created.board_id.clone(), Some(false), None)
+            .await
+            .unwrap();
+        {
+            let mut board = board.write().await;
+            board.execution_mode = mode;
+            let mut node = crate::flow::node::Node::new(
+                "events_inbound_email",
+                "Inbound Email Event",
+                "",
+                "Events",
+            );
+            node.id = "mail-node".into();
+            node.add_output_pin("email", "Email", "", VariableType::Struct)
+                .set_open_schema();
+            node.add_output_pin("exec_out", "Output", "", VariableType::Execution);
+            for name in ["session", "message", "attachments", "sender", "raw"] {
+                node.add_output_pin(name, name, "", VariableType::Struct);
+            }
+            node.add_output_pin("subject", "Subject", "", VariableType::String);
+            board.nodes.insert(node.id.clone(), node);
+            board.save(None).await.unwrap();
+        }
+        let mut event = storage_event("inbound-email-event");
+        event.event_type = "inbound_email".into();
+        event.board_id = created.board_id;
+        event.node_id = "mail-node".into();
+        event.config = b"{}".to_vec();
+        (app, event)
+    }
+
+    #[tokio::test]
+    async fn inbound_email_saves_remotely_on_hybrid_and_remote_boards() {
+        for mode in [
+            crate::flow::board::ExecutionMode::Hybrid,
+            crate::flow::board::ExecutionMode::Remote,
+        ] {
+            let (app, mut event) = inbound_email_fixture(mode).await;
+            event.active = true;
+            let saved = event.upsert(&app, None, true).await.unwrap();
+            assert_eq!(saved.execution_mode, super::EventExecutionMode::Remote);
+            assert_eq!(saved.inputs.len(), 1);
+            assert_eq!(saved.inputs[0].name, "email");
+        }
+    }
+
+    #[tokio::test]
+    async fn inbound_email_rejects_local_boards_even_when_inactive() {
+        let (app, mut event) =
+            inbound_email_fixture(crate::flow::board::ExecutionMode::Local).await;
+        for active in [false, true] {
+            event.active = active;
+            assert!(
+                event
+                    .upsert(&app, None, true)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Remote or Hybrid board")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn inbound_email_rejects_offline_apps() {
+        let (mut app, mut event) =
+            inbound_email_fixture(crate::flow::board::ExecutionMode::Hybrid).await;
+        app.visibility = crate::app::AppVisibility::Offline;
+        assert!(
+            event
+                .upsert(&app, None, true)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("online app")
+        );
+    }
+
+    #[tokio::test]
+    async fn inbound_email_validates_active_targets_and_variants() {
+        let (app, mut event) =
+            inbound_email_fixture(crate::flow::board::ExecutionMode::Hybrid).await;
+        event.active = true;
+        event.node_id = "missing".into();
+        assert!(event.validate_event_references(&app).await.is_err());
+        event.node_id = "mail-node".into();
+        let mut variant = test_variant("candidate");
+        variant.board_id = event.board_id.clone();
+        variant.board_version = None;
+        variant.node_id = "missing".into();
+        event.variants.push(variant);
+        assert!(event.validate_event_references(&app).await.is_err());
+        event.variants[0].node_id = event.node_id.clone();
+        event.validate_event_references(&app).await.unwrap();
+        event.variants[0].default_page_id = Some("page".into());
+        assert!(event.validate_event_references(&app).await.is_err());
+    }
+
+    async fn teams_fixture(mode: crate::flow::board::ExecutionMode) -> (crate::app::App, Event) {
+        let (app, mut event) = inbound_email_fixture(mode).await;
+        let board = app
+            .open_board(event.board_id.clone(), Some(false), None)
+            .await
+            .unwrap();
+        {
+            let mut board = board.write().await;
+            let mut chat = board.nodes[&event.node_id].clone();
+            chat.id = "chat-node".into();
+            chat.name = "events_chat".into();
+            chat.friendly_name = "Chat Event".into();
+            chat.pins.clear();
+            chat.add_output_pin("exec_out", "Output", "", VariableType::Execution);
+            for name in [
+                "history",
+                "local_session",
+                "global_session",
+                "actions",
+                "attachments",
+                "user",
+            ] {
+                chat.add_output_pin(name, name, "", VariableType::Struct);
+            }
+            chat.add_output_pin("tools", "Tools", "", VariableType::String)
+                .set_value_type(ValueType::Array);
+            board.nodes.insert(chat.id.clone(), chat);
+            board.save(None).await.unwrap();
+        }
+        event.id = "teams-event".into();
+        event.event_type = "teams".into();
+        event.node_id = "chat-node".into();
+        (app, event)
+    }
+
+    #[tokio::test]
+    async fn teams_saves_remotely_and_keeps_chat_pins_on_hybrid_and_remote_boards() {
+        for mode in [
+            crate::flow::board::ExecutionMode::Hybrid,
+            crate::flow::board::ExecutionMode::Remote,
+        ] {
+            let (app, mut event) = teams_fixture(mode).await;
+            event.active = true;
+            let saved = event.upsert(&app, None, true).await.unwrap();
+            assert_eq!(saved.execution_mode, super::EventExecutionMode::Remote);
+            let mut inputs: Vec<_> = saved.inputs.iter().map(|pin| pin.name.as_str()).collect();
+            inputs.sort_unstable();
+            assert_eq!(
+                inputs,
+                [
+                    "actions",
+                    "attachments",
+                    "global_session",
+                    "history",
+                    "local_session",
+                    "tools",
+                    "user",
+                ]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn teams_rejects_local_boards_even_when_inactive() {
+        let (app, mut event) = teams_fixture(crate::flow::board::ExecutionMode::Local).await;
+        for active in [false, true] {
+            event.active = active;
+            let error = event.upsert(&app, None, true).await.unwrap_err();
+            assert!(error.to_string().contains("Remote or Hybrid board"));
+        }
+    }
+
+    #[tokio::test]
+    async fn teams_rejects_offline_apps_even_when_inactive() {
+        let (mut app, mut event) = teams_fixture(crate::flow::board::ExecutionMode::Hybrid).await;
+        app.visibility = crate::app::AppVisibility::Offline;
+        for active in [false, true] {
+            event.active = active;
+            let error = event.upsert(&app, None, true).await.unwrap_err();
+            assert!(error.to_string().contains("online app"));
+        }
+    }
+
+    #[tokio::test]
+    async fn teams_activation_requires_a_chat_node_and_rejects_page_targets() {
+        let (app, mut event) = teams_fixture(crate::flow::board::ExecutionMode::Hybrid).await;
+        event.node_id = "mail-node".into();
+        event.upsert(&app, None, true).await.unwrap();
+        event.active = true;
+        let error = event.upsert(&app, None, true).await.unwrap_err();
+        assert!(error.to_string().contains("Chat Event node"));
+        event.node_id = "missing".into();
+        assert!(event.validate_event_references(&app).await.is_err());
+        event.node_id = "chat-node".into();
+        event.validate_event_references(&app).await.unwrap();
+        event.default_page_id = Some("page".into());
+        let error = event.validate_event_references(&app).await.unwrap_err();
+        assert!(error.to_string().contains("Chat Event node"));
+    }
+
+    #[tokio::test]
+    async fn teams_variants_require_chat_nodes_for_live_and_shadow_targets() {
+        let (app, mut event) = teams_fixture(crate::flow::board::ExecutionMode::Hybrid).await;
+        event.active = true;
+        for mode in [
+            EventVariantMode::Live { weight: 0.25 },
+            EventVariantMode::Shadow { sample_rate: 0.5 },
+        ] {
+            let mut variant = test_variant("candidate");
+            variant.board_id = event.board_id.clone();
+            variant.board_version = None;
+            variant.node_id = "mail-node".into();
+            variant.mode = mode;
+            event.variants = vec![variant];
+            let error = event.validate_event_references(&app).await.unwrap_err();
+            assert!(error.to_string().contains("Chat Event node"));
+            event.variants[0].node_id = "missing".into();
+            assert!(event.validate_event_references(&app).await.is_err());
+            event.variants[0].node_id = "chat-node".into();
+            event.validate_event_references(&app).await.unwrap();
+            event.variants[0].default_page_id = Some("page".into());
+            let error = event.validate_event_references(&app).await.unwrap_err();
+            assert!(error.to_string().contains("Chat Event node"));
+        }
+    }
+
+    #[tokio::test]
+    async fn teams_legacy_canary_requires_a_chat_node() {
+        let (app, mut event) = teams_fixture(crate::flow::board::ExecutionMode::Hybrid).await;
+        event.active = true;
+        event.canary = Some(super::CanaryEvent {
+            weight: 0.25,
+            variables: HashMap::new(),
+            board_id: event.board_id.clone(),
+            board_version: None,
+            node_id: "mail-node".into(),
+            created_at: SystemTime::UNIX_EPOCH,
+            updated_at: SystemTime::UNIX_EPOCH,
+        });
+        let error = event.validate_event_references(&app).await.unwrap_err();
+        assert!(error.to_string().contains("Chat Event node"));
+        event.canary.as_mut().unwrap().node_id = "chat-node".into();
+        event.validate_event_references(&app).await.unwrap();
     }
 
     #[test]

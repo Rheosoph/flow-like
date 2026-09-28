@@ -16,8 +16,10 @@ use axum::{
     http::HeaderMap,
     routing::get,
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use flow_like_device_protocol::{
-    CertificateInventory, CertificateInventoryEntry, verify_certificate_inventory,
+    CertificateInventory, CertificateInventoryEntry, ManagementCapability, ManagementGrant,
+    ManagementScope, OnboardingManifest, verify_certificate_inventory, verify_management_policy,
 };
 use flow_like_types::tokio;
 use sea_orm::{
@@ -30,7 +32,12 @@ const DAY: i64 = 86_400;
 const CHECK_SECONDS: i64 = 300;
 const LEASE_SECONDS: i64 = 120;
 const BATCH: usize = 100;
-const SWEEP_BUDGET: Duration = Duration::from_secs(45);
+// Scheduling and delivery have separate budgets, so a burst of inventories
+// cannot use up the pass that delivers reminders.
+const SCHEDULE_BUDGET: Duration = Duration::from_secs(20);
+const DISPATCH_BUDGET: Duration = Duration::from_secs(25);
+/// One owner's devices cannot take more than this share of a delivery pass.
+const NOTICES_PER_OWNER_PER_PASS: i64 = 10;
 
 fn sql(query: &str, values: impl IntoIterator<Item = Value>) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Postgres, query, values)
@@ -83,6 +90,14 @@ async fn read(
 ) -> Result<Json<InventoryView>, ApiError> {
     let user = human_owner(&state, &user).await?;
     management::admitted_device(&state, &user, &id).await?;
+    let audience = audience(&state.db, &id, chrono::Utc::now().timestamp())
+        .await?
+        .ok_or(ApiError::FORBIDDEN)?;
+    if !audience.admits(&user) {
+        return Err(ApiError::forbidden(
+            "Certificate inventory requires device-wide Status or ManageCertificates access",
+        ));
+    }
     Ok(Json(view(&state.db, &id).await?))
 }
 
@@ -181,8 +196,10 @@ async fn retain(
                     return Ok(());
                 }
             }
+            // A material change keeps the device's reminder cadence, so rewriting the
+            // inventory cannot schedule notices more often than once per check.
             tx.execute_raw(sql(r#"INSERT INTO "DeviceCertificateInventory"("deviceId",revision,payload,"updatedAt","nextCheckAt") VALUES($1,$2,$3,$4,$4)
-                ON CONFLICT("deviceId") DO UPDATE SET revision=$2,payload=$3,"updatedAt"=$4,"nextCheckAt"=$4"#,
+                ON CONFLICT("deviceId") DO UPDATE SET revision=$2,payload=$3,"updatedAt"=$4"#,
                 [inventory.device_id.clone().into(), (inventory.revision as i64).into(), serde_json::to_string(&inventory)?.into(), now.into()])).await?;
             // Deleting stale deliveries also removes their retry leases. A sender rechecks
             // both the inventory and access immediately before dispatching each channel.
@@ -208,25 +225,147 @@ fn stage(not_after: i64, now: i64) -> Option<&'static str> {
     }
 }
 
-/// Group membership is already resolved to users in the owner's signed policy.
-/// Only its latest unexpired grants count; an unsigned group expansion grants nothing.
+/// Who may see a device's certificates: its owner, and grantees whose current
+/// grant covers the whole device with Status or ManageCertificates, the same
+/// access the device itself requires for its Certificates command.
+struct CertificateAudience {
+    owner: String,
+    grants: Vec<ManagementGrant>,
+}
+
+impl CertificateAudience {
+    fn admits(&self, user: &str) -> bool {
+        self.owner == user || self.grants.iter().any(|grant| grant.user_id == user)
+    }
+}
+
+fn covers_certificates(grant: &ManagementGrant, now: i64) -> bool {
+    grant.expires_at > now
+        && grant.scope == ManagementScope::Device
+        && grant.capabilities.iter().any(|capability| {
+            matches!(
+                capability,
+                ManagementCapability::Status | ManagementCapability::ManageCertificates
+            )
+        })
+}
+
+/// Only the latest owner-signed policy counts; an unsigned or expired one grants nothing.
+async fn audience<C: ConnectionTrait>(
+    db: &C,
+    id: &str,
+    now: i64,
+) -> Result<Option<CertificateAudience>, ApiError> {
+    let Some(row) = db.query_one_raw(sql(r#"SELECT d."ownerId",e.manifest,p."policyJws" FROM "ManagedDevice" d
+        JOIN "User" owner ON owner.id=d."ownerId" AND owner.status='ACTIVE'
+        LEFT JOIN "DeviceEnrollment" e ON e."deviceId"=d.id
+        LEFT JOIN "DeviceManagementPolicy" p ON p."deviceId"=d.id AND p.version=(SELECT MAX(version) FROM "DeviceManagementPolicy" WHERE "deviceId"=d.id)
+        WHERE d.id=$1 AND d.status='active'"#, [id.into()])).await? else {
+        return Ok(None);
+    };
+    let manifest = row
+        .try_get::<Option<String>>("", "manifest")?
+        .map(|manifest| serde_json::from_str::<OnboardingManifest>(&manifest))
+        .transpose()?;
+    let grants = match (manifest, row.try_get::<Option<String>>("", "policyJws")?) {
+        (Some(manifest), Some(policy)) => {
+            verify_management_policy(&policy, &manifest.owner_invitation_key, now)
+                .ok()
+                .filter(|policy| policy.device_id == id)
+                .map(|policy| {
+                    policy
+                        .grants
+                        .into_iter()
+                        .filter(|grant| covers_certificates(grant, now))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+        _ => Vec::new(),
+    };
+    Ok(Some(CertificateAudience {
+        owner: row.try_get("", "ownerId")?,
+        grants,
+    }))
+}
+
+/// Notices go only to grantees who accepted the share: under their own session
+/// they registered the grant's controller key for this device, either as a
+/// fleet reader or as an account backup. A policy naming an account grants it
+/// nothing it can be notified about until then.
 async fn recipients<C: ConnectionTrait>(
     db: &C,
     id: &str,
     now: i64,
 ) -> Result<Vec<String>, ApiError> {
-    let rows = db.query_all_raw(sql(r#"WITH device AS (
-        SELECT d.id,d."ownerId" FROM "ManagedDevice" d JOIN "User" owner
-        ON owner.id=d."ownerId" AND owner.status='ACTIVE' WHERE d.id=$1 AND d.status='active'
-    ), candidates AS (
-        SELECT "ownerId" AS "userId" FROM device
-        UNION SELECT r."userId" FROM device d JOIN "DeviceManagementRecipient" r ON r."deviceId"=d.id
-        JOIN "DeviceManagementPolicy" p ON p."deviceId"=r."deviceId" AND p.version=r.version
-        WHERE r."expiresAt">$2 AND p."expiresAt">$2
-        AND p.version=(SELECT MAX(version) FROM "DeviceManagementPolicy" WHERE "deviceId"=d.id)
-    ) SELECT u.id FROM candidates c JOIN "User" u ON u.id=c."userId" AND u.status='ACTIVE' ORDER BY u.id"#, [id.into(), now.into()])).await?;
-    rows.into_iter()
-        .map(|row| row.try_get("", "id").map_err(Into::into))
+    let Some(audience) = audience(db, id, now).await? else {
+        return Ok(Vec::new());
+    };
+    let mut users = vec![audience.owner.clone()];
+    if !audience.grants.is_empty() {
+        let mut reader_pairs = Vec::with_capacity(audience.grants.len());
+        let mut backup_pairs = Vec::with_capacity(audience.grants.len());
+        for grant in &audience.grants {
+            let key_id =
+                URL_SAFE_NO_PAD.encode(grant.controller_key.to_bytes().map_err(|error| {
+                    ApiError::internal(format!(
+                        "Invalid controller key in grant {}: {error}",
+                        grant.grant_id
+                    ))
+                })?);
+            reader_pairs.push((grant.user_id.clone(), key_id));
+            backup_pairs.push((
+                grant.user_id.clone(),
+                serde_json::to_string(&grant.controller_key)?,
+            ));
+        }
+        // A deleted reader withdrew its acceptance.
+        let readers = existing_pairs(
+            db,
+            id,
+            &reader_pairs,
+            |pairs| format!(r#"SELECT r."userId",r."keyId" FROM "DeviceFleetReader" r JOIN "User" u ON u.id=r."userId" AND u.status='ACTIVE' WHERE r."deviceId"=$1 AND r.deleted=false AND (r."userId",r."keyId") IN ({pairs})"#),
+        )
+        .await?;
+        let backups = existing_pairs(
+            db,
+            id,
+            &backup_pairs,
+            |pairs| format!(r#"SELECT v."userId",v."publicKey" FROM "DeviceControllerVault" v JOIN "User" u ON u.id=v."userId" AND u.status='ACTIVE' WHERE v."keyId"=$1 AND (v."userId",v."publicKey") IN ({pairs})"#),
+        )
+        .await?;
+        for (reader, backup) in reader_pairs.into_iter().zip(backup_pairs) {
+            if readers.contains(&reader) || backups.contains(&backup) {
+                users.push(reader.0);
+            }
+        }
+    }
+    users.sort();
+    users.dedup();
+    Ok(users)
+}
+
+/// The rows among `pairs` that exist, with `id` bound as $1. Only the named
+/// pairs are loaded, so no row limit can drop a real match.
+async fn existing_pairs<C: ConnectionTrait>(
+    db: &C,
+    id: &str,
+    pairs: &[(String, String)],
+    query: impl FnOnce(&str) -> String,
+) -> Result<std::collections::HashSet<(String, String)>, ApiError> {
+    let placeholders = (0..pairs.len())
+        .map(|index| format!("(${},${})", 2 * index + 2, 2 * index + 3))
+        .collect::<Vec<_>>()
+        .join(",");
+    let values = std::iter::once(Value::from(id)).chain(
+        pairs
+            .iter()
+            .flat_map(|(user, key)| [Value::from(user.as_str()), Value::from(key.as_str())]),
+    );
+    db.query_all_raw(sql(&query(&placeholders), values))
+        .await?
+        .into_iter()
+        .map(|row| Ok((row.try_get_by_index(0)?, row.try_get_by_index(1)?)))
         .collect()
 }
 
@@ -478,7 +617,10 @@ async fn dispatch_pending(
     sink: &impl DeliverySink,
     now: i64,
 ) -> Result<u64, ApiError> {
-    let rows = db.query_all_raw(sql(r#"SELECT * FROM "DeviceCertificateNotice" WHERE status='pending' AND "nextAttemptAt"<=$1 AND ("leaseUntil" IS NULL OR "leaseUntil"<=$1) ORDER BY "nextAttemptAt",id LIMIT 100"#, [now.into()])).await?;
+    let rows = db.query_all_raw(sql(r#"SELECT n.* FROM (SELECT c.*,ROW_NUMBER() OVER (PARTITION BY d."ownerId" ORDER BY c."nextAttemptAt",c.id) AS "ownerRank"
+        FROM "DeviceCertificateNotice" c JOIN "ManagedDevice" d ON d.id=c."deviceId"
+        WHERE c.status='pending' AND c."nextAttemptAt"<=$1 AND (c."leaseUntil" IS NULL OR c."leaseUntil"<=$1)) n
+        WHERE n."ownerRank"<=$2 ORDER BY n."nextAttemptAt",n.id LIMIT 100"#, [now.into(), NOTICES_PER_OWNER_PER_PASS.into()])).await?;
     let mut delivered = 0;
     for row in rows {
         let notice = Notice::from_row(row)?;
@@ -518,23 +660,32 @@ async fn dispatch_pending(
 }
 
 async fn bounded_sweep(
+    budget: Duration,
     work: impl std::future::Future<Output = Result<u64, ApiError>>,
 ) -> Result<u64, ApiError> {
-    tokio::time::timeout(SWEEP_BUDGET, work)
+    tokio::time::timeout(budget, work)
         .await
         .map_err(|_| ApiError::service_unavailable("Certificate reminder pass incomplete; queued deliveries and leases will resume on the next pass"))?
 }
 
 pub(crate) async fn sweep(state: &AppState) -> Result<u64, ApiError> {
-    bounded_sweep(sweep_pass(state)).await
-}
-
-async fn sweep_pass(state: &AppState) -> Result<u64, ApiError> {
     if !state.platform_config.standalone.enabled {
         return Ok(0);
     }
     let now = chrono::Utc::now().timestamp();
+    let scheduled = bounded_sweep(SCHEDULE_BUDGET, schedule_due(state, now)).await;
+    let delivered = bounded_sweep(
+        DISPATCH_BUDGET,
+        dispatch_pending(&state.db, &NativeDelivery(state), now),
+    )
+    .await;
+    scheduled?;
+    delivered
+}
+
+async fn schedule_due(state: &AppState, now: i64) -> Result<u64, ApiError> {
     let rows = state.db.query_all_raw(sql(r#"SELECT i."deviceId" FROM "DeviceCertificateInventory" i JOIN "ManagedDevice" d ON d.id=i."deviceId" JOIN "User" u ON u.id=d."ownerId" WHERE i."nextCheckAt"<=$1 AND d.status='active' AND u.status='ACTIVE' ORDER BY i."nextCheckAt",i."deviceId" LIMIT 100"#, [now.into()])).await?;
+    let mut scheduled = 0;
     for row in rows.into_iter().take(BATCH) {
         schedule(
             &state.db,
@@ -543,8 +694,9 @@ async fn sweep_pass(state: &AppState) -> Result<u64, ApiError> {
             now,
         )
         .await?;
+        scheduled += 1;
     }
-    dispatch_pending(&state.db, &NativeDelivery(state), now).await
+    Ok(scheduled)
 }
 
 pub fn spawn_sweeper(state: AppState) -> Option<tokio::task::JoinHandle<()>> {
@@ -566,7 +718,10 @@ pub fn spawn_sweeper(state: AppState) -> Option<tokio::task::JoinHandle<()>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_device_protocol::{DeviceIdentity, DeviceReceipt, SigningKey};
+    use flow_like_device_protocol::{
+        DeviceIdentity, DeviceReceipt, ManagementPolicy, SigningKey, compact_digest,
+        sign_management_policy,
+    };
     use std::{
         collections::HashSet,
         sync::{
@@ -588,6 +743,47 @@ mod tests {
                 not_after: now + 6 * DAY,
             }],
         }
+    }
+
+    #[test]
+    fn certificate_access_requires_a_live_device_wide_status_or_certificate_grant() {
+        let grant = |scope, capability, expires_at| ManagementGrant {
+            grant_id: "grant".into(),
+            user_id: "reader".into(),
+            controller_key: SigningKey::generate().public_key(),
+            scope,
+            capabilities: vec![capability],
+            expires_at,
+            group_id: None,
+            group_version: None,
+        };
+        let project = || ManagementScope::Project {
+            project_id: "project".into(),
+        };
+        assert!(covers_certificates(
+            &grant(ManagementScope::Device, ManagementCapability::Status, 20),
+            10
+        ));
+        assert!(covers_certificates(
+            &grant(
+                ManagementScope::Device,
+                ManagementCapability::ManageCertificates,
+                20
+            ),
+            10
+        ));
+        assert!(!covers_certificates(
+            &grant(ManagementScope::Device, ManagementCapability::Logs, 20),
+            10
+        ));
+        assert!(!covers_certificates(
+            &grant(project(), ManagementCapability::Status, 20),
+            10
+        ));
+        assert!(!covers_certificates(
+            &grant(ManagementScope::Device, ManagementCapability::Status, 10),
+            10
+        ));
     }
 
     #[test]
@@ -660,7 +856,7 @@ mod tests {
         }
         let cancelled = std::sync::Arc::new(AtomicBool::new(false));
         let started = tokio::time::Instant::now();
-        let result = bounded_sweep(async {
+        let result = bounded_sweep(SCHEDULE_BUDGET, async {
             let _in_flight = Cancelled(cancelled.clone());
             std::future::pending::<Result<u64, ApiError>>().await
         })
@@ -669,9 +865,15 @@ mod tests {
             result.unwrap_err().status(),
             axum::http::StatusCode::SERVICE_UNAVAILABLE
         );
-        assert_eq!(started.elapsed(), SWEEP_BUDGET);
+        assert_eq!(started.elapsed(), SCHEDULE_BUDGET);
         assert!(cancelled.load(Ordering::SeqCst));
-        assert_eq!(bounded_sweep(async { Ok(2) }).await.unwrap(), 2);
+        assert_eq!(
+            bounded_sweep(DISPATCH_BUDGET, async { Ok(2) })
+                .await
+                .unwrap(),
+            2
+        );
+        assert!(SCHEDULE_BUDGET + DISPATCH_BUDGET < Duration::from_secs(60));
     }
 
     #[derive(Default)]
@@ -740,6 +942,7 @@ mod tests {
         for migration in [
             include_str!("../../prisma/migrations/20260921120000_standalone_devices/migration.sql"),
             include_str!("../../prisma/migrations/20260922120000_device_management/migration.sql"),
+            include_str!("../../prisma/migrations/20260924150000_device_fleet/migration.sql"),
             include_str!(
                 "../../prisma/migrations/20260925120000_device_certificates/migration.sql"
             ),
@@ -752,7 +955,7 @@ mod tests {
             }
         }
         db.execute_unprepared(r#"CREATE TABLE "User"(id TEXT PRIMARY KEY,status TEXT NOT NULL,email TEXT);
-            INSERT INTO "User" VALUES('owner','ACTIVE','owner@example.invalid'),('reader','ACTIVE','reader@example.invalid'),('group-user','ACTIVE','group@example.invalid'),('expired','ACTIVE',NULL),('disabled','DISABLED',NULL)"#).await.unwrap();
+            INSERT INTO "User" VALUES('owner','ACTIVE','owner@example.invalid'),('reader','ACTIVE','reader@example.invalid'),('group-user','ACTIVE','group@example.invalid'),('expired','ACTIVE',NULL),('disabled','DISABLED',NULL),('scoped','ACTIVE',NULL),('unaccepted','ACTIVE',NULL),('withdrawn','ACTIVE',NULL)"#).await.unwrap();
         let now = chrono::Utc::now().timestamp();
         let identity = DeviceIdentity {
             auth_key: SigningKey::generate().public_key(),
@@ -771,29 +974,135 @@ mod tests {
             auth_epoch: 1,
         };
         db.execute_raw(sql(r#"INSERT INTO "ManagedDevice"(id,"ownerId",name,status,"authEpoch",identity,receipt,"registeredAt") VALUES('device','owner','Remote device','active',1,$1,$2,$3)"#, [serde_json::to_string(&identity).unwrap().into(), serde_json::to_string(&receipt).unwrap().into(), now.into()])).await.unwrap();
-        db.execute_raw(sql(r#"INSERT INTO "DeviceManagementPolicy"("deviceId",version,digest,"policyJws","expiresAt","createdAt") VALUES('device',1,'digest','already-owner-verified',$1,$2)"#, [(now + 30 * DAY).into(), now.into()])).await.unwrap();
-        for (user, expires_at) in [
-            ("reader", now + DAY),
-            ("group-user", now + DAY),
-            ("expired", now - 1),
-            ("disabled", now + DAY),
+        let invitation = SigningKey::generate();
+        let manifest = OnboardingManifest {
+            version: 1,
+            enrollment_id: "enrollment".into(),
+            device_id: "device".into(),
+            owner_id: "owner".into(),
+            name: "Remote device".into(),
+            api_base_url: "https://hub.example/api/v1".into(),
+            bootstrap_key: SigningKey::generate().public_key(),
+            controller_key: SigningKey::generate().public_key(),
+            owner_invitation_key: invitation.public_key(),
+            issued_at: now,
+            expires_at: now + 600,
+        };
+        db.execute_raw(sql(r#"INSERT INTO "DeviceEnrollment"(id,"deviceId","ownerId","jwtId",manifest,status,"expiresAt","createdAt") VALUES('enrollment','device','owner','jwt',$1,'consumed',$2,$3)"#, [serde_json::to_string(&manifest).unwrap().into(), manifest.expires_at.into(), now.into()])).await.unwrap();
+        let keys: std::collections::HashMap<&str, SigningKey> = [
+            "reader",
+            "group-user",
+            "expired",
+            "disabled",
+            "scoped",
+            "unaccepted",
+            "withdrawn",
+        ]
+        .into_iter()
+        .map(|user| (user, SigningKey::generate()))
+        .collect();
+        let grant = |user: &str, scope: ManagementScope, capability, expires_at| ManagementGrant {
+            grant_id: user.into(),
+            user_id: user.into(),
+            controller_key: keys[user].public_key(),
+            scope,
+            capabilities: vec![capability],
+            expires_at,
+            group_id: None,
+            group_version: None,
+        };
+        let mut policy = ManagementPolicy {
+            version: 1,
+            device_id: "device".into(),
+            policy_version: 1,
+            previous_policy_digest: None,
+            grants: vec![
+                grant(
+                    "reader",
+                    ManagementScope::Device,
+                    ManagementCapability::Status,
+                    now + DAY,
+                ),
+                ManagementGrant {
+                    group_id: Some("operators".into()),
+                    group_version: Some(1),
+                    ..grant(
+                        "group-user",
+                        ManagementScope::Device,
+                        ManagementCapability::ManageCertificates,
+                        now + DAY,
+                    )
+                },
+                grant(
+                    "expired",
+                    ManagementScope::Device,
+                    ManagementCapability::Status,
+                    now - 1,
+                ),
+                grant(
+                    "disabled",
+                    ManagementScope::Device,
+                    ManagementCapability::Status,
+                    now + DAY,
+                ),
+                grant(
+                    "scoped",
+                    ManagementScope::Project {
+                        project_id: "project".into(),
+                    },
+                    ManagementCapability::Status,
+                    now + DAY,
+                ),
+                grant(
+                    "unaccepted",
+                    ManagementScope::Device,
+                    ManagementCapability::Status,
+                    now + DAY,
+                ),
+                grant(
+                    "withdrawn",
+                    ManagementScope::Device,
+                    ManagementCapability::Status,
+                    now + DAY,
+                ),
+            ],
+            issued_at: now - 100,
+            expires_at: now + 30 * DAY,
+        };
+        let first_policy = sign_management_policy(&policy, &invitation).unwrap();
+        db.execute_raw(sql(r#"INSERT INTO "DeviceManagementPolicy"("deviceId",version,digest,"policyJws","expiresAt","createdAt") VALUES('device',1,$1,$2,$3,$4)"#, [compact_digest(&first_policy).into(), first_policy.clone().into(), policy.expires_at.into(), now.into()])).await.unwrap();
+        // Historical reader rows written first must not crowd out real acceptances.
+        db.execute_unprepared(r#"INSERT INTO "DeviceFleetReader"("deviceId","userId","keyId",revision,"readerJws",deleted) SELECT 'device','reader','historical-'||n,1,'fixture',false FROM generate_series(1,1100) n"#).await.unwrap();
+        // Grantees accept a share by registering the grant's key for this device
+        // under their own session, as a fleet reader or as an account backup.
+        // Deleting the reader withdraws that acceptance.
+        for (user, deleted) in [
+            ("reader", false),
+            ("expired", false),
+            ("disabled", false),
+            ("scoped", false),
+            ("withdrawn", true),
         ] {
-            db.execute_raw(sql(r#"INSERT INTO "DeviceManagementRecipient"("deviceId",version,"grantId","userId","expiresAt") VALUES('device',1,$1,$1,$2)"#, [user.into(), expires_at.into()])).await.unwrap();
+            let key_id = URL_SAFE_NO_PAD.encode(keys[user].public_key().to_bytes().unwrap());
+            db.execute_raw(sql(r#"INSERT INTO "DeviceFleetReader"("deviceId","userId","keyId",revision,"readerJws",deleted) VALUES('device',$1,$2,1,'fixture',$3)"#, [user.into(), key_id.into(), deleted.into()])).await.unwrap();
         }
+        db.execute_raw(sql(r#"INSERT INTO "DeviceControllerVault"("userId","keyId","publicKey",ciphertext,revision,"updatedAt") VALUES('group-user','device',$1,'fixture',1,$2)"#, [serde_json::to_string(&keys["group-user"].public_key()).unwrap().into(), now.into()])).await.unwrap();
         assert_eq!(
             recipients(&db, "device", now).await.unwrap(),
             vec!["group-user", "owner", "reader"]
         );
-        db.execute_raw(sql(
-            r#"UPDATE "DeviceManagementPolicy" SET "expiresAt"=$1"#,
-            [(now - 1).into()],
-        ))
-        .await
-        .unwrap();
+        let visible = audience(&db, "device", now).await.unwrap().unwrap();
+        assert!(
+            visible.admits("owner") && visible.admits("reader") && visible.admits("unaccepted")
+        );
+        assert!(!visible.admits("scoped") && !visible.admits("expired"));
+        db.execute_unprepared(r#"UPDATE "DeviceManagementPolicy" SET "policyJws"='tampered'"#)
+            .await
+            .unwrap();
         assert_eq!(recipients(&db, "device", now).await.unwrap(), vec!["owner"]);
         db.execute_raw(sql(
-            r#"UPDATE "DeviceManagementPolicy" SET "expiresAt"=$1"#,
-            [(now + 30 * DAY).into()],
+            r#"UPDATE "DeviceManagementPolicy" SET "policyJws"=$1"#,
+            [first_policy.clone().into()],
         ))
         .await
         .unwrap();
@@ -847,8 +1156,11 @@ mod tests {
 
         // A group grant is an explicit resolved recipient. Revoking it after
         // scheduling must cancel both channels before either is dispatched.
-        db.execute_raw(sql(r#"INSERT INTO "DeviceManagementPolicy"("deviceId",version,digest,"policyJws","expiresAt","createdAt") VALUES('device',2,'digest-2','verified-policy-with-group-member-removed',$1,$2)"#, [(now + 30 * DAY).into(), now.into()])).await.unwrap();
-        db.execute_raw(sql(r#"INSERT INTO "DeviceManagementRecipient"("deviceId",version,"grantId","userId","expiresAt") VALUES('device',2,'reader','reader',$1)"#, [(now + DAY).into()])).await.unwrap();
+        policy.policy_version = 2;
+        policy.previous_policy_digest = Some(compact_digest(&first_policy));
+        policy.grants.retain(|grant| grant.user_id == "reader");
+        let second_policy = sign_management_policy(&policy, &invitation).unwrap();
+        db.execute_raw(sql(r#"INSERT INTO "DeviceManagementPolicy"("deviceId",version,digest,"policyJws","expiresAt","createdAt") VALUES('device',2,$1,$2,$3,$4)"#, [compact_digest(&second_policy).into(), second_policy.into(), policy.expires_at.into(), now.into()])).await.unwrap();
         let sink = FakeDelivery {
             db: Some(db.clone()),
             ..Default::default()
@@ -919,7 +1231,21 @@ mod tests {
                 .await
                 .is_err()
         );
+        // A material change waits for the device's next check instead of
+        // scheduling immediately, so rewriting inventories cannot flood recipients.
         schedule(&db, DbDialect::Postgres, "device".into(), now)
+            .await
+            .unwrap();
+        assert_eq!(
+            count(
+                &db,
+                r#"SELECT COUNT(*) AS count FROM "DeviceCertificateNotice""#
+            )
+            .await,
+            0
+        );
+        let next_check = now + CHECK_SECONDS;
+        schedule(&db, DbDialect::Postgres, "device".into(), next_check)
             .await
             .unwrap();
         assert_eq!(
@@ -934,7 +1260,7 @@ mod tests {
         db.execute_unprepared(r#"UPDATE "ManagedDevice" SET status='revoked'"#)
             .await
             .unwrap();
-        assert_eq!(dispatch_pending(&db, &sink, now).await.unwrap(), 0);
+        assert_eq!(dispatch_pending(&db, &sink, next_check).await.unwrap(), 0);
         assert_eq!(sink.sent.lock().unwrap().len(), 4);
         db.execute_unprepared(r#"UPDATE "ManagedDevice" SET status='active'"#)
             .await

@@ -24,10 +24,17 @@ Flow-Like uses [mise](https://mise.jdx.dev/) to pin and run the repository
 toolchain. The root `mise.toml` currently installs Rust, Bun, Node.js 22,
 Python 3.12, and uv.
 
-Host builds use Rust 1.97.1, pinned in `rust-toolchain.toml`, mise, CI, and
-Docker builders. This satisfies Wasmtime 48's [Rust 1.95 minimum](https://github.com/bytecodealliance/wasmtime/blob/v48.0.1/Cargo.toml).
-Use the repository pin when building Flow-Like. Guest WASM packages have
-separate compiler requirements documented in their templates.
+Host builds use `beta-2026-09-27` (Rust 1.99.0-beta.8, LLVM 23.1.1). This
+dated prerelease includes the [LLVM fix for nondeterministic loop optimization](https://github.com/llvm/llvm-project/pull/188821)
+needed for byte-identical optimized rebuilds. Rust 1.97.1 and 1.98.1 still
+produce differing executable instructions in the regression case.
+
+`rust-toolchain.toml` controls CI and Docker builders across platforms. Mise
+and Xcode use matching pins, checked by CI. Use that pin for local builds too.
+Compiler updates must pass the clean rebuild regression on Linux, macOS, and
+Windows for x64 and ARM64; standalone releases also compare two complete
+binaries. Keep these checks when moving to a stable compiler. Guest WASM
+packages document their compiler requirements in their templates.
 
 ```bash
 mise trust

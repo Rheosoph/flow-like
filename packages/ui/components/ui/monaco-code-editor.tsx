@@ -16,7 +16,8 @@ function injectMonacoCodeStyles() {
 
 	const style = document.createElement("style");
 	style.id = styleId;
-	style.textContent = `.monaco-code-editor-wrapper .monaco-editor .line-numbers { font-size: 0.75rem; } .monaco-code-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider { background: hsl(var(--muted-foreground) / 0.3) !important; border-radius: 4px; } .monaco-code-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider:hover { background: hsl(var(--muted-foreground) / 0.5) !important; } /* Fullscreen mode */ .monaco-code-editor-fullscreen { position: fixed !important; inset: 0 !important; z-index: 50 !important; height: 100vh !important; width: 100vw !important; border-radius: 0 !important; }`;
+	style.textContent =
+		".monaco-code-editor-wrapper .monaco-editor .line-numbers { font-size: 0.75rem; } .monaco-code-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider { background: hsl(var(--muted-foreground) / 0.3) !important; border-radius: 4px; } .monaco-code-editor-wrapper .monaco-scrollable-element > .scrollbar > .slider:hover { background: hsl(var(--muted-foreground) / 0.5) !important; } /* Fullscreen mode */ .monaco-code-editor-fullscreen { position: fixed !important; inset: 0 !important; z-index: 50 !important; height: 100vh !important; width: 100vw !important; border-radius: 0 !important; }";
 	document.head.appendChild(style);
 }
 
@@ -39,6 +40,9 @@ export interface MonacoCodeEditorProps {
 	showMinimap?: boolean;
 	allowFullscreen?: boolean;
 	autoFocus?: boolean;
+	ariaLabel?: string;
+	/** Off lets the wheel scroll the surrounding panel once the editor reaches its edge. */
+	consumeMouseWheel?: boolean;
 }
 
 export function MonacoCodeEditor({
@@ -52,6 +56,8 @@ export function MonacoCodeEditor({
 	showMinimap = false,
 	allowFullscreen = false,
 	autoFocus = true,
+	ariaLabel,
+	consumeMouseWheel = true,
 }: Readonly<MonacoCodeEditorProps>) {
 	const [isFullscreen, setIsFullscreen] = useState(false);
 	const { resolvedTheme } = useTheme();
@@ -131,6 +137,7 @@ export function MonacoCodeEditor({
 				onMount={handleEditorMount}
 				options={{
 					readOnly: disabled,
+					ariaLabel,
 					minimap: { enabled: showMinimap || isFullscreen },
 					fontSize: isFullscreen ? 14 : 12,
 					fontFamily:
@@ -150,6 +157,7 @@ export function MonacoCodeEditor({
 						verticalScrollbarSize: 8,
 						horizontalScrollbarSize: 8,
 						useShadows: false,
+						alwaysConsumeMouseWheel: consumeMouseWheel,
 					},
 					folding: true,
 					glyphMargin: false,

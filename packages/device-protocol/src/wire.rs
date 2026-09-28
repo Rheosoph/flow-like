@@ -6,6 +6,8 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_ENROLLMENT_TTL_SECONDS: i64 = 24 * 60 * 60;
 pub const MAX_ASSERTION_TTL_SECONDS: i64 = 60;
 pub const PROOF_CLOCK_SKEW_SECONDS: i64 = 5;
+/// Bounded tolerance for server- and controller-issued times checked against a device clock.
+pub const MAX_CLOCK_SKEW_SECONDS: i64 = 120;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

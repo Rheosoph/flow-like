@@ -20,7 +20,11 @@ import type {
 } from "@flow-like/flow-like-ui/lib/schema/hub/hub";
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { useEffect, useMemo } from "react";
-import { sinkSupportsEventExecution } from "../../../lib/event-definitions";
+import {
+	isServerOnlyEventType,
+	serverEventSetupReady,
+	sinkSupportsEventExecution,
+} from "../../../lib/event-definitions";
 
 /** Map event types to their corresponding sink type for hub lookup */
 const EVENT_TYPE_TO_SINK_MAP: Record<string, keyof ISupportedSinks> = {
@@ -29,9 +33,11 @@ const EVENT_TYPE_TO_SINK_MAP: Record<string, keyof ISupportedSinks> = {
 	webhook: "webhook",
 	cron: "cron",
 	telegram: "telegram",
+	teams: "teams",
 	discord: "discord",
 	slack: "slack",
 	email: "email",
+	inbound_email: "inbound_email",
 	mqtt: "mqtt",
 	github: "github",
 	rss: "rss",
@@ -56,6 +62,10 @@ function computeSinkAvailability(
 ): { availability: "local" | "remote" | "both"; description?: string } | null {
 	const sinkType = EVENT_TYPE_TO_SINK_MAP[eventType];
 	const supportsLocal = canExecuteLocally ?? false;
+	if (isServerOnlyEventType(eventType)) {
+		if (hub && hub.supported_sinks?.[sinkType] !== true) return null;
+		return { availability: "remote" };
+	}
 
 	// If hub config is available, use dynamic computation
 	if (hub) {
@@ -166,6 +176,9 @@ export function EventTypeConfiguration({
 				staticCfg,
 			);
 			if (sinkConfig === null) return false;
+			// Server-only types stay listed on a Local event; choosing one switches
+			// the event to Remote.
+			if (isServerOnlyEventType(type)) return true;
 			return sinkSupportsEventExecution(
 				{
 					...sinkConfig,
@@ -231,6 +244,7 @@ export function EventTranslation({
 	canExecuteLocally,
 	eventExecutionMode,
 	section,
+	savedEvent,
 }: Readonly<{
 	appId: string;
 	eventConfig: IEventMapping;
@@ -246,8 +260,13 @@ export function EventTranslation({
 	eventExecutionMode?: IEventExecutionMode;
 	/** Slice of the config to render — see IConfigInterfaceProps.section. */
 	section?: string;
+	/** The persisted event. Server-only types get no event id until it is saved as that type. */
+	savedEvent?: Pick<IEvent, "event_type" | "execution_mode">;
 }>) {
 	const { t } = useTranslation("interfaces");
+	const configEventId = serverEventSetupReady(eventType, savedEvent)
+		? eventId
+		: undefined;
 	// Fully controlled by `config`. Holding a local copy meant a parent reset —
 	// Discard, or reloading the saved event — never reached the fields, so the
 	// form kept showing edits the event no longer had.
@@ -271,7 +290,7 @@ export function EventTranslation({
 			node: node,
 			nodeId: nodeId ?? "",
 			hub,
-			eventId,
+			eventId: configEventId,
 			canExecuteLocally,
 			eventExecutionMode,
 			section,
@@ -281,14 +300,14 @@ export function EventTranslation({
 		}),
 		[
 			editing,
-			board.app_id,
+			appId,
 			board.id,
 			config,
 			node,
 			nodeId,
 			onUpdate,
 			hub,
-			eventId,
+			configEventId,
 			canExecuteLocally,
 			eventExecutionMode,
 			section,

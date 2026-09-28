@@ -2,12 +2,16 @@
 //! human principals or device management credentials.
 
 mod budget;
+mod delegation_audit;
 mod jwt;
 pub(crate) mod offline;
 pub(crate) mod project;
 mod repository;
 
 pub(crate) use budget::{authorize_start, reserve_budget, settle_budget};
+// The device grant, billing and registration routes record through these once wired.
+#[allow(unused_imports)]
+pub(crate) use delegation_audit::{audit_billing, audit_grant, audit_registration};
 
 use crate::{
     backend_jwt::{self, TokenType},
@@ -27,6 +31,9 @@ use std::result::Result;
 const LEASE_SECONDS: i64 = INSTANCE_LEASE_SECONDS;
 const MAX_GRANT_SECONDS: i64 = 365 * 24 * 60 * 60;
 const MAX_BUDGET_MICROS: i64 = 1_000_000_000_000;
+/// A 401 with this code is a proof, signature or clock failure that a fresh proof can
+/// fix. Revoked or inactive authority is answered without it, so devices never fence on skew.
+pub(crate) const INSTANCE_PROOF_INVALID: &str = "INSTANCE_PROOF_INVALID";
 
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -35,7 +42,22 @@ fn invalid(_: impl std::fmt::Display) -> ApiError {
     ApiError::bad_request("Invalid instance protocol input")
 }
 fn bad_proof(_: impl std::fmt::Display) -> ApiError {
-    ApiError::unauthorized("Instance proof is invalid or expired")
+    ApiError::coded(
+        axum::http::StatusCode::UNAUTHORIZED,
+        INSTANCE_PROOF_INVALID,
+        "Instance proof is invalid or expired; check that the device clock is synchronized",
+    )
+}
+fn proof_live(expires_at: i64) -> Result<(), ApiError> {
+    live(expires_at).map_err(bad_proof)
+}
+/// A replayed device proof is fixed by signing a fresh one, so it must not read as a denial.
+fn device_proof_failure(error: ApiError) -> ApiError {
+    if error.status() == axum::http::StatusCode::UNAUTHORIZED {
+        bad_proof(error)
+    } else {
+        error
+    }
 }
 fn endpoint(state: &DeviceContext<'_>, path: &str) -> Result<String, ApiError> {
     endpoint_url(&devices::api_base_url(state)?, path).map_err(invalid)
@@ -67,7 +89,7 @@ pub(crate) struct VerifiedInstanceUsage {
     pub(crate) proof_expires_at: i64,
 }
 
-pub(super) fn validate_usage(
+fn validate_usage(
     graph: &Graph,
     usage: &VerifiedInstanceUsage,
     require_live_proof: bool,
@@ -101,7 +123,7 @@ pub(super) fn validate_usage(
         ));
     }
     if require_live_proof {
-        live(usage.proof_expires_at)?;
+        proof_live(usage.proof_expires_at)?;
     }
     Ok(())
 }
@@ -221,11 +243,12 @@ pub(crate) async fn approve_billing(
 }
 
 /// Keep consent reachable after sharing is withdrawn so a delegator can revoke it.
+/// Only consent that can still be revoked keeps the device visible.
 pub(crate) async fn consent_devices(
     state: &DeviceContext<'_>,
     user: &str,
 ) -> Result<Vec<DeviceStatus>, ApiError> {
-    let rows = state.db.query_all_raw(sql(r#"SELECT d.* FROM "ManagedDevice" d WHERE d."ownerId"<>$1 AND EXISTS(SELECT 1 FROM "PlacementResourceGrant" g WHERE g."deviceId"=d.id AND g."delegatingUserId"=$1) ORDER BY d."registeredAt" DESC LIMIT 1000"#, [user.into()])).await?;
+    let rows = state.db.query_all_raw(sql(r#"SELECT d.* FROM "ManagedDevice" d WHERE d."ownerId"<>$1 AND (EXISTS(SELECT 1 FROM "PlacementResourceGrant" g WHERE g."deviceId"=d.id AND g."delegatingUserId"=$1 AND g.status='active' AND g."expiresAt">$2) OR EXISTS(SELECT 1 FROM "PlacementBillingGrant" b JOIN "PlacementResourceGrant" g ON g.id=b."grantId" WHERE g."deviceId"=d.id AND b."payerId"=$1 AND b.status='active' AND b."expiresAt">$2)) ORDER BY d."registeredAt" DESC LIMIT 1000"#, [user.into(), now().into()])).await?;
     rows.into_iter()
         .map(|row| devices::repository::device(row).map(|device| device.status))
         .collect()
@@ -291,12 +314,13 @@ pub(crate) async fn instances(
         .collect())
 }
 
+/// Returns the revoked grant so the caller can record who withdrew which delegation.
 pub(crate) async fn revoke_grant(
     state: &DeviceContext<'_>,
     owner: &str,
     device_id: &str,
     grant_id: &str,
-) -> Result<(), ApiError> {
+) -> Result<ResourceGrantResponse, ApiError> {
     get_grant(state, owner, device_id, grant_id).await?;
     let owner = owner.to_owned();
     let device_id = device_id.to_owned();
@@ -309,8 +333,8 @@ pub(crate) async fn revoke_grant(
             let grant=read_grant(tx,&grant_id).await?;
             let device=devices::repository::current_device(tx,&device_id).await?;
             if grant.info.device_id!=device_id || (device.status.owner_id!=owner && grant.info.delegating_user_id!=owner) {return Err(ApiError::NOT_FOUND);}
-            if tx.execute_raw(sql(r#"UPDATE "PlacementResourceGrant" SET status='revoked',"authzVersion"="authzVersion"+1 WHERE id=$1 AND status='active'"#,[grant_id.into()])).await?.rows_affected()!=1 {return Err(ApiError::NOT_FOUND);}
-            Ok(())
+            if tx.execute_raw(sql(r#"UPDATE "PlacementResourceGrant" SET status='revoked',"authzVersion"="authzVersion"+1 WHERE id=$1 AND status='active'"#,[grant_id.clone().into()])).await?.rows_affected()!=1 {return Err(ApiError::NOT_FOUND);}
+            Ok(read_grant(tx,&grant_id).await?.info)
         })
     }).await
 }
@@ -349,12 +373,13 @@ pub(crate) async fn billing_grant(
     Ok(billing.info)
 }
 
+/// Returns the revoked sponsorship so the caller can record who withdrew it.
 pub(crate) async fn revoke_billing(
     state: &DeviceContext<'_>,
     owner: &str,
     device_id: &str,
     billing_id: &str,
-) -> Result<(), ApiError> {
+) -> Result<BillingGrantResponse, ApiError> {
     let billing = billing_grant(state, owner, device_id, billing_id).await?;
     if billing.payer_id != owner {
         return Err(ApiError::NOT_FOUND);
@@ -365,9 +390,10 @@ pub(crate) async fn revoke_billing(
         let device_id=device_id.clone();let owner=owner.clone();let billing=billing.clone();
         Box::pin(async move {
             if tx.execute_raw(sql(r#"UPDATE "ManagedDevice" SET "authEpoch"="authEpoch" WHERE id=$1"#,[device_id.into()])).await?.rows_affected()!=1 {return Err(ApiError::NOT_FOUND);}
-            tx.execute_raw(sql(r#"UPDATE "PlacementResourceGrant" SET "authzVersion"="authzVersion" WHERE id=$1"#,[billing.grant_id.into()])).await?;
-            if tx.execute_raw(sql(r#"UPDATE "PlacementBillingGrant" SET status='revoked',"authzVersion"="authzVersion"+1 WHERE id=$1 AND "payerId"=$2 AND status='active'"#,[billing.billing_grant_id.into(),owner.into()])).await?.rows_affected()!=1 {return Err(ApiError::NOT_FOUND);}
-            Ok(())
+            tx.execute_raw(sql(r#"UPDATE "PlacementResourceGrant" SET "authzVersion"="authzVersion" WHERE id=$1"#,[billing.grant_id.clone().into()])).await?;
+            if tx.execute_raw(sql(r#"UPDATE "PlacementBillingGrant" SET status='revoked',"authzVersion"="authzVersion"+1 WHERE id=$1 AND "payerId"=$2 AND status='active'"#,[billing.billing_grant_id.clone().into(),owner.into()])).await?.rows_affected()!=1 {return Err(ApiError::NOT_FOUND);}
+            let revoked=read_billing(tx,&billing.billing_grant_id).await?;
+            Ok(revoked.info)
         })
     }).await
 }
@@ -427,8 +453,9 @@ pub(crate) async fn register(
                 InstancePurpose::Workload => check_capacity(tx,&grant.info).await?,
                 InstancePurpose::RolloutValidation => check_validation_capacity(tx,&binding.device_id).await?,
             }
-            let expiry=binding.exp.min(proof.exp).min(grant.info.expires_at).min(billing.as_ref().map(|billing|billing.info.expires_at).unwrap_or(i64::MAX)); live(expiry)?;
-            devices::repository::consume_proof(tx,&binding.device_id,binding.device_auth_epoch,&binding.jti,expiry).await?;
+            let authority=grant.info.expires_at.min(billing.as_ref().map(|billing|billing.info.expires_at).unwrap_or(i64::MAX));
+            let expiry=binding.exp.min(proof.exp).min(authority); live(authority)?; proof_live(expiry)?;
+            devices::repository::consume_proof(tx,&binding.device_id,binding.device_auth_epoch,&binding.jti,expiry).await.map_err(device_proof_failure)?;
             if tx.query_one_raw(sql(r#"SELECT id FROM "WorkloadInstance" WHERE id=$1"#,[binding.instance_id.clone().into()])).await?.is_some() {return Err(ApiError::conflict("Instance is already registered; recover with its workload key"));}
             let registered_at=now();let lease_expires_at=(registered_at+LEASE_SECONDS).min(grant.info.expires_at).min(if grant.info.online_access.is_some() {i64::MAX} else {billing.as_ref().map(|billing|billing.info.expires_at).unwrap_or(0)});
             let receipt=InstanceReceipt {instance_id:binding.instance_id,purpose:binding.purpose,device_id:binding.device_id,grant_id:binding.grant_id,billing_grant_id:binding.billing_grant_id,
@@ -438,7 +465,7 @@ pub(crate) async fn register(
             let status=match receipt.purpose {InstancePurpose::Workload=>"active",InstancePurpose::RolloutValidation=>"validating"};
             tx.execute_raw(sql(r#"INSERT INTO "WorkloadInstance" (id,"deviceId","grantId","billingGrantId","workloadKey","workloadKeyThumbprint","deviceAuthEpoch","grantAuthzVersion","billingAuthzVersion","keyEpoch",status,"registeredAt","leaseExpiresAt","registrationJws",purpose) VALUES ($1,$2,$3,$4,$5,$9,$10,$11,$12,1,$14,$6,$7,$8,$13)"#,
                 [receipt.instance_id.clone().into(),receipt.device_id.clone().into(),receipt.grant_id.clone().into(),receipt.billing_grant_id.clone().into(),serde_json::to_string(&receipt.workload_key)?.into(),registered_at.into(),lease_expires_at.into(),receipt.registration_jws.clone().into(),receipt.workload_key.thumbprint().map_err(bad_proof)?.into(),(binding.device_auth_epoch as i64).into(),(binding.authz_version as i64).into(),binding.billing_authz_version.map(|version|version as i64).into(),receipt.purpose.as_str().into(),status.into()])).await?;
-            consume_instance_proof(tx,&receipt.instance_id,1,&proof.jti,expiry).await?;live(expiry)?;Ok(receipt)
+            consume_instance_proof(tx,&receipt.instance_id,1,&proof.jti,expiry).await?;live(authority)?;proof_live(expiry)?;Ok(receipt)
         })
     }).await
 }
@@ -479,8 +506,8 @@ async fn authenticated_instance(
                 if renew {
                     renew_lease(tx, &mut graph).await?;
                 }
-                live(proof.exp)?;
                 live(graph.grant.info.expires_at)?;
+                proof_live(proof.exp)?;
                 if graph.grant.info.online_access.is_none() {
                     require_billing(&graph)?;
                 }
@@ -599,9 +626,9 @@ pub(crate) async fn retire(
             if device.status.auth_epoch!=epoch {return Err(ApiError::UNAUTHORIZED);}
             let instance=read_instance(tx,&id).await?;
             if instance.receipt.device_id!=device_id {return Err(ApiError::NOT_FOUND);}
-            devices::repository::consume_proof(tx,&device_id,epoch,&proof.jti,proof.exp).await?;
+            devices::repository::consume_proof(tx,&device_id,epoch,&proof.jti,proof.exp).await.map_err(device_proof_failure)?;
             tx.execute_raw(sql(r#"UPDATE "WorkloadInstance" SET status='retired',"keyEpoch"="keyEpoch"+1,"leaseExpiresAt"=$2 WHERE id=$1 AND status IN ('active','validating')"#,[id.into(),now().into()])).await?;
-            live(proof.exp)
+            proof_live(proof.exp)
         })
     }).await
 }
@@ -615,17 +642,17 @@ fn credentials(headers: &HeaderMap) -> Result<(&str, &str), ApiError> {
             .count()
             > 1
     {
-        return Err(ApiError::UNAUTHORIZED);
+        return Err(bad_proof("ambiguous instance credential headers"));
     }
     let token = crate::middleware::jwt::viewer_authorization(headers)
         .and_then(|v| v.strip_prefix("DPoP "))
-        .ok_or(ApiError::UNAUTHORIZED)?;
+        .ok_or_else(|| bad_proof("missing DPoP access token"))?;
     let proof = headers
         .get("dpop")
         .and_then(|v| v.to_str().ok())
-        .ok_or(ApiError::UNAUTHORIZED)?;
+        .ok_or_else(|| bad_proof("missing DPoP proof"))?;
     if token.len() > MAX_COMPACT_JWS_BYTES || proof.len() > MAX_COMPACT_JWS_BYTES {
-        return Err(ApiError::UNAUTHORIZED);
+        return Err(bad_proof("oversized instance credential"));
     }
     Ok((token, proof))
 }

@@ -4,14 +4,16 @@ import {
 	commitMlsSnapshot,
 	readMlsSnapshot,
 } from "./storage";
-import type {
-	BrowserController,
-	BrowserMlsEndpoint,
-	DeviceReceipt,
-	ManagementResponse,
-	MlsDelivery,
-	OnboardingManifest,
-	TelemetryMember,
+import { rejectionMessage } from "./transport";
+import {
+	type BrowserController,
+	type BrowserMlsEndpoint,
+	type DeviceReceipt,
+	type ManagementResponse,
+	type MlsDelivery,
+	type OnboardingManifest,
+	type TelemetryMember,
+	managementRejection,
 } from "./types";
 
 export type ManagementCall = (
@@ -44,7 +46,8 @@ export async function readTelemetryChunks(
 		const response = await call({ ...request, offset, limit: 4096 });
 		if (response.state !== "completed")
 			throw new Error(
-				"The device could not return the requested group telemetry.",
+				rejectionMessage(response) ??
+					"The device could not return the requested group telemetry.",
 			);
 		const part = response.result;
 		if (part.available === false) {
@@ -92,6 +95,29 @@ export async function readTelemetryChunks(
 	if ((await digestText(text)) !== digest)
 		throw new Error("Group telemetry digest changed.");
 	return { text, latest, sequence };
+}
+
+export interface ReaderPosition {
+	joined: boolean;
+	retired: boolean;
+	sequence: number;
+}
+
+export function readerPosition(endpoint: BrowserMlsEndpoint): ReaderPosition {
+	const value = endpoint.position() as Partial<ReaderPosition> | null;
+	if (
+		typeof value?.joined !== "boolean" ||
+		typeof value.retired !== "boolean" ||
+		!Number.isSafeInteger(value.sequence)
+	)
+		throw new Error(
+			"This browser's MLS reader position is unreadable. Reload the app to update its device cryptography.",
+		);
+	return {
+		joined: value.joined,
+		retired: value.retired,
+		sequence: Number(value.sequence),
+	};
 }
 
 export class GroupMetricsReader {
@@ -156,8 +182,8 @@ export class GroupMetricsReader {
 			this.endpoint,
 		);
 	}
-	position() {
-		return this.endpoint.position();
+	position(): ReaderPosition {
+		return readerPosition(this.endpoint);
 	}
 	async confirmDeliveries(call: ManagementCall): Promise<void> {
 		for (const [receipt, receipt_jws] of this.endpoint.deliveryReceipts()) {
@@ -174,7 +200,8 @@ export class GroupMetricsReader {
 				response.result.endpoint_id !== receipt.endpoint_id
 			)
 				throw new Error(
-					"MLS delivery receipt has no confirmed result. Reconnect and retry before reading further messages.",
+					rejectionMessage(response) ??
+						"MLS delivery receipt has no confirmed result. Reconnect and retry before reading further messages.",
 				);
 			this.endpoint.prepareReceiptConfirmation(
 				receipt.sequence,
@@ -203,7 +230,7 @@ export class GroupMetricsReader {
 		receiptPending: boolean;
 	} | null> {
 		await this.confirmDeliveries(call);
-		const position = this.endpoint.position();
+		const position = this.position();
 		if (position.retired)
 			throw new Error(
 				"This MLS endpoint was removed. Create a fresh browser endpoint before rejoining.",
@@ -288,5 +315,105 @@ export async function acknowledgeGroupTelemetry(
 		envelope_digest: envelopeDigest,
 	});
 	if (result.state !== "completed")
-		throw new Error("The device did not acknowledge this group delivery.");
+		throw new Error(
+			rejectionMessage(result) ??
+				`The device did not acknowledge group delivery ${sequence}.`,
+		);
+}
+
+async function oldestDelivery(
+	call: ManagementCall,
+	scope: string,
+): Promise<{ sequence: number; envelopeDigest: string } | undefined> {
+	const oldest = await readTelemetryChunks(call, {
+		type: "telemetry_read",
+		scope,
+		sequence: 0,
+		welcome: false,
+	});
+	if (oldest.text === null) return undefined;
+	const delivery = JSON.parse(oldest.text) as MlsDelivery;
+	if (typeof delivery.envelope_jws !== "string" || oldest.sequence < 1)
+		throw new Error("The device returned an invalid oldest group delivery.");
+	return {
+		sequence: oldest.sequence,
+		envelopeDigest: await digestText(delivery.envelope_jws),
+	};
+}
+
+/** Owner action only: evicts every pending delivery up to and including `through`. */
+export async function acknowledgeGroupTelemetryThrough(
+	call: ManagementCall,
+	scope: string,
+	through: { sequence: number; envelopeDigest: string },
+): Promise<void> {
+	const direct = await call({
+		type: "telemetry_acknowledge",
+		scope,
+		sequence: through.sequence,
+		envelope_digest: through.envelopeDigest,
+	});
+	if (direct.state === "completed") return;
+	// Older agents evict only the oldest delivery per acknowledgement.
+	for (let removed = 0; removed < 256; removed++) {
+		const oldest = await oldestDelivery(call, scope);
+		if (!oldest || oldest.sequence > through.sequence) return;
+		await acknowledgeGroupTelemetry(
+			call,
+			scope,
+			oldest.sequence,
+			oldest.envelopeDigest,
+		);
+	}
+	throw new Error(
+		`More than 256 group deliveries precede sequence ${through.sequence}. Remove acknowledged deliveries again.`,
+	);
+}
+
+/** The device publishes every few seconds, so a stale sequence or a busy lock is re-read and retried. */
+export async function applyTelemetryPolicy(
+	call: ManagementCall,
+	command: {
+		scope: string;
+		policy_jws: string;
+		key_packages: { member: TelemetryMember; key_package: string }[];
+	},
+	pause: (milliseconds: number) => Promise<void> = (milliseconds) =>
+		new Promise((resolve) => setTimeout(resolve, milliseconds)),
+	attempts = 3,
+): Promise<number> {
+	for (let attempt = 1; ; attempt++) {
+		const position = await readTelemetryChunks(call, {
+			type: "telemetry_read",
+			scope: command.scope,
+			sequence: 0,
+			welcome: false,
+		});
+		const request = {
+			type: "telemetry_policy",
+			...command,
+			sequence: position.latest + 1,
+		};
+		if (new TextEncoder().encode(JSON.stringify(request)).length > 13_000)
+			throw new Error(
+				"This membership change is too large for one management message. Add fewer readers at once.",
+			);
+		const response = await call(request);
+		if (response.state === "completed")
+			return Number.isSafeInteger(response.result.sequence)
+				? Number(response.result.sequence)
+				: request.sequence;
+		const rejection = managementRejection(response);
+		if (
+			(rejection &&
+				!rejection.retryable &&
+				rejection.code !== "revision_conflict") ||
+			attempt >= attempts
+		)
+			throw new Error(
+				rejectionMessage(response) ??
+					"Group admission was rejected. Reload the current roster before retrying.",
+			);
+		await pause(400 * attempt);
+	}
 }

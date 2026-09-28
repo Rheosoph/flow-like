@@ -4,7 +4,7 @@
 //! verifies the weights, later loads stream them back from the cache store. All families share
 //! one quota per directory, so every family must be listed in `MANAGED_FAMILIES`.
 #[cfg(feature = "execute")]
-use flow_like::flow::execution::{LogLevel, context::ExecutionContext};
+use flow_like::flow::execution::{LogLevel, context::ExecutionContext, egress::GuardedHttpClient};
 #[cfg(any(feature = "execute", test))]
 use flow_like_catalog_core::FlowPath;
 #[cfg(feature = "execute")]
@@ -347,12 +347,13 @@ where
         .collect();
     let order = materialization_order(label, &cache_paths)?;
 
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(30))
-        .timeout(Duration::from_secs(30 * 60))
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()
-        .map_err(|e| anyhow!("Failed to create {label} model download client: {e}"))?;
+    let client = GuardedHttpClient::configured(context.execution_environment(), |builder| {
+        builder
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(30 * 60))
+            .redirect(reqwest::redirect::Policy::limited(5))
+    })
+    .map_err(|e| anyhow!("Failed to create {label} model download client: {e}"))?;
 
     let temp_dir = tempfile::Builder::new()
         .prefix(temp_prefix)
@@ -532,7 +533,7 @@ async fn try_materialize_cached_model(
 #[cfg(feature = "execute")]
 async fn materialize_model(
     context: &mut ExecutionContext,
-    client: &reqwest::Client,
+    client: &GuardedHttpClient,
     spec: &ModelSpec,
     cache_path: &FlowPath,
     destination: &Path,
@@ -562,7 +563,7 @@ async fn materialize_model(
     }
 
     let mut response = client
-        .get(spec.url.clone())
+        .get(spec.url.as_str())?
         .send()
         .await
         .map_err(|e| anyhow!("Failed to download {role} {label} model: {e}"))?

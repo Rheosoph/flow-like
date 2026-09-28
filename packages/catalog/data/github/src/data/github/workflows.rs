@@ -1,10 +1,11 @@
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 use super::provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider};
@@ -156,9 +157,9 @@ impl NodeLogic for ListWorkflowsNode {
             page.max(1)
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -314,9 +315,9 @@ impl NodeLogic for TriggerWorkflowNode {
             body["return_run_details"] = json!(true);
         }
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -559,9 +560,9 @@ impl NodeLogic for ListWorkflowRunsNode {
 
         let url = format!("{}?{}", base_url, query_params.join("&"));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -672,9 +673,9 @@ impl NodeLogic for GetWorkflowRunNode {
             owner, repo, run_id
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -786,9 +787,9 @@ impl NodeLogic for CancelWorkflowRunNode {
             owner, repo, run_id
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -917,9 +918,9 @@ impl NodeLogic for RerunWorkflowNode {
             owner, repo, run_id, endpoint
         ));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .post(&url)
+            .post(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -1198,9 +1199,9 @@ impl NodeLogic for GetLatestWorkflowRunNode {
 
         let url = format!("{}?{}", base_url, query_params.join("&"));
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)

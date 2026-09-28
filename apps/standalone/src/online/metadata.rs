@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, io::Read};
 
 pub(crate) const MAX_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_DOCUMENTS: usize = 1024;
+pub(super) const MAX_DOCUMENTS: usize = 1024;
 
 /// Exact bytes are approved by the controller through the authenticated Apply command.
 #[derive(Deserialize, Serialize)]

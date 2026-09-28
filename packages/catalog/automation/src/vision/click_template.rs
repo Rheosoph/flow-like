@@ -23,10 +23,10 @@ impl NodeLogic for ClickTemplateNode {
         let mut node = Node::new(
             "vision_click_template",
             "Click Template",
-            "Finds a template image on screen and clicks on it",
+            "Finds a template image on screen and clicks on it. Fails instead of guessing when two matches score within 0.01 of each other; use Find All Templates to choose one",
             "Automation/Vision",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("automation.vision", "clickTemplate");
         node.add_icon("/flow/icons/vision.svg");
 
@@ -112,7 +112,7 @@ impl NodeLogic for ClickTemplateNode {
         node.add_input_pin(
             "fallback_x",
             "Fallback X",
-            "X coordinate to click if template not found (use -1 to disable fallback)",
+            "Desktop X to click when the template is not found. The fallback is disabled only when both Fallback X and Fallback Y are -1, so negative coordinates on displays left of the primary work",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(-1)));
@@ -120,7 +120,7 @@ impl NodeLogic for ClickTemplateNode {
         node.add_input_pin(
             "fallback_y",
             "Fallback Y",
-            "Y coordinate to click if template not found (use -1 to disable fallback)",
+            "Desktop Y to click when the template is not found (both -1 disables the fallback)",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(-1)));
@@ -184,6 +184,19 @@ impl NodeLogic for ClickTemplateNode {
             monitor,
         )
         .await?;
+        if let [best, runner_up, ..] = matches.as_slice()
+            && (best.2 - runner_up.2).abs() < 0.01
+        {
+            return Err(flow_like_types::anyhow!(
+                "Template matches ambiguously at ({}, {}) and ({}, {}) with confidence {:.3} and {:.3}; use a more specific template, restrict Monitor, or use Find All Templates",
+                best.0,
+                best.1,
+                runner_up.0,
+                runner_up.1,
+                best.2,
+                runner_up.2
+            ));
+        }
         let target = if let Some(&(x, y, _)) = matches.first() {
             Some((
                 i32::try_from(
@@ -198,7 +211,7 @@ impl NodeLogic for ClickTemplateNode {
                 )?,
                 true,
             ))
-        } else if fallback_x != -1 && fallback_y != -1 {
+        } else if !(fallback_x == -1 && fallback_y == -1) {
             Some((
                 i32::try_from(fallback_x)?,
                 i32::try_from(fallback_y)?,

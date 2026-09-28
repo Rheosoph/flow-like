@@ -3,10 +3,10 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { loadDeviceCrypto } from "../../../lib/device-management/crypto";
 import { changeDevicePassword } from "../../../lib/device-management/password";
-import {
-	type DeviceAccountScope,
-	type LocalDeviceVault,
-	encryptedControllerBackup,
+import { sealedControllerBackup } from "../../../lib/device-management/recovery";
+import type {
+	DeviceAccountScope,
+	LocalDeviceVault,
 } from "../../../lib/device-management/storage";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -72,15 +72,21 @@ export function DevicePasswordChange({
 			onChanged(replacement);
 			setChanged(true);
 			try {
-				if (url.current) URL.revokeObjectURL(url.current);
-				url.current = URL.createObjectURL(
-					encryptedControllerBackup(scope, replacement),
+				const backup = await sealedControllerBackup(
+					scope,
+					replacement,
+					next,
+					crypto,
 				);
+				if (!active.current) return;
+				if (url.current) URL.revokeObjectURL(url.current);
+				url.current = URL.createObjectURL(backup);
 				setBackupUrl(url.current);
 			} catch {
-				setError(
-					"The password changed, but the backup download could not be prepared. Keep this app's local storage until you can save a new backup.",
-				);
+				if (active.current)
+					setError(
+						"The password changed, but the backup download could not be prepared. Keep this app's local storage until you can save a new backup.",
+					);
 			}
 		} catch (failure) {
 			if (active.current)

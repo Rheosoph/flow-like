@@ -16,6 +16,7 @@ Flow-Like can call raw HTTP APIs, receive event-driven input, and use provider-s
 | Call a REST or GraphQL endpoint | Build an HTTP request and run **API Call** |
 | Reuse a supported service operation | Use the provider's typed nodes |
 | Receive an external event | Expose an app event or webhook entry point |
+| Run a workflow from Microsoft Teams | Connect a [Teams bot](/topics/api-integrations/teams/) to a Chat Event |
 | Stream a long response | Use **Streaming API Call** |
 | Download a remote file | Use **HTTP Download** |
 | Let an AI workflow call external tools | Connect an MCP server |
@@ -102,7 +103,7 @@ The catalog includes typed nodes for services such as GitHub, Microsoft 365, Goo
 
 | Provider family | Typical operations |
 |-----------------|--------------------|
-| GitHub | local Git repositories, issues, pull requests, files, actions, releases |
+| GitHub | Git repositories, issues, pull requests, files, actions, releases |
 | Microsoft 365 | OneDrive, SharePoint, Outlook, Planner, To Do |
 | Google Workspace | Drive, Gmail, Sheets, Slides, Meet, Calendar |
 | Notion | databases, pages, search, files |
@@ -119,26 +120,43 @@ clones a missing repository and updates an existing checkout. **Clone
 Repository** remains useful when the workflow requires a fresh clone; it fails
 when the destination already contains files.
 
-Local Git nodes require Git on the machine running the workflow and a
-**FlowPath** backed by a local filesystem store. FlowPath identifies a location
-within a configured store. Connect the **Repository Path** output from Clone or
-Sync to subsequent Git nodes. Those nodes expect the repository root, rather
-than a file or a subdirectory inside it. Clone appends the repository name to its
-**Target Directory**; Sync uses its **Repository** path as the exact checkout
-directory. A clone copied to S3, memory, or another
-non-local store is a file snapshot and cannot be updated with these nodes.
+Git nodes accept a **FlowPath** in a local, cloud, or memory store. FlowPath
+identifies a location within a configured store. The runtime needs Git installed.
+Cloud and memory operations also need temporary disk space on the runtime: each
+operation restores the checkout and Git metadata, runs Git, then saves changes
+back to the store.
+
+Connect the **Repository Path** output from Clone or Sync to subsequent Git
+nodes. Those nodes expect the repository root. Clone appends the repository name
+to its **Target Directory**; Sync uses its **Repository** path as the exact
+checkout directory.
+
+New Clone nodes enable **Include .git** by default. Disable it only when you need
+a file-only snapshot. Existing cloud or memory snapshots without `.git` need a
+fresh clone into an empty destination with **Include .git** enabled before Git
+nodes can use them.
+
+Cloud and memory operations acquire `.git/flow-like-store.lock` in the repository
+store to prevent overlapping Git operations. Schedule direct file edits between
+Git nodes; file-writing nodes do not honor this lock. If a stopped runtime leaves
+a lock behind, confirm the prior operation has stopped before removing it.
+
+Saving uses multiple object writes, so other readers can observe an incomplete
+checkout until the save finishes. If an upload fails after saving starts, the node
+retains the lock and temporary checkout and reports its location. Use that checkout
+to recover changes before clearing the lock and retrying.
 
 Clone, Fetch, Pull, Push, and Sync authenticate over HTTPS with the **GitHub
 Provider**. Use remote URLs on the provider's host; Git URL rewrites are not
 supported. Credentials are supplied for each operation and kept out of newly
 cloned repositories' remote URLs.
 
-The [GitHub catalog](/nodes/data/github/) includes both local Git operations
+The [GitHub catalog](/nodes/data/github/) includes both Git working tree operations
 and GitHub API operations. **Switch Branch** changes the local checkout.
 **Create Branch** and **Delete Branch** call GitHub's API; use **Create Local
 Branch** and **Delete Local Branch** to change branches in the checkout.
 
-| Goal | Local Git nodes |
+| Goal | Git nodes |
 |------|-----------------|
 | Create or update a checkout | Init Repository, Clone Repository, Sync Repository, Fetch Repository, Pull Repository |
 | Inspect files and history | Repository Status, Repository Diff, Repository Log, List Local Branches |
@@ -151,7 +169,7 @@ Branch** and **Delete Local Branch** to change branches in the checkout.
 
 #### Refresh a repository on each run
 
-1. Select a directory in a local filesystem store and configure the GitHub
+1. Select a directory in a local, cloud, or memory store and configure the GitHub
    provider for the repository.
 2. Run **Sync Repository** with the owner, repository, and optional branch. Use
    the same destination on later runs.
@@ -230,6 +248,7 @@ MCP tools can expand what an AI workflow is able to call. Review the server's to
 
 ## Related guides
 
+- [Teams bots](/topics/api-integrations/teams/)
 - [App events](/apps/events/)
 - [Data pipelines](/topics/data-pipelines/overview/)
 - [Document processing](/topics/document-processing/overview/)

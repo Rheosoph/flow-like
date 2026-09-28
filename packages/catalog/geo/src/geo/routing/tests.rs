@@ -164,6 +164,38 @@ mod routing_tests {
         assert_eq!(geometry[2].latitude, 52.54);
         assert_eq!(geometry[2].longitude, 13.42);
     }
+
+    #[test]
+    fn osrm_client_refuses_host_plane_base_urls_server_side() {
+        use crate::geo::routing::osrm::osrm_client;
+        use flow_like::flow::execution::ExecutionEnvironment;
+
+        let server = osrm_client(ExecutionEnvironment::Server).unwrap();
+        for base in [
+            "http://169.254.169.254",
+            "http://127.0.0.1:5000",
+            "http://metadata.google.internal",
+        ] {
+            assert!(
+                server
+                    .get(&format!("{base}/tile/v1/driving/0/0/0.mvt"))
+                    .is_err(),
+                "{base} must be refused server-side"
+            );
+        }
+        assert!(
+            server
+                .get("https://router.project-osrm.org/tile/v1/driving/0/0/0.mvt")
+                .is_ok()
+        );
+
+        let local = osrm_client(ExecutionEnvironment::Local).unwrap();
+        assert!(
+            local
+                .get("http://127.0.0.1:5000/nearest/v1/driving/0,0")
+                .is_ok()
+        );
+    }
 }
 
 #[cfg(all(test, feature = "execute"))]

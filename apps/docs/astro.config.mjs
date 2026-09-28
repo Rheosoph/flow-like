@@ -186,7 +186,7 @@ export default defineConfig({
 							collapsed: true,
 							items: [
 								{ label: "Package Store", slug: "start/packages-store" },
-								{ label: "Package Library", slug: "start/packages-library" },
+								{ label: "Packages", slug: "start/packages-library" },
 							],
 						},
 						{

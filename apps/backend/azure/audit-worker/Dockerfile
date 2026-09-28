@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1.4
 # Context: flow-like repository root. The root .dockerignore excludes secrets.
 FROM rust:1.97.1-bookworm AS builder
+COPY rust-toolchain.toml /rust-toolchain.toml
+RUN rustup toolchain install
 RUN apt-get update && apt-get install -y pkg-config libssl-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
@@ -11,8 +13,8 @@ ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 # secret and FLOW_LIKE_CONFIG_SHA256; without them the tracked public default is used.
 ARG FLOW_LIKE_CONFIG_SHA256
 RUN --mount=type=secret,id=flow_like_config,target=/tmp/flow-like.azure.config.json \
-    --mount=type=cache,target=/cargo-home,id=cargo-home,sharing=shared \
-    --mount=type=cache,target=/app/target,id=cargo-target-azure-audit-worker,sharing=locked \
+    --mount=type=cache,target=/cargo-home,id=cargo-home-rust-beta-2026-09-27,sharing=shared \
+    --mount=type=cache,target=/app/target,id=cargo-target-azure-audit-worker-rust-beta-2026-09-27,sharing=locked \
     if [ -e /tmp/flow-like.azure.config.json ]; then \
         test -s /tmp/flow-like.azure.config.json \
         && test -n "$FLOW_LIKE_CONFIG_SHA256" \

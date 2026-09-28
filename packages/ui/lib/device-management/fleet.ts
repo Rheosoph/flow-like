@@ -2,13 +2,15 @@ import type { IApiState } from "../../state/backend-state/api-state";
 import type { IProfile } from "../../types";
 import { isMissingResourceError } from "../api-error";
 import {
+	type RetainedObservation,
 	inventoryObservation,
 	inventoryScopeKey,
-	type RetainedObservation,
 } from "./inventory";
 import {
 	type DeviceAccountScope,
 	type LocalDeviceVault,
+	deviceApiBase,
+	pinDeviceIdentity,
 	updateFleetState,
 } from "./storage";
 import { digestText } from "./telemetry";
@@ -50,7 +52,7 @@ export function fleetTrusted(
 	vault: LocalDeviceVault,
 ): FleetTrustedContext {
 	return {
-		api_base_url: `${scope.apiOrigin.replace(/\/$/u, "")}/api/v1`,
+		api_base_url: deviceApiBase(scope),
 		user_id: scope.account,
 		onboarding_manifest_jws: vault.manifestJws,
 		owner_controller_key:
@@ -91,41 +93,49 @@ export async function registerFleetReader(
 			remote.revision < 1)
 	)
 		throw new Error("Fleet reader registration moved backwards.");
-	if (local.pending) {
-		if (remote?.reader_jws === local.pending.reader_jws && !remote.deleted) {
-			const accepted = local.pending;
+	const verifyRemote = (state: FleetReaderState) => {
+		const verified = controller.verifyFleetReader(
+			fleetTrusted(account, vault),
+			receipt,
+			state.reader_jws,
+		);
+		if (verified.revision !== state.revision)
+			throw new Error(
+				`Fleet reader revision ${state.revision} does not match its signed revision ${verified.revision}.`,
+			);
+		return verified;
+	};
+	if (local.pending && remote) {
+		const pending = local.pending;
+		const settled = remote.reader_jws === pending.reader_jws && !remote.deleted;
+		if (settled || remote.revision >= pending.revision) {
+			// A restored copy of this controller key may have registered this revision first.
+			if (!settled && !remote.deleted) verifyRemote(remote);
+			const adopted = settled ? pending : remote.deleted ? undefined : remote;
 			local = await updateFleetState(
 				account,
 				vault.deviceId,
 				key,
 				(current) => {
 					if (
-						current.pending?.reader_jws !== accepted.reader_jws ||
-						current.revision > accepted.revision
+						current.pending?.reader_jws !== pending.reader_jws ||
+						(adopted && current.revision > adopted.revision)
 					)
 						throw new Error("Fleet registration changed in another session.");
-					return {
-						...current,
-						revision: accepted.revision,
-						readerJws: accepted.reader_jws,
-						pending: undefined,
-					};
+					return adopted
+						? {
+								...current,
+								revision: adopted.revision,
+								readerJws: adopted.reader_jws,
+								pending: undefined,
+							}
+						: { ...current, pending: undefined };
 				},
-			);
-		} else if (remote && remote.revision >= local.pending.revision) {
-			throw new Error(
-				"Fleet registration changed in another session. Reopen device monitoring.",
 			);
 		}
 	}
 	if (!local.pending && remote && !remote.deleted) {
-		const verified = controller.verifyFleetReader(
-			fleetTrusted(account, vault),
-			receipt,
-			remote.reader_jws,
-		);
-		if (verified.revision !== remote.revision)
-			throw new Error("Fleet reader revision does not match its signature.");
+		const verified = verifyRemote(remote);
 		if (
 			remote.revision === local.revision &&
 			local.readerJws &&
@@ -167,7 +177,9 @@ export async function registerFleetReader(
 		});
 	}
 	if (!active()) throw new Error("Fleet unlock cancelled.");
-	const pending = local.pending!;
+	const pending = local.pending;
+	if (!pending)
+		throw new Error("Fleet registration has no pending declaration to upload.");
 	const confirmed = await api.put<FleetReaderState>(profile, url, {
 		reader_jws: pending.reader_jws,
 	});
@@ -238,6 +250,7 @@ export async function readFleet(
 		view,
 		BigInt(now),
 	);
+	await pinDeviceIdentity(account, vault.deviceId, receipt);
 	const policy = view.policy_jws
 		? crypto.verifyManagementPolicy(
 				view.policy_jws,
@@ -319,7 +332,7 @@ export async function readFleet(
 				kind: manifest.audience.kind,
 				grant_id: manifest.audience.grant_id,
 				reader_digest: manifest.audience.reader_digest,
-				policy_digest: manifest.audience.policy_digest,
+				policy_digest: manifest.audience.policy_digest ?? null,
 			};
 		} finally {
 			bytes.fill(0);
@@ -366,7 +379,7 @@ export async function readFleet(
 						a.kind === anchor.kind &&
 						a.grant_id === anchor.grant_id &&
 						a.reader_digest === anchor.reader_digest &&
-						a.policy_digest === anchor.policy_digest &&
+						(a.policy_digest ?? null) === (anchor.policy_digest ?? null) &&
 						inventoryScopeKey(a.scope) === inventoryScopeKey(anchor.scope),
 				)
 			)

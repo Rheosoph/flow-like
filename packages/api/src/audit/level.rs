@@ -23,6 +23,7 @@ const MINIMAL_PREFIXES: &[&str] = &[
     "app_group.member.",
     "app_group.request.",
     "sink.",
+    "event.teams.",
 ];
 
 /// Lifecycle, publication and irreversible deletions of primary resources.
@@ -196,12 +197,17 @@ mod tests {
         ("event.canary.share", AuditLevel::Standard),
         ("event.canary.variants", AuditLevel::Standard),
         ("event.delete", AuditLevel::Minimal),
+        ("event.email-alias.update", AuditLevel::Standard),
         ("event.regression.fixture.delete", AuditLevel::Standard),
         ("event.regression.fixture.promote", AuditLevel::Standard),
         ("event.regression.run", AuditLevel::Standard),
         ("event.regression.suite.update", AuditLevel::Standard),
         ("event.restore", AuditLevel::Standard),
         ("event.setup", AuditLevel::Standard),
+        ("event.teams.disconnect", AuditLevel::Minimal),
+        ("event.teams.orphaned", AuditLevel::Minimal),
+        ("event.teams.rotate", AuditLevel::Minimal),
+        ("event.teams.setup", AuditLevel::Minimal),
         ("event.upsert", AuditLevel::Standard),
         ("execution.board.complete", AuditLevel::Verbose),
         ("execution.board.reject", AuditLevel::Verbose),

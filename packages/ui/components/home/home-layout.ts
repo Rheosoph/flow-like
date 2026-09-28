@@ -3,6 +3,7 @@ import type { IHomeDefaults, IHomeLayout, IHomeWidget } from "./types";
 export const MAX_HOME_WIDGETS = 80;
 export const MAX_HOME_LAYOUT_BYTES = 128 * 1024;
 export const MAX_HOME_WIDGET_CLASS_NAME_BYTES = 1024;
+export const MAX_HOME_WIDGET_CSS_BYTES = 8 * 1024;
 export const HOME_ROW_HEIGHT = 88;
 export const HOME_GRID_GAP = 16;
 
@@ -26,6 +27,11 @@ export function normalizeHomeWidgetClassName(
 ): string | undefined {
 	if (typeof value !== "string") return undefined;
 	return value.trim().split(/\s+/).join(" ") || undefined;
+}
+
+export function normalizeHomeWidgetCss(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	return value.trim() ? value : undefined;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -56,6 +62,7 @@ export function normalizeHomeLayout(value: unknown): IHomeLayout | null {
 		const size = record(item.size) ? item.size : {};
 		const appearance = record(item.appearance) ? item.appearance : {};
 		const className = normalizeHomeWidgetClassName(appearance.className);
+		const css = normalizeHomeWidgetCss(appearance.css);
 		widgets.push({
 			id: item.id,
 			type: item.type,
@@ -80,6 +87,7 @@ export function normalizeHomeLayout(value: unknown): IHomeLayout | null {
 				accent:
 					typeof appearance.accent === "string" ? appearance.accent : "neutral",
 				...(className ? { className } : {}),
+				...(css ? { css } : {}),
 			},
 			config: record(item.config) ? item.config : {},
 		});

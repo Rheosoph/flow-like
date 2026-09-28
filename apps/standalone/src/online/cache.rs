@@ -27,7 +27,14 @@ const LIST_BYTES: usize = 4 * 1024 * 1024;
 const ROW_OVERHEAD: u64 = 256;
 const MIN_CACHE_BYTES: u64 = 64 * 1024;
 const MAX_WRITE_MARKERS: u64 = 64;
+/// No provider request outlives this window, so an unresolved write older than
+/// it has either committed or never will.
+const WRITE_SETTLE_SECONDS: i64 = 3600;
 const CLOUD_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn wall_clock() -> object_store::Result<i64> {
+    crate::enrollment::unix_time().map_err(|error| cache_error(error.to_string()))
+}
 
 fn is_scope_digest(name: &str) -> bool {
     name.len() == 64
@@ -59,6 +66,12 @@ struct CloudUnavailable;
 #[derive(Debug, thiserror::Error)]
 #[error("Cloud storage is offline and this read is not available in the device cache")]
 struct OfflineCacheMiss;
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "The project grant deadline has passed; this placement stops serving until it is authorized again"
+)]
+struct GrantDeadlineElapsed;
 
 /// Preserve server availability as a typed error before the provider hides the
 /// HTTP status in its private retry error. Writes retain normal provider behavior.
@@ -296,6 +309,7 @@ impl CachedMeta {
 pub(super) struct CacheControl {
     connection: Mutex<Connection>,
     revoked: AtomicBool,
+    suspended: AtomicBool,
     prefixes: Vec<String>,
     max_bytes: u64,
     availability: Mutex<ReadAvailability>,
@@ -502,9 +516,21 @@ impl CacheControl {
             [],
             |row| row.get::<_, bool>(0),
         )?;
+        // Unresolved writes recorded before write times were kept settle one
+        // window after this start instead of immediately.
+        let now = crate::enrollment::unix_time()?;
+        connection.execute(
+            "UPDATE cache_entries SET start=?1 WHERE kind=3 AND start=0",
+            [now],
+        )?;
+        connection.execute(
+            "UPDATE cache_write_state SET immutable_uncertain=?1 WHERE singleton=1 AND immutable_uncertain=1",
+            [now],
+        )?;
         let control = Arc::new(Self {
             connection: Mutex::new(connection),
             revoked: AtomicBool::new(revoked),
+            suspended: AtomicBool::new(false),
             prefixes,
             max_bytes,
             availability: Mutex::new(ReadAvailability::default()),
@@ -517,29 +543,55 @@ impl CacheControl {
         }
         Ok(control)
     }
-    pub(super) fn is_revoked(&self) -> bool {
+    /// Returns an error when the local database cannot be read. Only a durable
+    /// revocation that was actually read latches this process as revoked.
+    pub(super) fn is_revoked(&self) -> Result<bool> {
         if self.revoked.load(Ordering::Acquire) {
-            return true;
+            return Ok(true);
         }
-        let Ok(connection) = self.connection.lock() else {
-            return true;
-        };
-        let revoked = connection
-            .query_row(
-                "SELECT revoked FROM cache_state WHERE singleton=1",
-                [],
-                |row| row.get::<_, bool>(0),
-            )
-            .unwrap_or(true);
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Device read cache lock poisoned"))?;
+        let revoked = connection.query_row(
+            "SELECT revoked FROM cache_state WHERE singleton=1",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
         if revoked {
             self.revoked.store(true, Ordering::Release);
         }
-        revoked
+        Ok(revoked)
     }
-    fn try_cloud_read(&self) -> object_store::Result<bool> {
-        if self.is_revoked() {
+    #[cfg(test)]
+    pub(super) fn database_path(&self) -> std::path::PathBuf {
+        std::path::PathBuf::from(
+            self.connection
+                .lock()
+                .unwrap()
+                .path()
+                .expect("file-backed cache database"),
+        )
+    }
+    /// Stops serving cached data in this process without a durable revocation,
+    /// for a grant deadline that elapsed with no confirmed denial.
+    pub(super) fn suspend(&self) {
+        self.suspended.store(true, Ordering::Release);
+    }
+    fn authorized(&self) -> object_store::Result<()> {
+        if self.suspended.load(Ordering::Acquire) {
+            return Err(cache_error(GrantDeadlineElapsed));
+        }
+        if self
+            .is_revoked()
+            .map_err(|error| cache_error(format!("{error:#}")))?
+        {
             return Err(denied());
         }
+        Ok(())
+    }
+    fn try_cloud_read(&self) -> object_store::Result<bool> {
+        self.authorized()?;
         let mut availability = self
             .availability
             .lock()
@@ -586,9 +638,7 @@ impl CacheControl {
         Ok(())
     }
     fn scope(&self, path: &ObjectPath, directory: bool) -> object_store::Result<()> {
-        if self.is_revoked() {
-            return Err(denied());
-        }
+        self.authorized()?;
         if !self.prefixes.iter().any(|prefix| {
             path.as_ref().starts_with(prefix)
                 || (directory && path.as_ref() == prefix.trim_end_matches('/'))
@@ -604,6 +654,9 @@ impl CacheControl {
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> object_store::Result<T>,
     ) -> object_store::Result<T> {
+        if self.suspended.load(Ordering::Acquire) {
+            return Err(cache_error(GrantDeadlineElapsed));
+        }
         if self.revoked.load(Ordering::Acquire) {
             return Err(denied());
         }
@@ -716,24 +769,29 @@ impl CacheControl {
         )
         .map_err(cache_error)
     }
+    fn uncertain_since(tx: &Transaction<'_>) -> object_store::Result<i64> {
+        tx.query_row(
+            "SELECT immutable_uncertain FROM cache_write_state WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(cache_error)
+    }
     fn reserve_marker(&self, tx: &Transaction<'_>, cost: u64) -> object_store::Result<bool> {
-        let uncertain: bool = tx
-            .query_row(
-                "SELECT immutable_uncertain FROM cache_write_state WHERE singleton=1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(cache_error)?;
+        let now = wall_clock()?;
+        Self::settle_writes(tx, now)?;
         let (count, bytes) = Self::marker_usage(tx)?;
-        if uncertain
-            || count + u64::from(cost > 0) > MAX_WRITE_MARKERS
+        if count + u64::from(cost > 0) > MAX_WRITE_MARKERS
             || bytes.saturating_add(cost) > self.marker_budget()
         {
-            // A bounded flag replaces all unresolved operation history. The
-            // reserved control slice keeps bookkeeping out of the data LRU.
+            // An overflow replaces all unresolved operation history with one
+            // timestamp that settles a window after the last untracked write.
+            // Later writes are tracked again, so steady traffic cannot keep
+            // the scope uncertain. The reserved control slice keeps
+            // bookkeeping out of the data LRU.
             tx.execute(
-                "UPDATE cache_write_state SET immutable_uncertain=1 WHERE singleton=1",
-                [],
+                "UPDATE cache_write_state SET immutable_uncertain=?1 WHERE singleton=1",
+                [now],
             )
             .map_err(cache_error)?;
             tx.execute("DELETE FROM cache_entries WHERE kind=3", [])
@@ -741,6 +799,55 @@ impl CacheControl {
             return Ok(false);
         }
         Ok(true)
+    }
+    /// A write unresolved for the settle window has committed or never will.
+    /// Its path's cached data may predate a late commit, so it is dropped with
+    /// the marker and revalidated on the next read.
+    fn settle_writes(tx: &Transaction<'_>, now: i64) -> object_store::Result<()> {
+        let cutoff = now - WRITE_SETTLE_SECONDS;
+        let settled: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM cache_entries WHERE kind=3 AND start<=?1)",
+                [cutoff],
+                |row| row.get(0),
+            )
+            .map_err(cache_error)?;
+        let uncertain = Self::uncertain_since(tx)?;
+        let resolved = uncertain != 0 && uncertain <= cutoff;
+        if !settled && !resolved {
+            return Ok(());
+        }
+        tx.execute("UPDATE cache_state SET epoch=epoch+1 WHERE singleton=1", [])
+            .map_err(cache_error)?;
+        tx.execute("DELETE FROM cache_entries WHERE kind=2", [])
+            .map_err(cache_error)?;
+        if settled {
+            tx.execute(
+                "DELETE FROM cache_entries WHERE kind IN (0,1) AND path IN (SELECT path FROM cache_entries WHERE kind=3 AND start<=?1)",
+                [cutoff],
+            )
+            .map_err(cache_error)?;
+            tx.execute(
+                "DELETE FROM cache_entries WHERE kind=3 AND start<=?1",
+                [cutoff],
+            )
+            .map_err(cache_error)?;
+        }
+        if resolved {
+            // Untracked writes left no paths, so drop every cached entry whose
+            // trust depends on immutability before trusting it again.
+            tx.execute(
+                "DELETE FROM cache_entries WHERE kind IN (0,1) AND path GLOB '*.lance/data/*.lance'",
+                [],
+            )
+            .map_err(cache_error)?;
+            tx.execute(
+                "UPDATE cache_write_state SET immutable_uncertain=0 WHERE singleton=1",
+                [],
+            )
+            .map_err(cache_error)?;
+        }
+        Ok(())
     }
     fn evict(&self, tx: &Transaction<'_>, cost: u64) -> object_store::Result<()> {
         let mut total: u64 = tx
@@ -1008,6 +1115,7 @@ impl CacheControl {
     }
     fn begin_write(&self, paths: &[&ObjectPath]) -> object_store::Result<String> {
         let operation = uuid::Uuid::new_v4().to_string();
+        let started = wall_clock()?.max(1) as u64;
         self.transaction(|tx| {
             tx.execute("UPDATE cache_state SET epoch=epoch+1 WHERE singleton=1", [])
                 .map_err(cache_error)?;
@@ -1018,13 +1126,37 @@ impl CacheControl {
                     path.as_ref(),
                     3,
                     &operation,
-                    0,
+                    started,
                     0,
                     &[],
                 )?;
             }
             Ok(operation)
         })
+    }
+    /// A provider response settles a write whether or not it succeeded; only a
+    /// transport failure or cancellation leaves it unresolved.
+    fn finish_write<T>(
+        &self,
+        operation: &str,
+        paths: &[&ObjectPath],
+        result: &object_store::Result<T>,
+    ) -> object_store::Result<()> {
+        match result {
+            Ok(_) => {
+                self.cloud_succeeded();
+                self.complete_write(operation, paths)
+            }
+            Err(error) => {
+                self.handle_error(error);
+                if !is_offline(error) && !is_denied(error) {
+                    if let Err(cleanup) = self.complete_write(operation, paths) {
+                        tracing::warn!("Unable to settle a rejected device cache write: {cleanup}");
+                    }
+                }
+                Ok(())
+            }
+        }
     }
     fn complete_write(&self, operation: &str, paths: &[&ObjectPath]) -> object_store::Result<()> {
         self.transaction(|tx| {
@@ -1039,15 +1171,10 @@ impl CacheControl {
         })
     }
     fn immutable_trusted(&self, path: &ObjectPath) -> object_store::Result<bool> {
+        let now = wall_clock()?;
         self.transaction(|tx| {
-            let uncertain: bool = tx
-                .query_row(
-                    "SELECT immutable_uncertain FROM cache_write_state WHERE singleton=1",
-                    [],
-                    |row| row.get(0),
-                )
-                .map_err(cache_error)?;
-            if uncertain {
+            Self::settle_writes(tx, now)?;
+            if Self::uncertain_since(tx)? != 0 {
                 return Ok(false);
             }
             let pending: bool = tx
@@ -1221,7 +1348,7 @@ impl ReadCache {
                     Ok(bytes) => bytes,
                     Err(error) => { control.handle_error(&error); Err(error)?; unreachable!() }
                 };
-                if control.is_revoked() { Err(denied())?; }
+                control.authorized()?;
                 if !head && bytes.len() as u64 > end.saturating_sub(position) { Err(cache_error("Cloud object returned an invalid byte range"))?; }
                 while !bytes.is_empty() {
                     let chunk = bytes.split_to(bytes.len().min(BLOCK_BYTES-pending.len()));
@@ -1353,12 +1480,7 @@ impl ObjectStore for ReadCache {
         self.control.scope(path, false)?;
         let operation = self.control.begin_write(&[path])?;
         let result = self.inner.put_opts(path, payload, options).await;
-        if let Err(error) = &result {
-            self.control.handle_error(error);
-        } else {
-            self.control.cloud_succeeded();
-            self.control.complete_write(&operation, &[path])?;
-        }
+        self.control.finish_write(&operation, &[path], &result)?;
         result
     }
     async fn put_multipart_opts(
@@ -1394,12 +1516,7 @@ impl ObjectStore for ReadCache {
                 store.control.scope(&path, false)?;
                 let operation = store.control.begin_write(&[&path])?;
                 let result = store.inner.delete(&path).await;
-                if let Err(error) = &result {
-                    store.control.handle_error(error);
-                } else {
-                    store.control.cloud_succeeded();
-                    store.control.complete_write(&operation, &[&path])?;
-                }
+                store.control.finish_write(&operation, &[&path], &result)?;
                 result?;
                 Ok(path)
             }
@@ -1501,12 +1618,7 @@ impl ObjectStore for ReadCache {
         self.control.scope(to, false)?;
         let operation = self.control.begin_write(&[to])?;
         let result = self.inner.copy_opts(from, to, options).await;
-        if let Err(error) = &result {
-            self.control.handle_error(error);
-        } else {
-            self.control.cloud_succeeded();
-            self.control.complete_write(&operation, &[to])?;
-        }
+        self.control.finish_write(&operation, &[to], &result)?;
         result
     }
     async fn rename_opts(
@@ -1519,12 +1631,8 @@ impl ObjectStore for ReadCache {
         self.control.scope(to, false)?;
         let operation = self.control.begin_write(&[from, to])?;
         let result = self.inner.rename_opts(from, to, options).await;
-        if let Err(error) = &result {
-            self.control.handle_error(error);
-        } else {
-            self.control.cloud_succeeded();
-            self.control.complete_write(&operation, &[from, to])?;
-        }
+        self.control
+            .finish_write(&operation, &[from, to], &result)?;
         result
     }
 }
@@ -1537,8 +1645,8 @@ struct CachedUpload {
 #[async_trait]
 impl MultipartUpload for CachedUpload {
     fn put_part(&mut self, data: PutPayload) -> UploadPart {
-        if self.control.is_revoked() {
-            return Box::pin(async { Err(denied()) });
+        if let Err(error) = self.control.authorized() {
+            return Box::pin(async move { Err(error) });
         }
         let result = self.inner.put_part(data);
         let control = self.control.clone();
@@ -1556,12 +1664,8 @@ impl MultipartUpload for CachedUpload {
         self.control.scope(&self.path, false)?;
         let operation = self.control.begin_write(&[&self.path])?;
         let result = self.inner.complete().await;
-        if let Err(error) = &result {
-            self.control.handle_error(error);
-        } else {
-            self.control.cloud_succeeded();
-            self.control.complete_write(&operation, &[&self.path])?;
-        }
+        self.control
+            .finish_write(&operation, &[&self.path], &result)?;
         result
     }
     async fn abort(&mut self) -> object_store::Result<()> {
@@ -1776,7 +1880,7 @@ mod tests {
         assert_eq!(body(cache.as_ref(), &path).await, "next");
         cloud.mode.store(2, Ordering::SeqCst);
         assert!(is_denied(&cache.get(&path).await.unwrap_err()));
-        assert!(control.is_revoked());
+        assert!(control.is_revoked().unwrap());
         assert!(
             control
                 .connection
@@ -1911,10 +2015,10 @@ mod tests {
         }
         let mut pending = same.get(&path).await.unwrap().into_stream();
         first.revoke().unwrap();
-        assert!(other_process.is_revoked());
+        assert!(other_process.is_revoked().unwrap());
         assert!(is_denied(&pending.next().await.unwrap().unwrap_err()));
         let reloaded = control(root.path(), "device:grant:project:alice", 4 * 1024 * 1024);
-        assert!(reloaded.is_revoked());
+        assert!(reloaded.is_revoked().unwrap());
     }
 
     #[tokio::test]
@@ -2244,11 +2348,16 @@ mod tests {
         for _ in 0..MAX_WRITE_MARKERS + 1 {
             control.begin_write(&[&path]).unwrap();
         }
-        assert_eq!(
+        let (markers, marker_bytes) = control
+            .transaction(|tx| CacheControl::marker_usage(tx))
+            .unwrap();
+        assert!(markers <= MAX_WRITE_MARKERS && marker_bytes <= control.marker_budget());
+        assert!(
             control
-                .transaction(|tx| CacheControl::marker_usage(tx))
-                .unwrap(),
-            (0, 0)
+                .read(&format!("write:{first}:{path}"))
+                .unwrap()
+                .is_none(),
+            "Overflow compacts unresolved history into the uncertainty timestamp"
         );
         assert!(
             !control
@@ -2589,7 +2698,7 @@ mod tests {
             .transaction(|tx| control.insert(tx, "cached", "", 2, "", 0, 0, b"private"))
             .unwrap();
         CacheControl::revoke_placement(root.path(), "placement").unwrap();
-        assert!(control.is_revoked());
+        assert!(control.is_revoked().unwrap());
         assert!(
             control
                 .connection
@@ -2619,8 +2728,8 @@ mod tests {
         std::fs::write(metadata_root.join("manifest"), b"keep").unwrap();
         CacheControl::retain_placement_scope(root.path(), "placement", &current).unwrap();
         assert!(!old_root.exists());
-        assert!(old_cache.is_revoked());
-        assert!(!current_cache.is_revoked());
+        assert!(old_cache.is_revoked().unwrap());
+        assert!(!current_cache.is_revoked().unwrap());
         assert_eq!(
             std::fs::read(metadata_root.join("manifest")).unwrap(),
             b"keep"
@@ -2628,8 +2737,12 @@ mod tests {
         // A later, newly authorized rollback may recreate the former scope.
         let old_root = super::super::private_cache(root.path(), "placement", &old).unwrap();
         CacheControl::retain_placement_scope(root.path(), "placement", &old).unwrap();
-        assert!(!control(&old_root, &old, MIN_CACHE_BYTES).is_revoked());
-        assert!(current_cache.is_revoked());
+        assert!(
+            !control(&old_root, &old, MIN_CACHE_BYTES)
+                .is_revoked()
+                .unwrap()
+        );
+        assert!(current_cache.is_revoked().unwrap());
     }
 
     #[test]
@@ -2695,5 +2808,179 @@ mod tests {
             .is_err()
         );
         assert_eq!(std::fs::read(other).unwrap(), b"untouched");
+    }
+
+    fn age(control: &CacheControl, sql: &str) {
+        control
+            .connection
+            .lock()
+            .unwrap()
+            .execute(sql, [WRITE_SETTLE_SECONDS + 1])
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejected_and_settled_writes_restore_immutable_trust() {
+        let root = tempfile::tempdir().unwrap();
+        let cloud = Arc::new(Cloud::default());
+        let cache = ReadCache::new(
+            cloud.clone(),
+            control(root.path(), "settled-writes", 4 * 1024 * 1024),
+        );
+        let path = immutable();
+        cloud.memory.put(&path, "stored".into()).await.unwrap();
+        assert_eq!(body(cache.as_ref(), &path).await, "stored");
+        cloud.mode.store(4, Ordering::SeqCst);
+        assert!(cache.put(&path, "refused".into()).await.is_err());
+        cloud.mode.store(0, Ordering::SeqCst);
+        assert!(
+            cache.control.immutable_trusted(&path).unwrap(),
+            "A provider rejection settles its write"
+        );
+        cloud.mode.store(1, Ordering::SeqCst);
+        assert!(cache.put(&path, "unknown".into()).await.is_err());
+        cloud.mode.store(0, Ordering::SeqCst);
+        cache.control.cloud_succeeded();
+        assert!(!cache.control.immutable_trusted(&path).unwrap());
+        age(
+            &cache.control,
+            "UPDATE cache_entries SET start=start-?1 WHERE kind=3",
+        );
+        assert!(cache.control.immutable_trusted(&path).unwrap());
+        assert_eq!(
+            cache
+                .control
+                .transaction(|tx| CacheControl::marker_usage(tx))
+                .unwrap(),
+            (0, 0)
+        );
+        assert!(
+            cache
+                .control
+                .read(&format!("meta:{path}"))
+                .unwrap()
+                .is_none(),
+            "Data cached before a settled write is revalidated"
+        );
+        cloud.memory.put(&path, "late commit".into()).await.unwrap();
+        assert_eq!(body(cache.as_ref(), &path).await, "late commit");
+    }
+
+    #[test]
+    fn untracked_write_uncertainty_resets_after_the_last_write_settles() {
+        let root = tempfile::tempdir().unwrap();
+        let control = control(root.path(), "uncertain", 4 * MIN_CACHE_BYTES);
+        let path = immutable();
+        let other = ObjectPath::from(format!(
+            "apps/project/storage/db/table.lance/data/{}.lance",
+            "1".repeat(24) + "b".repeat(26).as_str()
+        ));
+        control
+            .transaction(|tx| {
+                control.insert(
+                    tx,
+                    &format!("meta:{other}"),
+                    other.as_ref(),
+                    0,
+                    "g",
+                    0,
+                    0,
+                    b"{}",
+                )
+            })
+            .unwrap();
+        for _ in 0..=MAX_WRITE_MARKERS {
+            control.begin_write(&[&path]).unwrap();
+        }
+        assert!(!control.immutable_trusted(&other).unwrap());
+        age(
+            &control,
+            "UPDATE cache_write_state SET immutable_uncertain=immutable_uncertain-?1",
+        );
+        assert!(control.immutable_trusted(&other).unwrap());
+        assert!(
+            control.read(&format!("meta:{other}")).unwrap().is_none(),
+            "Immutable entries cached during uncertainty are revalidated"
+        );
+        control.begin_write(&[&path]).unwrap();
+        assert!(!control.immutable_trusted(&path).unwrap());
+        assert!(control.immutable_trusted(&other).unwrap());
+    }
+
+    #[test]
+    fn steady_tracked_writes_do_not_keep_an_overflowed_scope_uncertain() {
+        let root = tempfile::tempdir().unwrap();
+        let control = control(root.path(), "steady-writes", 4 * 1024 * 1024);
+        let path = immutable();
+        let other = ObjectPath::from(format!(
+            "apps/project/storage/db/table.lance/data/{}.lance",
+            "2".repeat(24) + "c".repeat(26).as_str()
+        ));
+        for _ in 0..=MAX_WRITE_MARKERS {
+            control.begin_write(&[&path]).unwrap();
+        }
+        assert!(!control.immutable_trusted(&other).unwrap());
+        let elapse = |seconds: i64| {
+            control
+                .connection
+                .lock()
+                .unwrap()
+                .execute_batch(&format!(
+                    "UPDATE cache_write_state SET immutable_uncertain=immutable_uncertain-{seconds} WHERE immutable_uncertain<>0;
+                     UPDATE cache_entries SET start=start-{seconds} WHERE kind=3;"
+                ))
+                .unwrap();
+        };
+        let pending = control.begin_write(&[&other]).unwrap();
+        assert!(
+            control
+                .read(&format!("write:{pending}:{other}"))
+                .unwrap()
+                .is_some(),
+            "Writes stay tracked while the overflow settles"
+        );
+        control.complete_write(&pending, &[&other]).unwrap();
+        for _ in 0..=WRITE_SETTLE_SECONDS / 600 {
+            elapse(600);
+            let operation = control.begin_write(&[&path]).unwrap();
+            control.complete_write(&operation, &[&path]).unwrap();
+        }
+        assert!(
+            control.immutable_trusted(&other).unwrap(),
+            "Writing every ten minutes still lets the last untracked write settle"
+        );
+        assert!(control.immutable_trusted(&path).unwrap());
+    }
+
+    #[tokio::test]
+    async fn unreadable_cache_state_fails_the_operation_without_revoking() {
+        let root = tempfile::tempdir().unwrap();
+        let cloud = Arc::new(Cloud::default());
+        let control = control(root.path(), "unreadable", 4 * 1024 * 1024);
+        let cache = ReadCache::new(cloud.clone(), control.clone());
+        let path = ObjectPath::from("apps/project/storage/report.json");
+        cloud.memory.put(&path, "value".into()).await.unwrap();
+        let rename = |from: &str, to: &str| {
+            control
+                .connection
+                .lock()
+                .unwrap()
+                .execute_batch(&format!("ALTER TABLE {from} RENAME TO {to}"))
+                .unwrap();
+        };
+        rename("cache_state", "cache_state_moved");
+        assert!(control.is_revoked().is_err());
+        let error = cache.get(&path).await.unwrap_err();
+        assert!(!is_denied(&error) && !is_offline(&error));
+        rename("cache_state_moved", "cache_state");
+        assert!(!control.is_revoked().unwrap());
+        assert_eq!(body(cache.as_ref(), &path).await, "value");
+        control.suspend();
+        let error = cache.get(&path).await.unwrap_err();
+        assert!(!is_denied(&error) && !is_offline(&error));
+        assert!(
+            !control.is_revoked().unwrap(),
+            "Suspension is never durable"
+        );
     }
 }

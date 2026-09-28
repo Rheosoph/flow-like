@@ -60,13 +60,29 @@ impl Documents {
     }
 }
 
-fn device_event(mut event: Event) -> Result<Event, ApiError> {
-    // The device listener has its own secret. A hosted endpoint token must not
-    // become a reusable credential in the exported metadata artifact.
-    if event.event_type == "http" && !event.config.is_empty() {
-        let mut config: serde_json::Value = serde_json::from_slice(&event.config)?;
-        if let Some(object) = config.as_object_mut() {
-            object.remove("auth_token");
+/// Matches every sink's credential field (endpoint, bot and access tokens, webhook
+/// secrets, passwords, API keys) but no routing or display key. Mirrors the device-side
+/// redaction in flow-like-runtime's sharing::device so both sides strip the same keys.
+fn is_credential_config_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    matches!(key.as_str(), "token" | "secret" | "password")
+        || key.starts_with("secret_")
+        || ["_token", "_secret", "_password", "api_key"]
+            .iter()
+            .any(|suffix| key.ends_with(suffix))
+}
+
+/// Every event a device receives, exported or fetched by an instance, goes through here.
+/// The device listener has its own secret and placements supply secrets privately, so no
+/// saved sink credential (hosted endpoint token, bot token, webhook secret, mailbox
+/// password) becomes a credential that outlives the device's grant.
+pub(crate) fn device_event(mut event: Event) -> Result<Event, ApiError> {
+    if let Ok(serde_json::Value::Object(mut config)) =
+        serde_json::from_slice::<serde_json::Value>(&event.config)
+    {
+        let before = config.len();
+        config.retain(|key, _| !is_credential_config_key(key));
+        if config.len() != before {
             event.config = serde_json::to_vec(&config)?;
         }
     }
@@ -304,8 +320,50 @@ mod tests {
                 .unwrap()
                 .contains("cloud-endpoint-secret")
         );
-        event.event_type = "daemon".into();
-        assert_eq!(device_event(event.clone()).unwrap().config, event.config);
+        for event_type in ["api", "webhook", "daemon"] {
+            event.event_type = event_type.into();
+            assert!(
+                !String::from_utf8(device_event(event.clone()).unwrap().config)
+                    .unwrap()
+                    .contains("cloud-endpoint-secret"),
+                "{event_type} kept its hosted token"
+            );
+        }
+        for (event_type, config, kept) in [
+            (
+                "telegram",
+                serde_json::json!({"bot_token":"bot-credential","webhook_secret":"hook-credential","chat_id":"42"}),
+                serde_json::json!({"chat_id":"42"}),
+            ),
+            (
+                "user_mail",
+                serde_json::json!({"imap_host":"mail.example","secret_imap_password":"mailbox-credential"}),
+                serde_json::json!({"imap_host":"mail.example"}),
+            ),
+            (
+                "http",
+                serde_json::json!({"path":"/hook","AUTH_TOKEN":"cloud-endpoint-secret","Api_Key":"key-credential"}),
+                serde_json::json!({"path":"/hook"}),
+            ),
+        ] {
+            event.event_type = event_type.into();
+            event.config = serde_json::to_vec(&config).unwrap();
+            let exported = device_event(event.clone()).unwrap().config;
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&exported).unwrap(),
+                kept,
+                "{event_type} kept a sink credential"
+            );
+        }
+        for config in [
+            br#"{"path":"/hook","settings":{"auth_token":"nested-flow-value"}}"#.to_vec(),
+            br#"{"path":"/hook","tokenizer":"words","secretary":"desk"}"#.to_vec(),
+            b"not json".to_vec(),
+            Vec::new(),
+        ] {
+            event.config = config;
+            assert_eq!(device_event(event.clone()).unwrap().config, event.config);
+        }
     }
 
     #[test]

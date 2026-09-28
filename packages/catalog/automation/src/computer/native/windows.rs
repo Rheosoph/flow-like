@@ -42,51 +42,81 @@ fn node(e: &IUIAutomationElement) -> AccessibilityNode {
                 width: r.right - r.left,
                 height: r.bottom - r.top,
             });
-        let mut states = vec![];
-        if e.CurrentIsEnabled().is_ok_and(|v| v.as_bool()) {
-            states.push("enabled".into());
+        let mut states: Vec<String> = vec![];
+        match e.CurrentIsEnabled() {
+            Ok(enabled) if enabled.as_bool() => states.push("enabled".into()),
+            Ok(_) => states.push("disabled".into()),
+            Err(_) => {}
         }
         if e.CurrentHasKeyboardFocus().is_ok_and(|v| v.as_bool()) {
             states.push("focused".into());
         }
-        let mut actions = vec!["focus".into()];
+        if e.CurrentIsOffscreen().is_ok_and(|v| v.as_bool()) {
+            states.push("offscreen".into());
+        }
+        let mut actions: Vec<String> = vec!["focus".into()];
         if e.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
             .is_ok()
         {
             actions.push("invoke".into());
         }
-        if e.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
-            .is_ok()
+        if let Ok(toggle) = e.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
         {
-            actions.push("set_value".into());
+            if !actions.iter().any(|a| a == "invoke") {
+                actions.push("invoke".into());
+            }
+            match toggle.CurrentToggleState() {
+                Ok(state) if state == ToggleState_On => states.push("checked".into()),
+                Ok(state) if state == ToggleState_Indeterminate => states.push("mixed".into()),
+                _ => {}
+            }
         }
-        if e.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId)
-            .is_ok()
+        let value_pattern = e
+            .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+            .ok();
+        if let Some(pattern) = &value_pattern {
+            if pattern.CurrentIsReadOnly().is_ok_and(|v| v.as_bool()) {
+                states.push("read_only".into());
+            } else {
+                actions.push("set_value".into());
+            }
+        }
+        if let Ok(selection) =
+            e.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId)
         {
             actions.push("select".into());
+            if selection.CurrentIsSelected().is_ok_and(|v| v.as_bool()) {
+                states.push("selected".into());
+            }
         }
-        if e.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(UIA_ExpandCollapsePatternId)
-            .is_ok()
+        if let Ok(expander) =
+            e.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(UIA_ExpandCollapsePatternId)
         {
             actions.extend(["expand".into(), "collapse".into()]);
+            match expander.CurrentExpandCollapseState() {
+                Ok(state) if state == ExpandCollapseState_Expanded => {
+                    states.push("expanded".into())
+                }
+                Ok(state) if state == ExpandCollapseState_Collapsed => {
+                    states.push("collapsed".into())
+                }
+                _ => {}
+            }
         }
         AccessibilityNode {
-            native_id: None,
             role: e
                 .CurrentControlType()
                 .map(|kind| control_type_name(kind.0))
                 .unwrap_or_default(),
             name: e.CurrentName().ok().map(|s| s.to_string()),
-            value: e
-                .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
-                .ok()
+            value: value_pattern
                 .and_then(|p| p.CurrentValue().ok())
                 .map(|s| s.to_string()),
             description: e.CurrentHelpText().ok().map(|s| s.to_string()),
             bounds,
             states,
             actions,
-            children: vec![],
+            ..Default::default()
         }
     }
 }
@@ -181,9 +211,23 @@ pub async fn action(
         unsafe {
             match action.as_str() {
                 "focus" => element.SetFocus()?,
-                "invoke" => element
-                    .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)?
-                    .Invoke()?,
+                "invoke" => {
+                    if let Ok(pattern) = element
+                        .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+                    {
+                        pattern.Invoke()?
+                    } else if let Ok(pattern) = element
+                        .GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
+                    {
+                        pattern.Toggle()?
+                    } else {
+                        element
+                            .GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(
+                                UIA_SelectionItemPatternId,
+                            )?
+                            .Select()?
+                    }
+                }
                 "select" => element
                     .GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(
                         UIA_SelectionItemPatternId,
@@ -205,7 +249,7 @@ pub async fn action(
                         .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)?
                         .SetValue(&text)?;
                 }
-                _ => return Err(anyhow!("Unsupported accessibility action")),
+                _ => return Err(anyhow!("Unsupported accessibility action: {}", action)),
             }
         }
         Ok(())

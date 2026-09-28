@@ -98,7 +98,10 @@ fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
 }
 
 /// True for names that address the host / hypervisor plane by convention,
-/// before any DNS lookup.
+/// before any DNS lookup. Subdomains of `localhost` are left to the resolver:
+/// deployments alias them to service containers (Docker Compose serves
+/// signed storage URLs from `s3.localhost`), and one that answers with
+/// loopback per RFC 6761 is refused on its address.
 pub fn is_blocked_host(host: &str) -> bool {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     matches!(
@@ -112,7 +115,7 @@ pub fn is_blocked_host(host: &str) -> bool {
             | "instance-data"
             | "host.docker.internal"
             | "gateway.docker.internal"
-    ) || host.ends_with(".localhost")
+    )
 }
 
 /// Refuses a URL whose host is on the host / hypervisor plane when running
@@ -171,6 +174,24 @@ pub async fn resolve_socket_addrs(
     Ok(addrs)
 }
 
+/// Pre-flight check for transports that cannot carry the guarded resolver
+/// (third-party clients such as object stores or MCP): refuses the URL and,
+/// server-side, a host that currently resolves to the host plane. Unlike
+/// [`GuardedHttpClient`] it cannot stop a later re-resolution or redirect.
+pub async fn ensure_url_resolves_allowed(
+    environment: ExecutionEnvironment,
+    url: &Url,
+) -> Result<()> {
+    ensure_url_allowed(environment, url)?;
+    if environment != ExecutionEnvironment::Server {
+        return Ok(());
+    }
+    if let Some(url::Host::Domain(host)) = url.host() {
+        resolve_socket_addrs(environment, host, url.port_or_known_default().unwrap_or(0)).await?;
+    }
+    Ok(())
+}
+
 /// DNS resolver that refuses names resolving to the host plane. Installed
 /// into every server-side reqwest client so the check happens at connect
 /// time, per connection — DNS rebinding after an initial check does not help.
@@ -205,7 +226,13 @@ fn guarded_redirect_policy() -> redirect::Policy {
 /// plain builder otherwise. Prefer [`GuardedHttpClient`], which also checks
 /// the initial request URL — a resolver never sees IP-literal hosts.
 pub fn client_builder(environment: ExecutionEnvironment) -> reqwest::ClientBuilder {
-    let builder = reqwest::Client::builder();
+    install_guard(reqwest::Client::builder(), environment)
+}
+
+fn install_guard(
+    builder: reqwest::ClientBuilder,
+    environment: ExecutionEnvironment,
+) -> reqwest::ClientBuilder {
     if environment != ExecutionEnvironment::Server {
         return builder;
     }
@@ -235,12 +262,13 @@ impl GuardedHttpClient {
     }
 
     /// Like [`Self::new`], with extra builder configuration (timeouts, user
-    /// agent, …) applied on top of the guarded builder.
+    /// agent, …). The guard is installed after `configure`, so a resolver or
+    /// redirect policy set there cannot replace it server-side.
     pub fn configured(
         environment: ExecutionEnvironment,
         configure: impl FnOnce(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
     ) -> Result<Self> {
-        let client = configure(client_builder(environment))
+        let client = install_guard(configure(reqwest::Client::builder()), environment)
             .build()
             .map_err(|e| anyhow!("Failed to build HTTP client: {e}"))?;
         Ok(Self {
@@ -332,7 +360,10 @@ impl GuardedHttpClient {
 
     /// Starts a request after checking the URL against the egress policy.
     pub fn request(&self, method: reqwest::Method, url: &str) -> Result<reqwest::RequestBuilder> {
-        let url = Url::parse(url).map_err(|e| anyhow!("Invalid URL '{url}': {e}"))?;
+        let url = Url::parse(url).map_err(|e| {
+            let without_query = url.split(['?', '#']).next().unwrap_or_default();
+            anyhow!("Invalid URL '{without_query}': {e}")
+        })?;
         ensure_url_allowed(self.environment, &url)?;
         Ok(self.client.request(method, url))
     }
@@ -343,6 +374,18 @@ impl GuardedHttpClient {
 
     pub fn post(&self, url: &str) -> Result<reqwest::RequestBuilder> {
         self.request(reqwest::Method::POST, url)
+    }
+
+    pub fn put(&self, url: &str) -> Result<reqwest::RequestBuilder> {
+        self.request(reqwest::Method::PUT, url)
+    }
+
+    pub fn patch(&self, url: &str) -> Result<reqwest::RequestBuilder> {
+        self.request(reqwest::Method::PATCH, url)
+    }
+
+    pub fn delete(&self, url: &str) -> Result<reqwest::RequestBuilder> {
+        self.request(reqwest::Method::DELETE, url)
     }
 }
 
@@ -395,13 +438,29 @@ mod tests {
             "Metadata.Google.Internal.",
             "metadata",
             "localhost",
-            "api.localhost",
+            "LocalHost.",
             "host.docker.internal",
         ] {
             assert!(is_blocked_host(host), "{host} must be blocked");
         }
         assert!(!is_blocked_host("example.com"));
         assert!(!is_blocked_host("api.internal.example.com"));
+    }
+
+    #[test]
+    fn localhost_subdomains_are_left_to_the_resolver() {
+        let signed = Url::parse("http://s3.localhost:9000/bucket/key?X-Amz-Signature=abc").unwrap();
+        assert!(
+            ensure_url_allowed(ExecutionEnvironment::Server, &signed).is_ok(),
+            "compose aliases s3.localhost to the storage gateway"
+        );
+        for refused in ["http://localhost:9000/", "http://127.0.0.1:9000/"] {
+            let url = Url::parse(refused).unwrap();
+            assert!(
+                ensure_url_allowed(ExecutionEnvironment::Server, &url).is_err(),
+                "{refused} must be refused"
+            );
+        }
     }
 
     #[test]
@@ -425,10 +484,91 @@ mod tests {
         let client = GuardedHttpClient::new(ExecutionEnvironment::Server).unwrap();
         assert!(client.get("http://169.254.169.254/").is_err());
         assert!(client.get("http://metadata.google.internal/").is_err());
+        assert!(client.post("http://127.0.0.1/").is_err());
+        assert!(client.put("http://[fd00:ec2::254]/").is_err());
+        assert!(client.patch("http://localhost:8080/").is_err());
+        assert!(client.delete("http://169.254.170.2/").is_err());
         assert!(client.get("https://example.com/").is_ok());
+        assert!(client.delete("https://example.com/").is_ok());
+
+        let invalid = client
+            .get("https://exa mple.com/file?X-Amz-Signature=signed-secret")
+            .unwrap_err()
+            .to_string();
+        assert!(invalid.contains("https://exa mple.com/file"), "{invalid}");
+        assert!(
+            !invalid.contains("signed-secret"),
+            "signed query strings stay out of errors: {invalid}"
+        );
 
         let local = GuardedHttpClient::new(ExecutionEnvironment::Desktop).unwrap();
         assert!(local.get("http://127.0.0.1:11434/").is_ok());
+    }
+
+    #[test]
+    fn preflight_refuses_host_plane_urls_server_side_only() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let metadata = Url::parse("http://169.254.169.254/latest/").unwrap();
+            let loopback = Url::parse("http://localhost:8080/mcp").unwrap();
+            for url in [&metadata, &loopback] {
+                assert!(
+                    ensure_url_resolves_allowed(ExecutionEnvironment::Server, url)
+                        .await
+                        .is_err(),
+                    "{url} must be refused server-side"
+                );
+                assert!(
+                    ensure_url_resolves_allowed(ExecutionEnvironment::Local, url)
+                        .await
+                        .is_ok()
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn configured_redirect_policy_cannot_replace_the_server_guard() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buf = [0; 1024];
+                let _ = socket.read(&mut buf).await;
+                socket
+                    .write_all(
+                        b"HTTP/1.1 302 Found\r\nlocation: http://169.254.169.254/latest/meta-data/\r\ncontent-length: 0\r\n\r\n",
+                    )
+                    .await
+                    .unwrap();
+            });
+
+            let client = GuardedHttpClient::configured(ExecutionEnvironment::Server, |builder| {
+                builder
+                    .no_proxy()
+                    .redirect(redirect::Policy::limited(5))
+                    .timeout(Duration::from_secs(5))
+            })
+            .unwrap();
+            // Bypasses the request-URL check, which would refuse the loopback test server.
+            let error = client.client.get(&url).send().await.unwrap_err();
+            assert!(
+                error.is_redirect(),
+                "the redirect to the metadata endpoint must be refused: {error}"
+            );
+        });
     }
 
     // The only test calling `shared`, so the build counter is not raced.

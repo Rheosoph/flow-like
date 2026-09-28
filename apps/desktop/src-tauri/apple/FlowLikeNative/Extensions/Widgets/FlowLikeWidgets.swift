@@ -19,20 +19,31 @@ struct WorkspaceEntry: TimelineEntry {
 }
 
 struct WorkspaceProvider: TimelineProvider {
+    let sectionKind: String
+
     func placeholder(in context: Context) -> WorkspaceEntry { WorkspaceEntry(date: Date(), snapshot: nil) }
     func getSnapshot(in context: Context, completion: @escaping (WorkspaceEntry) -> Void) {
         completion(WorkspaceEntry(date: Date(), snapshot: NativeStore.shared.snapshot()))
     }
+    // Stale content keeps rendering with its age until the section leaves its privacy window.
     func getTimeline(in context: Context, completion: @escaping (Timeline<WorkspaceEntry>) -> Void) {
         let snapshot = NativeStore.shared.snapshot()
         let now = Date()
         var entries = [WorkspaceEntry(date: now, snapshot: snapshot)]
-        if let expiry = snapshot.flatMap({ NativeSnapshot.date($0.expiresAt) }), expiry > now {
-            entries.append(WorkspaceEntry(date: expiry, snapshot: nil))
+        if let snapshot {
+            let freshness = snapshot.sections.first(where: { $0.kind == sectionKind }).flatMap(snapshot.freshness(of:))
+            if let freshness, showsFreshness(sectionKind) {
+                entries += NativeWidgetFreshness.labelDates(freshness, after: now).map { WorkspaceEntry(date: $0, snapshot: snapshot) }
+            }
+            if let expiry = freshness?.expiresAt ?? NativeSnapshot.date(snapshot.expiresAt), expiry > now {
+                entries.append(WorkspaceEntry(date: expiry, snapshot: nil))
+            }
         }
         completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(900))))
     }
 }
+
+private func showsFreshness(_ sectionKind: String) -> Bool { sectionKind != "flowpilot" }
 
 // The mark follows the two paths in gen/apple/icon.icon/Assets/flow-like.svg.
 struct FlowLikeMark: Shape {
@@ -281,15 +292,45 @@ struct FlowWidgetBackground: View {
 
 struct FlowWidgetHeader: View {
     let title: String
+    var spokenTitle: String? = nil
+    var staleSince: Date? = nil
+    var reference = Date()
+    var compact = false
     @Environment(\.colorScheme) private var colorScheme
+    private var palette: FlowWidgetPalette { FlowWidgetPalette(dark: colorScheme == .dark) }
+
     var body: some View {
-        HStack(spacing: 8) {
-            Text(title).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
-                .foregroundStyle(FlowWidgetPalette(dark: colorScheme == .dark).ink)
-            Spacer(minLength: 0)
-            FlowLikeMark().fill(FlowWidgetPalette.gradient).frame(width: 15, height: 17)
-                .widgetAccentable().accessibilityHidden(true)
+        if let staleSince {
+            // The age moves under the title rather than truncating it.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { titleText; Spacer(minLength: 0); age(since: staleSince) }
+                VStack(alignment: .leading, spacing: 2) { titleText; age(since: staleSince) }
+            }
+        } else {
+            HStack(spacing: 8) {
+                titleText
+                Spacer(minLength: 0)
+                FlowLikeMark().fill(FlowWidgetPalette.gradient).frame(width: 15, height: 17)
+                    .widgetAccentable().accessibilityHidden(true)
+            }
         }
+    }
+
+    private var titleText: some View {
+        Text(title).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
+            .foregroundStyle(palette.ink).accessibilityLabel(spokenTitle ?? title)
+    }
+
+    private func age(since date: Date) -> some View {
+        let age = NativeWidgetFreshness.age(since: date, at: reference)
+        return HStack(spacing: 3) {
+            Image(systemName: "clock.arrow.circlepath")
+            if compact { Text(age) } else { Text("Updated \(age)") }
+        }
+        .font(.caption2.weight(.medium)).foregroundStyle(palette.secondary)
+        .lineLimit(1).minimumScaleFactor(0.8)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Updated \(NativeWidgetFreshness.age(since: date, at: reference, style: .full))"))
     }
 }
 
@@ -389,8 +430,19 @@ struct WorkspaceWidgetView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var palette: FlowWidgetPalette { FlowWidgetPalette(dark: colorScheme == .dark) }
-    private var section: NativeSection? { entry.snapshot?.sections.first { $0.kind == sectionKind } }
-    private var items: [NativeItem] { section?.state == "ready" ? section?.items ?? [] : [] }
+    private var snapshot: NativeSnapshot? {
+        guard let snapshot = entry.snapshot,
+              let section = snapshot.sections.first(where: { $0.kind == sectionKind }) else { return entry.snapshot }
+        return snapshot.freshness(of: section)?.isExpired(at: entry.date) == true ? nil : snapshot
+    }
+    private var section: NativeSection? { snapshot?.sections.first { $0.kind == sectionKind } }
+    private var staleSince: Date? {
+        guard showsFreshness(sectionKind), let snapshot, let section, section.state == "ready",
+              let freshness = snapshot.freshness(of: section), freshness.isStale(at: entry.date) else { return nil }
+        return freshness.updatedAt
+    }
+    // An unavailable section can still hold the runs the app is executing right now.
+    private var items: [NativeItem] { section?.state == "signed_out" ? [] : section?.items ?? [] }
     private var small: Bool { family == .systemSmall }
     private var large: Bool { family == .systemLarge }
     private var accessible: Bool { dynamicTypeSize.isAccessibilitySize }
@@ -409,10 +461,10 @@ struct WorkspaceWidgetView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: accessible ? 6 : 10) {
-            FlowWidgetHeader(title: displayTitle).accessibilityLabel(title)
+            FlowWidgetHeader(title: displayTitle, spokenTitle: title, staleSince: staleSince, reference: entry.date, compact: small || accessible)
             if sectionKind == "flowpilot", section?.state == "ready" {
                 flowPilotContent
-            } else if let snapshot = entry.snapshot, !items.isEmpty {
+            } else if let snapshot, !items.isEmpty {
                 switch sectionKind {
                 case "usage": usageContent(snapshot)
                 case "workspace": workspaceContent(snapshot)
@@ -425,7 +477,7 @@ struct WorkspaceWidgetView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .foregroundStyle(palette.ink)
         .containerBackground(for: .widget) { FlowWidgetBackground(kind: sectionKind) }
-        .widgetURL(NativeWidgetLaunchURL.section(sectionKind, scope: entry.snapshot?.scope))
+        .widgetURL(NativeWidgetLaunchURL.section(sectionKind, scope: snapshot?.scope))
     }
 
     private var voiceIntent: OpenFlowPilotIntent { OpenFlowPilotIntent(voice: true) }
@@ -630,7 +682,7 @@ struct WorkspaceWidgetView: View {
                                     Text(body).font(.caption).foregroundStyle(palette.secondary).lineLimit(small ? 2 : (large ? 3 : 1))
                                 } else if sectionKind != "attention" || small { itemTime(item).font(.caption2).foregroundStyle(palette.secondary) }
                             }
-                            if let progress = item.progress, item.status?.lowercased() == "running" {
+                            if let progress = item.progress, item.status?.lowercased() == "running", staleSince == nil || item.live == true {
                                 runProgress(progress)
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -654,7 +706,7 @@ struct WorkspaceWidgetView: View {
     @ViewBuilder private func itemTime(_ item: NativeItem) -> some View {
         if let raw = sectionKind == "recent_apps" ? item.subtitle : item.startedAt,
            let date = NativeSnapshot.date(raw) {
-            if Calendar.current.isDateInToday(date) { Text(date, style: .time) }
+            if Calendar.current.isDate(date, inSameDayAs: entry.date) { Text(date, style: .time) }
             else { Text(date, format: .dateTime.month(.abbreviated).day()) }
         }
     }
@@ -666,9 +718,11 @@ struct WorkspaceWidgetView: View {
         let warning = lower == "warn" || lower.contains("wait")
         let color = error ? Color(widgetHex: palette.dark ? 0xffa19a : 0xac3029) :
             warning ? Color(widgetHex: palette.dark ? 0xecc779 : 0x805d15) : palette.secondary
+        // A stale snapshot cannot tell whether an in-flight run has finished since.
+        let unknown = staleSince != nil && item.live != true && ["running", "pending", "queued"].contains(lower)
         return HStack(spacing: 5) {
             Circle().fill(color).frame(width: 5, height: 5)
-            Text(status.capitalized).lineLimit(1)
+            if unknown { Text("Last seen \(lower)").lineLimit(1) } else { Text(status.capitalized).lineLimit(1) }
         }.font(.caption2.weight(.medium)).foregroundStyle(color)
     }
 
@@ -686,9 +740,9 @@ struct WorkspaceWidgetView: View {
         }
     }
 
-    private var emptySymbol: String { entry.snapshot == nil ? "arrow.clockwise" : section?.state == "signed_out" ? "person.crop.circle" : symbol }
+    private var emptySymbol: String { snapshot == nil ? "arrow.clockwise" : section?.state == "signed_out" ? "person.crop.circle" : symbol }
     private var emptyTitle: String {
-        if entry.snapshot == nil { return "Refresh widget" }
+        if snapshot == nil { return "Refresh widget" }
         if section?.state == "signed_out" { return "Sign in" }
         if section?.state == "unavailable" { return "Updates unavailable" }
         switch sectionKind {
@@ -701,7 +755,7 @@ struct WorkspaceWidgetView: View {
         }
     }
     private var emptyMessage: String {
-        if entry.snapshot == nil { return "Open the app to update." }
+        if snapshot == nil { return "Open the app to update." }
         if section?.state == "signed_out" { return "Connect your workspace." }
         if section?.state == "unavailable" { return "Open Flow Like to reconnect." }
         switch sectionKind {
@@ -724,7 +778,7 @@ protocol NativeSectionWidget: Widget {
 extension NativeSectionWidget {
     static var families: [WidgetFamily] { [.systemSmall, .systemMedium, .systemLarge] }
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "com.flow-like.app.\(Self.sectionKind)", provider: WorkspaceProvider()) { entry in
+        StaticConfiguration(kind: "com.flow-like.app.\(Self.sectionKind)", provider: WorkspaceProvider(sectionKind: Self.sectionKind)) { entry in
             WorkspaceWidgetView(entry: entry, sectionKind: Self.sectionKind, title: Self.title, symbol: Self.symbol)
         }
         .configurationDisplayName(Self.title)

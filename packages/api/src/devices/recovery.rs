@@ -15,6 +15,8 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, V
 use serde::{Deserialize, Serialize};
 use std::result::Result;
 
+const MAX_ACCOUNT_BACKUPS: i64 = 256;
+
 fn sql(query: &str, values: impl IntoIterator<Item = Value>) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Postgres, query, values)
 }
@@ -146,8 +148,11 @@ async fn persist(
                 if !policy.grants.iter().any(|grant| grant.user_id == owner && grant.controller_key == request.public_key && grant.expires_at > now) { return Err(ApiError::FORBIDDEN); }
             }
             if existing.is_none() {
+                // Backups of revoked devices and of packages that were cancelled or
+                // expired unredeemed can no longer unlock anything, so they free their slot.
+                tx.execute_raw(sql(r#"DELETE FROM "DeviceControllerVault" v WHERE v."userId"=$1 AND NOT EXISTS(SELECT 1 FROM "ManagedDevice" d WHERE d.id=v."keyId" AND d.status='active') AND NOT EXISTS(SELECT 1 FROM "DeviceEnrollment" e WHERE e."deviceId"=v."keyId" AND e.status='pending' AND e."expiresAt">$2)"#, [owner.clone().into(), now.into()])).await?;
                 let count = tx.query_one_raw(sql(r#"SELECT COUNT(*) AS count FROM "DeviceControllerVault" WHERE "userId"=$1"#, [owner.clone().into()])).await?.ok_or(ApiError::FORBIDDEN)?;
-                if count.try_get::<i64>("", "count")? >= 256 { return Err(ApiError::too_many_requests("Controller backup storage limit reached")); }
+                if count.try_get::<i64>("", "count")? >= MAX_ACCOUNT_BACKUPS { return Err(ApiError::too_many_requests(format!("Controller backup storage limit of {MAX_ACCOUNT_BACKUPS} active devices and pending packages reached"))); }
             }
             tx.execute_raw(sql(r#"INSERT INTO "DeviceControllerVault"("userId","keyId","publicKey",ciphertext,revision,"updatedAt") VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT("userId","keyId") DO UPDATE SET ciphertext=excluded.ciphertext,revision=excluded.revision,"updatedAt"=excluded."updatedAt""#, [owner.into(), id.into(), public_key.into(), request.ciphertext.into(), (request.revision as i64).into(), now.into()])).await?;
             Ok(())
@@ -475,7 +480,7 @@ mod tests {
         let count = db
             .query_one_raw(sql(
                 r#"SELECT COUNT(*) AS count FROM "DeviceControllerVault" WHERE "keyId"=$1"#,
-                [manifest.device_id.into()],
+                [manifest.device_id.clone().into()],
             ))
             .await
             .unwrap()
@@ -483,6 +488,38 @@ mod tests {
             .try_get::<i64>("", "count")
             .unwrap();
         assert_eq!(count, 2);
+        // Backups of the revoked device and of abandoned packages stop counting
+        // against the account limit when the next device's first backup is saved.
+        db.execute_raw(sql(
+            r#"INSERT INTO "DeviceControllerVault"("userId","keyId","publicKey",ciphertext,revision,"updatedAt") SELECT 'owner','abandoned-' || n,'{}','fixture',1,$1 FROM generate_series(1,300) AS n"#,
+            [now.into()],
+        ))
+        .await
+        .unwrap();
+        let mut next = manifest.clone();
+        next.enrollment_id = "next-enrollment".into();
+        next.device_id = "next-device".into();
+        next.expires_at = now + 600;
+        db.execute_raw(sql(r#"INSERT INTO "DeviceEnrollment"(id,"deviceId","ownerId","jwtId",manifest,status,"expiresAt","createdAt") VALUES($1,$2,'owner','next-jwt',$3,'pending',$4,$5)"#, [next.enrollment_id.clone().into(),next.device_id.clone().into(),serde_json::to_string(&next).unwrap().into(),next.expires_at.into(),now.into()])).await.unwrap();
+        write_checked(
+            &db,
+            "owner",
+            &next.device_id,
+            signed_write(&owner, "owner", &next.device_id, 1, 8),
+        )
+        .await
+        .unwrap();
+        let remaining = db
+            .query_one_raw(sql(
+                r#"SELECT COUNT(*) AS count FROM "DeviceControllerVault" WHERE "userId"='owner'"#,
+                [],
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get::<i64>("", "count")
+            .unwrap();
+        assert_eq!(remaining, 1);
         db.close().await.unwrap();
         admin
             .execute_unprepared(&format!("DROP SCHEMA {schema} CASCADE"))

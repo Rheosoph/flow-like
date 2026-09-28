@@ -24,6 +24,8 @@ members = [
     "apps/backend/aws/executor",
     "apps/backend/aws/executor-async",
     "apps/backend/aws/event-bridge",
+    "apps/backend/aws/mail-ingress",
+    "apps/backend/mail-ingress",
     "apps/backend/aws/maintenance",
     "apps/backend/aws/media-transformer",
     "apps/backend/aws/file-tracker",

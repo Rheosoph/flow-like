@@ -1,12 +1,15 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import type { DeviceCertificate } from "../../../lib/device-management/certificates";
 import {
 	loadDeviceCrypto,
 	withPassword,
 } from "../../../lib/device-management/crypto";
-import type { InstalledProject } from "../../../lib/device-management/deployment";
-import type { DeviceCertificate } from "../../../lib/device-management/certificates";
+import {
+	DEPLOYMENT_CONFIG_BYTES,
+	type InstalledProject,
+} from "../../../lib/device-management/deployment";
 import { readDeviceInspection } from "../../../lib/device-management/inspection";
 import {
 	type InventoryWriter,
@@ -14,17 +17,31 @@ import {
 } from "../../../lib/device-management/inventory";
 import type { ReleaseConfig } from "../../../lib/device-management/package";
 import {
+	type ControllerBackupFile,
+	openControllerBackup,
+	readControllerBackupFile,
+} from "../../../lib/device-management/recovery";
+import {
 	type DeviceAccountScope,
+	type DeviceStoragePersistence,
 	type LocalDeviceVault,
 	acquireDeviceLock,
 	addDeviceVault,
-	controllerBackup,
+	assertVaultAuthority,
+	deviceApiBase,
+	deviceStorageWarning,
+	pinDeviceIdentity,
 	readDeviceVault,
 	replaceEndpointVault,
 	replaceRestoredVault,
+	requestPersistentDeviceStorage,
 } from "../../../lib/device-management/storage";
 import type { ManagementCall } from "../../../lib/device-management/telemetry";
-import { DeviceManagementConnection } from "../../../lib/device-management/transport";
+import {
+	DeviceManagementConnection,
+	ManagementUnconfirmedError,
+	rejectionMessage,
+} from "../../../lib/device-management/transport";
 import type {
 	BrowserController,
 	DeviceReceipt,
@@ -47,8 +64,8 @@ import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
 import { DeviceAccountRecovery } from "./device-account-recovery";
 import { DeviceArchiveHistory } from "./device-archive-history";
-import { DeviceDeploymentForm } from "./device-deployment-form";
 import { DeviceCertificates } from "./device-certificates";
+import { DeviceDeploymentForm } from "./device-deployment-form";
 import { DeviceGroupMetrics } from "./device-group-metrics";
 import { DeviceHostOperations } from "./device-host-operations";
 import { DeviceMessagesView } from "./device-messages-view";
@@ -57,7 +74,11 @@ import { DeviceOfflineQueue } from "./device-offline-queue";
 import { DevicePasswordChange } from "./device-password-change";
 import { DeviceProjectUpload } from "./device-project-upload";
 import { DeviceReplicaControl } from "./device-replica-control";
-import { DeviceSharingForm } from "./device-sharing-form";
+import {
+	DeviceSharingForm,
+	type HostIsolation,
+	parseHostIsolation,
+} from "./device-sharing-form";
 
 export function DeviceManagementDialog({
 	device,
@@ -109,6 +130,9 @@ export function DeviceManagementDialog({
 		placement: string;
 		operationId: string;
 	}>();
+	const [unconfirmed, setUnconfirmed] = useState<string>();
+	const [storage, setStorage] = useState<DeviceStoragePersistence>();
+	const [hostIsolation, setHostIsolation] = useState<HostIsolation>();
 	const current = useRef(true);
 	const controller = useRef<BrowserController | undefined>(undefined);
 	const connection = useRef<DeviceManagementConnection | undefined>(undefined);
@@ -134,6 +158,36 @@ export function DeviceManagementDialog({
 	}, [projectId, inspection, audience]);
 	const inventoryWriter = useRef<InventoryWriter | undefined>(undefined);
 	const inventoryWrites = useRef(Promise.resolve());
+	async function inspect(call: ManagementCall): Promise<Inspection> {
+		let isolation: HostIsolation | undefined;
+		const status = await readDeviceInspection(async (command, operationId) => {
+			const response = await call(command, operationId);
+			if (
+				command.type === "inspect_page" &&
+				command.after === null &&
+				response.state === "completed"
+			)
+				isolation = parseHostIsolation(response.result.isolation);
+			return response;
+		}, device.device_id);
+		if (current.current) setHostIsolation(isolation);
+		return status;
+	}
+	/** A failed request closes its session; forget it at once so polling cannot mask the cause. */
+	function releaseFailedConnection(
+		failed: DeviceManagementConnection,
+		error: unknown,
+	) {
+		if (failed.open) return;
+		failed.close();
+		if (connection.current === failed) connection.current = undefined;
+		if (!current.current) return;
+		setConnected(false);
+		if (error instanceof ManagementUnconfirmedError) {
+			setUnconfirmed(error.operationId);
+			setOperation(error.operationId);
+		}
+	}
 	function acceptInspection(value: Inspection) {
 		setInspection(value);
 		onInspection?.(value);
@@ -202,13 +256,14 @@ export function DeviceManagementDialog({
 		);
 		if (
 			accepted.device_id !== device.device_id ||
-			accepted.api_base_url !==
-				`${scope.apiOrigin.replace(/\/$/u, "")}/api/v1` ||
+			accepted.api_base_url !== deviceApiBase(scope) ||
 			receipt.owner_id !== device.owner_id
 		)
 			throw new Error(
 				"The signed device identity belongs to another device or hub.",
 			);
+		assertVaultAuthority(scope, stored, accepted);
+		await pinDeviceIdentity(scope, device.device_id, receipt);
 		const opened = await DeviceManagementConnection.connect(
 			backend.apiState,
 			profile,
@@ -246,11 +301,11 @@ export function DeviceManagementDialog({
 				"Encrypted inventory could not be prepared. Reconnect to retry.",
 			);
 		}
-		const status = await readDeviceInspection(
-			(value) => opened.request(value),
-			device.device_id,
-		);
+		const status = await inspect((value) => opened.request(value));
 		if (current.current) acceptInspection(status);
+		void requestPersistentDeviceStorage().then((value) => {
+			if (current.current) setStorage(value);
+		});
 	}
 	async function connect() {
 		if (working.current || !record) return;
@@ -317,22 +372,25 @@ export function DeviceManagementDialog({
 		working.current = true;
 		setBusy(true);
 		setError(undefined);
+		const active = connection.current;
 		try {
-			const result = await connection.current.request(value);
-			if (current.current) setLastResult(result);
+			const result = await active.request(value);
+			if (current.current) {
+				setLastResult(result);
+				if (value.type === "operation" && value.operation_id === unconfirmed)
+					setUnconfirmed(undefined);
+			}
 			if (result.state === "rejected")
 				throw new Error(
-					"The device rejected this operation under its current permissions or revision.",
+					rejectionMessage(result) ??
+						"The device rejected this operation under its current permissions or revision.",
 				);
 			if (refresh) {
-				const active = connection.current;
-				const status = await readDeviceInspection(
-					(value) => active.request(value),
-					device.device_id,
-				);
+				const status = await inspect((value) => active.request(value));
 				if (current.current) acceptInspection(status);
 			}
 		} catch (error) {
+			releaseFailedConnection(active, error);
 			if (current.current)
 				setError(
 					error instanceof Error ? error.message : "Device operation failed.",
@@ -412,6 +470,13 @@ export function DeviceManagementDialog({
 			return await operation((command, operationId) =>
 				active.request(command, operationId),
 			);
+		} catch (error) {
+			releaseFailedConnection(active, error);
+			if (!active.open && current.current)
+				setError(
+					error instanceof Error ? error.message : "Device operation failed.",
+				);
+			throw error;
 		} finally {
 			working.current = false;
 			if (current.current) setBusy(false);
@@ -430,29 +495,30 @@ export function DeviceManagementDialog({
 			if (cancelled || working.current || !connection.current) return;
 			working.current = true;
 			setBusy(true);
+			const active = connection.current;
 			try {
-				if (connection.current.expiresAt <= Date.now() / 1000 + 10) {
-					connection.current.close();
+				if (active.expiresAt <= Date.now() / 1000 + 10) {
+					active.close();
 					connection.current = undefined;
 					if (current.current) setConnected(false);
 					return;
 				}
 				const hasLiveScope = Boolean(audience) || !projectId;
 				const sample = hasLiveScope
-					? await connection.current.request({
+					? await active.request({
 							type: "metrics",
 							placement_id: audience || null,
 						})
 					: undefined;
 				const entries = hasLiveScope
-					? await connection.current.request({
+					? await active.request({
 							type: "logs",
 							placement_id: audience || null,
 							after: logPosition.current,
 							limit: 20,
 						})
 					: undefined;
-				const transitions = await connection.current.request({
+				const transitions = await active.request({
 					type: "messages",
 					placement_id: audience || null,
 					project_id: !audience ? (projectId ?? null) : null,
@@ -460,7 +526,7 @@ export function DeviceManagementDialog({
 					limit: 20,
 				});
 				const projectSample = projectId
-					? await connection.current.request({
+					? await active.request({
 							type: "project_metrics",
 							project_id: projectId,
 						})
@@ -498,6 +564,10 @@ export function DeviceManagementDialog({
 					);
 				}
 			} catch (error) {
+				if (!active.open) {
+					active.close();
+					if (connection.current === active) connection.current = undefined;
+				}
 				if (!cancelled && current.current) {
 					setConnected(false);
 					setError(
@@ -536,45 +606,15 @@ export function DeviceManagementDialog({
 				{!loaded ? (
 					<output>Loading encrypted local keys…</output>
 				) : !record ? (
-					<div className="space-y-3">
-						<p>
-							This app has no controller vault for this device. Import the
-							encrypted backup created during setup.
-						</p>
-						<Input
-							type="file"
-							accept=".json,application/json"
-							onChange={async (event) => {
-								const file = event.target.files?.[0];
-								event.target.value = "";
-								if (!file) return;
-								try {
-									if (file.size > 1024 * 1024)
-										throw new Error(
-											"Controller backups must be smaller than 1 MiB.",
-										);
-									const stored = controllerBackup(
-										await file.text(),
-										scope,
-										device.device_id,
-									);
-									if (!current.current) return;
-									await addDeviceVault(scope, stored);
-									if (current.current) {
-										setRecord(stored);
-										setError(undefined);
-									}
-								} catch (error) {
-									if (current.current)
-										setError(
-											error instanceof Error
-												? error.message
-												: "The backup could not be imported.",
-										);
-								}
-							}}
-						/>
-					</div>
+					<ControllerBackupImport
+						scope={scope}
+						deviceId={device.device_id}
+						onImported={(value, persistence) => {
+							setRecord(value);
+							setStorage(persistence);
+							setError(undefined);
+						}}
+					/>
 				) : !connected ? (
 					<form
 						className="space-y-3"
@@ -583,6 +623,13 @@ export function DeviceManagementDialog({
 							void connect();
 						}}
 					>
+						{unconfirmed && (
+							<output className="block rounded border p-3 text-sm">
+								Operation {unconfirmed} has no confirmed result. After
+								reconnecting, check its status under “Check an unconfirmed
+								operation” before retrying.
+							</output>
+						)}
 						{!controller.current && (
 							<label
 								htmlFor={`${formId}-password`}
@@ -667,9 +714,7 @@ export function DeviceManagementDialog({
 									size="sm"
 									disabled={busy}
 									onClick={() =>
-										void runGroup((call) =>
-											readDeviceInspection(call, device.device_id),
-										)
+										void runGroup((call) => inspect(call))
 											.then((value) => {
 												if (current.current) acceptInspection(value);
 											})
@@ -773,6 +818,13 @@ export function DeviceManagementDialog({
 										)
 											throw new Error(
 												"Provide a placement with project, revision and pinned events.",
+											);
+										const size = new TextEncoder().encode(
+											JSON.stringify(config),
+										).length;
+										if (size > DEPLOYMENT_CONFIG_BYTES)
+											throw new Error(
+												`This placement JSON needs ${size} bytes, but one management message carries at most ${DEPLOYMENT_CONFIG_BYTES}. Move large values into project files or variables and retry.`,
 											);
 										const expected =
 											inspection?.placements.find((row) => row.id === config.id)
@@ -942,6 +994,7 @@ export function DeviceManagementDialog({
 											certificateManagement={
 												inspection?.certificate_management === 1
 											}
+											isolation={hostIsolation}
 										/>
 									)}
 								</>
@@ -1017,6 +1070,9 @@ export function DeviceManagementDialog({
 							setRecord(value);
 							setPassword("");
 							setError(undefined);
+							void requestPersistentDeviceStorage().then((persistence) => {
+								if (current.current) setStorage(persistence);
+							});
 						}}
 					/>
 				)}
@@ -1045,12 +1101,7 @@ export function DeviceManagementDialog({
 						profile={profile}
 						run={runGroup}
 						onApplied={async () => {
-							const value = await runGroup((call) =>
-								readDeviceInspection(
-									(command) => call(command),
-									device.device_id,
-								),
-							);
+							const value = await runGroup((call) => inspect(call));
 							if (current.current) acceptInspection(value);
 						}}
 					/>
@@ -1095,6 +1146,11 @@ export function DeviceManagementDialog({
 						}}
 					/>
 				)}
+				{deviceStorageWarning(storage) && (
+					<output className="block text-sm text-muted-foreground">
+						{deviceStorageWarning(storage)}
+					</output>
+				)}
 				{error && (
 					<p role="alert" className="text-sm text-destructive">
 						{error}
@@ -1102,5 +1158,123 @@ export function DeviceManagementDialog({
 				)}
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+function ControllerBackupImport({
+	scope,
+	deviceId,
+	onImported,
+}: {
+	scope: DeviceAccountScope;
+	deviceId: string;
+	onImported: (
+		vault: LocalDeviceVault,
+		persistence: DeviceStoragePersistence,
+	) => void;
+}) {
+	const id = useId();
+	const [sealed, setSealed] =
+		useState<Extract<ControllerBackupFile, { sealed: true }>>();
+	const [password, setPassword] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string>();
+	const alive = useRef(true);
+	useEffect(() => {
+		alive.current = true;
+		return () => {
+			alive.current = false;
+		};
+	}, []);
+	async function store(vault: LocalDeviceVault) {
+		const persistence = await requestPersistentDeviceStorage();
+		await addDeviceVault(scope, vault);
+		if (alive.current) onImported(vault, persistence);
+	}
+	async function run(action: () => Promise<void>, fallback: string) {
+		setBusy(true);
+		setError(undefined);
+		try {
+			await action();
+		} catch (failure) {
+			if (alive.current)
+				setError(failure instanceof Error ? failure.message : fallback);
+		} finally {
+			if (alive.current) setBusy(false);
+		}
+	}
+	return (
+		<div className="space-y-3">
+			<p>
+				This app has no keys for this device. If it managed the device before,
+				its storage may have been cleared. Import the encrypted controller
+				backup, or restore your account backup below.
+			</p>
+			<Input
+				type="file"
+				accept=".json,application/json"
+				aria-label="Encrypted controller backup"
+				disabled={busy}
+				onChange={(event) => {
+					const file = event.target.files?.[0];
+					event.target.value = "";
+					setSealed(undefined);
+					if (!file) return;
+					void run(async () => {
+						if (file.size > 1024 * 1024)
+							throw new Error("Controller backups must be smaller than 1 MiB.");
+						const parsed = readControllerBackupFile(
+							await file.text(),
+							scope,
+							deviceId,
+						);
+						if (!alive.current) return;
+						if (parsed.sealed) setSealed(parsed);
+						else await store(parsed.vault);
+					}, "The backup could not be imported.");
+				}}
+			/>
+			{sealed && (
+				<form
+					className="space-y-2"
+					onSubmit={(event) => {
+						event.preventDefault();
+						const secret = password;
+						setPassword("");
+						void run(async () => {
+							const vault = await openControllerBackup(
+								scope,
+								deviceId,
+								sealed,
+								secret,
+								await loadDeviceCrypto(),
+							);
+							await store(vault);
+						}, "The backup password is wrong or the backup was changed.");
+					}}
+				>
+					<label htmlFor={`${id}-password`} className="block space-y-1 text-sm">
+						Password of this backup
+						<Input
+							id={`${id}-password`}
+							type="password"
+							autoComplete="current-password"
+							value={password}
+							onChange={(event) => setPassword(event.target.value)}
+							required
+							disabled={busy}
+						/>
+					</label>
+					<Button type="submit" disabled={busy || !password}>
+						{busy ? "Verifying backup…" : "Verify and import backup"}
+					</Button>
+				</form>
+			)}
+			{error && (
+				<p role="alert" className="text-sm text-destructive">
+					{error}
+				</p>
+			)}
+		</div>
 	);
 }

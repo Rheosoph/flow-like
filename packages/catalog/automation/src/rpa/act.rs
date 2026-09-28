@@ -328,7 +328,6 @@ impl NodeLogic for DragAndDropNode {
         let to_y: i64 = context.evaluate_pin("to_y").await?;
         let duration: f64 = context.evaluate_pin("duration_sec").await?;
 
-        use enigo::{Button, Coordinate, Direction, Mouse};
         if !duration.is_finite() || !(0.0..=60.0).contains(&duration) {
             return Err(flow_like_types::anyhow!(
                 "Drag duration must be between 0 and 60 seconds"
@@ -344,25 +343,14 @@ impl NodeLogic for DragAndDropNode {
         let cancellation = context.get_cancellation_token();
         tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
             crate::computer::mouse::check_cancellation(cancellation.as_ref())?;
-            input.move_mouse(from_x, from_y, Coordinate::Abs)?;
-            input.button(Button::Left, Direction::Press)?;
-            let steps = (duration * 60.0).ceil().max(1.0) as u32;
-            for step in 1..=steps {
-                crate::computer::mouse::check_cancellation(cancellation.as_ref())?;
-                let t = step as f64 / steps as f64;
-                input.move_mouse(
-                    (from_x as f64 + (to_x as f64 - from_x as f64) * t).round() as i32,
-                    (from_y as f64 + (to_y as f64 - from_y as f64) * t).round() as i32,
-                    Coordinate::Abs,
-                )?;
-                crate::computer::mouse::interruptible_sleep(
-                    (duration * 1000.0 / steps as f64).round() as u64,
-                    cancellation.as_ref(),
-                )?;
-            }
-            input.button(Button::Left, Direction::Release)?;
-
-            Ok(())
+            crate::computer::mouse::perform_drag(
+                &mut input,
+                (from_x, from_y),
+                (to_x, to_y),
+                enigo::Button::Left,
+                (duration * 1000.0).round() as u64,
+                cancellation.as_ref(),
+            )
         })
         .await??;
         session.apply_delay(context).await?;
@@ -395,10 +383,10 @@ impl NodeLogic for ScrollNode {
         let mut node = Node::new(
             "rpa_scroll",
             "Scroll",
-            "Performs a scroll action at the current mouse position",
+            "Scrolls the mouse wheel vertically at the current pointer position. Positive Clicks scroll UP (towards the top of a page); note that the Computer Scroll node uses the opposite sign",
             "Automation/RPA",
         );
-        node.set_version(1);
+        node.set_version(2);
         node.set_flowscript_name("rpa", "scroll");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -427,7 +415,7 @@ impl NodeLogic for ScrollNode {
         node.add_input_pin(
             "clicks",
             "Clicks",
-            "Number of scroll clicks (positive = up, negative = down)",
+            "Wheel ticks: positive scrolls UP (content moves down), negative scrolls down (-1000 to 1000)",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(3)));

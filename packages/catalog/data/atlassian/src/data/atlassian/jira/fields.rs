@@ -1,11 +1,12 @@
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
+use flow_like::flow::execution::egress::GuardedHttpClient;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
+use flow_like_types::{JsonSchema, Value, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 /// Jira field metadata
@@ -157,11 +158,11 @@ impl NodeLogic for GetFieldsNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let provider: AtlassianProvider = context.evaluate_pin("provider").await?;
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.jira_api_url("/field");
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;
@@ -303,11 +304,11 @@ impl NodeLogic for SearchFieldsNode {
             .await
             .unwrap_or_default();
 
-        let client = reqwest::Client::new();
+        let client = GuardedHttpClient::new(context.execution_environment())?;
         let url = provider.jira_api_url("/field");
 
         let response = client
-            .get(&url)
+            .get(&url)?
             .header("Authorization", provider.auth_header())
             .send()
             .await?;

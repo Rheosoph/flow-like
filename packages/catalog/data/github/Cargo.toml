@@ -22,3 +22,6 @@ urlencoding.workspace = true
 
 [build-dependencies]
 flow-like-catalog-build-helper.workspace = true
+
+[dev-dependencies]
+futures.workspace = true

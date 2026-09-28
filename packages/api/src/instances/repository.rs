@@ -438,13 +438,13 @@ pub(super) async fn consume_instance_proof(
     jti: &str,
     expires_at: i64,
 ) -> Result<(), ApiError> {
-    live(expires_at)?;
+    proof_live(expires_at)?;
     if tx.execute_raw(sql(r#"INSERT INTO "InstanceProofReplay" ("instanceId","keyEpoch","proofId","expiresAt") VALUES ($1,$2,$3,$4) ON CONFLICT ("instanceId","keyEpoch","proofId") DO NOTHING"#,
         [id.into(),(key_epoch as i64).into(),jti.into(),expires_at.into()])).await?.rows_affected()!=1 {
-        return Err(ApiError::unauthorized("Instance proof was already used"));
+        return Err(bad_proof("Instance proof was already used"));
     }
     tx.execute_raw(sql(r#"DELETE FROM "InstanceProofReplay" WHERE ("instanceId","keyEpoch","proofId") IN (SELECT "instanceId","keyEpoch","proofId" FROM "InstanceProofReplay" WHERE "instanceId"=$1 AND "expiresAt"<$2 LIMIT 128)"#,[id.into(),(now()-60).into()])).await?;
-    live(expires_at)
+    proof_live(expires_at)
 }
 
 pub(super) async fn renew_lease(

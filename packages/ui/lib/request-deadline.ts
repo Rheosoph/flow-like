@@ -63,7 +63,9 @@ function routeTimeoutMs(parts: readonly string[], method: string): number {
 	if (root === "apps") {
 		if (second === "fork") return DATA_REQUEST_TIMEOUT_MS;
 		if (section === "events" && parts.length >= 4) {
+			if (action === "teams" && method !== "GET") return JOB_REQUEST_TIMEOUT_MS;
 			if (parts.length === 4) {
+				if (method === "DELETE") return JOB_REQUEST_TIMEOUT_MS;
 				return method === "PUT"
 					? DISPATCH_REQUEST_TIMEOUT_MS
 					: WRITE_REQUEST_TIMEOUT_MS;

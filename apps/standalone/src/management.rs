@@ -16,6 +16,210 @@ use std::{
     },
 };
 
+/// Terminal rows stay replayable and readable by status lookups for this long.
+const JOURNAL_RETENTION_SECONDS: i64 = 86_400;
+const MAX_GRANT_JOURNAL_ENTRIES: u64 = 4_096;
+const MAX_JOURNAL_ENTRIES: u64 = 1_000_000;
+const MAX_REJECTION_TEXT: usize = 1_024;
+const REMOTE_HOST_OPERATIONS: bool = cfg!(target_os = "linux");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RejectionCode {
+    Unauthorized,
+    RevisionConflict,
+    Invalid,
+    HostPolicy,
+    Unsupported,
+    Limit,
+    Busy,
+    Failed,
+}
+
+impl RejectionCode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Unauthorized => "unauthorized",
+            Self::RevisionConflict => "revision_conflict",
+            Self::Invalid => "invalid",
+            Self::HostPolicy => "host_policy",
+            Self::Unsupported => "unsupported",
+            Self::Limit => "limit",
+            Self::Busy => "busy",
+            Self::Failed => "failed",
+        }
+    }
+
+    fn retryable(self) -> bool {
+        matches!(self, Self::Busy | Self::Failed)
+    }
+
+    fn public_message(self) -> &'static str {
+        match self {
+            Self::Unauthorized => "The current management grant does not allow this command.",
+            Self::RevisionConflict => {
+                "The placement or device changed since it was read. Reload it before retrying."
+            }
+            Self::Invalid => "The device rejected this request as invalid.",
+            Self::HostPolicy => "The device's host isolation policy does not allow this configuration.",
+            Self::Unsupported => {
+                "The device agent does not support this command. Update the device agent."
+            }
+            Self::Limit => "A device capacity limit was reached.",
+            Self::Busy => "The device is busy with another operation. Retry shortly.",
+            Self::Failed => "The device could not complete this command.",
+        }
+    }
+}
+
+/// Keeps the wrapped error's message and causes while recording why the command was refused.
+#[derive(Debug)]
+struct Rejection {
+    code: RejectionCode,
+    error: anyhow::Error,
+}
+
+impl std::fmt::Display for Rejection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.error, formatter)
+    }
+}
+
+impl std::error::Error for Rejection {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        std::error::Error::source(&*self.error)
+    }
+}
+
+fn refusal(
+    code: RejectionCode,
+    message: impl std::fmt::Display + std::fmt::Debug + Send + Sync + 'static,
+) -> anyhow::Error {
+    Rejection {
+        code,
+        error: anyhow::Error::msg(message),
+    }
+    .into()
+}
+
+fn refuse_unless(
+    condition: bool,
+    code: RejectionCode,
+    message: impl std::fmt::Display + std::fmt::Debug + Send + Sync + 'static,
+) -> Result<()> {
+    if condition {
+        Ok(())
+    } else {
+        Err(refusal(code, message))
+    }
+}
+
+trait RejectAs<T> {
+    fn reject_as(self, code: RejectionCode) -> Result<T>;
+}
+
+impl<T, E: Into<anyhow::Error>> RejectAs<T> for std::result::Result<T, E> {
+    fn reject_as(self, code: RejectionCode) -> Result<T> {
+        self.map_err(|error| {
+            let error = error.into();
+            if error.downcast_ref::<Rejection>().is_some() {
+                error
+            } else {
+                Rejection { code, error }.into()
+            }
+        })
+    }
+}
+
+pub(crate) fn rejection_code(error: &anyhow::Error) -> RejectionCode {
+    if let Some(rejection) = error.downcast_ref::<Rejection>() {
+        return rejection.code;
+    }
+    error
+        .chain()
+        .find_map(|cause| {
+            if cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::WouldBlock)
+            {
+                return Some(RejectionCode::Busy);
+            }
+            if let Some(rusqlite::Error::SqliteFailure(failure, _)) =
+                cause.downcast_ref::<rusqlite::Error>()
+                && matches!(
+                    failure.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                )
+            {
+                return Some(RejectionCode::Busy);
+            }
+            cause
+                .downcast_ref::<ProtocolError>()
+                .map(|_| RejectionCode::Invalid)
+        })
+        .unwrap_or(RejectionCode::Failed)
+}
+
+fn bounded_text(mut text: String) -> String {
+    if text.len() > MAX_REJECTION_TEXT {
+        let mut end = MAX_REJECTION_TEXT;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    text
+}
+
+/// Only the device owner sees the local cause; other principals get a fixed sentence per code.
+fn rejected(
+    authority: &Authority,
+    operation_id: &str,
+    code: RejectionCode,
+    detail: String,
+) -> ManagementResponse {
+    let detail = bounded_text(detail);
+    tracing::warn!(
+        operation_id = if validate_management_id(operation_id).is_ok() {
+            operation_id
+        } else {
+            "<invalid>"
+        },
+        principal = %authority.principal,
+        code = code.as_str(),
+        error = %detail,
+        "Management command rejected"
+    );
+    let message = if authority.grant.is_none() {
+        detail
+    } else {
+        code.public_message().to_owned()
+    };
+    ManagementResponse {
+        operation_id: operation_id.to_owned(),
+        state: "rejected".into(),
+        result: json!({"error":message,"code":code.as_str(),"retryable":code.retryable()}),
+    }
+}
+
+/// Schema names help an owner see which newer field or command this agent lacks; value
+/// errors are reduced to their position so request payloads never reach logs.
+fn unsupported_request_detail(error: &serde_json::Error) -> String {
+    let message = error.to_string();
+    if ["unknown variant", "unknown field", "missing field"]
+        .iter()
+        .any(|prefix| message.starts_with(prefix))
+    {
+        format!("This device agent does not support the request: {message}")
+    } else {
+        format!(
+            "This device agent could not decode the request ({:?} error at line {} column {})",
+            error.classify(),
+            error.line(),
+            error.column()
+        )
+    }
+}
+
 pub struct ManagementService {
     state_dir: PathBuf,
     device: Arc<DeviceSession>,
@@ -60,17 +264,22 @@ impl Authority {
                 [],
                 |row| row.get(0),
             )?;
-            let current = verify_management_policy(&compact, &manifest.owner_invitation_key, now)?;
-            ensure!(
+            let current = verify_management_policy(&compact, &manifest.owner_invitation_key, now)
+                .reject_as(RejectionCode::Unauthorized)?;
+            refuse_unless(
                 current.device_id == manifest.device_id
                     && current
                         .grants
                         .iter()
                         .any(|value| value == grant && value.expires_at > now),
-                "Management grant changed"
-            );
+                RejectionCode::Unauthorized,
+                "Management grant changed",
+            )?;
         }
         Ok(())
+    }
+    fn require_owner(&self, message: &'static str) -> Result<()> {
+        refuse_unless(self.grant.is_none(), RejectionCode::Unauthorized, message)
     }
     fn read_guard(
         &self,
@@ -125,11 +334,11 @@ impl Authority {
         project: Option<&str>,
         placement: Option<&str>,
     ) -> Result<()> {
-        ensure!(
-            self.permits(capability, project, placement),
-            "Management capability denied"
-        );
-        Ok(())
+        refuse_unless(
+            self.permits(capability.clone(), project, placement),
+            RejectionCode::Unauthorized,
+            format!("Management capability {capability:?} denied"),
+        )
     }
 
     fn require_certificate_assignment(
@@ -145,10 +354,11 @@ impl Authority {
         if previous_id != config.tls_certificate_id.as_deref() {
             // Assigning a certificate gives the selected workload access to its private key.
             // Project deployment authority cannot expand that device-level delegation.
-            ensure!(
+            refuse_unless(
                 self.permits(ManagementCapability::ManageCertificates, None, None),
-                "Changing a certificate assignment requires device certificate administration"
-            );
+                RejectionCode::Unauthorized,
+                "Changing a certificate assignment requires device certificate administration",
+            )?;
         }
         Ok(())
     }
@@ -181,14 +391,18 @@ impl ManagementService {
     }
 
     /// Cloud admission can suspend management; it cannot create a controller key or capability.
-    pub fn refresh_authority(&self, expires_at: i64) -> Result<()> {
+    /// Returns the admission's expiry on the device clock, which a skewed clock cannot extend
+    /// beyond the longest admission lifetime.
+    pub fn refresh_authority(&self, expires_at: i64) -> Result<i64> {
         let now = unix_time()?;
         ensure!(
-            expires_at > now && expires_at <= now + 305,
-            "Invalid management authority lease"
+            expires_at > now
+                && expires_at <= now + crate::enrollment::ADMISSION_SECONDS + MAX_CLOCK_SKEW_SECONDS,
+            "Invalid management authority lease: expires at {expires_at}, device clock reads {now}"
         );
-        self.authority_until.store(expires_at, Ordering::Release);
-        Ok(())
+        let local = expires_at.min(now + crate::enrollment::ADMISSION_SECONDS);
+        self.authority_until.store(local, Ordering::Release);
+        Ok(local)
     }
 
     pub async fn synchronize_policy(&self, admission: &DeviceSignalingResponse) -> Result<()> {
@@ -343,7 +557,33 @@ impl ManagementConnection {
             .as_mut()
             .context("Management connection is closed")?;
         let plaintext = zeroize::Zeroizing::new(session.decrypt(bytes)?);
-        let request: ManagementRequest = serde_json::from_slice(&plaintext)?;
+        let request: ManagementRequest = match serde_json::from_slice(&plaintext) {
+            Ok(request) => request,
+            Err(error) => {
+                // A JSON object with an operation ID is a request from a newer controller;
+                // anything else is not a management request and closes the session.
+                // Other fields are skipped unread, so no secret is copied out of the buffer.
+                #[derive(serde::Deserialize)]
+                struct Envelope {
+                    operation_id: String,
+                }
+                let envelope = plaintext
+                    .trim_ascii_start()
+                    .starts_with(b"{")
+                    .then(|| serde_json::from_slice::<Envelope>(&plaintext).ok())
+                    .flatten();
+                let Some(envelope) = envelope else {
+                    return Err(anyhow::Error::from(error).context("Decode management request"));
+                };
+                let response = rejected(
+                    &authority,
+                    &envelope.operation_id,
+                    RejectionCode::Unsupported,
+                    unsupported_request_detail(&error),
+                );
+                return Ok(session.encrypt(&serde_json::to_vec(&response)?)?);
+            }
+        };
         let response = if matches!(request.command, ManagementCommand::Artifact { .. }) {
             drop(store);
             let service = self.service.clone();
@@ -354,10 +594,16 @@ impl ManagementConnection {
                 let store = StateStore::open(&service.state_dir.join("management.sqlite"))?;
                 let now = unix_time()?;
                 let authority = service.current_authority(&store, &grant, now)?;
-                ensure!(authority.key == signer, "Artifact controller key changed");
+                refuse_unless(
+                    authority.key == signer,
+                    RejectionCode::Unauthorized,
+                    "Artifact controller key changed",
+                )?;
                 execute_artifact(&store, &authority, &request, &service, now)
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|result| result)
         } else if matches!(
             request.command,
             ManagementCommand::TelemetryPolicy { .. }
@@ -378,14 +624,14 @@ impl ManagementConnection {
                 now,
             )
         };
-        let response = match response {
-            Ok(response) => response,
-            Err(_) => ManagementResponse {
-                operation_id: request.operation_id,
-                state: "rejected".into(),
-                result: json!({"error":"Command rejected by current authority, revision, or device state"}),
-            },
-        };
+        let response = response.unwrap_or_else(|error| {
+            rejected(
+                &authority,
+                &request.operation_id,
+                rejection_code(&error),
+                format!("{error:#}"),
+            )
+        });
         Ok(session.encrypt(&serde_json::to_vec(&response)?)?)
     }
 }
@@ -494,8 +740,10 @@ fn placement_scope(
     store: &StateStore,
     id: &str,
 ) -> Result<(crate::state::PlacementRecord, String)> {
-    validate_management_id(id)?;
-    let record = store.get_placement(id)?.context("Unknown placement")?;
+    validate_management_id(id).reject_as(RejectionCode::Invalid)?;
+    let record = store
+        .get_placement(id)?
+        .ok_or_else(|| refusal(RejectionCode::RevisionConflict, format!("Unknown placement {id}")))?;
     let project = record
         .config
         .get("project_id")
@@ -505,18 +753,89 @@ fn placement_scope(
     Ok((record, project))
 }
 
+fn known_rollout(store: &StateStore, rollout_id: &str) -> Result<crate::rollout::RolloutRecord> {
+    store.rollout(rollout_id)?.ok_or_else(|| {
+        refusal(
+            RejectionCode::Invalid,
+            format!("Unknown workflow update {rollout_id}"),
+        )
+    })
+}
+
+/// Controller clocks may differ from the device by a bounded skew. Noise already rejects
+/// replays, and mutating operation IDs stay journaled well beyond this window.
 fn validate_request(request: &ManagementRequest, device_id: &str, now: i64) -> Result<()> {
-    validate_management_id(&request.operation_id)?;
-    ensure!(
+    validate_management_id(&request.operation_id).reject_as(RejectionCode::Invalid)?;
+    refuse_unless(
         request.device_id == device_id
             && request.issued_at > 0
-            && request.issued_at <= now + 5
-            && request.expires_at > now
+            && request.issued_at <= now + MAX_CLOCK_SKEW_SECONDS
+            && request.expires_at > now - MAX_CLOCK_SKEW_SECONDS
             && request.expires_at > request.issued_at
             && request.expires_at.saturating_sub(request.issued_at) <= 300,
-        "Invalid management request binding or lifetime"
-    );
-    Ok(())
+        RejectionCode::Invalid,
+        format!(
+            "Invalid management request binding or lifetime: issued {}, expires {}, device clock {now}",
+            request.issued_at, request.expires_at
+        ),
+    )
+}
+
+/// Prunes rows past their replay and status window, then admits one more row for this
+/// principal. A grantee's quota cannot exhaust the journal for the owner or other grants.
+fn reserve_journal_entry(
+    connection: &rusqlite::Connection,
+    authority: &Authority,
+    now: i64,
+) -> Result<()> {
+    connection.execute(
+        "DELETE FROM management_operations WHERE accepted_at<?1
+            AND operation_id NOT IN (SELECT operation_id FROM host_operations WHERE state IN ('pending','staging','draining','requesting','requested','unknown'))
+            AND operation_id NOT IN (SELECT operation_id FROM secret_operations WHERE state='pending')",
+        [now.saturating_sub(JOURNAL_RETENTION_SECONDS)],
+    )?;
+    let (total, own): (u64, u64) = connection.query_row(
+        "SELECT COUNT(*),COALESCE(SUM(principal=?1),0) FROM management_operations",
+        [&authority.principal],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    refuse_unless(
+        total < MAX_JOURNAL_ENTRIES,
+        RejectionCode::Limit,
+        format!("Management journal is full ({total} operations in the last day)"),
+    )?;
+    refuse_unless(
+        authority.grant.is_none() || own < MAX_GRANT_JOURNAL_ENTRIES,
+        RejectionCode::Limit,
+        format!(
+            "Management grant reached its limit of {MAX_GRANT_JOURNAL_ENTRIES} recorded operations per day"
+        ),
+    )
+}
+
+fn previous_operation(
+    connection: &rusqlite::Connection,
+    operation_id: &str,
+    digest: &str,
+    authority: &Authority,
+) -> Result<Option<ManagementResponse>> {
+    let previous: Option<(String, String, String)> = connection
+        .query_row(
+            "SELECT request_digest,principal,result_json FROM management_operations WHERE operation_id=?1",
+            [operation_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    previous
+        .map(|(old, principal, result)| {
+            refuse_unless(
+                old == digest && principal == authority.principal,
+                RejectionCode::Invalid,
+                format!("Operation ID {operation_id} already belongs to a different request"),
+            )?;
+            Ok(serde_json::from_str(&result)?)
+        })
+        .transpose()
 }
 
 fn execute_artifact(
@@ -537,27 +856,23 @@ fn execute_artifact(
     )?;
     let digest = compact_digest(&serde_json::to_string(request)?);
     if artifact.journaled() {
-        let old:Option<(String,String,String)>=store.connection.query_row("SELECT request_digest,principal,result_json FROM management_operations WHERE operation_id=?1",[&request.operation_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-        if let Some((old, principal, result)) = old {
-            ensure!(
-                old == digest && principal == authority.principal,
-                "Artifact operation conflict"
-            );
-            let result: ManagementResponse = serde_json::from_str(&result)?;
-            if result.state != "pending" {
-                return Ok(result);
+        match previous_operation(&store.connection, &request.operation_id, &digest, authority)? {
+            Some(result) if result.state != "pending" => return Ok(result),
+            Some(_) => {}
+            None => {
+                reserve_journal_entry(&store.connection, authority, now)?;
+                let pending = ManagementResponse {
+                    operation_id: request.operation_id.clone(),
+                    state: "pending".into(),
+                    result: json!({"project_id":artifact.project_id()}),
+                };
+                let inserted=store.connection.execute("INSERT INTO management_operations(operation_id,request_digest,principal,project_id,accepted_at,result_json) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(operation_id) DO NOTHING",params![request.operation_id,digest,authority.principal,artifact.project_id(),now,serde_json::to_string(&pending)?])?;
+                refuse_unless(
+                    inserted == 1,
+                    RejectionCode::Busy,
+                    "Artifact operation was claimed concurrently; retry its ID",
+                )?;
             }
-        } else {
-            let pending = ManagementResponse {
-                operation_id: request.operation_id.clone(),
-                state: "pending".into(),
-                result: json!({"project_id":artifact.project_id()}),
-            };
-            let inserted=store.connection.execute("INSERT INTO management_operations(operation_id,request_digest,principal,project_id,accepted_at,result_json) SELECT ?1,?2,?3,?4,?5,?6 WHERE (SELECT COUNT(*) FROM management_operations)<1000000 ON CONFLICT(operation_id) DO NOTHING",params![request.operation_id,digest,authority.principal,artifact.project_id(),now,serde_json::to_string(&pending)?])?;
-            ensure!(
-                inserted == 1,
-                "Artifact operation journal unavailable; retry its ID"
-            );
         }
     }
     use crate::project_artifacts as artifacts;
@@ -650,7 +965,10 @@ fn execute_artifact(
             #[cfg(not(feature = "runtime"))]
             {
                 let _ = (project_id, revision, event_id, after);
-                anyhow::bail!("Project discovery requires the runtime build")
+                return Err(refusal(
+                    RejectionCode::Unsupported,
+                    "Project discovery requires the runtime build",
+                ));
             }
         }
     };
@@ -667,6 +985,43 @@ fn execute_artifact(
 
 pub(crate) fn inspection_placement(p: crate::state::PlacementRecord) -> Value {
     json!({"id":p.id,"project_id":p.config.get("project_id"),"deployment_id":p.config.get("deployment_id"),"revision":p.config.get("revision"),"desired_state":p.desired_state,"observed_state":p.observed_state,"config_revision":p.config_revision,"intent_revision":p.intent_revision,"applied_revision":p.applied_revision,"desired_replicas":p.desired_replicas,"running_replicas":p.running_replicas,"ready_replicas":p.ready_replicas,"max_replicas":p.config.get("max_replicas").cloned().unwrap_or(json!(1)),"replicas":p.replicas.iter().map(|r|json!({"slot":r.slot,"observed_state":r.observed_state,"applied_revision":r.applied_revision})).collect::<Vec<_>>()})
+}
+
+fn host_isolation_mode(capabilities: &crate::isolation::Capabilities) -> &'static str {
+    if capabilities.require_isolation {
+        "required"
+    } else if capabilities.sandbox_available {
+        "optional"
+    } else {
+        "none"
+    }
+}
+
+/// `host_isolation` tells a granting owner whether project deployments run sandboxed
+/// ("required"), may choose to ("optional"), or run as the agent's OS account ("none").
+fn inspection_result(
+    authority: &Authority,
+    manifest: &OnboardingManifest,
+    boot_id: &str,
+    state_dir: &Path,
+    placements: Vec<Value>,
+) -> Value {
+    let device_status = authority.permits(ManagementCapability::Status, None, None);
+    let isolation = device_status.then(|| crate::isolation::capabilities(state_dir));
+    json!({
+        "device_id":manifest.device_id,
+        "agent_version":env!("CARGO_PKG_VERSION"),
+        "certificate_management":1,
+        "certificate_issuance":1,
+        "certificate_acme":1,
+        "can_delegate_certificate_renewal":authority.grant.is_none(),
+        "can_manage_certificates":authority.permits(ManagementCapability::ManageCertificates,None,None),
+        "host_operations":{"reboot":REMOTE_HOST_OPERATIONS,"update_agent":REMOTE_HOST_OPERATIONS},
+        "boot_id":device_status.then_some(boot_id),
+        "host_isolation":isolation.as_ref().map(host_isolation_mode),
+        "isolation":isolation,
+        "placements":placements
+    })
 }
 
 fn execute_telemetry_group(
@@ -695,23 +1050,6 @@ fn execute_telemetry_group(
     } else {
         Some(scope.as_str())
     };
-    if matches!(
-        request.command,
-        ManagementCommand::TelemetryRead { .. }
-            | ManagementCommand::TelemetryRosterRead { .. }
-            | ManagementCommand::TelemetryReceipt { .. }
-    ) {
-        ensure!(
-            authority.permits(ManagementCapability::Metrics, project.as_deref(), placement),
-            "Telemetry access denied"
-        );
-    } else {
-        ensure!(
-            authority.grant.is_none(),
-            "Only the owner may change telemetry membership or acknowledge the shared outbox"
-        );
-    }
-    let digest = compact_digest(&serde_json::to_string(request)?);
     let mutating = !matches!(
         request.command,
         ManagementCommand::TelemetryRead { .. }
@@ -719,27 +1057,35 @@ fn execute_telemetry_group(
             | ManagementCommand::TelemetryReceipt { .. }
     );
     if mutating {
-        let old:Option<(String,String,String)>=store.connection.query_row("SELECT request_digest,principal,result_json FROM management_operations WHERE operation_id=?1",[&request.operation_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-        if let Some((old, principal, result)) = old {
-            ensure!(
-                old == digest && principal == authority.principal,
-                "Operation ID conflict"
-            );
-            let response: ManagementResponse = serde_json::from_str(&result)?;
-            if response.state != "pending" {
-                return Ok(response);
+        authority.require_owner(
+            "Only the owner may change telemetry membership or acknowledge the shared outbox",
+        )?;
+    } else {
+        refuse_unless(
+            authority.permits(ManagementCapability::Metrics, project.as_deref(), placement),
+            RejectionCode::Unauthorized,
+            "Telemetry access denied",
+        )?;
+    }
+    let digest = compact_digest(&serde_json::to_string(request)?);
+    if mutating {
+        match previous_operation(&store.connection, &request.operation_id, &digest, authority)? {
+            Some(response) if response.state != "pending" => return Ok(response),
+            Some(_) => {}
+            None => {
+                reserve_journal_entry(&store.connection, authority, now)?;
+                let pending = ManagementResponse {
+                    operation_id: request.operation_id.clone(),
+                    state: "pending".into(),
+                    result: json!({"scope":scope}),
+                };
+                let inserted=store.connection.execute("INSERT INTO management_operations(operation_id,request_digest,principal,project_id,placement_id,accepted_at,result_json) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(operation_id) DO NOTHING",params![request.operation_id,digest,authority.principal,project,placement,now,serde_json::to_string(&pending)?])?;
+                refuse_unless(
+                    inserted == 1,
+                    RejectionCode::Busy,
+                    "Operation was claimed concurrently; retry its ID",
+                )?;
             }
-        } else {
-            let pending = ManagementResponse {
-                operation_id: request.operation_id.clone(),
-                state: "pending".into(),
-                result: json!({"scope":scope}),
-            };
-            let inserted=store.connection.execute("INSERT INTO management_operations(operation_id,request_digest,principal,project_id,placement_id,accepted_at,result_json) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(operation_id) DO NOTHING",params![request.operation_id,digest,authority.principal,project,placement,now,serde_json::to_string(&pending)?])?;
-            ensure!(
-                inserted == 1,
-                "Operation was claimed concurrently; retry its ID"
-            );
         }
     }
     let result = match &request.command {
@@ -855,21 +1201,19 @@ fn execute(
     validate_request(request, &manifest.device_id, now)?;
     match &request.command {
         ManagementCommand::AcmeCertificates { after, limit } => {
-            ensure!(
+            refuse_unless(
                 (1..=8).contains(limit),
-                "ACME policy page limit must be between 1 and 8"
-            );
+                RejectionCode::Invalid,
+                "ACME policy page limit must be between 1 and 8",
+            )?;
             if let Some(after) = after {
-                validate_certificate_id(after)?;
+                validate_certificate_id(after).reject_as(RejectionCode::Invalid)?;
             }
             return authorized_read(
                 store,
                 authority.read_guard(manifest, request, now, None, None),
                 || {
-                    ensure!(
-                        authority.grant.is_none(),
-                        "Only the device owner can manage ACME renewal"
-                    );
+                    authority.require_owner("Only the device owner can manage ACME renewal")?;
                     let mut policies = Vec::new();
                     let mut next = None;
                     for policy in crate::acme::list(store)? {
@@ -905,21 +1249,21 @@ fn execute(
             );
         }
         ManagementCommand::CertificateIssuers { after, limit } => {
-            ensure!(
+            refuse_unless(
                 (1..=8).contains(limit),
-                "Certificate issuer page limit must be between 1 and 8"
-            );
+                RejectionCode::Invalid,
+                "Certificate issuer page limit must be between 1 and 8",
+            )?;
             if let Some(after) = after {
-                validate_certificate_id(after)?;
+                validate_certificate_id(after).reject_as(RejectionCode::Invalid)?;
             }
             return authorized_read(
                 store,
                 authority.read_guard(manifest, request, now, None, None),
                 || {
-                    ensure!(
-                        authority.grant.is_none(),
-                        "Only the device owner can manage certificate renewal authorities"
-                    );
+                    authority.require_owner(
+                        "Only the device owner can manage certificate renewal authorities",
+                    )?;
                     let mut issuers = Vec::new();
                     let mut next = None;
                     for item in crate::certificate_issuers::list(store)? {
@@ -955,12 +1299,13 @@ fn execute(
             );
         }
         ManagementCommand::CertificateRequests { after, limit } => {
-            ensure!(
+            refuse_unless(
                 (1..=8).contains(limit),
-                "Certificate request page limit must be between 1 and 8"
-            );
+                RejectionCode::Invalid,
+                "Certificate request page limit must be between 1 and 8",
+            )?;
             if let Some(after) = after {
-                validate_certificate_id(after)?;
+                validate_certificate_id(after).reject_as(RejectionCode::Invalid)?;
             }
             return authorized_read(
                 store,
@@ -1011,12 +1356,13 @@ fn execute(
             after,
             limit,
         } => {
-            ensure!(
+            refuse_unless(
                 (1..=8).contains(limit),
-                "Certificate page limit must be between 1 and 8"
-            );
+                RejectionCode::Invalid,
+                "Certificate page limit must be between 1 and 8",
+            )?;
             if let Some(after) = after {
-                validate_certificate_id(after)?;
+                validate_certificate_id(after).reject_as(RejectionCode::Invalid)?;
             }
             return authorized_read(
                 store,
@@ -1030,10 +1376,11 @@ fn execute(
                             Some(id),
                         )?;
                     } else if let Some(grant) = &authority.grant {
-                        ensure!(
+                        refuse_unless(
                             grant.capabilities.contains(&ManagementCapability::Status),
-                            "Status access denied"
-                        );
+                            RejectionCode::Unauthorized,
+                            "Status access denied",
+                        )?;
                     }
                     let mut certificates = Vec::new();
                     let mut next = None;
@@ -1132,27 +1479,30 @@ fn execute(
                         state: "completed".into(),
                         result: json!({"placement_id":placement_id,"queues":queues,"next":next}),
                     };
-                    ensure!(
+                    refuse_unless(
                         serde_json::to_vec(&response)?.len() <= noise::MAX_PLAINTEXT,
-                        "Offline queue status exceeds the encrypted message limit"
-                    );
+                        RejectionCode::Limit,
+                        "Offline queue status exceeds the encrypted message limit",
+                    )?;
                     Ok(response)
                 },
             );
         }
         ManagementCommand::InspectPage { after, limit } => {
-            ensure!(
+            refuse_unless(
                 (1..=2).contains(limit),
-                "Inspection page limit must be between 1 and 2"
-            );
+                RejectionCode::Invalid,
+                "Inspection page limit must be between 1 and 2",
+            )?;
             if let Some(after) = after {
-                validate_management_id(after)?;
+                validate_management_id(after).reject_as(RejectionCode::Invalid)?;
             }
             let (project, placement) = if let Some(grant) = &authority.grant {
-                ensure!(
+                refuse_unless(
                     grant.capabilities.contains(&ManagementCapability::Status),
-                    "Status access denied"
-                );
+                    RejectionCode::Unauthorized,
+                    "Status access denied",
+                )?;
                 match &grant.scope {
                     ManagementScope::Device => (None, None),
                     ManagementScope::Project { project_id } => (Some(project_id.as_str()), None),
@@ -1195,10 +1545,12 @@ fn execute(
             };
             guard(&transaction)?;
             transaction.commit()?;
+            let mut result = inspection_result(authority, manifest, boot_id, state_dir, placements);
+            result["next"] = json!(next);
             return Ok(ManagementResponse {
                 operation_id: request.operation_id.clone(),
                 state: "completed".into(),
-                result: json!({"device_id":manifest.device_id,"certificate_management":1,"certificate_issuance":1,"certificate_acme":1,"can_delegate_certificate_renewal":authority.grant.is_none(),"can_manage_certificates":authority.permits(ManagementCapability::ManageCertificates,None,None),"boot_id":if authority.permits(ManagementCapability::Status,None,None){Some(boot_id)}else{None},"isolation":if authority.permits(ManagementCapability::Status,None,None){Some(crate::isolation::capabilities(state_dir))}else{None},"placements":placements,"next":next}),
+                result,
             });
         }
         ManagementCommand::Inspect => {
@@ -1218,15 +1570,18 @@ fn execute(
                         })
                         .map(inspection_placement)
                         .collect();
-                    ensure!(
+                    refuse_unless(
                         authority.permits(ManagementCapability::Status, None, None)
                             || !placements.is_empty(),
-                        "Status access denied"
-                    );
+                        RejectionCode::Unauthorized,
+                        "Status access denied",
+                    )?;
                     Ok(ManagementResponse {
                         operation_id: request.operation_id.clone(),
                         state: "completed".into(),
-                        result: json!({"device_id":manifest.device_id,"certificate_management":1,"certificate_issuance":1,"certificate_acme":1,"can_delegate_certificate_renewal":authority.grant.is_none(),"can_manage_certificates":authority.permits(ManagementCapability::ManageCertificates,None,None),"boot_id":if authority.permits(ManagementCapability::Status,None,None){Some(boot_id)}else{None},"isolation":if authority.permits(ManagementCapability::Status,None,None){Some(crate::isolation::capabilities(state_dir))}else{None},"placements":placements}),
+                        result: inspection_result(
+                            authority, manifest, boot_id, state_dir, placements,
+                        ),
                     })
                 },
             );
@@ -1237,7 +1592,13 @@ fn execute(
                 authority.read_guard(manifest, request, now, None, None),
                 || {
                     let result: Option<String> = store.connection.query_row("SELECT result_json FROM management_operations WHERE operation_id=?1 AND principal=?2",params![operation_id,authority.principal],|r|r.get(0)).optional()?;
-                    Ok(serde_json::from_str(&result.context("Unknown operation")?)?)
+                    let result = result.ok_or_else(|| {
+                        refusal(
+                            RejectionCode::Invalid,
+                            format!("Unknown operation {operation_id}; it was never accepted or its record expired"),
+                        )
+                    })?;
+                    Ok(serde_json::from_str(&result)?)
                 },
             );
         }
@@ -1269,10 +1630,11 @@ fn execute(
                         state: "completed".into(),
                         result: json!({"placement_id":record.id,"project_id":project_id,"deployment_id":config.deployment_id,"config_revision":record.config_revision,"desired_state":record.desired_state,"rollout_sources":rollout_sources,"rollout":store.latest_rollout(placement_id)?.map(|r|r.status()),"config":config}),
                     };
-                    ensure!(
+                    refuse_unless(
                         serde_json::to_vec(&response)?.len() <= noise::MAX_PLAINTEXT,
-                        "Placement configuration exceeds the remote read limit"
-                    );
+                        RejectionCode::Limit,
+                        "Placement configuration exceeds the remote read limit",
+                    )?;
                     Ok(response)
                 },
             );
@@ -1282,9 +1644,7 @@ fn execute(
                 store,
                 authority.read_guard(manifest, request, now, None, None),
                 || {
-                    let rollout = store
-                        .rollout(rollout_id)?
-                        .context("Unknown workflow update")?;
+                    let rollout = known_rollout(store, rollout_id)?;
                     authority.require(
                         ManagementCapability::Deploy,
                         Some(&rollout.project_id),
@@ -1358,7 +1718,7 @@ fn execute(
                 authority.read_guard(manifest, request, now, None, None),
                 || {
                     let known:bool=store.connection.query_row("SELECT EXISTS(SELECT 1 FROM placement_identities WHERE project_id=?1 COLLATE BINARY)",[project_id],|r|r.get(0))?;
-                    ensure!(known, "Project has no device placement history");
+                    refuse_unless(known, RejectionCode::Invalid, "Project has no device placement history")?;
                     authority.require(ManagementCapability::Metrics, Some(project_id), None)?;
                     Ok(ManagementResponse {
                         operation_id: request.operation_id.clone(),
@@ -1374,10 +1734,11 @@ fn execute(
             after,
             limit,
         } => {
-            ensure!(
+            refuse_unless(
                 placement_id.is_none() || project_id.is_none(),
-                "Choose a project or placement message scope"
-            );
+                RejectionCode::Invalid,
+                "Choose a project or placement message scope",
+            )?;
             for id in placement_id.iter().chain(project_id.iter()) {
                 flow_like_device_protocol::validate_management_id(id)?;
             }
@@ -1393,7 +1754,7 @@ fn execute(
                     };
                     if let Some(project) = &project {
                         let known:bool=store.connection.query_row("SELECT EXISTS(SELECT 1 FROM placement_identities WHERE project_id=?1 COLLATE BINARY)",[project],|r|r.get(0))?;
-                        ensure!(known, "Project has no device placement history");
+                        refuse_unless(known, RejectionCode::Invalid, "Project has no device placement history")?;
                     }
                     authority.require(
                         ManagementCapability::Logs,
@@ -1558,9 +1919,82 @@ fn validate_remote_project_path(state_dir: &Path, config: &PlacementConfig) -> R
         #[cfg(feature = "runtime")]
         crate::online::validate_approved_metadata(config)?;
         #[cfg(not(feature = "runtime"))]
-        anyhow::bail!("This device binary does not include the online project runtime");
+        return Err(refusal(
+            RejectionCode::Unsupported,
+            "This device binary does not include the online project runtime",
+        ));
     }
     Ok(())
+}
+
+fn require_host_operation_slot(
+    store: &StateStore,
+    expected_boot_id: &str,
+    boot_id: &str,
+) -> Result<()> {
+    refuse_unless(
+        !store.has_active_rollouts()?,
+        RejectionCode::RevisionConflict,
+        "A workflow update is active",
+    )?;
+    refuse_unless(
+        expected_boot_id == boot_id,
+        RejectionCode::RevisionConflict,
+        "Device has already rebooted",
+    )?;
+    let pending: u64 = store.connection.query_row(
+        "SELECT COUNT(*) FROM host_operations WHERE state IN ('pending','staging','draining','requesting','requested','unknown')",
+        [],
+        |r| r.get(0),
+    )?;
+    refuse_unless(
+        pending == 0,
+        RejectionCode::RevisionConflict,
+        "Another host operation is pending",
+    )
+}
+
+fn require_revision(current: u64, expected: u64, placement_id: &str) -> Result<()> {
+    refuse_unless(
+        current == expected,
+        RejectionCode::RevisionConflict,
+        format!("Placement revision changed: {placement_id} is at {current}, request expected {expected}"),
+    )
+}
+
+fn requested_config(value: &Value) -> Result<PlacementConfig> {
+    let config: PlacementConfig =
+        serde_json::from_value(value.clone()).reject_as(RejectionCode::Invalid)?;
+    config.validate().reject_as(RejectionCode::Invalid)?;
+    Ok(config)
+}
+
+/// Turning buffering off stops replay, so queued writes the cloud has not applied would be
+/// stranded on disk. They must be replayed or skipped before the buffer can be removed.
+fn require_buffered_writes_drained(
+    state_dir: &Path,
+    previous: Option<&Value>,
+    next: &PlacementConfig,
+) -> Result<()> {
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+    let previous: PlacementConfig = serde_json::from_value(previous.clone())?;
+    if previous.offline_writes.is_none() || next.offline_writes.is_some() {
+        return Ok(());
+    }
+    let mut pending = 0u64;
+    for queue in crate::outbox::for_placement(state_dir, &previous)? {
+        pending = pending.saturating_add(queue.status()?.pending_count);
+    }
+    refuse_unless(
+        pending == 0,
+        RejectionCode::Invalid,
+        format!(
+            "Offline write buffering for placement {} still holds {pending} queued writes; replay or skip them before removing buffering",
+            previous.id
+        ),
+    )
 }
 
 fn execute_transaction(
@@ -1596,17 +2030,13 @@ fn execute_transaction(
             | ManagementCommand::ConfigureAcmeCertificate { .. }
             | ManagementCommand::DeleteAcmeCertificate { .. }
     ) {
-        ensure!(
-            authority.grant.is_none(),
-            "Only the device owner can manage certificate renewal authorities"
-        );
+        authority.require_owner("Only the device owner can manage certificate renewal authorities")?;
     }
     if let ManagementCommand::DeleteCertificateRequest { request_id } = &request.command {
         let issuer: bool = store.connection.query_row("SELECT EXISTS(SELECT 1 FROM certificate_requests WHERE request_id=?1 AND json_extract(metadata_json,'$.purpose')='issuer')", [request_id], |row| row.get(0))?;
-        ensure!(
-            !issuer || authority.grant.is_none(),
-            "Only the device owner can cancel an issuing authority request"
-        );
+        if issuer {
+            authority.require_owner("Only the device owner can cancel an issuing authority request")?;
+        }
     }
     let digest = if matches!(
         request.command,
@@ -1620,21 +2050,12 @@ fn execute_transaction(
     } else {
         compact_digest(&serde_json::to_string(request)?)
     };
-    let previous: Option<(String,String,String)> = store.connection.query_row("SELECT request_digest,principal,result_json FROM management_operations WHERE operation_id=?1",[&request.operation_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-    if let Some((old, principal, result)) = previous {
-        ensure!(
-            old == digest && principal == authority.principal,
-            "Operation ID already belongs to a different request"
-        );
-        return Ok(serde_json::from_str(&result)?);
+    if let Some(previous) =
+        previous_operation(&store.connection, &request.operation_id, &digest, authority)?
+    {
+        return Ok(previous);
     }
-    let count: u64 =
-        store
-            .connection
-            .query_row("SELECT COUNT(*) FROM management_operations", [], |r| {
-                r.get(0)
-            })?;
-    ensure!(count < 1_000_000, "Management journal is full");
+    reserve_journal_entry(&store.connection, authority, now)?;
     let mut project = None;
     let mut placement = None;
     let result = match &request.command {
@@ -1648,10 +2069,7 @@ fn execute_transaction(
             http_bind,
             terms_of_service_agreed,
         } => {
-            ensure!(
-                authority.grant.is_none(),
-                "Only the device owner can manage ACME renewal"
-            );
+            authority.require_owner("Only the device owner can manage ACME renewal")?;
             let acme = crate::acme::configure(
                 store,
                 certificate_id,
@@ -1670,10 +2088,7 @@ fn execute_transaction(
             certificate_id,
             expected_revision,
         } => {
-            ensure!(
-                authority.grant.is_none(),
-                "Only the device owner can manage ACME renewal"
-            );
+            authority.require_owner("Only the device owner can manage ACME renewal")?;
             crate::acme::delete(store, certificate_id, *expected_revision)?;
             json!({"certificate_id":certificate_id,"deleted":true})
         }
@@ -1806,7 +2221,12 @@ fn execute_transaction(
             let queue = queues
                 .iter()
                 .find(|queue| queue.scope() == scope)
-                .context("Unknown offline authorization scope")?;
+                .ok_or_else(|| {
+                    refusal(
+                        RejectionCode::Invalid,
+                        format!("Unknown offline authorization scope {scope}"),
+                    )
+                })?;
             match &request.command {
                 ManagementCommand::OfflineQueueSkip {
                     reason,
@@ -1829,9 +2249,9 @@ fn execute_transaction(
             stabilization_seconds,
             deadline_seconds,
         } => {
-            let config: PlacementConfig = serde_json::from_value(config.clone())?;
-            config.validate()?;
-            crate::isolation::enforce_host_policy(&config, state_dir)?;
+            let config = requested_config(config)?;
+            crate::isolation::enforce_host_policy(&config, state_dir)
+                .reject_as(RejectionCode::HostPolicy)?;
             authority.require(
                 ManagementCapability::Deploy,
                 Some(&config.project_id),
@@ -1844,10 +2264,31 @@ fn execute_transaction(
                 Some(&config.project_id),
                 Some(&config.id),
             )?;
+            store
+                .require_no_active_rollout(&config.id)
+                .reject_as(RejectionCode::RevisionConflict)?;
+            let existing = store.get_placement(&config.id)?;
+            refuse_unless(
+                existing.as_ref().is_some_and(|current| {
+                    current.config_revision == *expected_revision
+                        && current.desired_state == crate::state::DesiredState::Running
+                }),
+                RejectionCode::RevisionConflict,
+                format!(
+                    "Rollout requires running placement {} at revision {expected_revision}",
+                    config.id
+                ),
+            )?;
             authority.require_certificate_assignment(store, &config)?;
-            validate_remote_project_path(state_dir, &config)?;
+            require_buffered_writes_drained(
+                state_dir,
+                existing.as_ref().map(|current| &current.config),
+                &config,
+            )?;
+            validate_remote_project_path(state_dir, &config).reject_as(RejectionCode::Invalid)?;
             if let Some(id) = &config.tls_certificate_id {
-                crate::certificates::validate_binding(store, state_dir, id, now)?;
+                crate::certificates::validate_binding(store, state_dir, id, now)
+                    .reject_as(RejectionCode::Invalid)?;
             }
             let rollout = store.stage_rollout(
                 &request.operation_id,
@@ -1867,9 +2308,7 @@ fn execute_transaction(
             name,
             value,
         } => {
-            let rollout = store
-                .rollout(rollout_id)?
-                .context("Unknown workflow update")?;
+            let rollout = known_rollout(store, rollout_id)?;
             authority.require(
                 ManagementCapability::Deploy,
                 Some(&rollout.project_id),
@@ -1882,9 +2321,7 @@ fn execute_transaction(
             json!({"rollout_id":rollout_id,"placement_id":rollout.placement_id,"name":name,"secret":"completed"})
         }
         ManagementCommand::ActivateRollout { rollout_id } => {
-            let rollout = store
-                .rollout(rollout_id)?
-                .context("Unknown workflow update")?;
+            let rollout = known_rollout(store, rollout_id)?;
             authority.require(
                 ManagementCapability::Deploy,
                 Some(&rollout.project_id),
@@ -1900,18 +2337,20 @@ fn execute_transaction(
             store.begin_rollout_validation(rollout_id, now)?.status()
         }
         ManagementCommand::CancelRollout { rollout_id } => {
-            let rollout = store
-                .rollout(rollout_id)?
-                .context("Unknown workflow update")?;
+            let rollout = known_rollout(store, rollout_id)?;
             authority.require(
                 ManagementCapability::Deploy,
                 Some(&rollout.project_id),
                 Some(&rollout.placement_id),
             )?;
-            ensure!(
+            refuse_unless(
                 matches!(rollout.state.as_str(), "staged" | "validating"),
-                "Only a staged or validating update can be discarded"
-            );
+                RejectionCode::RevisionConflict,
+                format!(
+                    "Only a staged or validating update can be discarded; {rollout_id} is {}",
+                    rollout.state
+                ),
+            )?;
             store.connection.execute(
                 "UPDATE placement_rollouts SET state='cancelled',failure_code='discarded',updated_at=?2,stable_since=NULL,cohort=NULL WHERE rollout_id=?1",
                 params![rollout_id, now],
@@ -1940,10 +2379,7 @@ fn execute_transaction(
             expected_revision,
         } => {
             let (record, project_id) = placement_scope(store, placement_id)?;
-            ensure!(
-                record.config_revision == *expected_revision,
-                "Placement revision changed"
-            );
+            require_revision(record.config_revision, *expected_revision, placement_id)?;
             let capability = match request.command {
                 ManagementCommand::Start { .. } => ManagementCapability::Start,
                 ManagementCommand::Stop { .. } => ManagementCapability::Stop,
@@ -1951,6 +2387,21 @@ fn execute_transaction(
                 _ => ManagementCapability::Remove,
             };
             authority.require(capability, Some(&project_id), Some(placement_id))?;
+            // Restarting a stopped placement starts it, which Restart alone does not grant.
+            if matches!(request.command, ManagementCommand::Restart { .. })
+                && record.desired_state != crate::state::DesiredState::Running
+            {
+                authority.require(
+                    ManagementCapability::Start,
+                    Some(&project_id),
+                    Some(placement_id),
+                )?;
+            }
+            if !matches!(request.command, ManagementCommand::Stop { .. }) {
+                store
+                    .require_no_active_rollout(placement_id)
+                    .reject_as(RejectionCode::RevisionConflict)?;
+            }
             if matches!(request.command, ManagementCommand::Remove { .. }) {
                 store.remove_placement(placement_id)?;
             } else {
@@ -1972,11 +2423,25 @@ fn execute_transaction(
             expected_revision,
             replicas,
         } => {
-            let (_, project_id) = placement_scope(store, placement_id)?;
+            let (record, project_id) = placement_scope(store, placement_id)?;
             authority.require(
                 ManagementCapability::Scale,
                 Some(&project_id),
                 Some(placement_id),
+            )?;
+            require_revision(record.config_revision, *expected_revision, placement_id)?;
+            store
+                .require_no_active_rollout(placement_id)
+                .reject_as(RejectionCode::RevisionConflict)?;
+            let max_replicas = record
+                .config
+                .get("max_replicas")
+                .and_then(Value::as_u64)
+                .unwrap_or(1);
+            refuse_unless(
+                (1..=max_replicas.min(32)).contains(&u64::from(*replicas)),
+                RejectionCode::Invalid,
+                format!("Replica count {replicas} must be between 1 and {max_replicas}"),
             )?;
             store.set_replica_count(placement_id, *expected_revision, *replicas)?;
             project = Some(project_id);
@@ -1988,34 +2453,65 @@ fn execute_transaction(
             expected_revision,
             start,
         } => {
-            let config: PlacementConfig = serde_json::from_value(config.clone())?;
-            config.validate()?;
-            store.check_placement_identity(&config.id, &serde_json::to_value(&config)?)?;
+            let config = requested_config(config)?;
+            store
+                .check_placement_identity(&config.id, &serde_json::to_value(&config)?)
+                .reject_as(RejectionCode::RevisionConflict)?;
             authority.require(
                 ManagementCapability::Deploy,
                 Some(&config.project_id),
                 Some(&config.id),
             )?;
-            crate::isolation::enforce_host_policy(&config, state_dir)?;
-            store.require_no_active_rollout(&config.id)?;
+            crate::isolation::enforce_host_policy(&config, state_dir)
+                .reject_as(RejectionCode::HostPolicy)?;
+            store
+                .require_no_active_rollout(&config.id)
+                .reject_as(RejectionCode::RevisionConflict)?;
             let existing = store.get_placement(&config.id)?;
-            ensure!(
-                existing.as_ref().map_or(0, |p| p.config_revision) == *expected_revision,
-                "Placement revision changed"
-            );
+            require_revision(
+                existing.as_ref().map_or(0, |p| p.config_revision),
+                *expected_revision,
+                &config.id,
+            )?;
             if let Some(old) = &existing {
-                ensure!(
+                refuse_unless(
                     old.config.get("project_id").and_then(Value::as_str)
                         == Some(&config.project_id)
                         && old.config.get("deployment_id").and_then(Value::as_str)
                             == Some(&config.deployment_id),
-                    "Placement identity is immutable"
-                );
+                    RejectionCode::RevisionConflict,
+                    "Placement identity is immutable",
+                )?;
+            }
+            // Deploy changes configuration only. Starting a placement that is not running,
+            // or stopping one that is, needs the separately granted capability.
+            let running = existing
+                .as_ref()
+                .is_some_and(|old| old.desired_state == crate::state::DesiredState::Running);
+            if *start && !running {
+                authority.require(
+                    ManagementCapability::Start,
+                    Some(&config.project_id),
+                    Some(&config.id),
+                )?;
+            }
+            if !*start && running {
+                authority.require(
+                    ManagementCapability::Stop,
+                    Some(&config.project_id),
+                    Some(&config.id),
+                )?;
             }
             authority.require_certificate_assignment(store, &config)?;
-            validate_remote_project_path(state_dir, &config)?;
+            require_buffered_writes_drained(
+                state_dir,
+                existing.as_ref().map(|old| &old.config),
+                &config,
+            )?;
+            validate_remote_project_path(state_dir, &config).reject_as(RejectionCode::Invalid)?;
             if let Some(id) = &config.tls_certificate_id {
-                crate::certificates::validate_binding(store, state_dir, id, now)?;
+                crate::certificates::validate_binding(store, state_dir, id, now)
+                    .reject_as(RejectionCode::Invalid)?;
             }
             if let Some(old) = &existing {
                 crate::secrets::preserve_for_revision(
@@ -2060,11 +2556,10 @@ fn execute_transaction(
                 Some(&project_id),
                 Some(placement_id),
             )?;
-            ensure!(
-                record.config_revision == *expected_revision,
-                "Placement revision changed"
-            );
-            store.require_no_active_rollout(placement_id)?;
+            require_revision(record.config_revision, *expected_revision, placement_id)?;
+            store
+                .require_no_active_rollout(placement_id)
+                .reject_as(RejectionCode::RevisionConflict)?;
             crate::secrets::enqueue(
                 store,
                 state_dir,
@@ -2079,31 +2574,29 @@ fn execute_transaction(
             json!({"placement_id":placement_id,"name":name,"secret":"pending"})
         }
         ManagementCommand::ArchivePolicy { policy_jws } => {
-            ensure!(
-                authority.grant.is_none(),
-                "Only the owner may change retained-history recipients"
-            );
+            authority.require_owner("Only the owner may change retained-history recipients")?;
             crate::archives::apply_policy(store, manifest, policy_jws, now)?
         }
         ManagementCommand::ApplyPolicy { policy_jws } => {
-            ensure!(
-                authority.grant.is_none(),
-                "Only the owner can apply sharing policy"
-            );
-            store.accept_management_policy(
-                policy_jws,
-                &manifest.owner_invitation_key,
-                &manifest.device_id,
-                now,
-            )?;
+            authority.require_owner("Only the owner can apply sharing policy")?;
+            store
+                .accept_management_policy(
+                    policy_jws,
+                    &manifest.owner_invitation_key,
+                    &manifest.device_id,
+                    now,
+                )
+                .reject_as(RejectionCode::Invalid)?;
             json!({"policy_digest":compact_digest(policy_jws)})
         }
         ManagementCommand::Reboot { expected_boot_id } => {
             authority.require(ManagementCapability::Reboot, None, None)?;
-            ensure!(!store.has_active_rollouts()?, "A workflow update is active");
-            ensure!(expected_boot_id == boot_id, "Device has already rebooted");
-            let pending:u64=store.connection.query_row("SELECT COUNT(*) FROM host_operations WHERE state IN ('pending','staging','draining','requesting','requested','unknown')",[],|r|r.get(0))?;
-            ensure!(pending == 0, "Another host operation is pending");
+            refuse_unless(
+                REMOTE_HOST_OPERATIONS,
+                RejectionCode::Unsupported,
+                "Remote reboot requires Linux systemd; restart this device locally",
+            )?;
+            require_host_operation_slot(store, expected_boot_id, boot_id)?;
             store.connection.execute("INSERT INTO host_operations(operation_id,kind,boot_id,state,created_at) VALUES(?1,'reboot',?2,'pending',?3)",params![request.operation_id,boot_id,now])?;
             json!({"boot_id":boot_id,"reboot":"pending"})
         }
@@ -2112,24 +2605,30 @@ fn execute_transaction(
             release_jws,
         } => {
             authority.require(ManagementCapability::UpdateAgent, None, None)?;
-            ensure!(!store.has_active_rollouts()?, "A workflow update is active");
-            ensure!(expected_boot_id == boot_id, "Device has already rebooted");
-            ensure!(
-                cfg!(target_os = "linux"),
-                "Automatic updates require Linux systemd"
-            );
-            ensure!(
-                uuid::Uuid::parse_str(&request.operation_id)?.to_string() == request.operation_id,
-                "Update operation ID must be a canonical UUID"
-            );
+            refuse_unless(
+                REMOTE_HOST_OPERATIONS,
+                RejectionCode::Unsupported,
+                "Automatic updates require Linux systemd",
+            )?;
+            refuse_unless(
+                uuid::Uuid::parse_str(&request.operation_id)
+                    .is_ok_and(|id| id.to_string() == request.operation_id),
+                RejectionCode::Invalid,
+                "Update operation ID must be a canonical UUID",
+            )?;
             let trust = crate::release::ReleaseTrust::load(&state_dir.join("release-trust.json"))?;
-            let release = crate::release::VerifiedRelease::verify(release_jws.clone(), &trust)?;
-            let pending:u64=store.connection.query_row("SELECT COUNT(*) FROM host_operations WHERE state IN ('pending','staging','draining','requesting','requested','unknown')",[],|r|r.get(0))?;
-            ensure!(pending == 0, "Another host operation is pending");
+            let release = crate::release::VerifiedRelease::verify(release_jws.clone(), &trust)
+                .reject_as(RejectionCode::Invalid)?;
+            require_host_operation_slot(store, expected_boot_id, boot_id)?;
             store.connection.execute("INSERT INTO host_operations(operation_id,kind,boot_id,state,created_at,payload_json) VALUES(?1,'update',?2,'pending',?3,?4)",params![request.operation_id,boot_id,now,serde_json::to_string(&json!({"release_jws":release_jws}))?])?;
             json!({"boot_id":boot_id,"update":"pending","release_version":release.manifest().release_version})
         }
-        _ => anyhow::bail!("Unsupported management command"),
+        _ => {
+            return Err(refusal(
+                RejectionCode::Unsupported,
+                "Unsupported management command",
+            ));
+        }
     };
     let response = ManagementResponse {
         operation_id: request.operation_id.clone(),
@@ -2198,6 +2697,526 @@ mod tests {
             key: manifest.controller_key.clone(),
             grant: None,
         }
+    }
+    fn project_grant(id: &str, capabilities: Vec<ManagementCapability>, expires_at: i64) -> Authority {
+        let key = SigningKey::generate().public_key();
+        Authority {
+            principal: format!("{id}:{id}"),
+            key: key.clone(),
+            grant: Some(ManagementGrant {
+                grant_id: id.into(),
+                user_id: id.into(),
+                controller_key: key,
+                scope: ManagementScope::Project {
+                    project_id: "project".into(),
+                },
+                capabilities,
+                expires_at,
+                group_id: None,
+                group_version: None,
+            }),
+        }
+    }
+    fn accept_grants(
+        store: &StateStore,
+        signing: &SigningKey,
+        grantees: &[&Authority],
+        issued_at: i64,
+        expires_at: i64,
+    ) -> Result<()> {
+        let policy = ManagementPolicy {
+            version: 1,
+            device_id: "device".into(),
+            policy_version: 1,
+            previous_policy_digest: None,
+            grants: grantees
+                .iter()
+                .filter_map(|authority| authority.grant.clone())
+                .collect(),
+            issued_at,
+            expires_at,
+        };
+        store.accept_management_policy(
+            &sign_management_policy(&policy, signing)?,
+            &signing.public_key(),
+            "device",
+            issued_at,
+        )
+    }
+
+    #[test]
+    fn apply_cannot_start_or_stop_a_placement_without_those_capabilities() -> Result<()> {
+        use crate::state::DesiredState;
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        let signing = SigningKey::generate();
+        let manifest = manifest(&signing);
+        let owner = owner(&manifest);
+        let deployer = project_grant("deployer", vec![ManagementCapability::Deploy], 1000);
+        let restarter = project_grant("restarter", vec![ManagementCapability::Restart], 1000);
+        accept_grants(&store, &signing, &[&deployer, &restarter], 100, 1000)?;
+        let mut config = placement(&root)?;
+        let mut run = |authority: &Authority, id: &str, command| {
+            execute(
+                &mut store,
+                authority,
+                &request(id, command),
+                &manifest,
+                "boot",
+                &root,
+                101,
+            )
+        };
+        let apply = |config: &Value, expected_revision, start| ManagementCommand::Apply {
+            config: config.clone(),
+            expected_revision,
+            start,
+        };
+        let placement_id = || "api".to_owned();
+        let denied = run(&deployer, "start-new", apply(&config, 0, true)).unwrap_err();
+        assert_eq!(rejection_code(&denied), RejectionCode::Unauthorized);
+        run(&deployer, "create-stopped", apply(&config, 0, false))?;
+        let denied = run(&deployer, "start-existing", apply(&config, 1, true)).unwrap_err();
+        assert_eq!(rejection_code(&denied), RejectionCode::Unauthorized);
+        run(
+            &owner,
+            "owner-start",
+            ManagementCommand::Start {
+                placement_id: placement_id(),
+                expected_revision: 1,
+            },
+        )?;
+        let denied = run(&deployer, "stop-running", apply(&config, 1, false)).unwrap_err();
+        assert_eq!(rejection_code(&denied), RejectionCode::Unauthorized);
+        config["variables"]["public-listen-port"] = json!(9090);
+        run(&deployer, "update-running", apply(&config, 1, true))?;
+        run(
+            &owner,
+            "owner-stop",
+            ManagementCommand::Stop {
+                placement_id: placement_id(),
+                expected_revision: 2,
+            },
+        )?;
+        let restart = |expected_revision| ManagementCommand::Restart {
+            placement_id: placement_id(),
+            expected_revision,
+        };
+        let denied = run(&restarter, "restart-stopped", restart(2)).unwrap_err();
+        assert_eq!(rejection_code(&denied), RejectionCode::Unauthorized);
+        let stale = run(&owner, "stale-restart", restart(1)).unwrap_err();
+        assert_eq!(rejection_code(&stale), RejectionCode::RevisionConflict);
+        run(
+            &owner,
+            "owner-restart-start",
+            ManagementCommand::Start {
+                placement_id: placement_id(),
+                expected_revision: 2,
+            },
+        )?;
+        run(&restarter, "restart-running", restart(2))?;
+        let current = store.get_placement("api")?.unwrap();
+        assert_eq!(current.config_revision, 2);
+        assert_eq!(current.desired_state, DesiredState::Running);
+        let denied: u64 = store.connection.query_row("SELECT COUNT(*) FROM management_operations WHERE operation_id IN ('start-new','start-existing','stop-running','restart-stopped','stale-restart')", [], |r| r.get(0))?;
+        assert_eq!(denied, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn rejections_carry_codes_and_hide_local_causes_from_grantees() {
+        let manifest = manifest(&SigningKey::generate());
+        let owner = owner(&manifest);
+        let grantee = project_grant("grantee", vec![ManagementCapability::Status], 1000);
+        let cause = refusal(
+            RejectionCode::HostPolicy,
+            "This device requires linux_sandbox under /var/lib/flow-like",
+        );
+        let shown = rejected(&owner, "op", rejection_code(&cause), format!("{cause:#}"));
+        assert_eq!(shown.operation_id, "op");
+        assert_eq!(shown.state, "rejected");
+        assert_eq!(
+            shown.result,
+            json!({"error":"This device requires linux_sandbox under /var/lib/flow-like","code":"host_policy","retryable":false})
+        );
+        let hidden = rejected(&grantee, "op", rejection_code(&cause), format!("{cause:#}"));
+        assert_eq!(
+            hidden.result["error"],
+            RejectionCode::HostPolicy.public_message()
+        );
+        assert!(!hidden.result.to_string().contains("/var/lib"));
+        let wrapped = cause.context("Apply placement api");
+        assert_eq!(rejection_code(&wrapped), RejectionCode::HostPolicy);
+        assert!(format!("{wrapped:#}").contains("linux_sandbox"));
+        let first: Result<()> =
+            Err(refusal(RejectionCode::Unauthorized, "denied")).reject_as(RejectionCode::Invalid);
+        assert_eq!(
+            rejection_code(&first.unwrap_err()),
+            RejectionCode::Unauthorized
+        );
+        let lock = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::WouldBlock))
+            .context("Acquire artifact lock");
+        assert_eq!(rejection_code(&lock), RejectionCode::Busy);
+        let sqlite = anyhow::Error::from(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            None,
+        ));
+        assert_eq!(rejection_code(&sqlite), RejectionCode::Busy);
+        let identifier = validate_management_id("../escape").map_err(anyhow::Error::from);
+        assert_eq!(
+            rejection_code(&identifier.unwrap_err()),
+            RejectionCode::Invalid
+        );
+        assert_eq!(
+            rejection_code(&anyhow::anyhow!("disk failure")),
+            RejectionCode::Failed
+        );
+        for code in [
+            RejectionCode::Unauthorized,
+            RejectionCode::RevisionConflict,
+            RejectionCode::Invalid,
+            RejectionCode::HostPolicy,
+            RejectionCode::Unsupported,
+            RejectionCode::Limit,
+        ] {
+            assert!(!code.retryable(), "{code:?}");
+        }
+        assert!(RejectionCode::Busy.retryable() && RejectionCode::Failed.retryable());
+        let long = rejected(&owner, "op", RejectionCode::Failed, "é".repeat(2048));
+        assert!(long.result["error"].as_str().unwrap().len() <= MAX_REJECTION_TEXT);
+    }
+
+    #[test]
+    fn journal_prunes_expired_rows_and_bounds_each_grant() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        let signing = SigningKey::generate();
+        let manifest = manifest(&signing);
+        let owner = owner(&manifest);
+        let now = 1_000_000;
+        let horizon = now + 30 * 86_400;
+        let deployer = project_grant("deployer", vec![ManagementCapability::Deploy], horizon);
+        accept_grants(&store, &signing, &[&deployer], now - 1, horizon)?;
+        let expired = now - JOURNAL_RETENTION_SECONDS - 1;
+        for id in ["expired", "host-pending", "secret-pending"] {
+            store.connection.execute("INSERT INTO management_operations(operation_id,request_digest,principal,accepted_at,result_json) VALUES(?1,'digest','owner-user:owner',?2,'{}')", params![id, expired])?;
+        }
+        store.connection.execute("INSERT INTO host_operations(operation_id,kind,boot_id,state,created_at) VALUES('host-pending','reboot','boot','unknown',?1)", [expired])?;
+        store.connection.execute("INSERT INTO secret_operations(operation_id,placement_id,expected_revision,name,ciphertext,created_at,state) VALUES('secret-pending','api',1,'name',x'',?1,'pending')", [expired])?;
+        store.connection.execute_batch("BEGIN")?;
+        for index in 0..MAX_GRANT_JOURNAL_ENTRIES {
+            store.connection.execute("INSERT INTO management_operations(operation_id,request_digest,principal,accepted_at,result_json) VALUES(?1,'digest','deployer:deployer',?2,'{}')", params![format!("flood-{index}"), now - 10])?;
+        }
+        store.connection.execute_batch("COMMIT")?;
+        let config = placement(&root)?;
+        let at = |id: &str, command, time: i64| ManagementRequest {
+            operation_id: id.into(),
+            device_id: "device".into(),
+            issued_at: time,
+            expires_at: time + 60,
+            command,
+        };
+        let apply = |expected_revision| ManagementCommand::Apply {
+            config: config.clone(),
+            expected_revision,
+            start: false,
+        };
+        execute(
+            &mut store,
+            &owner,
+            &at("owner-create", apply(0), now),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )?;
+        let kept = |store: &StateStore, id: &str| -> Result<bool> {
+            Ok(store.connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM management_operations WHERE operation_id=?1)",
+                [id],
+                |r| r.get(0),
+            )?)
+        };
+        assert!(!kept(&store, "expired")?);
+        assert!(kept(&store, "host-pending")? && kept(&store, "secret-pending")?);
+        let full = execute(
+            &mut store,
+            &deployer,
+            &at("grantee-noop", apply(1), now),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )
+        .unwrap_err();
+        assert_eq!(rejection_code(&full), RejectionCode::Limit, "{full:#}");
+        execute(
+            &mut store,
+            &owner,
+            &at(
+                "owner-still-managed",
+                ManagementCommand::Stop {
+                    placement_id: "api".into(),
+                    expected_revision: 1,
+                },
+                now,
+            ),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )?;
+        let later = now + JOURNAL_RETENTION_SECONDS + 20;
+        execute(
+            &mut store,
+            &deployer,
+            &at("grantee-after-retention", apply(1), later),
+            &manifest,
+            "boot",
+            &root,
+            later,
+        )?;
+        assert!(!kept(&store, "flood-0")?);
+        assert!(kept(&store, "host-pending")? && kept(&store, "secret-pending")?);
+        Ok(())
+    }
+
+    #[test]
+    fn buffering_cannot_be_removed_while_offline_writes_are_queued() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        let manifest = manifest(&SigningKey::generate());
+        let owner = owner(&manifest);
+        let mut config = placement(&root)?;
+        config["source"] = json!("online");
+        config["resource_grant"] = json!({"grant_id":"grant","authz_version":1});
+        config["online_metadata_sha256"] = json!("a".repeat(64));
+        config["offline_writes"] = json!({"tables":[{"purpose":"storage","database":"db","table":"measurements","primary_key":"id"}]});
+        store.upsert_placement("api", &config, crate::state::DesiredState::Running)?;
+        let mut data = root.clone();
+        for part in ["placement-data", "api", "current", "store"] {
+            data.push(part);
+            crate::outbox::private_directory(&data)?;
+        }
+        let queue =
+            crate::outbox::Outbox::open(&data, "api", &"a".repeat(64), Default::default())?;
+        queue.enqueue("table", json!({"row":1}), None, 100)?;
+        drop(queue);
+        let mut unbuffered = config.clone();
+        unbuffered["offline_writes"] = Value::Null;
+        for (id, command) in [
+            (
+                "apply-unbuffered",
+                ManagementCommand::Apply {
+                    config: unbuffered.clone(),
+                    expected_revision: 1,
+                    start: true,
+                },
+            ),
+            (
+                "stage-unbuffered",
+                ManagementCommand::StageRollout {
+                    config: unbuffered.clone(),
+                    expected_revision: 1,
+                    stabilization_seconds: 2,
+                    deadline_seconds: 30,
+                },
+            ),
+        ] {
+            let error = execute(
+                &mut store,
+                &owner,
+                &request(id, command),
+                &manifest,
+                "boot",
+                &root,
+                101,
+            )
+            .unwrap_err();
+            assert_eq!(rejection_code(&error), RejectionCode::Invalid, "{error:#}");
+            assert!(error.to_string().contains("1 queued writes"), "{error:#}");
+        }
+        assert_eq!(store.get_placement("api")?.unwrap().config_revision, 1);
+        assert!(store.latest_rollout("api")?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn inspection_reports_host_isolation_and_refuses_undispatchable_reboots() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = crate::supervisor::prepare_state_dir(temp.path())?;
+        crate::vault::write_new_private(
+            &root.join("agent.env"),
+            b"FLOW_LIKE_DEVICE_ISOLATION_POLICY=required\n",
+        )?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        let signing = SigningKey::generate();
+        let manifest = manifest(&signing);
+        let owner = owner(&manifest);
+        let inspected = execute(
+            &mut store,
+            &owner,
+            &request("inspect", ManagementCommand::Inspect),
+            &manifest,
+            "boot",
+            &root,
+            101,
+        )?;
+        assert_eq!(inspected.result["host_isolation"], "required");
+        assert_eq!(
+            inspected.result["host_operations"]["reboot"],
+            cfg!(target_os = "linux")
+        );
+        assert_eq!(
+            inspected.result["agent_version"],
+            env!("CARGO_PKG_VERSION")
+        );
+        let reader = project_grant("reader", vec![ManagementCapability::Status], 1000);
+        accept_grants(&store, &signing, &[&reader], 100, 1000)?;
+        let mut config = placement(&root)?;
+        config["resources"] = json!({"profile":"trusted_process"});
+        store.upsert_placement("api", &config, crate::state::DesiredState::Stopped)?;
+        let page = execute(
+            &mut store,
+            &reader,
+            &request(
+                "reader-inspect",
+                ManagementCommand::InspectPage {
+                    after: None,
+                    limit: 2,
+                },
+            ),
+            &manifest,
+            "boot",
+            &root,
+            101,
+        )?;
+        assert!(page.result["host_isolation"].is_null());
+        assert!(page.result["isolation"].is_null());
+        if !cfg!(target_os = "linux") {
+            let error = execute(
+                &mut store,
+                &owner,
+                &request(
+                    "reboot",
+                    ManagementCommand::Reboot {
+                        expected_boot_id: "boot".into(),
+                    },
+                ),
+                &manifest,
+                "boot",
+                &root,
+                101,
+            )
+            .unwrap_err();
+            assert_eq!(rejection_code(&error), RejectionCode::Unsupported);
+            let queued: u64 =
+                store
+                    .connection
+                    .query_row("SELECT COUNT(*) FROM host_operations", [], |r| r.get(0))?;
+            assert_eq!(queued, 0);
+        }
+        Ok(())
+    }
+
+    async fn owner_noise_session(
+        service: &Arc<ManagementService>,
+        controller: &SigningKey,
+    ) -> Result<(ManagementConnection, noise::Session)> {
+        let now = unix_time()?;
+        let certificate = sign_controller_certificate(
+            &ControllerCertificate {
+                version: 1,
+                device_id: "device".into(),
+                grant_id: "owner".into(),
+                session_id: "session".into(),
+                management_key: x25519_dalek::x25519([7; 32], x25519_dalek::X25519_BASEPOINT_BYTES),
+                issued_at: now,
+                expires_at: now + 300,
+            },
+            controller,
+        )?;
+        let mut initiator = noise::Handshake::initiator(
+            &[7; 32],
+            x25519_dalek::x25519([42; 32], x25519_dalek::X25519_BASEPOINT_BYTES),
+            "device",
+            "session",
+        )?;
+        let mut connection = service.connect(&certificate, "owner", "session")?;
+        let reply = connection.receive(&initiator.write()?).await?;
+        initiator.read(&reply)?;
+        let ready = connection.receive(&initiator.write()?).await?;
+        let mut session = initiator.finish()?;
+        let ready: Value = serde_json::from_slice(&session.decrypt(&ready)?)?;
+        ensure!(ready["ready"] == true, "Management session was not ready");
+        Ok((connection, session))
+    }
+
+    #[tokio::test]
+    async fn undecodable_requests_with_an_operation_id_are_rejected_and_keep_the_session()
+    -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let controller = SigningKey::generate();
+        let device = Arc::new(DeviceSession::test_management_session(
+            "https://example.test/api/v1".into(),
+            "device".into(),
+            SigningKey::generate(),
+            controller.public_key(),
+        ));
+        let service = ManagementService::new(temp.path().canonicalize()?, device, "boot".into());
+        service.refresh_authority(unix_time()? + 300)?;
+        let (mut connection, mut session) = owner_noise_session(&service, &controller).await?;
+        let now = unix_time()?;
+        let newer = json!({"operation_id":"from-newer-controller","device_id":"device","issued_at":now,"expires_at":now+60,"command":{"type":"future_command","value":"private-request-value"}});
+        let reply = connection
+            .receive(&session.encrypt(&serde_json::to_vec(&newer)?)?)
+            .await?;
+        let reply: Value = serde_json::from_slice(&session.decrypt(&reply)?)?;
+        assert_eq!(reply["operation_id"], "from-newer-controller");
+        assert_eq!(reply["state"], "rejected");
+        assert_eq!(reply["result"]["code"], "unsupported");
+        assert_eq!(reply["result"]["retryable"], false);
+        assert!(
+            reply["result"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("future_command")
+        );
+        assert!(!reply.to_string().contains("private-request-value"));
+        let inspect = ManagementRequest {
+            operation_id: "inspect-after-unsupported".into(),
+            device_id: "device".into(),
+            issued_at: now,
+            expires_at: now + 60,
+            command: ManagementCommand::Inspect,
+        };
+        let reply = connection
+            .receive(&session.encrypt(&serde_json::to_vec(&inspect)?)?)
+            .await?;
+        let reply: Value = serde_json::from_slice(&session.decrypt(&reply)?)?;
+        assert_eq!(reply["state"], "completed");
+        let expired = ManagementRequest {
+            operation_id: "expired".into(),
+            device_id: "device".into(),
+            issued_at: now - 1000,
+            expires_at: now - 900,
+            command: ManagementCommand::Inspect,
+        };
+        let reply = connection
+            .receive(&session.encrypt(&serde_json::to_vec(&expired)?)?)
+            .await?;
+        let reply: Value = serde_json::from_slice(&session.decrypt(&reply)?)?;
+        assert_eq!(reply["result"]["code"], "invalid");
+        assert!(
+            connection
+                .receive(&session.encrypt(b"[\"no-operation-id\"]")?)
+                .await
+                .is_err()
+        );
+        Ok(())
     }
 
     #[test]
@@ -3694,6 +4713,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn reboot_completion_requires_a_new_os_boot_identity() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let root = temp.path().canonicalize()?;

@@ -1,6 +1,8 @@
 use crate::{
     config::PlacementConfig,
-    enrollment::{DeviceSession, api_status, http_client, response_json, unix_time},
+    enrollment::{
+        DeviceSession, api_error_code, api_status, http_client, response_json, unix_time,
+    },
     state::StateStore,
 };
 use anyhow::{Context, Result, ensure};
@@ -52,16 +54,73 @@ impl RefreshRetry {
     }
 }
 
-fn resource_authorization_error(error: &anyhow::Error) -> AuthorizationError {
+const PROOF_REJECTION_CODES: [&str; 2] = ["INSTANCE_PROOF_INVALID", "DEVICE_PROOF_INVALID"];
+
+/// A rejected proof, for example after clock skew, is distinct from an
+/// authorization decision.
+fn proof_rejected(error: &anyhow::Error) -> bool {
+    api_status(error) == Some(reqwest::StatusCode::UNAUTHORIZED)
+        && api_error_code(error).is_some_and(|code| PROOF_REJECTION_CODES.contains(&code))
+}
+
+pub(crate) async fn instance_json<T: serde::de::DeserializeOwned>(
+    response: reqwest::Response,
+) -> Result<T> {
+    let server_date = response
+        .headers()
+        .get(reqwest::header::DATE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let result = response_json(response).await;
+    if result.as_ref().err().is_some_and(proof_rejected) {
+        tracing::warn!(
+            server_date = server_date.as_deref().unwrap_or("unknown"),
+            device_time = unix_time().unwrap_or_default(),
+            "The API rejected a workload proof as invalid or expired; retrying without revoking. Check that the device clock is synchronized"
+        );
+    }
+    result
+}
+
+#[cfg(test)]
+pub(crate) async fn api_error(status: u16, body: &'static str) -> anyhow::Error {
+    let response = axum::http::Response::builder()
+        .status(status)
+        .body(body)
+        .expect("Build test API response");
+    instance_json::<serde_json::Value>(response.into())
+        .await
+        .expect_err("A failed status must return an error")
+}
+
+/// A confirmed denial is a 403, or a 401 other than a rejected proof.
+pub(crate) fn confirmed_denial(error: &anyhow::Error) -> bool {
+    match api_status(error) {
+        Some(reqwest::StatusCode::FORBIDDEN) => true,
+        Some(reqwest::StatusCode::UNAUTHORIZED) => !proof_rejected(error),
+        _ => false,
+    }
+}
+
+pub(crate) fn authorization_error(error: &anyhow::Error) -> AuthorizationError {
     if let Some(error) = error.downcast_ref::<AuthorizationError>() {
         return *error;
     }
+    if confirmed_denial(error) {
+        return AuthorizationError::Denied;
+    }
+    if proof_rejected(error) || error.chain().any(|cause| cause.is::<rusqlite::Error>()) {
+        return AuthorizationError::Unavailable;
+    }
     match api_status(error) {
-        Some(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN) => {
-            AuthorizationError::Denied
-        }
         Some(status)
-            if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS =>
+            if status.is_server_error()
+                || matches!(
+                    status,
+                    reqwest::StatusCode::TOO_MANY_REQUESTS
+                        | reqwest::StatusCode::REQUEST_TIMEOUT
+                        | reqwest::StatusCode::PAYMENT_REQUIRED
+                ) =>
         {
             AuthorizationError::Unavailable
         }
@@ -306,19 +365,12 @@ impl WorkloadBroker {
             return Err(AuthorizationError::Denied.into());
         }
         let result = self.ensure_registered(&mut state).await;
-        if result.as_ref().err().is_some_and(|error| {
-            matches!(
-                api_status(error),
-                Some(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN)
-            )
-        }) {
-            state.deny_project();
-            #[cfg(feature = "runtime")]
-            self.fence_outage()?;
+        if result.as_ref().err().is_some_and(confirmed_denial) {
+            self.deny_confirmed(&mut state)?;
         }
         #[cfg(feature = "runtime")]
         if let Err(error) = &result {
-            if crate::online::authorization_error(error) == AuthorizationError::Unavailable
+            if authorization_error(error) == AuthorizationError::Unavailable
                 && state
                     .outage_restored_until
                     .is_some_and(|expiry| expiry > unix_time().unwrap_or(i64::MAX))
@@ -333,6 +385,17 @@ impl WorkloadBroker {
             state.ready = true;
         }
         self.require_current_validation()
+    }
+
+    /// Validation credentials share the serving placement's outage binding, so
+    /// only a serving broker may fence its snapshot, cache and offline writes.
+    fn deny_confirmed(&self, state: &mut BrokerState) -> Result<()> {
+        state.deny_project();
+        #[cfg(feature = "runtime")]
+        if self.validation.is_none() {
+            self.fence_outage()?;
+        }
+        Ok(())
     }
 
     pub fn instance_id(&self) -> &str {
@@ -420,7 +483,7 @@ impl WorkloadBroker {
                 self.base(),
                 &format!("/instances/{}/receipt", self.instance_id),
             )?;
-            let receipt = response_json::<InstanceReceipt>(
+            let receipt = instance_json::<InstanceReceipt>(
                 self.client
                     .post(&endpoint)
                     .json(&ReceiptRequest {
@@ -496,7 +559,7 @@ impl WorkloadBroker {
         )?;
         state.registrations.push(registration_jws.clone());
         self.reserve_possible_lease()?;
-        let receipt = response_json(
+        let receipt = instance_json(
             self.client
                 .post(&endpoint)
                 .json(&InstanceRegistrationRequest {
@@ -527,13 +590,8 @@ impl WorkloadBroker {
             return Err(AuthorizationError::Denied.into());
         }
         if let Err(error) = self.ensure_registered(&mut state).await {
-            if matches!(
-                api_status(&error),
-                Some(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN)
-            ) {
-                state.deny_project();
-                #[cfg(feature = "runtime")]
-                self.fence_outage()?;
+            if confirmed_denial(&error) {
+                self.deny_confirmed(&mut state)?;
             }
             return Err(error);
         }
@@ -555,9 +613,6 @@ impl WorkloadBroker {
                 .as_ref()
                 .filter(|retry| Instant::now() < retry.retry_at)
             {
-                if retry.error != AuthorizationError::Unavailable {
-                    return Err(retry.error.into());
-                }
                 // A retry delay never extends the credential's actual lifetime.
                 let lease = if project {
                     &state.project_lease
@@ -581,12 +636,10 @@ impl WorkloadBroker {
                         }
                     }
                     Err(error) => {
-                        let failure = resource_authorization_error(&error);
+                        let failure = authorization_error(&error);
                         if failure == AuthorizationError::Denied {
                             if project {
-                                state.deny_project();
-                                #[cfg(feature = "runtime")]
-                                self.fence_outage()?;
+                                self.deny_confirmed(&mut state)?;
                             } else {
                                 state.denied = true;
                                 state.lease = None;
@@ -604,11 +657,17 @@ impl WorkloadBroker {
                         } else {
                             &state.lease
                         };
-                        // A transient issuer outage does not revoke a token the
-                        // resource server can still validate. Never retry the
-                        // paid request itself; only credential issuance is retried.
-                        if failure != AuthorizationError::Unavailable || lease.is_none() {
+                        // A failed renewal does not revoke a token the resource
+                        // server can still validate. Never retry the paid request
+                        // itself; only credential issuance is retried.
+                        if lease.is_none() {
                             return Err(failure.into());
+                        }
+                        if failure != AuthorizationError::Unavailable {
+                            tracing::warn!(
+                                instance_id = %self.instance_id,
+                                "Workload credential renewal failed; the current credential stays in use until it expires: {error:#}"
+                            );
                         }
                     }
                 }
@@ -653,7 +712,7 @@ impl WorkloadBroker {
             ),
         )?;
         self.reserve_possible_lease()?;
-        let mut response = response_json::<InstanceTokenResponse>(
+        let mut response = instance_json::<InstanceTokenResponse>(
             self.client
                 .post(&endpoint)
                 .json(&InstanceTokenRequest {
@@ -860,7 +919,7 @@ impl WorkloadBroker {
         proof.set_sensitive(true);
         // Authenticate the context independently of child memory. These provider
         // credentials exist only for this response and are never persisted.
-        let response = response_json::<InstanceStorageLease>(
+        let response = instance_json::<InstanceStorageLease>(
             self.client
                 .post(&endpoint)
                 .header("authorization", token)
@@ -872,12 +931,8 @@ impl WorkloadBroker {
         let lease = match response {
             Ok(lease) => lease,
             Err(error) => {
-                if matches!(
-                    api_status(&error),
-                    Some(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN)
-                ) {
-                    self.state.lock().await.deny_project();
-                    self.fence_outage()?;
+                if confirmed_denial(&error) {
+                    self.deny_confirmed(&mut *self.state.lock().await)?;
                     return Err(AuthorizationError::Denied.into());
                 }
                 return Err(error);
@@ -907,7 +962,7 @@ impl crate::online::outage::OutageAuthority for WorkloadBroker {
         self.validate_outage_claim(claim)?;
         ensure!(
             claim.grant_expires_at > unix_time()?,
-            AuthorizationError::Denied
+            AuthorizationError::Expired
         );
         {
             let state = self.state.lock().await;
@@ -960,10 +1015,10 @@ impl crate::online::outage::OutageAuthority for WorkloadBroker {
             [&claim.binding],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        ensure!(
-            !denied && deadline > unix_time()?,
-            AuthorizationError::Denied
-        );
+        ensure!(!denied, AuthorizationError::Denied);
+        // An elapsed deadline stops outage restarts without a durable revocation;
+        // the next online start renews or confirms the grant.
+        ensure!(deadline > unix_time()?, AuthorizationError::Expired);
         ensure!(
             deadline == claim.grant_expires_at,
             "A newer authenticated outage context replaced this snapshot"
@@ -974,12 +1029,10 @@ impl crate::online::outage::OutageAuthority for WorkloadBroker {
 
     async fn deny(&self, binding: &str) -> Result<()> {
         ensure!(
-            binding == self.outage_binding()?,
+            self.validation.is_none() && binding == self.outage_binding()?,
             "Cannot revoke another outage snapshot"
         );
-        self.state.lock().await.deny_project();
-        self.fence_outage()?;
-        Ok(())
+        self.deny_confirmed(&mut *self.state.lock().await)
     }
 }
 
@@ -1065,7 +1118,7 @@ impl RequestAuthorizer for WorkloadBroker {
             }
             self.authorize_inner(request.audience, request.method, request.url)
                 .await
-                .map_err(|error| resource_authorization_error(&error))
+                .map_err(|error| authorization_error(&error))
         })
     }
 }
@@ -1077,8 +1130,16 @@ pub async fn drain_retirements(
     wake: Arc<tokio::sync::Notify>,
 ) -> Result<()> {
     loop {
-        retire_pending_once(&state_dir, &session, &cancel).await?;
-        tokio::select! { _ = cancel.cancelled() => return Ok(()), _ = wake.notified() => {}, _ = tokio::time::sleep(Duration::from_secs(30)) => {} }
+        // Only cancellation ends the drainer; a busy or full state database
+        // delays retirements until the next pass.
+        if let Err(error) = retire_pending_once(&state_dir, &session, &cancel).await {
+            tracing::warn!("Instance retirement pass failed; retrying in 30s: {error:#}");
+        }
+        tokio::select! {
+            _ = cancel.cancelled() => return Ok(()),
+            _ = wake.notified() => {}
+            _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+        }
     }
 }
 
@@ -1104,7 +1165,14 @@ async fn retire_pending_once(
             break;
         };
         if matches!(result, Ok(Ok(true))) {
-            StateStore::open(&state_dir.join("management.sqlite"))?.forget_instance(&id)?;
+            if let Err(error) = StateStore::open(&state_dir.join("management.sqlite"))
+                .and_then(|store| store.forget_instance(&id))
+            {
+                tracing::warn!(
+                    instance_id = %id,
+                    "Retired instance remains queued for another pass: {error:#}"
+                );
+            }
         }
     }
     Ok(())
@@ -1397,15 +1465,136 @@ mod tests {
         peer.await?;
         assert!(error.is_request());
         let error = error.into();
-        assert_eq!(
-            resource_authorization_error(&error),
-            AuthorizationError::Unavailable
-        );
+        assert_eq!(authorization_error(&error), AuthorizationError::Unavailable);
         #[cfg(feature = "runtime")]
         assert_eq!(
             crate::online::authorization_error(&error),
             AuthorizationError::Unavailable
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn only_authorization_decisions_are_confirmed_denials() -> Result<()> {
+        const INSTANCE_PROOF: &str = r#"{"error":{"code":"INSTANCE_PROOF_INVALID"}}"#;
+        const DEVICE_PROOF: &str = r#"{"error":{"code":"DEVICE_PROOF_INVALID"}}"#;
+        for (status, body, expected) in [
+            (401, INSTANCE_PROOF, AuthorizationError::Unavailable),
+            (401, DEVICE_PROOF, AuthorizationError::Unavailable),
+            (
+                401,
+                r#"{"error":{"code":"UNAUTHORIZED"}}"#,
+                AuthorizationError::Denied,
+            ),
+            (401, "", AuthorizationError::Denied),
+            (403, INSTANCE_PROOF, AuthorizationError::Denied),
+            (403, "", AuthorizationError::Denied),
+            (402, "", AuthorizationError::Unavailable),
+            (408, "", AuthorizationError::Unavailable),
+            (429, "", AuthorizationError::Unavailable),
+            (503, "", AuthorizationError::Unavailable),
+            (404, "", AuthorizationError::InvalidResponse),
+        ] {
+            let error = api_error(status, body).await;
+            assert_eq!(authorization_error(&error), expected, "{status} {body}");
+            assert_eq!(
+                confirmed_denial(&error),
+                expected == AuthorizationError::Denied,
+                "{status} {body}"
+            );
+        }
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+        let address = listener.local_addr()?;
+        let peer = std::thread::spawn(move || -> std::io::Result<()> {
+            use std::io::{BufRead, Write};
+            let (stream, _) = listener.accept()?;
+            let mut request = std::io::BufReader::new(&stream);
+            let mut line = String::new();
+            while request.read_line(&mut line)? > 2 {
+                line.clear();
+            }
+            (&stream).write_all(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 64\r\n\r\n{\"error\"")
+        });
+        let response = http_client()?
+            .get(format!("http://{address}/"))
+            .send()
+            .await?;
+        let truncated = instance_json::<serde_json::Value>(response)
+            .await
+            .unwrap_err();
+        peer.join().expect("Test peer panicked")?;
+        assert!(
+            confirmed_denial(&truncated),
+            "A truncated error body keeps its status"
+        );
+        let busy = anyhow::Error::from(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("database is locked".into()),
+        ))
+        .context("Reserve workload lease");
+        assert_eq!(authorization_error(&busy), AuthorizationError::Unavailable);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rejected_proofs_are_transient_but_other_unauthorized_responses_deny() -> Result<()> {
+        let fixture = broker_fixture().await?;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let code = Arc::new(Mutex::new("INSTANCE_PROOF_INVALID"));
+        let response_code = code.clone();
+        let router = axum::Router::new().fallback(move || {
+            let code = response_code.clone();
+            async move {
+                (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    axum::Json(serde_json::json!({"error":{"code":*code.lock().await,"message":"Instance proof is invalid or expired"}})),
+                )
+            }
+        });
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let config = fixture.broker.config.clone();
+        let broker = WorkloadBroker::new(
+            Arc::new(DeviceSession::test_session(
+                format!("http://{address}/api/v1"),
+                fixture.api.device_id.clone(),
+                SigningKey::generate(),
+            )),
+            config,
+            fixture._directory.path().into(),
+            1,
+            1,
+        )?;
+        for audience in [ResourceAudience::ProjectApi, ResourceAudience::HostedModels] {
+            assert_eq!(
+                fixture_authorize(&broker, audience, false)
+                    .await
+                    .unwrap_err(),
+                AuthorizationError::Unavailable
+            );
+        }
+        {
+            let state = broker.state.lock().await;
+            assert!(!state.denied && !state.project_denied);
+        }
+        #[cfg(feature = "runtime")]
+        {
+            let denied: bool = broker.outage_store()?.connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM online_outage_authority WHERE denied=1)",
+                [],
+                |row| row.get(0),
+            )?;
+            assert!(!denied, "A rejected proof must never fence outage recovery");
+        }
+        *code.lock().await = "UNAUTHORIZED";
+        assert_eq!(
+            fixture_authorize(&broker, ResourceAudience::ProjectApi, false)
+                .await
+                .unwrap_err(),
+            AuthorizationError::Denied
+        );
+        assert!(broker.state.lock().await.project_denied);
+        server.abort();
         Ok(())
     }
 
@@ -1571,6 +1760,59 @@ mod tests {
                 assert_eq!(fixture.api.tokens.load(Ordering::SeqCst), 1);
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unexpected_renewal_failures_keep_serving_the_unexpired_credential() -> Result<()> {
+        let fixture = broker_fixture().await?;
+        let broker = &fixture.broker;
+        let first = fixture_authorize(broker, ResourceAudience::ProjectApi, false).await?;
+        broker
+            .state
+            .lock()
+            .await
+            .project_lease
+            .as_mut()
+            .unwrap()
+            .refresh_at = 0;
+        fixture
+            .api
+            .project_token_status
+            .store(404, Ordering::SeqCst);
+        let retained = fixture_authorize(broker, ResourceAudience::ProjectApi, false).await?;
+        assert_eq!(retained.authorization(), first.authorization());
+        assert_eq!(fixture.api.project_tokens.load(Ordering::SeqCst), 2);
+        let retry = broker
+            .state
+            .lock()
+            .await
+            .project_lease_retry
+            .as_ref()
+            .unwrap()
+            .error;
+        assert_eq!(retry, AuthorizationError::InvalidResponse);
+        assert_eq!(
+            fixture_authorize(broker, ResourceAudience::ProjectApi, false)
+                .await?
+                .authorization(),
+            first.authorization(),
+            "The retry window still serves the unexpired credential"
+        );
+        broker
+            .state
+            .lock()
+            .await
+            .project_lease
+            .as_mut()
+            .unwrap()
+            .expires_at = unix_time()? - 1;
+        assert_eq!(
+            fixture_authorize(broker, ResourceAudience::ProjectApi, false)
+                .await
+                .unwrap_err(),
+            AuthorizationError::Expired
+        );
         Ok(())
     }
 
@@ -2378,6 +2620,17 @@ mod tests {
             "UPDATE placement_rollouts SET deadline_at=?1 WHERE rollout_id='rollout'",
             [unix_time()? + 120],
         )?;
+        // A rollback validation shares the serving configuration and thus its
+        // outage binding. Discarding it must leave the serving fence untouched.
+        #[cfg(feature = "runtime")]
+        let serving_binding = {
+            let binding = broker.outage_binding()?;
+            broker.outage_store()?.connection.execute(
+                "INSERT INTO online_outage_authority(binding,expires_at,denied) VALUES (?1,?2,0)",
+                rusqlite::params![binding, unix_time()? + 3600],
+            )?;
+            binding
+        };
         block.store(true, Ordering::SeqCst);
         broker
             .state
@@ -2408,6 +2661,17 @@ mod tests {
             AuthorizationError::Denied
         );
         assert_eq!(authorize().await.unwrap_err(), AuthorizationError::Denied);
+        #[cfg(feature = "runtime")]
+        {
+            use crate::online::outage::OutageAuthority;
+            assert!(broker.deny(&serving_binding).await.is_err());
+            let denied: bool = store.connection.query_row(
+                "SELECT denied FROM online_outage_authority WHERE binding=?1",
+                [&serving_binding],
+                |row| row.get(0),
+            )?;
+            assert!(!denied, "A validation broker fenced the serving placement");
+        }
         assert_eq!(store.get_placement("service")?.unwrap().config_revision, 1);
         let id = broker.instance_id().to_owned();
         drop(broker);

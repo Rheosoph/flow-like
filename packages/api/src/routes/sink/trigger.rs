@@ -707,6 +707,28 @@ pub async fn trigger_event(
     event: flow_like::flow::event::Event,
     input: TriggerEventInput,
 ) -> FlResult<TriggerResponse> {
+    trigger_event_dispatch(state, sink, event, input, create_id(), false).await
+}
+
+/// Durable transports retain one run identity across delivery retries.
+pub(crate) async fn trigger_event_with_run_id(
+    state: &AppState,
+    sink: event_sink::Model,
+    event: flow_like::flow::event::Event,
+    input: TriggerEventInput,
+    run_id: String,
+) -> FlResult<TriggerResponse> {
+    trigger_event_dispatch(state, sink, event, input, run_id, true).await
+}
+
+async fn trigger_event_dispatch(
+    state: &AppState,
+    sink: event_sink::Model,
+    event: flow_like::flow::event::Event,
+    input: TriggerEventInput,
+    run_id: String,
+    retry_dispatch: bool,
+) -> FlResult<TriggerResponse> {
     use crate::routes::app::events::db::decrypt_token;
     let encryption_key = &state.encryption_key;
 
@@ -716,7 +738,6 @@ pub async fn trigger_event(
     }
 
     // Create run
-    let run_id = create_id();
     let expires_at = chrono::Utc::now().fixed_offset() + chrono::Duration::hours(24);
     // Decrypt PAT from sink if available
     let token = sink
@@ -821,7 +842,8 @@ pub async fn trigger_event(
         profile: hydrated_sink_profile(state, &sink).await,
         wasm_packages,
         channel: None,
-        // Programmatic trigger: cron workers, Lambda handlers, queue processors.
+        // Programmatic trigger: cron workers, Lambda handlers, queue processors, bot
+        // webhooks. Teams answers arrive through the HTTP channel grant every run receives.
         trigger: DispatchTrigger::System,
         shadow: false,
         artifact: None,
@@ -865,7 +887,34 @@ pub async fn trigger_event(
     };
 
     // Insert run record
-    let run_model = run.insert(&state.db).await?;
+    let run_model = match execution_run::Entity::find_by_id(&run_id)
+        .one(&state.db)
+        .await?
+    {
+        Some(existing) => {
+            if existing.app_id != sink.app_id
+                || existing.event_id.as_deref() != Some(&sink.event_id)
+            {
+                return Err(anyhow!("Run identity belongs to another event"));
+            }
+            if existing.status != RunStatus::Pending {
+                return Ok(TriggerResponse {
+                    triggered: true,
+                    run_id: Some(run_id),
+                    message: "Event already dispatched".into(),
+                });
+            }
+            let existing_subject = existing
+                .user_id
+                .clone()
+                .unwrap_or_else(|| format!("sink:{}", sink.id));
+            if existing.board_id != target.board_id || existing_subject != request.user_id {
+                return Err(anyhow!("Pending run target or execution actor changed"));
+            }
+            existing
+        }
+        None => run.insert(&state.db).await?,
+    };
     crate::audit::record_execution_dispatch_for(state, &run_model, "sink").await?;
 
     // Dispatch (fire and forget for programmatic triggers)
@@ -879,7 +928,11 @@ pub async fn trigger_event(
             message: "Event triggered successfully".to_string(),
         }),
         Err(e) => {
-            crate::audit::record_execution_dispatch_failure(state, &run_id, "sink").await?;
+            // A durable transport owns retries. Marking this run failed would
+            // fence the executor even if the queue accepted a timed-out request.
+            if !retry_dispatch {
+                crate::audit::record_execution_dispatch_failure(state, &run_id, "sink").await?;
+            }
             if let crate::execution::DispatchError::Quota(error) = e {
                 return Err(error.into());
             }
@@ -2207,7 +2260,10 @@ async fn publish_trigger_result(
 }
 
 /// Validate a sink trigger JWT and extract claims (without DB check)
-fn validate_sink_trigger_jwt(token: &str, secret: &str) -> Result<SinkTriggerClaims, ApiError> {
+pub(crate) fn validate_sink_trigger_jwt(
+    token: &str,
+    secret: &str,
+) -> Result<SinkTriggerClaims, ApiError> {
     let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
     validation.required_spec_claims.remove("exp");
     validation.validate_exp = false;

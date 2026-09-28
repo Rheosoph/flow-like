@@ -1,4 +1,6 @@
-use flow_like::flow::execution::context::ExecutionContext;
+use flow_like::flow::execution::{
+    ExecutionEnvironment, context::ExecutionContext, egress::GuardedHttpClient,
+};
 use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use flow_like_types::json::{self, json};
 use flow_like_types::utils::constant_time_eq;
@@ -37,6 +39,7 @@ pub(crate) async fn build_oauth_validator(
         return Ok(None);
     };
 
+    let environment = context.execution_environment();
     let mut issuer = clean_optional(issuer.clone());
     let jwks_url = jwks_url
         .as_ref()
@@ -56,14 +59,14 @@ pub(crate) async fn build_oauth_validator(
     }
 
     let jwks_bytes = match (jwks_url, jwks_flow_path.as_ref(), oidc_discovery_url) {
-        (Some(url), None, None) => fetch_jwks(url).await?,
+        (Some(url), None, None) => fetch_jwks(environment, url).await?,
         (None, Some(flow_path), None) => flow_path.get(context, false).await?,
         (None, None, Some(discovery_url)) => {
-            let discovery = fetch_oidc_discovery(discovery_url).await?;
+            let discovery = fetch_oidc_discovery(environment, discovery_url).await?;
             if issuer.is_none() {
                 issuer = discovery.issuer;
             }
-            fetch_jwks(&discovery.jwks_uri).await?
+            fetch_jwks(environment, &discovery.jwks_uri).await?
         }
         (None, None, None) => {
             return Err(anyhow!(
@@ -319,9 +322,12 @@ impl OAuthValidator {
     }
 }
 
-async fn fetch_jwks(url: &str) -> flow_like_types::Result<Vec<u8>> {
-    let response = reqwest::Client::new()
-        .get(url)
+async fn fetch_jwks(
+    environment: ExecutionEnvironment,
+    url: &str,
+) -> flow_like_types::Result<Vec<u8>> {
+    let response = GuardedHttpClient::new(environment)?
+        .get(url)?
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
@@ -342,9 +348,12 @@ struct OidcDiscovery {
     jwks_uri: String,
 }
 
-async fn fetch_oidc_discovery(url: &str) -> flow_like_types::Result<OidcDiscovery> {
-    let response = reqwest::Client::new()
-        .get(url)
+async fn fetch_oidc_discovery(
+    environment: ExecutionEnvironment,
+    url: &str,
+) -> flow_like_types::Result<OidcDiscovery> {
+    let response = GuardedHttpClient::new(environment)?
+        .get(url)?
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await

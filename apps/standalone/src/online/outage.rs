@@ -22,7 +22,9 @@ use std::{
 
 const MAX_METADATA_BYTES: usize = 32 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES: usize = 48 * 1024 * 1024;
-const MAX_METADATA_FILES: usize = 1024;
+/// Hydration writes at most two objects per approved document (templates and
+/// widgets keep a versioned copy and an alias).
+const MAX_METADATA_FILES: usize = 2 * super::metadata::MAX_DOCUMENTS;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -176,7 +178,7 @@ impl SnapshotStore {
         credentials: &ProjectCredentials,
         metadata: &Arc<dyn ObjectStore>,
     ) -> Result<()> {
-        let grant_expires_at = credentials.grant_expires_at.context("This API does not provide grant expiry for restart-safe outage recovery; update the API")?;
+        let grant_expires_at = credentials.grant_deadline().context("This API does not provide grant expiry for restart-safe outage recovery; update the API")?;
         let mut total = 0usize;
         let mut files = Vec::new();
         let mut objects = metadata.list(None);
@@ -241,6 +243,8 @@ impl SnapshotStore {
                 std::fs::remove_file(entry.path())?;
             }
         }
+        #[cfg(unix)]
+        crate::vault::remove_abandoned_private_staging(&self.root);
         let temporary = self.root.join(format!("{}.partial", uuid::Uuid::new_v4()));
         let result = (|| -> Result<()> {
             crate::vault::write_new_private(&temporary, &bytes)?;
@@ -308,15 +312,7 @@ impl SnapshotStore {
         // files were damaged. Attempt every cleanup before returning an error.
         let denied = self.authority.deny(&self.binding).await;
         let cache = super::cache::CacheControl::revoke_placement(&self.cache_root, &self.placement);
-        let removed = (|| -> Result<()> {
-            let _lock = snapshot_lock(&self.root)?;
-            match std::fs::remove_file(self.root.join("snapshot.json")) {
-                Ok(()) => File::open(&self.root)?.sync_all()?,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
-            }
-            Ok(())
-        })();
+        let removed = delete_snapshot(&self.root);
         denied.and(cache).and(removed)
     }
 }
@@ -347,9 +343,16 @@ pub(crate) fn remove_snapshot(root: &Path, placement: &str) -> Result<()> {
         return Ok(());
     }
     super::validate_snapshot_parent(root, placement)?;
-    let _lock = snapshot_lock(&parent)?;
-    match std::fs::remove_file(parent.join("snapshot.json")) {
-        Ok(()) => File::open(parent)?.sync_all()?,
+    delete_snapshot(&parent)
+}
+
+/// Staging copies of an earlier snapshot must not outlive it.
+fn delete_snapshot(root: &Path) -> Result<()> {
+    let _lock = snapshot_lock(root)?;
+    #[cfg(unix)]
+    crate::vault::remove_abandoned_private_staging(root);
+    match std::fs::remove_file(root.join("snapshot.json")) {
+        Ok(()) => File::open(root)?.sync_all()?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }

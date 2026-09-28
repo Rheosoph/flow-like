@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
 FROM rust:1.97.1-bookworm AS builder
+COPY rust-toolchain.toml /rust-toolchain.toml
+RUN rustup toolchain install
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
@@ -14,8 +16,8 @@ COPY . .
 
 ENV CARGO_BUILD_JOBS=2
 
-RUN --mount=type=cache,target=/cargo-home,id=cargo-home,sharing=shared \
-    --mount=type=cache,target=/app/target,id=cargo-target-gcp-executor,sharing=locked \
+RUN --mount=type=cache,target=/cargo-home,id=cargo-home-rust-beta-2026-09-27,sharing=shared \
+    --mount=type=cache,target=/app/target,id=cargo-target-gcp-executor-rust-beta-2026-09-27,sharing=locked \
     CARGO_HOME=/cargo-home cargo build --locked --release --package gcp-executor \
     && strip -s /app/target/release/gcp-executor \
     && cp /app/target/release/gcp-executor /tmp/gcp-executor

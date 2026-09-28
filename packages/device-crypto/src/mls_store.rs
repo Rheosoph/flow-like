@@ -10,10 +10,10 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
 };
 use flow_like_device_protocol::{
-    Ed25519PublicKey, SigningKey, TelemetryDeliveryReceipt, TelemetryEnvelope,
-    TelemetryEnvelopeKind, TelemetryMember, TelemetryRoster, compact_digest,
-    sign_telemetry_delivery_receipt, sign_telemetry_envelope, verify_telemetry_delivery_receipt,
-    verify_telemetry_envelope, verify_telemetry_roster,
+    Ed25519PublicKey, MAX_CLOCK_SKEW_SECONDS, SigningKey, TelemetryDeliveryReceipt,
+    TelemetryEnvelope, TelemetryEnvelopeKind, TelemetryMember, TelemetryRoster, compact_digest,
+    sign_telemetry_delivery_receipt, sign_telemetry_envelope, verify_historical_telemetry_roster,
+    verify_telemetry_delivery_receipt, verify_telemetry_envelope, verify_telemetry_roster,
 };
 use openmls_rust_crypto::{OpenMlsRustCrypto, RustCrypto};
 use openmls_traits::{OpenMlsProvider, crypto::OpenMlsCrypto, types::HashType};
@@ -27,10 +27,24 @@ use zeroize::{Zeroize, Zeroizing};
 
 const MAX_SNAPSHOT: usize = 32 * 1024 * 1024;
 const MAX_OUTBOX: usize = 128;
+/// Applications leave one slot for a membership commit, so the owner can renew
+/// or change the roster while slow readers are still catching up.
+const MAX_APPLICATION_OUTBOX: usize = MAX_OUTBOX - 1;
 const MAX_REPLAY: usize = 256;
 const MAX_PACKAGES: usize = 4096;
 const MAX_WIRE: usize = 1024 * 1024;
 const FORMAT: u32 = 1;
+
+/// The publication order moved between reading the latest sequence and this
+/// request, for example because the background publisher sent a sample.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "MLS publication sequence {requested} is stale or skipped; the next sequence is {next}. Read the latest position and retry"
+)]
+pub struct MlsSequenceConflict {
+    pub requested: u64,
+    pub next: u64,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -126,10 +140,14 @@ pub trait SnapshotBackend {
 pub type SqliteTransactionGuard = Box<dyn Fn(&Connection) -> Result<()> + Send>;
 
 #[cfg(feature = "sqlite")]
+pub type SqliteTransactionEffect = Box<dyn FnOnce(&Connection) -> Result<()> + Send>;
+
+#[cfg(feature = "sqlite")]
 pub struct SqliteSnapshotBackend {
     connection: Connection,
     namespace: String,
     guard: Option<SqliteTransactionGuard>,
+    effect: Option<SqliteTransactionEffect>,
 }
 
 #[cfg(feature = "sqlite")]
@@ -161,6 +179,7 @@ impl SqliteSnapshotBackend {
             connection,
             namespace: pins.namespace()?,
             guard: None,
+            effect: None,
         })
     }
 
@@ -178,6 +197,7 @@ impl SnapshotBackend for SqliteSnapshotBackend {
         &mut self,
         operation: impl FnOnce(Option<ProtectedSnapshot>) -> Result<(ProtectedSnapshot, R)>,
     ) -> Result<R> {
+        let effect = self.effect.take();
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -211,6 +231,9 @@ impl SnapshotBackend for SqliteSnapshotBackend {
             ON CONFLICT(namespace) DO UPDATE SET snapshot=excluded.snapshot",
             params![self.namespace, encoded],
         )?;
+        if let Some(effect) = effect {
+            effect(&transaction)?;
+        }
         if let Some(guard) = &self.guard {
             guard(&transaction)?;
         }
@@ -372,7 +395,28 @@ impl Snapshot {
     }
 
     fn policy(&self, compact: &str, now: i64) -> Result<TelemetryRoster> {
-        let policy = verify_telemetry_roster(compact, &self.pins.owner_invitation_key, now)?;
+        self.audience_policy(verify_telemetry_roster(
+            compact,
+            &self.pins.owner_invitation_key,
+            now,
+        )?)
+    }
+
+    /// The pinned publisher signs envelopes only under a roster that is current
+    /// at publication, so a reader authenticates a delivery's roster without
+    /// its expiry. Backlog and renewals stay consumable after the roster expires.
+    fn delivered_policy(&self, compact: &str, now: i64) -> Result<TelemetryRoster> {
+        let policy = verify_historical_telemetry_roster(compact, &self.pins.owner_invitation_key)?;
+        ensure!(
+            policy.issued_at <= now.saturating_add(MAX_CLOCK_SKEW_SECONDS),
+            "MLS policy version {} is issued in the future (issued_at {}, now {now})",
+            policy.policy_version,
+            policy.issued_at
+        );
+        self.audience_policy(policy)
+    }
+
+    fn audience_policy(&self, policy: TelemetryRoster) -> Result<TelemetryRoster> {
         ensure!(
             policy.device_id == self.pins.device_id && policy.scope == self.pins.scope,
             "MLS policy belongs to another audience"
@@ -402,6 +446,11 @@ impl Snapshot {
 
     fn next_policy(&self, compact: &str, now: i64) -> Result<TelemetryRoster> {
         let next = self.policy(compact, now)?;
+        self.ensure_successor(&next)?;
+        Ok(next)
+    }
+
+    fn ensure_successor(&self, next: &TelemetryRoster) -> Result<()> {
         match &self.policy_jws {
             Some(current) => {
                 // A policy may be renewed after its expiry, but it cannot skip
@@ -415,7 +464,9 @@ impl Snapshot {
                             .context("MLS policy version exhausted")?
                         && next.previous_policy_digest.as_deref()
                             == Some(compact_digest(current).as_str()),
-                    "MLS policy is stale or forked"
+                    "MLS policy version {} is stale or forked; the accepted version is {}",
+                    next.policy_version,
+                    previous.policy_version
                 );
             }
             None => ensure!(
@@ -423,7 +474,7 @@ impl Snapshot {
                 "MLS genesis policy is invalid"
             ),
         }
-        Ok(next)
+        Ok(())
     }
 
     fn policy_at_issue(
@@ -482,6 +533,9 @@ pub struct ProtectedMlsStore<B: SnapshotBackend> {
 }
 
 impl<B: SnapshotBackend> ProtectedMlsStore<B> {
+    /// A crash between committing the genesis snapshot and persisting its
+    /// witness leaves an untouched revision 1 sealed under this key. Creating
+    /// again adopts it, since no ratchet or package exists before revision 2.
     pub fn create(
         mut backend: B,
         pins: MlsPins,
@@ -495,10 +549,15 @@ impl<B: SnapshotBackend> ProtectedMlsStore<B> {
         );
         let key = Zeroizing::new(key);
         let checkpoint = backend.transact(|current| {
-            ensure!(
-                current.is_none(),
-                "MLS state already exists; refusing to replace live ratchets"
-            );
+            if let Some(current) = current {
+                ensure!(
+                    current.revision == 1 && open_snapshot(&pins, &key, &current).is_ok(),
+                    "MLS state already exists at revision {}; refusing to replace live ratchets",
+                    current.revision
+                );
+                let checkpoint = current.checkpoint()?;
+                return Ok((current, checkpoint));
+            }
             let provider = SessionProvider(OpenMlsRustCrypto::default());
             Identity::from_signing_key(&provider.0, pins.local.id().to_vec(), local_key)?;
             let mut snapshot = Snapshot {
@@ -639,8 +698,14 @@ impl<B: SnapshotBackend> ProtectedMlsStore<B> {
         self.inspect(|snapshot| Ok((snapshot.group_exists, snapshot.retired, snapshot.received)))
     }
 
+    pub fn accepted_policy(&mut self) -> Result<Option<String>> {
+        self.inspect(|snapshot| Ok(snapshot.policy_jws.clone()))
+    }
+
     /// The explicit next sequence fences retries after an acknowledgement has
     /// removed the old outbox record. Unacknowledged retries return exact bytes.
+    /// Sequence 0 lets the store assign the next sequence, so a membership change
+    /// never races the application publisher; the policy chain fences its retries.
     pub fn apply_policy(
         &mut self,
         request_id: &str,
@@ -666,6 +731,10 @@ impl<B: SnapshotBackend> ProtectedMlsStore<B> {
             {
                 return Ok(existing);
             }
+            let sequence = match sequence {
+                0 => snapshot.next_sequence()?,
+                sequence => sequence,
+            };
             let policy = snapshot.next_policy(policy_jws, now)?;
             let approved = members(&policy)?;
             if waive_removed_readers(snapshot, &policy.members)? {
@@ -673,7 +742,8 @@ impl<B: SnapshotBackend> ProtectedMlsStore<B> {
             }
             ensure!(
                 snapshot.outbox.len() < MAX_OUTBOX,
-                "MLS outbox is full; current readers must receive outstanding messages"
+                "MLS outbox is full ({} of {MAX_OUTBOX} messages await readers); current readers must receive outstanding messages",
+                snapshot.outbox.len()
             );
             let mut package_digests = Vec::new();
             for (_, package) in packages {
@@ -791,7 +861,8 @@ impl<B: SnapshotBackend> ProtectedMlsStore<B> {
                 !snapshot.group_exists && !snapshot.retired && snapshot.key_package.is_some(),
                 "MLS leaf cannot accept another Welcome"
             );
-            let (envelope, policy) = verified_delivery(snapshot, delivery, now)?;
+            let envelope = verified_envelope(snapshot, delivery)?;
+            let policy = snapshot.delivered_policy(&delivery.policy_jws, now)?;
             ensure!(
                 envelope.kind == TelemetryEnvelopeKind::Welcome,
                 "Expected an MLS Welcome envelope"
@@ -827,7 +898,7 @@ impl<B: SnapshotBackend> ProtectedMlsStore<B> {
     /// or whose transaction fails consumes no durable receive ratchet.
     pub fn receive(&mut self, delivery: &MlsDelivery, now: i64) -> Result<MlsReceipt> {
         self.mutate(|snapshot, provider| {
-            let (envelope, policy) = verified_delivery(snapshot, delivery, now)?;
+            let envelope = verified_envelope(snapshot, delivery)?;
             let wire_digest = compact_digest(&delivery.envelope_jws);
             if let Some(previous) = snapshot
                 .replay
@@ -848,6 +919,7 @@ impl<B: SnapshotBackend> ProtectedMlsStore<B> {
                         .context("MLS receive sequence exhausted")?,
                 "MLS history is missing or outside the replay window; ordered recovery is required"
             );
+            let policy = snapshot.delivered_policy(&delivery.policy_jws, now)?;
             let mut group = snapshot.group(provider)?;
             let approved = members(&policy)?;
             match envelope.kind {
@@ -855,9 +927,7 @@ impl<B: SnapshotBackend> ProtectedMlsStore<B> {
                     snapshot.policy_jws.as_deref() == Some(delivery.policy_jws.as_str()),
                     "MLS application requires its accepted membership policy"
                 ),
-                TelemetryEnvelopeKind::Commit => {
-                    snapshot.next_policy(&delivery.policy_jws, now)?;
-                }
+                TelemetryEnvelopeKind::Commit => snapshot.ensure_successor(&policy)?,
                 TelemetryEnvelopeKind::Welcome => {
                     bail!("An existing MLS leaf cannot receive another Welcome")
                 }
@@ -907,20 +977,36 @@ impl<B: SnapshotBackend> ProtectedMlsStore<B> {
         })
     }
 
-    /// Acknowledge only the oldest durable record. A relay acknowledgement means
-    /// durable transport acceptance; it is not proof every reader applied it.
+    /// Evict every retained record through `sequence`, whose envelope digest
+    /// must match. An owner or relay acknowledgement means durable transport
+    /// acceptance; it is not proof every reader applied it.
     pub fn acknowledge(&mut self, sequence: u64, envelope_digest: &str) -> Result<()> {
         self.mutate(|snapshot, _| {
             if sequence <= snapshot.acknowledged {
                 return Ok(());
             }
-            let first = snapshot.outbox.first().context("MLS outbox is empty")?;
+            let target = snapshot
+                .outbox
+                .iter()
+                .find(|entry| entry.publication.sequence == sequence)
+                .with_context(|| {
+                    format!(
+                        "MLS acknowledgement names sequence {sequence}, but only {} through {} are retained",
+                        snapshot.acknowledged + 1,
+                        snapshot.sequence
+                    )
+                })?;
             ensure!(
-                first.publication.sequence == sequence
-                    && compact_digest(&first.publication.message.envelope_jws) == envelope_digest,
-                "MLS acknowledgement does not match the oldest message"
+                compact_digest(&target.publication.message.envelope_jws) == envelope_digest,
+                "MLS acknowledgement digest does not match message {sequence}"
             );
-            evict_first(snapshot)?;
+            while snapshot
+                .outbox
+                .first()
+                .is_some_and(|first| first.publication.sequence <= sequence)
+            {
+                evict_first(snapshot)?;
+            }
             Ok(())
         })
     }
@@ -1033,6 +1119,17 @@ impl<B: SnapshotBackend> ProtectedMlsStore<B> {
     }
 }
 
+#[cfg(feature = "sqlite")]
+impl ProtectedMlsStore<SqliteSnapshotBackend> {
+    /// Run `effect` on the snapshot connection inside the next transaction,
+    /// after its replacement is written and before it commits, so application
+    /// rows change atomically with the MLS state. A failing effect rolls back both.
+    /// The next transaction consumes the effect even when it fails before the write.
+    pub fn before_next_commit(&mut self, effect: SqliteTransactionEffect) {
+        self.backend.effect = Some(effect);
+    }
+}
+
 fn request_identifier(id: &str) -> Result<()> {
     ensure!(
         !id.is_empty() && id.len() <= 128 && id.bytes().all(|b| b.is_ascii_graphic()),
@@ -1137,20 +1234,27 @@ fn existing_publication(
     sequence: u64,
     membership: bool,
 ) -> Result<Option<MlsPublication>> {
+    let assigned = membership && sequence == 0;
     if let Some(existing) = snapshot.outbox.iter().find(|entry| entry.request_id == id) {
         ensure!(
-            existing.request_digest == request_digest && existing.publication.sequence == sequence,
+            existing.request_digest == request_digest
+                && (assigned || existing.publication.sequence == sequence),
             "MLS publication identity changed"
         );
         return Ok(Some(existing.publication.clone()));
     }
+    let next = snapshot.next_sequence()?;
+    if !assigned && sequence != next {
+        return Err(MlsSequenceConflict {
+            requested: sequence,
+            next,
+        }
+        .into());
+    }
     ensure!(
-        sequence == snapshot.next_sequence()?,
-        "MLS publication sequence is stale or skipped"
-    );
-    ensure!(
-        membership || snapshot.outbox.len() < MAX_OUTBOX,
-        "MLS outbox is full; publication is suspended"
+        membership || snapshot.outbox.len() < MAX_APPLICATION_OUTBOX,
+        "MLS outbox is full ({} messages await readers); publication is suspended",
+        snapshot.outbox.len()
     );
     Ok(None)
 }
@@ -1220,11 +1324,7 @@ fn signed_delivery(
     })
 }
 
-fn verified_delivery(
-    snapshot: &Snapshot,
-    delivery: &MlsDelivery,
-    now: i64,
-) -> Result<(TelemetryEnvelope, TelemetryRoster)> {
+fn verified_envelope(snapshot: &Snapshot, delivery: &MlsDelivery) -> Result<TelemetryEnvelope> {
     ensure!(
         !delivery.wire.is_empty() && delivery.wire.len() <= MAX_WIRE,
         "Invalid MLS message size"
@@ -1242,8 +1342,7 @@ fn verified_delivery(
             && envelope.policy_digest == compact_digest(&delivery.policy_jws),
         "MLS message envelope binding failed"
     );
-    let policy = snapshot.policy(&delivery.policy_jws, now)?;
-    Ok((envelope, policy))
+    Ok(envelope)
 }
 
 fn member(value: &flow_like_device_protocol::TelemetryMember) -> Result<MemberIdentity> {
@@ -1463,6 +1562,17 @@ mod tests {
             previous: Option<&str>,
             readers: &[TelemetryMember],
         ) -> String {
+            self.policy_at(version, previous, readers, self.now - 1, self.now + 600)
+        }
+
+        fn policy_at(
+            &self,
+            version: u64,
+            previous: Option<&str>,
+            readers: &[TelemetryMember],
+            issued_at: i64,
+            expires_at: i64,
+        ) -> String {
             let mut members = vec![self.publisher.clone()];
             members.extend_from_slice(readers);
             sign_telemetry_roster(
@@ -1475,8 +1585,8 @@ mod tests {
                     management_policy_digest: None,
                     publisher: self.publisher.clone(),
                     members,
-                    issued_at: self.now - 1,
-                    expires_at: self.now + 600,
+                    issued_at,
+                    expires_at,
                 },
                 &self.owner,
             )
@@ -1687,7 +1797,7 @@ mod tests {
     fn removal_unblocks_full_outbox_without_charging_new_readers_for_old_messages() {
         let fixture = Fixture::new();
         let (mut publisher, _reader, previous) = fixture.pair();
-        for sequence in 3..=MAX_OUTBOX as u64 {
+        for sequence in 3..MAX_OUTBOX as u64 {
             publisher
                 .publish(
                     &format!("sample-{sequence}"),
@@ -1699,7 +1809,7 @@ mod tests {
         }
         assert!(
             publisher
-                .publish("full", MAX_OUTBOX as u64 + 1, b"metrics", fixture.now)
+                .publish("full", MAX_OUTBOX as u64, b"metrics", fixture.now)
                 .is_err()
         );
         let new_key = SigningKey::generate();
@@ -1715,7 +1825,7 @@ mod tests {
         )
         .unwrap();
         let policy = fixture.policy(3, Some(&previous), std::slice::from_ref(&new_member));
-        let next = MAX_OUTBOX as u64 + 1;
+        let next = MAX_OUTBOX as u64;
         let publication = publisher
             .apply_policy(
                 "replace",
@@ -1813,22 +1923,20 @@ mod tests {
         );
 
         let pending = publisher.pending_outbox().unwrap();
+        let digests: Vec<_> = pending
+            .iter()
+            .map(|publication| compact_digest(&publication.message.envelope_jws))
+            .collect();
         let checkpoint = publisher.checkpoint();
         assert!(publisher.acknowledge(1, "wrong").is_err());
+        assert!(publisher.acknowledge(3, &digests[1]).is_err());
+        assert!(publisher.acknowledge(5, &digests[3]).is_err());
         assert_eq!(publisher.checkpoint(), checkpoint);
-        assert!(
-            publisher
-                .acknowledge(2, &compact_digest(&pending[1].message.envelope_jws))
-                .is_err()
-        );
-        for publication in pending {
-            publisher
-                .acknowledge(
-                    publication.sequence,
-                    &compact_digest(&publication.message.envelope_jws),
-                )
-                .unwrap();
-        }
+        publisher.acknowledge(2, &digests[1]).unwrap();
+        assert_eq!(publisher.publication_position().unwrap(), (4, 2));
+        assert_eq!(publisher.pending_outbox().unwrap().len(), 2);
+        publisher.acknowledge(4, &digests[3]).unwrap();
+        publisher.acknowledge(3, "already evicted").unwrap();
         assert_eq!(publisher.publication_position().unwrap(), (4, 4));
         assert!(publisher.pending_outbox().unwrap().is_empty());
         assert!(
@@ -2065,6 +2173,243 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn lost_genesis_witness_adopts_untouched_state_but_never_live_ratchets() {
+        let fixture = Fixture::new();
+        let backend = MemoryBackend::default();
+        let pins = fixture.pins(&fixture.publisher);
+        let genesis = ProtectedMlsStore::create(
+            backend.clone(),
+            pins.clone(),
+            [41; 32],
+            &fixture.publisher_key,
+        )
+        .unwrap()
+        .checkpoint();
+        let mut adopted = ProtectedMlsStore::create(
+            backend.clone(),
+            pins.clone(),
+            [41; 32],
+            &fixture.publisher_key,
+        )
+        .unwrap();
+        assert_eq!(adopted.checkpoint(), genesis);
+        assert!(
+            ProtectedMlsStore::create(
+                backend.clone(),
+                pins.clone(),
+                [99; 32],
+                &fixture.publisher_key
+            )
+            .is_err()
+        );
+        adopted
+            .apply_policy(
+                "genesis",
+                1,
+                &fixture.policy(1, None, &[]),
+                &[],
+                fixture.now,
+            )
+            .unwrap();
+        assert!(
+            ProtectedMlsStore::create(backend, pins, [41; 32], &fixture.publisher_key).is_err()
+        );
+    }
+
+    #[test]
+    fn readers_consume_backlog_and_renewals_after_their_roster_expires() {
+        let fixture = Fixture::new();
+        let (mut publisher, mut reader, previous) = fixture.pair();
+        let late_key = SigningKey::generate();
+        let late = TelemetryMember {
+            endpoint_id: "late-reader".into(),
+            signing_key: late_key.public_key(),
+        };
+        let mut late_store = ProtectedMlsStore::create(
+            MemoryBackend::default(),
+            fixture.pins(&late),
+            [43; 32],
+            &late_key,
+        )
+        .unwrap();
+        let readers = [fixture.reader.clone(), late.clone()];
+        let admitted = fixture.policy(3, Some(&previous), &readers);
+        let admission = publisher
+            .apply_policy(
+                "admit-late",
+                3,
+                &admitted,
+                &[(member(&late).unwrap(), late_store.key_package().unwrap())],
+                fixture.now,
+            )
+            .unwrap();
+        let sample = publisher
+            .publish("sample", 4, b"before expiry", fixture.now)
+            .unwrap();
+        let later = fixture.now + 601;
+        assert!(
+            publisher
+                .publish("expired", 5, b"after expiry", later)
+                .is_err()
+        );
+        let before = reader.checkpoint();
+        assert!(
+            reader
+                .receive(&admission.message, fixture.now - 1_000)
+                .is_err()
+        );
+        assert_eq!(reader.checkpoint(), before);
+        assert!(matches!(
+            reader.receive(&admission.message, later).unwrap(),
+            MlsReceipt::EpochChanged(_)
+        ));
+        assert!(matches!(
+            reader.receive(&admission.message, later).unwrap(),
+            MlsReceipt::Duplicate
+        ));
+        assert_application(
+            reader.receive(&sample.message, later).unwrap(),
+            b"before expiry",
+        );
+        late_store
+            .join(admission.welcome.as_ref().unwrap(), later)
+            .unwrap();
+        assert_application(
+            late_store.receive(&sample.message, later).unwrap(),
+            b"before expiry",
+        );
+        let renewal = fixture.policy_at(4, Some(&admitted), &readers, later - 1, later + 600);
+        let commit = publisher
+            .apply_policy("renewal", 5, &renewal, &[], later)
+            .unwrap();
+        for store in [&mut reader, &mut late_store] {
+            assert!(matches!(
+                store.receive(&commit.message, later).unwrap(),
+                MlsReceipt::EpochChanged(_)
+            ));
+        }
+        let renewed = publisher
+            .publish("renewed", 6, b"after renewal", later)
+            .unwrap();
+        assert_application(
+            reader.receive(&renewed.message, later).unwrap(),
+            b"after renewal",
+        );
+    }
+
+    #[test]
+    fn membership_keeps_a_slot_when_applications_fill_the_outbox_and_can_take_the_next_sequence() {
+        let fixture = Fixture::new();
+        let (mut publisher, mut reader, previous) = fixture.pair();
+        let mut sequence = 3;
+        while publisher
+            .publish(
+                &format!("sample-{sequence}"),
+                sequence,
+                b"metrics",
+                fixture.now,
+            )
+            .is_ok()
+        {
+            sequence += 1;
+        }
+        assert_eq!(
+            publisher.pending_outbox().unwrap().len(),
+            MAX_APPLICATION_OUTBOX
+        );
+        let stale = publisher
+            .apply_policy(
+                "stale",
+                sequence - 1,
+                &fixture.policy(3, Some(&previous), std::slice::from_ref(&fixture.reader)),
+                &[],
+                fixture.now,
+            )
+            .err()
+            .unwrap();
+        let conflict = stale.downcast_ref::<MlsSequenceConflict>().unwrap();
+        assert_eq!(
+            (conflict.requested, conflict.next),
+            (sequence - 1, sequence)
+        );
+        let renewal = fixture.policy(3, Some(&previous), std::slice::from_ref(&fixture.reader));
+        let commit = publisher
+            .apply_policy("renewal", 0, &renewal, &[], fixture.now)
+            .unwrap();
+        assert_eq!(commit.sequence, sequence);
+        let retry = publisher
+            .apply_policy("renewal", 0, &renewal, &[], fixture.now)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_vec(&commit).unwrap(),
+            serde_json::to_vec(&retry).unwrap()
+        );
+        assert_eq!(publisher.pending_outbox().unwrap().len(), MAX_OUTBOX);
+        for pending in publisher.pending_outbox().unwrap().iter().skip(2) {
+            reader.receive(&pending.message, fixture.now).unwrap();
+        }
+        assert!(matches!(
+            reader.receive(&commit.message, fixture.now).unwrap(),
+            MlsReceipt::Duplicate
+        ));
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn sqlite_commit_effect_is_atomic_with_the_snapshot_and_runs_once() {
+        let fixture = Fixture::new();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("management.sqlite");
+        let management = Connection::open(&path).unwrap();
+        management
+            .pragma_update(None, "application_id", 0x464c5341)
+            .unwrap();
+        management
+            .execute_batch("CREATE TABLE projection (value TEXT NOT NULL)")
+            .unwrap();
+        let pins = fixture.pins(&fixture.publisher);
+        let mut publisher = ProtectedMlsStore::create(
+            SqliteSnapshotBackend::open(&path, &pins).unwrap(),
+            pins,
+            [41; 32],
+            &fixture.publisher_key,
+        )
+        .unwrap();
+        let genesis = fixture.policy(1, None, &[]);
+        let before = publisher.checkpoint();
+        publisher.before_next_commit(Box::new(|connection| {
+            connection.execute("INSERT INTO projection VALUES('rolled back')", [])?;
+            bail!("injected projection failure")
+        }));
+        assert!(
+            publisher
+                .apply_policy("genesis", 1, &genesis, &[], fixture.now)
+                .is_err()
+        );
+        assert_eq!(publisher.checkpoint(), before);
+        publisher.before_next_commit(Box::new(|connection| {
+            connection.execute("INSERT INTO projection VALUES('accepted')", [])?;
+            Ok(())
+        }));
+        publisher
+            .apply_policy("genesis", 1, &genesis, &[], fixture.now)
+            .unwrap();
+        publisher.publication_position().unwrap();
+        let rows: Vec<String> = management
+            .prepare("SELECT value FROM projection")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(rows, ["accepted"]);
     }
 
     #[cfg(feature = "sqlite")]

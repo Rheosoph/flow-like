@@ -22,6 +22,7 @@ pub mod build_together;
 pub mod build_vertex;
 pub mod build_voyageai;
 pub mod build_xai;
+pub mod external;
 
 pub use build_anthropic::BuildAnthropicNode;
 pub use build_atlascloud::BuildAtlasCloudNode;
@@ -47,3 +48,6 @@ pub use build_together::BuildTogetherNode;
 pub use build_vertex::BuildVertexNode;
 pub use build_voyageai::BuildVoyageAINode;
 pub use build_xai::BuildXAINode;
+pub use external::{
+    BuildClaudeCodeNode, BuildCodexNode, BuildGithubCopilotNode, BuildMicrosoftCopilotNode,
+};

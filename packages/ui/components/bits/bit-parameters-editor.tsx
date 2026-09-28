@@ -10,6 +10,7 @@ import {
 import { createContext, useContext, useId, useState } from "react";
 import { isHostedLlmProviderName } from "../../lib/bit/local-model-filter";
 import { IBitTypes } from "../../lib/schema/bit/bit";
+import { useBackend } from "../../state/backend-state";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
@@ -53,6 +54,10 @@ const HINTS: Record<string, string> = {
 };
 const ProviderScope = createContext<"custom" | "admin">("admin");
 const CUSTOM_PROVIDERS = [
+	"claude-code",
+	"codex",
+	"github-copilot",
+	"microsoft-copilot",
 	"openai",
 	"anthropic",
 	"gemini",
@@ -76,6 +81,10 @@ const CUSTOM_PROVIDERS = [
 	"mozilla",
 ];
 const PROVIDER_LABELS: Record<string, string> = {
+	"claude-code": "Claude Code",
+	codex: "Codex (ChatGPT)",
+	"github-copilot": "GitHub Copilot",
+	"microsoft-copilot": "Microsoft 365 Copilot",
 	openai: "OpenAI",
 	anthropic: "Anthropic",
 	gemini: "Google Gemini",
@@ -112,6 +121,8 @@ function ParameterValue({
 	path: string;
 }) {
 	const scope = useContext(ProviderScope);
+	const canUseNativeProviders =
+		!!useBackend().capabilities().canUseNativeAgentProviders;
 	const label = labelFor(name);
 	if (name === "provider_name") {
 		const current = typeof value === "string" ? value : "";
@@ -119,7 +130,12 @@ function ParameterValue({
 			{ value: "Local", label: "Local (llama.cpp)" },
 			{ value: "MLX", label: "Local (MLX)" },
 			...(scope === "custom"
-				? CUSTOM_PROVIDERS.map((provider) => ({
+				? CUSTOM_PROVIDERS.filter(
+						(provider) =>
+							provider !== "claude-code" ||
+							canUseNativeProviders ||
+							current === "custom:claude-code",
+					).map((provider) => ({
 						value: `custom:${provider}`,
 						label: PROVIDER_LABELS[provider],
 					}))

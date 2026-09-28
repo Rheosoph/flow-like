@@ -42,6 +42,76 @@ const recipientsSchema = z
 	)
 	.min(1)
 	.max(24);
+/** Capabilities that let a recipient run their workflows on the device. */
+const WORKLOAD_CAPABILITIES: Capability[] = [
+	"deploy",
+	"start",
+	"restart",
+	"scale",
+];
+
+export interface HostIsolation {
+	platform: string;
+	sandboxAvailable: boolean;
+	requireIsolation: boolean;
+}
+
+export function parseHostIsolation(value: unknown): HostIsolation | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const row = value as Record<string, unknown>;
+	if (
+		typeof row.platform !== "string" ||
+		typeof row.sandbox_available !== "boolean" ||
+		typeof row.require_isolation !== "boolean"
+	)
+		return undefined;
+	return {
+		platform: row.platform.slice(0, 64),
+		sandboxAvailable: row.sandbox_available,
+		requireIsolation: row.require_isolation,
+	};
+}
+
+type Recipient = z.infer<typeof recipientsSchema>[number];
+
+/** Re-approving a recipient's own grant replaces it; a grant id held by anyone else is refused. */
+export function mergeRecipientGrants(
+	active: ManagementGrant[],
+	recipients: Recipient[],
+	template: Omit<ManagementGrant, "grant_id" | "user_id" | "controller_key">,
+	newGrantId: () => string = () => crypto.randomUUID(),
+): ManagementGrant[] {
+	const replaced = new Set<string>();
+	for (const recipient of recipients) {
+		if (!recipient.grant_id) continue;
+		if (replaced.has(recipient.grant_id))
+			throw new Error(
+				`Grant ${recipient.grant_id} is listed more than once. List each access request once.`,
+			);
+		const existing = active.find(
+			(grant) => grant.grant_id === recipient.grant_id,
+		);
+		if (
+			existing &&
+			(existing.user_id !== recipient.user_id ||
+				existing.controller_key.x !== recipient.controller_key.x)
+		)
+			throw new Error(
+				`Grant ${recipient.grant_id} already belongs to another account or controller. Ask ${recipient.user_id} for a new access request.`,
+			);
+		replaced.add(recipient.grant_id);
+	}
+	return [
+		...active.filter((grant) => !replaced.has(grant.grant_id)),
+		...recipients.map((recipient) => ({
+			...template,
+			grant_id: recipient.grant_id ?? newGrantId(),
+			user_id: recipient.user_id,
+			controller_key: recipient.controller_key,
+		})),
+	];
+}
+
 const capabilities: Capability[] = [
 	"status",
 	"metrics",
@@ -63,12 +133,14 @@ export function DeviceSharingForm({
 	receipt,
 	invitationVault,
 	certificateManagement = false,
+	isolation,
 }: {
 	profile: IProfile;
 	manifest: OnboardingManifest;
 	receipt: DeviceReceipt;
 	invitationVault: Uint8Array;
 	certificateManagement?: boolean;
+	isolation?: HostIsolation;
 }) {
 	const backend = useBackend();
 	const certificateSupport = useRef(certificateManagement);
@@ -93,6 +165,11 @@ export function DeviceSharingForm({
 	const [saved, setSaved] = useState<PolicyView>();
 	const [activeGrants, setActiveGrants] = useState<ManagementGrant[]>();
 	const [bundleUrl, setBundleUrl] = useState<string>();
+	const [trustAccepted, setTrustAccepted] = useState(false);
+	const runsWorkloads = selected.some((capability) =>
+		WORKLOAD_CAPABILITIES.includes(capability),
+	);
+	const hostTrustRequired = runsWorkloads && !isolation?.requireIsolation;
 	useEffect(() => {
 		const url = URL.createObjectURL(
 			new Blob(
@@ -193,6 +270,10 @@ export function DeviceSharingForm({
 				throw new Error("List each recipient once.");
 			if (!removeGrant && selected.length === 0)
 				throw new Error("Choose at least one permission.");
+			if (!removeGrant && hostTrustRequired && !trustAccepted)
+				throw new Error(
+					"Confirm that these recipients' workflows run with the device agent's full access before approving.",
+				);
 			if (
 				!removeGrant &&
 				scope !== "device" &&
@@ -259,17 +340,13 @@ export function DeviceSharingForm({
 								project_id: project,
 								placement_id: placement,
 							};
-			for (const recipient of users)
-				grants.push({
-					grant_id: recipient.grant_id ?? crypto.randomUUID(),
-					user_id: recipient.user_id,
-					controller_key: recipient.controller_key,
-					scope: resolvedScope,
-					capabilities: selected,
-					expires_at: now + 86_400,
-					group_id: groupId || null,
-					group_version: groupId ? Number(groupVersion) : null,
-				});
+			grants = mergeRecipientGrants(grants, users, {
+				scope: resolvedScope,
+				capabilities: selected,
+				expires_at: now + 86_400,
+				group_id: groupId || null,
+				group_version: groupId ? Number(groupVersion) : null,
+			});
 			if (grants.length > 24)
 				throw new Error(
 					"This policy would exceed 24 grants. Revoke unused access first.",
@@ -295,6 +372,7 @@ export function DeviceSharingForm({
 				setSaved(result);
 				setActiveGrants(grants);
 				setRecipients("");
+				setTrustAccepted(false);
 			}
 		} catch (error) {
 			if (current.current)
@@ -425,6 +503,30 @@ export function DeviceSharingForm({
 					</label>
 				))}
 			</fieldset>
+			{hostTrustRequired && (
+				<div className="space-y-2 rounded border border-destructive p-3 text-sm">
+					<p>
+						Deploy, start, restart and scale let recipients run their own
+						workflows on this device.{" "}
+						{isolation
+							? `This ${isolation.platform} host does not require isolation, so`
+							: "This device did not report that it requires isolation, so"}{" "}
+						a placement without a Linux sandbox runs under the device agent's
+						operating-system account. That workflow can read the device keys,
+						the management database and every other placement's data. A project
+						or placement scope does not contain it.
+					</p>
+					<label className="flex items-start gap-2">
+						<input
+							type="checkbox"
+							checked={trustAccepted}
+							onChange={(event) => setTrustAccepted(event.target.checked)}
+							disabled={busy}
+						/>
+						I trust these recipients with full access to this device.
+					</label>
+				</div>
+			)}
 			{!certificateManagement && (
 				<p className="text-sm text-muted-foreground">
 					Update the device's standalone binary and reconnect before sharing

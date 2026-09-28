@@ -203,8 +203,10 @@ mise run test:wasm:rust:e2e
 
 1. Run `mise run build`.
 2. Open Flow-Like Desktop.
-3. Go to **Library → Packages → Publish**.
-4. Select `node.wasm` and `flow-like.toml`.
+3. In **Packages › Mine**, add the project with **Add folder** if it is not
+   listed yet.
+4. Select **Publish…** on the package card. The wizard reads `flow-like.toml`
+   and the built `node.wasm` from the folder.
 5. Review the extracted nodes and submit the package.
 
 There is no checked-in `flow-like publish` CLI and no supported
