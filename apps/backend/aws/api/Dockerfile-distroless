@@ -1,4 +1,6 @@
 FROM rust:1.97.1-bookworm AS build
+COPY rust-toolchain.toml /rust-toolchain.toml
+RUN rustup toolchain install
 ARG CRDB_CA_URL
 
 WORKDIR /app
@@ -25,12 +27,12 @@ RUN if [ -n "$CRDB_CA_URL" ]; then \
 
 COPY . .
 
-RUN --mount=type=cache,id=cargo-target-api-distroless,target=/app/target/,sharing=locked \
-    --mount=type=cache,id=cargo-git-api-distroless,target=/usr/local/cargo/git/db,sharing=locked \
-    --mount=type=cache,id=cargo-registry-api-distroless,target=/usr/local/cargo/registry/,sharing=locked \
+RUN --mount=type=cache,id=cargo-target-api-distroless-rust-beta-2026-09-27,target=/app/target/,sharing=locked \
+    --mount=type=cache,id=cargo-git-api-distroless-rust-beta-2026-09-27,target=/usr/local/cargo/git/db,sharing=locked \
+    --mount=type=cache,id=cargo-registry-api-distroless-rust-beta-2026-09-27,target=/usr/local/cargo/registry/,sharing=locked \
     cargo build --release --target=aarch64-unknown-linux-gnu --manifest-path=apps/backend/aws/api/Cargo.toml
 
-RUN --mount=type=cache,id=cargo-target-api-distroless,target=/app/target/,sharing=locked cp target/aarch64-unknown-linux-gnu/release/aws-api /app/aws-api
+RUN --mount=type=cache,id=cargo-target-api-distroless-rust-beta-2026-09-27,target=/app/target/,sharing=locked cp target/aarch64-unknown-linux-gnu/release/aws-api /app/aws-api
 RUN strip --strip-all /app/aws-api
 
 FROM gcr.io/distroless/cc-debian12:latest-arm64

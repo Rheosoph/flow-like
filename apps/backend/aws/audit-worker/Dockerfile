@@ -4,6 +4,7 @@
 # ============================================================
 # Links the API crate like the Lambda API, so it needs the same build packages.
 FROM --platform=linux/arm64 public.ecr.aws/amazonlinux/amazonlinux:2023 AS builder
+COPY rust-toolchain.toml /rust-toolchain.toml
 
 WORKDIR /app
 
@@ -21,7 +22,8 @@ RUN yum update -y && \
     curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-linux-aarch_64.zip && \
     unzip protoc-25.3-linux-aarch_64.zip -d /usr/local && \
     rm protoc-25.3-linux-aarch_64.zip && \
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.97.1 && \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none && \
+    /root/.cargo/bin/rustup toolchain install && \
     yum remove -y xz && \
     yum clean all
 
@@ -31,9 +33,9 @@ ARG CARGO_BUILD_JOBS
 COPY . .
 
 # Copy the binary before releasing the shared cache lock; caches may be evicted.
-RUN --mount=type=cache,id=flow-like-rust-1.97.1-amazonlinux2023-arm64-registry,target=/root/.cargo/registry,sharing=locked \
-    --mount=type=cache,id=flow-like-rust-1.97.1-amazonlinux2023-arm64-git,target=/root/.cargo/git,sharing=locked \
-    --mount=type=cache,id=flow-like-rust-1.97.1-amazonlinux2023-arm64-target,target=/app/target,sharing=locked \
+RUN --mount=type=cache,id=flow-like-rust-beta-2026-09-27-amazonlinux2023-arm64-registry,target=/root/.cargo/registry,sharing=locked \
+    --mount=type=cache,id=flow-like-rust-beta-2026-09-27-amazonlinux2023-arm64-git,target=/root/.cargo/git,sharing=locked \
+    --mount=type=cache,id=flow-like-rust-beta-2026-09-27-amazonlinux2023-arm64-target,target=/app/target,sharing=locked \
     if [ -n "${CARGO_BUILD_JOBS:-}" ]; then export CARGO_BUILD_JOBS; fi && \
     cargo build --locked --profile lambda --manifest-path apps/backend/aws/audit-worker/Cargo.toml && \
     cp target/lambda/aws-audit-worker /tmp/bootstrap && \

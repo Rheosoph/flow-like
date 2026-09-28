@@ -110,3 +110,44 @@ Some tips:
 - Prefer theme tokens such as `bg-card`, `text-primary`, and
   `border-primary/30` over fixed colors so the widget still looks right in
   light and dark mode.
+
+## Style a widget with custom CSS
+
+When utility classes are not enough, for example for an animation, a
+pseudo-element, or several rules for elements inside the widget, write a
+stylesheet in **Custom CSS**, below **Tailwind classes**. In **Edit JSON**, the
+same value is the widget's `appearance.css`. It can be up to 8 KiB.
+
+The stylesheet only reaches its own widget:
+
+- `:root` is the widget's surface. For dark mode, write `:root:is(.dark *)`.
+- Every other selector, such as `h2` or `.my-class`, matches elements inside
+  the widget.
+- Rules here override the widget's Tailwind classes.
+- `@keyframes` names stay local to the widget, so they cannot replace another
+  widget's or the app's animations.
+
+```css
+@keyframes glow {
+  to { box-shadow: 0 0 24px color-mix(in srgb, var(--primary) 40%, transparent); }
+}
+
+:root {
+  background: linear-gradient(135deg, var(--card), color-mix(in srgb, var(--primary) 12%, var(--card)));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root { animation: glow 3s ease-in-out infinite alternate; }
+}
+
+h2::after { content: " ✦"; color: var(--primary); }
+```
+
+Avoid these, because they reach outside the widget or conflict with the
+layout. FlowPilot warns about them when it validates a layout.
+
+- `+` or `~` after `:root`. They style the widgets next to this one.
+- `@property`, `@font-face`, `@counter-style`, and `@page`. They apply to the
+  whole page. `@import` is removed.
+- `position`, `inset`, `z-index`, grid placement, `order`, `width`, or `height`
+  on `:root`. The layout controls where the widget sits and how large it is.

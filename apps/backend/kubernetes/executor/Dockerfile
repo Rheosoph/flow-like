@@ -3,6 +3,8 @@
 # Stage 1: Builder
 # ============================================================
 FROM rust:1.97.1-bookworm AS build-deps
+COPY rust-toolchain.toml /rust-toolchain.toml
+RUN rustup toolchain install
 
 # Automation execution links the Linux capture and input libraries.
 # ocl-icd-opencl-dev provides libOpenCL.so: rustautogui's `dev` feature implies
@@ -42,8 +44,8 @@ ARG CARGO_BUILD_JOBS=2
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
 # Use BuildKit cache mounts for faster rebuilds
-RUN --mount=type=cache,target=/cargo-home,id=cargo-home,sharing=shared \
-    --mount=type=cache,target=/app/target,id=cargo-target-k8s-executor,sharing=locked \
+RUN --mount=type=cache,target=/cargo-home,id=cargo-home-rust-beta-2026-09-27,sharing=shared \
+    --mount=type=cache,target=/app/target,id=cargo-target-k8s-executor-rust-beta-2026-09-27,sharing=locked \
     CARGO_HOME=/cargo-home cargo build --locked --release --package k8s-executor \
       --package flow-like-execution-manager --bin k8s-executor --bin execution-slot && \
     cp /app/target/release/k8s-executor /tmp/k8s-executor && \

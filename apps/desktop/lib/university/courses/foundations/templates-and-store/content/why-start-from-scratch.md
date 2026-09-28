@@ -21,7 +21,7 @@ Open Flow-Like. The home screen is already a storefront: under the "What do you 
 The Explore hub carries two different shelves, and mixing them up costs real time:
 
 - **Community apps** are whole projects — flows, interfaces, data, access settings. You join one to use it, or fork it to make it your own (next lesson).
-- **Packages** are node collections. They do nothing on their own; they add new nodes to the catalog your flows build from. Select **Packages** in the Explore header to browse the registry — the same shelf is reachable from **Library → Packages → Browse Packages**.
+- **Packages** are node collections. They do nothing on their own; they add new nodes to the catalog your flows build from. Select **Packages** in the Explore header to browse the registry — **Explore packages** on the sidebar's **Packages** page opens the same shelf: Explore, filtered to Packages.
 
 Package cards show the current version, category, install count, rating, price, and visibility, and a shield marks a package that completed the registry's verification process. Lesson 2 teaches you to actually read those signals.
 
@@ -32,7 +32,7 @@ Here's the part that bites almost everyone once. Packages live in three scopes:
 | Scope | Where | What it means |
 | --- | --- | --- |
 | Registry | Explore → Packages | Versions that exist in the world |
-| Device | Library → Packages | Code installed on this computer |
+| Device | Packages › Library | Code installed on this computer |
 | App | Open the app → Packages | The version *this app* declares it needs |
 
 Installing puts code on your device. **Linking** — Add Package inside the app's own Packages screen — records the dependency that fills that app's node catalog and resolves remote execution. Priya once installed a mail package, opened her flow, found no mail nodes, and restarted Flow-Like twice before spotting it: she never linked the package to the client app.
@@ -44,7 +44,7 @@ When nodes don't show up, work this list:
 3. Reload the flow after changing the app's packages.
 4. Open the package's **Nodes** tab to confirm the node is exported by that version.
 
-> **Watch out:** Updating the device copy in Library → Packages does not rewrite each app's linked version. Every app keeps its own declaration — review an app's Packages screen instead of assuming it moved.
+> **Watch out:** Updating the device copy in Packages › Library does not rewrite each app's linked version. Every app keeps its own declaration — review an app's Packages screen instead of assuming it moved.
 
 ## Recap
 

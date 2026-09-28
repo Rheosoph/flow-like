@@ -1,6 +1,7 @@
 # The release target builds natively on linux/arm64. TARGETARCH also supports
 # linux/amd64 for development and selects matching ONNX Runtime and protoc.
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023 AS build
+COPY rust-toolchain.toml /rust-toolchain.toml
 
 ARG TARGETARCH
 ARG ONNXRUNTIME_VERSION=1.24.2
@@ -39,7 +40,8 @@ RUN set -eu && \
     mkdir -p /opt/onnxruntime && \
     tar -xzf /tmp/onnxruntime.tgz --strip-components=1 -C /opt/onnxruntime && \
     rm /tmp/onnxruntime.tgz && \
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.97.1 && \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none && \
+    /root/.cargo/bin/rustup toolchain install && \
     yum remove -y xz && \
     yum clean all
 
@@ -54,15 +56,15 @@ ARG CARGO_BUILD_JOBS
 COPY . .
 
 # LLD emits the range-extension thunks needed by large AArch64 executables.
-RUN --mount=type=cache,id=flow-like-rust-1.97.1-amazonlinux2023-${TARGETARCH}-registry,target=/root/.cargo/registry,sharing=locked \
-    --mount=type=cache,id=flow-like-rust-1.97.1-amazonlinux2023-${TARGETARCH}-git,target=/root/.cargo/git,sharing=locked \
-    --mount=type=cache,id=flow-like-rust-1.97.1-amazonlinux2023-${TARGETARCH}-target,target=/app/target,sharing=locked \
+RUN --mount=type=cache,id=flow-like-rust-beta-2026-09-27-amazonlinux2023-${TARGETARCH}-registry,target=/root/.cargo/registry,sharing=locked \
+    --mount=type=cache,id=flow-like-rust-beta-2026-09-27-amazonlinux2023-${TARGETARCH}-git,target=/root/.cargo/git,sharing=locked \
+    --mount=type=cache,id=flow-like-rust-beta-2026-09-27-amazonlinux2023-${TARGETARCH}-target,target=/app/target,sharing=locked \
     source "$HOME"/.cargo/env && \
     if [ -n "${CARGO_BUILD_JOBS:-}" ]; then export CARGO_BUILD_JOBS; fi && \
     if [ "$TARGETARCH" = "arm64" ]; then export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-Clink-arg=-fuse-ld=lld"; fi && \
     cargo build --locked --release --manifest-path=apps/backend/aws/executor-async/Cargo.toml 2>&1
 
-RUN --mount=type=cache,id=flow-like-rust-1.97.1-amazonlinux2023-${TARGETARCH}-target,target=/app/target/,sharing=locked \
+RUN --mount=type=cache,id=flow-like-rust-beta-2026-09-27-amazonlinux2023-${TARGETARCH}-target,target=/app/target/,sharing=locked \
     cp target/release/aws-executor-async /app/aws-executor-async
 
 RUN strip --strip-all /app/aws-executor-async

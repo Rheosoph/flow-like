@@ -15,6 +15,11 @@ env:
   RUSTUP_MAX_RETRIES: 10
 
 jobs:
+  compiler-checks:
+    uses: ./.github/workflows/compiler-reproducibility.yml
+    permissions:
+      contents: read
+
   prepare-release-frontend:
     name: Prepare release frontend
     runs-on: ubuntu-latest
@@ -125,6 +130,7 @@ jobs:
   alpha-release:
     needs:
       - prepare-release-frontend
+      - compiler-checks
     permissions:
       contents: write
     strategy:
@@ -175,6 +181,7 @@ jobs:
     needs:
       - prepare-release-frontend
       - prepare-release-mlx
+      - compiler-checks
     permissions:
       contents: write
     uses: ./.github/workflows/release-native.yml

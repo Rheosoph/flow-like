@@ -1,0 +1,12 @@
+[package]
+name = "aws-mail-ingress"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+flow-like-mail-ingress = { path = "../../mail-ingress" }
+lambda_runtime = { version = "1.0.2", features = ["anyhow"] }
+serde_json.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+

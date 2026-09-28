@@ -4,6 +4,8 @@
 # user, with no shell or package manager. The binary answers its own container
 # health check (`/app/api healthcheck`).
 FROM rust:1.97.1-bookworm AS build
+COPY rust-toolchain.toml /rust-toolchain.toml
+RUN rustup toolchain install
 
 ARG TARGETARCH
 # Graviton2 (Neoverse N1) is the oldest arm64 CPU Fargate runs on, and
@@ -26,9 +28,9 @@ COPY . .
 # LLD links the large API graph faster than ld.bfd and emits AArch64 range
 # thunks, which ld.bfd stops doing once .text outgrows a 128 MB branch.
 # Copy the binary out before the target cache mount is released.
-RUN --mount=type=cache,id=flow-like-rust-1.97.1-bookworm-${TARGETARCH}-registry,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=flow-like-rust-1.97.1-bookworm-${TARGETARCH}-git,target=/usr/local/cargo/git,sharing=locked \
-    --mount=type=cache,id=flow-like-rust-1.97.1-bookworm-${TARGETARCH}-aws-api-ecs-target,target=/app/target,sharing=locked \
+RUN --mount=type=cache,id=flow-like-rust-beta-2026-09-27-bookworm-${TARGETARCH}-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=flow-like-rust-beta-2026-09-27-bookworm-${TARGETARCH}-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=flow-like-rust-beta-2026-09-27-bookworm-${TARGETARCH}-aws-api-ecs-target,target=/app/target,sharing=locked \
     set -eu && \
     case "$TARGETARCH" in \
         arm64) target_cpu="$TARGET_CPU_ARM64" ;; \

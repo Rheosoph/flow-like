@@ -1,0 +1,78 @@
+# Add with -f docker-compose.yml -f docker-compose.mail.yml.
+services:
+  api:
+    environment:
+      INBOUND_MAIL_DOMAIN: ${INBOUND_MAIL_DOMAIN:?Set the receiving domain}
+      INBOUND_MAIL_MAX_BYTES: ${MAIL_MAX_MESSAGE_BYTES:-10485760}
+  mail-ingress:
+    build:
+      context: ../../..
+      dockerfile: apps/backend/mail-ingress/Dockerfile
+    environment:
+      API_BASE_URL: http://api-gateway:8080
+      SINK_TRIGGER_JWT_FILE: /run/secrets/mail_sink_jwt
+      MAIL_POSTFIX_HOSTNAME: ${MAIL_POSTFIX_HOSTNAME:?Set the public MX hostname}
+      MAIL_MAX_MESSAGE_BYTES: ${MAIL_MAX_MESSAGE_BYTES:-10485760}
+      MAIL_LMTP_LISTEN: 0.0.0.0:2525
+      MAIL_SOCKETMAP_LISTEN: 0.0.0.0:2526
+      RUST_LOG: info
+    secrets:
+      - mail_sink_jwt
+    networks:
+      - app
+      - mail
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    restart: unless-stopped
+    depends_on:
+      api-gateway:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1'
+          pids: 128
+    pids_limit: 128
+  mail-postfix:
+    build:
+      context: ../../..
+      dockerfile: apps/backend/mail-ingress/postfix/Dockerfile
+    environment:
+      MAIL_POSTFIX_HOSTNAME: ${MAIL_POSTFIX_HOSTNAME:?Set the public MX hostname}
+      INBOUND_MAIL_DOMAIN: ${INBOUND_MAIL_DOMAIN:?Set the receiving domain}
+      MAIL_MAX_MESSAGE_BYTES: ${MAIL_MAX_MESSAGE_BYTES:-10485760}
+    ports:
+      - '${MAIL_BIND_ADDRESS:-0.0.0.0}:25:25'
+    volumes:
+      - mail_spool:/var/spool/postfix
+    secrets:
+      - mail_tls_certificate
+      - mail_tls_key
+    networks:
+      - mail
+      - edge
+    depends_on:
+      - mail-ingress
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1'
+          pids: 256
+    pids_limit: 256
+
+networks:
+  mail:
+    internal: true
+volumes:
+  mail_spool: {}
+secrets:
+  mail_sink_jwt:
+    file: ${MAIL_SINK_JWT_FILE:?Path to the inbound_email service JWT file}
+  mail_tls_certificate:
+    file: ${MAIL_TLS_CERTIFICATE_FILE:?Path to the SMTP TLS certificate chain}
+  mail_tls_key:
+    file: ${MAIL_TLS_KEY_FILE:?Path to the SMTP TLS private key}

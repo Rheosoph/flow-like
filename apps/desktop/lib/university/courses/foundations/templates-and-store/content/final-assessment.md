@@ -26,7 +26,7 @@ Three flows, all living in the **Customer Support Copilot** app (online, current
 A new teammate ran a rehearsal on a fresh laptop and logged four findings:
 
 - **F1** — She installed the team's mail package from Explore → Packages, opened the client app's flow, and found none of its nodes in the catalog.
-- **F2** — After she applied a package update in Library → Packages, an older client app that had been running fine started failing.
+- **F2** — After she applied a package update in Packages › Library, an older client app that had been running fine started failing.
 - **F3** — During an earlier store experiment, a visitor briefly saw last night's half-finished Reply Drafter behavior.
 - **F4** — A client app created from the June template still shows the June routing bug — the July fix never arrived.
 

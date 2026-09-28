@@ -59,10 +59,7 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
         run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
-        with:
-          toolchain: 1.97.1
-          components: rustfmt
+      - uses: ./.github/actions/setup-rust
 
       - name: Check Formatting
         run: cargo fmt --check

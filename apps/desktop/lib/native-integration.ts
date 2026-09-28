@@ -79,6 +79,8 @@ export interface NativeSnapshotItem {
 	progress?: number;
 	startedAt?: string;
 	action: NativeAction;
+	/** A run executing in this app right now, never run history. */
+	live?: true;
 }
 export type NativeWidgetKind =
 	| "flowpilot"
@@ -112,7 +114,13 @@ export interface NativeSnapshot {
 	version: 1;
 	scope: string;
 	generatedAt: string;
+	/** Widgets show content older than this with its age. */
+	staleAt: string;
+	/** Privacy window: widgets hide this snapshot's content after it. */
 	expiresAt: string;
+	/** Reads that failed, so the native store keeps its previous values. */
+	appsUnavailable?: true;
+	eventsUnavailable?: string[];
 	sections: NativeSnapshotSection[];
 	events: NativeEventEntity[];
 	apps: { id: string; title: string; spotlightEligible?: boolean }[];
@@ -122,6 +130,8 @@ export interface NativeSnapshot {
 
 const settledValue = <T>(result: PromiseSettledResult<T>): T | undefined =>
 	result.status === "fulfilled" ? result.value : undefined;
+const NATIVE_SNAPSHOT_STALE_MS = 60 * 60_000;
+const NATIVE_SNAPSHOT_RETENTION_MS = 7 * 86_400_000;
 const section = (
 	kind: NativeWidgetKind,
 	title: string,
@@ -174,6 +184,17 @@ export async function loadNativeSnapshot(
 			? backend.usageState.getUsageSummary()
 			: Promise.resolve(undefined),
 	]);
+	const reads = {
+		apps: libraryResult,
+		profile: profileResult,
+		inbox: inboxResult,
+		history: historyResult,
+		activity: activityResult,
+		usage: usageResult,
+	};
+	for (const [name, result] of Object.entries(reads))
+		if (result.status === "rejected")
+			console.warn(`Native snapshot ${name} read failed:`, result.reason);
 	const profile = settledValue(profileResult);
 	const visible = new Set(profile?.apps?.map((app) => app.app_id) ?? []);
 	let library = (settledValue(libraryResult) ?? []).filter(([app]) =>
@@ -198,14 +219,12 @@ export async function loadNativeSnapshot(
 	const names = new Map(apps.map((app) => [app.id, app.title]));
 	const events: NativeEventEntity[] = [];
 	const favorites: NativeSnapshotItem[] = [];
-	let eventReadsSucceeded =
-		libraryResult.status === "fulfilled" &&
-		profileResult.status === "fulfilled";
 	const nowMs = now.getTime();
 	if (eventCatalog)
 		for (const appId of eventCatalog.keys())
 			if (!names.has(appId)) eventCatalog.delete(appId);
 	const eventsByApp = new Map<string, IEvent[]>();
+	const failedEventApps: string[] = [];
 	const pending = library.filter(([app]) => {
 		const cached = eventCatalog?.get(app.id);
 		if (!cached || nowMs - cached.fetchedAt >= NATIVE_EVENT_CATALOG_MAX_AGE_MS)
@@ -228,7 +247,14 @@ export async function loadNativeSnapshot(
 			}
 			const stale = eventCatalog?.get(appId);
 			if (stale) eventsByApp.set(appId, stale.events);
-			else eventReadsSucceeded = false;
+			else {
+				failedEventApps.push(appId);
+				if (result.status === "rejected")
+					console.warn(
+						`Native snapshot events read failed for ${appId}:`,
+						result.reason,
+					);
+			}
 		});
 	}
 	for (const app of apps) {
@@ -293,6 +319,8 @@ export async function loadNativeSnapshot(
 			appIcon: item.app_id ? appIcons.get(item.app_id) : undefined,
 		})),
 	);
+	const appsFailed =
+		libraryResult.status === "rejected" || profileResult.status === "rejected";
 	const history = settledValue(historyResult);
 	const activity = settledValue(activityResult);
 	const usage = settledValue(usageResult);
@@ -319,13 +347,13 @@ export async function loadNativeSnapshot(
 			"attention",
 			"Needs attention",
 			asArray(activity?.attention).filter(visibleRun).slice(0, 8).map(runItem),
-			activity !== undefined,
+			activity !== undefined && !appsFailed,
 		),
 		section(
 			"recent_runs",
 			"Recent runs",
 			asArray(history?.items).filter(visibleRun).map(runItem),
-			history !== undefined,
+			history !== undefined && !appsFailed,
 		),
 		section(
 			"recent_apps",
@@ -391,14 +419,13 @@ export async function loadNativeSnapshot(
 						]
 					: []),
 			],
-			libraryResult.status === "fulfilled" &&
-				profileResult.status === "fulfilled",
+			!appsFailed && activityResult.status !== "rejected",
 		),
 		section(
 			"event_favorites",
 			"Favorite Events",
 			favorites.slice(0, 12),
-			eventReadsSucceeded,
+			!appsFailed,
 		),
 	];
 	if (!authenticated)
@@ -409,10 +436,17 @@ export async function loadNativeSnapshot(
 		version: 1,
 		scope,
 		generatedAt: now.toISOString(),
-		expiresAt: new Date(now.getTime() + 60 * 60 * 1000).toISOString(),
+		staleAt: new Date(now.getTime() + NATIVE_SNAPSHOT_STALE_MS).toISOString(),
+		expiresAt: new Date(
+			now.getTime() + NATIVE_SNAPSHOT_RETENTION_MS,
+		).toISOString(),
 		sections,
 		events,
 		apps,
+		...(appsFailed ? { appsUnavailable: true as const } : {}),
+		...(!appsFailed && failedEventApps.length
+			? { eventsUnavailable: failedEventApps }
+			: {}),
 	};
 }
 
@@ -872,6 +906,7 @@ export function withNativeActiveRuns(
 			subtitle: "Running",
 			status: "running",
 			startedAt: run.startedAt,
+			live: true as const,
 			action: {
 				kind: "open_run",
 				appId: run.appId,
@@ -886,7 +921,11 @@ export function withNativeActiveRuns(
 			section.kind === "recent_runs"
 				? {
 						...section,
-						state: active.length ? "ready" : section.state,
+						// A failed history read stays unavailable so the native store keeps the last history.
+						state:
+							active.length && section.state !== "unavailable"
+								? "ready"
+								: section.state,
 						items: [
 							...active,
 							...section.items.filter((item) => !ids.has(item.id)),

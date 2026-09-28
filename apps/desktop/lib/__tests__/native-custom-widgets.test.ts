@@ -319,6 +319,67 @@ describe("native custom widget publication", () => {
 		expect(harness.latest()[0].page).toBeUndefined();
 	});
 
+	it("keeps the last content when a refresh fails without an access verdict", async () => {
+		const item = definition();
+		const saved = new Date("2026-09-13T08:00:00.000Z");
+		seed(scope, {
+			...nativeWidgetShell(item, saved),
+			state: "ready",
+			page: projection("Last good").root,
+		});
+		saveNativeWidgetDefinitions(scope, [item]);
+		mocks.loadPage.mockRejectedValue(new Error("Network unavailable: pages"));
+		const harness = publisher();
+		await harness.service.refresh(true);
+		expect(harness.latest()[0]).toMatchObject({
+			state: "ready",
+			updatedAt: saved.toISOString(),
+		});
+		expect(harness.latest()[0].page?.text).toBe("Last good");
+	});
+
+	it("replaces kept content when a refresh fails with a code or access error", async () => {
+		const item = definition();
+		seed(scope, {
+			...nativeWidgetShell(item),
+			state: "ready",
+			page: projection("Last good").root,
+		});
+		saveNativeWidgetDefinitions(scope, [item]);
+		mocks.loadPage.mockRejectedValue(
+			new TypeError("Cannot read properties of undefined"),
+		);
+		const harness = publisher();
+		await harness.service.refresh(true);
+		expect(harness.latest()[0].state).toBe("error");
+		expect(harness.latest()[0].page).toBeUndefined();
+	});
+
+	it("keeps a pending placeholder instead of an error after a transient failure", async () => {
+		saveNativeWidgetDefinitions(scope, [definition()]);
+		mocks.loadPage.mockRejectedValue(new Error("Network unavailable: pages"));
+		const harness = publisher();
+		await harness.service.refresh(true);
+		expect(
+			harness.publish.mock.calls.flatMap(([widgets]) => widgets),
+		).not.toContainEqual(expect.objectContaining({ state: "error" }));
+		expect(harness.latest()[0]).toMatchObject({ pending: true });
+		await harness.service.refresh();
+		expect(mocks.loadPage).toHaveBeenCalledTimes(1);
+	});
+
+	it("marks placeholders pending so the native store keeps earlier content", async () => {
+		saveNativeWidgetDefinitions(scope, [definition()]);
+		mocks.loadPage.mockReturnValue(new Promise(() => {}));
+		const harness = publisher();
+		void harness.service.refresh();
+		await flush();
+		expect(harness.publish.mock.calls[0][0][0]).toMatchObject({
+			state: "unavailable",
+			pending: true,
+		});
+	});
+
 	it("clears cached private content when a live capture discovers revoked access", async () => {
 		const item = definition();
 		seed(scope, {

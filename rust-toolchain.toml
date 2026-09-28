@@ -1,4 +1,8 @@
 [toolchain]
-channel = "1.97.1"
+# LLVM 23 includes the deterministic LoopUnroll fix (llvm/llvm-project#188821).
+# TODO: Move to Rust 1.99.0 stable after reproducibility checks, full native builds,
+# and runtime smoke tests pass. Update matching pins and check them with:
+# python3 .github/scripts/check_rust_toolchain.py
+channel = "beta-2026-09-27"
 profile = "minimal"
 components = ["rustfmt", "clippy"]

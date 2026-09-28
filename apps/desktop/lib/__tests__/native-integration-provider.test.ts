@@ -410,6 +410,7 @@ test("current page publication updates without restarting native action delivery
 		version: 1,
 		scope: scope(),
 		generatedAt: new Date().toISOString(),
+		staleAt: new Date(Date.now() + 3_600_000).toISOString(),
 		expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
 		sections: [],
 		events: [],
@@ -438,6 +439,7 @@ function notificationSnapshot(user = "user-a"): NativeSnapshot {
 		version: 1,
 		scope: scope(user),
 		generatedAt: new Date().toISOString(),
+		staleAt: new Date(Date.now() + 3_600_000).toISOString(),
 		expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
 		sections: [
 			{

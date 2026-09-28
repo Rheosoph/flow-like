@@ -154,8 +154,10 @@ names, pins, and permissions in review.
 
 1. Run `mise run build`.
 2. Open Flow-Like Desktop.
-3. Go to **Library → Packages → Publish**.
-4. Select `build/node.wasm` and `flow-like.toml`.
+3. In **Packages › Mine**, add the project with **Add folder** if it is not
+   listed yet.
+4. Select **Publish…** on the package card. The wizard reads `flow-like.toml`
+   and the built `build/node.wasm` from the folder.
 5. Review the nodes extracted from the binary and submit.
 
 ## Related

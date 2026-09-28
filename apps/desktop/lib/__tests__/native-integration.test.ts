@@ -94,6 +94,10 @@ function fixture(events = [event()]) {
 		},
 	} as unknown as IBackendState;
 }
+function usage(backend: IBackendState) {
+	if (!backend.usageState) throw new Error("The fixture provides usage state");
+	return backend.usageState;
+}
 function context(backend: IBackendState): NativeDispatchContext {
 	return {
 		scope: "account-a",
@@ -383,7 +387,7 @@ describe("native snapshots", () => {
 
 	test("converts recorded model and embedding microdollars into widget USD", async () => {
 		const backend = fixture();
-		backend.usageState!.getUsageSummary = vi.fn(async () => ({
+		usage(backend).getUsageSummary = vi.fn(async () => ({
 			total_executions: 700,
 			total_llm_invocations: 6,
 			total_embedding_invocations: 2,
@@ -409,10 +413,10 @@ describe("native snapshots", () => {
 			{ id: "other-profile", app_id: "other", status: "Error" },
 			{ id: "missing-app", status: "Error" },
 		];
-		backend.usageState!.getExecutionHistory = vi.fn(async () => ({
+		usage(backend).getExecutionHistory = vi.fn(async () => ({
 			items: rows,
 		})) as never;
-		backend.usageState!.getExecutionActivity = vi.fn(async () => ({
+		usage(backend).getExecutionActivity = vi.fn(async () => ({
 			total: 3,
 			attention: rows,
 		})) as never;
@@ -434,6 +438,27 @@ describe("native snapshots", () => {
 		expect(
 			snapshot.sections.find((section) => section.kind === "recent_apps"),
 		).toMatchObject({ state: "unavailable", items: [] });
+		expect(snapshot.appsUnavailable).toBe(true);
+		expect(
+			snapshot.sections.find((section) => section.kind === "recent_runs")
+				?.state,
+		).toBe("unavailable");
+		expect(
+			snapshot.sections.find((section) => section.kind === "attention")?.state,
+		).toBe("unavailable");
+	});
+	test("a failed event read names the app so the native store keeps its events", async () => {
+		const backend = fixture([event()]);
+		backend.eventState.getEvents = vi.fn(async () => {
+			throw new Error("offline");
+		});
+		const snapshot = await loadNativeSnapshot(backend, "account-a", [], true);
+		expect(snapshot.eventsUnavailable).toEqual(["app"]);
+		expect(snapshot.appsUnavailable).toBeUndefined();
+		expect(
+			snapshot.sections.find((section) => section.kind === "event_favorites")
+				?.state,
+		).toBe("ready");
 	});
 	test("uses actual opening order, selected profile apps, and complete attention source", async () => {
 		const backend = fixture([
@@ -473,13 +498,16 @@ describe("native snapshots", () => {
 				value: "400",
 			},
 		]);
-		expect(backend.usageState!.getExecutionActivity).toHaveBeenCalledWith(7);
+		expect(usage(backend).getExecutionActivity).toHaveBeenCalledWith(7);
 		expect(JSON.stringify(snapshot)).not.toContain("DO NOT COPY");
-		expect(snapshot.expiresAt).toBe("2026-09-12T01:00:00.000Z");
+		expect(snapshot.staleAt).toBe("2026-09-12T01:00:00.000Z");
+		expect(snapshot.expiresAt).toBe("2026-09-19T00:00:00.000Z");
+		expect(snapshot.appsUnavailable).toBeUndefined();
+		expect(snapshot.eventsUnavailable).toBeUndefined();
 	});
 	test("failed reads remain unavailable and do not impersonate zero activity", async () => {
 		const backend = fixture();
-		backend.usageState!.getExecutionActivity = vi.fn(async () => {
+		usage(backend).getExecutionActivity = vi.fn(async () => {
 			throw new Error("offline");
 		});
 		const snapshot = await loadNativeSnapshot(backend, "account-a", [], true);
@@ -489,6 +517,9 @@ describe("native snapshots", () => {
 		expect(
 			snapshot.sections.find((item) => item.kind === "recent_runs")?.state,
 		).toBe("ready");
+		expect(
+			snapshot.sections.find((item) => item.kind === "workspace"),
+		).toMatchObject({ state: "unavailable", items: [{ id: "apps" }] });
 	});
 	test("signed-out snapshots retain only positively local-only app entry points", async () => {
 		const backend = fixture();
@@ -501,7 +532,7 @@ describe("native snapshots", () => {
 		const backend = fixture();
 		const snapshot = await loadNativeSnapshot(backend, "local", [], false);
 		expect(backend.userState.listNotifications).not.toHaveBeenCalled();
-		expect(backend.usageState!.getExecutionHistory).not.toHaveBeenCalled();
+		expect(usage(backend).getExecutionHistory).not.toHaveBeenCalled();
 		expect(snapshot.apps).toEqual([]);
 		expect(snapshot.events).toEqual([]);
 		expect(snapshot.sections.find((item) => item.kind === "inbox")?.state).toBe(
@@ -823,19 +854,43 @@ describe("native navigation and active runs", () => {
 			live,
 			{ ...live, appId: "other", runId: "other-run" },
 		]);
-		const items = merged.sections.find(
-			(section) => section.kind === "recent_runs",
-		)!.items;
+		const items =
+			merged.sections.find((section) => section.kind === "recent_runs")
+				?.items ?? [];
 		expect(items).toHaveLength(1);
 		expect(items[0]).toMatchObject({
 			id: "run",
 			status: "running",
+			live: true,
 			action: { runId: "run", eventId: "event" },
 		});
 		expect(
-			snapshot.sections.find((section) => section.kind === "recent_runs")!
-				.items[0].status,
+			snapshot.sections.find((section) => section.kind === "recent_runs")
+				?.items[0].status,
 		).toBe("Info");
+	});
+	test("active executions never turn a failed history read into history", async () => {
+		const backend = fixture();
+		usage(backend).getExecutionHistory = vi.fn(async () => {
+			throw new Error("offline");
+		});
+		const snapshot = await loadNativeSnapshot(backend, "account-a", [], true);
+		const merged = withNativeActiveRuns(snapshot, [
+			{
+				streamId: "stream",
+				appId: "app",
+				eventId: "event",
+				runId: "run",
+				title: "Translation",
+				startedAt: "2026-09-12T00:00:00Z",
+			},
+		]);
+		expect(
+			merged.sections.find((section) => section.kind === "recent_runs"),
+		).toMatchObject({
+			state: "unavailable",
+			items: [{ id: "run", live: true }],
+		});
 	});
 	test("usable app routes are eligible for app discovery without exposing unconfigured Events", async () => {
 		const snapshot = await loadNativeSnapshot(
