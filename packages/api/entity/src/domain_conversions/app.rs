@@ -92,6 +92,18 @@ impl From<AppCategory> for DbCategory {
     }
 }
 
+impl From<DbVisibility> for AppVisibility {
+    fn from(value: DbVisibility) -> Self {
+        match value {
+            DbVisibility::Public => Self::Public,
+            DbVisibility::PublicRequestAccess => Self::PublicRequestAccess,
+            DbVisibility::Private => Self::Private,
+            DbVisibility::Prototype => Self::Prototype,
+            DbVisibility::Offline => Self::Offline,
+        }
+    }
+}
+
 impl From<app::Model> for App {
     fn from(model: app::Model) -> Self {
         Self {
@@ -108,13 +120,7 @@ impl From<app::Model> for App {
                 DbStatus::Inactive => AppStatus::Inactive,
                 DbStatus::Archived => AppStatus::Archived,
             },
-            visibility: match model.visibility {
-                DbVisibility::Public => AppVisibility::Public,
-                DbVisibility::PublicRequestAccess => AppVisibility::PublicRequestAccess,
-                DbVisibility::Private => AppVisibility::Private,
-                DbVisibility::Prototype => AppVisibility::Prototype,
-                DbVisibility::Offline => AppVisibility::Offline,
-            },
+            visibility: model.visibility.into(),
             authors: vec![],
             bits: model.bits.unwrap_or_default().into_inner(),
             boards: vec![],

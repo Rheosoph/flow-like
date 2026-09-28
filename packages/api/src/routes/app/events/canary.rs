@@ -485,14 +485,7 @@ pub async fn patch_canary(
         ));
     }
 
-    let mut app = state
-        .scoped_app(
-            &sub,
-            &app_id,
-            &state,
-            crate::credentials::CredentialsAccess::EditApp,
-        )
-        .await?;
+    let mut app = super::editable_event_app(&state, &sub, &app_id).await?;
     let mut event = freshest_event(&app, db_event).await;
 
     let share_change = if let Some(variant) = event
@@ -608,14 +601,7 @@ pub async fn put_event_variants(
         ));
     }
 
-    let mut app = state
-        .scoped_app(
-            &sub,
-            &app_id,
-            &state,
-            crate::credentials::CredentialsAccess::EditApp,
-        )
-        .await?;
+    let mut app = super::editable_event_app(&state, &sub, &app_id).await?;
     let stored = freshest_event(&app, db_event).await;
 
     let mut updated = stored.clone();
@@ -993,14 +979,7 @@ pub async fn promote_canary(
     updated.variables.extend(promoted.variables);
     preserve_event_secrets(&mut updated, &stored);
 
-    let mut app = state
-        .scoped_app(
-            &sub,
-            &app_id,
-            &state,
-            crate::credentials::CredentialsAccess::EditApp,
-        )
-        .await?;
+    let mut app = super::editable_event_app(&state, &sub, &app_id).await?;
     // An explicit version type forces the cut even when the promoted content
     // matches the primary — the promote must be addressable in the archive.
     let event = app
@@ -1143,14 +1122,7 @@ pub async fn abort_canary(
     take_variant(&mut updated, &body.variant)?;
     preserve_event_secrets(&mut updated, &stored);
 
-    let mut app = state
-        .scoped_app(
-            &sub,
-            &app_id,
-            &state,
-            crate::credentials::CredentialsAccess::EditApp,
-        )
-        .await?;
+    let mut app = super::editable_event_app(&state, &sub, &app_id).await?;
     // Removing a variant is a content change, so a patch cut happens on its
     // own — fine, inbound serves by pointer, not by version equality.
     let event = app

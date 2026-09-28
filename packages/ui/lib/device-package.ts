@@ -50,6 +50,7 @@ const TARGETS: readonly ReleaseTarget[] = [
 ];
 const MAX_JWS = 16 * 1024;
 const MAX_BROWSER_BINARY = 256 * 1024 * 1024;
+const MAX_RELEASE_BINARY = 2 * 1024 ** 3;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const fail = (message: string): never => {
@@ -366,7 +367,7 @@ function validateManifest(
 		assert(
 			Number.isSafeInteger(artifact.size) &&
 				Number(artifact.size) > 0 &&
-				Number(artifact.size) <= 2 * 1024 ** 3 &&
+				Number(artifact.size) <= MAX_RELEASE_BINARY &&
 				typeof artifact.sha256 === "string" &&
 				/^[a-f0-9]{64}$/.test(artifact.sha256),
 			"Invalid release artifact digest or size.",
@@ -433,11 +434,19 @@ export function standalonePackageModes(
 	const artifact = release.artifacts.find((value) => value.target === target);
 	const platform = containerPlatform(target);
 	return {
-		binary: Boolean(artifact && artifact.size <= MAX_BROWSER_BINARY),
+		binary: Boolean(artifact && artifact.size <= MAX_RELEASE_BINARY),
 		docker: Boolean(
 			artifact && platform && release.container?.platforms.includes(platform),
 		),
 	};
+}
+
+export function standalonePackageDownloadsBinary(
+	release: StandaloneRelease,
+	target: ReleaseTarget,
+): boolean {
+	const artifact = release.artifacts.find((value) => value.target === target);
+	return Boolean(artifact && artifact.size > MAX_BROWSER_BINARY);
 }
 
 export function validateStandalonePackageSelection(
@@ -457,15 +466,63 @@ export function validateStandalonePackageSelection(
 	if (mode !== "docker")
 		assert(
 			modes.binary,
-			modes.docker
-				? "This binary exceeds the browser package limit of 256 MiB. Select Docker Compose."
-				: "This binary exceeds the browser package limit of 256 MiB. This target has no Docker alternative in the signed release.",
+			"This binary exceeds the release size limit of 2 GiB.",
 		);
 	if (mode !== "binary")
 		assert(
 			modes.docker,
 			"The signed release has no container for the selected target.",
 		);
+}
+
+function binaryDownloadScript(artifact: StandaloneArtifact): string {
+	const quotedUrl = `'${artifact.url.replaceAll("'", `'"'"'`)}'`;
+	return `#!/bin/sh
+set -eu
+umask 077
+export LC_ALL=C
+cd -- "$(dirname -- "$0")"
+chmod 700 .
+if [ -L ./flow-like-standalone ] || { [ -e ./flow-like-standalone ] && [ ! -f ./flow-like-standalone ]; }; then
+  echo 'The runtime destination must be a regular file.' >&2
+  exit 1
+fi
+# An enrolled runtime may have installed a newer signed release through its updater.
+if [ -f ./flow-like-standalone ] && [ ! -f onboarding.json ]; then exit 0; fi
+if command -v sha256sum >/dev/null 2>&1; then
+  checksum() { sha256sum "$1"; }
+elif command -v shasum >/dev/null 2>&1; then
+  checksum() { shasum -a 256 "$1"; }
+else
+  echo 'Install sha256sum or shasum to verify the runtime.' >&2
+  exit 1
+fi
+verify_binary() {
+  [ "$(wc -c < "$1")" -eq ${artifact.size} ] || { echo 'Runtime size differs from the signed release.' >&2; return 1; }
+  digest=$(checksum "$1") || return 1
+  [ "\${digest%% *}" = '${artifact.sha256}' ] || { echo 'Runtime digest differs from the signed release.' >&2; return 1; }
+}
+if [ -f ./flow-like-standalone ]; then verify_binary ./flow-like-standalone; exit 0; fi
+command -v curl >/dev/null 2>&1 || { echo 'Install curl to download the runtime.' >&2; exit 1; }
+download_dir=$(mktemp -d ./.runtime-download.XXXXXX)
+trap 'rm -rf "$download_dir"' 0
+trap 'exit 1' HUP INT TERM
+echo 'Downloading and verifying the native runtime...'
+# Older curl versions cannot limit unknown-length responses. Shell file limits
+# use 512 or 1024 byte blocks, so this also bounds disk use to at most twice the signed size.
+status=$(
+  ulimit -f ${Math.ceil(artifact.size / 512)} || exit 1
+  curl --disable --fail --silent --show-error --globoff \\
+    --proto '=https' --max-redirs 0 --connect-timeout 30 \\
+    --max-time ${300 + Math.floor(artifact.size / (32 * 1024))} --speed-limit 1 --speed-time 60 \\
+    --max-filesize ${artifact.size} --output "$download_dir/binary" \\
+    --write-out '%{http_code}' --url ${quotedUrl}
+)
+[ "$status" = 200 ] || { echo 'Runtime download requires a direct HTTP 200 response.' >&2; exit 1; }
+verify_binary "$download_dir/binary"
+chmod 700 "$download_dir/binary"
+mv -f "$download_dir/binary" ./flow-like-standalone
+`;
 }
 
 async function download(
@@ -693,24 +750,37 @@ export async function buildStandalonePackage(
 	const add = (name: string, value: string, mode = 0o100600) =>
 		entries.push({ name, bytes: encoder.encode(value), mode });
 	if (input.mode !== "docker") {
-		const binary = await download(
-			artifact.url,
-			artifact.size,
-			input.signal,
-			artifact.size,
-		);
-		assert(
-			(await sha256(binary)) === artifact.sha256,
-			"The binary digest does not match the signed release.",
-		);
-		entries.push({
-			name: "flow-like-standalone",
-			bytes: binary,
-			mode: 0o100700,
-		});
+		const deferredDownload = artifact.size > MAX_BROWSER_BINARY;
+		if (deferredDownload) {
+			add("download-runtime.sh", binaryDownloadScript(artifact), 0o100700);
+		} else {
+			const binary = await download(
+				artifact.url,
+				MAX_BROWSER_BINARY,
+				input.signal,
+				artifact.size,
+			);
+			assert(
+				(await sha256(binary)) === artifact.sha256,
+				"The binary digest does not match the signed release.",
+			);
+			entries.push({
+				name: "flow-like-standalone",
+				bytes: binary,
+				mode: 0o100700,
+			});
+		}
 		add(
 			"start.sh",
-			'#!/bin/sh\nset -eu\ncd -- "$(dirname -- "$0")"\nchmod 700 . ./flow-like-standalone\nchmod 600 .env onboarding.json release-trust.json release.jws 2>/dev/null || true\nif [ -f onboarding.json ]; then ./flow-like-standalone --state-dir ./state enroll .; fi\nif [ -f ./state/agent.env ]; then chmod 600 ./state/agent.env; fi\nexec ./flow-like-standalone --state-dir ./state run\n',
+			`#!/bin/sh
+set -eu
+cd -- "$(dirname -- "$0")"
+${deferredDownload ? "sh ./download-runtime.sh\n" : ""}chmod 700 . ./flow-like-standalone
+chmod 600 .env onboarding.json release-trust.json release.jws 2>/dev/null || true
+if [ -f onboarding.json ]; then ./flow-like-standalone --state-dir ./state enroll .; fi
+if [ -f ./state/agent.env ]; then chmod 600 ./state/agent.env; fi
+exec ./flow-like-standalone --state-dir ./state run
+`,
 			0o100700,
 		);
 	}

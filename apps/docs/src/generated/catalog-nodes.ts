@@ -118645,6 +118645,14 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "categorySlug": "nodes/email",
     "icon": "/flow/icons/mail.svg",
+    "scores": {
+      "privacy": 4,
+      "security": 6,
+      "performance": 6,
+      "governance": 6,
+      "reliability": 6,
+      "cost": 7
+    },
     "pins": [
       {
         "name": "exec_in",
@@ -118750,6 +118758,14 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "categorySlug": "nodes/email",
     "icon": "/flow/icons/mail.svg",
+    "scores": {
+      "privacy": 4,
+      "security": 6,
+      "performance": 6,
+      "governance": 6,
+      "reliability": 6,
+      "cost": 7
+    },
     "pins": [
       {
         "name": "exec_in",
@@ -121280,6 +121296,14 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "categorySlug": "nodes/events",
     "icon": "/flow/icons/event.svg",
+    "scores": {
+      "privacy": 4,
+      "security": 5,
+      "performance": 8,
+      "governance": 7,
+      "reliability": 7,
+      "cost": 8
+    },
     "pins": [
       {
         "name": "exec_out",
@@ -121293,11 +121317,11 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "email",
         "friendlyName": "Email",
-        "description": "Email content, envelope recipients, headers and attachment storage paths",
+        "description": "Email content, envelope recipients, headers and temporary file paths that expire at Expires At",
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmail\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"delivery_id\":{\"type\":\"string\"},\"envelope_from\":{\"type\":\"string\"},\"recipient\":{\"type\":\"string\"},\"session\":{\"anyOf\":[{\"$ref\":\"#/$defs/MailSession\"},{\"type\":\"null\"}],\"default\":null},\"reference\":{\"anyOf\":[{\"$ref\":\"#/$defs/MailMessageRef\"},{\"type\":\"null\"}],\"default\":null},\"sender\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAddress\"},{\"type\":\"null\"}],\"default\":null},\"from\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"cc\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"reply_to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"subject\":{\"type\":[\"string\",\"null\"],\"default\":null},\"message_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"text\":{\"type\":[\"string\",\"null\"],\"default\":null},\"html\":{\"type\":[\"string\",\"null\"],\"default\":null},\"text_truncated\":{\"type\":\"boolean\",\"default\":false},\"html_truncated\":{\"type\":\"boolean\",\"default\":false},\"text_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"default\":null},\"html_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"default\":null},\"headers\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailHeader\"},\"default\":[]},\"attachments\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAttachment\"},\"default\":[]},\"raw_path\":{\"$ref\":\"#/$defs/FlowPath\"},\"received_at\":{\"type\":[\"string\",\"null\"],\"default\":null},\"expires_at\":{\"type\":[\"string\",\"null\"],\"default\":null},\"authentication\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAuthentication\"},{\"type\":\"null\"}],\"default\":null}},\"required\":[\"id\",\"delivery_id\",\"envelope_from\",\"recipient\",\"raw_path\"],\"$defs\":{\"MailSession\":{\"type\":\"object\",\"properties\":{\"app_id\":{\"type\":\"string\"},\"event_id\":{\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"app_id\",\"event_id\"]},\"MailMessageRef\":{\"type\":\"object\",\"properties\":{\"session\":{\"$ref\":\"#/$defs/MailSession\"},\"delivery_id\":{\"description\":\"Internal inbound delivery ID. The mail provider's ID stays on InboundEmail.\",\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"session\",\"delivery_id\"]},\"InboundEmailAddress\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]},\"InboundEmailHeader\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"value\":{\"type\":\"string\"}},\"required\":[\"name\",\"value\"]},\"InboundEmailAttachment\":{\"type\":\"object\",\"properties\":{\"filename\":{\"type\":[\"string\",\"null\"],\"default\":null},\"content_type\":{\"type\":\"string\"},\"size\":{\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"path\":{\"$ref\":\"#/$defs/FlowPath\"}},\"required\":[\"content_type\",\"size\",\"path\"]},\"InboundEmailAuthentication\":{\"type\":\"object\",\"properties\":{\"provider\":{\"type\":[\"string\",\"null\"],\"default\":null},\"spam\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"virus\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"spf\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dkim\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc_policy\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"InboundEmailVerdict\":{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\"}},\"required\":[\"status\"]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmail\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"delivery_id\":{\"type\":\"string\"},\"envelope_from\":{\"type\":\"string\"},\"recipient\":{\"type\":\"string\"},\"session\":{\"anyOf\":[{\"$ref\":\"#/$defs/MailSession\"},{\"type\":\"null\"}],\"default\":null},\"reference\":{\"anyOf\":[{\"$ref\":\"#/$defs/MailMessageRef\"},{\"type\":\"null\"}],\"default\":null},\"sender\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAddress\"},{\"type\":\"null\"}],\"default\":null},\"from\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"cc\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"reply_to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"subject\":{\"type\":[\"string\",\"null\"],\"default\":null},\"message_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"text\":{\"type\":[\"string\",\"null\"],\"default\":null},\"html\":{\"type\":[\"string\",\"null\"],\"default\":null},\"text_truncated\":{\"type\":\"boolean\",\"default\":false},\"html_truncated\":{\"type\":\"boolean\",\"default\":false},\"text_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"default\":null},\"html_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"default\":null},\"headers\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailHeader\"},\"default\":[]},\"attachments\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAttachment\"},\"default\":[]},\"raw_path\":{\"$ref\":\"#/$defs/FlowPath\"},\"received_at\":{\"type\":[\"string\",\"null\"],\"default\":null},\"expires_at\":{\"type\":[\"string\",\"null\"],\"default\":null},\"authentication\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAuthentication\"},{\"type\":\"null\"}],\"default\":null},\"automated\":{\"description\":\"Bounce, auto-reply, list or other machine-generated mail. Replies to it are refused.\",\"type\":\"boolean\",\"default\":false}},\"required\":[\"id\",\"delivery_id\",\"envelope_from\",\"recipient\",\"raw_path\"],\"$defs\":{\"MailSession\":{\"type\":\"object\",\"properties\":{\"app_id\":{\"type\":\"string\"},\"event_id\":{\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"app_id\",\"event_id\"]},\"MailMessageRef\":{\"type\":\"object\",\"properties\":{\"session\":{\"$ref\":\"#/$defs/MailSession\"},\"delivery_id\":{\"description\":\"Internal inbound delivery ID. The mail provider's ID stays on InboundEmail.\",\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"session\",\"delivery_id\"]},\"InboundEmailAddress\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]},\"InboundEmailHeader\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"value\":{\"type\":\"string\"}},\"required\":[\"name\",\"value\"]},\"InboundEmailAttachment\":{\"type\":\"object\",\"properties\":{\"filename\":{\"type\":[\"string\",\"null\"],\"default\":null},\"content_type\":{\"type\":\"string\"},\"size\":{\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"path\":{\"$ref\":\"#/$defs/FlowPath\"}},\"required\":[\"content_type\",\"size\",\"path\"]},\"InboundEmailAuthentication\":{\"type\":\"object\",\"properties\":{\"provider\":{\"type\":[\"string\",\"null\"],\"default\":null},\"spam\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"virus\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"spf\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dkim\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc_policy\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"InboundEmailVerdict\":{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\"}},\"required\":[\"status\"]}}}",
         "index": 2
       },
       {
@@ -121323,7 +121347,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "attachments",
         "friendlyName": "Attachments",
-        "description": "Stored attachment paths for file and path nodes",
+        "description": "Temporary attachment files for file and path nodes. Copy them to app storage to keep them",
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Array",
@@ -121333,7 +121357,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "attachment_metadata",
         "friendlyName": "Attachment Metadata",
-        "description": "Attachment filenames, content types, byte sizes and storage paths",
+        "description": "Attachment filenames, content types, byte sizes and temporary file paths",
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Array",
@@ -121436,34 +121460,52 @@ export const catalogNodes: CatalogNode[] = [
         "index": 16
       },
       {
+        "name": "automated",
+        "friendlyName": "Automated",
+        "description": "True for bounces, auto-replies, mailing lists and other machine-generated mail. Platform replies to it are refused to prevent mail loops",
+        "pinType": "Output",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "index": 17
+      },
+      {
         "name": "raw",
         "friendlyName": "Raw Email",
-        "description": "Complete MIME message stored as an EML file",
+        "description": "Complete MIME message as a temporary EML file. Copy it to app storage to keep it",
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
         "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
-        "index": 17
+        "index": 18
       },
       {
         "name": "text_path",
         "friendlyName": "Text File",
-        "description": "Complete plain text body, when present",
-        "pinType": "Output",
-        "dataType": "Struct",
-        "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Nullable_FlowPath\",\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}",
-        "index": 18
-      },
-      {
-        "name": "html_path",
-        "friendlyName": "HTML File",
-        "description": "Complete HTML body, when present",
+        "description": "Complete plain text body as a temporary file, when present",
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
         "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Nullable_FlowPath\",\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}",
         "index": 19
+      },
+      {
+        "name": "html_path",
+        "friendlyName": "HTML File",
+        "description": "Complete HTML body as a temporary file, when present",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Nullable_FlowPath\",\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}",
+        "index": 20
+      },
+      {
+        "name": "expires_at",
+        "friendlyName": "Expires At",
+        "description": "When the email's stored files are deleted. Copy files to app storage before then to keep them",
+        "pinType": "Output",
+        "dataType": "Date",
+        "valueType": "Normal",
+        "index": 21
       },
       {
         "name": "text_truncated",
@@ -121472,7 +121514,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Boolean",
         "valueType": "Normal",
-        "index": 20
+        "index": 22
       },
       {
         "name": "html_truncated",
@@ -121481,11 +121523,11 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Output",
         "dataType": "Boolean",
         "valueType": "Normal",
-        "index": 21
+        "index": 23
       }
     ],
     "inputCount": 0,
-    "outputCount": 21,
+    "outputCount": 23,
     "flags": [
       "Start node"
     ],
@@ -123157,7 +123199,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "data",
     "name": "events_teams_send_card",
     "friendlyName": "Send Teams Card",
-    "description": "Reply to the Teams conversation from a Chat Event session",
+    "description": "Send an Adaptive Card to the Teams conversation of a Chat Event session",
     "category": "Events/Chat/Teams",
     "categoryPath": [
       "Events",
@@ -123166,6 +123208,14 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "categorySlug": "nodes/events/chat/teams",
     "icon": "/flow/icons/teams.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 6,
+      "performance": 6,
+      "governance": 6,
+      "reliability": 6,
+      "cost": 8
+    },
     "pins": [
       {
         "name": "exec_in",
@@ -123237,7 +123287,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "data",
     "name": "events_teams_send_message",
     "friendlyName": "Send Teams Message",
-    "description": "Reply to the Teams conversation from a Chat Event session",
+    "description": "Send a text reply to the Teams conversation of a Chat Event session",
     "category": "Events/Chat/Teams",
     "categoryPath": [
       "Events",
@@ -123246,6 +123296,14 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "categorySlug": "nodes/events/chat/teams",
     "icon": "/flow/icons/teams.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 6,
+      "performance": 6,
+      "governance": 6,
+      "reliability": 6,
+      "cost": 8
+    },
     "pins": [
       {
         "name": "exec_in",
@@ -123307,7 +123365,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "data",
     "name": "events_teams_update_message",
     "friendlyName": "Update Teams Message",
-    "description": "Reply to the Teams conversation from a Chat Event session",
+    "description": "Replace the text of a message a Teams send node posted in this conversation",
     "category": "Events/Chat/Teams",
     "categoryPath": [
       "Events",
@@ -123316,6 +123374,14 @@ export const catalogNodes: CatalogNode[] = [
     ],
     "categorySlug": "nodes/events/chat/teams",
     "icon": "/flow/icons/teams.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 6,
+      "performance": 6,
+      "governance": 6,
+      "reliability": 6,
+      "cost": 8
+    },
     "pins": [
       {
         "name": "exec_in",
@@ -123347,7 +123413,7 @@ export const catalogNodes: CatalogNode[] = [
         "index": 3
       },
       {
-        "name": "message_id",
+        "name": "input_message_id",
         "friendlyName": "Message ID",
         "description": "Message returned by a Teams send node in this conversation",
         "pinType": "Input",

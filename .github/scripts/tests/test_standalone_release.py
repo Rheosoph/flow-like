@@ -136,17 +136,24 @@ class StandalonePublisherTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "anonymously pullable"):
                 release.anonymous_container_readback(container)
 
-    def test_oversized_binary_requires_a_usable_signed_docker_platform(self):
-        records = [{"target": "x86_64-unknown-linux-gnu", "size": release.MAX_BROWSER_BINARY_BYTES + 1}]
-        release.usable_package_modes(records, {"platforms": ["linux/amd64"]})
-        for container in [None, {"platforms": ["linux/arm64"]}]:
-            with self.assertRaisesRegex(ValueError, "256 MiB"):
-                release.usable_package_modes(records, container)
-        records[0]["target"] = "aarch64-apple-darwin"
-        with self.assertRaisesRegex(ValueError, "no signed Docker alternative"):
-            release.usable_package_modes(records, {"platforms": ["linux/arm64"]})
-        records[0]["size"] = release.MAX_BROWSER_BINARY_BYTES
-        release.usable_package_modes(records, None)
+    def test_large_binaries_have_a_native_bootstrap_package_for_every_target(self):
+        for target in release.TARGETS:
+            for size in [256 * 1024 * 1024, 657979008, release.MAX_RELEASE_BINARY_BYTES]:
+                release.usable_package_modes([{"target": target, "size": size}], None)
+        for size in [0, True, release.MAX_RELEASE_BINARY_BYTES + 1]:
+            with self.assertRaisesRegex(ValueError, "2 GiB"):
+                release.usable_package_modes([{"target": "aarch64-apple-darwin", "size": size}], None)
+
+    def test_describe_rejects_oversized_binary_before_execution_or_copy(self):
+        with tempfile.TemporaryDirectory() as folder:
+            binary = Path(folder) / "binary"
+            with binary.open("wb") as stream:
+                stream.truncate(release.MAX_RELEASE_BINARY_BYTES + 1)
+            with patch.object(release, "binary_info") as info, patch.object(release.shutil, "copyfile") as copy:
+                with self.assertRaisesRegex(ValueError, "2 GiB"):
+                    release.describe(binary, "aarch64-apple-darwin", Path(folder) / "output")
+                info.assert_not_called()
+                copy.assert_not_called()
 
     def test_signed_immutable_artifacts_read_back_before_manifest_and_idempotent_retry(self):
         signed = self.signed(10)

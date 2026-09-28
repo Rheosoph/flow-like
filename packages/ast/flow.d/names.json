@@ -2722,8 +2722,8 @@
     "namespace": "browser",
     "alias": "blockUrls",
     "flat": "browserBlockUrls",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Emulation"
   },
   "browser_clear_console_logs": {
@@ -2767,8 +2767,8 @@
     "namespace": "browser",
     "alias": "clickAtPoint",
     "flat": "browserClickAtPoint",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Interact"
   },
   "browser_close": {
@@ -2794,8 +2794,8 @@
     "namespace": "browser",
     "alias": "countElements",
     "flat": "browserCountElements",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Extract"
   },
   "browser_double_click": {
@@ -2848,8 +2848,8 @@
     "namespace": "browser",
     "alias": "fillForm",
     "flat": "browserFillForm",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Input"
   },
   "browser_find_elements": {
@@ -2857,8 +2857,8 @@
     "namespace": "browser",
     "alias": "findElements",
     "flat": "browserFindElements",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Snapshot"
   },
   "browser_forward": {
@@ -2929,8 +2929,8 @@
     "namespace": "browser",
     "alias": "getElementState",
     "flat": "browserGetElementState",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Extract"
   },
   "browser_get_html": {
@@ -2965,8 +2965,8 @@
     "namespace": "browser",
     "alias": "getPageText",
     "flat": "browserGetPageText",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Extract"
   },
   "browser_get_session_storage": {
@@ -3037,8 +3037,8 @@
     "namespace": "browser",
     "alias": "listElements",
     "flat": "browserListElements",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Extract"
   },
   "browser_list_tabs": {
@@ -3064,8 +3064,8 @@
     "namespace": "browser",
     "alias": "loadStorageState",
     "flat": "browserLoadStorageState",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Auth"
   },
   "browser_new_page": {
@@ -3100,8 +3100,8 @@
     "namespace": "browser",
     "alias": "printPdf",
     "flat": "browserPrintPdf",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Capture"
   },
   "browser_reload": {
@@ -3136,8 +3136,8 @@
     "namespace": "browser",
     "alias": "saveStorageState",
     "flat": "browserSaveStorageState",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Auth"
   },
   "browser_screenshot": {
@@ -3172,8 +3172,8 @@
     "namespace": "browser",
     "alias": "scrollPage",
     "flat": "browserScrollPage",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Interact"
   },
   "browser_select_option": {
@@ -3217,8 +3217,8 @@
     "namespace": "browser",
     "alias": "setEmulation",
     "flat": "browserSetEmulation",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Emulation"
   },
   "browser_set_extra_headers": {
@@ -3226,8 +3226,8 @@
     "namespace": "browser",
     "alias": "setExtraHeaders",
     "flat": "browserSetExtraHeaders",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Emulation"
   },
   "browser_set_local_storage": {
@@ -3244,8 +3244,8 @@
     "namespace": "browser",
     "alias": "setNavigationPolicy",
     "flat": "browserSetNavigationPolicy",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Navigation"
   },
   "browser_set_session_storage": {
@@ -3262,8 +3262,8 @@
     "namespace": "browser",
     "alias": "snapshot",
     "flat": "browserSnapshot",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Snapshot"
   },
   "browser_start_console_observer": {
@@ -3316,8 +3316,8 @@
     "namespace": "browser",
     "alias": "typeSecret",
     "flat": "browserTypeSecret",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Input"
   },
   "browser_type_text": {
@@ -3370,8 +3370,8 @@
     "namespace": "browser",
     "alias": "waitForCondition",
     "flat": "browserWaitForCondition",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Wait"
   },
   "browser_wait_for_download": {
@@ -3406,8 +3406,8 @@
     "namespace": "browser",
     "alias": "zoomScreenshot",
     "flat": "browserZoomScreenshot",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Browser/Capture"
   },
   "bytes_concat": {
@@ -3631,8 +3631,8 @@
     "namespace": "computer",
     "alias": "captureState",
     "flat": "computerCaptureState",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Capture"
   },
   "computer_capture_window": {
@@ -3649,8 +3649,8 @@
     "namespace": "computer",
     "alias": "clickElement",
     "flat": "computerClickElement",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Mouse"
   },
   "computer_click_text": {
@@ -3658,8 +3658,8 @@
     "namespace": "computer",
     "alias": "clickText",
     "flat": "computerClickText",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Vision"
   },
   "computer_clipboard_get_image": {
@@ -3703,8 +3703,8 @@
     "namespace": "computer",
     "alias": "cursorPosition",
     "flat": "computerCursorPosition",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Mouse"
   },
   "computer_find_accessibility_element": {
@@ -3721,8 +3721,8 @@
     "namespace": "computer",
     "alias": "findText",
     "flat": "computerFindText",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Vision"
   },
   "computer_find_window_by_title": {
@@ -3784,8 +3784,8 @@
     "namespace": "computer",
     "alias": "holdKey",
     "flat": "computerHoldKey",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Keyboard"
   },
   "computer_key_chord": {
@@ -3793,8 +3793,8 @@
     "namespace": "computer",
     "alias": "keyChord",
     "flat": "computerKeyChord",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Keyboard"
   },
   "computer_key_press": {
@@ -3865,8 +3865,8 @@
     "namespace": "computer",
     "alias": "mouseDown",
     "flat": "computerMouseDown",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Mouse"
   },
   "computer_mouse_drag": {
@@ -3892,8 +3892,8 @@
     "namespace": "computer",
     "alias": "mouseTripleClick",
     "flat": "computerMouseTripleClick",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Mouse"
   },
   "computer_mouse_up": {
@@ -3901,8 +3901,8 @@
     "namespace": "computer",
     "alias": "mouseUp",
     "flat": "computerMouseUp",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Mouse"
   },
   "computer_natural_mouse_move": {
@@ -3919,8 +3919,8 @@
     "namespace": "computer",
     "alias": "ocr",
     "flat": "computerOcr",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Vision"
   },
   "computer_screenshot": {
@@ -3946,8 +3946,8 @@
     "namespace": "computer",
     "alias": "typeSecret",
     "flat": "computerTypeSecret",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Keyboard"
   },
   "computer_use_agent": {
@@ -3955,8 +3955,8 @@
     "namespace": "computer",
     "alias": "useAgent",
     "flat": "computerUseAgent",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Agent"
   },
   "computer_wait": {
@@ -3982,8 +3982,8 @@
     "namespace": "computer",
     "alias": "waitScreenChange",
     "flat": "computerWaitScreenChange",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Wait"
   },
   "computer_wait_screen_stable": {
@@ -3991,8 +3991,8 @@
     "namespace": "computer",
     "alias": "waitScreenStable",
     "flat": "computerWaitScreenStable",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Wait"
   },
   "computer_window_operation": {
@@ -4009,8 +4009,8 @@
     "namespace": "computer",
     "alias": "zoom",
     "flat": "computerZoom",
-    "receiver": "session",
-    "class": "AutomationSession",
+    "receiver": null,
+    "class": null,
     "category": "Automation/Computer/Capture"
   },
   "construct_array": {
