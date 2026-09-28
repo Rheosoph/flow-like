@@ -253,14 +253,42 @@ async fn inbound_email_groups_break_into_typed_scalar_date_and_file_pins() {
         (pin.data_type.clone(), pin.value_type.clone())
     };
     for (group, name, expected) in [
-        ("addresses", "sender", (VariableType::Struct, ValueType::Normal)),
+        (
+            "addresses",
+            "sender",
+            (VariableType::Struct, ValueType::Normal),
+        ),
         ("addresses", "to", (VariableType::Struct, ValueType::Array)),
-        ("addresses", "recipient", (VariableType::String, ValueType::Normal)),
-        ("content", "subject", (VariableType::String, ValueType::Normal)),
-        ("content", "text_truncated", (VariableType::Boolean, ValueType::Normal)),
-        ("delivery", "automated", (VariableType::Boolean, ValueType::Normal)),
-        ("delivery", "expires_at", (VariableType::Date, ValueType::Normal)),
-        ("delivery", "received_at", (VariableType::Date, ValueType::Normal)),
+        (
+            "addresses",
+            "recipient",
+            (VariableType::String, ValueType::Normal),
+        ),
+        (
+            "content",
+            "subject",
+            (VariableType::String, ValueType::Normal),
+        ),
+        (
+            "content",
+            "text_truncated",
+            (VariableType::Boolean, ValueType::Normal),
+        ),
+        (
+            "delivery",
+            "automated",
+            (VariableType::Boolean, ValueType::Normal),
+        ),
+        (
+            "delivery",
+            "expires_at",
+            (VariableType::Date, ValueType::Normal),
+        ),
+        (
+            "delivery",
+            "received_at",
+            (VariableType::Date, ValueType::Normal),
+        ),
     ] {
         assert_eq!(field(group, name), expected, "{group}.{name}");
     }

@@ -62037,14 +62037,14 @@
       "inputs": [],
       "outputs": [
         {
-          "name": "email",
+          "name": "message",
           "ty": {
             "base": "Struct",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Email content, envelope recipients, headers and temporary file paths that expire at Expires At",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmail\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"delivery_id\":{\"type\":\"string\"},\"envelope_from\":{\"type\":\"string\"},\"recipient\":{\"type\":\"string\"},\"session\":{\"anyOf\":[{\"$ref\":\"#/$defs/MailSession\"},{\"type\":\"null\"}],\"default\":null},\"reference\":{\"anyOf\":[{\"$ref\":\"#/$defs/MailMessageRef\"},{\"type\":\"null\"}],\"default\":null},\"sender\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAddress\"},{\"type\":\"null\"}],\"default\":null},\"from\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"cc\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"reply_to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"subject\":{\"type\":[\"string\",\"null\"],\"default\":null},\"message_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"text\":{\"type\":[\"string\",\"null\"],\"default\":null},\"html\":{\"type\":[\"string\",\"null\"],\"default\":null},\"text_truncated\":{\"type\":\"boolean\",\"default\":false},\"html_truncated\":{\"type\":\"boolean\",\"default\":false},\"text_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"default\":null},\"html_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"default\":null},\"headers\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailHeader\"},\"default\":[]},\"attachments\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAttachment\"},\"default\":[]},\"raw_path\":{\"$ref\":\"#/$defs/FlowPath\"},\"received_at\":{\"type\":[\"string\",\"null\"],\"default\":null},\"expires_at\":{\"type\":[\"string\",\"null\"],\"default\":null},\"authentication\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAuthentication\"},{\"type\":\"null\"}],\"default\":null},\"automated\":{\"description\":\"Bounce, auto-reply, list or other machine-generated mail. Replies to it are refused.\",\"type\":\"boolean\",\"default\":false}},\"required\":[\"id\",\"delivery_id\",\"envelope_from\",\"recipient\",\"raw_path\"],\"$defs\":{\"MailSession\":{\"type\":\"object\",\"properties\":{\"app_id\":{\"type\":\"string\"},\"event_id\":{\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"app_id\",\"event_id\"]},\"MailMessageRef\":{\"type\":\"object\",\"properties\":{\"session\":{\"$ref\":\"#/$defs/MailSession\"},\"delivery_id\":{\"description\":\"Internal inbound delivery ID. The mail provider's ID stays on InboundEmail.\",\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"session\",\"delivery_id\"]},\"InboundEmailAddress\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]},\"InboundEmailHeader\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"value\":{\"type\":\"string\"}},\"required\":[\"name\",\"value\"]},\"InboundEmailAttachment\":{\"type\":\"object\",\"properties\":{\"filename\":{\"type\":[\"string\",\"null\"],\"default\":null},\"content_type\":{\"type\":\"string\"},\"size\":{\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"path\":{\"$ref\":\"#/$defs/FlowPath\"}},\"required\":[\"content_type\",\"size\",\"path\"]},\"InboundEmailAuthentication\":{\"type\":\"object\",\"properties\":{\"provider\":{\"type\":[\"string\",\"null\"],\"default\":null},\"spam\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"virus\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"spf\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dkim\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc_policy\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"InboundEmailVerdict\":{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\"}},\"required\":[\"status\"]}}}"
+          "doc": "Reference to this email for Reply Platform Email",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"MailMessageRef\",\"type\":\"object\",\"properties\":{\"session\":{\"$ref\":\"#/$defs/MailSession\"},\"delivery_id\":{\"description\":\"Internal inbound delivery ID. The mail provider's ID stays on InboundEmail.\",\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"session\",\"delivery_id\"],\"$defs\":{\"MailSession\":{\"type\":\"object\",\"properties\":{\"app_id\":{\"type\":\"string\"},\"event_id\":{\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"app_id\",\"event_id\"]}}}"
         },
         {
           "name": "session",
@@ -62053,18 +62053,28 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "App and Event reference for sending through this automation address",
+          "doc": "App and Event reference for sending new mail from this automation address",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"MailSession\",\"type\":\"object\",\"properties\":{\"app_id\":{\"type\":\"string\"},\"event_id\":{\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"app_id\",\"event_id\"]}"
         },
         {
-          "name": "message",
+          "name": "addresses",
           "ty": {
             "base": "Struct",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Original inbound message reference for replies",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"MailMessageRef\",\"type\":\"object\",\"properties\":{\"session\":{\"$ref\":\"#/$defs/MailSession\"},\"delivery_id\":{\"description\":\"Internal inbound delivery ID. The mail provider's ID stays on InboundEmail.\",\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"session\",\"delivery_id\"],\"$defs\":{\"MailSession\":{\"type\":\"object\",\"properties\":{\"app_id\":{\"type\":\"string\"},\"event_id\":{\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"app_id\",\"event_id\"]}}}"
+          "doc": "Sender, header recipients and SMTP envelope addresses",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddresses\",\"type\":\"object\",\"properties\":{\"sender\":{\"description\":\"Sender header, falling back to the first From address\",\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAddress\"},{\"type\":\"null\"}]},\"from\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"}},\"to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"}},\"cc\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"}},\"reply_to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"}},\"envelope_from\":{\"description\":\"SMTP envelope sender\",\"type\":\"string\"},\"recipient\":{\"description\":\"The automation address that received the email\",\"type\":\"string\"}},\"required\":[\"from\",\"to\",\"cc\",\"reply_to\",\"envelope_from\",\"recipient\"],\"$defs\":{\"InboundEmailAddress\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}}}"
+        },
+        {
+          "name": "content",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Subject and body previews, plus temporary files with the complete bodies",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailContent\",\"type\":\"object\",\"properties\":{\"subject\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"},\"html\":{\"type\":\"string\"},\"text_truncated\":{\"description\":\"Text is a preview. Read text_path for the complete plain text body\",\"type\":\"boolean\"},\"html_truncated\":{\"description\":\"HTML is a preview. Read html_path for the complete HTML body\",\"type\":\"boolean\"},\"text_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]},\"html_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"subject\",\"text\",\"html\",\"text_truncated\",\"html_truncated\"],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
         },
         {
           "name": "attachments",
@@ -62073,179 +62083,18 @@
             "container": "Array"
           },
           "optional": false,
-          "doc": "Temporary attachment files for file and path nodes. Copy them to app storage to keep them",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
-        },
-        {
-          "name": "attachment_metadata",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "Attachment filenames, content types, byte sizes and temporary file paths",
+          "doc": "Attachment filenames, content types, byte sizes and temporary files. Copy files to app storage to keep them",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAttachment\",\"type\":\"object\",\"properties\":{\"filename\":{\"type\":[\"string\",\"null\"],\"default\":null},\"content_type\":{\"type\":\"string\"},\"size\":{\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"path\":{\"$ref\":\"#/$defs/FlowPath\"}},\"required\":[\"content_type\",\"size\",\"path\"],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
         },
         {
-          "name": "sender",
+          "name": "delivery",
           "ty": {
             "base": "Struct",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Sender header, falling back to the first From address",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Nullable_InboundEmailAddress\",\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAddress\"},{\"type\":\"null\"}],\"$defs\":{\"InboundEmailAddress\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}}}"
-        },
-        {
-          "name": "from",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "From header addresses",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddress\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
-        },
-        {
-          "name": "to",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "To header addresses",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddress\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
-        },
-        {
-          "name": "cc",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "Carbon copy header addresses",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddress\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
-        },
-        {
-          "name": "reply_to",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "Addresses for replies",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddress\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
-        },
-        {
-          "name": "subject",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Email subject, empty when absent"
-        },
-        {
-          "name": "text",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Plain text preview, empty when absent"
-        },
-        {
-          "name": "html",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "HTML preview, empty when absent"
-        },
-        {
-          "name": "envelope_from",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "SMTP envelope sender"
-        },
-        {
-          "name": "recipient",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "The receiving automation address"
-        },
-        {
-          "name": "automated",
-          "ty": {
-            "base": "bool",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "True for bounces, auto-replies, mailing lists and other machine-generated mail. Platform replies to it are refused to prevent mail loops"
-        },
-        {
-          "name": "raw",
-          "ty": {
-            "base": "Struct",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Complete MIME message as a temporary EML file. Copy it to app storage to keep it",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
-        },
-        {
-          "name": "text_path",
-          "ty": {
-            "base": "Struct",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Complete plain text body as a temporary file, when present",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Nullable_FlowPath\",\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
-        },
-        {
-          "name": "html_path",
-          "ty": {
-            "base": "Struct",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Complete HTML body as a temporary file, when present",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Nullable_FlowPath\",\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
-        },
-        {
-          "name": "expires_at",
-          "ty": {
-            "base": "Date",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "When the email's stored files are deleted. Copy files to app storage before then to keep them"
-        },
-        {
-          "name": "text_truncated",
-          "ty": {
-            "base": "bool",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Read Text File for the complete plain text body"
-        },
-        {
-          "name": "html_truncated",
-          "ty": {
-            "base": "bool",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Read HTML File for the complete HTML body"
+          "doc": "Machine-generated flag, file expiry, raw EML file, headers and authentication verdicts",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailDelivery\",\"type\":\"object\",\"properties\":{\"automated\":{\"description\":\"Bounce, auto-reply, mailing list or other machine-generated mail. Platform replies to it are refused to prevent mail loops\",\"type\":\"boolean\"},\"expires_at\":{\"description\":\"When the raw, body and attachment files are deleted\",\"type\":[\"string\",\"null\"],\"format\":\"date-time\"},\"raw_path\":{\"description\":\"Complete MIME message as a temporary EML file\",\"$ref\":\"#/$defs/FlowPath\"},\"received_at\":{\"type\":[\"string\",\"null\"],\"format\":\"date-time\"},\"message_id\":{\"type\":[\"string\",\"null\"]},\"provider_delivery_id\":{\"description\":\"The mail provider's delivery ID\",\"type\":\"string\"},\"headers\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailHeader\"}},\"authentication\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAuthentication\"},{\"type\":\"null\"}]}},\"required\":[\"automated\",\"raw_path\",\"provider_delivery_id\",\"headers\"],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]},\"InboundEmailHeader\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"value\":{\"type\":\"string\"}},\"required\":[\"name\",\"value\"]},\"InboundEmailAuthentication\":{\"type\":\"object\",\"properties\":{\"provider\":{\"type\":[\"string\",\"null\"],\"default\":null},\"spam\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"virus\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"spf\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dkim\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc_policy\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"InboundEmailVerdict\":{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\"}},\"required\":[\"status\"]}}}"
         }
       ],
       "impure": true,

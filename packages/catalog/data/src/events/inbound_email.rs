@@ -297,9 +297,7 @@ impl NodeLogic for InboundEmailEventNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like::flow::{
-        board::cleanup::sync_node_schema::sync_node_with_catalog, pin::Pin,
-    };
+    use flow_like::flow::{board::cleanup::sync_node_schema::sync_node_with_catalog, pin::Pin};
     use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
     use std::collections::HashMap;
 
@@ -346,7 +344,10 @@ mod tests {
         let attachments: Vec<InboundEmailAttachment> =
             json::from_value(values["attachments"].clone()).unwrap();
         assert_eq!(attachments[0].filename.as_deref(), Some("invoice.pdf"));
-        assert_eq!(attachments[0].path.path, "tmp/mail/attachments/0/invoice.pdf");
+        assert_eq!(
+            attachments[0].path.path,
+            "tmp/mail/attachments/0/invoice.pdf"
+        );
         assert_eq!(attachments[0].path.store_ref, REQUEST_FILES_STORE_REF);
         let reader_path: flow_like_catalog_data_support::data::path::FlowPath =
             json::from_value(values["attachments"][0]["path"].clone()).unwrap();
@@ -438,9 +439,15 @@ mod tests {
         for (name, schema) in [
             ("message", Pin::schema_string_for::<MailMessageRef>()),
             ("session", Pin::schema_string_for::<MailSession>()),
-            ("addresses", Pin::schema_string_for::<InboundEmailAddresses>()),
+            (
+                "addresses",
+                Pin::schema_string_for::<InboundEmailAddresses>(),
+            ),
             ("content", Pin::schema_string_for::<InboundEmailContent>()),
-            ("attachments", Pin::schema_string_for::<InboundEmailAttachment>()),
+            (
+                "attachments",
+                Pin::schema_string_for::<InboundEmailAttachment>(),
+            ),
             ("delivery", Pin::schema_string_for::<InboundEmailDelivery>()),
         ] {
             assert_eq!(node.get_pin_by_name(name).unwrap().schema, schema, "{name}");

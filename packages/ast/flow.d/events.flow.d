@@ -242,31 +242,15 @@ declare namespace events {
     /**
      * Run a server workflow when an email arrives at its assigned address
      * @node events_inbound_email @alias eventsInboundEmail
-     * @returns email — Email content, envelope recipients, headers and temporary file paths that expire at Expires At
-     * @returns session — App and Event reference for sending through this automation address
-     * @returns message — Original inbound message reference for replies
-     * @returns attachments — Temporary attachment files for file and path nodes. Copy them to app storage to keep them
-     * @returns attachmentMetadata — Attachment filenames, content types, byte sizes and temporary file paths
-     * @returns sender — Sender header, falling back to the first From address
-     * @returns from — From header addresses
-     * @returns to — To header addresses
-     * @returns cc — Carbon copy header addresses
-     * @returns replyTo — Addresses for replies
-     * @returns subject — Email subject, empty when absent
-     * @returns text — Plain text preview, empty when absent
-     * @returns html — HTML preview, empty when absent
-     * @returns envelopeFrom — SMTP envelope sender
-     * @returns recipient — The receiving automation address
-     * @returns automated — True for bounces, auto-replies, mailing lists and other machine-generated mail. Platform replies to it are refused to prevent mail loops
-     * @returns raw — Complete MIME message as a temporary EML file. Copy it to app storage to keep it
-     * @returns textPath — Complete plain text body as a temporary file, when present
-     * @returns htmlPath — Complete HTML body as a temporary file, when present
-     * @returns expiresAt — When the email's stored files are deleted. Copy files to app storage before then to keep them
-     * @returns textTruncated — Read Text File for the complete plain text body
-     * @returns htmlTruncated — Read HTML File for the complete HTML body
+     * @returns message — Reference to this email for Reply Platform Email
+     * @returns session — App and Event reference for sending new mail from this automation address
+     * @returns addresses — Sender, header recipients and SMTP envelope addresses
+     * @returns content — Subject and body previews, plus temporary files with the complete bodies
+     * @returns attachments — Attachment filenames, content types, byte sizes and temporary files. Copy files to app storage to keep them
+     * @returns delivery — Machine-generated flag, file expiry, raw EML file, headers and authentication verdicts
      * @impure has side effects / drives control flow
      */
-    function inboundEmail(): { email: Struct, session: Struct, message: Struct, attachments: Struct[], attachmentMetadata: Struct[], sender: Struct, from: Struct[], to: Struct[], cc: Struct[], replyTo: Struct[], subject: string, text: string, html: string, envelopeFrom: string, recipient: string, automated: bool, raw: Struct, textPath: Struct, htmlPath: Struct, expiresAt: Date, textTruncated: bool, htmlTruncated: bool };
+    function inboundEmail(): { message: Struct, session: Struct, addresses: Struct, content: Struct, attachments: Struct[], delivery: Struct };
 
     /**
      * Starts when the device enters or leaves a configured circular region. Configure foreground or background monitoring in the Event settings.
