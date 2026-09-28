@@ -135,8 +135,10 @@ jobs:
       RELEASE_ARCH: ${{ matrix.arch }}
       CC: clang
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=/src --remap-path-prefix=${{ runner.temp }}=/build
     steps:
+      - name: Remap build paths in release binaries
+        shell: bash
+        run: echo "RUSTFLAGS=--remap-path-prefix=$GITHUB_WORKSPACE=/src --remap-path-prefix=$RUNNER_TEMP=/build" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
