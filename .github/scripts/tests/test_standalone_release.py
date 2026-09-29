@@ -119,21 +119,32 @@ class StandalonePublisherTests(unittest.TestCase):
     def test_anonymous_pulls_use_each_exact_platform_without_credentials_or_helpers(self):
         container = {"image": "ghcr.io/example/agent@sha256:" + "a" * 64,
                      "platforms": ["linux/amd64", "linux/arm64"]}
-        platforms = []
-        def pull(command, **options):
+        operations = []
+        def docker(command, **options):
             self.assertEqual(command[-1], container["image"])
-            platforms.append(command[-2])
             config = Path(command[2])
             self.assertEqual(json.loads((config / "config.json").read_text()), {"auths": {}})
             self.assertEqual(options["env"], {"PATH": str(config), "DOCKER_CONFIG": str(config)})
-            self.assertEqual(command[3:5], ["--host", "unix:///var/run/docker.sock"])
-            self.assertEqual(options["stderr"], subprocess.DEVNULL)
-            return subprocess.CompletedProcess(command, 0)
-        with patch.object(release.shutil, "which", return_value="/usr/bin/docker"), patch.object(release.subprocess, "run", side_effect=pull):
+            self.assertEqual(command[3:6], ["--host", "unix:///var/run/docker.sock", "image"])
+            if command[6] == "rm":
+                operations.append("rm")
+                return subprocess.CompletedProcess(command, 1, stderr=b"No such image")
+            operations.append(command[-2])
+            return subprocess.CompletedProcess(command, 0, stderr=b"")
+        with patch.object(release.shutil, "which", return_value="/usr/bin/docker"), patch.object(release.subprocess, "run", side_effect=docker):
             release.anonymous_container_readback(container)
-        self.assertEqual(platforms, container["platforms"])
-        with patch.object(release.shutil, "which", return_value="/usr/bin/docker"), patch.object(release.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)):
-            with self.assertRaisesRegex(ValueError, "anonymously pullable"):
+        self.assertEqual(operations, ["rm", "linux/amd64", "rm", "linux/arm64"])
+
+    def test_anonymous_pull_failures_report_the_docker_error(self):
+        container = {"image": "ghcr.io/example/agent@sha256:" + "a" * 64, "platforms": ["linux/amd64"]}
+        def failing(stderr):
+            return patch.object(release.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, stderr=stderr))
+        with patch.object(release.shutil, "which", return_value="/usr/bin/docker"):
+            with failing(b"Error response from daemon: denied\n"), self.assertRaisesRegex(ValueError, "linux/amd64: Error response from daemon: denied; make the digest-pinned GHCR package public"):
+                release.anonymous_container_readback(container)
+            with failing(b"Error response from daemon: cannot overwrite digest sha256:abc\n"), self.assertRaisesRegex(ValueError, r"cannot overwrite digest sha256:abc$"):
+                release.anonymous_container_readback(container)
+            with failing(None), self.assertRaisesRegex(ValueError, "anonymously pullable for linux/amd64: Docker reported no error message"):
                 release.anonymous_container_readback(container)
 
     def test_large_binaries_have_a_native_bootstrap_package_for_every_target(self):
