@@ -2,6 +2,7 @@ pub mod local;
 pub mod mlx;
 pub mod mlx_pack;
 
+use super::media::RemoteMediaModel;
 use crate::{bit::Bit, state::FlowLikeState};
 use flow_like_model_provider::llm::{
     ModelLogic, anthropic::AnthropicModel, bedrock::BedrockModel, cohere::CohereModel,
@@ -308,9 +309,29 @@ impl ModelFactory {
         Ok(model)
     }
 
+    /// Wraps every model except MLX in [`RemoteMediaModel`], outside the cache, so fetches use
+    /// the caller's execution environment. MLX hands out its cached runtime itself, whose
+    /// identity `mlx_e2e` asserts.
+    pub async fn build(
+        &mut self,
+        bit: &Bit,
+        app_state: Arc<FlowLikeState>,
+        access_token: Option<String>,
+        usage_context: Option<ModelUsageContext>,
+    ) -> Result<Arc<dyn ModelLogic>> {
+        let environment = app_state.execution_environment;
+        let model = self
+            .build_inner(bit, app_state, access_token, usage_context)
+            .await?;
+        if bit.is_mlx_model() {
+            return Ok(model);
+        }
+        Ok(Arc::new(RemoteMediaModel::new(model, environment)))
+    }
+
     #[allow(clippy::cognitive_complexity)]
     #[allow(clippy::too_many_lines)]
-    pub async fn build(
+    async fn build_inner(
         &mut self,
         bit: &Bit,
         app_state: Arc<FlowLikeState>,

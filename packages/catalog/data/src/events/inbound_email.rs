@@ -61,6 +61,8 @@ struct InboundEmailDelivery {
     expires_at: Option<String>,
     /// Complete MIME message as a temporary EML file
     raw_path: FlowPath,
+    /// Attachments beyond the limit of 100 that are only contained in the raw EML file
+    omitted_attachments: u32,
     #[schemars(extend("format" = "date-time"))]
     received_at: Option<String>,
     message_id: Option<String>,
@@ -143,6 +145,7 @@ fn email_outputs(email: InboundEmail) -> flow_like_types::Result<[(&'static str,
         html_path,
         headers,
         attachments,
+        omitted_attachments,
         raw_path,
         received_at,
         expires_at,
@@ -185,6 +188,7 @@ fn email_outputs(email: InboundEmail) -> flow_like_types::Result<[(&'static str,
                 automated,
                 expires_at,
                 raw_path,
+                omitted_attachments,
                 received_at,
                 message_id,
                 provider_delivery_id: delivery_id,
@@ -207,7 +211,7 @@ impl NodeLogic for InboundEmailEventNode {
         node.set_flowscript_name("events", "inboundEmail");
         node.add_icon("/flow/icons/event.svg");
         node.set_start(true);
-        node.set_version(3);
+        node.set_version(4);
         node.set_scores(
             NodeScores::new()
                 .set_privacy(4)
@@ -255,7 +259,7 @@ impl NodeLogic for InboundEmailEventNode {
         node.add_output_pin(
             "attachments",
             "Attachments",
-            "Attachment filenames, content types, byte sizes and temporary files. Copy files to app storage to keep them",
+            "Attachment filenames, content types, byte sizes and temporary files. Embedded is true for parts the HTML body shows through cid:<content_id>, such as signature logos, which are rarely real attachments. Copy files to app storage to keep them",
             VariableType::Struct,
         )
         .set_schema::<InboundEmailAttachment>()
@@ -324,7 +328,9 @@ mod tests {
             "text_path": file("tmp/mail/body.txt"),
             "headers": [{"name": "X-Priority", "value": "1"}],
             "attachments": [{"filename": "invoice.pdf", "content_type": "application/pdf", "size": 42,
-                "path": file("tmp/mail/attachments/0/invoice.pdf")}],
+                "path": file("tmp/mail/attachments/0/invoice.pdf"),
+                "content_id": "logo@example.com", "disposition": "inline", "embedded": true}],
+            "omitted_attachments": 2,
             "raw_path": file("tmp/mail/raw.eml"),
             "automated": true,
             "received_at": "2026-09-28T10:00:00+00:00",
@@ -349,6 +355,12 @@ mod tests {
             "tmp/mail/attachments/0/invoice.pdf"
         );
         assert_eq!(attachments[0].path.store_ref, REQUEST_FILES_STORE_REF);
+        assert_eq!(
+            attachments[0].content_id.as_deref(),
+            Some("logo@example.com")
+        );
+        assert_eq!(attachments[0].disposition.as_deref(), Some("inline"));
+        assert!(attachments[0].embedded && attachments[0].charset.is_none());
         let reader_path: flow_like_catalog_data_support::data::path::FlowPath =
             json::from_value(values["attachments"][0]["path"].clone()).unwrap();
         assert_eq!(reader_path.path, attachments[0].path.path);
@@ -382,6 +394,7 @@ mod tests {
         assert_eq!(delivery["provider_delivery_id"], "provider-1");
         assert_eq!(delivery["headers"][0]["name"], "X-Priority");
         assert_eq!(delivery["authentication"]["dkim"]["status"], "PASS");
+        assert_eq!(delivery["omitted_attachments"], 2);
 
         let node = InboundEmailEventNode.get_node();
         for name in DATA_PINS {
@@ -402,7 +415,14 @@ mod tests {
     fn preserves_explicit_sender_and_defaults_missing_content() {
         let mut payload = payload();
         payload["email"]["sender"] = json!({"name": "Agent", "email": "agent@example.com"});
-        for field in ["subject", "text", "from", "attachments", "automated"] {
+        for field in [
+            "subject",
+            "text",
+            "from",
+            "attachments",
+            "automated",
+            "omitted_attachments",
+        ] {
             payload["email"].as_object_mut().unwrap().remove(field);
         }
         let values = outputs(&payload);
@@ -412,6 +432,7 @@ mod tests {
         assert_eq!(values["content"]["text"], "");
         assert_eq!(values["attachments"], json!([]));
         assert_eq!(values["delivery"]["automated"], false);
+        assert_eq!(values["delivery"]["omitted_attachments"], 0);
         payload["email"].as_object_mut().unwrap().remove("sender");
         assert!(email_from_payload(Some(&payload)).unwrap().sender.is_none());
     }
@@ -419,7 +440,7 @@ mod tests {
     #[test]
     fn catalog_exposes_one_typed_struct_per_concern() {
         let node = InboundEmailEventNode.get_node();
-        assert_eq!(node.version, Some(3));
+        assert_eq!(node.version, Some(4));
         assert!(node.scores.is_some());
         let mut names: Vec<_> = node.pins.values().map(|pin| pin.name.as_str()).collect();
         names.sort_unstable();
@@ -480,7 +501,7 @@ mod tests {
         placed.add_output_pin("subject", "Subject", "", VariableType::String);
         let message_id = placed.get_pin_by_name("message").unwrap().id.clone();
         sync_node_with_catalog(&mut placed, &InboundEmailEventNode.get_node());
-        assert_eq!(placed.version, Some(3));
+        assert_eq!(placed.version, Some(4));
         let message = placed.get_pin_by_name("message").unwrap();
         assert_eq!(message.id, message_id);
         assert!(message.connected_to.contains("reply-message"));

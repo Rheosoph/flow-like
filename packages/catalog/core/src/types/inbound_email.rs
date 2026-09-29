@@ -39,6 +39,18 @@ pub struct InboundEmailAttachment {
     pub content_type: String,
     pub size: u64,
     pub path: FlowPath,
+    /// Content-ID without angle brackets, referenced from HTML as `cid:<content_id>`.
+    #[serde(default)]
+    pub content_id: Option<String>,
+    /// Lower-case Content-Disposition type: `inline` or `attachment`.
+    #[serde(default)]
+    pub disposition: Option<String>,
+    /// Declared charset. Text files in any other charset than UTF-8 or US-ASCII are stored as UTF-8.
+    #[serde(default)]
+    pub charset: Option<String>,
+    /// Image or other part shown inside the HTML body through its Content-ID, such as a signature logo.
+    #[serde(default)]
+    pub embedded: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -104,6 +116,9 @@ pub struct InboundEmail {
     pub headers: Vec<InboundEmailHeader>,
     #[serde(default)]
     pub attachments: Vec<InboundEmailAttachment>,
+    /// Attachments beyond the per-message limit. The raw message still contains them.
+    #[serde(default)]
+    pub omitted_attachments: u32,
     pub raw_path: FlowPath,
     #[serde(default)]
     pub received_at: Option<String>,

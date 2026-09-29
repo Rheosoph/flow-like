@@ -6,6 +6,7 @@ pub mod generation;
 pub mod image_embedding;
 pub mod llm;
 pub mod local_utils;
+pub mod media;
 #[cfg(feature = "local-stt")]
 pub mod stt;
 #[cfg(feature = "local-tts")]

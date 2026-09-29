@@ -37,6 +37,7 @@ pub mod huggingface;
 pub mod hyperbolic;
 pub mod llamacpp;
 pub mod lmstudio;
+pub mod media;
 pub mod mira;
 pub mod mistral;
 pub mod mlx;

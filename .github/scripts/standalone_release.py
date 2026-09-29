@@ -22,6 +22,7 @@ TARGETS = {
     "aarch64-apple-darwin": None,
 }
 MAX_RELEASE_BINARY_BYTES = 2 * 1024**3
+CDN_NOT_FOUND_ATTEMPTS, CDN_NOT_FOUND_RETRY_SECONDS = 9, 30
 
 
 def usable_package_modes(records, container):
@@ -163,24 +164,74 @@ class NoRedirect(HTTPRedirectHandler):
         raise ValueError("Release CDN redirected; direct HTTPS objects are required")
 
 
+def read_public(request, size, digest):
+    with build_opener(NoRedirect).open(request, timeout=60) as response:
+        if (response.status != 200 or response.headers.get("Access-Control-Allow-Origin") != "*"
+                or response.headers.get("Content-Encoding", "identity") != "identity"):
+            raise ValueError("Release CDN must allow anonymous browser CORS reads without transformation")
+        received, checksum = 0, hashlib.sha256()
+        while chunk := response.read(1024 * 1024):
+            received += len(chunk)
+            if received > size:
+                raise ValueError("Release CDN returned an oversized object")
+            checksum.update(chunk)
+        if received != size or checksum.hexdigest() != digest:
+            raise ValueError("Release CDN readback differs from the signed bytes")
+
+
+def cdn_request(url, method="GET"):
+    # Cloudflare's browser integrity check rejects urllib's default User-Agent (error 1010).
+    return Request(secure_prefix(url), method=method,
+                   headers={"User-Agent": "flow-like-standalone-release-verifier/1",
+                            "Origin": "https://release-verification.flow-like.invalid",
+                            "Accept-Encoding": "identity", "Cache-Control": "no-cache"})
+
+
+def cdn_failure(url, error):
+    if isinstance(error, HTTPError):
+        error.close()
+        return ValueError(f"Release CDN answered HTTP {error.code} for {url}; it must serve release objects to anonymous clients")
+    return ValueError(f"Release CDN is unreachable for {url}: {getattr(error, 'reason', error)}")
+
+
 def public_readback(url, size, digest):
-    secure_prefix(url)
-    request = Request(url, headers={"Origin": "https://release-verification.flow-like.invalid", "Accept-Encoding": "identity", "Cache-Control": "no-cache"})
+    request = cdn_request(url)
+    for attempt in range(CDN_NOT_FOUND_ATTEMPTS):
+        try:
+            return read_public(request, size, digest)
+        except (URLError, TimeoutError) as error:
+            # The CDN edge keeps a 404 served before the upload for up to three minutes.
+            if getattr(error, "code", None) != 404 or attempt + 1 == CDN_NOT_FOUND_ATTEMPTS:
+                raise cdn_failure(url, error) from error
+            error.close()
+        time.sleep(CDN_NOT_FOUND_RETRY_SECONDS)
+
+
+def published_object(url, method="GET", limit=16384):
     try:
-        with build_opener(NoRedirect).open(request, timeout=60) as response:
-            if (response.status != 200 or response.headers.get("Access-Control-Allow-Origin") != "*"
-                    or response.headers.get("Content-Encoding", "identity") != "identity"):
-                raise ValueError("Release CDN must allow anonymous browser CORS reads without transformation")
-            received, checksum = 0, hashlib.sha256()
-            while chunk := response.read(1024 * 1024):
-                received += len(chunk)
-                if received > size:
-                    raise ValueError("Release CDN returned an oversized object")
-                checksum.update(chunk)
-            if received != size or checksum.hexdigest() != digest:
-                raise ValueError("Release CDN readback differs from the signed bytes")
-    except (HTTPError, URLError, TimeoutError) as error:
-        raise ValueError("Release CDN is unavailable or does not permit direct public reads") from error
+        with build_opener(NoRedirect).open(cdn_request(url, method), timeout=60) as response:
+            body = response.read(limit + 1)
+    except (URLError, TimeoutError) as error:
+        if getattr(error, "code", None) == 404:
+            error.close()
+            return None
+        raise cdn_failure(url, error) from error
+    if len(body) > limit:
+        raise ValueError(f"Release CDN returned an oversized object for {url}")
+    return body
+
+
+def preflight(base_url, sequence, public_keys):
+    base_url = secure_prefix(base_url)
+    stable = published_object(f"{base_url}/release.jws")
+    if stable is not None:
+        current = verified_release(stable, json.loads(public_keys), current=False)["sequence"]
+        if sequence <= current:
+            raise ValueError(f"Release sequence {sequence} must be greater than the published sequence {current}")
+    # Immutable objects of a failed run keep their bytes; a rebuild under the same sequence cannot replace them.
+    for name in [f"flow-like-standalone-{target}" for target in TARGETS] + ["release.jws"]:
+        if published_object(f"{base_url}/releases/{sequence}/{name}", "HEAD") is not None:
+            raise ValueError(f"An earlier run already uploaded {name} for sequence {sequence}; dispatch with a higher sequence")
 
 
 class S3Store:
@@ -411,6 +462,10 @@ if __name__ == "__main__":
     publish_parser.add_argument("--prefix", required=True)
     publish_parser.add_argument("--public-keys", required=True)
     publish_parser.add_argument("--endpoint")
+    preflight_parser = commands.add_parser("preflight")
+    preflight_parser.add_argument("--base-url", required=True)
+    preflight_parser.add_argument("--sequence", type=int, required=True)
+    preflight_parser.add_argument("--public-keys", required=True)
     args = vars(parser.parse_args())
     command = args.pop("command")
     globals()[command](**args)

@@ -27,6 +27,7 @@ const KEYS_MAX_STALE_MS: i64 = 7 * 24 * 3_600_000;
 const KEYS_REFETCH_INTERVAL_MS: i64 = 5 * 60_000;
 const TOKEN_MARGIN_SECS: i64 = 300;
 const RENEWAL_WINDOW_MS: i64 = 14 * 86_400_000;
+const RENEWAL_BACKOFF_SECS: u64 = 600;
 
 #[derive(Clone)]
 struct KeySet {
@@ -39,6 +40,13 @@ static CONNECTOR_KEYS: LazyLock<Mutex<Option<KeySet>>> = LazyLock::new(|| Mutex:
 static KEY_REFRESH: LazyLock<AsyncMutex<()>> = LazyLock::new(|| AsyncMutex::new(()));
 static BOT_TOKENS: LazyLock<TokenCache> = LazyLock::new(token_cache);
 static GRAPH_TOKENS: LazyLock<TokenCache> = LazyLock::new(token_cache);
+/// Connections whose rotation failed while their secret was still valid.
+static RENEWAL_BACKOFF: LazyLock<moka::sync::Cache<String, ()>> = LazyLock::new(|| {
+    moka::sync::Cache::builder()
+        .max_capacity(10_000)
+        .time_to_live(Duration::from_secs(RENEWAL_BACKOFF_SECS))
+        .build()
+});
 
 type TokenCache = moka::sync::Cache<String, (String, i64)>;
 
@@ -405,13 +413,44 @@ fn token_expiry(now: i64, expires_in: Option<i64>) -> i64 {
     now + (lifetime - TOKEN_MARGIN_SECS.min(lifetime / 2)) * 1000
 }
 
+fn secret_expiry(connection: &Connection) -> Option<i64> {
+    connection
+        .secret_expires_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|expiry| expiry.timestamp_millis())
+}
+
+fn secret_still_valid(connection: &Connection, now: i64) -> bool {
+    secret_expiry(connection).is_some_and(|expiry| expiry > now)
+}
+
+/// After a failed rotation, a still-valid secret is not renewed again until the backoff ends.
 fn needs_renewal(connection: &Connection, now: i64) -> bool {
     connection.mode == super::AuthMode::FlowLikeManaged
-        && connection
-            .secret_expires_at
-            .as_deref()
-            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-            .is_some_and(|expiry| expiry.timestamp_millis() < now + RENEWAL_WINDOW_MS)
+        && secret_expiry(connection).is_some_and(|expiry| {
+            expiry < now + RENEWAL_WINDOW_MS
+                && (expiry <= now || !RENEWAL_BACKOFF.contains_key(&connection.id))
+        })
+}
+
+/// A failed renewal keeps the caller's credential until it actually expires.
+fn renewed_or_current(
+    connection: &Connection,
+    renewed: Result<Connection, ApiError>,
+    now: i64,
+) -> Result<Connection, ApiError> {
+    match renewed {
+        Err(error) if secret_still_valid(connection, now) => {
+            tracing::warn!(
+                connection_id = %connection.id,
+                %error,
+                "Teams credential renewal failed; using the still-valid active credential"
+            );
+            Ok(connection.clone())
+        }
+        renewed => renewed,
+    }
 }
 
 /// Runs `work` on its own task, so a caller that times out or is dropped cannot abandon it
@@ -435,17 +474,22 @@ pub(super) async fn fresh_connection(
     if !needs_renewal(connection, now()) {
         return Ok(connection.clone());
     }
-    let (state, connection) = (state.clone(), connection.clone());
-    detached("Teams bot credential renewal", async move {
-        renew(&state, &connection).await
+    let (owned_state, owned) = (state.clone(), connection.clone());
+    let renewed = detached("Teams bot credential renewal", async move {
+        renew(&owned_state, &owned).await
     })
-    .await
+    .await;
+    renewed_or_current(connection, renewed, now())
 }
 
-/// Rotates the secret under the connection's operation lease.
+/// Rotates the secret under the connection's operation lease. While another request holds
+/// the lease, or wins the race for it, the stored credential is used if still valid.
 async fn renew(state: &AppState, connection: &Connection) -> Result<Connection, ApiError> {
     let (mut current, mut revision) = store_connection(state, &connection.id).await?;
     if current.operation_until > now() {
+        if secret_still_valid(&current, now()) {
+            return Ok(current);
+        }
         return Err(ApiError::service_unavailable(
             "Bot credentials are being renewed. Retry shortly.",
         ));
@@ -453,24 +497,47 @@ async fn renew(state: &AppState, connection: &Connection) -> Result<Connection, 
     // Recheck after loading: another API instance may already have rotated.
     if current.secret == connection.secret {
         current.operation_until = now() + 300_000;
-        super::store::save_connection(state, &current, revision).await?;
+        if let Err(error) = super::store::save_connection(state, &current, revision).await {
+            return stored_after_conflict(state, &current.id, error).await;
+        }
         revision += 1;
         let result = super::provision::rotate(state, &mut current, &mut revision).await;
         current.operation_until = 0;
-        super::store::save_connection(state, &current, revision).await?;
+        let released = super::store::save_connection(state, &current, revision).await;
         if let Err(error) = result {
-            if current
-                .secret_expires_at
-                .as_deref()
-                .and_then(|expiry| chrono::DateTime::parse_from_rfc3339(expiry).ok())
-                .is_none_or(|expiry| expiry.timestamp_millis() <= now())
-            {
+            if !secret_still_valid(&current, now()) {
                 return Err(error);
             }
-            tracing::warn!(connection_id = %current.id, "Teams credential renewal needs a retry; retaining the valid active credential");
+            RENEWAL_BACKOFF.insert(current.id.clone(), ());
+            tracing::warn!(
+                connection_id = %current.id,
+                %error,
+                backoff_secs = RENEWAL_BACKOFF_SECS,
+                "Teams credential rotation failed; retaining the valid active credential until the backoff ends"
+            );
+        }
+        if let Err(error) = released {
+            return stored_after_conflict(state, &current.id, error).await;
         }
     }
     Ok(current)
+}
+
+/// Another request changed the connection first: its stored credential is used while valid.
+async fn stored_after_conflict(
+    state: &AppState,
+    id: &str,
+    error: ApiError,
+) -> Result<Connection, ApiError> {
+    if error.status() != reqwest::StatusCode::CONFLICT {
+        return Err(error);
+    }
+    let (stored, _) = store_connection(state, id).await?;
+    if secret_still_valid(&stored, now()) {
+        Ok(stored)
+    } else {
+        Err(error)
+    }
 }
 
 pub(super) async fn bot_token(
@@ -732,25 +799,78 @@ mod tests {
         assert_ne!(key, graph_token_key(&c));
     }
 
+    fn expires_in(now: i64, offset_ms: i64) -> Option<String> {
+        Some(
+            chrono::DateTime::from_timestamp_millis(now + offset_ms)
+                .unwrap()
+                .to_rfc3339(),
+        )
+    }
+
     #[test]
     fn only_managed_secrets_close_to_expiry_are_renewed() {
         let (mut c, ..) = fixture();
         let now = chrono::Utc::now().timestamp_millis();
-        let at = |offset_ms: i64| {
-            chrono::DateTime::from_timestamp_millis(now + offset_ms)
-                .unwrap()
-                .to_rfc3339()
-        };
-        c.secret_expires_at = Some(at(86_400_000));
+        c.secret_expires_at = expires_in(now, 86_400_000);
         assert!(!needs_renewal(&c, now));
         c.mode = crate::teams::AuthMode::FlowLikeManaged;
         assert!(needs_renewal(&c, now));
-        c.secret_expires_at = Some(at(RENEWAL_WINDOW_MS + 60_000));
+        c.secret_expires_at = expires_in(now, RENEWAL_WINDOW_MS + 60_000);
         assert!(!needs_renewal(&c, now));
         c.secret_expires_at = Some("not a date".into());
         assert!(!needs_renewal(&c, now));
         c.secret_expires_at = None;
         assert!(!needs_renewal(&c, now));
+    }
+
+    #[test]
+    fn a_secret_is_valid_only_before_a_readable_expiry() {
+        let (mut c, ..) = fixture();
+        let now = chrono::Utc::now().timestamp_millis();
+        c.secret_expires_at = expires_in(now, 60_000);
+        assert!(secret_still_valid(&c, now));
+        c.secret_expires_at = expires_in(now, 0);
+        assert!(!secret_still_valid(&c, now));
+        c.secret_expires_at = expires_in(now, -60_000);
+        assert!(!secret_still_valid(&c, now));
+        c.secret_expires_at = Some("not a date".into());
+        assert!(!secret_still_valid(&c, now));
+        c.secret_expires_at = None;
+        assert!(!secret_still_valid(&c, now));
+    }
+
+    #[test]
+    fn a_failed_rotation_pauses_renewal_until_the_secret_expires() {
+        let (mut c, ..) = fixture();
+        let now = chrono::Utc::now().timestamp_millis();
+        c.id = "renewal-backoff-test".into();
+        c.mode = crate::teams::AuthMode::FlowLikeManaged;
+        c.secret_expires_at = expires_in(now, 86_400_000);
+        assert!(needs_renewal(&c, now));
+        RENEWAL_BACKOFF.insert(c.id.clone(), ());
+        assert!(!needs_renewal(&c, now));
+        c.secret_expires_at = expires_in(now, -60_000);
+        assert!(needs_renewal(&c, now));
+        RENEWAL_BACKOFF.invalidate(&c.id);
+    }
+
+    #[test]
+    fn a_failed_renewal_keeps_a_valid_secret_and_fails_an_expired_one() {
+        let (mut c, ..) = fixture();
+        let now = chrono::Utc::now().timestamp_millis();
+        let failed = || Err(ApiError::service_unavailable("Renewal failed"));
+        c.secret_expires_at = expires_in(now, 60_000);
+        let kept = renewed_or_current(&c, failed(), now).unwrap();
+        assert_eq!((kept.id, kept.secret), (c.id.clone(), c.secret.clone()));
+        let mut rotated = c.clone();
+        rotated.secret = "rotated".into();
+        assert_eq!(
+            renewed_or_current(&c, Ok(rotated), now).unwrap().secret,
+            "rotated"
+        );
+        c.secret_expires_at = expires_in(now, -60_000);
+        let error = renewed_or_current(&c, failed(), now).unwrap_err();
+        assert_eq!(error.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
