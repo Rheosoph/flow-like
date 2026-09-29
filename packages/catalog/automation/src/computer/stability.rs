@@ -428,7 +428,9 @@ impl NodeLogic for ComputerWaitScreenStableNode {
         context.set_pin_value("image", json!(image)).await?;
         context.set_pin_value("frame", json!(frame)).await?;
         context.set_pin_value("stable", json!(stable)).await?;
-        context.set_pin_value("last_change", json!(last_change)).await?;
+        context
+            .set_pin_value("last_change", json!(last_change))
+            .await?;
         context.set_pin_value("waited_ms", json!(waited_ms)).await?;
         context.set_pin_value("session_out", json!(session)).await?;
         context
@@ -499,12 +501,7 @@ impl NodeLogic for ComputerWaitScreenChangeNode {
             5000,
         );
 
-        node.add_output_pin(
-            "exec_out",
-            "▶",
-            "The area changed",
-            VariableType::Execution,
-        );
+        node.add_output_pin("exec_out", "▶", "The area changed", VariableType::Execution);
         node.add_output_pin(
             "exec_timeout",
             "Timeout",
@@ -530,13 +527,8 @@ impl NodeLogic for ComputerWaitScreenChangeNode {
             "Fraction of pixels that differ from the baseline in the last frame",
             VariableType::Float,
         );
-        node.add_output_pin(
-            "before",
-            "Before",
-            "Baseline image",
-            VariableType::Struct,
-        )
-        .set_schema::<NodeImage>();
+        node.add_output_pin("before", "Before", "Baseline image", VariableType::Struct)
+            .set_schema::<NodeImage>();
         node.add_output_pin(
             "after",
             "After",
@@ -648,7 +640,10 @@ mod tests {
     fn thumbnails_are_downsampled_to_the_long_edge() {
         let thumbnail = diff_thumbnail(&frame(1920, 1080, 40), THUMBNAIL_EDGE);
         assert_eq!(thumbnail.dimensions(), (320, 180));
-        assert_eq!(diff_thumbnail(&frame(100, 50, 40), THUMBNAIL_EDGE).dimensions(), (100, 50));
+        assert_eq!(
+            diff_thumbnail(&frame(100, 50, 40), THUMBNAIL_EDGE).dimensions(),
+            (100, 50)
+        );
     }
 
     #[test]
@@ -659,7 +654,10 @@ mod tests {
             after.put_pixel(x, 0, image::Luma([200]));
         }
         after.put_pixel(0, 5, image::Luma([105]));
-        assert_eq!(changed_fraction(&before, &after, PIXEL_TOLERANCE).unwrap(), 0.1);
+        assert_eq!(
+            changed_fraction(&before, &after, PIXEL_TOLERANCE).unwrap(),
+            0.1
+        );
         assert_eq!(changed_fraction(&before, &before, 0).unwrap(), 0.0);
         assert!(changed_fraction(&before, &image::GrayImage::new(5, 5), 0).is_err());
     }

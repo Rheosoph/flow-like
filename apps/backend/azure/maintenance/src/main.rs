@@ -297,7 +297,12 @@ async fn run_job(
 
     match (job, parsed) {
         (MaintenanceJob::Payments, MaintenanceRunResponse::Payments(result)) => {
-            tracing::info!(inbox_completed = result.inbox_completed, effects_completed = result.effects_completed, deferred = result.deferred, "Payment recovery completed");
+            tracing::info!(
+                inbox_completed = result.inbox_completed,
+                effects_completed = result.effects_completed,
+                deferred = result.deferred,
+                "Payment recovery completed"
+            );
         }
         (MaintenanceJob::TelemetryAlerts, MaintenanceRunResponse::TelemetryAlerts(result)) => {
             tracing::info!(

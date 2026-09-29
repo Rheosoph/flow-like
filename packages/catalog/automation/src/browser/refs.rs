@@ -160,10 +160,10 @@ pub(crate) mod tree {
         }
 
         pub fn from_response(response: &Value) -> flow_like_types::Result<Self> {
-            let nodes: Vec<AxNode> =
-                flow_like_types::json::from_value(response["nodes"].clone()).map_err(|error| {
-                    flow_like_types::anyhow!("Failed to parse accessibility tree: {error}")
-                })?;
+            let nodes: Vec<AxNode> = flow_like_types::json::from_value(response["nodes"].clone())
+                .map_err(|error| {
+                flow_like_types::anyhow!("Failed to parse accessibility tree: {error}")
+            })?;
             Ok(Self::new(nodes))
         }
 
@@ -175,9 +175,9 @@ pub(crate) mod tree {
         }
 
         pub fn find_backend(&self, backend: i64) -> Option<usize> {
-            self.nodes
-                .iter()
-                .position(|node| node.role() != "InlineTextBox" && node.backend_dom_node_id == Some(backend))
+            self.nodes.iter().position(|node| {
+                node.role() != "InlineTextBox" && node.backend_dom_node_id == Some(backend)
+            })
         }
 
         pub fn title(&self) -> String {
@@ -237,10 +237,10 @@ pub(crate) mod tree {
                 Class::Generic
             }
             "button" | "link" | "textbox" | "searchbox" | "checkbox" | "radio" | "combobox"
-            | "listbox" | "option" | "menuitem" | "menuitemcheckbox" | "menuitemradio"
-            | "tab" | "switch" | "slider" | "spinbutton" | "treeitem" | "DisclosureTriangle"
-            | "ColorWell" | "Date" | "DateTime" | "InputTime" | "PopUpButton"
-            | "ToggleButton" | "MenuListOption" => Class::Interactive,
+            | "listbox" | "option" | "menuitem" | "menuitemcheckbox" | "menuitemradio" | "tab"
+            | "switch" | "slider" | "spinbutton" | "treeitem" | "DisclosureTriangle"
+            | "ColorWell" | "Date" | "DateTime" | "InputTime" | "PopUpButton" | "ToggleButton"
+            | "MenuListOption" => Class::Interactive,
             _ => Class::Structural,
         }
     }
@@ -513,7 +513,11 @@ pub(crate) mod tree {
                 element,
                 backend_id: node.backend_dom_node_id,
                 frame_path: frame_path.to_vec(),
-                children: if flat { Vec::new() } else { std::mem::take(&mut children) },
+                children: if flat {
+                    Vec::new()
+                } else {
+                    std::mem::take(&mut children)
+                },
             });
             out.extend(children);
         }
@@ -591,7 +595,11 @@ pub(crate) mod tree {
         format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
     }
 
-    pub(crate) fn element_line(element: &SnapshotElement, indent: u32, has_children: bool) -> String {
+    pub(crate) fn element_line(
+        element: &SnapshotElement,
+        indent: u32,
+        has_children: bool,
+    ) -> String {
         let mut line = format!("{}- ", "  ".repeat(indent as usize));
         if element.role == "text" {
             line.push_str("text: ");
@@ -624,7 +632,11 @@ pub(crate) mod tree {
     }
 
     fn url_line(url: &str, indent: u32) -> String {
-        format!("{}- /url: {}", "  ".repeat(indent as usize + 1), clip(url, CONTENT_LIMIT))
+        format!(
+            "{}- /url: {}",
+            "  ".repeat(indent as usize + 1),
+            clip(url, CONTENT_LIMIT)
+        )
     }
 
     #[derive(Debug, Clone, PartialEq)]
@@ -765,7 +777,12 @@ pub(crate) mod tree {
     pub(crate) fn clickable_nodes(snapshot: &Value) -> HashSet<i64> {
         let strings: Vec<&str> = snapshot["strings"]
             .as_array()
-            .map(|strings| strings.iter().map(|s| s.as_str().unwrap_or_default()).collect())
+            .map(|strings| {
+                strings
+                    .iter()
+                    .map(|s| s.as_str().unwrap_or_default())
+                    .collect()
+            })
             .unwrap_or_default();
         let string = |index: &Value| {
             index
@@ -847,7 +864,12 @@ pub(crate) mod tree {
     }
 
     impl ElementQuery {
-        pub fn new(role: &str, name: &str, mode: &str, text: &str) -> flow_like_types::Result<Self> {
+        pub fn new(
+            role: &str,
+            name: &str,
+            mode: &str,
+            text: &str,
+        ) -> flow_like_types::Result<Self> {
             let pattern = name.trim();
             let name = normalize(name);
             let name = if name.is_empty() {
@@ -994,7 +1016,10 @@ mod live {
         format!("automation:refs:{}", session.session_ref)
     }
 
-    async fn table_for(context: &ExecutionContext, session: &AutomationSession) -> Option<SharedTable> {
+    async fn table_for(
+        context: &ExecutionContext,
+        session: &AutomationSession,
+    ) -> Option<SharedTable> {
         context
             .cache
             .read()
@@ -1064,7 +1089,9 @@ mod live {
         }
     }
 
-    pub(crate) async fn frame_tree(driver: &thirtyfour::WebDriver) -> flow_like_types::Result<FrameTree> {
+    pub(crate) async fn frame_tree(
+        driver: &thirtyfour::WebDriver,
+    ) -> flow_like_types::Result<FrameTree> {
         let response = cdp(driver, "Page.getFrameTree", json!({})).await?;
         flow_like_types::json::from_value(response["frameTree"].clone())
             .map_err(|error| flow_like_types::anyhow!("Failed to parse Page.getFrameTree: {error}"))
@@ -1128,7 +1155,10 @@ mod live {
         })?;
         let (entry, loader_id) = {
             let table = lock(&table);
-            (table.entries.get(&reference).cloned(), table.loader_id.clone())
+            (
+                table.entries.get(&reference).cloned(),
+                table.loader_id.clone(),
+            )
         };
         let entry = entry.ok_or_else(|| stale_ref_error(&reference))?;
         if frame_tree(driver).await?.frame.loader_id != loader_id {
@@ -1377,7 +1407,9 @@ mod live {
             max_chars: usize::MAX,
             detect_clickable: true,
         };
-        Ok(take_snapshot(context, session, driver, &request).await?.elements)
+        Ok(take_snapshot(context, session, driver, &request)
+            .await?
+            .elements)
     }
 
     /// Maps elements to snapshot refs, registering refs for main-frame elements the latest
@@ -1437,7 +1469,8 @@ mod live {
             ) else {
                 continue;
             };
-            let described = cdp(driver, "DOM.describeNode", json!({ "objectId": object_id })).await?;
+            let described =
+                cdp(driver, "DOM.describeNode", json!({ "objectId": object_id })).await?;
             if let Some(backend) = described["node"]["backendNodeId"].as_i64()
                 && index < refs.len()
             {
@@ -1595,12 +1628,16 @@ impl NodeLogic for BrowserSnapshotNode {
         let driver = session.get_browser_driver_and_switch(context).await?;
         let snapshot = take_snapshot(context, &session, &driver, &request).await?;
         drop(driver);
-        context.set_pin_value("snapshot", json!(snapshot.text)).await?;
+        context
+            .set_pin_value("snapshot", json!(snapshot.text))
+            .await?;
         context
             .set_pin_value("elements", json!(snapshot.elements))
             .await?;
         context.set_pin_value("url", json!(snapshot.url)).await?;
-        context.set_pin_value("title", json!(snapshot.title)).await?;
+        context
+            .set_pin_value("title", json!(snapshot.title))
+            .await?;
         context
             .set_pin_value("generation", json!(snapshot.generation))
             .await?;
@@ -1828,7 +1865,10 @@ mod tests {
         assert_eq!(reference, "e6");
         assert_eq!(entry.backend_node_id, 91);
         assert_eq!(entry.frame_path, vec![90]);
-        assert_eq!(rendered.elements[3].url.as_deref(), Some("https://example.com/forgot"));
+        assert_eq!(
+            rendered.elements[3].url.as_deref(),
+            Some("https://example.com/forgot")
+        );
     }
 
     #[test]
@@ -1852,7 +1892,10 @@ mod tests {
             ]
             .join("\n")
         );
-        assert_eq!(rendered.elements[1].text.as_deref(), Some("Please sign in to continue."));
+        assert_eq!(
+            rendered.elements[1].text.as_deref(),
+            Some("Please sign in to continue.")
+        );
     }
 
     #[test]
@@ -1885,8 +1928,16 @@ mod tests {
             },
         )]);
         let rendered = render(&nodes, true, 15_000, &previous, 41);
-        assert!(rendered.text.contains("- button \"Sign in\" [disabled] [ref=e40]"));
-        assert!(rendered.text.contains("- textbox \"Email\" [focused] [required] [ref=e41]"));
+        assert!(
+            rendered
+                .text
+                .contains("- button \"Sign in\" [disabled] [ref=e40]")
+        );
+        assert!(
+            rendered
+                .text
+                .contains("- textbox \"Email\" [focused] [required] [ref=e41]")
+        );
         assert_eq!(rendered.next_ref, 45);
     }
 
@@ -1953,7 +2004,10 @@ mod tests {
             let nodes = Walker::new(&options, &frames).walk(&tree, 0, &[]);
             render(&nodes, interactive_only, 15_000, &HashMap::new(), 1).text
         };
-        assert_eq!(render_mode(true), "- combobox \"Country\" [ref=e1]: Germany");
+        assert_eq!(
+            render_mode(true),
+            "- combobox \"Country\" [ref=e1]: Germany"
+        );
         assert_eq!(
             render_mode(false),
             "- combobox \"Country\" [ref=e1]: Germany\n  - option \"Germany\" [selected] [ref=e2]"

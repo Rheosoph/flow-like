@@ -38,9 +38,9 @@ def merge(records, cloud="all"):
 class MatrixTests(unittest.TestCase):
     def test_matrix_covers_portable_targets_and_real_recipes(self):
         entries = containers.matrix("all")["include"]
-        self.assertEqual(len(entries), 63)
-        self.assertEqual(len({entry["id"] for entry in entries}), 63)
-        self.assertEqual([len(containers.matrix(cloud)["include"]) for cloud in ("aws", "gcp", "azure")], [14, 8, 9])
+        self.assertEqual(len(entries), 64)
+        self.assertEqual(len({entry["id"] for entry in entries}), 64)
+        self.assertEqual([len(containers.matrix(cloud)["include"]) for cloud in ("aws", "gcp", "azure")], [15, 8, 9])
         self.assertIn("gcp-api", {entry["id"] for entry in entries})
         self.assertIn("azure-api", {entry["id"] for entry in entries})
         self.assertEqual({entry["cloud"] for entry in entries if entry["workload"] == "web"}, {"docker-compose", "kubernetes"})
@@ -589,7 +589,7 @@ class PublishTests(unittest.TestCase):
     def test_cloud_repositories_are_carbon_copied_without_annotations(self):
         release = release_manifest("aws")
         document, run, _ = self.publish(release, "refs/heads/main")
-        self.assertEqual(len(document["images"]), 13)
+        self.assertEqual(len(document["images"]), 14)
         ecs_api = self.repository("aws-api-ecs")
         records = {entry["repository"]: entry for entry in release["images"]}
         for image in document["images"]:

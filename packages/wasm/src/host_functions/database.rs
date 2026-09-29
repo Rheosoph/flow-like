@@ -14,7 +14,7 @@ use flow_like_catalog_data_support::data::datafusion::session::{
 };
 use flow_like_storage::{
     databases::vector::{
-        VectorStore, buffered::BufferedWriteOrigin, lancedb::record_batches_to_vec,
+        buffered::BufferedWriteOrigin, lancedb::record_batches_to_vec, VectorStore,
     },
     datafusion::{
         catalog::{CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider},
@@ -34,7 +34,7 @@ use flow_like_storage::{
 };
 use parking_lot::RwLock;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{collections::HashMap, sync::Arc};
 
 const MAX_ROWS: usize = 10_000;
@@ -736,7 +736,9 @@ mod tests {
         // handle is a valid source; `validate_outputs` already vets what it emits.
         let (forwarded, _wasm_node) = attach(true);
         *forwarded.value.write() = Some(value.clone());
-        assert!(ensure_trusted_handle_source(&forwarded, &value).await.is_ok());
+        assert!(ensure_trusted_handle_source(&forwarded, &value)
+            .await
+            .is_ok());
 
         // An output the guest never wrote leaves only a pin default downstream.
         let (unset, _unset_node) = attach(true);
@@ -750,16 +752,12 @@ mod tests {
     #[test]
     fn a_guest_cannot_export_a_forged_typed_handle() {
         let value = json!({"cache_key":"private"});
-        assert!(
-            DatabaseContext::default()
-                .validate_output(HandleKind::Database, &value)
-                .is_err()
-        );
-        assert!(
-            DatabaseContext::default()
-                .validate_output(HandleKind::Session, &value)
-                .is_err()
-        );
+        assert!(DatabaseContext::default()
+            .validate_output(HandleKind::Database, &value)
+            .is_err());
+        assert!(DatabaseContext::default()
+            .validate_output(HandleKind::Session, &value)
+            .is_err());
     }
 
     #[tokio::test]
@@ -811,26 +809,22 @@ mod tests {
         );
         assert_eq!(query(&host, 8, handle, "{}").await.as_deref(), Some("1"));
         let session = query(&host, 20, "{}", "{}").await.unwrap();
-        assert!(
-            query(
-                &host,
-                21,
-                &session,
-                r#"{"database":{"cache_key":"ungranted"},"table_name":"other"}"#
-            )
-            .await
-            .is_none()
-        );
-        assert!(
-            query(
-                &host,
-                21,
-                &session,
-                r#"{"database":{"cache_key":"granted"},"table_name":"entities"}"#
-            )
-            .await
-            .is_some()
-        );
+        assert!(query(
+            &host,
+            21,
+            &session,
+            r#"{"database":{"cache_key":"ungranted"},"table_name":"other"}"#
+        )
+        .await
+        .is_none());
+        assert!(query(
+            &host,
+            21,
+            &session,
+            r#"{"database":{"cache_key":"granted"},"table_name":"entities"}"#
+        )
+        .await
+        .is_some());
         let rows = query(
             &host,
             22,
@@ -884,11 +878,9 @@ mod tests {
         );
         assert!(query(&consumer, 8, handle, "{}").await.is_none());
         host.capabilities = WasmCapabilities::DATABASE_READ;
-        assert!(
-            query(&host, 6, handle, r#"{"filter":"id = 'person-1'"}"#)
-                .await
-                .is_none()
-        );
+        assert!(query(&host, 6, handle, r#"{"filter":"id = 'person-1'"}"#)
+            .await
+            .is_none());
         assert_eq!(database.db.read().await.count(None).await.unwrap(), 1);
     }
 
@@ -982,21 +974,17 @@ mod tests {
     async fn guessed_handles_and_missing_permissions_are_denied() {
         let mut host = HostState::new(WasmCapabilities::ALL);
         host.database_context = Some(Arc::new(DatabaseContext::default()));
-        assert!(
-            query(&host, 7, r#"{"cache_key":"private"}"#, "{}")
-                .await
-                .is_none()
-        );
-        assert!(
-            query(
-                &host,
-                22,
-                r#"{"cache_key":"df_session_default"}"#,
-                r#"{"sql":"SELECT 1"}"#
-            )
+        assert!(query(&host, 7, r#"{"cache_key":"private"}"#, "{}")
             .await
-            .is_none()
-        );
+            .is_none());
+        assert!(query(
+            &host,
+            22,
+            r#"{"cache_key":"df_session_default"}"#,
+            r#"{"sql":"SELECT 1"}"#
+        )
+        .await
+        .is_none());
         let session = CachedDataFusionSession::new(isolated_session());
         host.database_context
             .as_ref()

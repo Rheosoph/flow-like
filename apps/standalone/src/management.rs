@@ -60,7 +60,9 @@ impl RejectionCode {
                 "The placement or device changed since it was read. Reload it before retrying."
             }
             Self::Invalid => "The device rejected this request as invalid.",
-            Self::HostPolicy => "The device's host isolation policy does not allow this configuration.",
+            Self::HostPolicy => {
+                "The device's host isolation policy does not allow this configuration."
+            }
             Self::Unsupported => {
                 "The device agent does not support this command. Update the device agent."
             }
@@ -397,7 +399,8 @@ impl ManagementService {
         let now = unix_time()?;
         ensure!(
             expires_at > now
-                && expires_at <= now + crate::enrollment::ADMISSION_SECONDS + MAX_CLOCK_SKEW_SECONDS,
+                && expires_at
+                    <= now + crate::enrollment::ADMISSION_SECONDS + MAX_CLOCK_SKEW_SECONDS,
             "Invalid management authority lease: expires at {expires_at}, device clock reads {now}"
         );
         let local = expires_at.min(now + crate::enrollment::ADMISSION_SECONDS);
@@ -741,9 +744,12 @@ fn placement_scope(
     id: &str,
 ) -> Result<(crate::state::PlacementRecord, String)> {
     validate_management_id(id).reject_as(RejectionCode::Invalid)?;
-    let record = store
-        .get_placement(id)?
-        .ok_or_else(|| refusal(RejectionCode::RevisionConflict, format!("Unknown placement {id}")))?;
+    let record = store.get_placement(id)?.ok_or_else(|| {
+        refusal(
+            RejectionCode::RevisionConflict,
+            format!("Unknown placement {id}"),
+        )
+    })?;
     let project = record
         .config
         .get("project_id")
@@ -1718,7 +1724,11 @@ fn execute(
                 authority.read_guard(manifest, request, now, None, None),
                 || {
                     let known:bool=store.connection.query_row("SELECT EXISTS(SELECT 1 FROM placement_identities WHERE project_id=?1 COLLATE BINARY)",[project_id],|r|r.get(0))?;
-                    refuse_unless(known, RejectionCode::Invalid, "Project has no device placement history")?;
+                    refuse_unless(
+                        known,
+                        RejectionCode::Invalid,
+                        "Project has no device placement history",
+                    )?;
                     authority.require(ManagementCapability::Metrics, Some(project_id), None)?;
                     Ok(ManagementResponse {
                         operation_id: request.operation_id.clone(),
@@ -1754,7 +1764,11 @@ fn execute(
                     };
                     if let Some(project) = &project {
                         let known:bool=store.connection.query_row("SELECT EXISTS(SELECT 1 FROM placement_identities WHERE project_id=?1 COLLATE BINARY)",[project],|r|r.get(0))?;
-                        refuse_unless(known, RejectionCode::Invalid, "Project has no device placement history")?;
+                        refuse_unless(
+                            known,
+                            RejectionCode::Invalid,
+                            "Project has no device placement history",
+                        )?;
                     }
                     authority.require(
                         ManagementCapability::Logs,
@@ -1958,7 +1972,9 @@ fn require_revision(current: u64, expected: u64, placement_id: &str) -> Result<(
     refuse_unless(
         current == expected,
         RejectionCode::RevisionConflict,
-        format!("Placement revision changed: {placement_id} is at {current}, request expected {expected}"),
+        format!(
+            "Placement revision changed: {placement_id} is at {current}, request expected {expected}"
+        ),
     )
 }
 
@@ -2030,12 +2046,14 @@ fn execute_transaction(
             | ManagementCommand::ConfigureAcmeCertificate { .. }
             | ManagementCommand::DeleteAcmeCertificate { .. }
     ) {
-        authority.require_owner("Only the device owner can manage certificate renewal authorities")?;
+        authority
+            .require_owner("Only the device owner can manage certificate renewal authorities")?;
     }
     if let ManagementCommand::DeleteCertificateRequest { request_id } = &request.command {
         let issuer: bool = store.connection.query_row("SELECT EXISTS(SELECT 1 FROM certificate_requests WHERE request_id=?1 AND json_extract(metadata_json,'$.purpose')='issuer')", [request_id], |row| row.get(0))?;
         if issuer {
-            authority.require_owner("Only the device owner can cancel an issuing authority request")?;
+            authority
+                .require_owner("Only the device owner can cancel an issuing authority request")?;
         }
     }
     let digest = if matches!(
@@ -2698,7 +2716,11 @@ mod tests {
             grant: None,
         }
     }
-    fn project_grant(id: &str, capabilities: Vec<ManagementCapability>, expires_at: i64) -> Authority {
+    fn project_grant(
+        id: &str,
+        capabilities: Vec<ManagementCapability>,
+        expires_at: i64,
+    ) -> Authority {
         let key = SigningKey::generate().public_key();
         Authority {
             principal: format!("{id}:{id}"),
@@ -3001,8 +3023,7 @@ mod tests {
             data.push(part);
             crate::outbox::private_directory(&data)?;
         }
-        let queue =
-            crate::outbox::Outbox::open(&data, "api", &"a".repeat(64), Default::default())?;
+        let queue = crate::outbox::Outbox::open(&data, "api", &"a".repeat(64), Default::default())?;
         queue.enqueue("table", json!({"row":1}), None, 100)?;
         drop(queue);
         let mut unbuffered = config.clone();
@@ -3070,10 +3091,7 @@ mod tests {
             inspected.result["host_operations"]["reboot"],
             cfg!(target_os = "linux")
         );
-        assert_eq!(
-            inspected.result["agent_version"],
-            env!("CARGO_PKG_VERSION")
-        );
+        assert_eq!(inspected.result["agent_version"], env!("CARGO_PKG_VERSION"));
         let reader = project_grant("reader", vec![ManagementCapability::Status], 1000);
         accept_grants(&store, &signing, &[&reader], 100, 1000)?;
         let mut config = placement(&root)?;

@@ -161,8 +161,7 @@ impl NodeLogic for RemoteOntologyActionRequestNode {
             .unwrap_or(DEFAULT_REMOTE_ACTION_TIMEOUT_SECS);
         let timeout = timeout.clamp(1, MAX_REMOTE_ACTION_TIMEOUT_SECS) as u64;
 
-        let connection =
-            crate::data::db::vector::connection::open_shared(context, false).await?;
+        let connection = crate::data::db::vector::connection::open_shared(context, false).await?;
 
         let import = match lancegraph::load_ontology_import(&connection, &binding_id).await {
             Ok(import) => import,

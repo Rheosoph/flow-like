@@ -111,7 +111,9 @@ pub(crate) enum NameMatch {
 
 /// Parses `role`, `role|name` (substring), `role|=name` (exact) and `role|/pattern/flags`.
 #[cfg(any(feature = "execute", test))]
-pub(crate) fn parse_role_value(value: &str) -> flow_like_types::Result<(String, Option<NameMatch>)> {
+pub(crate) fn parse_role_value(
+    value: &str,
+) -> flow_like_types::Result<(String, Option<NameMatch>)> {
     let (role, name) = match value.split_once('|') {
         Some((role, name)) => (role, Some(name)),
         None => (value, None),
@@ -302,13 +304,16 @@ async fn resolve_in_page(
         flow_like_types::json::json!(name_flags),
         flow_like_types::json::json!(all),
     ];
-    let result = driver.execute(RESOLVE_SCRIPT, args).await.map_err(|error| {
-        flow_like_types::anyhow!(
-            "Failed to resolve {:?} selector '{}': {error}",
-            selector.kind,
-            selector.value
-        )
-    })?;
+    let result = driver
+        .execute(RESOLVE_SCRIPT, args)
+        .await
+        .map_err(|error| {
+            flow_like_types::anyhow!(
+                "Failed to resolve {:?} selector '{}': {error}",
+                selector.kind,
+                selector.value
+            )
+        })?;
     Ok(result.elements()?)
 }
 
@@ -443,10 +448,7 @@ mod tests {
         assert_eq!(parse_role_value("Button").unwrap(), ("button".into(), None));
         assert_eq!(
             parse_role_value("button|  Sign   in ").unwrap(),
-            (
-                "button".into(),
-                Some(NameMatch::Contains("Sign in".into()))
-            )
+            ("button".into(), Some(NameMatch::Contains("Sign in".into())))
         );
         assert_eq!(
             parse_role_value("link|=Home").unwrap().1,

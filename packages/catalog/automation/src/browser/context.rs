@@ -339,12 +339,9 @@ impl NodeLogic for BrowserOpenNode {
 async fn profile_directory(
     context: &mut ExecutionContext,
 ) -> flow_like_types::Result<Option<String>> {
-    let value = super::selector::optional_input(
-        context,
-        "user_data_dir",
-        flow_like_types::Value::Null,
-    )
-    .await?;
+    let value =
+        super::selector::optional_input(context, "user_data_dir", flow_like_types::Value::Null)
+            .await?;
     if !value.is_null() && !value.as_object().is_some_and(|object| object.is_empty()) {
         let path: FlowPath = flow_like_types::json::from_value(value)?;
         let runtime = path.to_runtime(context).await?;
@@ -402,7 +399,9 @@ fn bypass_hosts(bypass: &str) -> Vec<String> {
 }
 
 #[cfg(feature = "execute")]
-fn w3c_proxy(proxy: &ProxySettings) -> flow_like_types::Result<thirtyfour::common::capabilities::desiredcapabilities::Proxy> {
+fn w3c_proxy(
+    proxy: &ProxySettings,
+) -> flow_like_types::Result<thirtyfour::common::capabilities::desiredcapabilities::Proxy> {
     use thirtyfour::common::capabilities::desiredcapabilities::Proxy;
     let (scheme, address) = proxy_parts(&proxy.server);
     let no_proxy = proxy.bypass.as_deref().map(bypass_hosts);
@@ -438,7 +437,8 @@ fn chromium_options(
         flow_like_types::anyhow!("Failed to set {setting}: {error}")
     };
     if options.headless {
-        caps.set_headless().map_err(|e| failed("headless mode", e))?;
+        caps.set_headless()
+            .map_err(|e| failed("headless mode", e))?;
     }
     if let (Some(width), Some(height)) = (options.viewport_width, options.viewport_height) {
         caps.add_arg(&format!("--window-size={width},{height}"))
@@ -456,8 +456,11 @@ fn chromium_options(
         caps.add_arg(&format!("--proxy-server={}", proxy.server))
             .map_err(|e| failed("proxy", e))?;
         if let Some(bypass) = &proxy.bypass {
-            caps.add_arg(&format!("--proxy-bypass-list={}", bypass_hosts(bypass).join(";")))
-                .map_err(|e| failed("proxy bypass", e))?;
+            caps.add_arg(&format!(
+                "--proxy-bypass-list={}",
+                bypass_hosts(bypass).join(";")
+            ))
+            .map_err(|e| failed("proxy bypass", e))?;
         }
     }
     if let Some(locale) = &options.locale {
@@ -560,7 +563,9 @@ async fn match_viewport(
     driver
         .set_window_rect(0, 0, grown(width, extra_width), grown(height, extra_height))
         .await
-        .map_err(|e| flow_like_types::anyhow!("Failed to fit the viewport to {width}x{height}: {e}"))?;
+        .map_err(|e| {
+            flow_like_types::anyhow!("Failed to fit the viewport to {width}x{height}: {e}")
+        })?;
     Ok(())
 }
 

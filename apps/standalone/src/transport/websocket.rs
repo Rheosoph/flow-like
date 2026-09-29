@@ -94,14 +94,18 @@ impl Relayed {
         else {
             return;
         };
-        let mut connection =
-            match NoiseConnection::new(management, &session_id, grant_id, certificate_jws) {
-                Ok(connection) => connection,
-                Err(error) => {
-                    tracing::warn!(session_id = %session_id, grant_id = %grant_id, "Management session was not admitted: {error:#}");
-                    return;
-                }
-            };
+        let mut connection = match NoiseConnection::new(
+            management,
+            &session_id,
+            grant_id,
+            certificate_jws,
+        ) {
+            Ok(connection) => connection,
+            Err(error) => {
+                tracing::warn!(session_id = %session_id, grant_id = %grant_id, "Management session was not admitted: {error:#}");
+                return;
+            }
+        };
         let permit = match registry.reserve(&session_id, grant_id, &self.sessions_cancel) {
             Ok(permit) => permit,
             Err(error) => {
@@ -359,10 +363,7 @@ mod tests {
         tungstenite::handshake::server::{Request, Response},
     };
 
-    async fn accept(
-        listener: &TcpListener,
-        expires_at: i64,
-    ) -> Result<WebSocketStream<TcpStream>> {
+    async fn accept(listener: &TcpListener, expires_at: i64) -> Result<WebSocketStream<TcpStream>> {
         let (stream, _) = timeout(Duration::from_secs(10), listener.accept()).await??;
         let mut socket = accept_hdr_async(stream, |request: &Request, mut response: Response| {
             assert_eq!(

@@ -487,7 +487,9 @@ mod node_capability_tests {
         let unbacked = PackagePermissions::unbacked_capability_flags(&authored, &derived);
         assert_eq!(unbacked.len(), 2);
         assert!(unbacked[0].starts_with("flow-like.toml declares `net.http`, but no node uses it"));
-        assert!(unbacked[1].starts_with("flow-like.toml declares `streaming`, but no node uses it"));
+        assert!(
+            unbacked[1].starts_with("flow-like.toml declares `streaming`, but no node uses it")
+        );
     }
 
     #[test]
@@ -515,7 +517,10 @@ mod node_capability_tests {
         let derived = authored.with_node_capabilities(&[mail]);
         assert_eq!(derived.oauth_scopes.len(), 2);
         assert_eq!(derived.oauth_scopes[0].provider, "google");
-        assert_eq!(derived.oauth_scopes[0].scopes, ["calendar.read", "mail.send"]);
+        assert_eq!(
+            derived.oauth_scopes[0].scopes,
+            ["calendar.read", "mail.send"]
+        );
         assert_eq!(derived.oauth_scopes[0].reason, "Reads your calendar");
         assert_eq!(derived.oauth_scopes[1].provider, "github");
         assert_eq!(derived.oauth_scopes[1].reason, "Required by Mail");

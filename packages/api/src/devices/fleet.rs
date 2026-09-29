@@ -593,8 +593,12 @@ mod tests {
         let refused = check_renewal_interval(&backdated, Some(now - 60), now).unwrap_err();
         assert_eq!(refused.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
         assert!(
-            check_renewal_interval(&backdated, Some(now - 60), now - 60 + MIN_READER_RENEWAL_SECONDS)
-                .is_ok()
+            check_renewal_interval(
+                &backdated,
+                Some(now - 60),
+                now - 60 + MIN_READER_RENEWAL_SECONDS
+            )
+            .is_ok()
         );
     }
 
@@ -615,9 +619,12 @@ mod tests {
     fn reader_replacements_are_spaced_from_the_later_of_issue_and_acceptance() {
         let stored = signed_reader(10_000);
         assert_eq!(issued_at(&stored), Some(10_000));
-        let refused =
-            check_renewal_interval(&stored, Some(9_000), 10_000 + MIN_READER_RENEWAL_SECONDS - 1)
-                .unwrap_err();
+        let refused = check_renewal_interval(
+            &stored,
+            Some(9_000),
+            10_000 + MIN_READER_RENEWAL_SECONDS - 1,
+        )
+        .unwrap_err();
         assert_eq!(refused.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
         assert!(
             refused

@@ -170,7 +170,11 @@ impl NodeLogic for BrowserGetElementStateNode {
             ("checked", "Checked", "Checked, selected or pressed"),
             ("editable", "Editable", "Accepts typed input"),
             ("focused", "Focused", "Has keyboard focus"),
-            ("in_viewport", "In Viewport", "Visible and intersecting the viewport"),
+            (
+                "in_viewport",
+                "In Viewport",
+                "Visible and intersecting the viewport",
+            ),
         ] {
             node.add_output_pin(name, title, description, VariableType::Boolean);
         }
@@ -200,13 +204,15 @@ impl NodeLogic for BrowserGetElementStateNode {
         let selector: String = context.evaluate_pin("selector").await?;
         let locator = super::selector::evaluate_locator(context, &selector).await?;
         let driver = session.get_browser_driver_and_switch(context).await?;
-        let element = super::selector::find(&driver, &locator).await.map_err(|error| {
-            flow_like_types::anyhow!(
-                "Get Element State found no element for {:?} '{}': {error}",
-                locator.kind,
-                locator.value
-            )
-        })?;
+        let element = super::selector::find(&driver, &locator)
+            .await
+            .map_err(|error| {
+                flow_like_types::anyhow!(
+                    "Get Element State found no element for {:?} '{}': {error}",
+                    locator.kind,
+                    locator.value
+                )
+            })?;
         let state = element_state(&driver, &element).await?;
         drop(driver);
         for (name, value) in [
@@ -362,7 +368,8 @@ impl NodeLogic for BrowserListElementsNode {
         let driver = session.get_browser_driver_and_switch(context).await?;
         let found = super::selector::find_all(&driver, &locator).await?;
         let count = found.len();
-        let elements: Vec<thirtyfour::WebElement> = found.into_iter().take(limit as usize).collect();
+        let elements: Vec<thirtyfour::WebElement> =
+            found.into_iter().take(limit as usize).collect();
         let mut arguments = vec![json!(attributes)];
         for element in &elements {
             arguments.push(element.to_json()?);

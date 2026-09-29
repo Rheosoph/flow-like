@@ -215,9 +215,7 @@ pub(crate) fn parse_key(name: &str) -> flow_like_types::Result<enigo::Key> {
         "volumemute" | "mute" => Key::VolumeMute,
         "mediaplaypause" | "playpause" => Key::MediaPlayPause,
         "medianext" | "medianexttrack" | "nexttrack" => Key::MediaNextTrack,
-        "mediaprev" | "mediaprevious" | "mediaprevtrack" | "previoustrack" => {
-            Key::MediaPrevTrack
-        }
+        "mediaprev" | "mediaprevious" | "mediaprevtrack" | "previoustrack" => Key::MediaPrevTrack,
         other => {
             if let Some(key) = other
                 .strip_prefix('f')
@@ -737,9 +735,9 @@ impl NodeLogic for ComputerHoldKeyNode {
                 duration_ms as u64,
                 cancellation.as_ref(),
             );
-            let released = input.key(key, Direction::Release).map_err(|e| {
-                flow_like_types::anyhow!("Failed to release key {}: {}", key_name, e)
-            });
+            let released = input
+                .key(key, Direction::Release)
+                .map_err(|e| flow_like_types::anyhow!("Failed to release key {}: {}", key_name, e));
             held?;
             released
         })
@@ -925,8 +923,9 @@ fn paste_secret(
         use arboard::SetExtWindows;
         set.exclude_from_monitoring()
     };
-    set.text(secret)
-        .map_err(|e| flow_like_types::anyhow!("Failed to place the secret on the clipboard: {}", e))?;
+    set.text(secret).map_err(|e| {
+        flow_like_types::anyhow!("Failed to place the secret on the clipboard: {}", e)
+    })?;
     let primary = if cfg!(target_os = "macos") {
         enigo::Key::Meta
     } else {
@@ -1020,9 +1019,22 @@ mod tests {
         assert_eq!(parse_key("+").unwrap(), Key::Unicode('+'));
         assert_eq!(parse_key(" ").unwrap(), Key::Unicode(' '));
         assert!(parse_key("f25").is_err());
-        assert!(parse_key("hyper").unwrap_err().to_string().contains("Unknown key"));
+        assert!(
+            parse_key("hyper")
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown key")
+        );
         #[cfg(target_os = "macos")]
-        for name in ["Insert", "PrintScreen", "NumLock", "ScrollLock", "Pause", "F21", "F24"] {
+        for name in [
+            "Insert",
+            "PrintScreen",
+            "NumLock",
+            "ScrollLock",
+            "Pause",
+            "F21",
+            "F24",
+        ] {
             let error = parse_key(name).unwrap_err().to_string();
             assert!(error.contains("cannot be sent"), "{name}: {error}");
         }

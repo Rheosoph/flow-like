@@ -238,8 +238,10 @@ async fn authoritative_enrollment_and_replay() {
     assert!(
         uses.iter()
             .filter_map(|result| result.as_ref().err())
-            .all(|error| error.status() == axum::http::StatusCode::UNAUTHORIZED
-                && error.public_code() == super::super::DEVICE_PROOF_INVALID)
+            .all(
+                |error| error.status() == axum::http::StatusCode::UNAUTHORIZED
+                    && error.public_code() == super::super::DEVICE_PROOF_INVALID
+            )
     );
     assert!(
         repository

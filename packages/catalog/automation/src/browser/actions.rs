@@ -323,8 +323,7 @@ fn validate_plan(
                 }
             }
             "navigate" => {
-                let url =
-                    super::policy::NavigationPolicy::parse(text_parameter(action, "url")?)?;
+                let url = super::policy::NavigationPolicy::parse(text_parameter(action, "url")?)?;
                 policy.check_static(&url)?;
             }
             "wait" => {

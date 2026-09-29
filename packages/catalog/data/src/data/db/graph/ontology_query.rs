@@ -93,8 +93,7 @@ impl NodeLogic for QueryOntologyObjectsNode {
         let ontology_id: String = context.evaluate_pin("ontology_id").await?;
         let object_type: String = context.evaluate_pin("object_type").await?;
         let limit: i64 = context.evaluate_pin("limit").await.unwrap_or(100);
-        let connection =
-            crate::data::db::vector::connection::open_shared(context, false).await?;
+        let connection = crate::data::db::vector::connection::open_shared(context, false).await?;
         let ontology = match lancegraph::load_overlay(&connection, &ontology_id).await {
             Ok(ontology) => ontology,
             Err(error) => {
