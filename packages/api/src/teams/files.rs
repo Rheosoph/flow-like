@@ -1453,17 +1453,15 @@ mod tests {
         assert_eq!(classify(&twice).len(), 1);
         let mut untrusted = twice.clone();
         untrusted["serviceUrl"] = json!("https://attacker.invalid/");
-        assert_eq!(
-            classify(&untrusted)[0].source,
-            unavailable(None, FOREIGN_IMAGE)
-        );
+        let rejected = &classify(&untrusted)[0];
+        assert_eq!(rejected.source, unavailable(None, FOREIGN_IMAGE));
+        assert_eq!(rejected.rejected_host.as_deref(), Some("attacker.invalid"));
         let odd_id = html(
             "<img itemtype=\"http://schema.skype.com/AMSImage\" itemid=\"../../x\" src=\"https://us-api.asm.skype.com/v1/objects/../views/imgo\">",
         );
-        assert_eq!(
-            classify(&odd_id)[0].source,
-            unavailable(None, FOREIGN_IMAGE)
-        );
+        let rejected = &classify(&odd_id)[0];
+        assert_eq!(rejected.source, unavailable(None, FOREIGN_IMAGE));
+        assert_eq!(rejected.rejected_host, None);
         let mut paired = odd_id.clone();
         paired["attachments"]
             .as_array_mut()
@@ -1475,20 +1473,93 @@ mod tests {
         );
         assert_eq!(
             classify(&sticker),
-            vec![Candidate {
-                name: Some("sticker-1".into()),
-                mime: "image/*".into(),
-                source: unavailable(None, INLINE_MEDIA),
-                link: None,
-            }]
+            vec![not_downloadable("sticker-1".into(), "image/*")]
         );
-        let many = html(&"<video itemtype=\"http://schema.skype.com/AMSVideo\">".repeat(50));
-        assert_eq!(classify(&many).len(), MAX_FILES);
         let late = html(&format!(
             "{}<img itemtype=\"http://schema.skype.com/AMSImage\" itemid=\"0-late\">",
             "é".repeat(MAX_HTML_BYTES)
         ));
         assert!(classify(&late).is_empty());
+    }
+
+    #[test]
+    fn the_download_limit_counts_files_not_duplicate_html_tags() {
+        let pasted = |id: usize| {
+            format!("<img itemtype=\"http://schema.skype.com/AMSImage\" itemid=\"0-i{id}\">")
+        };
+        let html = |content: String| {
+            json!({"serviceUrl": "https://smba.trafficmanager.net/amer/", "attachments": [
+                {"contentType": "text/html", "content": content}
+            ]})
+        };
+        let mut paste_and_video = html(format!(
+            "{}<video itemtype=\"http://schema.skype.com/AMSVideo\">",
+            (0..MAX_FILES).map(pasted).collect::<String>()
+        ));
+        let attachments = paste_and_video["attachments"].as_array_mut().unwrap();
+        for id in 0..MAX_FILES {
+            attachments.insert(
+                id,
+                json!({"contentType": "image/*", "contentUrl": format!("https://smba.trafficmanager.net/amer/v3/attachments/0-i{id}/views/original")}),
+            );
+        }
+        let found = classify(&paste_and_video);
+        assert_eq!(found.len(), MAX_FILES + 1);
+        assert!(
+            found[..MAX_FILES]
+                .iter()
+                .all(|candidate| matches!(candidate.source, Source::Teams(_)))
+        );
+        assert_eq!(
+            found[MAX_FILES],
+            not_downloadable(format!("video-{}", MAX_FILES + 1), "video/*")
+        );
+
+        let html_only = classify(&html((0..=MAX_FILES).map(pasted).collect()));
+        assert_eq!(html_only.len(), MAX_FILES + 1);
+        assert!(
+            html_only
+                .iter()
+                .all(|candidate| matches!(candidate.source, Source::TeamsDerived(_)))
+        );
+        let mut entries = html_only
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| FileEntry::pending(index, candidate))
+            .collect::<Vec<_>>();
+        assert_eq!(jobs("c", html_only, &mut entries).len(), MAX_FILES);
+        assert_eq!(
+            entries[MAX_FILES].error.as_deref(),
+            Some("Only the first 10 files of a message are downloaded")
+        );
+    }
+
+    #[test]
+    fn unavailable_files_are_reported_once_by_the_host_the_bot_declined() {
+        let activity = json!({"attachments": [
+            {"contentType": "image/png", "contentUrl": "https://attacker.invalid/x.png?tempauth=secret-marker"},
+            {"contentType": DOWNLOAD_INFO, "name": "a.pdf", "contentUrl": "https://contoso.sharepoint.com/a.pdf", "content": {
+                "downloadUrl": "https://files.example.invalid/a.pdf?tempauth=secret-marker"
+            }},
+            {"contentType": "reference", "name": "Plan.docx", "contentUrl": "https://contoso.sharepoint.com/Plan.docx"}
+        ]});
+        let logs = Logs::default();
+        let candidates =
+            tracing::subscriber::with_default(logs.subscriber(), || classify(&activity));
+        assert_eq!(logs.text(), "");
+        tracing::subscriber::with_default(logs.subscriber(), || {
+            report_unavailable("c", &candidates)
+        });
+        let text = logs.text();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert!(text.contains("connection_id=\"c\""), "{text}");
+        assert!(text.contains(&format!("{FOREIGN_IMAGE} (attacker.invalid)")), "{text}");
+        assert!(
+            text.contains(&format!("{FOREIGN_DOWNLOAD} (files.example.invalid)")),
+            "{text}"
+        );
+        assert!(text.contains(&format!("{SHARED_FILE} (contoso.sharepoint.com)")), "{text}");
+        assert!(!text.contains("secret-marker"), "{text}");
     }
 
     #[test]
