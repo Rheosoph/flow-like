@@ -1,6 +1,6 @@
 use super::{
-    AuthMode, Connection, auth, config, config::ManagedConfig, endpoint, guid, now, provision,
-    store,
+    AuthMode, Connection, TeamsPermission, auth, config, config::ManagedConfig, endpoint, guid,
+    microsoft::MicrosoftError, now, provision, store,
 };
 use crate::{
     audit::AuditRecordInput, ensure_fresh_permission, error::ApiError, middleware::jwt::AppUser,
@@ -8,7 +8,9 @@ use crate::{
 };
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, RawQuery, State},
+    http::header,
+    response::{Html, IntoResponse},
 };
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -40,6 +42,8 @@ pub struct TeamsConnectionView {
     client_id: String,
     secret_expires_at: Option<String>,
     allowed_responders: Vec<String>,
+    /// Read access the Teams app requests through resource-specific consent.
+    permissions: Vec<TeamsPermission>,
     /// Time of the last verified Teams request, in Unix milliseconds.
     last_activity_at: Option<i64>,
 }
@@ -66,6 +70,53 @@ pub struct TeamsSetupRequest {
     /// Entra user object IDs that may answer approvals. Empty: only the requester.
     #[serde(default)]
     allowed_responders: Vec<String>,
+    /// Read access to request through resource-specific consent. Changes take effect after
+    /// the updated Teams app is installed.
+    #[serde(default)]
+    permissions: Vec<TeamsPermission>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TeamsAccessStatus {
+    /// The bot requests no read permissions.
+    NotNeeded,
+    /// Microsoft issues the bot a Microsoft Graph token for the organization.
+    Ready,
+    /// An administrator of the organization must approve the bot first.
+    ConsentRequired,
+    /// The bot is not connected.
+    NotConnected,
+    /// Microsoft could not confirm access; `message` says why.
+    Error,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TeamsAccessView {
+    status: TeamsAccessStatus,
+    /// Admin-consent link of a Flow-Like-managed bot, sent with `consent_required`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    consent_url: Option<String>,
+    /// What to do next.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+impl TeamsAccessView {
+    fn of(status: TeamsAccessStatus) -> Self {
+        Self {
+            status,
+            consent_url: None,
+            message: None,
+        }
+    }
+
+    fn with_message(status: TeamsAccessStatus, message: impl Into<String>) -> Self {
+        Self {
+            message: Some(message.into()),
+            ..Self::of(status)
+        }
+    }
 }
 
 #[derive(Serialize, ToSchema)]
@@ -101,6 +152,7 @@ fn new_connection(app: &str, event: &str, mode: AuthMode) -> Connection {
         pending_secret_key_ids: vec![],
         status: "not_configured".into(),
         allowed_responders: vec![],
+        permissions: vec![],
         operation_until: 0,
     }
 }
@@ -165,6 +217,7 @@ async fn view(
         client_id: c.map(|c| c.client_id.clone()).unwrap_or_default(),
         secret_expires_at: c.and_then(|c| c.secret_expires_at.clone()),
         allowed_responders: c.map(|c| c.allowed_responders.clone()).unwrap_or_default(),
+        permissions: c.map(|c| c.permissions.clone()).unwrap_or_default(),
         last_activity_at: None,
     })
 }
@@ -211,6 +264,153 @@ pub async fn get(
 }
 
 #[utoipa::path(
+    get,
+    path = "/apps/{app_id}/events/{event_id}/teams/access",
+    operation_id = "check_teams_bot_access",
+    tag = "events",
+    description = "Check whether Microsoft lets the Teams bot read what its permissions request. When an administrator has to approve the bot first, a Flow-Like-managed bot gets an admin-consent link.",
+    params(
+        ("app_id" = String, Path, description = "Application ID"),
+        ("event_id" = String, Path, description = "Teams event ID")
+    ),
+    responses(
+        (status = 200, description = "The bot's Microsoft Graph access", body = TeamsAccessView),
+        (status = 400, description = "The event is not saved as a remote Teams bot"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden")
+    ),
+    security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
+)]
+pub async fn access(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path((app, event)): Path<(String, String)>,
+) -> Result<Json<TeamsAccessView>, ApiError> {
+    authorize(&state, &user, &app, &event, false).await?;
+    let connection = store::event_connection(&state, &event).await?.map(|c| c.0);
+    Ok(Json(match connection {
+        Some(c) if c.app_id != app => return Err(ApiError::FORBIDDEN),
+        Some(c) if c.permissions.is_empty() => TeamsAccessView::of(TeamsAccessStatus::NotNeeded),
+        Some(c) if c.status == "ready" => graph_access(&state, &c).await,
+        Some(_) => TeamsAccessView::of(TeamsAccessStatus::NotConnected),
+        None => TeamsAccessView::of(TeamsAccessStatus::NotNeeded),
+    }))
+}
+
+async fn graph_access(state: &AppState, c: &Connection) -> TeamsAccessView {
+    match auth::graph_token(state, c).await {
+        Ok(_) => TeamsAccessView::of(TeamsAccessStatus::Ready),
+        Err(MicrosoftError::ConsentRequired) => consent_access(state, c).await,
+        Err(MicrosoftError::Unavailable(reason) | MicrosoftError::Invalid(reason)) => {
+            TeamsAccessView::with_message(TeamsAccessStatus::Error, reason)
+        }
+        Err(error) => TeamsAccessView::with_message(
+            TeamsAccessStatus::Error,
+            error
+                .into_api("the bot's Microsoft Graph access")
+                .public_message()
+                .unwrap_or("Microsoft could not confirm the bot's access. Retry shortly."),
+        ),
+    }
+}
+
+async fn consent_access(state: &AppState, c: &Connection) -> TeamsAccessView {
+    if c.mode != AuthMode::FlowLikeManaged {
+        return TeamsAccessView::with_message(
+            TeamsAccessStatus::ConsentRequired,
+            "An administrator of your Microsoft 365 organization must approve the bot: in Microsoft Entra ID, open the bot's app registration, choose API permissions, then select Grant admin consent.",
+        );
+    }
+    match provision::ensure_consent_redirect(state, c).await {
+        Ok(redirect) => TeamsAccessView {
+            consent_url: Some(admin_consent_url(
+                &c.customer_tenant_id,
+                &c.client_id,
+                &redirect,
+            )),
+            ..TeamsAccessView::with_message(
+                TeamsAccessStatus::ConsentRequired,
+                "An administrator of your Microsoft 365 organization must approve the bot. Open the consent link and sign in as an administrator.",
+            )
+        },
+        Err(error) => {
+            tracing::warn!(connection_id = %c.id, %error, "Could not register the Teams admin-consent redirect");
+            TeamsAccessView::with_message(
+                TeamsAccessStatus::Error,
+                format!(
+                    "Microsoft needs an administrator's approval, but Flow-Like could not prepare the consent link. {}",
+                    error.public_message().unwrap_or("Retry shortly.")
+                ),
+            )
+        }
+    }
+}
+
+fn admin_consent_url(tenant: &str, client_id: &str, redirect: &str) -> String {
+    format!(
+        "https://login.microsoftonline.com/{}/adminconsent?client_id={}&redirect_uri={}",
+        urlencoding::encode(tenant),
+        urlencoding::encode(client_id),
+        urlencoding::encode(redirect)
+    )
+}
+
+#[utoipa::path(
+    get,
+    path = "/sink/trigger/teams/{connection_id}/consent",
+    operation_id = "teams_admin_consent_result",
+    tag = "sink",
+    description = "Page Microsoft opens after an administrator answers the admin-consent request of a Flow-Like-managed Teams bot. It shows only whether consent was recorded.",
+    params(
+        ("connection_id" = String, Path, description = "Teams bot connection ID"),
+        ("error" = Option<String>, Query, description = "Set by Microsoft when consent was not granted"),
+        ("error_description" = Option<String>, Query, description = "Microsoft's reason. Never shown on the page.")
+    ),
+    responses(
+        (status = 200, description = "Static page saying whether admin consent was recorded", content_type = "text/html", body = String)
+    )
+)]
+pub async fn consent(RawQuery(query): RawQuery) -> impl IntoResponse {
+    (
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::REFERRER_POLICY, "no-referrer"),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+            ),
+        ],
+        Html(consent_page(!consent_failed(query.as_deref()))),
+    )
+}
+
+fn consent_failed(query: Option<&str>) -> bool {
+    query
+        .unwrap_or_default()
+        .split('&')
+        .any(|pair| matches!(pair.split('=').next(), Some("error" | "error_description")))
+}
+
+/// Static text only: Microsoft's query values are never rendered.
+fn consent_page(recorded: bool) -> String {
+    let (title, text) = if recorded {
+        (
+            "Admin consent recorded",
+            "You can close this tab and check access again in Flow-Like.",
+        )
+    } else {
+        (
+            "Admin consent was not granted",
+            "Microsoft did not record consent for the bot. Close this tab and check access again in Flow-Like, or ask an administrator of your organization to approve the bot.",
+        )
+    };
+    format!(
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>{title}</title><style>body{{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,sans-serif;background:#f7f7f8;color:#1f1f23}}@media (prefers-color-scheme:dark){{body{{background:#131316;color:#ececf1}}}}main{{max-width:30rem;padding:2rem;text-align:center;line-height:1.5}}</style></head><body><main><h1>{title}</h1><p>{text}</p></main></body></html>"#
+    )
+}
+
+#[utoipa::path(
     put,
     path = "/apps/{app_id}/events/{event_id}/teams",
     operation_id = "setup_teams_bot",
@@ -241,7 +441,7 @@ pub async fn setup(
 ) -> Result<Json<TeamsConnectionView>, ApiError> {
     authorize(&state, &user, &app, &event, true).await?;
     super::ensure_enabled(&state)?;
-    let (customer_tenant_id, allowed_responders) = validate_setup(&input)?;
+    let (customer_tenant_id, allowed_responders, permissions) = validate_setup(&input)?;
     if input.mode == AuthMode::FlowLikeManaged
         && ManagedConfig::load(&state.secrets).await?.is_none()
     {
@@ -263,6 +463,7 @@ pub async fn setup(
     c.description = input.description.clone();
     c.customer_tenant_id = customer_tenant_id;
     c.allowed_responders = allowed_responders;
+    c.permissions = permissions;
     c.mode = input.mode.clone();
     let c = if c.mode == AuthMode::FlowLikeManaged {
         setup_managed(&state, previous, c, revision).await?
@@ -273,8 +474,26 @@ pub async fn setup(
     Ok(Json(view(&state, &app, &event, Some(c)).await?))
 }
 
-/// Returns the normalized organization tenant and approver IDs.
-fn validate_setup(input: &TeamsSetupRequest) -> Result<(String, Vec<String>), ApiError> {
+/// Manifest order. The exhaustive match makes a new permission choose its place.
+fn permission_rank(permission: TeamsPermission) -> u8 {
+    match permission {
+        TeamsPermission::ReadMessages => 0,
+        TeamsPermission::MeetingDetails => 1,
+        TeamsPermission::ConversationDetails => 2,
+    }
+}
+
+fn canonical_permissions(permissions: &[TeamsPermission]) -> Vec<TeamsPermission> {
+    let mut permissions = permissions.to_vec();
+    permissions.sort_by_key(|permission| permission_rank(*permission));
+    permissions.dedup();
+    permissions
+}
+
+/// Returns the normalized organization tenant, approver IDs and permissions.
+fn validate_setup(
+    input: &TeamsSetupRequest,
+) -> Result<(String, Vec<String>, Vec<TeamsPermission>), ApiError> {
     if input.name.trim().is_empty()
         || input.name.chars().count() > 30
         || input.description.chars().count() > 4000
@@ -290,7 +509,11 @@ fn validate_setup(input: &TeamsSetupRequest) -> Result<(String, Vec<String>), Ap
         .iter()
         .map(|id| guid(id))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok((guid(&input.customer_tenant_id)?, responders))
+    Ok((
+        guid(&input.customer_tenant_id)?,
+        responders,
+        canonical_permissions(&input.permissions),
+    ))
 }
 
 fn ensure_editable(c: &Connection, app: &str, mode: &AuthMode) -> Result<(), ApiError> {
@@ -731,17 +954,32 @@ fn package_filename(name: &str) -> String {
     }
 }
 
+/// Resource-specific consent entries for the manifest's `authorization.permissions`.
+fn resource_specific(permissions: &[TeamsPermission]) -> Vec<Value> {
+    canonical_permissions(permissions)
+        .into_iter()
+        .flat_map(TeamsPermission::rsc)
+        .map(|name| json!({"name":name,"type":"Application"}))
+        .collect()
+}
+
 fn app_package(c: Connection, revision: i32) -> Result<Vec<u8>, ApiError> {
-    let manifest = json!({
+    let mut manifest = json!({
         "$schema":"https://developer.microsoft.com/json-schemas/teams/v1.21/MicrosoftTeams.schema.json",
         "manifestVersion":"1.21","version":format!("1.0.{}",revision.max(0)),"id":c.id,
         "developer":{"name":"Flow-Like","websiteUrl":"https://flow-like.com","privacyUrl":"https://flow-like.com/privacy-policy","termsOfUseUrl":"https://flow-like.com/eula"},
         "name":{"short":c.name,"full":c.name},
         "description":{"short":if c.description.is_empty(){c.name.clone()}else{c.description.chars().take(80).collect::<String>()},"full":if c.description.is_empty(){format!("{} powered by Flow-Like",c.name)}else{c.description}},
         "icons":{"color":"color.png","outline":"outline.png"},"accentColor":"#5B53AE",
-        "bots":[{"botId":c.client_id,"scopes":["personal","team","groupchat"],"isNotificationOnly":false,"supportsFiles":false}],
+        "bots":[{"botId":c.client_id,"scopes":["personal","team","groupchat"],"isNotificationOnly":false,"supportsFiles":true}],
         "validDomains":[]
     });
+    if !c.permissions.is_empty() {
+        manifest["webApplicationInfo"] =
+            json!({"id":c.client_id,"resource":format!("api://botid-{}",c.client_id)});
+        manifest["authorization"] =
+            json!({"permissions":{"resourceSpecific":resource_specific(&c.permissions)}});
+    }
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let options =
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
@@ -770,14 +1008,34 @@ fn app_package(c: Connection, revision: i32) -> Result<Vec<u8>, ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn package_contains_installable_metadata_and_icons_without_credentials() {
-        let c: Connection = serde_json::from_value(json!({
+    use TeamsPermission::*;
+
+    fn packaged_connection() -> Connection {
+        serde_json::from_value(json!({
             "id":"12345678-1234-1234-1234-123456789012", "app_id":"app", "event_id":"event", "mode":"customer_teams",
             "name":"Support", "description":"Support in Teams", "customer_tenant_id":"tenant", "home_tenant_id":"home",
             "client_id":"22345678-1234-1234-1234-123456789012", "secret":"NEVER-IN-PACKAGE", "status":"ready", "allowed_responders":[]
-        })).unwrap();
-        let bytes = app_package(c, 12).unwrap();
+        })).unwrap()
+    }
+
+    fn packaged_manifest(c: Connection) -> Value {
+        let bytes = app_package(c, 3).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        serde_json::from_reader(archive.by_name("manifest.json").unwrap()).unwrap()
+    }
+
+    fn setup_request(permissions: Value) -> TeamsSetupRequest {
+        serde_json::from_value(json!({
+            "mode":"customer_teams", "name":"Support",
+            "customer_tenant_id":"32345678-1234-1234-1234-123456789012",
+            "permissions":permissions
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn package_contains_installable_metadata_and_icons_without_credentials() {
+        let bytes = app_package(packaged_connection(), 12).unwrap();
         assert!(!String::from_utf8_lossy(&bytes).contains("NEVER-IN-PACKAGE"));
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
         assert_eq!(archive.len(), 3);
@@ -792,6 +1050,9 @@ mod tests {
             manifest["bots"][0]["botId"],
             "22345678-1234-1234-1234-123456789012"
         );
+        assert_eq!(manifest["bots"][0]["supportsFiles"], true);
+        assert!(manifest.get("webApplicationInfo").is_none());
+        assert!(manifest.get("authorization").is_none());
         for (name, size) in [("color.png", 192), ("outline.png", 32)] {
             use std::io::Read;
             let mut bytes = Vec::new();
@@ -804,6 +1065,148 @@ mod tests {
                 image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).unwrap();
             assert_eq!((image.width(), image.height()), (size, size));
         }
+    }
+
+    #[test]
+    fn package_declares_resource_specific_consent_in_permission_order() {
+        let mut c = packaged_connection();
+        c.permissions = vec![
+            ConversationDetails,
+            ReadMessages,
+            MeetingDetails,
+            ReadMessages,
+        ];
+        let manifest = packaged_manifest(c);
+        assert_eq!(
+            manifest["webApplicationInfo"],
+            json!({
+                "id":"22345678-1234-1234-1234-123456789012",
+                "resource":"api://botid-22345678-1234-1234-1234-123456789012"
+            })
+        );
+        assert_eq!(
+            manifest["authorization"],
+            json!({"permissions":{"resourceSpecific":[
+                {"name":"ChannelMessage.Read.Group","type":"Application"},
+                {"name":"ChatMessage.Read.Chat","type":"Application"},
+                {"name":"OnlineMeeting.ReadBasic.Chat","type":"Application"},
+                {"name":"ChannelMeeting.ReadBasic.Group","type":"Application"},
+                {"name":"TeamSettings.Read.Group","type":"Application"},
+                {"name":"ChannelSettings.Read.Group","type":"Application"},
+                {"name":"ChatSettings.Read.Chat","type":"Application"}
+            ]}})
+        );
+
+        let mut c = packaged_connection();
+        c.permissions = vec![MeetingDetails];
+        assert_eq!(
+            packaged_manifest(c)["authorization"]["permissions"]["resourceSpecific"],
+            json!([
+                {"name":"OnlineMeeting.ReadBasic.Chat","type":"Application"},
+                {"name":"ChannelMeeting.ReadBasic.Group","type":"Application"}
+            ])
+        );
+    }
+
+    #[test]
+    fn setup_permissions_are_optional_deduplicated_and_ordered() {
+        let (_, _, permissions) = validate_setup(&setup_request(json!([
+            "conversation_details",
+            "read_messages",
+            "conversation_details"
+        ])))
+        .unwrap();
+        assert_eq!(permissions, vec![ReadMessages, ConversationDetails]);
+
+        let request: TeamsSetupRequest = serde_json::from_value(json!({
+            "mode":"customer_teams", "name":"Support",
+            "customer_tenant_id":"32345678-1234-1234-1234-123456789012"
+        }))
+        .unwrap();
+        assert!(validate_setup(&request).unwrap().2.is_empty());
+        assert!(
+            serde_json::from_value::<TeamsSetupRequest>(json!({
+                "mode":"customer_teams", "name":"Support", "customer_tenant_id":"t",
+                "permissions":["write_messages"]
+            }))
+            .is_err()
+        );
+        assert!(
+            new_connection("app", "event", AuthMode::CustomerTeams)
+                .permissions
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn access_views_omit_what_does_not_apply() {
+        assert_eq!(
+            serde_json::to_value(TeamsAccessView::of(TeamsAccessStatus::NotNeeded)).unwrap(),
+            json!({"status":"not_needed"})
+        );
+        let view = TeamsAccessView {
+            consent_url: Some("https://login.microsoftonline.com/t/adminconsent".into()),
+            ..TeamsAccessView::with_message(TeamsAccessStatus::ConsentRequired, "Approve it.")
+        };
+        assert_eq!(
+            serde_json::to_value(view).unwrap(),
+            json!({
+                "status":"consent_required",
+                "consent_url":"https://login.microsoftonline.com/t/adminconsent",
+                "message":"Approve it."
+            })
+        );
+    }
+
+    #[test]
+    fn admin_consent_url_targets_the_customer_tenant_and_encodes_the_redirect() {
+        assert_eq!(
+            admin_consent_url(
+                "32345678-1234-1234-1234-123456789012",
+                "22345678-1234-1234-1234-123456789012",
+                "https://api.flow-like.com/api/v1/sink/trigger/teams/c/consent"
+            ),
+            "https://login.microsoftonline.com/32345678-1234-1234-1234-123456789012/adminconsent?client_id=22345678-1234-1234-1234-123456789012&redirect_uri=https%3A%2F%2Fapi.flow-like.com%2Fapi%2Fv1%2Fsink%2Ftrigger%2Fteams%2Fc%2Fconsent"
+        );
+    }
+
+    #[tokio::test]
+    async fn consent_page_is_static_uncached_html_that_never_echoes_the_query() {
+        use axum::{body::to_bytes, routing::get};
+        use tower::ServiceExt;
+
+        let router = axum::Router::new().route("/consent", get(consent));
+        for (query, recorded) in [
+            ("", true),
+            ("?admin_consent=True&tenant=t", true),
+            (
+                "?error=access_denied&error_description=%3Cscript%3Ealert(1)%3C%2Fscript%3E",
+                false,
+            ),
+            ("?error_description=%3Cb%3Einjected%3C%2Fb%3E", false),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(format!("/consent{query}"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            let headers = response.headers();
+            assert_eq!(headers[header::CONTENT_TYPE], "text/html; charset=utf-8");
+            assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+            assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+            let body = to_bytes(response.into_body(), 1 << 16).await.unwrap();
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            assert_eq!(body.contains("Admin consent recorded"), recorded, "{query}");
+            assert!(!body.contains("script") && !body.contains("injected"));
+            assert!(!body.contains("access_denied"));
+        }
+        assert!(!consent_failed(Some("admin_consent=True&errors=0")));
     }
 
     #[test]

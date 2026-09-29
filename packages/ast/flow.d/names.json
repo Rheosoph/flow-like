@@ -8882,6 +8882,33 @@
     "class": null,
     "category": "Events"
   },
+  "events_teams_context": {
+    "qualified": "teams::context",
+    "namespace": "teams",
+    "alias": "context",
+    "flat": "eventsTeamsContext",
+    "receiver": null,
+    "class": null,
+    "category": "Events/Chat/Teams"
+  },
+  "events_teams_get_members": {
+    "qualified": "teams::getMembers",
+    "namespace": "teams",
+    "alias": "getMembers",
+    "flat": "eventsTeamsGetMembers",
+    "receiver": null,
+    "class": null,
+    "category": "Events/Chat/Teams"
+  },
+  "events_teams_get_messages": {
+    "qualified": "teams::getMessages",
+    "namespace": "teams",
+    "alias": "getMessages",
+    "flat": "eventsTeamsGetMessages",
+    "receiver": null,
+    "class": null,
+    "category": "Events/Chat/Teams"
+  },
   "events_teams_send_card": {
     "qualified": "teams::sendCard",
     "namespace": "teams",

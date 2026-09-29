@@ -123044,6 +123044,250 @@ export const catalogNodes: CatalogNode[] = [
     "permissions": []
   },
   {
+    "slug": "nodes/events/chat/teams/events-teams-get-members",
+    "packageName": "data",
+    "name": "events_teams_get_members",
+    "friendlyName": "Get Teams Members",
+    "description": "List the members of the Teams conversation of a Chat Event session, one page at a time",
+    "category": "Events/Chat/Teams",
+    "categoryPath": [
+      "Events",
+      "Chat",
+      "Teams"
+    ],
+    "categorySlug": "nodes/events/chat/teams",
+    "icon": "/flow/icons/teams.svg",
+    "scores": {
+      "privacy": 4,
+      "security": 6,
+      "performance": 6,
+      "governance": 6,
+      "reliability": 6,
+      "cost": 8
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "In",
+        "description": "Read the Teams members",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "session",
+        "friendlyName": "Session",
+        "description": "Local or global session from the Teams Chat Event",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"type\":\"object\",\"additionalProperties\":true}",
+        "index": 2
+      },
+      {
+        "name": "limit",
+        "friendlyName": "Limit",
+        "description": "Maximum number of members in this page, 1 to 500",
+        "pinType": "Input",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "defaultValue": 100,
+        "index": 3,
+        "options": {
+          "range": [
+            1.0,
+            500.0
+          ]
+        }
+      },
+      {
+        "name": "continuation_token",
+        "friendlyName": "Continuation Token",
+        "description": "Next Continuation Token of the previous page, empty for the first page",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Out",
+        "description": "Teams returned the result",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "members",
+        "friendlyName": "Members",
+        "description": "Members of the conversation",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Array",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TeamsMember\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"given_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"surname\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null},\"user_principal_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"tenant_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"user_role\":{\"type\":[\"string\",\"null\"],\"default\":null}}}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "next_continuation_token",
+        "friendlyName": "Next Continuation Token",
+        "description": "Pass it to the next call for more members, empty on the last page",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 3
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 3,
+    "flags": [],
+    "version": 1,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/events/chat/teams/events-teams-get-messages",
+    "packageName": "data",
+    "name": "events_teams_get_messages",
+    "friendlyName": "Get Teams Messages",
+    "description": "Read recent messages of the Teams thread or conversation of a Chat Event session, with author names",
+    "category": "Events/Chat/Teams",
+    "categoryPath": [
+      "Events",
+      "Chat",
+      "Teams"
+    ],
+    "categorySlug": "nodes/events/chat/teams",
+    "icon": "/flow/icons/teams.svg",
+    "scores": {
+      "privacy": 4,
+      "security": 6,
+      "performance": 6,
+      "governance": 6,
+      "reliability": 6,
+      "cost": 8
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "In",
+        "description": "Read the Teams messages",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "session",
+        "friendlyName": "Session",
+        "description": "Local or global session from the Teams Chat Event",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"type\":\"object\",\"additionalProperties\":true}",
+        "index": 2
+      },
+      {
+        "name": "scope",
+        "friendlyName": "Scope",
+        "description": "thread reads the channel thread of the message, conversation reads the whole channel or chat",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "thread",
+        "index": 3,
+        "options": {
+          "validValues": [
+            "thread",
+            "conversation"
+          ]
+        }
+      },
+      {
+        "name": "limit",
+        "friendlyName": "Limit",
+        "description": "Maximum number of messages, 1 to 50",
+        "pinType": "Input",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "defaultValue": 20,
+        "index": 4,
+        "options": {
+          "range": [
+            1.0,
+            50.0
+          ]
+        }
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Out",
+        "description": "Teams returned the result",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "messages",
+        "friendlyName": "Messages",
+        "description": "Messages oldest first",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Array",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TeamsHistoryMessage\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"author_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"author_aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"author_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"is_bot\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"text\":{\"type\":[\"string\",\"null\"],\"default\":null},\"html\":{\"type\":[\"string\",\"null\"],\"default\":null},\"created_at\":{\"type\":[\"string\",\"null\"],\"default\":null},\"reply_to_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"attachments\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/TeamsFileLink\"},\"default\":[]}},\"$defs\":{\"TeamsFileLink\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"type\":{\"type\":[\"string\",\"null\"],\"default\":null},\"link\":{\"type\":[\"string\",\"null\"],\"default\":null}}}}}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "history",
+        "friendlyName": "History",
+        "description": "Chat history with people's messages as \"Name: text\" and bot messages as assistant",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"History\",\"type\":\"object\",\"properties\":{\"model\":{\"type\":\"string\"},\"messages\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/HistoryMessage\"}},\"preset\":{\"type\":[\"string\",\"null\"]},\"stream\":{\"type\":[\"boolean\",\"null\"]},\"stream_options\":{\"anyOf\":[{\"$ref\":\"#/$defs/StreamOptions\"},{\"type\":\"null\"}]},\"max_completion_tokens\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"top_p\":{\"type\":[\"number\",\"null\"],\"format\":\"float\"},\"temperature\":{\"type\":[\"number\",\"null\"],\"format\":\"float\"},\"thinking\":{\"anyOf\":[{\"$ref\":\"#/$defs/HistoryThinking\"},{\"type\":\"null\"}]},\"seed\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"presence_penalty\":{\"type\":[\"number\",\"null\"],\"format\":\"float\"},\"frequency_penalty\":{\"type\":[\"number\",\"null\"],\"format\":\"float\"},\"user\":{\"type\":[\"string\",\"null\"]},\"stop\":{\"type\":[\"array\",\"null\"],\"items\":{\"type\":\"string\"}},\"response_format\":{\"anyOf\":[{\"$ref\":\"#/$defs/ResponseFormat\"},{\"type\":\"null\"}]},\"n\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"tools\":{\"type\":[\"array\",\"null\"],\"items\":{\"$ref\":\"#/$defs/Tool\"}},\"tool_choice\":{\"anyOf\":[{\"$ref\":\"#/$defs/ToolChoice\"},{\"type\":\"null\"}]},\"usage\":{\"anyOf\":[{\"$ref\":\"#/$defs/Usage\"},{\"type\":\"null\"}]}},\"required\":[\"model\",\"messages\"],\"$defs\":{\"HistoryMessage\":{\"type\":\"object\",\"properties\":{\"role\":{\"$ref\":\"#/$defs/Role\"},\"content\":{\"$ref\":\"#/$defs/MessageContent\"},\"name\":{\"type\":[\"string\",\"null\"]},\"tool_calls\":{\"type\":[\"array\",\"null\"],\"items\":{\"$ref\":\"#/$defs/ToolCall\"}},\"tool_call_id\":{\"type\":[\"string\",\"null\"]},\"annotations\":{\"type\":[\"array\",\"null\"],\"items\":{\"$ref\":\"#/$defs/Annotation\"}}},\"required\":[\"role\",\"content\"]},\"Role\":{\"type\":\"string\",\"enum\":[\"system\",\"user\",\"assistant\",\"function\",\"tool\"]},\"MessageContent\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Content\"}}]},\"Content\":{\"anyOf\":[{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"text\":{\"type\":\"string\"}},\"required\":[\"type\",\"text\"]},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"image_url\":{\"$ref\":\"#/$defs/ImageUrl\"}},\"required\":[\"type\",\"image_url\"]},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"audio_url\":{\"type\":\"string\"},\"media_type\":{\"type\":[\"string\",\"null\"]},\"additional_params\":true},\"required\":[\"type\",\"audio_url\"]},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"video_url\":{\"type\":\"string\"},\"media_type\":{\"type\":[\"string\",\"null\"]},\"additional_params\":true},\"required\":[\"type\",\"video_url\"]},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"document_url\":{\"type\":\"string\"},\"media_type\":{\"type\":[\"string\",\"null\"]},\"additional_params\":true},\"required\":[\"type\",\"document_url\"]}]},\"ContentType\":{\"type\":\"string\",\"enum\":[\"text\",\"image_url\",\"audio_url\",\"video_url\",\"document_url\"]},\"ImageUrl\":{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"detail\":{\"type\":[\"string\",\"null\"]},\"media_type\":{\"type\":[\"string\",\"null\"]},\"additional_params\":true},\"required\":[\"url\"]},\"ToolCall\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"type\":{\"type\":\"string\"},\"function\":{\"$ref\":\"#/$defs/ToolCallFunction\"}},\"required\":[\"id\",\"type\",\"function\"]},\"ToolCallFunction\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"arguments\":{\"type\":\"string\"}},\"required\":[\"name\",\"arguments\"]},\"Annotation\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\"},\"url_citation\":{\"anyOf\":[{\"$ref\":\"#/$defs/UrlCitation\"},{\"type\":\"null\"}]}},\"required\":[\"type\"]},\"UrlCitation\":{\"type\":\"object\",\"properties\":{\"end_index\":{\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"start_index\":{\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"title\":{\"type\":\"string\"},\"url\":{\"type\":\"string\"},\"content\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"end_index\",\"start_index\",\"title\",\"url\"]},\"StreamOptions\":{\"type\":\"object\",\"properties\":{\"include_usage\":{\"type\":\"boolean\"}},\"required\":[\"include_usage\"]},\"HistoryThinking\":{\"type\":\"string\",\"enum\":[\"off\",\"low\",\"mid\",\"high\"]},\"ResponseFormat\":{\"anyOf\":[{\"type\":\"string\"},true]},\"Tool\":{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ToolType\"},\"function\":{\"$ref\":\"#/$defs/HistoryFunction\"}},\"required\":[\"type\",\"function\"]},\"ToolType\":{\"type\":\"string\",\"enum\":[\"function\"]},\"HistoryFunction\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"description\":{\"type\":[\"string\",\"null\"]},\"parameters\":{\"$ref\":\"#/$defs/HistoryFunctionParameters\"}},\"required\":[\"name\",\"parameters\"]},\"HistoryFunctionParameters\":{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/HistoryJSONSchemaType\"},\"properties\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"$ref\":\"#/$defs/HistoryJSONSchemaDefine\"}},\"required\":{\"type\":[\"array\",\"null\"],\"items\":{\"type\":\"string\"}}},\"required\":[\"type\"]},\"HistoryJSONSchemaType\":{\"type\":\"string\",\"enum\":[\"object\",\"number\",\"string\",\"array\",\"null\",\"boolean\"]},\"HistoryJSONSchemaDefine\":{\"type\":\"object\",\"properties\":{\"type\":{\"anyOf\":[{\"$ref\":\"#/$defs/HistoryJSONSchemaType\"},{\"type\":\"null\"}]},\"description\":{\"type\":[\"string\",\"null\"]},\"default\":true,\"enum\":{\"type\":[\"array\",\"null\"],\"items\":{\"type\":\"string\"}},\"properties\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"$ref\":\"#/$defs/HistoryJSONSchemaDefine\"}},\"required\":{\"type\":[\"array\",\"null\"],\"items\":{\"type\":\"string\"}},\"items\":{\"anyOf\":[{\"$ref\":\"#/$defs/HistoryJSONSchemaDefine\"},{\"type\":\"null\"}]}}},\"ToolChoice\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"null\"},{\"type\":\"null\"},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ToolType\"},\"function\":{\"$ref\":\"#/$defs/HistoryFunction\"}},\"required\":[\"type\",\"function\"]}]},\"Usage\":{\"type\":\"object\",\"properties\":{\"include\":{\"type\":\"boolean\"}},\"required\":[\"include\"]}}}",
+        "index": 3,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "transcript",
+        "friendlyName": "Transcript",
+        "description": "One \"Name: text\" line per message",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "source",
+        "friendlyName": "Source",
+        "description": "graph for Microsoft Graph, bot_history for the bot's own 1:1 history",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 5,
+    "flags": [],
+    "version": 1,
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
     "slug": "nodes/events/chat/teams/events-teams-send-card",
     "packageName": "data",
     "name": "events_teams_send_card",
@@ -123205,6 +123449,165 @@ export const catalogNodes: CatalogNode[] = [
     "inputCount": 3,
     "outputCount": 2,
     "flags": [],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/events/chat/teams/events-teams-context",
+    "packageName": "data",
+    "name": "events_teams_context",
+    "friendlyName": "Teams Context",
+    "description": "Read the conversation, user, team, channel, meeting and message details of a Teams Chat Event",
+    "category": "Events/Chat/Teams",
+    "categoryPath": [
+      "Events",
+      "Chat",
+      "Teams"
+    ],
+    "categorySlug": "nodes/events/chat/teams",
+    "icon": "/flow/icons/teams.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 8,
+      "performance": 10,
+      "governance": 7,
+      "reliability": 9,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "session",
+        "friendlyName": "Session",
+        "description": "Local Session from the Teams Chat Event",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"type\":\"object\",\"additionalProperties\":true}",
+        "index": 1
+      },
+      {
+        "name": "context",
+        "friendlyName": "Context",
+        "description": "Everything Teams and Microsoft shared about this message",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TeamsContext\",\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"permissions\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"default\":[]},\"conversation\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsConversation\"},{\"type\":\"null\"}],\"default\":null},\"user\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsUser\"},{\"type\":\"null\"}],\"default\":null},\"team\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsTeam\"},{\"type\":\"null\"}],\"default\":null},\"channel\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsChannel\"},{\"type\":\"null\"}],\"default\":null},\"meeting\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsMeeting\"},{\"type\":\"null\"}],\"default\":null},\"message\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsMessageInfo\"},{\"type\":\"null\"}],\"default\":null}},\"$defs\":{\"TeamsConversation\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"type\":{\"description\":\"`personal`, `groupChat` or `channel`\",\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"topic\":{\"type\":[\"string\",\"null\"],\"default\":null},\"web_url\":{\"type\":[\"string\",\"null\"],\"default\":null},\"tenant_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"thread_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"is_group\":{\"type\":[\"boolean\",\"null\"],\"default\":null}}},\"TeamsUser\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"given_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"surname\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null},\"user_principal_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"tenant_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"role\":{\"type\":[\"string\",\"null\"],\"default\":null},\"external\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"anonymous\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"meeting_role\":{\"type\":[\"string\",\"null\"],\"default\":null},\"locale\":{\"type\":[\"string\",\"null\"],\"default\":null},\"timezone\":{\"type\":[\"string\",\"null\"],\"default\":null},\"platform\":{\"type\":[\"string\",\"null\"],\"default\":null},\"country\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsTeam\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"graph_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"description\":{\"type\":[\"string\",\"null\"],\"default\":null},\"web_url\":{\"type\":[\"string\",\"null\"],\"default\":null},\"visibility\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsChannel\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"description\":{\"type\":[\"string\",\"null\"],\"default\":null},\"membership_type\":{\"type\":[\"string\",\"null\"],\"default\":null},\"web_url\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsMeeting\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"title\":{\"type\":[\"string\",\"null\"],\"default\":null},\"start\":{\"type\":[\"string\",\"null\"],\"default\":null},\"end\":{\"type\":[\"string\",\"null\"],\"default\":null},\"join_url\":{\"type\":[\"string\",\"null\"],\"default\":null},\"organizer\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsMessageInfo\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"timestamp\":{\"type\":[\"string\",\"null\"],\"default\":null},\"local_timestamp\":{\"type\":[\"string\",\"null\"],\"default\":null},\"text\":{\"type\":[\"string\",\"null\"],\"default\":null},\"html\":{\"type\":[\"string\",\"null\"],\"default\":null},\"reply_to_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"mentions_bot\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"mentions\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/TeamsMention\"},\"default\":[]},\"quoted\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsQuote\"},{\"type\":\"null\"}],\"default\":null},\"files\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/TeamsFile\"},\"default\":[]}}},\"TeamsMention\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsQuote\":{\"type\":\"object\",\"properties\":{\"message_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"sender_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"sender_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"preview\":{\"type\":[\"string\",\"null\"],\"default\":null},\"time\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsFile\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"type\":{\"type\":[\"string\",\"null\"],\"default\":null},\"size\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint64\",\"minimum\":0,\"default\":null},\"url\":{\"description\":\"Signed download URL, present when the server downloaded the file\",\"type\":[\"string\",\"null\"],\"default\":null},\"path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"default\":null},\"downloadable\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"link\":{\"description\":\"SharePoint or OneDrive link for files the bot cannot download\",\"type\":[\"string\",\"null\"],\"default\":null},\"error\":{\"description\":\"Why the file was skipped\",\"type\":[\"string\",\"null\"],\"default\":null}}},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}",
+        "index": 1,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "user",
+        "friendlyName": "User",
+        "description": "The person who sent the message",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TeamsUser\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"given_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"surname\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null},\"user_principal_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"tenant_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"role\":{\"type\":[\"string\",\"null\"],\"default\":null},\"external\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"anonymous\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"meeting_role\":{\"type\":[\"string\",\"null\"],\"default\":null},\"locale\":{\"type\":[\"string\",\"null\"],\"default\":null},\"timezone\":{\"type\":[\"string\",\"null\"],\"default\":null},\"platform\":{\"type\":[\"string\",\"null\"],\"default\":null},\"country\":{\"type\":[\"string\",\"null\"],\"default\":null}}}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "user_name",
+        "friendlyName": "User Name",
+        "description": "Display name of the sender",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 3
+      },
+      {
+        "name": "user_email",
+        "friendlyName": "User Email",
+        "description": "Email address of the sender, empty when Teams does not share it",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "conversation_type",
+        "friendlyName": "Conversation Type",
+        "description": "personal, groupChat or channel",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      },
+      {
+        "name": "team_name",
+        "friendlyName": "Team Name",
+        "description": "Team of a channel conversation, empty elsewhere",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 6
+      },
+      {
+        "name": "channel_name",
+        "friendlyName": "Channel Name",
+        "description": "Channel of a channel conversation, empty elsewhere",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 7
+      },
+      {
+        "name": "locale",
+        "friendlyName": "Locale",
+        "description": "Locale of the sender's Teams client, e.g. de-DE",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 8
+      },
+      {
+        "name": "timezone",
+        "friendlyName": "Timezone",
+        "description": "IANA timezone of the sender's Teams client, e.g. Europe/Berlin",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 9
+      },
+      {
+        "name": "message_html",
+        "friendlyName": "Message HTML",
+        "description": "Formatted HTML of the message, empty for plain text messages",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 10
+      },
+      {
+        "name": "is_group",
+        "friendlyName": "Is Group",
+        "description": "True in group chats and channels",
+        "pinType": "Output",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "index": 11
+      },
+      {
+        "name": "files",
+        "friendlyName": "Files",
+        "description": "Files and images from the message that the server downloaded",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Array",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 12
+      }
+    ],
+    "inputCount": 1,
+    "outputCount": 12,
+    "flags": [],
+    "version": 1,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -180125,16 +180528,16 @@ export const catalogCategories: CatalogCategory[] = [
     "path": "Events",
     "slug": "nodes/events",
     "depth": 1,
-    "count": 36,
-    "description": "Browse 36 generated Flow-Like node references in Events with pin details and available schema, package, and risk-rating metadata."
+    "count": 39,
+    "description": "Browse 39 generated Flow-Like node references in Events with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Chat",
     "path": "Events/Chat",
     "slug": "nodes/events/chat",
     "depth": 2,
-    "count": 24,
-    "description": "Browse 24 generated Flow-Like node references in Events/Chat with pin details and available schema, package, and risk-rating metadata."
+    "count": 27,
+    "description": "Browse 27 generated Flow-Like node references in Events/Chat with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Attachments",
@@ -180157,8 +180560,8 @@ export const catalogCategories: CatalogCategory[] = [
     "path": "Events/Chat/Teams",
     "slug": "nodes/events/chat/teams",
     "depth": 3,
-    "count": 3,
-    "description": "Browse 3 generated Flow-Like node references in Events/Chat/Teams with pin details and available schema, package, and risk-rating metadata."
+    "count": 6,
+    "description": "Browse 6 generated Flow-Like node references in Events/Chat/Teams with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Generic",

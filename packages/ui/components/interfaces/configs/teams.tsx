@@ -4,12 +4,15 @@ import { useTranslation } from "@flow-like/locales";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import {
+	CheckCircle2,
 	ChevronDown,
 	Copy,
 	Download,
 	ExternalLink,
+	Info,
 	Loader2,
 	RefreshCw,
+	ShieldAlert,
 } from "lucide-react";
 import {
 	type ReactElement,
@@ -23,15 +26,20 @@ import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks/use-invoke";
 import {
 	TEAMS_AUTH_MODES,
+	TEAMS_PERMISSIONS,
+	TEAMS_PERMISSION_RSC,
 	type TeamsAuthMode,
+	type TeamsBotAccess,
 	type TeamsBotConnection,
 	type TeamsBotPackage,
 	type TeamsBotSetup,
 	type TeamsFailure,
 	type TeamsOperation,
+	type TeamsPermission,
 	type TeamsSetupField,
 	isTeamsBotLocked,
 	parseTeamsApprovers,
+	teamsConsentUrl,
 	teamsFailure,
 	teamsFailureDetail,
 	teamsPackageFilename,
@@ -39,6 +47,7 @@ import {
 	teamsSetupFromConnection,
 	validateTeamsSetup,
 	withTeamsAuthMode,
+	withTeamsPermission,
 } from "../../../lib/teams-bot";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
@@ -62,6 +71,7 @@ import {
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
+import { Switch } from "../../ui/switch";
 import { Textarea } from "../../ui/textarea";
 import type { IConfigInterfaceProps } from "../interfaces";
 
@@ -79,6 +89,7 @@ const EMPTY_SETUP: TeamsBotSetup = {
 	client_id: "",
 	client_secret: "",
 	allowed_responders: [],
+	permissions: [],
 };
 
 const SERVER_OPERATION_STATUSES = new Set(["provisioning", "disconnecting"]);
@@ -301,6 +312,7 @@ function TeamsSetupForm({
 	const backend = useBackend();
 	const events = backend.eventState;
 	const get = events.getTeamsBot;
+	const checkAccess = events.getTeamsBotAccess;
 	const prefix = useId();
 	const invalidate = useInvalidateInvoke();
 	const [form, setForm] = useState<TeamsBotSetup>(EMPTY_SETUP);
@@ -343,6 +355,8 @@ function TeamsSetupForm({
 	const serverBusy = SERVER_OPERATION_STATUSES.has(saved.status);
 	const endpoint = saved.endpoint;
 	const invalid = (field: TeamsSetupField) => fieldErrors.includes(field);
+	const showAccess =
+		saved.status === "ready" && (saved.permissions?.length ?? 0) > 0;
 
 	function applyConnection(result: TeamsBotConnection) {
 		setForm(teamsSetupFromConnection(result));
@@ -376,6 +390,8 @@ function TeamsSetupForm({
 		} finally {
 			if (operation !== "download" && get)
 				await invalidate(get, [appId, eventId]);
+			if (operation === "setup" && checkAccess)
+				await invalidate(checkAccess, [appId, eventId]);
 			if (current()) setBusy(null);
 		}
 	}
@@ -574,6 +590,23 @@ function TeamsSetupForm({
 					);
 				}}
 			/>
+			<TeamsPermissions
+				permissions={form.permissions}
+				editable={editable}
+				onToggle={(permission, enabled) =>
+					setForm((previous) =>
+						withTeamsPermission(previous, permission, enabled),
+					)
+				}
+			>
+				{showAccess && checkAccess && (
+					<TeamsGraphAccess
+						appId={appId}
+						eventId={eventId}
+						check={checkAccess}
+					/>
+				)}
+			</TeamsPermissions>
 			{error && (
 				<div role="alert" className="space-y-1 text-sm text-destructive">
 					<p>{error.summary}</p>
@@ -836,7 +869,7 @@ function TeamsAuthPathPicker({
 	const { t } = useTranslation("interfaces");
 	const paths = useTeamsAuthPaths();
 	const prefix = useId();
-	const facts: [keyof TeamsAuthPathCopy, string][] = [
+	const facts: TeamsAuthPathFact[] = [
 		["pros", t("teamsPros", "Pros")],
 		["cons", t("teamsCons", "Cons")],
 		["permissions", t("teamsYouNeed", "You need")],
@@ -852,61 +885,20 @@ function TeamsAuthPathPicker({
 				value={value}
 				disabled={disabled}
 				onValueChange={(mode) => onChange(mode as TeamsAuthMode)}
-				className="grid gap-3 lg:grid-cols-3"
+				className="gap-2"
 			>
-				{TEAMS_AUTH_MODES.map((mode) => {
-					const path = paths[mode];
-					const unavailable = mode === "flow_like_managed" && !managedAvailable;
-					const inactive = disabled || unavailable;
-					const id = `${prefix}-${mode}`;
-					return (
-						<div
-							key={mode}
-							className={cn(
-								"flex flex-col gap-3 rounded-lg border p-4 text-sm",
-								value === mode
-									? "border-primary bg-primary/5"
-									: "border-border",
-								inactive && "opacity-60",
-							)}
-						>
-							<label
-								htmlFor={id}
-								className={cn(
-									"flex flex-col gap-2",
-									inactive ? "cursor-not-allowed" : "cursor-pointer",
-								)}
-							>
-								<span className="flex items-center gap-2">
-									<RadioGroupItem
-										id={id}
-										value={mode}
-										disabled={unavailable}
-										aria-describedby={`${id}-facts`}
-									/>
-									<span className="font-medium">{path.title}</span>
-								</span>
-								<span className="text-muted-foreground">{path.summary}</span>
-								{unavailable && (
-									<span className="text-xs">
-										{t(
-											"teamsNotEnabledOnThisServer",
-											"Not enabled on this server",
-										)}
-									</span>
-								)}
-							</label>
-							<dl id={`${id}-facts`} className="space-y-2 text-xs">
-								{facts.map(([key, label]) => (
-									<div key={key}>
-										<dt className="font-medium">{label}</dt>
-										<dd className="text-muted-foreground">{path[key]}</dd>
-									</div>
-								))}
-							</dl>
-						</div>
-					);
-				})}
+				{TEAMS_AUTH_MODES.map((mode) => (
+					<TeamsAuthPathRow
+						key={mode}
+						id={`${prefix}-${mode}`}
+						mode={mode}
+						path={paths[mode]}
+						facts={facts}
+						selected={value === mode}
+						unavailable={mode === "flow_like_managed" && !managedAvailable}
+						disabled={disabled}
+					/>
+				))}
 			</RadioGroup>
 			{locked && (
 				<p className="text-xs text-muted-foreground">
@@ -917,6 +909,93 @@ function TeamsAuthPathPicker({
 				</p>
 			)}
 		</fieldset>
+	);
+}
+
+type TeamsAuthPathFact = [keyof TeamsAuthPathCopy, string];
+
+function TeamsAuthPathRow({
+	id,
+	mode,
+	path,
+	facts,
+	selected,
+	unavailable,
+	disabled,
+}: Readonly<{
+	id: string;
+	mode: TeamsAuthMode;
+	path: TeamsAuthPathCopy;
+	facts: readonly TeamsAuthPathFact[];
+	selected: boolean;
+	unavailable: boolean;
+	disabled: boolean;
+}>) {
+	const { t } = useTranslation("interfaces");
+	const inactive = disabled || unavailable;
+	return (
+		<div
+			className={cn(
+				"rounded-lg border text-sm transition-colors",
+				selected ? "border-primary bg-primary/5" : "border-border",
+				!selected && (inactive ? "opacity-60" : "hover:bg-muted/50"),
+			)}
+		>
+			<label
+				htmlFor={id}
+				className={cn(
+					"flex items-start gap-3 p-4",
+					inactive ? "cursor-not-allowed" : "cursor-pointer",
+				)}
+			>
+				<RadioGroupItem
+					id={id}
+					value={mode}
+					disabled={unavailable}
+					className="mt-0.5"
+					aria-describedby={
+						selected ? `${id}-summary ${id}-facts` : `${id}-summary`
+					}
+				/>
+				<span className="min-w-0 flex-1 space-y-0.5">
+					<span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+						<span className="font-medium">{path.title}</span>
+						{unavailable && (
+							<Badge
+								variant="outline"
+								className="font-normal text-muted-foreground"
+							>
+								{t("teamsNotEnabledOnThisServer", "Not enabled on this server")}
+							</Badge>
+						)}
+					</span>
+					<span id={`${id}-summary`} className="block text-muted-foreground">
+						{path.summary}
+					</span>
+				</span>
+			</label>
+			{selected && (
+				<dl
+					id={`${id}-facts`}
+					className="grid gap-x-6 gap-y-3 pr-4 pb-4 pl-11 text-xs sm:grid-cols-2"
+				>
+					{facts.map(([key, label], index) => (
+						<div
+							key={key}
+							className={cn(
+								"space-y-0.5",
+								index === facts.length - 1 &&
+									index % 2 === 0 &&
+									"sm:col-span-2",
+							)}
+						>
+							<dt className="font-medium">{label}</dt>
+							<dd className="text-muted-foreground">{path[key]}</dd>
+						</div>
+					))}
+				</dl>
+			)}
+		</div>
 	);
 }
 
@@ -1265,6 +1344,309 @@ function TeamsApprovers({
 	);
 }
 
+interface TeamsPermissionCopy {
+	title: string;
+	description: string;
+}
+
+function useTeamsPermissionCopy(): Record<
+	TeamsPermission,
+	TeamsPermissionCopy
+> {
+	const { t } = useTranslation("interfaces");
+	return {
+		read_messages: {
+			title: t(
+				"teamsPermissionReadMessagesTitle",
+				"Read channel and chat messages",
+			),
+			description: t(
+				"teamsPermissionReadMessagesDescription",
+				"Gives the flow the conversation around each mention, and lets the Get Teams Messages node read earlier messages.",
+			),
+		},
+		meeting_details: {
+			title: t("teamsPermissionMeetingDetailsTitle", "Read meeting details"),
+			description: t(
+				"teamsPermissionMeetingDetailsDescription",
+				"Adds the meeting title, time, join link and organizer to runs started from a meeting chat.",
+			),
+		},
+		conversation_details: {
+			title: t(
+				"teamsPermissionConversationDetailsTitle",
+				"Read team, channel and chat details",
+			),
+			description: t(
+				"teamsPermissionConversationDetailsDescription",
+				"Adds team and channel descriptions, their links and group chat topics to the Teams context.",
+			),
+		},
+	};
+}
+
+function TeamsPermissions({
+	permissions,
+	editable,
+	onToggle,
+	children,
+}: Readonly<{
+	permissions: readonly TeamsPermission[];
+	editable: boolean;
+	onToggle: (permission: TeamsPermission, enabled: boolean) => void;
+	children?: ReactNode;
+}>) {
+	const { t } = useTranslation("interfaces");
+	const copy = useTeamsPermissionCopy();
+	const prefix = useId();
+	return (
+		<section
+			aria-labelledby={`${prefix}-title`}
+			className="space-y-4 rounded-lg border p-4"
+		>
+			<div className="space-y-1">
+				<h3 id={`${prefix}-title`} className="text-sm font-medium">
+					{t("teamsWhatTheBotCanRead", "What the bot can read")}
+				</h3>
+				<p className="text-sm text-muted-foreground">
+					{t(
+						"teamsWhatTheBotCanReadHint",
+						"Without these permissions the bot only sees messages that @mention it or are sent to it directly.",
+					)}
+				</p>
+			</div>
+			<ul className="divide-y">
+				{TEAMS_PERMISSIONS.map((permission) => {
+					const enabled = permissions.includes(permission);
+					return (
+						<TeamsPermissionRow
+							key={permission}
+							id={`${prefix}-${permission}`}
+							permission={permission}
+							copy={copy[permission]}
+							enabled={enabled}
+							disabled={!editable}
+							onToggle={(value) => onToggle(permission, value)}
+						>
+							{permission === "read_messages" && enabled && (
+								<p className="flex gap-2 rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
+									<Info className="mt-px size-3.5 shrink-0" />
+									{t(
+										"teamsReadMessagesNote",
+										"With this on, Teams sends the bot every message in the chats and channels where it is installed. The flow still runs only when someone @mentions the bot or writes to it in a 1:1 chat; other messages become conversation context, with each sender's name.",
+									)}
+								</p>
+							)}
+						</TeamsPermissionRow>
+					);
+				})}
+			</ul>
+			<p className="text-xs text-muted-foreground">
+				{t(
+					"teamsPermissionsApplyNote",
+					"Changes apply after you download the updated app and update it in Teams. A team owner approves the permissions when installing it.",
+				)}
+			</p>
+			{children}
+		</section>
+	);
+}
+
+function TeamsPermissionRow({
+	id,
+	permission,
+	copy,
+	enabled,
+	disabled,
+	onToggle,
+	children,
+}: Readonly<{
+	id: string;
+	permission: TeamsPermission;
+	copy: TeamsPermissionCopy;
+	enabled: boolean;
+	disabled: boolean;
+	onToggle: (enabled: boolean) => void;
+	children?: ReactNode;
+}>) {
+	return (
+		<li className="flex items-start justify-between gap-4 py-3 first:pt-0 last:pb-0">
+			<div className="min-w-0 space-y-1.5">
+				<Label htmlFor={id} className="leading-5">
+					{copy.title}
+				</Label>
+				<p id={`${id}-description`} className="text-sm text-muted-foreground">
+					{copy.description}
+				</p>
+				<p className="font-mono text-xs text-muted-foreground">
+					{TEAMS_PERMISSION_RSC[permission].join(" · ")}
+				</p>
+				{children}
+			</div>
+			<Switch
+				id={id}
+				className="mt-0.5"
+				checked={enabled}
+				disabled={disabled}
+				aria-describedby={`${id}-description`}
+				onCheckedChange={onToggle}
+			/>
+		</li>
+	);
+}
+
+interface TeamsAccessCopy {
+	label: string;
+	guidance?: string;
+	detail?: string;
+	tone: "ok" | "action" | "failed" | "neutral";
+}
+
+function useTeamsAccessCopy(
+	access: UseQueryResult<TeamsBotAccess, Error>,
+): TeamsAccessCopy {
+	const { t } = useTranslation("interfaces");
+	const failed = (detail?: string | null): TeamsAccessCopy => ({
+		label: t("teamsGraphAccessFailed", "Check failed"),
+		guidance: t(
+			"teamsGraphAccessFailedGuidance",
+			"Microsoft did not confirm access. Check again in a moment.",
+		),
+		detail: detail || undefined,
+		tone: "failed",
+	});
+	if (access.isPending)
+		return {
+			label: t("teamsGraphAccessChecking", "Checking…"),
+			tone: "neutral",
+		};
+	if (access.error) return failed(teamsFailureDetail(access.error));
+	const { status, message } = access.data;
+	switch (status) {
+		case "ready":
+			return {
+				label: t("teamsGraphAccessReady", "Ready"),
+				guidance: t(
+					"teamsGraphAccessReadyGuidance",
+					"Microsoft accepts the bot in your organization. Each team or chat still approves the permissions when the app is installed.",
+				),
+				tone: "ok",
+			};
+		case "consent_required":
+			return {
+				label: t("teamsGraphAccessConsentRequired", "Needs admin consent"),
+				guidance: t(
+					"teamsGraphAccessConsentRequiredGuidance",
+					"An admin of your Microsoft 365 organization must approve the bot once before it can read messages or details.",
+				),
+				detail: message || undefined,
+				tone: "action",
+			};
+		case "not_connected":
+			return {
+				label: t("teamsGraphAccessNotConnected", "Not connected"),
+				guidance: t(
+					"teamsGraphAccessNotConnectedGuidance",
+					"Connect the bot, then check again.",
+				),
+				tone: "neutral",
+			};
+		case "not_needed":
+			return {
+				label: t("teamsGraphAccessNotNeeded", "Not needed"),
+				guidance: t(
+					"teamsGraphAccessNotNeededGuidance",
+					"Save at least one read permission to check access.",
+				),
+				tone: "neutral",
+			};
+		default:
+			return failed(message);
+	}
+}
+
+const ACCESS_BADGE: Readonly<
+	Record<TeamsAccessCopy["tone"], "secondary" | "outline" | "destructive">
+> = {
+	ok: "secondary",
+	action: "outline",
+	failed: "destructive",
+	neutral: "secondary",
+};
+
+function TeamsAccessIcon({
+	tone,
+}: Readonly<{ tone: TeamsAccessCopy["tone"] }>) {
+	if (tone === "ok") return <CheckCircle2 />;
+	if (tone === "action") return <ShieldAlert />;
+	return null;
+}
+
+function TeamsGraphAccess({
+	appId,
+	eventId,
+	check,
+}: Readonly<{
+	appId: string;
+	eventId: string;
+	check: (appId: string, eventId: string) => Promise<TeamsBotAccess>;
+}>) {
+	const { t } = useTranslation("interfaces");
+	const events = useBackend().eventState;
+	const access = useInvoke(check, events, [appId, eventId]);
+	const copy = useTeamsAccessCopy(access);
+	const consentUrl = teamsConsentUrl(access.data);
+	return (
+		<div className="flex flex-wrap items-start justify-between gap-3 border-t pt-4">
+			<output className="block min-w-0 flex-1 basis-64 space-y-1">
+				<span className="flex flex-wrap items-center gap-2 text-sm">
+					<span className="text-muted-foreground">
+						{t("teamsGraphAccess", "Microsoft Graph access")}
+					</span>
+					<Badge variant={ACCESS_BADGE[copy.tone]}>
+						{access.isPending ? (
+							<Loader2 className="animate-spin" />
+						) : (
+							<TeamsAccessIcon tone={copy.tone} />
+						)}
+						{copy.label}
+					</Badge>
+				</span>
+				{copy.guidance && (
+					<span className="block text-sm text-muted-foreground">
+						{copy.guidance}
+					</span>
+				)}
+				{copy.detail && (
+					<span className="block text-xs text-muted-foreground">
+						{copy.detail}
+					</span>
+				)}
+			</output>
+			<div className="flex flex-wrap gap-2">
+				{consentUrl && (
+					<Button asChild size="sm">
+						<a href={consentUrl} target="_blank" rel="noreferrer">
+							{t("teamsGrantAdminConsent", "Grant admin consent")}
+							<ExternalLink />
+						</a>
+					</Button>
+				)}
+				<Button
+					type="button"
+					size="sm"
+					variant="outline"
+					disabled={access.isFetching}
+					onClick={() => access.refetch()}
+				>
+					<RefreshCw className={cn(access.isFetching && "animate-spin")} />
+					{t("teamsCheckAgain", "Check again")}
+				</Button>
+			</div>
+		</div>
+	);
+}
+
 function useTeamsStatusCopy(status: string): {
 	label: string;
 	guidance: string;
@@ -1407,6 +1789,12 @@ function TeamsInstall({
 				{t(
 					"teamsInstallSteps",
 					"Download the app, then in Teams choose Apps → Manage your apps → Upload an app. If uploads are disabled, send the ZIP to your Teams admin. Activate this event before sending a message to the bot.",
+				)}
+			</p>
+			<p className="text-sm text-muted-foreground">
+				{t(
+					"teamsUpdateAppAfterPermissionChange",
+					"After changing read permissions, download the app again and update it in Teams.",
 				)}
 			</p>
 			<Button

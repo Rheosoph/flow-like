@@ -8,6 +8,30 @@ export const TEAMS_AUTH_MODES = [
 
 export type TeamsAuthMode = (typeof TEAMS_AUTH_MODES)[number];
 
+export const TEAMS_PERMISSIONS = [
+	"read_messages",
+	"meeting_details",
+	"conversation_details",
+] as const;
+
+export type TeamsPermission = (typeof TEAMS_PERMISSIONS)[number];
+
+/** Resource-specific consent names that the Teams app manifest declares. */
+export const TEAMS_PERMISSION_RSC: Readonly<
+	Record<TeamsPermission, readonly string[]>
+> = {
+	read_messages: ["ChannelMessage.Read.Group", "ChatMessage.Read.Chat"],
+	meeting_details: [
+		"OnlineMeeting.ReadBasic.Chat",
+		"ChannelMeeting.ReadBasic.Group",
+	],
+	conversation_details: [
+		"TeamSettings.Read.Group",
+		"ChannelSettings.Read.Group",
+		"ChatSettings.Read.Chat",
+	],
+};
+
 export type TeamsConnectionStatus =
 	| "not_configured"
 	| "provisioning"
@@ -31,6 +55,7 @@ export interface TeamsBotConnection {
 	client_id: string;
 	secret_expires_at: string | null;
 	allowed_responders: string[];
+	permissions?: TeamsPermission[];
 	last_activity_at?: number | null;
 }
 
@@ -43,6 +68,20 @@ export interface TeamsBotSetup {
 	client_id: string;
 	client_secret: string;
 	allowed_responders: string[];
+	permissions: TeamsPermission[];
+}
+
+export type TeamsAccessStatus =
+	| "not_needed"
+	| "ready"
+	| "consent_required"
+	| "not_connected"
+	| "error";
+
+export interface TeamsBotAccess {
+	status: TeamsAccessStatus;
+	consent_url?: string | null;
+	message?: string | null;
 }
 
 export interface TeamsBotPackage {
@@ -146,7 +185,8 @@ export function validateTeamsSetup(
 
 /**
  * Whether saving would change who the connected bot is or who can reach it,
- * as opposed to a metadata-only edit (name, description, approvers).
+ * as opposed to a metadata-only edit (name, description, approvers,
+ * read permissions).
  */
 export function teamsSetupChangesConnectedBot(
 	input: TeamsBotSetup,
@@ -178,6 +218,21 @@ export function withTeamsAuthMode(
 	};
 }
 
+/** The draft with one read permission switched, kept in manifest order. */
+export function withTeamsPermission(
+	setup: TeamsBotSetup,
+	permission: TeamsPermission,
+	enabled: boolean,
+): TeamsBotSetup {
+	const next = new Set(setup.permissions);
+	if (enabled) next.add(permission);
+	else next.delete(permission);
+	return {
+		...setup,
+		permissions: TEAMS_PERMISSIONS.filter((key) => next.has(key)),
+	};
+}
+
 export function teamsSetupFromConnection(c: TeamsBotConnection): TeamsBotSetup {
 	return {
 		mode:
@@ -189,7 +244,19 @@ export function teamsSetupFromConnection(c: TeamsBotConnection): TeamsBotSetup {
 		client_id: c.client_id,
 		client_secret: "",
 		allowed_responders: c.allowed_responders,
+		permissions: c.permissions ?? [],
 	};
+}
+
+/** The admin-consent link to offer: only an https URL sent with `consent_required`. */
+export function teamsConsentUrl(access?: TeamsBotAccess): string | undefined {
+	const url = access?.status === "consent_required" && access.consent_url;
+	if (!url) return undefined;
+	try {
+		return new URL(url).protocol === "https:" ? url : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 export function teamsPackageFilename(result: TeamsBotPackage): string {

@@ -7362,6 +7362,51 @@ declare namespace teams {
     // === Events/Chat/Teams ===
 
     /**
+     * Read the conversation, user, team, channel, meeting and message details of a Teams Chat Event
+     * @node events_teams_context @alias eventsTeamsContext
+     * @param session — Local Session from the Teams Chat Event
+     * @returns context — Everything Teams and Microsoft shared about this message
+     * @returns user — The person who sent the message
+     * @returns userName — Display name of the sender
+     * @returns userEmail — Email address of the sender, empty when Teams does not share it
+     * @returns conversationType — personal, groupChat or channel
+     * @returns teamName — Team of a channel conversation, empty elsewhere
+     * @returns channelName — Channel of a channel conversation, empty elsewhere
+     * @returns locale — Locale of the sender's Teams client, e.g. de-DE
+     * @returns timezone — IANA timezone of the sender's Teams client, e.g. Europe/Berlin
+     * @returns messageHtml — Formatted HTML of the message, empty for plain text messages
+     * @returns isGroup — True in group chats and channels
+     * @returns files — Files and images from the message that the server downloaded
+     */
+    function context({ session: Struct }): { context: Struct, user: Struct, userName: string, userEmail: string, conversationType: string, teamName: string, channelName: string, locale: string, timezone: string, messageHtml: string, isGroup: bool, files: Struct[] };
+
+    /**
+     * List the members of the Teams conversation of a Chat Event session, one page at a time
+     * @node events_teams_get_members @alias eventsTeamsGetMembers
+     * @param session — Local or global session from the Teams Chat Event
+     * @param limit (optional) — Maximum number of members in this page, 1 to 500
+     * @param continuationToken (optional) — Next Continuation Token of the previous page, empty for the first page
+     * @returns members — Members of the conversation
+     * @returns nextContinuationToken — Pass it to the next call for more members, empty on the last page
+     * @impure has side effects / drives control flow
+     */
+    function getMembers({ session: Struct, limit?: int, continuationToken?: string }): { members: Struct[], nextContinuationToken: string };
+
+    /**
+     * Read recent messages of the Teams thread or conversation of a Chat Event session, with author names
+     * @node events_teams_get_messages @alias eventsTeamsGetMessages
+     * @param session — Local or global session from the Teams Chat Event
+     * @param scope (optional) — thread reads the channel thread of the message, conversation reads the whole channel or chat
+     * @param limit (optional) — Maximum number of messages, 1 to 50
+     * @returns messages — Messages oldest first
+     * @returns history — Chat history with people's messages as "Name: text" and bot messages as assistant
+     * @returns transcript — One "Name: text" line per message
+     * @returns source — graph for Microsoft Graph, bot_history for the bot's own 1:1 history
+     * @impure has side effects / drives control flow
+     */
+    function getMessages({ session: Struct, scope?: string, limit?: int }): { messages: Struct[], history: Struct, transcript: string, source: string };
+
+    /**
      * Send an Adaptive Card to the Teams conversation of a Chat Event session
      * @node events_teams_send_card @alias eventsTeamsSendCard
      * @param session — Local or global session from the Teams Chat Event

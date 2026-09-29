@@ -1,4 +1,10 @@
-use super::{Connection, auth, client, config::ManagedConfig, endpoint, guid, store};
+use super::{
+    Connection,
+    auth::{self, GRAPH_SCOPE},
+    client,
+    config::ManagedConfig,
+    endpoint, guid, store,
+};
 use crate::{error::ApiError, state::AppState};
 use flow_like_types::tokio;
 use serde_json::{Value, json};
@@ -6,7 +12,6 @@ use std::time::Duration;
 
 type Provisioner = ManagedConfig;
 
-const GRAPH_SCOPE: &str = "https://graph.microsoft.com/.default";
 const ARM_SCOPE: &str = "https://management.azure.com/.default";
 const PURGE_ATTEMPTS: u64 = 3;
 
@@ -156,6 +161,64 @@ pub(super) async fn update_bot(state: &AppState, c: &Connection) -> Result<(), A
         .ok_or_else(|| ApiError::bad_request("Complete bot setup before editing it"))?;
     let arm = Provisioner::required(state).await?.token(ARM_SCOPE).await?;
     put_bot(state, c, resource, &arm).await
+}
+
+/// Registers the admin-consent landing page as a redirect URI of a managed bot's application
+/// and returns it. The application is read first, so repeated checks never write.
+pub(super) async fn ensure_consent_redirect(
+    state: &AppState,
+    c: &Connection,
+) -> Result<String, ApiError> {
+    let object = c.graph_object_id.as_deref().ok_or_else(|| {
+        ApiError::bad_request("Complete bot setup before requesting admin consent")
+    })?;
+    let redirect = format!("{}/consent", endpoint(state, &c.id).await?);
+    let graph = Provisioner::required(state)
+        .await?
+        .token(GRAPH_SCOPE)
+        .await?;
+    add_redirect_uri(&graph, object, &redirect).await?;
+    Ok(redirect)
+}
+
+async fn add_redirect_uri(graph: &str, object: &str, redirect: &str) -> Result<(), ApiError> {
+    let url = format!("https://graph.microsoft.com/v1.0/applications/{object}");
+    let application = call(
+        reqwest::Method::GET,
+        &format!("{url}?$select=web"),
+        graph,
+        None,
+    )
+    .await?;
+    let Some(uris) = redirect_uris_with(&application, redirect)? else {
+        return Ok(());
+    };
+    call(
+        reqwest::Method::PATCH,
+        &url,
+        graph,
+        Some(json!({"web":{"redirectUris":uris}})),
+    )
+    .await?;
+    Ok(())
+}
+
+/// The application's web redirect URIs plus `redirect`, or `None` when it is already listed.
+fn redirect_uris_with(application: &Value, redirect: &str) -> Result<Option<Vec<Value>>, ApiError> {
+    let mut uris = match &application["web"]["redirectUris"] {
+        Value::Null => Vec::new(),
+        Value::Array(uris) if uris.iter().all(Value::is_string) => uris.clone(),
+        _ => {
+            return Err(ApiError::bad_gateway(
+                "Microsoft returned the bot application's redirect URIs in an unexpected shape",
+            ));
+        }
+    };
+    if uris.iter().any(|uri| uri == redirect) {
+        return Ok(None);
+    }
+    uris.push(Value::from(redirect));
+    Ok(Some(uris))
 }
 
 pub(super) fn recovery_tag(connection: &str) -> String {
@@ -548,6 +611,7 @@ mod tests {
             pending_secret_key_ids: vec![],
             status: "ready".into(),
             allowed_responders: vec!["approver".into()],
+            permissions: vec![],
             operation_until: 123,
         }
     }
@@ -632,5 +696,36 @@ mod tests {
             vec!["bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"]
         );
         assert!(cleanup_keys(&current, &json!({})).is_err());
+    }
+
+    #[test]
+    fn consent_redirect_is_added_once_and_keeps_existing_uris() {
+        let redirect = "https://api.example.com/api/v1/sink/trigger/teams/c/consent";
+        assert_eq!(
+            redirect_uris_with(&json!({"web":{"redirectUris":[]}}), redirect).unwrap(),
+            Some(vec![json!(redirect)])
+        );
+        assert_eq!(
+            redirect_uris_with(&json!({"web":null}), redirect).unwrap(),
+            Some(vec![json!(redirect)])
+        );
+        assert_eq!(
+            redirect_uris_with(
+                &json!({"web":{"redirectUris":["https://other.example.com/cb"]}}),
+                redirect
+            )
+            .unwrap(),
+            Some(vec![json!("https://other.example.com/cb"), json!(redirect)])
+        );
+        assert_eq!(
+            redirect_uris_with(
+                &json!({"web":{"redirectUris":["https://other.example.com/cb", redirect]}}),
+                redirect
+            )
+            .unwrap(),
+            None
+        );
+        assert!(redirect_uris_with(&json!({"web":{"redirectUris":"x"}}), redirect).is_err());
+        assert!(redirect_uris_with(&json!({"web":{"redirectUris":[1]}}), redirect).is_err());
     }
 }

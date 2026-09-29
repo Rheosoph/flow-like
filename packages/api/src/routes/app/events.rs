@@ -118,6 +118,10 @@ pub fn routes() -> Router<AppState> {
             post(crate::teams::management::rotate),
         )
         .route(
+            "/{event_id}/teams/access",
+            get(crate::teams::management::access),
+        )
+        .route(
             "/{event_id}/email-address",
             get(crate::mail_ingress::address::get_address)
                 .put(crate::mail_ingress::address::update_alias),

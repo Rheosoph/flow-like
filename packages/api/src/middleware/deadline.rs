@@ -159,6 +159,22 @@ use Methods as M;
 const RULES: &[Rule] = &[
     rule(M::POST, "/api/v1/execution/events", Data),
     rule(M::POST, "/api/v1/execution/apps/{app_id}/teams/send", Data),
+    rule(
+        M::POST,
+        "/api/v1/execution/apps/{app_id}/teams/messages",
+        Data,
+    ),
+    rule(
+        M::POST,
+        "/api/v1/execution/apps/{app_id}/teams/members",
+        Data,
+    ),
+    // Token and consent-redirect calls to Microsoft have their own 20 s timeout.
+    rule(
+        GET_HEAD,
+        "/api/v1/apps/{app_id}/events/{event_id}/teams/access",
+        Write,
+    ),
     rule(M::PUT, "/api/v1/apps/{app_id}/events/{event_id}/teams", Job),
     rule(
         M::DELETE,
@@ -262,6 +278,12 @@ const RULES: &[Rule] = &[
     // Ingest stores each recipient's copy with a 120 s upload budget; dispatch stops at 60 s.
     rule(M::POST, "/api/v1/sink/mail/ingest", Job),
     rule(M::POST, "/api/v1/sink/mail/dispatch", Data),
+    // A static page Microsoft opens after admin consent.
+    rule(
+        READS,
+        "/api/v1/sink/trigger/teams/{connection_id}/consent",
+        Read,
+    ),
     // Observed POST /sink/trigger/async max 3.0 s; HTTP sinks wait up to 120 s.
     rule(M::ANY, "/api/v1/sink/trigger/*", Dispatch),
     // Observed max 33.4 s; the deletion pass budget reaches 270 s.
@@ -524,6 +546,30 @@ mod tests {
             None,
         ),
         (
+            "POST",
+            "/api/v1/execution/apps/{app_id}/teams/messages",
+            Data,
+            None,
+        ),
+        (
+            "POST",
+            "/api/v1/execution/apps/{app_id}/teams/members",
+            Data,
+            None,
+        ),
+        (
+            "GET",
+            "/api/v1/apps/{app_id}/events/{event_id}/teams/access",
+            Write,
+            None,
+        ),
+        (
+            "GET",
+            "/api/v1/apps/{app_id}/events/{event_id}/teams",
+            Read,
+            None,
+        ),
+        (
             "PUT",
             "/api/v1/apps/{app_id}/events/{event_id}/teams",
             Job,
@@ -700,6 +746,18 @@ mod tests {
         (
             "POST",
             "/api/v1/sink/trigger/telegram/{event_id}",
+            Dispatch,
+            None,
+        ),
+        (
+            "GET",
+            "/api/v1/sink/trigger/teams/{connection_id}/consent",
+            Read,
+            None,
+        ),
+        (
+            "POST",
+            "/api/v1/sink/trigger/teams/{connection_id}",
             Dispatch,
             None,
         ),
