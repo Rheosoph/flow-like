@@ -8,9 +8,9 @@ use flow_like::flow::{
     node::{Node, NodeLogic},
     variable::VariableType,
 };
-use flow_like_catalog_core::NodeImage;
 #[cfg(feature = "execute")]
 use flow_like_catalog_core::FlowPath;
+use flow_like_catalog_core::NodeImage;
 #[cfg(feature = "execute")]
 use flow_like_storage::object_store::ObjectStoreExt;
 #[cfg(feature = "execute")]

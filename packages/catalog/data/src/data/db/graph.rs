@@ -196,8 +196,7 @@ impl NodeLogic for OpenGraphOverlayNode {
 
         let cache_set = context.cache.read().await.contains_key(&cache_key);
         if !cache_set {
-            let connection =
-                super::vector::connection::open_shared(context, user_scoped).await?;
+            let connection = super::vector::connection::open_shared(context, user_scoped).await?;
 
             let overlay = match lancegraph::load_overlay(&connection, &overlay_id).await {
                 Ok(o) => o,
@@ -327,8 +326,7 @@ impl NodeLogic for CreateGraphOverlayNode {
         let overlay: flow_like_catalog_core::GraphOverlay = context.evaluate_pin("overlay").await?;
         let user_scoped: bool = context.evaluate_pin("user_scoped").await.unwrap_or(false);
 
-        let connection =
-            super::vector::connection::open_shared(context, user_scoped).await?;
+        let connection = super::vector::connection::open_shared(context, user_scoped).await?;
 
         let overlay_id = if overlay.id.is_empty() {
             uuid::Uuid::new_v4().to_string()

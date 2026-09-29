@@ -1677,9 +1677,15 @@ mod tests {
         let context = proof.context("Renew device admission");
         assert!(device_proof_rejected(&context));
         for (code, body) in [
-            (StatusCode::UNAUTHORIZED, r#"{"error":{"code":"UNAUTHORIZED"}}"#),
+            (
+                StatusCode::UNAUTHORIZED,
+                r#"{"error":{"code":"UNAUTHORIZED"}}"#,
+            ),
             (StatusCode::UNAUTHORIZED, "not json"),
-            (StatusCode::FORBIDDEN, r#"{"error":{"code":"DEVICE_PROOF_INVALID"}}"#),
+            (
+                StatusCode::FORBIDDEN,
+                r#"{"error":{"code":"DEVICE_PROOF_INVALID"}}"#,
+            ),
         ] {
             let error = status(code, body);
             assert!(is_access_denied(&error), "{code} {body}");

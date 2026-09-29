@@ -15,11 +15,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signature = node_to_signature(&node);
     assert_eq!(node.version, Some(2));
     assert_eq!(signature.inputs[0].name, "model_dir");
-    assert!(signature.outputs.iter().all(|pin| !["score", "noul"].contains(&pin.name.as_str())));
-    fs::write(output.join("signature.json"), serde_json::to_string_pretty(&signature)?)?;
-    fs::write(output.join("names.json"), serde_json::to_string_pretty(&node_names(&node))?)?;
-    fs::write(output.join("schemas.json"), serde_json::to_string_pretty(&schema_sidecar(std::slice::from_ref(&signature)))?)?;
-    fs::write(output.join("member.flow.d"), format!("{}\n\n", signature.render_namespace_member("    ")))?;
+    assert!(
+        signature
+            .outputs
+            .iter()
+            .all(|pin| !["score", "noul"].contains(&pin.name.as_str()))
+    );
+    fs::write(
+        output.join("signature.json"),
+        serde_json::to_string_pretty(&signature)?,
+    )?;
+    fs::write(
+        output.join("names.json"),
+        serde_json::to_string_pretty(&node_names(&node))?,
+    )?;
+    fs::write(
+        output.join("schemas.json"),
+        serde_json::to_string_pretty(&schema_sidecar(std::slice::from_ref(&signature)))?,
+    )?;
+    fs::write(
+        output.join("member.flow.d"),
+        format!("{}\n\n", signature.render_namespace_member("    ")),
+    )?;
     let category = declarations_by_category(&[signature]);
     fs::write(output.join("category.flow.d"), &category[0].content)?;
     let package = declarations_by_package(&[node_to_signature_in(&node, "onnx")]);

@@ -80,6 +80,7 @@ TARGETS = tuple(sorted([
     target("aws", "file-tracker", "linux/arm64"),
     target("aws", "media-transformer", "linux/arm64"),
     target("aws", "event-bridge", "linux/arm64"),
+    target("aws", "mail-ingress", "linux/arm64"),
     target("aws", "maintenance", "linux/arm64"),
     target("aws", "audit-worker", "linux/arm64"),
     *[target(cloud, "audit-worker", audit_features=cloud)

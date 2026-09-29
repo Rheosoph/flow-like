@@ -559,7 +559,10 @@ mod tests {
             Vec::<String>::new()
         );
         assert_eq!(
-            context.evaluate_pin::<Option<String>>("label").await.unwrap(),
+            context
+                .evaluate_pin::<Option<String>>("label")
+                .await
+                .unwrap(),
             Some(String::new())
         );
     }

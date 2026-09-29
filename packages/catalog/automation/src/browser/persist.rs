@@ -531,8 +531,9 @@ impl NodeLogic for BrowserLoadStorageStateNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let file_path: FlowPath = context.evaluate_pin("file_path").await?;
         let data = read_storage_file(context, &file_path).await?;
-        let state: StorageState = flow_like_types::json::from_slice(&data)
-            .map_err(|error| flow_like_types::anyhow!("Storage state file is not valid: {error}"))?;
+        let state: StorageState = flow_like_types::json::from_slice(&data).map_err(|error| {
+            flow_like_types::anyhow!("Storage state file is not valid: {error}")
+        })?;
         let driver = session.get_browser_driver_and_switch(context).await?;
         let report = write_cookies(context, &session, &driver, &state.cookies).await?;
         driver.enter_default_frame().await?;
@@ -665,9 +666,10 @@ mod tests {
         assert_eq!(state.cookies[0].expires, -1.0);
         assert_eq!(state.origins[0].local_storage[0].name, "token");
         assert_eq!(flow_like_types::json::to_value(&state).unwrap(), playwright);
-        let minimal: StorageState =
-            flow_like_types::json::from_value(json!({ "cookies": [{ "name": "a", "value": "b" }] }))
-                .unwrap();
+        let minimal: StorageState = flow_like_types::json::from_value(
+            json!({ "cookies": [{ "name": "a", "value": "b" }] }),
+        )
+        .unwrap();
         assert_eq!(minimal.cookies[0].path, "/");
         assert_eq!(minimal.cookies[0].same_site, "Lax");
         assert!(minimal.origins.is_empty());

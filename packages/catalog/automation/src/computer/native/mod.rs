@@ -167,7 +167,9 @@ pub async fn recognize_text(
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = (image, options);
-        Err(anyhow!("Text recognition is not available on this operating system"))
+        Err(anyhow!(
+            "Text recognition is not available on this operating system"
+        ))
     }
 }
 pub fn operate_window(

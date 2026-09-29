@@ -757,12 +757,8 @@ impl NodeLogic for FocusWindowNode {
                     title
                 ));
             }
-            launch_application_async(
-                process.clone(),
-                vec![],
-                context.get_cancellation_token(),
-            )
-            .await?;
+            launch_application_async(process.clone(), vec![], context.get_cancellation_token())
+                .await?;
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             while found.is_none() && std::time::Instant::now() < deadline {
                 crate::rpa::branch::delay(context, std::time::Duration::from_millis(100)).await?;
@@ -861,7 +857,11 @@ pub(crate) fn pick_window(
     let process = process.to_lowercase();
     let matches = windows.into_iter().filter(|window| {
         let name = window.title.to_lowercase();
-        let app = window.app_name.as_deref().unwrap_or_default().to_lowercase();
+        let app = window
+            .app_name
+            .as_deref()
+            .unwrap_or_default()
+            .to_lowercase();
         let title_matches = title.is_empty()
             || name.contains(&title)
             || (process.is_empty() && app.contains(&title));

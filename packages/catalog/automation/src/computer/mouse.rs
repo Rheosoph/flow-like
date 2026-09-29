@@ -5,9 +5,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::FlowPath;
-use flow_like_types::{async_trait, json::json};
 #[cfg(feature = "execute")]
 use flow_like_types::rand;
+use flow_like_types::{async_trait, json::json};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -1422,9 +1422,9 @@ pub(crate) fn perform_drag(
         interruptible_sleep(pause, cancellation)?;
     }
     interruptible_sleep(80, cancellation)?;
-    input
-        .button(button, Direction::Release)
-        .map_err(|e| flow_like_types::anyhow!("Failed to release {:?} after drag: {}", button, e))?;
+    input.button(button, Direction::Release).map_err(|e| {
+        flow_like_types::anyhow!("Failed to release {:?} after drag: {}", button, e)
+    })?;
     Ok(())
 }
 
@@ -1743,9 +1743,9 @@ impl NodeLogic for ComputerMouseUpNode {
                 })?;
                 interruptible_sleep(50, cancellation.as_ref())?;
             }
-            input
-                .button(button, Direction::Release)
-                .map_err(|e| flow_like_types::anyhow!("Failed to release {}: {}", button_name, e))?;
+            input.button(button, Direction::Release).map_err(|e| {
+                flow_like_types::anyhow!("Failed to release {}: {}", button_name, e)
+            })?;
             input.unlatch_button(button);
             Ok(())
         })
@@ -1881,7 +1881,10 @@ mod drag_tests {
         let path = drag_path((10, 20), (110, -80), 8);
         assert_eq!(path.len(), 8);
         assert_eq!(*path.last().unwrap(), (110, -80));
-        assert!(path.windows(2).all(|pair| pair[1].0 >= pair[0].0 && pair[1].1 <= pair[0].1));
+        assert!(
+            path.windows(2)
+                .all(|pair| pair[1].0 >= pair[0].0 && pair[1].1 <= pair[0].1)
+        );
         assert_eq!(drag_path((5, 5), (5, 5), 0), vec![(5, 5)]);
     }
 }

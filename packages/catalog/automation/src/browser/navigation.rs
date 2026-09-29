@@ -99,9 +99,7 @@ impl NodeLogic for BrowserGotoNode {
         let final_url = super::policy::verify_landing(&driver, &policy, &url).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
-        context
-            .set_pin_value("final_url", json!(final_url))
-            .await?;
+        context.set_pin_value("final_url", json!(final_url)).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())

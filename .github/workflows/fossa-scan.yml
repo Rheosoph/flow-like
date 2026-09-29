@@ -19,11 +19,13 @@ jobs:
         uses: fossas/fossa-action@c414b9ad82eaad041e47a7cf62a4f02411f427a0 # v1.8.0
         with:
           api-key: ${{ secrets.FOSSA_API_KEY }}
-          generate-report: html
 
+      # The action's `report` output passes the whole HTML through an
+      # expression, which exceeds the runner's expression memory limit.
       - name: Save FOSSA Report
-        if: always()
-        run: echo '${{ steps.fossa.outputs.report }}' > fossa-attribution.html
+        env:
+          FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
+        run: fossa report attribution --format html > fossa-attribution.html
 
       - name: Upload FOSSA Report
         if: always()

@@ -45,7 +45,6 @@ const DOCUMENTS: [&str; 36] = [
     "Le fuseau horaire d'un rapport suit celui de l'espace de travail, pas celui du navigateur, afin que deux personnes voient les mêmes totaux journaliers.",
     "Uploading more than one hundred files at once is chunked by the orchestrator. Each chunk is acknowledged before the next begins so a dropped connection resumes rather than restarts.",
     "Row level security is enforced in SQL, not in the API layer, so a query that forgets the tenant predicate returns nothing instead of leaking another tenant's rows.",
-
     // --- hard negatives: adjacent topic, overlapping vocabulary, wrong answer ---
     "Personal access tokens are listed under Settings with their creation date and last use. The list is read only; creating and revoking happen on the Tokens page.",
     "Service account keys differ from personal access tokens: they never expire, cannot be rotated in the console, and must be replaced by recreating the service account.",
@@ -146,8 +145,14 @@ fn main() {
     };
     let load_ms = start.elapsed().as_millis();
 
-    let docs: Vec<String> = DOCUMENTS.iter().map(|s| format!("{doc_prefix}{s}")).collect();
-    let queries: Vec<String> = QUERIES.iter().map(|s| format!("{query_prefix}{s}")).collect();
+    let docs: Vec<String> = DOCUMENTS
+        .iter()
+        .map(|s| format!("{doc_prefix}{s}"))
+        .collect();
+    let queries: Vec<String> = QUERIES
+        .iter()
+        .map(|s| format!("{query_prefix}{s}"))
+        .collect();
 
     let start = Instant::now();
     let doc_vectors = match embedder.embed(docs.clone(), Some(12)) {
@@ -180,7 +185,10 @@ fn main() {
             .collect();
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        let rank = scored.iter().position(|(j, _)| *j == i).unwrap_or(usize::MAX);
+        let rank = scored
+            .iter()
+            .position(|(j, _)| *j == i)
+            .unwrap_or(usize::MAX);
         if rank == 0 {
             hits += 1;
         }
@@ -188,7 +196,11 @@ fn main() {
             reciprocal += 1.0 / (rank as f64 + 1.0);
         }
         // How far the correct passage sits above the best wrong one; negative means it lost.
-        let correct = scored.iter().find(|(j, _)| *j == i).map(|(_, s)| *s).unwrap_or(0.0);
+        let correct = scored
+            .iter()
+            .find(|(j, _)| *j == i)
+            .map(|(_, s)| *s)
+            .unwrap_or(0.0);
         let best_wrong = scored
             .iter()
             .find(|(j, _)| *j != i)

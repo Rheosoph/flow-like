@@ -1793,8 +1793,8 @@ function TeamsInstall({
 			</p>
 			<p className="text-sm text-muted-foreground">
 				{t(
-					"teamsUpdateAppAfterPermissionChange",
-					"After changing read permissions, download the app again and update it in Teams.",
+					"teamsUpdateAppAfterChanges",
+					"After changing read permissions or after Flow-Like updates the Teams app, download the app again and update it in Teams.",
 				)}
 			</p>
 			<Button
@@ -1814,6 +1814,12 @@ function TeamsInstall({
 				{t(
 					"teamsSupportedInteractions",
 					"Direct messages, mentions, and card replies are supported. Reading every message or calling Microsoft Graph as a user requires additional permissions and setup.",
+				)}
+			</p>
+			<p className="text-xs text-muted-foreground">
+				{t(
+					"teamsFileSupport",
+					"Files uploaded in 1:1 chats reach the bot. In group chats, channels and meeting chats Teams only delivers pasted images to bots; uploaded files are not sent. With “Read channel and chat messages” the bot sees the file's name and link, not its content.",
 				)}
 			</p>
 		</section>

@@ -82,7 +82,9 @@ fn describe(selector: &Selector) -> String {
 #[cfg(any(feature = "execute", test))]
 fn validate_fields(fields: &[FormField]) -> flow_like_types::Result<()> {
     if fields.is_empty() {
-        return Err(flow_like_types::anyhow!("Fill Form needs at least one field"));
+        return Err(flow_like_types::anyhow!(
+            "Fill Form needs at least one field"
+        ));
     }
     for (index, field) in fields.iter().enumerate() {
         let check = || -> flow_like_types::Result<()> {
@@ -515,7 +517,10 @@ mod tests {
             field(json!({ "target": "e2", "value": "maybe", "kind": "checkbox" })),
         ];
         let error = validate_fields(&fields).unwrap_err().to_string();
-        assert!(error.starts_with("Form field 2 (Ref 'e2') is invalid"), "{error}");
+        assert!(
+            error.starts_with("Form field 2 (Ref 'e2') is invalid"),
+            "{error}"
+        );
         assert!(validate_fields(&[]).is_err());
         let radio = field(json!({ "target": "e3", "value": "false", "kind": "radio" }));
         assert!(validate_fields(&[radio]).is_err());

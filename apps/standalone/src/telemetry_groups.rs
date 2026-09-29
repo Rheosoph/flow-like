@@ -711,8 +711,10 @@ fn publish_audience(
         return Ok(());
     }
     let mut audience = Audience::open(root, device, scope)?;
-    let accepted = reconcile_roster(&store.connection, scope, &mut audience)?
-        .with_context(|| format!("Telemetry roster for scope {scope} disappeared before publication"))?;
+    let accepted =
+        reconcile_roster(&store.connection, scope, &mut audience)?.with_context(|| {
+            format!("Telemetry roster for scope {scope} disappeared before publication")
+        })?;
     let (sequence, _) = audience.state.publication_position()?;
     fence_publication(&mut audience, device.manifest(), &accepted);
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -859,10 +861,8 @@ mod tests {
         store.accept_management_policy(&policy, &owner.public_key(), "device", now)?;
         let genesis = sign_telemetry_roster(&roster(device, 1, None, &policy, &[], now), owner)?;
         apply_policy(root, device, "device", "genesis", 1, &genesis, &[])?;
-        let renewed = sign_telemetry_roster(
-            &roster(device, 2, Some(&genesis), &policy, &[], now),
-            owner,
-        )?;
+        let renewed =
+            sign_telemetry_roster(&roster(device, 2, Some(&genesis), &policy, &[], now), owner)?;
         apply_policy(root, device, "device", "renewed", 0, &renewed, &[])?;
         Ok((genesis, renewed))
     }

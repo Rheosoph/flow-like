@@ -78,6 +78,12 @@ jobs:
               output.write(f'epoch={epoch}\nsequence={sequence}\nbase={base}\nimage={image}\n')
           PY
       - run: python3 -m unittest discover -s .github/scripts/tests -p 'test_standalone_release*.py'
+      - name: Refuse a sequence that is already published or partly uploaded
+        env:
+          RELEASE_BASE: ${{ steps.inputs.outputs.base }}
+          RELEASE_SEQUENCE: ${{ steps.inputs.outputs.sequence }}
+          RELEASE_PUBLIC_KEYS: ${{ vars.STANDALONE_RELEASE_PUBLIC_KEYS }}
+        run: python3 .github/scripts/standalone_release.py preflight --base-url "$RELEASE_BASE" --sequence "$RELEASE_SEQUENCE" --public-keys "$RELEASE_PUBLIC_KEYS"
 
   frontend:
     needs: prepare

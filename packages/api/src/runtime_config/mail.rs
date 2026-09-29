@@ -32,7 +32,7 @@ impl Default for MailAutomationConfig {
             bucket: None,
             prefix: "raw/".into(),
             ttl_seconds: 3600,
-            max_bytes: 10 * 1024 * 1024,
+            max_bytes: 25 * 1024 * 1024,
             sending_enabled: true,
             min_send_interval_seconds: 5,
             daily_app_recipient_limit: 500,
@@ -470,7 +470,7 @@ mod tests {
         assert!(configured.can_send());
         assert_eq!(configured.prefix, "raw/");
         assert_eq!(configured.ttl_seconds, 3600);
-        assert_eq!(configured.max_bytes, 10 * 1024 * 1024);
+        assert_eq!(configured.max_bytes, 25 * 1024 * 1024);
         assert_eq!(configured.min_send_interval_seconds, 5);
         assert_eq!(configured.daily_app_recipient_limit, 500);
         assert_eq!(configured.daily_principal_recipient_limit, 2000);
@@ -515,6 +515,12 @@ mod tests {
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| OsString::from(value))
         }
+    }
+
+    #[test]
+    fn default_size_limit_stays_within_the_supported_maximum() {
+        let default = MailAutomationConfig::default().max_bytes;
+        assert!((1024..=MAX_SUPPORTED_MAIL_BYTES).contains(&default));
     }
 
     #[test]

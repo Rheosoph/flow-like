@@ -291,7 +291,9 @@ impl NodeLogic for BrowserSaveCookiesNode {
         store
             .put(&runtime.path, cookie_json.into())
             .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to save cookies to {}: {}", runtime.path, e))?;
+            .map_err(|e| {
+                flow_like_types::anyhow!("Failed to save cookies to {}: {}", runtime.path, e)
+            })?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context
@@ -741,9 +743,12 @@ impl NodeLogic for TotpCodeNode {
         let period = u64::try_from(period)
             .ok()
             .filter(|period| *period > 0)
-            .ok_or_else(|| flow_like_types::anyhow!("TOTP period must be positive (got {period})"))?;
-        let digits = u32::try_from(digits)
-            .map_err(|_| flow_like_types::anyhow!("TOTP digits must be 6, 7 or 8 (got {digits})"))?;
+            .ok_or_else(|| {
+                flow_like_types::anyhow!("TOTP period must be positive (got {period})")
+            })?;
+        let digits = u32::try_from(digits).map_err(|_| {
+            flow_like_types::anyhow!("TOTP digits must be 6, 7 or 8 (got {digits})")
+        })?;
         let unix_time = match u64::try_from(unix_time) {
             Ok(time) => time,
             Err(_) => std::time::SystemTime::now()
@@ -751,8 +756,13 @@ impl NodeLogic for TotpCodeNode {
                 .as_secs(),
         };
         let key = decode_base32(&secret)?;
-        let (code, remaining) =
-            totp(&key, unix_time, period, digits, TotpAlgorithm::parse(&algorithm)?)?;
+        let (code, remaining) = totp(
+            &key,
+            unix_time,
+            period,
+            digits,
+            TotpAlgorithm::parse(&algorithm)?,
+        )?;
         context.set_pin_value("code", json!(code)).await?;
         context
             .set_pin_value("seconds_remaining", json!(remaining))
@@ -772,7 +782,14 @@ impl NodeLogic for TotpCodeNode {
 mod tests {
     use super::*;
 
-    const TIMES: [u64; 6] = [59, 1_111_111_109, 1_111_111_111, 1_234_567_890, 2_000_000_000, 20_000_000_000];
+    const TIMES: [u64; 6] = [
+        59,
+        1_111_111_109,
+        1_111_111_111,
+        1_234_567_890,
+        2_000_000_000,
+        20_000_000_000,
+    ];
 
     fn codes(key: &[u8], algorithm: TotpAlgorithm) -> Vec<String> {
         TIMES
@@ -785,18 +802,24 @@ mod tests {
     fn rfc6238_vectors() {
         assert_eq!(
             codes(b"12345678901234567890", TotpAlgorithm::Sha1),
-            ["94287082", "07081804", "14050471", "89005924", "69279037", "65353130"]
+            [
+                "94287082", "07081804", "14050471", "89005924", "69279037", "65353130"
+            ]
         );
         assert_eq!(
             codes(b"12345678901234567890123456789012", TotpAlgorithm::Sha256),
-            ["46119246", "68084774", "67062674", "91819424", "90698825", "77737706"]
+            [
+                "46119246", "68084774", "67062674", "91819424", "90698825", "77737706"
+            ]
         );
         assert_eq!(
             codes(
                 b"1234567890123456789012345678901234567890123456789012345678901234",
                 TotpAlgorithm::Sha512
             ),
-            ["90693936", "25091201", "99943326", "93441116", "38618901", "47863826"]
+            [
+                "90693936", "25091201", "99943326", "93441116", "38618901", "47863826"
+            ]
         );
     }
 
@@ -819,7 +842,10 @@ mod tests {
         let error = decode_base32("ABC1").unwrap_err().to_string();
         assert!(error.contains("position 4"));
         assert!(!error.contains('1'));
-        assert_eq!(TotpAlgorithm::parse("sha-256").unwrap(), TotpAlgorithm::Sha256);
+        assert_eq!(
+            TotpAlgorithm::parse("sha-256").unwrap(),
+            TotpAlgorithm::Sha256
+        );
         assert!(TotpAlgorithm::parse("md5").is_err());
     }
 

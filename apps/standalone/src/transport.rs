@@ -268,7 +268,9 @@ impl NoiseConnection {
                 ensure!(self.step == 2, "Management handshake incomplete");
                 data
             }
-            NoiseEnvelope::Close { .. } => anyhow::bail!("Controller closed the management session"),
+            NoiseEnvelope::Close { .. } => {
+                anyhow::bail!("Controller closed the management session")
+            }
         };
         let response = self.connection.receive(&wire::decode(&data)?).await?;
         let envelope = if self.step == 0 {

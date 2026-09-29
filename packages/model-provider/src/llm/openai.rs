@@ -2,7 +2,9 @@ use std::{any::Any, sync::Arc};
 
 use super::{
     ModelLogic, UsageReportingMode, body_params, drop_body_param, drop_temperature,
-    extract_headers, merge_additional_params, output_budget_as_body_param,
+    extract_headers,
+    media::{self, MediaDialect},
+    merge_additional_params, output_budget_as_body_param,
 };
 use crate::authorization::AuthorizedHttpClient;
 use crate::provider::random_provider;
@@ -128,7 +130,8 @@ fn drop_rejected_sampling(model: &str, request: &mut CompletionRequest) {
     }
 }
 
-fn chat_completions_constraints(model: &str, mut request: CompletionRequest) -> CompletionRequest {
+fn chat_completions_constraints(model: &str, request: CompletionRequest) -> CompletionRequest {
+    let mut request = media::retain_supported(MediaDialect::OpenAIChat, model, request);
     if OpenAIReasoning::of(model).needs_max_completion_tokens()
         && let Some(max_tokens) = request.max_tokens.take()
     {
@@ -145,12 +148,16 @@ fn azure_constraints(model: &str, request: CompletionRequest) -> CompletionReque
     } else {
         "max_tokens"
     };
-    let mut request = output_budget_as_body_param(request, key);
+    let mut request = output_budget_as_body_param(
+        media::retain_supported(MediaDialect::OpenAIChat, model, request),
+        key,
+    );
     drop_rejected_sampling(model, &mut request);
     request
 }
 
-fn responses_constraints(model: &str, mut request: CompletionRequest) -> CompletionRequest {
+fn responses_constraints(model: &str, request: CompletionRequest) -> CompletionRequest {
+    let mut request = media::retain_supported(MediaDialect::OpenAIResponses, model, request);
     drop_rejected_sampling(model, &mut request);
     request
 }
@@ -1574,6 +1581,57 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(&server.await.unwrap()).unwrap();
         assert_eq!(body["max_tokens"], 2048);
         assert_eq!(response.choices[0].finish_reason, "length");
+    }
+
+    #[tokio::test]
+    async fn hosted_chat_completions_sends_a_note_for_a_linked_pdf() {
+        use crate::llm::test_support::{chat_completion, json_response, serve_once};
+
+        let (endpoint, server) =
+            serve_once(json_response(chat_completion("bit-id", "stop", 1))).await;
+        let mut provider = proxy_provider();
+        provider
+            .params
+            .as_mut()
+            .unwrap()
+            .insert("endpoint".to_string(), serde_json::json!(endpoint));
+        let model = OpenAIModel::from_provider_chat_completions(&provider)
+            .await
+            .unwrap();
+        let mut history = History::new(
+            "bit-id".to_string(),
+            vec![HistoryMessage {
+                role: Role::User,
+                content: MessageContent::Contents(vec![
+                    Content::Text {
+                        content_type: ContentType::Text,
+                        text: "What does the report say?".to_string(),
+                    },
+                    Content::Document {
+                        content_type: ContentType::DocumentUrl,
+                        document_url: "https://bucket.s3.amazonaws.com/runs/r/request/teams/files/0/report.pdf?X-Amz-Signature=secret".to_string(),
+                        media_type: Some("application/pdf".to_string()),
+                        additional_params: None,
+                    },
+                ]),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                annotations: None,
+            }],
+        );
+        history.stream = Some(false);
+
+        model.invoke(&history, None).await.unwrap();
+
+        let body = server.await.unwrap();
+        assert!(!body.contains("X-Amz-Signature"), "{body}");
+        assert!(
+            body.contains(
+                "[attachment omitted: this model cannot read documents (application/pdf) sent as a link]"
+            ),
+            "{body}"
+        );
     }
 
     #[tokio::test]

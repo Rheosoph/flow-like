@@ -500,7 +500,19 @@ async fn try_materialize_cached_model(
     spec: &ModelSpec,
     destination: &Path,
 ) -> Result<CachedModelLookup> {
-    let (result, dirty) = cache_path.get_cached_file(context).await?;
+    let (result, dirty) = match cache_path.get_cached_file(context).await {
+        Ok(lookup) => lookup,
+        Err(error) => {
+            context.log_message(
+                &format!(
+                    "Treating the cached {} {} model as missing because the model cache could not be read: {error}",
+                    spec.role, spec.family.label
+                ),
+                LogLevel::Warn,
+            );
+            return Ok(CachedModelLookup::Miss);
+        }
+    };
     let Some(result) = result else {
         return Ok(CachedModelLookup::Miss);
     };
@@ -1023,10 +1035,24 @@ mod tests {
     #[cfg(feature = "execute")]
     mod execute {
         use super::super::*;
+        use flow_like::{
+            flow::{
+                board::ExecutionStage,
+                execution::internal_node::InternalNode,
+                node::{Node, NodeLogic},
+            },
+            profile::Profile,
+            state::{FlowLikeConfig, FlowLikeState},
+            utils::http::HTTPClient,
+        };
         use flow_like_catalog_core::FlowPathRuntime;
         use flow_like_storage::{
             files::store::{FlowLikeStore, local_store::LocalObjectStore},
-            object_store::memory::InMemory,
+            object_store::{self, ObjectStore, memory::InMemory},
+        };
+        use flow_like_types::{
+            futures::{self, stream::BoxStream},
+            sync::{Mutex as AsyncMutex, RwLock},
         };
 
         const DEFAULT_FACE_CACHE_NAMES: [&str; 3] = [
@@ -1484,6 +1510,150 @@ mod tests {
                 assert_eq!(cached_etag, uploaded.e_tag);
                 assert_eq!(std::fs::read(materialized).unwrap(), contents);
             }
+        }
+
+        #[derive(Debug)]
+        struct DeniedStore;
+
+        impl std::fmt::Display for DeniedStore {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "DeniedStore")
+            }
+        }
+
+        fn denied(location: &flow_like_storage::Path) -> object_store::Error {
+            object_store::Error::PermissionDenied {
+                path: location.to_string(),
+                source: "403 Forbidden".into(),
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl ObjectStore for DeniedStore {
+            async fn put_opts(
+                &self,
+                location: &flow_like_storage::Path,
+                _: PutPayload,
+                _: object_store::PutOptions,
+            ) -> object_store::Result<object_store::PutResult> {
+                Err(denied(location))
+            }
+
+            async fn put_multipart_opts(
+                &self,
+                location: &flow_like_storage::Path,
+                _: object_store::PutMultipartOptions,
+            ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+                Err(denied(location))
+            }
+
+            async fn get_opts(
+                &self,
+                location: &flow_like_storage::Path,
+                _: object_store::GetOptions,
+            ) -> object_store::Result<object_store::GetResult> {
+                Err(denied(location))
+            }
+
+            fn delete_stream(
+                &self,
+                locations: BoxStream<'static, object_store::Result<flow_like_storage::Path>>,
+            ) -> BoxStream<'static, object_store::Result<flow_like_storage::Path>> {
+                locations.map(|location| Err(denied(&location?))).boxed()
+            }
+
+            fn list(
+                &self,
+                prefix: Option<&flow_like_storage::Path>,
+            ) -> BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
+                let error = denied(&prefix.cloned().unwrap_or_default());
+                futures::stream::once(async move { Err(error) }).boxed()
+            }
+
+            async fn list_with_delimiter(
+                &self,
+                prefix: Option<&flow_like_storage::Path>,
+            ) -> object_store::Result<object_store::ListResult> {
+                Err(denied(&prefix.cloned().unwrap_or_default()))
+            }
+
+            async fn copy_opts(
+                &self,
+                from: &flow_like_storage::Path,
+                _: &flow_like_storage::Path,
+                _: object_store::CopyOptions,
+            ) -> object_store::Result<()> {
+                Err(denied(from))
+            }
+        }
+
+        struct Noop;
+
+        #[async_trait::async_trait]
+        impl NodeLogic for Noop {
+            fn get_node(&self) -> Node {
+                Node::new(
+                    "model_cache_test",
+                    "Model cache test",
+                    "Model cache test",
+                    "Tests",
+                )
+            }
+
+            async fn run(&self, _: &mut ExecutionContext) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        async fn context_with_store(store: FlowLikeStore) -> ExecutionContext {
+            let state = Arc::new(FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            ));
+            let node = Arc::new(InternalNode::new(
+                Noop.get_node(),
+                Default::default(),
+                Arc::new(Noop),
+                Default::default(),
+            ));
+            let context = ExecutionContext::new(
+                Arc::new(Default::default()),
+                &Weak::new(),
+                &state,
+                &node,
+                &Arc::new(AsyncMutex::new(Default::default())),
+                &Arc::new(RwLock::new(Default::default())),
+                LogLevel::Debug,
+                ExecutionStage::Dev,
+                Arc::new(Profile::default()),
+                None,
+                Arc::new(RwLock::new(Vec::new())),
+                None,
+                None,
+                Arc::new(Default::default()),
+                None,
+            )
+            .await;
+            context.set_cache("store", Arc::new(store)).await;
+            context
+        }
+
+        #[tokio::test]
+        async fn an_unreadable_model_cache_is_a_miss() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let mut context = context_with_store(FlowLikeStore::Other(Arc::new(DeniedStore))).await;
+            let spec = spec(&FACE_ID_MODELS, "detector", &fake_sha('a'));
+            let cache_path = spec.cache_path(&FlowPath::new("models".into(), "store".into(), None));
+
+            let lookup = try_materialize_cached_model(
+                &mut context,
+                &cache_path,
+                &spec,
+                &temp_dir.path().join("model.onnx"),
+            )
+            .await;
+
+            assert!(matches!(lookup, Ok(CachedModelLookup::Miss)));
         }
 
         #[tokio::test]

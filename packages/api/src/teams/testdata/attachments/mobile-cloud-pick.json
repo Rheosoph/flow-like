@@ -1,0 +1,21 @@
+{
+  "attachments": [
+    {
+      "contentType": "application/vnd.microsoft.teams.file.download.info",
+      "content": {
+        "downloadUrl": "",
+        "uniqueId": "2392290d-ff20-4520-9862-f5bf588XXXXX",
+        "fileType": "xlsx"
+      },
+      "contentUrl": "",
+      "name": "Budget.xlsx"
+    }
+  ],
+  "type": "message",
+  "channelId": "msteams",
+  "serviceUrl": "https://smba.trafficmanager.net/amer/",
+  "conversation": {
+    "conversationType": "personal",
+    "id": "a:dummy-conversation-id"
+  }
+}

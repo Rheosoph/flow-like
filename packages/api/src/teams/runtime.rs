@@ -51,6 +51,12 @@ const LOOKUP_TIMEOUT: Duration = Duration::from_secs(4);
 /// Shared by the context lookups and the file downloads, which run concurrently. Microsoft
 /// expects the messaging endpoint to answer within about 15 seconds.
 const PREPARE_BUDGET: Duration = Duration::from_secs(10);
+const GRAPH_COPY_TIMEOUT: Duration = Duration::from_secs(3);
+/// Graph can list a message shortly after Teams delivered it, so a 404 is retried once.
+const GRAPH_COPY_LAG: Duration = Duration::from_millis(700);
+const GRAPH_COPY_RETRY_BUDGET: Duration = Duration::from_millis(1_500);
+const DOWNLOAD_INFO: &str = "application/vnd.microsoft.teams.file.download.info";
+const MAX_LOGGED_ATTACHMENTS: usize = 20;
 const ANONYMOUS: &str = "anonymous:";
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -347,7 +353,12 @@ pub async fn incoming(
     }
     match gate(&activity, reads_messages(&c))? {
         Gate::Dispatch => record_activity(&state, &c).await,
-        Gate::Ignore => return Ok(Json(json!({}))),
+        Gate::Ignore => {
+            if activity["type"] == "message" && !context::from_bot(&activity) {
+                log_attachment_shape(&c, &activity, "ignored");
+            }
+            return Ok(Json(json!({})));
+        }
         Gate::ForgetTeam(team) => {
             if let Err(error) = microsoft::forget_team(&state, &c, &team).await {
                 tracing::warn!(connection_id = %c.id, ?error, "Could not drop cached Teams team details");
@@ -585,7 +596,19 @@ async fn input_payload(
                 Enrichment::default()
             })
     };
-    let (enrichment, files) = tokio::join!(
+    let graph_copy = async {
+        let path =
+            graph_message_path(session, teams.graph_group()).filter(|_| reads_messages(c))?;
+        let until = deadline.min(Instant::now() + GRAPH_COPY_TIMEOUT);
+        best_effort(
+            c,
+            until,
+            "graph_message",
+            graph_message(state, c, &path, until),
+        )
+        .await
+    };
+    let (enrichment, files, graph_copy) = tokio::join!(
         enrichment,
         files::collect(
             state,
@@ -595,8 +618,13 @@ async fn input_payload(
             files::classify(activity),
             deadline
         ),
+        graph_copy,
     );
     teams.enrich(enrichment);
+    if files.iter().all(|file| file.url.is_none()) {
+        log_attachment_shape(c, activity, "dispatched");
+    }
+    let files = with_shared_files(files, graph_copy.as_ref());
     teams.set_files(files.iter().map(FileEntry::context).collect());
     let entry = user_entry(activity, &session.conversation_type, anonymous, &files);
     let conversation = update_history(state, &session.history_key, &c.id, |history| {
@@ -640,6 +668,70 @@ async fn best_effort<T>(
             None
         }
     }
+}
+
+/// Where Graph keeps the triggering message outside 1:1 chats. Channels need the team's
+/// Microsoft 365 group.
+fn graph_message_path(session: &Session, graph_group: Option<&str>) -> Option<String> {
+    let id = session.activity_id.as_str();
+    match session.conversation_type.as_str() {
+        "personal" => None,
+        "channel" => {
+            let group = graph_group.filter(|group| !group.is_empty())?;
+            let channel = session.channel_id.as_str();
+            if channel.is_empty() {
+                return None;
+            }
+            let thread = session.thread_id.as_str();
+            let mut segments = vec!["teams", group, "channels", channel, "messages"];
+            if thread.is_empty() || thread == id {
+                segments.push(id);
+            } else {
+                segments.extend([thread, "replies", id]);
+            }
+            Some(microsoft::graph_path(&segments))
+        }
+        _ => Some(microsoft::graph_path(&[
+            "chats",
+            microsoft::base_conversation(&session.conversation_id),
+            "messages",
+            id,
+        ])),
+    }
+}
+
+async fn graph_message(
+    state: &AppState,
+    c: &Connection,
+    path: &str,
+    until: Instant,
+) -> Result<Value, MicrosoftError> {
+    match microsoft::graph_get(state, c, path).await {
+        Err(MicrosoftError::NotFound)
+            if until.saturating_duration_since(Instant::now()) >= GRAPH_COPY_RETRY_BUDGET =>
+        {
+            tokio::time::sleep(GRAPH_COPY_LAG).await;
+            microsoft::graph_get(state, c, path).await
+        }
+        result => result,
+    }
+}
+
+/// Teams leaves files shared in group chats, channels and meetings off the activity, but the
+/// Graph copy lists them. They are named and linked, never downloaded.
+fn with_shared_files(mut files: Vec<FileEntry>, graph_copy: Option<&Value>) -> Vec<FileEntry> {
+    let shared = graph_copy
+        .map(files::classify)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|candidate| matches!(candidate.source, files::Source::Unavailable { .. }));
+    for candidate in shared {
+        let entry = FileEntry::pending(files.len(), &candidate);
+        if files.iter().all(|file| file.name != entry.name) {
+            files.push(entry);
+        }
+    }
+    files
 }
 
 /// Best-effort Microsoft lookups for `local_session.teams`; failures only leave fields out.
@@ -808,6 +900,83 @@ fn pending_files(activity: &Value) -> Vec<FileEntry> {
         .enumerate()
         .map(|(index, candidate)| FileEntry::pending(index, candidate))
         .collect()
+}
+
+/// A message's attachments as logs may show them: URL hosts only, never a path or query.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct AttachmentShape {
+    conversation_type: String,
+    content_types: Vec<String>,
+    hosts: Vec<String>,
+    empty_download_url: bool,
+    ams_image: bool,
+    ams_video: bool,
+    attachment_markers: bool,
+}
+
+fn url_host(raw: Option<&str>) -> Option<String> {
+    reqwest::Url::parse(raw?)
+        .ok()?
+        .host_str()
+        .map(str::to_owned)
+}
+
+fn attachment_shape(activity: &Value) -> Option<AttachmentShape> {
+    let attachments = activity["attachments"]
+        .as_array()
+        .filter(|attachments| !attachments.is_empty())?;
+    let mut shape = AttachmentShape {
+        conversation_type: context::clean_label(
+            context::field(activity, "/conversation/conversationType").unwrap_or_default(),
+            32,
+        ),
+        ..AttachmentShape::default()
+    };
+    for attachment in attachments.iter().take(MAX_LOGGED_ATTACHMENTS) {
+        let kind = attachment["contentType"]
+            .as_str()
+            .unwrap_or_default()
+            .trim();
+        shape.content_types.push(context::clean_label(kind, 100));
+        for url in [
+            attachment["contentUrl"].as_str(),
+            attachment["content"]["downloadUrl"].as_str(),
+        ] {
+            if let Some(host) = url_host(url).filter(|host| !shape.hosts.contains(host)) {
+                shape.hosts.push(host);
+            }
+        }
+        if kind.eq_ignore_ascii_case(DOWNLOAD_INFO) {
+            shape.empty_download_url |=
+                context::field(attachment, "/content/downloadUrl").is_none();
+        }
+        if kind.eq_ignore_ascii_case("text/html") {
+            let html = attachment["content"].as_str().unwrap_or_default();
+            shape.ams_image |= html.contains("AMSImage");
+            shape.ams_video |= html.contains("AMSVideo");
+            shape.attachment_markers |= html.contains("<attachment id=");
+        }
+    }
+    Some(shape)
+}
+
+/// The only record of what Teams delivered when a message's files could not be used.
+fn log_attachment_shape(c: &Connection, activity: &Value, outcome: &str) {
+    let Some(shape) = attachment_shape(activity) else {
+        return;
+    };
+    tracing::warn!(
+        connection_id = %c.id,
+        outcome,
+        conversation_type = %shape.conversation_type,
+        content_types = ?shape.content_types,
+        hosts = ?shape.hosts,
+        empty_download_url = shape.empty_download_url,
+        ams_image = shape.ams_image,
+        ams_video = shape.ams_video,
+        attachment_markers = shape.attachment_markers,
+        "Teams message attachments produced no downloaded file"
+    );
 }
 
 fn has_content(activity: &Value, files: &[FileEntry]) -> bool {
@@ -2082,6 +2251,178 @@ mod tests {
         blank_quote["entities"] =
             json!([{"type":"quotedReply","quotedReply":{"senderName":"Anna","preview":" "}}]);
         assert_eq!(gate(&blank_quote), Gate::Ignore);
+    }
+
+    #[test]
+    fn group_file_drops_still_dispatch_as_a_bare_mention() {
+        let mut mention = message("groupChat", "<at>Flow Bot</at>");
+        mention["attachments"] = json!([{"contentType":"text/html","content":"<p><span itemtype=\"http://schema.skype.com/Mention\" itemscope=\"\" itemid=\"0\">Flow Bot</span>&nbsp;</p>"}]);
+        for reads_messages in [false, true] {
+            assert_eq!(gate(&mention, reads_messages).unwrap(), Gate::Dispatch);
+        }
+        assert!(pending_files(&mention).is_empty());
+        assert_eq!(
+            user_entry(&mention, "groupChat", false, &[])["content"],
+            "Felix Schultz: @Flow Bot"
+        );
+        let mut empty = message("personal", "");
+        empty["attachments"] = json!([{"contentType":"text/html","content":"<p></p>"}]);
+        assert_eq!(gate(&empty, true).unwrap(), Gate::Ignore);
+    }
+
+    #[test]
+    fn personal_messages_with_only_an_inline_video_dispatch() {
+        let mut video = message("personal", "");
+        video["attachments"] = json!([{"contentType":"text/html","content":"<p><video src=\"https://eu-api.asm.skype.com/v1/objects/0-weu-d1-abc/views/video\" itemscope=\"\" itemtype=\"http://schema.skype.com/AMSVideo\" width=\"256\" height=\"144\" data-duration=\"PT10S\" alt=\"Media\"></video></p>"}]);
+        assert_eq!(gate(&video, false).unwrap(), Gate::Dispatch);
+    }
+
+    fn graph_session(activity: &Value) -> Session {
+        let scope = context::scope(activity);
+        serde_json::from_value(json!({
+            "connection_id": "c", "app_id": "app", "event_id": "event", "run_id": "run",
+            "tenant_id": "tenant", "client_id": "bot-id",
+            "conversation_id": activity["conversation"]["id"],
+            "service_url": activity["serviceUrl"], "activity_id": activity["id"],
+            "user_id": OID, "bot_id": BOT, "history_key": "history",
+            "conversation_type": scope.conversation_type, "team_id": scope.team_id,
+            "channel_id": scope.channel_id, "thread_id": scope.thread_id
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn graph_copies_are_read_from_the_chat_or_the_channel_thread() {
+        let path = |activity: &Value| {
+            let teams = Context::from_activity(activity, "run", &[], false);
+            graph_message_path(&graph_session(activity), teams.graph_group())
+        };
+        assert_eq!(
+            path(&message("groupChat", "<at>Flow Bot</at>")).as_deref(),
+            Some("chats/19%3Ac%40thread.v2/messages/1727")
+        );
+        let mut meeting = message("groupChat", "<at>Flow Bot</at>");
+        meeting["conversation"]["id"] = json!("19:meeting_x@thread.v2");
+        meeting["channelData"] = json!({"meeting":{"id":"MCMx"}});
+        assert_eq!(
+            path(&meeting).as_deref(),
+            Some("chats/19%3Ameeting_x%40thread.v2/messages/1727")
+        );
+        let mut root = message("channel", "<at>Flow Bot</at>");
+        root["conversation"]["id"] = json!("19:general@thread.tacv2;messageid=1727");
+        root["channelData"] = json!({
+            "team": {"id":"19:team@thread.tacv2","aadGroupId":"0b3e1c52-5d4f-4b7a-9a61-2f0e6c7d8e9f"},
+            "channel": {"id":"19:general@thread.tacv2"}
+        });
+        assert_eq!(
+            path(&root).as_deref(),
+            Some(
+                "teams/0b3e1c52-5d4f-4b7a-9a61-2f0e6c7d8e9f/channels/19%3Ageneral%40thread.tacv2/messages/1727"
+            )
+        );
+        let mut reply = root.clone();
+        reply["id"] = json!("1728");
+        assert_eq!(
+            path(&reply).as_deref(),
+            Some(
+                "teams/0b3e1c52-5d4f-4b7a-9a61-2f0e6c7d8e9f/channels/19%3Ageneral%40thread.tacv2/messages/1727/replies/1728"
+            )
+        );
+        let mut groupless = root.clone();
+        groupless["channelData"]["team"] = json!({"id":"19:team@thread.tacv2"});
+        assert_eq!(path(&groupless), None);
+        assert_eq!(path(&message("personal", "hi")), None);
+    }
+
+    #[test]
+    fn files_listed_only_on_the_graph_copy_are_named_and_linked() {
+        let link = "https://m365x987948.sharepoint.com/sites/test/Shared%20Documents/General/test%20doc.docx";
+        let graph_copy = json!({
+            "id": "1727",
+            "body": {
+                "contentType": "html",
+                "content": "Here's the latest budget. <attachment id=\"153fa47d-18c9-4179-be08-9879815a9f90\"></attachment>"
+            },
+            "attachments": [
+                {"id":"153fa47d-18c9-4179-be08-9879815a9f90","contentType":"reference","contentUrl":link,"content":null,"name":"Budget.docx","thumbnailUrl":null},
+                {"id":"1726","contentType":"messageReference","content":"{\"messageId\":\"1726\"}"},
+                {"contentType":"image/png","contentUrl":"https://smba.trafficmanager.net/emea/v3/attachments/x/views/original"}
+            ]
+        });
+        let image = FileEntry {
+            name: "image-1.png".into(),
+            mime: "image/png".into(),
+            size: Some(3),
+            url: Some("https://store/image-1.png?sig=1".into()),
+            path: Some("tmp/image-1.png".into()),
+            downloadable: true,
+            ..FileEntry::default()
+        };
+        let files = with_shared_files(vec![image.clone()], Some(&graph_copy));
+        let shared = FileEntry {
+            name: "Budget.docx".into(),
+            mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document".into(),
+            downloadable: false,
+            link: Some(link.into()),
+            error: Some(
+                "Files shared in channels and group chats cannot be downloaded by the bot".into(),
+            ),
+            ..FileEntry::default()
+        };
+        assert_eq!(files, vec![image.clone(), shared.clone()]);
+        assert_eq!(shared.attachment(), None);
+        assert_eq!(shared.context()["link"], link);
+        let activity = message("groupChat", "<at>Flow Bot</at> check the budget");
+        assert_eq!(
+            user_entry(&activity, "groupChat", false, &files)["content"],
+            "Felix Schultz: check the budget\n[image: image-1.png]\n[file: Budget.docx]"
+        );
+        assert_eq!(with_shared_files(files.clone(), Some(&graph_copy)), files);
+        assert_eq!(
+            with_shared_files(vec![image.clone()], None),
+            vec![image.clone()]
+        );
+        assert_eq!(
+            with_shared_files(vec![image.clone()], Some(&json!({"attachments": []}))),
+            vec![image]
+        );
+    }
+
+    #[test]
+    fn attachment_shapes_log_hosts_but_never_urls() {
+        let mut activity = message("personal", "");
+        activity["attachments"] = json!([
+            {"contentType": DOWNLOAD_INFO, "name": "a.pdf", "content": {"downloadUrl": "", "uniqueId": "u"},
+             "contentUrl": "https://contoso-my.sharepoint.com/personal/x/Documents/a.pdf?secret=1"},
+            {"contentType": DOWNLOAD_INFO, "content": {"downloadUrl": "https://contoso-my.sharepoint.com/_layouts/15/download.aspx?tempauth=secret"}},
+            {"contentType": "image/*", "contentUrl": "https://smba.trafficmanager.net/amer/v3/attachments/0-cus/views/original"},
+            {"contentType": "text/html", "content": "<img itemtype=\"http://schema.skype.com/AMSImage\" src=\"https://us-api.asm.skype.com/v1/objects/0-cus/views/imgo\"><attachment id=\"153f\"></attachment>"}
+        ]);
+        let shape = attachment_shape(&activity).unwrap();
+        assert_eq!(
+            shape,
+            AttachmentShape {
+                conversation_type: "personal".into(),
+                content_types: vec![
+                    DOWNLOAD_INFO.into(),
+                    DOWNLOAD_INFO.into(),
+                    "image/*".into(),
+                    "text/html".into()
+                ],
+                hosts: vec![
+                    "contoso-my.sharepoint.com".into(),
+                    "smba.trafficmanager.net".into()
+                ],
+                empty_download_url: true,
+                ams_image: true,
+                ams_video: false,
+                attachment_markers: true,
+            }
+        );
+        assert!(!format!("{shape:?}").contains("secret"));
+        assert_eq!(attachment_shape(&message("groupChat", "hi")), None);
+        activity["attachments"] = json!([]);
+        assert_eq!(attachment_shape(&activity), None);
     }
 
     #[test]

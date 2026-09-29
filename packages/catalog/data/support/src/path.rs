@@ -2,6 +2,7 @@ use flow_like::{
     flow::execution::context::{ExecutionContext, ExecutionContextCache},
     utils::hash::hash_string_non_cryptographic,
 };
+use flow_like_catalog_core::found_or_missing;
 use flow_like_storage::object_store::ObjectStoreExt;
 use flow_like_storage::{
     Path,
@@ -72,7 +73,12 @@ impl FlowPath {
 
         let (get_results, dirty) = self.get_cached_file(context).await?;
         let get_results = get_results.ok_or_else(|| {
-            flow_like_types::anyhow!("File not found in cache or store: {}", self.path)
+            let searched = if self.cache_store_ref.is_some() {
+                "cache or store"
+            } else {
+                "store"
+            };
+            flow_like_types::anyhow!("File not found in {searched}: {}", self.path)
         })?;
         let etag = get_results.meta.e_tag.clone();
 
@@ -265,10 +271,8 @@ impl FlowPath {
     }
 
     async fn get_file(&self, store: &FlowLikeStore) -> flow_like_types::Result<Option<GetResult>> {
-        match store.as_generic().get(&self.object_path()).await {
-            Ok(data) => Ok(Some(data)),
-            Err(_) => Ok(None),
-        }
+        let result = store.as_generic().get(&self.object_path()).await;
+        found_or_missing(result, &self.path, &self.store_ref)
     }
 
     /// Retrieves the file from the cache if available, otherwise fetches it from the store.
@@ -542,6 +546,22 @@ mod tests {
         let serialized = runtime.serialize().await;
         assert_eq!(serialized.path, once.as_ref());
         assert_eq!(serialized.object_path(), once);
+    }
+
+    #[tokio::test]
+    async fn a_missing_key_reads_as_none_and_a_stored_key_as_the_file() {
+        let memory = Arc::new(InMemory::new());
+        let store = FlowLikeStore::Memory(memory.clone());
+        let path = flow_path("uploads/report.pdf");
+
+        assert!(path.get_file(&store).await.unwrap().is_none());
+
+        memory
+            .put(&path.object_path(), PutPayload::from_static(b"pdf"))
+            .await
+            .unwrap();
+        let file = path.get_file(&store).await.unwrap().expect("stored file");
+        assert_eq!(file.bytes().await.unwrap().as_ref(), b"pdf");
     }
 
     #[test]

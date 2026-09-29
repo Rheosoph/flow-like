@@ -1,0 +1,19 @@
+{
+  "attachments": [
+    {
+      "contentType": "image/*",
+      "contentUrl": "https://smba.trafficmanager.net/amer/v3/attachments/0-eus-d20-fd7c8146fbc34613ddb246bed1988c0e/views/original"
+    },
+    {
+      "contentType": "text/html",
+      "content": "<div>Envoyer un fax à 162626<br>\r\n<img src=\"https://us-api.asm.skype.com/v1/objects/0-eus-d20-fd7c8146fbc34613ddb246bed1988c0e/views/imgo\" itemscope=\"\" itemtype=\"http://schema.skype.com/AMSImage\" style=\"width:2448px; height:3264px\"></div>"
+    }
+  ],
+  "type": "message",
+  "channelId": "msteams",
+  "serviceUrl": "https://smba.trafficmanager.net/amer/",
+  "conversation": {
+    "conversationType": "personal",
+    "id": "a:dummy-conversation-id"
+  }
+}
