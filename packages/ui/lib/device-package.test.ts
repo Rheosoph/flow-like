@@ -1,18 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import AdmZip from "adm-zip";
+import { standalonePackageFixture } from "../../../.github/scripts/tests/fixtures/standalone-package";
 import {
-	CompactSign,
-	calculateJwkThumbprint,
-	exportJWK,
-	generateKeyPair,
-} from "jose";
-import type { IApiState } from "../state/backend-state/api-state";
-import type { IProfile } from "../types";
-import { prepareDevicePackage } from "./device-management/setup";
-import {
-	type ReleaseConfig,
-	type StandalonePackageInput,
-	type StandaloneRelease,
 	buildStandalonePackage,
 	fetchVerifiedRelease,
 	standalonePackageModes,
@@ -25,142 +14,30 @@ const originalFetch = globalThis.fetch;
 afterEach(() => {
 	globalThis.fetch = originalFetch;
 });
+
 const now = Math.floor(Date.now() / 1000);
 const bytes = new TextEncoder().encode("verified standalone binary fixture");
-async function fixture() {
-	const releaseKey = await generateKeyPair("EdDSA", { extractable: true });
-	const publicKey = await exportJWK(releaseKey.publicKey);
-	const fingerprint = await calculateJwkThumbprint(publicKey);
-	const config: ReleaseConfig = {
-		manifestUrl: "https://releases.example/release.jws",
-		publicKeys: [String(publicKey.x)],
-		minimumSequence: 4,
-	};
-	const digest = [
-		...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
-	]
-		.map((byte) => byte.toString(16).padStart(2, "0"))
-		.join("");
-	const manifest: StandaloneRelease = {
-		version: 1,
-		state_schema_version: 4,
-		sequence: 4,
-		release_version: "1.2.3",
-		issued_at: now - 1,
-		expires_at: now + 3600,
-		artifacts: [
-			{
-				target: "x86_64-unknown-linux-gnu",
-				url: "https://releases.example/agent",
-				size: bytes.length,
-				sha256: digest,
-			},
-		],
-		container: {
-			image: `ghcr.io/example/agent@sha256:${"a".repeat(64)}`,
-			platforms: ["linux/amd64"],
-		},
-	};
-	const sign = (value: unknown, type = "flow-like-standalone-release+jws") =>
-		new CompactSign(
-			new TextEncoder().encode(
-				typeof value === "string" ? value : JSON.stringify(value),
-			),
-		)
-			.setProtectedHeader({ alg: "EdDSA", typ: type, kid: fingerprint })
-			.sign(releaseKey.privateKey);
-	const signed = await sign(manifest);
-	const controller = await generateKeyPair("EdDSA", { extractable: true });
-	const controllerJwk = await exportJWK(controller.publicKey);
-	const bootstrap = await generateKeyPair("EdDSA", { extractable: true });
-	const bootstrapJwk = await exportJWK(bootstrap.privateKey);
-	const owner = await generateKeyPair("EdDSA", { extractable: true });
-	const ownerJwk = await exportJWK(owner.publicKey);
-	const publicPart = (key: JsonWebKey) => ({
-		kty: "OKP",
-		crv: "Ed25519",
-		x: key.x,
-	});
-	const onboarding = {
-		version: 1,
-		enrollment_id: "enrollment",
-		device_id: "device",
-		owner_id: "owner",
-		name: "Packaged device",
-		api_base_url: "https://api.example/api/v1",
-		bootstrap_key: publicPart(bootstrapJwk),
-		controller_key: publicPart(controllerJwk),
-		owner_invitation_key: publicPart(ownerJwk),
-		issued_at: now - 1,
-		expires_at: now + 3600,
-	};
-	const onboardingJws = await new CompactSign(
-		new TextEncoder().encode(JSON.stringify(onboarding)),
-	)
-		.setProtectedHeader({
-			alg: "EdDSA",
-			typ: "flow-like-device-onboarding+jwt",
-			kid: await calculateJwkThumbprint(controllerJwk),
-		})
-		.sign(controller.privateKey);
-	const input: StandalonePackageInput = {
-		manifest: onboarding,
-		manifest_jws: onboardingJws,
-		enrollment_token: "short-lived-enrollment-token",
-		bootstrap_secret: [...Buffer.from(String(bootstrapJwk.d), "base64url")],
-		target: "x86_64-unknown-linux-gnu",
-		mode: "both",
-		release: config,
-	};
-	return { config, manifest, sign, signed, input };
-}
+const fixture = () => standalonePackageFixture(bytes, now);
 
 describe("verified standalone release packages", () => {
-	test("oversized signed binaries fail before enrollment while retaining signed Linux Docker options", async () => {
+	test("oversized signed binaries retain native bootstrap and signed Docker options", async () => {
 		const { config, manifest, sign } = await fixture();
 		manifest.artifacts[0].size = 256 * 1024 * 1024 + 1;
-		const signed = await sign(manifest);
-		const verified = await verifyReleaseManifest(signed, config);
+		const verified = await verifyReleaseManifest(await sign(manifest), config);
 		expect(
 			standalonePackageModes(verified.manifest, "x86_64-unknown-linux-gnu"),
-		).toEqual({ binary: false, docker: true });
-		expect(() =>
-			validateStandalonePackageSelection(
-				verified.manifest,
-				"x86_64-unknown-linux-gnu",
-				"docker",
-			),
-		).not.toThrow();
-		let requests = 0;
-		const api = {
-			fetch: async () => {
-				requests++;
-				throw new Error("enrollment reached");
-			},
-		} as unknown as IApiState;
-		for (const mode of ["binary", "both"] as const)
-			await expect(
-				prepareDevicePackage({
-					api,
-					profile: {} as IProfile,
-					scope: {
-						account: "owner",
-						issuer: "issuer",
-						apiOrigin: "https://api.example",
-						profileId: "profile",
-					},
-					name: "Device",
-					password: "management password",
-					target: "x86_64-unknown-linux-gnu",
+		).toEqual({ binary: true, docker: true });
+		for (const mode of ["binary", "docker", "both"] as const)
+			expect(() =>
+				validateStandalonePackageSelection(
+					verified.manifest,
+					"x86_64-unknown-linux-gnu",
 					mode,
-					release: config,
-					verifiedRelease: verified,
-				}),
-			).rejects.toThrow("256 MiB");
-		expect(requests).toBe(0);
+				),
+			).not.toThrow();
 		manifest.artifacts[0].target = "aarch64-apple-darwin";
 		expect(standalonePackageModes(manifest, "aarch64-apple-darwin")).toEqual({
-			binary: false,
+			binary: true,
 			docker: false,
 		});
 		expect(() =>
@@ -169,7 +46,11 @@ describe("verified standalone release packages", () => {
 				"aarch64-apple-darwin",
 				"binary",
 			),
-		).toThrow("no Docker alternative");
+		).not.toThrow();
+		manifest.artifacts[0].size = 2 * 1024 ** 3 + 1;
+		await expect(
+			verifyReleaseManifest(await sign(manifest), config),
+		).rejects.toThrow("size");
 	});
 	test("requires configured keys, signature profile, sequence, and fresh metadata", async () => {
 		const { config, manifest, signed, sign } = await fixture();

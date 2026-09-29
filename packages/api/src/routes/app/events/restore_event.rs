@@ -175,14 +175,7 @@ pub async fn restore_event(
     let sub = permission.sub()?;
     let user_context = permission.to_user_context();
 
-    let mut app = state
-        .scoped_app(
-            &sub,
-            &app_id,
-            &state,
-            crate::credentials::CredentialsAccess::EditApp,
-        )
-        .await?;
+    let mut app = super::editable_event_app(&state, &sub, &app_id).await?;
 
     // The live head comes from the database row — routing is endpoint-owned
     // and only the row is guaranteed current. Older apps can miss the row, so

@@ -514,6 +514,7 @@ impl HevcParameterSets {
         }
     }
 
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
     fn complete(&self) -> bool {
         self.vps.is_some() && self.sps.is_some() && self.pps.is_some()
     }

@@ -223,7 +223,7 @@ test("failed checks show a retryable error without exposing backend details", as
 	expect(f.button("Create deployment package").disabled).toBe(false);
 });
 
-test("oversized Linux release selects Docker before enrollment and disables unusable native targets", async () => {
+test("large native binaries stay selectable and explain the first-start download", async () => {
 	const f = await fixture();
 	await act(async () => checks[0].request.resolve(ready(true)));
 	await act(async () =>
@@ -241,48 +241,28 @@ test("oversized Linux release selects Docker before enrollment and disables unus
 	);
 	const selects = f.container.querySelectorAll<HTMLSelectElement>("select");
 	const mode = selects[1];
-	expect(mode.value).toBe("docker");
+	expect(mode.value).toBe("binary");
 	expect(
 		mode.querySelector<HTMLOptionElement>('[value="binary"]')?.disabled,
-	).toBe(true);
+	).toBe(false);
 	expect(
 		selects[0].querySelector<HTMLOptionElement>(
 			'[value="aarch64-apple-darwin"]',
 		)?.disabled,
+	).toBe(false);
+	expect(f.container.textContent).toContain(
+		"native binary downloads on first start",
+	);
+	expect(f.container.textContent).toContain("internet access, curl");
+	await act(async () => {
+		selects[0].value = "aarch64-apple-darwin";
+		selects[0].dispatchEvent(new Event("change", { bubbles: true }));
+	});
+	expect(mode.value).toBe("binary");
+	expect(
+		mode.querySelector<HTMLOptionElement>('[value="docker"]')?.disabled,
 	).toBe(true);
-	expect(f.container.textContent).toContain("browser package limit of 256 MiB");
-	await act(async () => {
-		mode.value = "binary";
-		mode.dispatchEvent(new Event("change", { bubbles: true }));
-	});
-	await f.submit();
-	expect(enrollments).toHaveLength(0);
-	await act(async () => {
-		mode.value = "docker";
-		mode.dispatchEvent(new Event("change", { bubbles: true }));
-	});
 	await f.submit();
 	expect(enrollments).toHaveLength(1);
-	expect((enrollments[0] as { mode: string }).mode).toBe("docker");
-});
-
-test("a release with no browser-compatible packaging mode cannot create enrollment", async () => {
-	const f = await fixture();
-	await act(async () => checks[0].request.resolve(ready(true)));
-	await act(async () =>
-		releases[0].request.resolve({
-			...verified,
-			targets: ["aarch64-apple-darwin"],
-			manifest: {
-				...verified.manifest,
-				artifacts: [
-					{ target: "aarch64-apple-darwin", size: 512 * 1024 * 1024 },
-				],
-			},
-		}),
-	);
-	expect(f.container.textContent).toContain("no browser package");
-	expect(f.button("Create deployment package").disabled).toBe(true);
-	await f.submit();
-	expect(enrollments).toHaveLength(0);
+	expect((enrollments[0] as { mode: string }).mode).toBe("binary");
 });

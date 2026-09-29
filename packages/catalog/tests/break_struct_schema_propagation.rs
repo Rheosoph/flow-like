@@ -172,29 +172,17 @@ async fn inbound_email_attachment_paths_reach_file_nodes_through_nested_structs(
     let logics = catalog();
     let mut board = empty_board();
     place(&mut board, &logics, "events_inbound_email");
-    place_as(&mut board, &logics, "struct_break", "email_fields");
     place(&mut board, &logics, "array_get");
     place_as(&mut board, &logics, "struct_break", "attachment_fields");
     place(&mut board, &logics, "read_to_string");
 
-    connect(
-        &mut board,
-        ("events_inbound_email", "email"),
-        ("email_fields", "struct_in"),
-    );
-    settle(&mut board, &logics).await;
-    assert_eq!(board.nodes["email_fields"].error, None);
-    assert_eq!(
-        pin_named(&board, "email_fields", "__break_struct_field__subject").data_type,
-        VariableType::String,
-    );
-    let attachments = pin_named(&board, "email_fields", "__break_struct_field__attachments");
+    let attachments = pin_named(&board, "events_inbound_email", "attachments");
     assert_eq!(attachments.data_type, VariableType::Struct);
     assert_eq!(attachments.value_type, ValueType::Array);
 
     connect(
         &mut board,
-        ("email_fields", "__break_struct_field__attachments"),
+        ("events_inbound_email", "attachments"),
         ("array_get", "array_in"),
     );
     connect(
@@ -222,16 +210,6 @@ async fn inbound_email_attachment_paths_reach_file_nodes_through_nested_structs(
         Some(path_schema),
         Some(reader_schema)
     ));
-    let paths = pin_named(&board, "events_inbound_email", "attachments");
-    assert_eq!(paths.value_type, ValueType::Array);
-    let paths_schema = paths
-        .schema
-        .as_deref()
-        .expect("attachment paths declare a schema");
-    assert!(schemas_are_compatible(
-        Some(paths_schema),
-        Some(reader_schema)
-    ));
 
     let path_id = path.id.clone();
     let reader_id = reader.id.clone();
@@ -250,8 +228,84 @@ async fn inbound_email_attachment_paths_reach_file_nodes_through_nested_structs(
             .depends_on
             .contains(&path_id)
     );
-    assert_eq!(board.nodes["email_fields"].error, None);
     assert_eq!(board.nodes["attachment_fields"].error, None);
+}
+
+#[flow_like_types::tokio::test]
+async fn inbound_email_groups_break_into_typed_scalar_date_and_file_pins() {
+    let logics = catalog();
+    let mut board = empty_board();
+    place(&mut board, &logics, "events_inbound_email");
+    for group in ["addresses", "content", "delivery"] {
+        place_as(&mut board, &logics, "struct_break", group);
+        connect(
+            &mut board,
+            ("events_inbound_email", group),
+            (group, "struct_in"),
+        );
+    }
+    settle(&mut board, &logics).await;
+    for group in ["addresses", "content", "delivery"] {
+        assert_eq!(board.nodes[group].error, None, "{group}");
+    }
+    let field = |group: &str, name: &str| {
+        let pin = pin_named(&board, group, &format!("{BREAK_STRUCT_PIN_PREFIX}{name}"));
+        (pin.data_type.clone(), pin.value_type.clone())
+    };
+    for (group, name, expected) in [
+        (
+            "addresses",
+            "sender",
+            (VariableType::Struct, ValueType::Normal),
+        ),
+        ("addresses", "to", (VariableType::Struct, ValueType::Array)),
+        (
+            "addresses",
+            "recipient",
+            (VariableType::String, ValueType::Normal),
+        ),
+        (
+            "content",
+            "subject",
+            (VariableType::String, ValueType::Normal),
+        ),
+        (
+            "content",
+            "text_truncated",
+            (VariableType::Boolean, ValueType::Normal),
+        ),
+        (
+            "delivery",
+            "automated",
+            (VariableType::Boolean, ValueType::Normal),
+        ),
+        (
+            "delivery",
+            "expires_at",
+            (VariableType::Date, ValueType::Normal),
+        ),
+        (
+            "delivery",
+            "received_at",
+            (VariableType::Date, ValueType::Normal),
+        ),
+    ] {
+        assert_eq!(field(group, name), expected, "{group}.{name}");
+    }
+
+    let reader = logics["read_to_string"].get_node();
+    let reader_schema = reader.get_pin_by_name("path").unwrap().schema.as_deref();
+    for (group, name) in [
+        ("content", "text_path"),
+        ("content", "html_path"),
+        ("delivery", "raw_path"),
+    ] {
+        let pin = pin_named(&board, group, &format!("{BREAK_STRUCT_PIN_PREFIX}{name}"));
+        assert!(
+            schemas_are_compatible(pin.schema.as_deref(), reader_schema),
+            "{group}.{name} cannot feed file readers"
+        );
+    }
 }
 
 /// `Get File Input Files -> Get Element -> Break Struct`, the shape the regression was reported on.

@@ -807,7 +807,6 @@ impl Event {
                 .filter(|pin| {
                     pin.pin_type == target_pin_type
                         && pin.data_type != super::variable::VariableType::Execution
-                        && (self.event_type != "inbound_email" || pin.name == "email")
                 })
                 .map(|pin| EventInput {
                     id: pin.id.clone(),
@@ -1846,6 +1845,15 @@ mod tests {
         }
     }
 
+    const INBOUND_EMAIL_PINS: [&str; 6] = [
+        "message",
+        "session",
+        "addresses",
+        "content",
+        "attachments",
+        "delivery",
+    ];
+
     async fn inbound_email_fixture(
         mode: crate::flow::board::ExecutionMode,
     ) -> (crate::app::App, Event) {
@@ -1866,13 +1874,10 @@ mod tests {
                 "Events",
             );
             node.id = "mail-node".into();
-            node.add_output_pin("email", "Email", "", VariableType::Struct)
-                .set_open_schema();
             node.add_output_pin("exec_out", "Output", "", VariableType::Execution);
-            for name in ["session", "message", "attachments", "sender", "raw"] {
+            for name in INBOUND_EMAIL_PINS {
                 node.add_output_pin(name, name, "", VariableType::Struct);
             }
-            node.add_output_pin("subject", "Subject", "", VariableType::String);
             board.nodes.insert(node.id.clone(), node);
             board.save(None).await.unwrap();
         }
@@ -1894,8 +1899,11 @@ mod tests {
             event.active = true;
             let saved = event.upsert(&app, None, true).await.unwrap();
             assert_eq!(saved.execution_mode, super::EventExecutionMode::Remote);
-            assert_eq!(saved.inputs.len(), 1);
-            assert_eq!(saved.inputs[0].name, "email");
+            let mut inputs: Vec<_> = saved.inputs.iter().map(|pin| pin.name.as_str()).collect();
+            inputs.sort_unstable();
+            let mut expected = INBOUND_EMAIL_PINS;
+            expected.sort_unstable();
+            assert_eq!(inputs, expected);
         }
     }
 

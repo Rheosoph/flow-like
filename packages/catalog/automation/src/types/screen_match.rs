@@ -254,6 +254,7 @@ pub fn physical_to_logical(x: u32, y: u32) -> flow_like_types::Result<(i32, i32)
         .find(|m| m.is_primary().unwrap_or(false))
         .or_else(|| monitors.first())
         .ok_or_else(|| flow_like_types::anyhow!("No monitor available"))?;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let scale = monitor.scale_factor()? as f64;
     #[cfg(target_os = "macos")]
     let input_scale = scale;

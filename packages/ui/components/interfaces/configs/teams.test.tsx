@@ -4,14 +4,21 @@ import { Window } from "happy-dom";
 import { type ComponentProps, act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { ApiResponseError } from "../../../lib/api-error";
-import type { TeamsBotConnection, TeamsBotSetup } from "../../../lib/teams-bot";
+import type {
+	TeamsBotAccess,
+	TeamsBotConnection,
+	TeamsBotSetup,
+} from "../../../lib/teams-bot";
 
 const tenant = "11111111-1111-1111-1111-111111111111";
 const clientId = "22222222-2222-2222-2222-222222222222";
 const approver = "33333333-3333-3333-3333-333333333333";
+const consentUrl = `https://login.microsoftonline.com/${tenant}/adminconsent?client_id=${clientId}`;
 let response: TeamsBotConnection;
 let offline: boolean;
 let failure: { error: Error; status?: string } | undefined;
+let access: TeamsBotAccess;
+let accessFailure: Error | undefined;
 const fields = new Map<
 	string,
 	ComponentProps<"input"> | ComponentProps<"textarea">
@@ -47,18 +54,27 @@ const getTeamsBotPackage = mock(async () => ({
 	filename: "support-bot.zip",
 	base64: "UEs=",
 }));
+const getTeamsBotAccess = mock(async function getTeamsBotAccess() {
+	if (accessFailure) throw accessFailure;
+	return access;
+});
 const onConfigUpdate = mock(() => {});
-const backend = {
+const eventState = {
+	getTeamsBot,
+	setupTeamsBot,
+	disconnectTeamsBot,
+	rotateTeamsBotSecret,
+	getTeamsBotPackage,
+	getTeamsBotAccess,
+};
+const backend: {
+	isOffline: () => Promise<boolean>;
+	eventState: Partial<typeof eventState>;
+} = {
 	isOffline: async function isOffline() {
 		return offline;
 	},
-	eventState: {
-		getTeamsBot,
-		setupTeamsBot,
-		disconnectTeamsBot,
-		rotateTeamsBotSecret,
-		getTeamsBotPackage,
-	},
+	eventState,
 };
 
 const documentDescriptor = Object.getOwnPropertyDescriptor(
@@ -157,6 +173,7 @@ beforeEach(() => {
 	queryClient = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
 	});
+	// No `permissions`: older servers omit the field.
 	response = {
 		managed_available: false,
 		configured: false,
@@ -174,9 +191,12 @@ beforeEach(() => {
 	};
 	offline = false;
 	failure = undefined;
+	access = { status: "ready" };
+	accessFailure = undefined;
 	fields.clear();
 	onConfigUpdate.mockClear();
-	for (const method of Object.values(backend.eventState)) method.mockClear();
+	backend.eventState = eventState;
+	for (const method of Object.values(eventState)) method.mockClear();
 });
 afterEach(async () => {
 	await act(async () => root.unmount());
@@ -237,6 +257,23 @@ function radio(mode: string) {
 	if (!found) throw new Error(`Radio not found: ${mode}`);
 	return found as unknown as HTMLButtonElement;
 }
+function permissionSwitch(permission: string) {
+	const found = browser.document.querySelector(
+		`button[role="switch"][id$="-${permission}"]`,
+	);
+	if (!found) throw new Error(`Switch not found: ${permission}`);
+	return found as unknown as HTMLButtonElement;
+}
+async function toggle(permission: string) {
+	await act(async () => permissionSwitch(permission).click());
+	await settle();
+}
+function pageText() {
+	return browser.document.body.textContent ?? "";
+}
+function accessRow() {
+	return browser.document.querySelector("output")?.textContent;
+}
 function alerts() {
 	return Array.from(browser.document.querySelectorAll('[role="alert"]')).map(
 		(node) => node.textContent ?? "",
@@ -283,7 +320,7 @@ test("new and offline events explain the prerequisite without fetching bot setup
 	expect(getTeamsBot).not.toHaveBeenCalled();
 }, 15_000);
 
-test("an unavailable managed path defaults to customer setup and compares every path", async () => {
+test("an unavailable managed path defaults to customer setup and details the selected path", async () => {
 	await render();
 	expect(radio("flow_like_managed").disabled).toBe(true);
 	expect(radio("customer_teams").getAttribute("aria-checked")).toBe("true");
@@ -297,7 +334,7 @@ test("an unavailable managed path defaults to customer setup and compares every 
 		"What to expect",
 		"Microsoft sign-in",
 	])
-		expect(headings.filter((text) => text === heading)).toHaveLength(3);
+		expect(headings.filter((text) => text === heading)).toHaveLength(1);
 	const text = browser.document.body.textContent ?? "";
 	expect(text).toContain("How to find your tenant ID");
 	expect(field("endpoint").value).toBe(response.endpoint);
@@ -332,6 +369,7 @@ test("customer setup marks invalid fields, then saves credentials and approvers 
 		client_id: clientId,
 		client_secret: "private-value",
 		allowed_responders: [approver, tenant],
+		permissions: [],
 	});
 	expect(field("secret").value).toBe("");
 	expect(onConfigUpdate).not.toHaveBeenCalled();
@@ -371,10 +409,139 @@ test("managed setup needs the Teams tenant and does not request customer credent
 		client_id: "",
 		client_secret: "",
 		allowed_responders: [],
+		permissions: [],
 	});
 	expect(browser.document.body.textContent).toContain(
 		"Download Teams app (.zip)",
 	);
+});
+
+test("only the selected management path shows its details", async () => {
+	await render();
+	const facts = () =>
+		Array.from(browser.document.querySelectorAll("dl")).map(
+			(node) => node.textContent ?? "",
+		);
+	expect(facts()).toHaveLength(1);
+	expect(facts()[0]).toContain("You own the bot identity");
+	expect(pageText()).toContain("Not enabled on this server");
+	expect(pageText()).toContain(
+		"Connect an Azure Bot resource your organization owns.",
+	);
+	expect(pageText()).not.toContain("Full control of the Azure resource");
+	expect(
+		radio("customer_azure").getAttribute("aria-describedby"),
+	).not.toContain("-facts");
+	await act(async () => radio("customer_azure").click());
+	expect(facts()).toHaveLength(1);
+	expect(facts()[0]).toContain("Full control of the Azure resource");
+	expect(pageText()).not.toContain("You own the bot identity");
+	expect(radio("customer_azure").getAttribute("aria-describedby")).toContain(
+		"-facts",
+	);
+});
+
+test("read permissions are saved with the bot, and reading messages explains what changes", async () => {
+	await render();
+	await customerCredentials();
+	const note = "Teams sends the bot every message";
+	expect(permissionSwitch("read_messages").getAttribute("aria-checked")).toBe(
+		"false",
+	);
+	expect(pageText()).toContain("ChannelMessage.Read.Group");
+	expect(pageText()).not.toContain(note);
+	await toggle("conversation_details");
+	expect(pageText()).not.toContain(note);
+	await toggle("read_messages");
+	expect(pageText()).toContain(note);
+	await toggle("read_messages");
+	expect(pageText()).not.toContain(note);
+	await toggle("read_messages");
+	expect(accessRow()).toBeUndefined();
+	await click("Connect bot");
+	expect(setupTeamsBot.mock.calls.at(-1)?.[2]).toEqual({
+		mode: "customer_teams",
+		name: "Support",
+		description: "",
+		customer_tenant_id: tenant,
+		home_tenant_id: tenant,
+		client_id: clientId,
+		client_secret: "private-value",
+		allowed_responders: [],
+		permissions: ["read_messages", "conversation_details"],
+	});
+	expect(permissionSwitch("read_messages").getAttribute("aria-checked")).toBe(
+		"true",
+	);
+	expect(permissionSwitch("meeting_details").getAttribute("aria-checked")).toBe(
+		"false",
+	);
+	expect(getTeamsBotAccess).toHaveBeenCalledWith("app", "event");
+	expect(accessRow()).toContain("Ready");
+});
+
+test("a permissions-only change on a connected bot saves without confirmation", async () => {
+	configured();
+	await render();
+	await toggle("meeting_details");
+	await click("Save bot settings");
+	expect(pageText()).not.toContain("Change the connected bot?");
+	expect(setupTeamsBot.mock.calls.at(-1)?.[2].permissions).toEqual([
+		"meeting_details",
+	]);
+});
+
+test("the Graph access row reports admin consent, readiness and failures, and checks again", async () => {
+	configured("flow_like_managed");
+	response.managed_available = true;
+	response.permissions = ["read_messages"];
+	access = {
+		status: "consent_required",
+		consent_url: consentUrl,
+		message: "The tenant has not approved the bot.",
+	};
+	await render();
+	expect(accessRow()).toContain("Needs admin consent");
+	expect(accessRow()).toContain("The tenant has not approved the bot.");
+	const consent = browser.document.querySelector(`a[href="${consentUrl}"]`);
+	expect(consent?.textContent).toContain("Grant admin consent");
+	expect(consent?.getAttribute("target")).toBe("_blank");
+
+	access = { status: "ready" };
+	await click("Check again");
+	expect(accessRow()).toContain("Ready");
+	expect(browser.document.querySelector(`a[href="${consentUrl}"]`)).toBeNull();
+
+	access = { status: "error", message: "Microsoft Graph returned 503." };
+	await click("Check again");
+	expect(accessRow()).toContain("Check failed");
+	expect(accessRow()).toContain("Microsoft Graph returned 503.");
+
+	accessFailure = new Error("The access check could not reach the server.");
+	await click("Check again");
+	expect(accessRow()).toContain("Check failed");
+	expect(accessRow()).toContain("could not reach the server");
+	expect(getTeamsBotAccess).toHaveBeenCalledTimes(4);
+});
+
+test("the Graph access row needs saved read permissions", async () => {
+	configured();
+	await render();
+	expect(accessRow()).toBeUndefined();
+	expect(getTeamsBotAccess).not.toHaveBeenCalled();
+});
+
+test("servers without an access check hide the row but keep the saved permissions", async () => {
+	configured();
+	response.permissions = ["meeting_details"];
+	const { getTeamsBotAccess: _unsupported, ...older } = eventState;
+	backend.eventState = older;
+	await render();
+	expect(permissionSwitch("meeting_details").getAttribute("aria-checked")).toBe(
+		"true",
+	);
+	expect(accessRow()).toBeUndefined();
+	expect(getTeamsBotAccess).not.toHaveBeenCalled();
 });
 
 test("metadata edits save directly; a changed identity keeps its secret requirement", async () => {
@@ -528,6 +695,11 @@ test("read-only viewers cannot change, renew, or disconnect the bot", async () =
 	expect(browser.document.querySelector("fieldset")?.disabled).toBe(true);
 	await click("Approvals and actions");
 	expect(field("approvers").disabled).toBe(true);
+	expect(permissionSwitch("read_messages").disabled).toBe(true);
+	await act(async () => permissionSwitch("read_messages").click());
+	expect(permissionSwitch("read_messages").getAttribute("aria-checked")).toBe(
+		"false",
+	);
 	await click("Connection maintenance");
 	for (const label of [
 		"Save bot settings",

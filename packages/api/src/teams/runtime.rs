@@ -1,4 +1,11 @@
-use super::{Connection, auth, cards, client, now, store};
+use super::{
+    Connection, TeamsPermission, auth, cards, client,
+    context::{self, Context, Enrichment},
+    files::{self, FileEntry},
+    hash,
+    microsoft::{self, MicrosoftError},
+    now, store,
+};
 use crate::{
     entity::{app, event_sink, sea_orm_active_enums::Status},
     error::ApiError,
@@ -19,10 +26,12 @@ use axum::{
 use flow_like_types::{
     channel::{ChannelClientDescriptor, ChannelPush, ChannelPushKind},
     interaction::InteractionRequest,
+    tokio::{self, time::Instant},
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::time::Duration;
 use utoipa::ToSchema;
 
 const DAY_MS: i64 = 86_400_000;
@@ -30,40 +39,66 @@ const HISTORY_MS: i64 = 30 * DAY_MS;
 const DISPATCH_LEASE_MS: i64 = 120_000;
 const DELIVERY_LEASE_MS: i64 = 60_000;
 const MAX_MESSAGE_BYTES: usize = 24_000;
-const MAX_HISTORY: usize = 20;
+const MAX_PASSIVE_BYTES: usize = 4_000;
+const MAX_HISTORY: usize = 30;
+/// Keeps the encrypted conversation row well under DSQL's 1 MiB limit.
+const MAX_HISTORY_BYTES: usize = 200_000;
 const MAX_COMPLETED_RUNS: usize = 100;
 const MAX_RECORDED_REPLIES: usize = 200;
+const MAX_PASSIVE_KEYS: usize = 500;
+const HEALTH_REFRESH_MS: i64 = 60_000;
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(4);
+/// Shared by the context lookups and the file downloads, which run concurrently. Microsoft
+/// expects the messaging endpoint to answer within about 15 seconds.
+const PREPARE_BUDGET: Duration = Duration::from_secs(10);
+const ANONYMOUS: &str = "anonymous:";
 
 #[derive(Clone, Serialize, Deserialize)]
-struct Session {
-    connection_id: String,
-    app_id: String,
-    event_id: String,
-    run_id: String,
-    tenant_id: String,
-    client_id: String,
-    conversation_id: String,
-    service_url: String,
-    activity_id: String,
-    user_id: String,
-    bot_id: String,
-    history_key: String,
+pub(super) struct Session {
+    pub(super) connection_id: String,
+    pub(super) app_id: String,
+    pub(super) event_id: String,
+    pub(super) run_id: String,
+    pub(super) tenant_id: String,
+    pub(super) client_id: String,
+    pub(super) conversation_id: String,
+    pub(super) service_url: String,
+    pub(super) activity_id: String,
+    pub(super) user_id: String,
+    pub(super) bot_id: String,
+    pub(super) history_key: String,
+    #[serde(default)]
+    pub(super) conversation_type: String,
+    #[serde(default)]
+    pub(super) team_id: String,
+    #[serde(default)]
+    pub(super) channel_id: String,
+    #[serde(default)]
+    pub(super) thread_id: String,
+    #[serde(default)]
+    pub(super) meeting_id: String,
+    #[serde(default)]
+    pub(super) permissions: Vec<TeamsPermission>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
-struct Conversation {
+pub(super) struct Conversation {
     #[serde(default)]
-    messages: Vec<Value>,
+    pub(super) messages: Vec<Value>,
     #[serde(default)]
-    local: Value,
+    pub(super) local: Value,
     #[serde(default)]
-    last_run: String,
+    pub(super) last_run: String,
     /// Runs whose user message is already in `messages`.
     #[serde(default)]
-    completed_runs: Vec<String>,
+    pub(super) completed_runs: Vec<String>,
     /// Replies already in `messages`, keyed by run and reply.
     #[serde(default)]
-    recorded: Vec<String>,
+    pub(super) recorded: Vec<String>,
+    /// `passive:{activity id}` of messages recorded as context or deleted, so a Microsoft
+    /// retry never adds them again.
+    #[serde(default)]
+    pub(super) passive: Vec<String>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -107,13 +142,111 @@ enum Claim {
     Retry,
 }
 
-fn hash(parts: &[&str]) -> String {
-    let mut h = blake3::Hasher::new();
-    for part in parts {
-        h.update(&(part.len() as u64).to_be_bytes());
-        h.update(part.as_bytes());
+/// What `incoming` does with an activity that is not a card action.
+#[derive(Debug, PartialEq, Eq)]
+enum Gate {
+    Ignore,
+    /// The team changed, so cached team and channel names are stale.
+    ForgetTeam(String),
+    /// Context only: Teams delivered it because the bot may read every message.
+    Passive,
+    /// A message the history may hold was deleted or edited.
+    Revise(Revision),
+    Dispatch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Revision {
+    Delete,
+    Edit,
+}
+
+fn reads_messages(c: &Connection) -> bool {
+    c.permissions.contains(&TeamsPermission::ReadMessages)
+}
+
+/// Restoring a deleted message (`undeleteMessage`) is not tracked.
+fn revision(activity: &Value) -> Option<Revision> {
+    match (
+        activity["type"].as_str(),
+        context::field(activity, "/channelData/eventType"),
+    ) {
+        (Some("messageDelete"), None | Some("softDeleteMessage")) => Some(Revision::Delete),
+        (Some("messageUpdate"), Some("editMessage")) => Some(Revision::Edit),
+        _ => None,
     }
-    h.finalize().to_hex().to_string()
+}
+
+/// Installs, removals and renames arrive as `conversationUpdate` or `installationUpdate`.
+fn other_activity(activity: &Value) -> Gate {
+    let team_changed = matches!(
+        activity["type"].as_str(),
+        Some("conversationUpdate" | "installationUpdate")
+    );
+    match context::field(activity, "/channelData/team/id").filter(|_| team_changed) {
+        Some(team) => Gate::ForgetTeam(team.to_owned()),
+        None => Gate::Ignore,
+    }
+}
+
+/// Other people's messages only reach the history when the bot may read every message.
+/// Deletes and edits always apply, because they only change entries the history already holds.
+fn gate(activity: &Value, reads_messages: bool) -> Result<Gate, ApiError> {
+    match activity["type"].as_str() {
+        Some("message") => {}
+        Some("messageDelete" | "messageUpdate") => {
+            return Ok(revision(activity).map_or(Gate::Ignore, Gate::Revise));
+        }
+        _ => return Ok(other_activity(activity)),
+    }
+    if activity["from"]["id"] == activity["recipient"]["id"] || context::from_bot(activity) {
+        return Ok(Gate::Ignore);
+    }
+    let conversation_type = context::scope(activity).conversation_type;
+    let mentions_bot = context::mentions_bot(activity);
+    if !context::addressed(&conversation_type, mentions_bot) {
+        return Ok(if reads_messages {
+            Gate::Passive
+        } else {
+            Gate::Ignore
+        });
+    }
+    if activity["text"].as_str().unwrap_or_default().len() > MAX_MESSAGE_BYTES {
+        return Err(ApiError::bad_request(
+            "Teams messages may contain at most 24000 bytes",
+        ));
+    }
+    // Outside 1:1 chats a bare @mention asks the bot to look at the conversation.
+    let bare_mention = mentions_bot && conversation_type != "personal";
+    if !bare_mention
+        && context::clean_text(activity).is_empty()
+        && files::classify(activity).is_empty()
+        && quote_line(activity).is_none()
+    {
+        return Ok(Gate::Ignore);
+    }
+    Ok(Gate::Dispatch)
+}
+
+/// The sender's Entra object ID, or a per-bot pseudonym for anonymous meeting guests that
+/// never parses as a GUID, so approvals fail closed for them.
+fn identity(connection_id: &str, activity: &Value) -> Result<(String, bool), ApiError> {
+    match context::field(activity, "/from/aadObjectId") {
+        Some(oid) => super::guid(oid)
+            .map(|oid| (oid, false))
+            .map_err(|_| ApiError::bad_request("Teams activity has an invalid sender object ID")),
+        None => {
+            let from = string(activity, "/from/id")?;
+            Ok((format!("{ANONYMOUS}{}", hash(&[connection_id, from])), true))
+        }
+    }
+}
+
+fn history_key(c: &Connection, conversation: &str) -> String {
+    format!(
+        "conversation:{}",
+        hash(&[&c.id, &c.client_id, &c.customer_tenant_id, conversation])
+    )
 }
 
 /// Teams runs are identified by a [`hash`] of the originating activity.
@@ -196,11 +329,11 @@ pub async fn incoming(
     }
     auth::verify(&c, &headers, &activity).await?;
     let (sink, event) = live(&state, &c).await?;
-    record_activity(&state, &c).await?;
     let action_data = activity
         .pointer("/value/action/data")
         .or_else(|| activity.get("value"));
     if let Some(data) = action_data.filter(|data| data.get("flow_like_action").is_some()) {
+        record_activity(&state, &c).await;
         let result = respond(&state, &c, &activity, data).await;
         return match result {
             Ok(message) => Ok(Json(
@@ -212,21 +345,31 @@ pub async fn incoming(
             Err(error) => Err(error),
         };
     }
-    if activity["type"] != "message" || activity["from"]["id"] == activity["recipient"]["id"] {
-        return Ok(Json(json!({})));
-    }
-    let text = activity["text"].as_str().unwrap_or_default();
-    if text.len() > MAX_MESSAGE_BYTES {
-        return Err(ApiError::bad_request(
-            "Teams messages may contain at most 24000 bytes",
-        ));
-    }
-    if text.trim().is_empty() {
-        return Ok(Json(json!({})));
+    match gate(&activity, reads_messages(&c))? {
+        Gate::Dispatch => record_activity(&state, &c).await,
+        Gate::Ignore => return Ok(Json(json!({}))),
+        Gate::ForgetTeam(team) => {
+            if let Err(error) = microsoft::forget_team(&state, &c, &team).await {
+                tracing::warn!(connection_id = %c.id, ?error, "Could not drop cached Teams team details");
+            }
+            return Ok(Json(json!({})));
+        }
+        Gate::Passive => {
+            if let Err(error) = remember_passive(&state, &c, &activity).await {
+                tracing::warn!(connection_id = %c.id, %error, "Could not add a Teams message to the conversation history");
+            }
+            return Ok(Json(json!({})));
+        }
+        Gate::Revise(revision) => {
+            if let Err(error) = revise_history(&state, &c, &activity, revision).await {
+                tracing::warn!(connection_id = %c.id, ?revision, %error, "Could not apply a changed Teams message to the conversation history");
+            }
+            return Ok(Json(json!({})));
+        }
     }
     let conversation = string(&activity, "/conversation/id")?;
     let activity_id = string(&activity, "/id")?;
-    let user_id = super::guid(string(&activity, "/from/aadObjectId")?)?;
+    let (user_id, _) = identity(&c.id, &activity)?;
     let run = hash(&[
         &c.id,
         &c.client_id,
@@ -234,6 +377,7 @@ pub async fn incoming(
         conversation,
         activity_id,
     ]);
+    let scope = context::scope(&activity);
     let session = Session {
         connection_id: c.id.clone(),
         app_id: c.app_id.clone(),
@@ -246,10 +390,13 @@ pub async fn incoming(
         activity_id: activity_id.into(),
         user_id,
         bot_id: string(&activity, "/recipient/id")?.into(),
-        history_key: format!(
-            "conversation:{}",
-            hash(&[&c.id, &c.client_id, &c.customer_tenant_id, conversation])
-        ),
+        history_key: history_key(&c, conversation),
+        conversation_type: scope.conversation_type,
+        team_id: scope.team_id,
+        channel_id: scope.channel_id,
+        thread_id: scope.thread_id,
+        meeting_id: scope.meeting_id,
+        permissions: c.permissions.clone(),
     };
     let Some(lease) = claim_dispatch(&state, &c, &run).await? else {
         return Ok(Json(json!({})));
@@ -259,16 +406,38 @@ pub async fn incoming(
     result.map(|()| Json(json!({})))
 }
 
-async fn record_activity(state: &AppState, c: &Connection) -> Result<(), ApiError> {
+/// The setup page shows when the bot last handled a message or card action.
+async fn record_activity(state: &AppState, c: &Connection) {
+    if let Err(error) = save_activity(state, c).await {
+        tracing::warn!(connection_id = %c.id, %error, "Could not record Teams bot activity");
+    }
+}
+
+async fn save_activity(state: &AppState, c: &Connection) -> Result<(), ApiError> {
     let key = format!("health:{}", c.id);
+    let stored = store::get::<Value>(state, &key).await?;
+    if stored
+        .as_ref()
+        .is_some_and(|(health, _)| recent_activity(health, c, now()))
+    {
+        return Ok(());
+    }
     let health = json!({"client_id":c.client_id,"tenant_id":c.customer_tenant_id,"at":now()});
     let expires = now() + HISTORY_MS;
-    if let Some((_, revision)) = store::get::<Value>(state, &key).await? {
-        store::update_until(state, &key, &health, revision, expires).await?;
-    } else {
-        store::insert(state, &key, &c.id, &health, expires).await?;
-    }
+    match stored {
+        Some((_, revision)) => store::update_until(state, &key, &health, revision, expires).await?,
+        None => store::insert(state, &key, &c.id, &health, expires).await?,
+    };
     Ok(())
+}
+
+/// Busy bots write the health row at most once a minute.
+fn recent_activity(health: &Value, c: &Connection, now: i64) -> bool {
+    health["client_id"] == c.client_id
+        && health["tenant_id"] == c.customer_tenant_id
+        && health["at"]
+            .as_i64()
+            .is_some_and(|at| now - at < HEALTH_REFRESH_MS)
 }
 
 fn dispatch_claim(existing: &Dispatch, now: i64) -> Claim {
@@ -355,7 +524,7 @@ async fn dispatch(
     let payload = match store::get::<Value>(state, &payload_key).await? {
         Some((payload, _)) => payload,
         None => {
-            let payload = input_payload(state, c, activity, &session).await?;
+            let payload = input_payload(state, c, &sink, activity, &session).await?;
             if store::insert(state, &payload_key, &c.id, &payload, now() + DAY_MS).await? {
                 payload
             } else {
@@ -387,48 +556,540 @@ async fn dispatch(
     Ok(())
 }
 
+/// Builds the Chat Event payload once per message: it looks up context, downloads files and
+/// persists the user's message to the conversation history before the run starts.
 async fn input_payload(
     state: &AppState,
     c: &Connection,
+    sink: &event_sink::Model,
     activity: &Value,
     session: &Session,
 ) -> Result<Value, ApiError> {
-    let mut conversation = store::get::<Conversation>(state, &session.history_key)
-        .await?
-        .map(|v| v.0)
-        .unwrap_or_default();
-    let mut text = activity["text"].as_str().unwrap_or_default().to_owned();
-    if let Some(entities) = activity["entities"].as_array() {
-        for entity in entities {
-            if entity["type"] == "mention"
-                && entity["mentioned"]["id"] == activity["recipient"]["id"]
-                && let Some(mention) = entity["text"].as_str()
-            {
-                text = text.replace(mention, "");
-            }
-        }
-    }
-    conversation
-        .messages
-        .push(json!({"role":"user","content":text.trim()}));
-    keep_last(&mut conversation.messages, MAX_HISTORY);
-    let mut local = if conversation.local.is_object() {
-        conversation.local
-    } else {
-        json!({})
+    let deadline = Instant::now() + PREPARE_BUDGET;
+    // Renew credentials once, outside the lookups' timeouts, so no lookup starts a rotation.
+    let c = &auth::fresh_connection(state, c)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(connection_id = %c.id, %error, "Could not renew the Teams bot credentials before preparing a message");
+            c.clone()
+        });
+    let anonymous = session.user_id.starts_with(ANONYMOUS);
+    let mut teams =
+        Context::from_activity(activity, &session.run_id, &session.permissions, anonymous);
+    let enrichment = async {
+        let lookups = enrich(state, c, session, activity, teams.graph_group(), deadline);
+        tokio::time::timeout_at(deadline, lookups)
+            .await
+            .unwrap_or_else(|_| {
+                tracing::warn!(connection_id = %c.id, "Teams context lookups did not finish in time");
+                Enrichment::default()
+            })
     };
-    local["teams"] = json!({"session_id":session.run_id});
-    let mut global = store::get::<UserSession>(state, &user_key(session))
+    let (enrichment, files) = tokio::join!(
+        enrichment,
+        files::collect(
+            state,
+            c,
+            sink,
+            &session.run_id,
+            files::classify(activity),
+            deadline
+        ),
+    );
+    teams.enrich(enrichment);
+    teams.set_files(files.iter().map(FileEntry::context).collect());
+    let entry = user_entry(activity, &session.conversation_type, anonymous, &files);
+    let conversation = update_history(state, &session.history_key, &c.id, |history| {
+        record_invocation(history, &session.run_id, &entry)
+    })
+    .await?;
+    let global = store::get::<UserSession>(state, &user_key(session))
         .await?
         .map(|v| v.0.value)
-        .unwrap_or_else(|| json!({}));
-    if !global.is_object() {
-        global = json!({});
+        .unwrap_or_default();
+    Ok(payload(Invocation {
+        chat_id: hash(&[&c.id, &session.conversation_id]),
+        history: conversation.messages,
+        entry,
+        files: &files,
+        local: conversation.local,
+        global,
+        teams: teams.into_value(),
+        run: &session.run_id,
+        sub: format!("{}:{}", c.customer_tenant_id, session.user_id),
+        name: context::display_name(context::field(activity, "/from/name"), anonymous),
+    }))
+}
+
+/// Each lookup gets `LOOKUP_TIMEOUT`, but never past the shared `deadline`.
+async fn best_effort<T>(
+    c: &Connection,
+    deadline: Instant,
+    lookup: &str,
+    future: impl Future<Output = Result<T, MicrosoftError>>,
+) -> Option<T> {
+    let until = deadline.min(Instant::now() + LOOKUP_TIMEOUT);
+    match tokio::time::timeout_at(until, future).await {
+        Ok(Ok(value)) => Some(value),
+        Ok(Err(error)) => {
+            tracing::warn!(connection_id = %c.id, lookup, ?error, "Teams context lookup failed");
+            None
+        }
+        Err(_) => {
+            tracing::warn!(connection_id = %c.id, lookup, "Teams context lookup timed out");
+            None
+        }
     }
-    global["teams"] = json!({"session_id":session.run_id});
-    Ok(
-        json!({"chat_id":hash(&[&c.id,&session.conversation_id]),"messages":conversation.messages,"local_session":local,"global_session":global,"user":{"sub":format!("{}:{}",c.customer_tenant_id,session.user_id),"name":activity["from"]["name"].as_str().unwrap_or("Teams user"),"bot":false},"actions":[],"tools":[],"attachments":[]}),
+}
+
+/// Best-effort Microsoft lookups for `local_session.teams`; failures only leave fields out.
+async fn enrich(
+    state: &AppState,
+    c: &Connection,
+    session: &Session,
+    activity: &Value,
+    graph_group: Option<&str>,
+    deadline: Instant,
+) -> Enrichment {
+    let details = session
+        .permissions
+        .contains(&TeamsPermission::ConversationDetails);
+    let from = context::field(activity, "/from/id");
+    let aad_object_id = context::field(activity, "/from/aadObjectId");
+    let service_url = session.service_url.as_str();
+    let member = async {
+        let from = from.filter(|_| aad_object_id.is_some())?;
+        best_effort(
+            c,
+            deadline,
+            "member",
+            microsoft::member(state, c, service_url, &session.conversation_id, from),
+        )
+        .await
+    };
+    let team = async {
+        if session.conversation_type != "channel" || session.team_id.is_empty() {
+            return (None, None, None, None);
+        }
+        let (team, channels) = tokio::join!(
+            best_effort(
+                c,
+                deadline,
+                "team",
+                microsoft::team(state, c, service_url, &session.team_id)
+            ),
+            best_effort(
+                c,
+                deadline,
+                "channels",
+                microsoft::channels(state, c, service_url, &session.team_id)
+            ),
+        );
+        let group = graph_group
+            .map(str::to_owned)
+            .or_else(|| team.as_ref().and_then(|team| team.aad_group_id.clone()))
+            .filter(|_| details);
+        let Some(group) = group else {
+            return (team, channels, None, None);
+        };
+        let (graph_team, graph_channel) = tokio::join!(
+            best_effort(
+                c,
+                deadline,
+                "graph_team",
+                microsoft::graph_team(state, c, &group)
+            ),
+            async {
+                if session.channel_id.is_empty() {
+                    return None;
+                }
+                best_effort(
+                    c,
+                    deadline,
+                    "graph_channel",
+                    microsoft::graph_channel(state, c, &group, &session.channel_id),
+                )
+                .await
+            },
+        );
+        (team, channels, graph_team, graph_channel)
+    };
+    let meeting = async {
+        if session.meeting_id.is_empty()
+            || !session
+                .permissions
+                .contains(&TeamsPermission::MeetingDetails)
+        {
+            return None;
+        }
+        let mut meeting = best_effort(
+            c,
+            deadline,
+            "meeting",
+            microsoft::meeting(state, c, service_url, &session.meeting_id),
+        )
+        .await?;
+        // The connector names the organizer by ID only. A sender who organized the meeting
+        // is named from their own details instead.
+        let organizer = meeting.organizer_id.clone().filter(|_| {
+            meeting.organizer_name.is_none()
+                && !context::organized_by(&meeting, from, aad_object_id)
+        });
+        if let Some(organizer) = organizer {
+            meeting.organizer_name = best_effort(
+                c,
+                deadline,
+                "organizer",
+                microsoft::member(state, c, service_url, &session.conversation_id, &organizer),
+            )
+            .await
+            .and_then(|member| member.name);
+        }
+        Some(meeting)
+    };
+    let meeting_role = async {
+        let oid = aad_object_id.filter(|_| !session.meeting_id.is_empty())?;
+        best_effort(
+            c,
+            deadline,
+            "meeting_role",
+            microsoft::meeting_role(state, c, service_url, &session.meeting_id, oid),
+        )
+        .await
+        .flatten()
+    };
+    let chat = async {
+        if !details || session.conversation_type != "groupChat" {
+            return None;
+        }
+        best_effort(
+            c,
+            deadline,
+            "graph_chat",
+            microsoft::graph_chat(state, c, &session.conversation_id),
+        )
+        .await
+    };
+    let (member, (team, channels, graph_team, graph_channel), meeting, meeting_role, graph_chat) =
+        tokio::join!(member, team, meeting, meeting_role, chat);
+    Enrichment {
+        member,
+        team,
+        channels,
+        meeting,
+        meeting_role,
+        graph_team,
+        graph_channel,
+        graph_chat,
+    }
+}
+
+fn quote_line(activity: &Value) -> Option<String> {
+    context::quoted(activity)
+        .as_ref()
+        .and_then(context::quote_line)
+}
+
+/// The cleaned text, or `@{bot}` for a message that only @mentions the bot.
+fn entry_text(activity: &Value) -> String {
+    let text = context::clean_text(activity);
+    if !text.is_empty() {
+        return text;
+    }
+    context::bot_mention_name(activity)
+        .map(|name| format!("@{name}"))
+        .unwrap_or_default()
+}
+
+/// Files as history shows them before, or instead of, any download.
+fn pending_files(activity: &Value) -> Vec<FileEntry> {
+    files::classify(activity)
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| FileEntry::pending(index, candidate))
+        .collect()
+}
+
+fn has_content(activity: &Value, files: &[FileEntry]) -> bool {
+    !files.is_empty() || !entry_text(activity).is_empty() || quote_line(activity).is_some()
+}
+
+/// A user message's history text: the author's name in front in group chats and channels,
+/// a quoted reply first, and files as text placeholders.
+fn entry_content(
+    activity: &Value,
+    conversation_type: &str,
+    author: &str,
+    files: &[FileEntry],
+) -> String {
+    let body = files::with_placeholders(&entry_text(activity), files);
+    context::history_content(
+        context::is_group(conversation_type).then_some(author),
+        quote_line(activity).as_deref(),
+        &body,
     )
+}
+
+/// A user message as history stores it.
+fn user_entry(
+    activity: &Value,
+    conversation_type: &str,
+    anonymous: bool,
+    files: &[FileEntry],
+) -> Value {
+    let author = context::display_name(context::field(activity, "/from/name"), anonymous);
+    let content = entry_content(activity, conversation_type, &author, files);
+    let mut entry = json!({"role":"user","content":content,"author":author});
+    if let Some(id) = context::field(activity, "/id") {
+        entry["id"] = json!(id);
+    }
+    if let Some(at) = context::field(activity, "/timestamp") {
+        entry["at"] = json!(at);
+    }
+    entry
+}
+
+/// A message the bot was not asked to answer, as conversation context. `None` when it carries
+/// no text, quote or files.
+fn passive_entry(activity: &Value) -> Option<Value> {
+    let files = pending_files(activity);
+    if !has_content(activity, &files) {
+        return None;
+    }
+    let anonymous = context::field(activity, "/from/aadObjectId").is_none();
+    let conversation_type = context::scope(activity).conversation_type;
+    let mut entry = user_entry(activity, &conversation_type, anonymous, &files);
+    entry["content"] = json!(context::cap(
+        entry["content"].as_str().unwrap_or_default(),
+        MAX_PASSIVE_BYTES
+    ));
+    Some(entry)
+}
+
+fn passive_key(activity_id: &str) -> String {
+    format!("passive:{activity_id}")
+}
+
+async fn remember_passive(
+    state: &AppState,
+    c: &Connection,
+    activity: &Value,
+) -> Result<(), ApiError> {
+    if !reads_messages(c) {
+        return Ok(());
+    }
+    let conversation = string(activity, "/conversation/id")?;
+    let key = passive_key(string(activity, "/id")?);
+    let Some(entry) = passive_entry(activity) else {
+        return Ok(());
+    };
+    update_history(state, &history_key(c, conversation), &c.id, |history| {
+        record_passive(history, &key, &entry)
+    })
+    .await
+    .map(drop)
+}
+
+fn record_passive(conversation: &mut Conversation, key: &str, entry: &Value) -> bool {
+    if conversation.passive.iter().any(|known| known == key) {
+        return false;
+    }
+    conversation.messages.push(entry.clone());
+    trim_history(&mut conversation.messages);
+    conversation.passive.push(key.into());
+    keep_last(&mut conversation.passive, MAX_PASSIVE_KEYS);
+    true
+}
+
+/// Applies a deleted or edited message to the history entry with its ID, if there is one.
+async fn revise_history(
+    state: &AppState,
+    c: &Connection,
+    activity: &Value,
+    revision: Revision,
+) -> Result<(), ApiError> {
+    let conversation = string(activity, "/conversation/id")?;
+    let id = string(activity, "/id")?;
+    update_history(
+        state,
+        &history_key(c, conversation),
+        &c.id,
+        |history| match revision {
+            Revision::Delete => record_delete(history, id),
+            Revision::Edit => record_edit(history, id, activity),
+        },
+    )
+    .await
+    .map(drop)
+}
+
+/// Removes the entry and keeps its passive key, so a retried delivery does not restore it.
+fn record_delete(conversation: &mut Conversation, id: &str) -> bool {
+    let before = conversation.messages.len();
+    conversation.messages.retain(|message| message["id"] != id);
+    if conversation.messages.len() == before {
+        return false;
+    }
+    let key = passive_key(id);
+    if !conversation.passive.contains(&key) {
+        conversation.passive.push(key);
+        keep_last(&mut conversation.passive, MAX_PASSIVE_KEYS);
+    }
+    true
+}
+
+/// Rewrites the entry's content from the edited message, keeping its ID, author and time.
+fn record_edit(conversation: &mut Conversation, id: &str, activity: &Value) -> bool {
+    let passive = conversation.passive.contains(&passive_key(id));
+    let Some(entry) = conversation
+        .messages
+        .iter_mut()
+        .find(|message| message["id"] == id)
+    else {
+        return false;
+    };
+    let files = pending_files(activity);
+    if !has_content(activity, &files) {
+        return false;
+    }
+    let author = match entry["author"].as_str() {
+        Some(author) => author.to_owned(),
+        None => context::display_name(
+            context::field(activity, "/from/name"),
+            context::field(activity, "/from/aadObjectId").is_none(),
+        ),
+    };
+    let conversation_type = context::scope(activity).conversation_type;
+    let limit = if passive {
+        MAX_PASSIVE_BYTES
+    } else {
+        MAX_MESSAGE_BYTES
+    };
+    let content = context::cap(
+        &entry_content(activity, &conversation_type, &author, &files),
+        limit,
+    );
+    if entry["content"] == content {
+        return false;
+    }
+    entry["content"] = json!(content);
+    true
+}
+
+fn timestamp(entry: &Value) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    entry["at"]
+        .as_str()
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+}
+
+/// Persists the invoking message before the run starts, so replies attach after it. It goes
+/// before any later message that arrived first; entries without a time count as earlier.
+fn record_invocation(conversation: &mut Conversation, run: &str, entry: &Value) -> bool {
+    if conversation.completed_runs.iter().any(|done| done == run) {
+        return false;
+    }
+    let position = timestamp(entry)
+        .and_then(|at| {
+            conversation
+                .messages
+                .iter()
+                .position(|message| timestamp(message).is_some_and(|other| other > at))
+        })
+        .unwrap_or(conversation.messages.len());
+    conversation.messages.insert(position, entry.clone());
+    trim_history(&mut conversation.messages);
+    conversation.completed_runs.push(run.into());
+    keep_last(&mut conversation.completed_runs, MAX_COMPLETED_RUNS);
+    true
+}
+
+/// Applies `change` with compare-and-swap, retrying when another writer wins.
+async fn update_history(
+    state: &AppState,
+    key: &str,
+    connection_id: &str,
+    mut change: impl FnMut(&mut Conversation) -> bool,
+) -> Result<Conversation, ApiError> {
+    let expires = now() + HISTORY_MS;
+    for _ in 0..4 {
+        let previous = store::get::<Conversation>(state, key).await?;
+        let (mut conversation, revision) = previous.map(|(c, r)| (c, Some(r))).unwrap_or_default();
+        if !change(&mut conversation) {
+            return Ok(conversation);
+        }
+        let saved = if let Some(revision) = revision {
+            store::update_until(state, key, &conversation, revision, expires).await?
+        } else {
+            store::insert(state, key, connection_id, &conversation, expires).await?
+        };
+        if saved {
+            return Ok(conversation);
+        }
+    }
+    Err(ApiError::conflict(
+        "Teams conversation changed while it was being saved. Retry shortly.",
+    ))
+}
+
+struct Invocation<'a> {
+    chat_id: String,
+    /// The persisted conversation, which already contains `entry`.
+    history: Vec<Value>,
+    entry: Value,
+    files: &'a [FileEntry],
+    local: Value,
+    global: Value,
+    teams: Value,
+    run: &'a str,
+    sub: String,
+    name: String,
+}
+
+fn object_or_empty(value: Value) -> Value {
+    if value.is_object() { value } else { json!({}) }
+}
+
+/// The Chat Event payload. The invoking message is last, with downloaded files as media parts.
+fn payload(invocation: Invocation) -> Value {
+    let Invocation {
+        chat_id,
+        history,
+        entry,
+        files,
+        local,
+        global,
+        teams,
+        run,
+        sub,
+        name,
+    } = invocation;
+    let mut messages: Vec<Value> = history
+        .into_iter()
+        .filter(|message| entry["id"].is_null() || message["id"] != entry["id"])
+        .collect();
+    let mut last = entry;
+    if let Some(parts) = files::content_parts(last["content"].as_str().unwrap_or_default(), files) {
+        last["content"] = parts;
+    }
+    messages.push(last);
+    let mut local = object_or_empty(local);
+    local["teams"] = teams;
+    let mut global = object_or_empty(global);
+    global["teams"] = json!({"session_id": run});
+    let attachments = files
+        .iter()
+        .filter_map(FileEntry::attachment)
+        .collect::<Vec<_>>();
+    json!({
+        "chat_id": chat_id,
+        "messages": messages,
+        "local_session": local,
+        "global_session": global,
+        "user": {"sub": sub, "name": name, "bot": false},
+        "actions": [],
+        "tools": [],
+        "attachments": attachments
+    })
 }
 
 fn user_key(s: &Session) -> String {
@@ -442,6 +1103,38 @@ fn keep_last<T>(values: &mut Vec<T>, limit: usize) {
     if values.len() > limit {
         values.drain(..values.len() - limit);
     }
+}
+
+/// Keeps the newest `MAX_HISTORY` entries whose serialized list fits `MAX_HISTORY_BYTES`,
+/// always keeping the newest entry.
+fn trim_history(messages: &mut Vec<Value>) {
+    keep_last(messages, MAX_HISTORY);
+    let sizes = messages
+        .iter()
+        .map(|message| message.to_string().len() + 1)
+        .collect::<Vec<_>>();
+    let mut total = sizes.iter().sum::<usize>() + 1;
+    let mut dropped = 0;
+    while total > MAX_HISTORY_BYTES && dropped + 1 < sizes.len() {
+        total -= sizes[dropped];
+        dropped += 1;
+    }
+    messages.drain(..dropped);
+}
+
+/// History never stores media: a parts array keeps only its text.
+fn stored_message(message: &Value) -> Value {
+    let mut message = message.clone();
+    if let Some(parts) = message["content"].as_array() {
+        let text = parts
+            .iter()
+            .filter(|part| part["type"] == "text")
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        message["content"] = json!(text);
+    }
+    message
 }
 
 fn activity_url(
@@ -637,7 +1330,7 @@ async fn deliver(
     })
 }
 
-async fn session_for_run(
+pub(super) async fn session_for_run(
     state: &AppState,
     app_id: &str,
     run_id: &str,
@@ -889,8 +1582,9 @@ fn response_text(payload: &Value) -> String {
         .unwrap_or_default()
 }
 
-/// Adds one reply to the history. The run's user message comes with its first reply;
-/// `entry` makes retried replies no-ops. Returns whether anything changed.
+/// Adds one reply to the history. The run's user message is normally persisted at dispatch;
+/// runs dispatched before that come with it here. `entry` makes retried replies no-ops.
+/// Returns whether anything changed.
 fn record_reply(
     conversation: &mut Conversation,
     run: &str,
@@ -908,7 +1602,7 @@ fn record_reply(
     }
     if !conversation.completed_runs.iter().any(|done| done == run) {
         if let Some(message) = user_message {
-            conversation.messages.push(message.clone());
+            conversation.messages.push(stored_message(message));
         }
         conversation.completed_runs.push(run.into());
         keep_last(&mut conversation.completed_runs, MAX_COMPLETED_RUNS);
@@ -918,7 +1612,7 @@ fn record_reply(
             .messages
             .push(json!({"role":"assistant","content":text}));
     }
-    keep_last(&mut conversation.messages, MAX_HISTORY);
+    trim_history(&mut conversation.messages);
     if let Some(local) = local {
         conversation.local = local.clone();
     }
@@ -956,41 +1650,18 @@ async fn remember(
         .as_array()
         .and_then(|messages| messages.last());
     let entry = hash(&[&s.run_id, key]);
-    let expires = now() + HISTORY_MS;
-    for attempt in 0..4 {
-        let previous = store::get::<Conversation>(state, &s.history_key).await?;
-        let (mut conversation, revision) = previous.map(|(c, r)| (c, Some(r))).unwrap_or_default();
-        if !record_reply(
-            &mut conversation,
+    update_history(state, &s.history_key, &s.connection_id, |conversation| {
+        record_reply(
+            conversation,
             &s.run_id,
             &entry,
             user_message,
             text,
             local.as_ref(),
-        ) {
-            break;
-        }
-        let saved = if let Some(revision) = revision {
-            store::update_until(state, &s.history_key, &conversation, revision, expires).await?
-        } else {
-            store::insert(
-                state,
-                &s.history_key,
-                &s.connection_id,
-                &conversation,
-                expires,
-            )
-            .await?
-        };
-        if saved {
-            break;
-        }
-        if attempt == 3 {
-            return Err(ApiError::conflict(
-                "Teams conversation changed. Retry saving this response.",
-            ));
-        }
-    }
+        )
+    })
+    .await?;
+    let expires = now() + HISTORY_MS;
     if let Some(global) = sessions
         .and_then(|payload| payload.get("global_session"))
         .filter(|v| v.is_object())
@@ -1027,6 +1698,16 @@ async fn remember(
     Ok(())
 }
 
+/// Anonymous meeting guests have no Entra identity, so they can never answer a request.
+fn responder(activity: &Value) -> Result<String, ApiError> {
+    let oid = context::field(activity, "/from/aadObjectId").ok_or_else(|| {
+        ApiError::forbidden(
+            "Sign in with a Microsoft work or school account to answer this request.",
+        )
+    })?;
+    super::guid(oid)
+}
+
 async fn respond(
     state: &AppState,
     c: &Connection,
@@ -1041,7 +1722,7 @@ async fn respond(
     let (mut action, revision) = store::get::<Action>(state, &key)
         .await?
         .ok_or_else(|| ApiError::gone("This request has expired"))?;
-    let sender = super::guid(string(activity, "/from/aadObjectId")?)?;
+    let sender = responder(activity)?;
     if action.session.connection_id != c.id
         || action.session.tenant_id != c.customer_tenant_id
         || action.session.client_id != c.client_id
@@ -1160,6 +1841,16 @@ mod tests {
             hash: "digest".into(),
             lease_until,
         }
+    }
+
+    fn connection() -> Connection {
+        serde_json::from_value(json!({
+            "id":"c", "app_id":"app", "event_id":"event", "mode":"customer_teams",
+            "name":"Bot", "description":"", "customer_tenant_id":"tenant", "home_tenant_id":"home",
+            "client_id":"bot-id", "secret":"s", "graph_object_id":null, "azure_resource_id":null,
+            "secret_key_id":null, "secret_expires_at":null, "status":"ready", "allowed_responders":[]
+        }))
+        .unwrap()
     }
 
     #[test]
@@ -1312,6 +2003,659 @@ mod tests {
         assert_eq!(
             conversation.messages.last(),
             Some(&json!({"role":"assistant","content":"reply"}))
+        );
+    }
+
+    const BOT: &str = "28:bot";
+    const OID: &str = "9d3e08f9-a7ae-43aa-a4d3-de3f319a8a9c";
+
+    fn message(conversation_type: &str, text: &str) -> Value {
+        json!({
+            "type": "message",
+            "id": "1727",
+            "timestamp": "2026-09-28T09:00:00Z",
+            "text": text,
+            "serviceUrl": "https://smba.trafficmanager.net/emea/",
+            "from": {"id": "29:felix", "aadObjectId": OID, "name": "Felix Schultz"},
+            "recipient": {"id": BOT, "name": "Flow Bot"},
+            "conversation": {"id": "19:c@thread.v2", "conversationType": conversation_type},
+            "entities": [{"type":"mention","text":"<at>Flow Bot</at>","mentioned":{"id":BOT}}]
+        })
+    }
+
+    fn unmentioned(conversation_type: &str, text: &str) -> Value {
+        let mut activity = message(conversation_type, text);
+        activity["entities"] = json!([]);
+        activity
+    }
+
+    fn quoting(mut activity: Value) -> Value {
+        activity["entities"].as_array_mut().unwrap().push(
+            json!({"type":"quotedReply","quotedReply":{"senderName":"Anna","preview":"preview"}}),
+        );
+        activity
+    }
+
+    #[test]
+    fn only_addressed_messages_with_content_dispatch() {
+        let gate = |activity: &Value| gate(activity, true).unwrap();
+        assert_eq!(gate(&message("personal", "hello")), Gate::Dispatch);
+        assert_eq!(gate(&unmentioned("personal", "hello")), Gate::Dispatch);
+        assert_eq!(
+            gate(&message("channel", "<at>Flow Bot</at> hi")),
+            Gate::Dispatch
+        );
+        assert_eq!(gate(&unmentioned("groupChat", "hi all")), Gate::Passive);
+        assert_eq!(gate(&unmentioned("channel", "hi all")), Gate::Passive);
+        let mut image = message("personal", "");
+        image["attachments"] = json!([{"contentType":"image/*","contentUrl":"https://smba.trafficmanager.net/emea/v3/attachments/a/views/original"}]);
+        assert_eq!(gate(&image), Gate::Dispatch);
+        image["attachments"] = json!([{"contentType":"text/html","content":"<p></p>"}]);
+        assert_eq!(gate(&image), Gate::Ignore);
+    }
+
+    #[test]
+    fn bare_mentions_and_quotes_dispatch_but_empty_personal_messages_do_not() {
+        let gate = |activity: &Value| gate(activity, false).unwrap();
+        assert_eq!(
+            gate(&message("groupChat", "<at>Flow Bot</at> ")),
+            Gate::Dispatch
+        );
+        assert_eq!(
+            gate(&message("channel", "<at>Flow Bot</at>")),
+            Gate::Dispatch
+        );
+        assert_eq!(
+            gate(&message("personal", "<at>Flow Bot</at> ")),
+            Gate::Ignore
+        );
+        assert_eq!(gate(&unmentioned("personal", " ")), Gate::Ignore);
+        assert_eq!(gate(&quoting(unmentioned("personal", ""))), Gate::Dispatch);
+        assert_eq!(
+            gate(&quoting(unmentioned(
+                "personal",
+                "<quoted messageId=\"1\"/>"
+            ))),
+            Gate::Dispatch
+        );
+        let mut blank_quote = unmentioned("personal", "");
+        blank_quote["entities"] =
+            json!([{"type":"quotedReply","quotedReply":{"senderName":"Anna","preview":" "}}]);
+        assert_eq!(gate(&blank_quote), Gate::Ignore);
+    }
+
+    #[test]
+    fn bare_mentions_and_quotes_become_readable_history() {
+        let bare = message("groupChat", "<at>Flow Bot</at>");
+        assert_eq!(
+            user_entry(&bare, "groupChat", false, &[])["content"],
+            "Felix Schultz: @Flow Bot"
+        );
+        assert_eq!(
+            user_entry(&quoting(bare), "groupChat", false, &[])["content"],
+            "Felix Schultz: > Anna: preview\n\n@Flow Bot"
+        );
+        assert_eq!(
+            user_entry(
+                &quoting(unmentioned("personal", "")),
+                "personal",
+                false,
+                &[]
+            )["content"],
+            "> Anna: preview"
+        );
+        let mut named = message("channel", "<at>Flow Bot</at>");
+        named["entities"][0]["mentioned"]["name"] = json!("Flow\u{200b} Assistant");
+        assert_eq!(
+            user_entry(&named, "channel", false, &[])["content"],
+            "Felix Schultz: @Flow Assistant"
+        );
+    }
+
+    #[test]
+    fn other_peoples_messages_need_the_read_permission_but_changes_always_apply() {
+        let deleted = json!({"type":"messageDelete","id":"1727","channelData":{"eventType":"softDeleteMessage"}});
+        let edited = json!({"type":"messageUpdate","id":"1727","text":"new","channelData":{"eventType":"editMessage"}});
+        let passive = unmentioned("channel", "hi all");
+        assert_eq!(gate(&passive, true).unwrap(), Gate::Passive);
+        assert_eq!(gate(&passive, false).unwrap(), Gate::Ignore);
+        for (activity, revision) in [
+            (deleted.clone(), Gate::Revise(Revision::Delete)),
+            (edited.clone(), Gate::Revise(Revision::Edit)),
+        ] {
+            assert_eq!(gate(&activity, true).unwrap(), revision);
+            assert_eq!(gate(&activity, false).unwrap(), revision);
+        }
+        let undeleted = json!({"type":"messageUpdate","id":"1727","channelData":{"eventType":"undeleteMessage"}});
+        assert_eq!(gate(&undeleted, true).unwrap(), Gate::Ignore);
+        let untyped_delete = json!({"type":"messageDelete","id":"1727"});
+        assert_eq!(
+            gate(&untyped_delete, true).unwrap(),
+            Gate::Revise(Revision::Delete)
+        );
+        let mut c = connection();
+        assert!(!reads_messages(&c));
+        c.permissions = vec![
+            TeamsPermission::MeetingDetails,
+            TeamsPermission::ReadMessages,
+        ];
+        assert!(reads_messages(&c));
+    }
+
+    #[test]
+    fn bots_and_other_activities_never_dispatch() {
+        let gate = |activity: &Value| gate(activity, true).unwrap();
+        let mut bot = message("personal", "hello");
+        bot["from"] = json!({"id":"28:other"});
+        assert_eq!(gate(&bot), Gate::Ignore);
+        bot["from"] = json!({"id":"29:x","aadObjectId":OID,"role":"bot"});
+        assert_eq!(gate(&bot), Gate::Ignore);
+        let mut own = message("personal", "hello");
+        own["from"] = json!({"id":BOT});
+        assert_eq!(gate(&own), Gate::Ignore);
+        let update = json!({"type":"conversationUpdate","channelData":{"team":{"id":"19:team"}}});
+        assert_eq!(gate(&update), Gate::ForgetTeam("19:team".into()));
+        let install = json!({"type":"installationUpdate","channelData":{"team":{"id":"19:team"}}});
+        assert_eq!(gate(&install), Gate::ForgetTeam("19:team".into()));
+        assert_eq!(gate(&json!({"type":"conversationUpdate"})), Gate::Ignore);
+        assert_eq!(
+            gate(&json!({"type":"typing","channelData":{"team":{"id":"19:team"}}})),
+            Gate::Ignore
+        );
+    }
+
+    #[test]
+    fn oversized_text_is_rejected_only_when_addressed() {
+        let long = "x".repeat(MAX_MESSAGE_BYTES + 1);
+        assert_eq!(
+            gate(&message("personal", &long), true)
+                .unwrap_err()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            gate(&unmentioned("channel", &long), true).unwrap(),
+            Gate::Passive
+        );
+        let entry = passive_entry(&unmentioned("channel", &long)).unwrap();
+        let content = entry["content"].as_str().unwrap();
+        assert!(content.len() <= MAX_PASSIVE_BYTES);
+        assert!(content.starts_with("Felix Schultz: xxx"));
+        assert!(content.ends_with('…'));
+    }
+
+    #[test]
+    fn anonymous_guests_get_a_stable_pseudonym_that_is_never_a_guid() {
+        let (user, anonymous) = identity("c", &message("groupChat", "hi")).unwrap();
+        assert_eq!((user.as_str(), anonymous), (OID, false));
+        let mut guest = message("groupChat", "hi");
+        guest["from"] = json!({"id":"29:guest","name":"Visitor"});
+        let (first, anonymous) = identity("c", &guest).unwrap();
+        assert!(anonymous);
+        assert_eq!(first, format!("{ANONYMOUS}{}", hash(&["c", "29:guest"])));
+        assert!(uuid::Uuid::parse_str(&first).is_err());
+        assert_eq!(identity("c", &guest).unwrap().0, first);
+        assert_ne!(identity("other", &guest).unwrap().0, first);
+        guest["from"]["aadObjectId"] = json!("not-a-guid");
+        assert_eq!(
+            identity("c", &guest).unwrap_err().status(),
+            StatusCode::BAD_REQUEST
+        );
+        let error = responder(&json!({"from":{"id":"29:guest"}})).unwrap_err();
+        assert_eq!(error.status(), StatusCode::FORBIDDEN);
+        assert!(
+            error
+                .public_message()
+                .is_some_and(|message| message.contains("work or school account"))
+        );
+        assert_eq!(responder(&message("personal", "")).unwrap(), OID);
+    }
+
+    #[test]
+    fn group_history_names_the_author_and_personal_history_does_not() {
+        let mut activity = message("groupChat", "<at>Flow Bot</at> what did <at>Anna</at> say?");
+        activity["entities"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"quotedReply","quotedReply":{"senderName":"Anna","preview":"Ship it\nFriday"}}));
+        let image = FileEntry {
+            name: "a.png".into(),
+            mime: "image/png".into(),
+            url: Some("https://store/a.png".into()),
+            downloadable: true,
+            ..FileEntry::default()
+        };
+        assert_eq!(
+            user_entry(&activity, "groupChat", false, &[image]),
+            json!({
+                "role": "user",
+                "content": "Felix Schultz: > Anna: Ship it Friday\n\nwhat did @Anna say?\n[image: a.png]",
+                "author": "Felix Schultz",
+                "id": "1727",
+                "at": "2026-09-28T09:00:00Z"
+            })
+        );
+        assert_eq!(
+            user_entry(&message("personal", "hello"), "personal", false, &[])["content"],
+            "hello"
+        );
+        let mut guest = unmentioned("channel", "hi");
+        guest["from"] = json!({"id":"29:guest"});
+        let entry = passive_entry(&guest).unwrap();
+        assert_eq!(entry["content"], "Guest: hi");
+        assert_eq!(entry["author"], "Guest");
+        let mut file_only = unmentioned("channel", "");
+        file_only["attachments"] = json!([{"contentType":"reference","name":"Plan.docx","contentUrl":"https://contoso.sharepoint.com/Plan.docx"}]);
+        assert_eq!(
+            passive_entry(&file_only).unwrap()["content"],
+            "Felix Schultz: [file: Plan.docx]"
+        );
+        assert_eq!(passive_entry(&unmentioned("channel", " ")), None);
+    }
+
+    #[test]
+    fn passive_messages_are_recorded_once() {
+        let mut conversation = Conversation::default();
+        let entry = json!({"role":"user","content":"Anna: hi","id":"1"});
+        assert!(record_passive(&mut conversation, "passive:1", &entry));
+        assert!(!record_passive(&mut conversation, "passive:1", &entry));
+        assert!(record_passive(
+            &mut conversation,
+            "passive:2",
+            &json!({"role":"user","content":"Anna: again","id":"2"})
+        ));
+        assert_eq!(conversation.messages.len(), 2);
+        assert_eq!(conversation.passive, vec!["passive:1", "passive:2"]);
+        assert!(conversation.recorded.is_empty());
+        assert!(conversation.completed_runs.is_empty());
+    }
+
+    #[test]
+    fn busy_channels_do_not_evict_reply_keys() {
+        let mut conversation = Conversation::default();
+        assert!(record_reply(
+            &mut conversation,
+            "run",
+            "reply",
+            None,
+            "answer",
+            None
+        ));
+        for index in 0..MAX_PASSIVE_KEYS + 100 {
+            let entry = json!({"role":"user","content":"Anna: hi","id":index.to_string()});
+            assert!(record_passive(
+                &mut conversation,
+                &passive_key(&index.to_string()),
+                &entry
+            ));
+        }
+        assert_eq!(conversation.passive.len(), MAX_PASSIVE_KEYS);
+        assert_eq!(conversation.passive[0], passive_key("100"));
+        assert_eq!(conversation.recorded, vec!["reply"]);
+        assert!(!record_reply(
+            &mut conversation,
+            "run",
+            "reply",
+            None,
+            "answer",
+            None
+        ));
+    }
+
+    #[test]
+    fn conversations_saved_before_the_passive_list_still_load() {
+        let conversation: Conversation = serde_json::from_value(json!({
+            "messages": [{"role":"user","content":"hi"}],
+            "local": {},
+            "last_run": "run",
+            "completed_runs": ["run"],
+            "recorded": ["passive:1", "reply"]
+        }))
+        .unwrap();
+        assert!(conversation.passive.is_empty());
+        assert_eq!(conversation.recorded.len(), 2);
+    }
+
+    fn history(entries: &[(&str, &str)]) -> Conversation {
+        let mut conversation = Conversation::default();
+        for (id, content) in entries {
+            record_passive(
+                &mut conversation,
+                &passive_key(id),
+                &json!({"role":"user","content":content,"author":"Anna","id":id,"at":"2026-09-28T09:00:00Z"}),
+            );
+        }
+        conversation
+    }
+
+    #[test]
+    fn deleted_messages_leave_the_history_for_good() {
+        let mut conversation = history(&[("1", "Anna: first"), ("2", "Anna: second")]);
+        assert!(record_delete(&mut conversation, "1"));
+        assert_eq!(conversation.messages.len(), 1);
+        assert_eq!(conversation.messages[0]["id"], "2");
+        assert!(!record_delete(&mut conversation, "1"));
+        assert!(!record_passive(
+            &mut conversation,
+            &passive_key("1"),
+            &json!({"role":"user","content":"Anna: first","id":"1"})
+        ));
+        assert_eq!(conversation.messages.len(), 1);
+
+        let mut invoked = Conversation::default();
+        record_invocation(
+            &mut invoked,
+            "run",
+            &json!({"role":"user","content":"Felix: hi","id":"9"}),
+        );
+        assert!(record_delete(&mut invoked, "9"));
+        assert!(invoked.messages.is_empty());
+        assert_eq!(invoked.passive, vec![passive_key("9")]);
+        assert!(!record_delete(&mut Conversation::default(), "9"));
+    }
+
+    fn edit(conversation_type: &str, id: &str, text: &str) -> Value {
+        let mut activity = unmentioned(conversation_type, text);
+        activity["type"] = json!("messageUpdate");
+        activity["id"] = json!(id);
+        activity["from"]["name"] = json!("Anna Renamed");
+        activity["timestamp"] = json!("2026-09-28T10:00:00Z");
+        activity["channelData"] = json!({"eventType":"editMessage"});
+        activity
+    }
+
+    #[test]
+    fn edited_messages_are_rewritten_in_place() {
+        let mut conversation = history(&[("1", "Anna: first"), ("2", "Anna: second")]);
+        assert!(record_edit(
+            &mut conversation,
+            "1",
+            &quoting(edit("channel", "1", "first, fixed"))
+        ));
+        assert_eq!(
+            conversation.messages[0],
+            json!({"role":"user","content":"Anna: > Anna: preview\n\nfirst, fixed","author":"Anna","id":"1","at":"2026-09-28T09:00:00Z"})
+        );
+        assert_eq!(conversation.messages[1]["content"], "Anna: second");
+        assert!(!record_edit(
+            &mut conversation,
+            "1",
+            &quoting(edit("channel", "1", "first, fixed"))
+        ));
+        assert!(!record_edit(
+            &mut conversation,
+            "3",
+            &edit("channel", "3", "x")
+        ));
+        assert!(!record_edit(
+            &mut conversation,
+            "2",
+            &edit("channel", "2", " ")
+        ));
+
+        let long = "y".repeat(MAX_MESSAGE_BYTES);
+        assert!(record_edit(
+            &mut conversation,
+            "2",
+            &edit("channel", "2", &long)
+        ));
+        let content = conversation.messages[1]["content"].as_str().unwrap();
+        assert!(content.len() <= MAX_PASSIVE_BYTES && content.ends_with('…'));
+
+        let mut invoked = Conversation::default();
+        record_invocation(
+            &mut invoked,
+            "run",
+            &json!({"role":"user","content":"hi","author":"Felix","id":"9"}),
+        );
+        assert!(record_edit(
+            &mut invoked,
+            "9",
+            &edit("personal", "9", &long)
+        ));
+        assert_eq!(invoked.messages[0]["content"], long);
+        assert_eq!(invoked.messages[0]["author"], "Felix");
+    }
+
+    #[test]
+    fn the_invoking_message_is_stored_in_time_order() {
+        let mut conversation = history(&[("0", "Anna: before")]);
+        conversation.messages[0]["at"] = json!("2026-09-28T08:59:00Z");
+        record_passive(
+            &mut conversation,
+            &passive_key("2"),
+            &json!({"role":"user","content":"Anna: after","id":"2","at":"2026-09-28T11:00:05.000+02:00"}),
+        );
+        conversation
+            .messages
+            .push(json!({"role":"assistant","content":"reply"}));
+        let entry =
+            json!({"role":"user","content":"Felix: hi","id":"1","at":"2026-09-28T09:00:00Z"});
+        assert!(record_invocation(&mut conversation, "run", &entry));
+        let ids = conversation
+            .messages
+            .iter()
+            .map(|message| message["id"].as_str().unwrap_or("reply"))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["0", "1", "2", "reply"]);
+
+        let untimed = json!({"role":"user","content":"Felix: again","id":"3"});
+        assert!(record_invocation(&mut conversation, "later", &untimed));
+        assert_eq!(conversation.messages.last(), Some(&untimed));
+
+        let payload = payload(Invocation {
+            chat_id: "chat".into(),
+            history: conversation.messages.clone(),
+            entry: entry.clone(),
+            files: &[],
+            local: Value::Null,
+            global: Value::Null,
+            teams: json!({"session_id":"run"}),
+            run: "run",
+            sub: "tenant:user".into(),
+            name: "Felix".into(),
+        });
+        assert_eq!(payload["messages"].as_array().unwrap().last(), Some(&entry));
+    }
+
+    #[test]
+    fn health_is_rewritten_at_most_once_a_minute_per_bot_identity() {
+        let c = connection();
+        let now = 10 * HEALTH_REFRESH_MS;
+        let health = |client: &str, tenant: &str, at: i64| json!({"client_id":client,"tenant_id":tenant,"at":at});
+        assert!(recent_activity(
+            &health("bot-id", "tenant", now - 1_000),
+            &c,
+            now
+        ));
+        assert!(!recent_activity(
+            &health("bot-id", "tenant", now - HEALTH_REFRESH_MS),
+            &c,
+            now
+        ));
+        assert!(!recent_activity(
+            &health("other-bot", "tenant", now),
+            &c,
+            now
+        ));
+        assert!(!recent_activity(
+            &health("bot-id", "other-tenant", now),
+            &c,
+            now
+        ));
+        assert!(!recent_activity(&json!({}), &c, now));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn lookups_stop_at_the_shared_deadline() {
+        let c = connection();
+        let hung = std::future::pending::<Result<(), MicrosoftError>>;
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(1);
+        assert_eq!(best_effort(&c, deadline, "slow", hung()).await, None);
+        assert_eq!(Instant::now() - start, Duration::from_secs(1));
+        let start = Instant::now();
+        let far = start + Duration::from_secs(60);
+        assert_eq!(best_effort(&c, far, "slow", hung()).await, None);
+        assert_eq!(Instant::now() - start, LOOKUP_TIMEOUT);
+        assert_eq!(
+            best_effort(&c, far, "quick", async { Ok(7) }).await,
+            Some(7)
+        );
+        assert_eq!(
+            best_effort::<()>(&c, far, "failed", async { Err(MicrosoftError::NotFound) }).await,
+            None
+        );
+    }
+
+    #[test]
+    fn the_invoking_message_is_persisted_once_and_replies_do_not_repeat_it() {
+        let mut conversation = Conversation::default();
+        let entry = json!({"role":"user","content":"Felix: hi","id":"1727"});
+        assert!(record_invocation(&mut conversation, "run", &entry));
+        assert!(!record_invocation(&mut conversation, "run", &entry));
+        record_passive(
+            &mut conversation,
+            "passive:1728",
+            &json!({"role":"user","content":"Anna: meanwhile","id":"1728"}),
+        );
+        let with_parts = json!({"role":"user","content":[{"type":"text","text":"Felix: hi"},{"type":"image_url","image_url":{"url":"u"}}]});
+        assert!(record_reply(
+            &mut conversation,
+            "run",
+            "chat_out",
+            Some(&with_parts),
+            "answer",
+            None
+        ));
+        assert_eq!(
+            conversation.messages,
+            vec![
+                entry,
+                json!({"role":"user","content":"Anna: meanwhile","id":"1728"}),
+                json!({"role":"assistant","content":"answer"}),
+            ]
+        );
+        let mut legacy = Conversation::default();
+        record_reply(&mut legacy, "old", "chat_out", Some(&with_parts), "a", None);
+        assert_eq!(
+            legacy.messages[0],
+            json!({"role":"user","content":"Felix: hi"})
+        );
+    }
+
+    #[test]
+    fn history_is_trimmed_by_count_and_size_keeping_the_newest() {
+        let mut messages = (0..40)
+            .map(|index| json!({"role":"user","content":index.to_string()}))
+            .collect::<Vec<_>>();
+        trim_history(&mut messages);
+        assert_eq!(messages.len(), MAX_HISTORY);
+        assert_eq!(messages[0]["content"], "10");
+        let big = "x".repeat(60_000);
+        let mut messages = (0..5)
+            .map(|index| json!({"role":"user","content":format!("{index}{big}")}))
+            .collect::<Vec<_>>();
+        trim_history(&mut messages);
+        assert_eq!(messages.len(), 3);
+        assert!(messages[0]["content"].as_str().unwrap().starts_with('2'));
+        assert!(serde_json::to_vec(&messages).unwrap().len() <= MAX_HISTORY_BYTES);
+        let mut huge = vec![json!({"role":"user","content":"y".repeat(MAX_HISTORY_BYTES)})];
+        trim_history(&mut huge);
+        assert_eq!(huge.len(), 1);
+    }
+
+    #[test]
+    fn payloads_end_with_the_invoking_message_and_its_media() {
+        let entry = json!({"role":"user","content":"Felix: look\n[image: a.png]\n[file: Plan.docx]","author":"Felix","id":"1727"});
+        let files = [
+            FileEntry {
+                name: "a.png".into(),
+                mime: "image/png".into(),
+                size: Some(3),
+                url: Some("https://store/a.png?sig=1".into()),
+                path: Some("tmp/a.png".into()),
+                downloadable: true,
+                ..FileEntry::default()
+            },
+            FileEntry {
+                name: "Plan.docx".into(),
+                mime: "application/octet-stream".into(),
+                link: Some("https://contoso.sharepoint.com/Plan.docx".into()),
+                error: Some("not downloadable".into()),
+                ..FileEntry::default()
+            },
+        ];
+        let history = vec![
+            json!({"role":"user","content":"Anna: earlier","id":"1700"}),
+            entry.clone(),
+            json!({"role":"user","content":"Anna: meanwhile","id":"1728"}),
+        ];
+        let payload = payload(Invocation {
+            chat_id: "chat".into(),
+            history,
+            entry: entry.clone(),
+            files: &files,
+            local: json!({"topic":"billing"}),
+            global: Value::Null,
+            teams: json!({"session_id":"run"}),
+            run: "run",
+            sub: format!("tenant:{ANONYMOUS}abc"),
+            name: "Guest".into(),
+        });
+        let messages = payload["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["id"], "1700");
+        assert_eq!(messages[1]["id"], "1728");
+        assert_eq!(messages[2]["id"], "1727");
+        assert_eq!(
+            messages[2]["content"],
+            json!([
+                {"type":"text","text":"Felix: look\n[image: a.png]\n[file: Plan.docx]"},
+                {"type":"image_url","image_url":{"url":"https://store/a.png?sig=1","media_type":"image/png"}}
+            ])
+        );
+        assert_eq!(
+            payload["attachments"],
+            json!([{"url":"https://store/a.png?sig=1","name":"a.png","type":"image/png","size":3}])
+        );
+        assert_eq!(
+            payload["local_session"],
+            json!({"topic":"billing","teams":{"session_id":"run"}})
+        );
+        assert_eq!(
+            payload["global_session"],
+            json!({"teams":{"session_id":"run"}})
+        );
+        assert_eq!(
+            payload["user"],
+            json!({"sub":"tenant:anonymous:abc","name":"Guest","bot":false})
+        );
+        assert_eq!(payload["chat_id"], "chat");
+        assert_eq!(payload["actions"], json!([]));
+        assert_eq!(payload["tools"], json!([]));
+
+        let plain = super::payload(Invocation {
+            chat_id: "chat".into(),
+            history: vec![entry.clone()],
+            entry: entry.clone(),
+            files: &files[1..],
+            local: json!("not an object"),
+            global: json!({"plan":"pro","teams":{"stale":true}}),
+            teams: json!({"session_id":"run"}),
+            run: "run",
+            sub: "tenant:user".into(),
+            name: "Felix".into(),
+        });
+        assert_eq!(plain["messages"], json!([entry]));
+        assert_eq!(plain["attachments"], json!([]));
+        assert_eq!(
+            plain["local_session"],
+            json!({"teams":{"session_id":"run"}})
+        );
+        assert_eq!(
+            plain["global_session"],
+            json!({"plan":"pro","teams":{"session_id":"run"}})
         );
     }
 }

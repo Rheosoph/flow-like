@@ -11,6 +11,7 @@ import type {
 	PageTrigger,
 } from "../../lib";
 import type {
+	TeamsBotAccess,
 	TeamsBotConnection,
 	TeamsBotPackage,
 	TeamsBotSetup,
@@ -461,6 +462,8 @@ export interface IEventState {
 		appId: string,
 		eventId: string,
 	): Promise<TeamsBotConnection>;
+	/** Whether Microsoft Graph accepts the bot for the saved read permissions. */
+	getTeamsBotAccess?(appId: string, eventId: string): Promise<TeamsBotAccess>;
 
 	/** Whether events always execute remotely (server-side). When true, secrets are handled server-side and don't need to be prompted or sent from the client. */
 	readonly alwaysRemote?: boolean;

@@ -41,6 +41,7 @@ import {
 	timeRunStep,
 } from "@flow-like/flow-like-ui/lib/run-timing";
 import type {
+	TeamsBotAccess,
 	TeamsBotConnection,
 	TeamsBotPackage,
 	TeamsBotSetup,
@@ -886,6 +887,16 @@ export class WebEventState implements IEventState {
 	): Promise<TeamsBotConnection> {
 		return apiDelete<TeamsBotConnection>(
 			`apps/${appId}/events/${eventId}/teams`,
+			this.backend.auth,
+		);
+	}
+
+	async getTeamsBotAccess(
+		appId: string,
+		eventId: string,
+	): Promise<TeamsBotAccess> {
+		return apiGet<TeamsBotAccess>(
+			`apps/${appId}/events/${eventId}/teams/access`,
 			this.backend.auth,
 		);
 	}

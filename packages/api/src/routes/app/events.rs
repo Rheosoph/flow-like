@@ -52,6 +52,26 @@ pub(crate) fn dotted_version_key(version: (u32, u32, u32)) -> String {
     format!("{}.{}.{}", version.0, version.1, version.2)
 }
 
+/// The app every event write and validation runs against. Event validation
+/// rejects server-only event types on offline apps, so visibility must come
+/// from the database rather than the stale manifest.
+pub(crate) async fn editable_event_app(
+    state: &AppState,
+    sub: &str,
+    app_id: &str,
+) -> flow_like_types::Result<flow_like::app::App> {
+    let mut app = state
+        .scoped_app(
+            sub,
+            app_id,
+            state,
+            crate::credentials::CredentialsAccess::EditApp,
+        )
+        .await?;
+    state.hydrate_app_visibility(&mut app).await?;
+    Ok(app)
+}
+
 fn connected_app_direct_event_allowed(event_type: &str, active: bool) -> bool {
     active && event_type == "simple_chat"
 }
@@ -96,6 +116,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{event_id}/teams/rotate",
             post(crate::teams::management::rotate),
+        )
+        .route(
+            "/{event_id}/teams/access",
+            get(crate::teams::management::access),
         )
         .route(
             "/{event_id}/email-address",

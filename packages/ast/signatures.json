@@ -15597,8 +15597,7 @@
       "impure": true,
       "doc": "Stops the current tab from loading matching URLs, such as ads, trackers or heavy media. Patterns use * as a wildcard. Replaces the previous list; an empty list unblocks everything. Chrome and Edge only.",
       "namespace": "browser",
-      "alias": "blockUrls",
-      "receiver": "session"
+      "alias": "blockUrls"
     },
     {
       "node_type": "browser_clear_console_logs",
@@ -15868,8 +15867,7 @@
       "impure": true,
       "doc": "Clicks at viewport CSS coordinates instead of an element, for canvas apps and coordinates read off a screenshot by a vision model. Works in every WebDriver browser.",
       "namespace": "browser",
-      "alias": "clickAtPoint",
-      "receiver": "session"
+      "alias": "clickAtPoint"
     },
     {
       "node_type": "browser_close",
@@ -15999,8 +15997,7 @@
       "impure": true,
       "doc": "Counts the elements matching a selector (0 when none match).",
       "namespace": "browser",
-      "alias": "countElements",
-      "receiver": "session"
+      "alias": "countElements"
     },
     {
       "node_type": "browser_double_click",
@@ -16364,8 +16361,7 @@
       "impure": true,
       "doc": "Fills several form fields in order: text inputs are cleared and typed, selects pick an option by value or label, checkboxes and radios are set. Each field is scrolled into view and must become visible and enabled within the timeout. Stops at the first failing field.",
       "namespace": "browser",
-      "alias": "fillForm",
-      "receiver": "session"
+      "alias": "fillForm"
     },
     {
       "node_type": "browser_find_elements",
@@ -16490,8 +16486,7 @@
       "impure": true,
       "doc": "Searches the latest browser snapshot by role, accessible name and text and returns matching refs. Takes a fresh full snapshot when none exists, the page navigated, or Refresh is set. Requires Chrome or Edge.",
       "namespace": "browser",
-      "alias": "findElements",
-      "receiver": "session"
+      "alias": "findElements"
     },
     {
       "node_type": "browser_forward",
@@ -17150,8 +17145,7 @@
       "impure": true,
       "doc": "Reads whether an element is visible, enabled, checked, editable, focused and in the viewport, plus its box, tag and text. Fails when no element matches.",
       "namespace": "browser",
-      "alias": "getElementState",
-      "receiver": "session"
+      "alias": "getElementState"
     },
     {
       "node_type": "browser_get_html",
@@ -17434,8 +17428,7 @@
       "impure": true,
       "doc": "Reads the rendered text of the page, or of one scoped element, and a Markdown version of the same content for prompts and summaries. Hidden elements are excluded from the text; scripts, styles and embedded media are dropped from the Markdown.",
       "namespace": "browser",
-      "alias": "getPageText",
-      "receiver": "session"
+      "alias": "getPageText"
     },
     {
       "node_type": "browser_get_session_storage",
@@ -17909,8 +17902,7 @@
       "impure": true,
       "doc": "Lists elements matching a selector with their text, chosen attributes, box and visibility. When a browser snapshot exists for the page, each main-frame element also gets a ref usable as a Ref selector.",
       "namespace": "browser",
-      "alias": "listElements",
-      "receiver": "session"
+      "alias": "listElements"
     },
     {
       "node_type": "browser_list_tabs",
@@ -18096,8 +18088,7 @@
       "impure": true,
       "doc": "Restores cookies and web storage from a Playwright-compatible storageState JSON file. Cookies for every domain are restored on Chrome and Edge (only the current domain elsewhere). Storage is applied only to the origin the page is on, without navigating; other origins are reported as skipped.",
       "namespace": "browser",
-      "alias": "loadStorageState",
-      "receiver": "session"
+      "alias": "loadStorageState"
     },
     {
       "node_type": "browser_new_page",
@@ -18453,8 +18444,7 @@
       "impure": true,
       "doc": "Prints the current page to a PDF file, the way the browser's print dialog would. Chrome and Edge print through DevTools (headless Chrome is the most reliable); other browsers use WebDriver printing.",
       "namespace": "browser",
-      "alias": "printPdf",
-      "receiver": "session"
+      "alias": "printPdf"
     },
     {
       "node_type": "browser_reload",
@@ -18665,8 +18655,7 @@
       "impure": true,
       "doc": "Saves all cookies (every domain, including HttpOnly, on Chrome and Edge) and the current origin's localStorage to a Playwright-compatible storageState JSON file. The file holds login sessions; store it like a password.",
       "namespace": "browser",
-      "alias": "saveStorageState",
-      "receiver": "session"
+      "alias": "saveStorageState"
     },
     {
       "node_type": "browser_screenshot",
@@ -18960,8 +18949,7 @@
       "impure": true,
       "doc": "Scrolls the page, or a scrollable container, by a distance or to its top or bottom, and reports where it ended up. Use At Bottom to stop infinite-scroll loops.",
       "namespace": "browser",
-      "alias": "scrollPage",
-      "receiver": "session"
+      "alias": "scrollPage"
     },
     {
       "node_type": "browser_select_option",
@@ -19323,8 +19311,7 @@
       "impure": true,
       "doc": "Makes the current tab behave like another device or place: locale, time zone, geolocation, screen size, color scheme, user agent and offline mode. Empty or zero inputs leave that setting unchanged; Offline is always applied. Overrides last until the tab closes. Chrome and Edge only.",
       "namespace": "browser",
-      "alias": "setEmulation",
-      "receiver": "session"
+      "alias": "setEmulation"
     },
     {
       "node_type": "browser_set_extra_headers",
@@ -19368,8 +19355,7 @@
       "impure": true,
       "doc": "Adds HTTP headers to every request the current tab makes, including requests to third-party origins, so avoid credentials on pages that load foreign content. Replaces headers set earlier; an empty object removes them. Chrome and Edge only.",
       "namespace": "browser",
-      "alias": "setExtraHeaders",
-      "receiver": "session"
+      "alias": "setExtraHeaders"
     },
     {
       "node_type": "browser_set_local_storage",
@@ -19510,8 +19496,7 @@
       "impure": true,
       "doc": "Restricts where Go To and Execute Browser Action Plan may navigate in this session: URL schemes, domain allow and block lists, and private network addresses. The final URL after redirects is checked too; a blocked landing page is left for about:blank and the node fails. Requests the page makes on its own are not filtered.",
       "namespace": "browser",
-      "alias": "setNavigationPolicy",
-      "receiver": "session"
+      "alias": "setNavigationPolicy"
     },
     {
       "node_type": "browser_set_session_storage",
@@ -19697,8 +19682,7 @@
       "impure": true,
       "doc": "Captures the page accessibility tree as compact text with element refs (e1, e2, …) that any selector pin accepts as a Ref selector. Refs stay valid until the page navigates or the element is removed; a stale ref fails with a request to take a new snapshot. Covers the current tab including same-process iframes; out-of-process (cross-site) iframes are omitted. Requires Chrome or Edge.",
       "namespace": "browser",
-      "alias": "snapshot",
-      "receiver": "session"
+      "alias": "snapshot"
     },
     {
       "node_type": "browser_start_console_observer",
@@ -20030,8 +20014,7 @@
       "impure": true,
       "doc": "Types a password or other secret into a field without logging it. The field must become visible and enabled within the timeout.",
       "namespace": "browser",
-      "alias": "typeSecret",
-      "receiver": "session"
+      "alias": "typeSecret"
     },
     {
       "node_type": "browser_type_text",
@@ -20447,8 +20430,7 @@
       "impure": true,
       "doc": "Polls the current page until a condition holds, then continues on Met, or on Timeout when the deadline passes. Conditions: text_visible / text_gone (rendered page text contains Value), url_matches (glob with * and ?, or re:<regex>), title_contains, load_state (domcontentloaded, load, or networkidle — networkidle needs a running Network Observer), js_truthy (Value is a JavaScript function body whose return value is tested, e.g. return window.appReady === true), element_visible / element_hidden (CSS selector in Value, or a connected Locator).",
       "namespace": "browser",
-      "alias": "waitForCondition",
-      "receiver": "session"
+      "alias": "waitForCondition"
     },
     {
       "node_type": "browser_wait_for_download",
@@ -20731,8 +20713,7 @@
       "impure": true,
       "doc": "Captures a region of the visible page at a higher device scale, so small text and icons stay legible for vision models. Coordinates are viewport CSS pixels, the same space as element bounding boxes and Click At Point. Chrome and Edge only.",
       "namespace": "browser",
-      "alias": "zoomScreenshot",
-      "receiver": "session"
+      "alias": "zoomScreenshot"
     },
     {
       "node_type": "bytes_concat",
@@ -22449,8 +22430,7 @@
       "impure": true,
       "doc": "Observes a window or display for an agent: a screenshot, the same screenshot with numbered boxes on every actionable element, and a compact element list (accessibility tree plus optional OCR text) whose ids Click Screen Element accepts",
       "namespace": "computer",
-      "alias": "captureState",
-      "receiver": "session"
+      "alias": "captureState"
     },
     {
       "node_type": "computer_capture_window",
@@ -22610,8 +22590,7 @@
       "impure": true,
       "doc": "Clicks an element by its id from the latest Capture Screen State of this session, through the accessibility action when possible, otherwise with the mouse at its center",
       "namespace": "computer",
-      "alias": "clickElement",
-      "receiver": "session"
+      "alias": "clickElement"
     },
     {
       "node_type": "computer_click_text",
@@ -22808,8 +22787,7 @@
       "impure": true,
       "doc": "Finds text on screen with OCR and clicks the center of the matched words",
       "namespace": "computer",
-      "alias": "clickText",
-      "receiver": "session"
+      "alias": "clickText"
     },
     {
       "node_type": "computer_clipboard_get_image",
@@ -23149,8 +23127,7 @@
       "impure": true,
       "doc": "Reads the mouse pointer position in desktop input coordinates and the display it is on. Not available on Wayland, which does not expose the global pointer",
       "namespace": "computer",
-      "alias": "cursorPosition",
-      "receiver": "session"
+      "alias": "cursorPosition"
     },
     {
       "node_type": "computer_find_accessibility_element",
@@ -23448,8 +23425,7 @@
       "impure": true,
       "doc": "Finds text on a display, region or window with OCR and returns its position in desktop coordinates",
       "namespace": "computer",
-      "alias": "findText",
-      "receiver": "session"
+      "alias": "findText"
     },
     {
       "node_type": "computer_find_window_by_title",
@@ -23898,8 +23874,7 @@
       "impure": true,
       "doc": "Holds a key down for a duration and then releases it. The key is released even when the run fails or is cancelled",
       "namespace": "computer",
-      "alias": "holdKey",
-      "receiver": "session"
+      "alias": "holdKey"
     },
     {
       "node_type": "computer_key_chord",
@@ -23951,8 +23926,7 @@
       "impure": true,
       "doc": "Presses a keyboard shortcut written as text, such as ctrl+shift+s, cmd+space or alt+F4. Modifiers are released in reverse order even when a key fails",
       "namespace": "computer",
-      "alias": "keyChord",
-      "receiver": "session"
+      "alias": "keyChord"
     },
     {
       "node_type": "computer_key_press",
@@ -24552,8 +24526,7 @@
       "impure": true,
       "doc": "Presses and keeps a mouse button down, optionally after moving to X/Y. Release it with Mouse Up; it is released automatically if the session closes or the run is cancelled",
       "namespace": "computer",
-      "alias": "mouseDown",
-      "receiver": "session"
+      "alias": "mouseDown"
     },
     {
       "node_type": "computer_mouse_drag",
@@ -24772,8 +24745,7 @@
       "impure": true,
       "doc": "Triple-clicks at desktop coordinates, e.g. to select a whole line or paragraph of text",
       "namespace": "computer",
-      "alias": "mouseTripleClick",
-      "receiver": "session"
+      "alias": "mouseTripleClick"
     },
     {
       "node_type": "computer_mouse_up",
@@ -24834,8 +24806,7 @@
       "impure": true,
       "doc": "Releases a mouse button, optionally after moving to X/Y (for example to finish a drag started with Mouse Down)",
       "namespace": "computer",
-      "alias": "mouseUp",
-      "receiver": "session"
+      "alias": "mouseUp"
     },
     {
       "node_type": "computer_natural_mouse_move",
@@ -25078,8 +25049,7 @@
       "impure": true,
       "doc": "Recognizes text in an image or on the screen with the operating system's OCR engine (Apple Vision, Windows OCR, Tesseract on Linux). Lines carry pixel boxes and, when the screen frame is known, desktop coordinates for the mouse nodes",
       "namespace": "computer",
-      "alias": "ocr",
-      "receiver": "session"
+      "alias": "ocr"
     },
     {
       "node_type": "computer_screenshot",
@@ -25310,8 +25280,7 @@
       "impure": true,
       "doc": "Enters a password or other secret into the focused field without logging it. Type mode sends keystrokes; paste mode puts the secret on the clipboard (excluded from clipboard history where supported), presses the paste shortcut and restores the previous text or image clipboard afterwards",
       "namespace": "computer",
-      "alias": "typeSecret",
-      "receiver": "session"
+      "alias": "typeSecret"
     },
     {
       "node_type": "computer_use_agent",
@@ -25493,8 +25462,7 @@
       "impure": true,
       "doc": "Lets a vision model operate the desktop until a goal is reached: it looks at a screenshot (optionally with numbered accessibility marks), calls mouse and keyboard tools, waits for the screen to settle, checks the result and repeats. Works with any vision model that supports tool calling. Ends when the model reports done or asks the user, or when it is stuck or out of steps or time",
       "namespace": "computer",
-      "alias": "useAgent",
-      "receiver": "session"
+      "alias": "useAgent"
     },
     {
       "node_type": "computer_wait",
@@ -25771,8 +25739,7 @@
       "impure": true,
       "doc": "Verifies that an action had a visible effect: compares a display or desktop region against a baseline until at least Threshold of it has changed, or times out. Connect Baseline to a screenshot of the same area taken before the action to also catch instant changes; otherwise the baseline is captured when this node starts",
       "namespace": "computer",
-      "alias": "waitScreenChange",
-      "receiver": "session"
+      "alias": "waitScreenChange"
     },
     {
       "node_type": "computer_wait_screen_stable",
@@ -25934,8 +25901,7 @@
       "impure": true,
       "doc": "Captures a display or desktop region repeatedly until consecutive frames stop changing for Stable (ms), e.g. after a page load or animation. Frames are compared on a downsampled grayscale copy",
       "namespace": "computer",
-      "alias": "waitScreenStable",
-      "receiver": "session"
+      "alias": "waitScreenStable"
     },
     {
       "node_type": "computer_window_operation",
@@ -26122,8 +26088,7 @@
       "impure": true,
       "doc": "Captures a desktop rectangle at the display's full pixel density, optionally enlarged, to read small text or inspect details. Coordinates found in the image map back to the desktop through the frame",
       "namespace": "computer",
-      "alias": "zoom",
-      "receiver": "session"
+      "alias": "zoom"
     },
     {
       "node_type": "construct_array",
@@ -62072,14 +62037,14 @@
       "inputs": [],
       "outputs": [
         {
-          "name": "email",
+          "name": "message",
           "ty": {
             "base": "Struct",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Email content, envelope recipients, headers and attachment storage paths",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmail\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"delivery_id\":{\"type\":\"string\"},\"envelope_from\":{\"type\":\"string\"},\"recipient\":{\"type\":\"string\"},\"session\":{\"anyOf\":[{\"$ref\":\"#/$defs/MailSession\"},{\"type\":\"null\"}],\"default\":null},\"reference\":{\"anyOf\":[{\"$ref\":\"#/$defs/MailMessageRef\"},{\"type\":\"null\"}],\"default\":null},\"sender\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAddress\"},{\"type\":\"null\"}],\"default\":null},\"from\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"cc\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"reply_to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"subject\":{\"type\":[\"string\",\"null\"],\"default\":null},\"message_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"text\":{\"type\":[\"string\",\"null\"],\"default\":null},\"html\":{\"type\":[\"string\",\"null\"],\"default\":null},\"text_truncated\":{\"type\":\"boolean\",\"default\":false},\"html_truncated\":{\"type\":\"boolean\",\"default\":false},\"text_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"default\":null},\"html_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"default\":null},\"headers\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailHeader\"},\"default\":[]},\"attachments\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAttachment\"},\"default\":[]},\"raw_path\":{\"$ref\":\"#/$defs/FlowPath\"},\"received_at\":{\"type\":[\"string\",\"null\"],\"default\":null},\"expires_at\":{\"type\":[\"string\",\"null\"],\"default\":null},\"authentication\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAuthentication\"},{\"type\":\"null\"}],\"default\":null}},\"required\":[\"id\",\"delivery_id\",\"envelope_from\",\"recipient\",\"raw_path\"],\"$defs\":{\"MailSession\":{\"type\":\"object\",\"properties\":{\"app_id\":{\"type\":\"string\"},\"event_id\":{\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"app_id\",\"event_id\"]},\"MailMessageRef\":{\"type\":\"object\",\"properties\":{\"session\":{\"$ref\":\"#/$defs/MailSession\"},\"delivery_id\":{\"description\":\"Internal inbound delivery ID. The mail provider's ID stays on InboundEmail.\",\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"session\",\"delivery_id\"]},\"InboundEmailAddress\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]},\"InboundEmailHeader\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"value\":{\"type\":\"string\"}},\"required\":[\"name\",\"value\"]},\"InboundEmailAttachment\":{\"type\":\"object\",\"properties\":{\"filename\":{\"type\":[\"string\",\"null\"],\"default\":null},\"content_type\":{\"type\":\"string\"},\"size\":{\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"path\":{\"$ref\":\"#/$defs/FlowPath\"}},\"required\":[\"content_type\",\"size\",\"path\"]},\"InboundEmailAuthentication\":{\"type\":\"object\",\"properties\":{\"provider\":{\"type\":[\"string\",\"null\"],\"default\":null},\"spam\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"virus\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"spf\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dkim\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc_policy\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"InboundEmailVerdict\":{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\"}},\"required\":[\"status\"]}}}"
+          "doc": "Reference to this email for Reply Platform Email",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"MailMessageRef\",\"type\":\"object\",\"properties\":{\"session\":{\"$ref\":\"#/$defs/MailSession\"},\"delivery_id\":{\"description\":\"Internal inbound delivery ID. The mail provider's ID stays on InboundEmail.\",\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"session\",\"delivery_id\"],\"$defs\":{\"MailSession\":{\"type\":\"object\",\"properties\":{\"app_id\":{\"type\":\"string\"},\"event_id\":{\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"app_id\",\"event_id\"]}}}"
         },
         {
           "name": "session",
@@ -62088,18 +62053,28 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "App and Event reference for sending through this automation address",
+          "doc": "App and Event reference for sending new mail from this automation address",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"MailSession\",\"type\":\"object\",\"properties\":{\"app_id\":{\"type\":\"string\"},\"event_id\":{\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"app_id\",\"event_id\"]}"
         },
         {
-          "name": "message",
+          "name": "addresses",
           "ty": {
             "base": "Struct",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Original inbound message reference for replies",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"MailMessageRef\",\"type\":\"object\",\"properties\":{\"session\":{\"$ref\":\"#/$defs/MailSession\"},\"delivery_id\":{\"description\":\"Internal inbound delivery ID. The mail provider's ID stays on InboundEmail.\",\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"session\",\"delivery_id\"],\"$defs\":{\"MailSession\":{\"type\":\"object\",\"properties\":{\"app_id\":{\"type\":\"string\"},\"event_id\":{\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"app_id\",\"event_id\"]}}}"
+          "doc": "Sender, header recipients and SMTP envelope addresses",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddresses\",\"type\":\"object\",\"properties\":{\"sender\":{\"description\":\"Sender header, falling back to the first From address\",\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAddress\"},{\"type\":\"null\"}]},\"from\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"}},\"to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"}},\"cc\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"}},\"reply_to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"}},\"envelope_from\":{\"description\":\"SMTP envelope sender\",\"type\":\"string\"},\"recipient\":{\"description\":\"The automation address that received the email\",\"type\":\"string\"}},\"required\":[\"from\",\"to\",\"cc\",\"reply_to\",\"envelope_from\",\"recipient\"],\"$defs\":{\"InboundEmailAddress\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}}}"
+        },
+        {
+          "name": "content",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Subject and body previews, plus temporary files with the complete bodies",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailContent\",\"type\":\"object\",\"properties\":{\"subject\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"},\"html\":{\"type\":\"string\"},\"text_truncated\":{\"description\":\"Text is a preview. Read text_path for the complete plain text body\",\"type\":\"boolean\"},\"html_truncated\":{\"description\":\"HTML is a preview. Read html_path for the complete HTML body\",\"type\":\"boolean\"},\"text_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]},\"html_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"subject\",\"text\",\"html\",\"text_truncated\",\"html_truncated\"],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
         },
         {
           "name": "attachments",
@@ -62108,161 +62083,18 @@
             "container": "Array"
           },
           "optional": false,
-          "doc": "Stored attachment paths for file and path nodes",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
-        },
-        {
-          "name": "attachment_metadata",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "Attachment filenames, content types, byte sizes and storage paths",
+          "doc": "Attachment filenames, content types, byte sizes and temporary files. Copy files to app storage to keep them",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAttachment\",\"type\":\"object\",\"properties\":{\"filename\":{\"type\":[\"string\",\"null\"],\"default\":null},\"content_type\":{\"type\":\"string\"},\"size\":{\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"path\":{\"$ref\":\"#/$defs/FlowPath\"}},\"required\":[\"content_type\",\"size\",\"path\"],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
         },
         {
-          "name": "sender",
+          "name": "delivery",
           "ty": {
             "base": "Struct",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Sender header, falling back to the first From address",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Nullable_InboundEmailAddress\",\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAddress\"},{\"type\":\"null\"}],\"$defs\":{\"InboundEmailAddress\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}}}"
-        },
-        {
-          "name": "from",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "From header addresses",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddress\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
-        },
-        {
-          "name": "to",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "To header addresses",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddress\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
-        },
-        {
-          "name": "cc",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "Carbon copy header addresses",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddress\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
-        },
-        {
-          "name": "reply_to",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "Addresses for replies",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddress\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
-        },
-        {
-          "name": "subject",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Email subject, empty when absent"
-        },
-        {
-          "name": "text",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Plain text preview, empty when absent"
-        },
-        {
-          "name": "html",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "HTML preview, empty when absent"
-        },
-        {
-          "name": "envelope_from",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "SMTP envelope sender"
-        },
-        {
-          "name": "recipient",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "The receiving automation address"
-        },
-        {
-          "name": "raw",
-          "ty": {
-            "base": "Struct",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Complete MIME message stored as an EML file",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
-        },
-        {
-          "name": "text_path",
-          "ty": {
-            "base": "Struct",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Complete plain text body, when present",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Nullable_FlowPath\",\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
-        },
-        {
-          "name": "html_path",
-          "ty": {
-            "base": "Struct",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Complete HTML body, when present",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Nullable_FlowPath\",\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
-        },
-        {
-          "name": "text_truncated",
-          "ty": {
-            "base": "bool",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Read Text File for the complete plain text body"
-        },
-        {
-          "name": "html_truncated",
-          "ty": {
-            "base": "bool",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Read HTML File for the complete HTML body"
+          "doc": "Machine-generated flag, file expiry, raw EML file, headers and authentication verdicts",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailDelivery\",\"type\":\"object\",\"properties\":{\"automated\":{\"description\":\"Bounce, auto-reply, mailing list or other machine-generated mail. Platform replies to it are refused to prevent mail loops\",\"type\":\"boolean\"},\"expires_at\":{\"description\":\"When the raw, body and attachment files are deleted\",\"type\":[\"string\",\"null\"],\"format\":\"date-time\"},\"raw_path\":{\"description\":\"Complete MIME message as a temporary EML file\",\"$ref\":\"#/$defs/FlowPath\"},\"received_at\":{\"type\":[\"string\",\"null\"],\"format\":\"date-time\"},\"message_id\":{\"type\":[\"string\",\"null\"]},\"provider_delivery_id\":{\"description\":\"The mail provider's delivery ID\",\"type\":\"string\"},\"headers\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailHeader\"}},\"authentication\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAuthentication\"},{\"type\":\"null\"}]}},\"required\":[\"automated\",\"raw_path\",\"provider_delivery_id\",\"headers\"],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]},\"InboundEmailHeader\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"value\":{\"type\":\"string\"}},\"required\":[\"name\",\"value\"]},\"InboundEmailAuthentication\":{\"type\":\"object\",\"properties\":{\"provider\":{\"type\":[\"string\",\"null\"],\"default\":null},\"spam\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"virus\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"spf\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dkim\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc_policy\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"InboundEmailVerdict\":{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\"}},\"required\":[\"status\"]}}}"
         }
       ],
       "impure": true,
@@ -62352,6 +62184,282 @@
       "alias": "simple"
     },
     {
+      "node_type": "events_teams_context",
+      "display": "eventsTeamsContext",
+      "friendly": "Teams Context",
+      "category": "Events/Chat/Teams",
+      "inputs": [
+        {
+          "name": "session",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local Session from the Teams Chat Event",
+          "schema": "{\"type\":\"object\",\"additionalProperties\":true}"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "context",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Everything Teams and Microsoft shared about this message",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TeamsContext\",\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"permissions\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"default\":[]},\"conversation\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsConversation\"},{\"type\":\"null\"}],\"default\":null},\"user\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsUser\"},{\"type\":\"null\"}],\"default\":null},\"team\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsTeam\"},{\"type\":\"null\"}],\"default\":null},\"channel\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsChannel\"},{\"type\":\"null\"}],\"default\":null},\"meeting\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsMeeting\"},{\"type\":\"null\"}],\"default\":null},\"message\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsMessageInfo\"},{\"type\":\"null\"}],\"default\":null}},\"$defs\":{\"TeamsConversation\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"type\":{\"description\":\"`personal`, `groupChat` or `channel`\",\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"topic\":{\"type\":[\"string\",\"null\"],\"default\":null},\"web_url\":{\"type\":[\"string\",\"null\"],\"default\":null},\"tenant_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"thread_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"is_group\":{\"type\":[\"boolean\",\"null\"],\"default\":null}}},\"TeamsUser\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"given_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"surname\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null},\"user_principal_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"tenant_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"role\":{\"type\":[\"string\",\"null\"],\"default\":null},\"external\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"anonymous\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"meeting_role\":{\"type\":[\"string\",\"null\"],\"default\":null},\"locale\":{\"type\":[\"string\",\"null\"],\"default\":null},\"timezone\":{\"type\":[\"string\",\"null\"],\"default\":null},\"platform\":{\"type\":[\"string\",\"null\"],\"default\":null},\"country\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsTeam\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"graph_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"description\":{\"type\":[\"string\",\"null\"],\"default\":null},\"web_url\":{\"type\":[\"string\",\"null\"],\"default\":null},\"visibility\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsChannel\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"description\":{\"type\":[\"string\",\"null\"],\"default\":null},\"membership_type\":{\"type\":[\"string\",\"null\"],\"default\":null},\"web_url\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsMeeting\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"title\":{\"type\":[\"string\",\"null\"],\"default\":null},\"start\":{\"type\":[\"string\",\"null\"],\"default\":null},\"end\":{\"type\":[\"string\",\"null\"],\"default\":null},\"join_url\":{\"type\":[\"string\",\"null\"],\"default\":null},\"organizer\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsMessageInfo\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"timestamp\":{\"type\":[\"string\",\"null\"],\"default\":null},\"local_timestamp\":{\"type\":[\"string\",\"null\"],\"default\":null},\"text\":{\"type\":[\"string\",\"null\"],\"default\":null},\"html\":{\"type\":[\"string\",\"null\"],\"default\":null},\"reply_to_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"mentions_bot\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"mentions\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/TeamsMention\"},\"default\":[]},\"quoted\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsQuote\"},{\"type\":\"null\"}],\"default\":null},\"files\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/TeamsFile\"},\"default\":[]}}},\"TeamsMention\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsQuote\":{\"type\":\"object\",\"properties\":{\"message_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"sender_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"sender_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"preview\":{\"type\":[\"string\",\"null\"],\"default\":null},\"time\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsFile\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"type\":{\"type\":[\"string\",\"null\"],\"default\":null},\"size\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint64\",\"minimum\":0,\"default\":null},\"url\":{\"description\":\"Signed download URL, present when the server downloaded the file\",\"type\":[\"string\",\"null\"],\"default\":null},\"path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"default\":null},\"downloadable\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"link\":{\"description\":\"SharePoint or OneDrive link for files the bot cannot download\",\"type\":[\"string\",\"null\"],\"default\":null},\"error\":{\"description\":\"Why the file was skipped\",\"type\":[\"string\",\"null\"],\"default\":null}}},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
+        },
+        {
+          "name": "user",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "The person who sent the message",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TeamsUser\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"given_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"surname\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null},\"user_principal_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"tenant_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"role\":{\"type\":[\"string\",\"null\"],\"default\":null},\"external\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"anonymous\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"meeting_role\":{\"type\":[\"string\",\"null\"],\"default\":null},\"locale\":{\"type\":[\"string\",\"null\"],\"default\":null},\"timezone\":{\"type\":[\"string\",\"null\"],\"default\":null},\"platform\":{\"type\":[\"string\",\"null\"],\"default\":null},\"country\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
+        },
+        {
+          "name": "user_name",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Display name of the sender"
+        },
+        {
+          "name": "user_email",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Email address of the sender, empty when Teams does not share it"
+        },
+        {
+          "name": "conversation_type",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "personal, groupChat or channel"
+        },
+        {
+          "name": "team_name",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Team of a channel conversation, empty elsewhere"
+        },
+        {
+          "name": "channel_name",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Channel of a channel conversation, empty elsewhere"
+        },
+        {
+          "name": "locale",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Locale of the sender's Teams client, e.g. de-DE"
+        },
+        {
+          "name": "timezone",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "IANA timezone of the sender's Teams client, e.g. Europe/Berlin"
+        },
+        {
+          "name": "message_html",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Formatted HTML of the message, empty for plain text messages"
+        },
+        {
+          "name": "is_group",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "True in group chats and channels"
+        },
+        {
+          "name": "files",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Files and images from the message that the server downloaded",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        }
+      ],
+      "impure": false,
+      "doc": "Read the conversation, user, team, channel, meeting and message details of a Teams Chat Event",
+      "namespace": "teams",
+      "alias": "context"
+    },
+    {
+      "node_type": "events_teams_get_members",
+      "display": "eventsTeamsGetMembers",
+      "friendly": "Get Teams Members",
+      "category": "Events/Chat/Teams",
+      "inputs": [
+        {
+          "name": "session",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local or global session from the Teams Chat Event",
+          "schema": "{\"type\":\"object\",\"additionalProperties\":true}"
+        },
+        {
+          "name": "limit",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Maximum number of members in this page, 1 to 500"
+        },
+        {
+          "name": "continuation_token",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Next Continuation Token of the previous page, empty for the first page"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "members",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Members of the conversation",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TeamsMember\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"given_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"surname\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null},\"user_principal_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"tenant_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"user_role\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
+        },
+        {
+          "name": "next_continuation_token",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Pass it to the next call for more members, empty on the last page"
+        }
+      ],
+      "impure": true,
+      "doc": "List the members of the Teams conversation of a Chat Event session, one page at a time",
+      "namespace": "teams",
+      "alias": "getMembers"
+    },
+    {
+      "node_type": "events_teams_get_messages",
+      "display": "eventsTeamsGetMessages",
+      "friendly": "Get Teams Messages",
+      "category": "Events/Chat/Teams",
+      "inputs": [
+        {
+          "name": "session",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local or global session from the Teams Chat Event",
+          "schema": "{\"type\":\"object\",\"additionalProperties\":true}"
+        },
+        {
+          "name": "scope",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "thread reads the channel thread of the message, conversation reads the whole channel or chat"
+        },
+        {
+          "name": "limit",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Maximum number of messages, 1 to 50"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "messages",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Messages oldest first",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TeamsHistoryMessage\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"author_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"author_aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"author_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"is_bot\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"text\":{\"type\":[\"string\",\"null\"],\"default\":null},\"html\":{\"type\":[\"string\",\"null\"],\"default\":null},\"created_at\":{\"type\":[\"string\",\"null\"],\"default\":null},\"reply_to_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"attachments\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/TeamsFileLink\"},\"default\":[]}},\"$defs\":{\"TeamsFileLink\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"type\":{\"type\":[\"string\",\"null\"],\"default\":null},\"link\":{\"type\":[\"string\",\"null\"],\"default\":null}}}}}"
+        },
+        {
+          "name": "history",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Chat history with people's messages as \"Name: text\" and bot messages as assistant",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"History\",\"type\":\"object\",\"properties\":{\"model\":{\"type\":\"string\"},\"messages\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/HistoryMessage\"}},\"preset\":{\"type\":[\"string\",\"null\"]},\"stream\":{\"type\":[\"boolean\",\"null\"]},\"stream_options\":{\"anyOf\":[{\"$ref\":\"#/$defs/StreamOptions\"},{\"type\":\"null\"}]},\"max_completion_tokens\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"top_p\":{\"type\":[\"number\",\"null\"],\"format\":\"float\"},\"temperature\":{\"type\":[\"number\",\"null\"],\"format\":\"float\"},\"thinking\":{\"anyOf\":[{\"$ref\":\"#/$defs/HistoryThinking\"},{\"type\":\"null\"}]},\"seed\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"presence_penalty\":{\"type\":[\"number\",\"null\"],\"format\":\"float\"},\"frequency_penalty\":{\"type\":[\"number\",\"null\"],\"format\":\"float\"},\"user\":{\"type\":[\"string\",\"null\"]},\"stop\":{\"type\":[\"array\",\"null\"],\"items\":{\"type\":\"string\"}},\"response_format\":{\"anyOf\":[{\"$ref\":\"#/$defs/ResponseFormat\"},{\"type\":\"null\"}]},\"n\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"tools\":{\"type\":[\"array\",\"null\"],\"items\":{\"$ref\":\"#/$defs/Tool\"}},\"tool_choice\":{\"anyOf\":[{\"$ref\":\"#/$defs/ToolChoice\"},{\"type\":\"null\"}]},\"usage\":{\"anyOf\":[{\"$ref\":\"#/$defs/Usage\"},{\"type\":\"null\"}]}},\"required\":[\"model\",\"messages\"],\"$defs\":{\"HistoryMessage\":{\"type\":\"object\",\"properties\":{\"role\":{\"$ref\":\"#/$defs/Role\"},\"content\":{\"$ref\":\"#/$defs/MessageContent\"},\"name\":{\"type\":[\"string\",\"null\"]},\"tool_calls\":{\"type\":[\"array\",\"null\"],\"items\":{\"$ref\":\"#/$defs/ToolCall\"}},\"tool_call_id\":{\"type\":[\"string\",\"null\"]},\"annotations\":{\"type\":[\"array\",\"null\"],\"items\":{\"$ref\":\"#/$defs/Annotation\"}}},\"required\":[\"role\",\"content\"]},\"Role\":{\"type\":\"string\",\"enum\":[\"system\",\"user\",\"assistant\",\"function\",\"tool\"]},\"MessageContent\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Content\"}}]},\"Content\":{\"anyOf\":[{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"text\":{\"type\":\"string\"}},\"required\":[\"type\",\"text\"]},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"image_url\":{\"$ref\":\"#/$defs/ImageUrl\"}},\"required\":[\"type\",\"image_url\"]},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"audio_url\":{\"type\":\"string\"},\"media_type\":{\"type\":[\"string\",\"null\"]},\"additional_params\":true},\"required\":[\"type\",\"audio_url\"]},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"video_url\":{\"type\":\"string\"},\"media_type\":{\"type\":[\"string\",\"null\"]},\"additional_params\":true},\"required\":[\"type\",\"video_url\"]},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"document_url\":{\"type\":\"string\"},\"media_type\":{\"type\":[\"string\",\"null\"]},\"additional_params\":true},\"required\":[\"type\",\"document_url\"]}]},\"ContentType\":{\"type\":\"string\",\"enum\":[\"text\",\"image_url\",\"audio_url\",\"video_url\",\"document_url\"]},\"ImageUrl\":{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"detail\":{\"type\":[\"string\",\"null\"]},\"media_type\":{\"type\":[\"string\",\"null\"]},\"additional_params\":true},\"required\":[\"url\"]},\"ToolCall\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"type\":{\"type\":\"string\"},\"function\":{\"$ref\":\"#/$defs/ToolCallFunction\"}},\"required\":[\"id\",\"type\",\"function\"]},\"ToolCallFunction\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"arguments\":{\"type\":\"string\"}},\"required\":[\"name\",\"arguments\"]},\"Annotation\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\"},\"url_citation\":{\"anyOf\":[{\"$ref\":\"#/$defs/UrlCitation\"},{\"type\":\"null\"}]}},\"required\":[\"type\"]},\"UrlCitation\":{\"type\":\"object\",\"properties\":{\"end_index\":{\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"start_index\":{\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"title\":{\"type\":\"string\"},\"url\":{\"type\":\"string\"},\"content\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"end_index\",\"start_index\",\"title\",\"url\"]},\"StreamOptions\":{\"type\":\"object\",\"properties\":{\"include_usage\":{\"type\":\"boolean\"}},\"required\":[\"include_usage\"]},\"HistoryThinking\":{\"type\":\"string\",\"enum\":[\"off\",\"low\",\"mid\",\"high\"]},\"ResponseFormat\":{\"anyOf\":[{\"type\":\"string\"},true]},\"Tool\":{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ToolType\"},\"function\":{\"$ref\":\"#/$defs/HistoryFunction\"}},\"required\":[\"type\",\"function\"]},\"ToolType\":{\"type\":\"string\",\"enum\":[\"function\"]},\"HistoryFunction\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"description\":{\"type\":[\"string\",\"null\"]},\"parameters\":{\"$ref\":\"#/$defs/HistoryFunctionParameters\"}},\"required\":[\"name\",\"parameters\"]},\"HistoryFunctionParameters\":{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/HistoryJSONSchemaType\"},\"properties\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"$ref\":\"#/$defs/HistoryJSONSchemaDefine\"}},\"required\":{\"type\":[\"array\",\"null\"],\"items\":{\"type\":\"string\"}}},\"required\":[\"type\"]},\"HistoryJSONSchemaType\":{\"type\":\"string\",\"enum\":[\"object\",\"number\",\"string\",\"array\",\"null\",\"boolean\"]},\"HistoryJSONSchemaDefine\":{\"type\":\"object\",\"properties\":{\"type\":{\"anyOf\":[{\"$ref\":\"#/$defs/HistoryJSONSchemaType\"},{\"type\":\"null\"}]},\"description\":{\"type\":[\"string\",\"null\"]},\"default\":true,\"enum\":{\"type\":[\"array\",\"null\"],\"items\":{\"type\":\"string\"}},\"properties\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"$ref\":\"#/$defs/HistoryJSONSchemaDefine\"}},\"required\":{\"type\":[\"array\",\"null\"],\"items\":{\"type\":\"string\"}},\"items\":{\"anyOf\":[{\"$ref\":\"#/$defs/HistoryJSONSchemaDefine\"},{\"type\":\"null\"}]}}},\"ToolChoice\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"null\"},{\"type\":\"null\"},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ToolType\"},\"function\":{\"$ref\":\"#/$defs/HistoryFunction\"}},\"required\":[\"type\",\"function\"]}]},\"Usage\":{\"type\":\"object\",\"properties\":{\"include\":{\"type\":\"boolean\"}},\"required\":[\"include\"]}}}"
+        },
+        {
+          "name": "transcript",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "One \"Name: text\" line per message"
+        },
+        {
+          "name": "source",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "graph for Microsoft Graph, bot_history for the bot's own 1:1 history"
+        }
+      ],
+      "impure": true,
+      "doc": "Read recent messages of the Teams thread or conversation of a Chat Event session, with author names",
+      "namespace": "teams",
+      "alias": "getMessages"
+    },
+    {
       "node_type": "events_teams_send_card",
       "display": "eventsTeamsSendCard",
       "friendly": "Send Teams Card",
@@ -62399,7 +62507,7 @@
         }
       ],
       "impure": true,
-      "doc": "Reply to the Teams conversation from a Chat Event session",
+      "doc": "Send an Adaptive Card to the Teams conversation of a Chat Event session",
       "namespace": "teams",
       "alias": "sendCard"
     },
@@ -62441,7 +62549,7 @@
         }
       ],
       "impure": true,
-      "doc": "Reply to the Teams conversation from a Chat Event session",
+      "doc": "Send a text reply to the Teams conversation of a Chat Event session",
       "namespace": "teams",
       "alias": "sendMessage"
     },
@@ -62471,7 +62579,7 @@
           "doc": "Message text with Teams Markdown formatting"
         },
         {
-          "name": "message_id",
+          "name": "input_message_id",
           "ty": {
             "base": "string",
             "container": "Normal"
@@ -62492,7 +62600,7 @@
         }
       ],
       "impure": true,
-      "doc": "Reply to the Teams conversation from a Chat Event session",
+      "doc": "Replace the text of a message a Teams send node posted in this conversation",
       "namespace": "teams",
       "alias": "updateMessage"
     },

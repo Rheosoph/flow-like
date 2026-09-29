@@ -52,7 +52,7 @@ const FIXED_HOST_CLIENTS: &[(&str, &str)] = &[
     ),
     ("data/notion/src/", "api.notion.com"),
     (
-        "data/src/events/teams.rs",
+        "data/src/events/teams/mod.rs",
         "the executor's own API (Teams relay)",
     ),
     (

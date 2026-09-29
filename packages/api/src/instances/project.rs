@@ -531,9 +531,10 @@ pub(crate) async fn app(
 ) -> Result<serde_json::Value, ApiError> {
     let context = devices::context(state);
     let a = authenticate(&context, headers, "GET", "/instances/project/app").await?;
-    let app = state
+    let mut app = state
         .master_app(&a.claims.sub, &a.claims.project_id, state)
         .await?;
+    state.hydrate_app_visibility(&mut app).await?;
     // Keep an explicit wire allowlist. Future runtime or credential fields on
     // App must not become public merely because its serializer changes.
     let value = serde_json::json!({"id":app.id,"status":app.status,"visibility":app.visibility,

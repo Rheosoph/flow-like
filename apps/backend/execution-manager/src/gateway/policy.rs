@@ -237,7 +237,14 @@ impl Policy {
                     && path
                         .strip_prefix(&format!("/api/v1/execution/apps/{}/", self.data.app_id))
                         .is_some_and(|route| {
-                            matches!(route, "teams/send" | "mail/send" | "mail/reply")
+                            matches!(
+                                route,
+                                "teams/send"
+                                    | "teams/messages"
+                                    | "teams/members"
+                                    | "mail/send"
+                                    | "mail/reply"
+                            )
                         }))
                 || (method == Method::DELETE && path == base)
                 || (method == Method::POST
@@ -470,6 +477,54 @@ mod tests {
             ),
             (
                 Method::POST,
+                "/api/v1/execution/apps/app-1/teams/messages",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/teams/members",
+                true,
+                true,
+            ),
+            (
+                Method::GET,
+                "/api/v1/execution/apps/app-1/teams/messages",
+                true,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-2/teams/members",
+                true,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/teams/messages",
+                false,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/teams/members/extra",
+                true,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/teams/access",
+                true,
+                false,
+            ),
+            (
+                Method::GET,
+                "/api/v1/apps/app-1/events/event-1/teams/access",
+                true,
+                false,
+            ),
+            (
+                Method::POST,
                 "/api/v1/execution/apps/app-1/mail/send",
                 true,
                 true,
@@ -549,6 +604,8 @@ mod tests {
         }
         for target in [
             "http://callback:8080/api/v1/execution/apps/app-1/teams/send",
+            "http://callback:8080/api/v1/execution/apps/app-1/teams/messages",
+            "http://callback:8080/api/v1/execution/apps/app-1/teams/members",
             "http://callback:8080/api/v1/execution/apps/app-1/mail/send",
             "http://callback:8080/api/v1/execution/apps/app-1/mail/reply",
         ] {

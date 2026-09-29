@@ -21,16 +21,14 @@ TARGETS = {
     "x86_64-apple-darwin": None,
     "aarch64-apple-darwin": None,
 }
-MAX_BROWSER_BINARY_BYTES = 256 * 1024 * 1024
+MAX_RELEASE_BINARY_BYTES = 2 * 1024**3
 
 
 def usable_package_modes(records, container):
-    platforms = container.get("platforms", []) if isinstance(container, dict) else []
+    # Browser packages embed small binaries and download larger signed binaries on first start.
     for record in records:
-        if record["size"] > MAX_BROWSER_BINARY_BYTES:
-            architecture = TARGETS.get(record["target"])
-            if not architecture or f"linux/{architecture}" not in platforms:
-                raise ValueError(f"{record['target']} binary exceeds the 256 MiB browser limit and has no signed Docker alternative; reduce its release size before publishing")
+        if type(record.get("size")) is not int or not 0 < record["size"] <= MAX_RELEASE_BINARY_BYTES:
+            raise ValueError(f"{record['target']} binary exceeds the release size limit of 2 GiB")
 
 
 def binary_info(binary, target):
@@ -51,6 +49,7 @@ def binary_info(binary, target):
 def describe(binary, target, output):
     if target not in TARGETS or binary.is_symlink() or not binary.is_file():
         raise ValueError("Expected a regular standalone binary for a supported target")
+    usable_package_modes([{"target": target, "size": binary.stat().st_size}], None)
     info = binary_info(binary, target)
     output.mkdir(parents=True, exist_ok=True)
     name = f"flow-like-standalone-{target}"
@@ -83,7 +82,7 @@ def manifest(artifacts, base_url, sequence, image, output, issued_at=None):
             version, schema = info["version"], info["state_schema_version"]
         if info["version"] != version or info["state_schema_version"] != schema:
             raise ValueError("Release binaries disagree on version or database schema")
-        if binary.is_symlink() or not binary.is_file() or not 0 < binary.stat().st_size <= 2 * 1024**3:
+        if binary.is_symlink() or not binary.is_file() or not 0 < binary.stat().st_size <= MAX_RELEASE_BINARY_BYTES:
             raise ValueError("Release binary exceeds its size or filesystem bounds")
         with binary.open("rb") as stream:
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
@@ -230,6 +229,16 @@ class S3Store:
             raise ValueError("S3 refused the conditional release upload")
 
 
+def docker_failure(stderr):
+    # Pulls run with an empty config and no credential helpers, so Docker errors hold no secrets.
+    detail = re.sub(r"[^\x20-\x7e]", "?", " ".join((stderr or b"").decode("utf-8", "replace").split()))[:400]
+    if not detail:
+        return "Docker reported no error message"
+    if re.search(r"unauthorized|denied|forbidden", detail, re.IGNORECASE):
+        return f"{detail}; make the digest-pinned GHCR package public before publishing"
+    return detail
+
+
 def anonymous_container_readback(container):
     if (not isinstance(container, dict) or not pinned_image(container.get("image", ""))
             or not isinstance(container.get("platforms"), list) or not container["platforms"]
@@ -244,16 +253,20 @@ def anonymous_container_readback(container):
         # An empty PATH also prevents Docker from discovering native credential
         # helpers. Only this fresh config and the local CI daemon are permitted.
         environment = {"PATH": folder, "DOCKER_CONFIG": folder}
+        def image(*arguments):
+            return subprocess.run([docker, "--config", folder, "--host", "unix:///var/run/docker.sock", "image", *arguments],
+                                  env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.PIPE, timeout=1800)
         for platform in container["platforms"]:
             try:
-                result = subprocess.run([docker, "--config", folder, "--host", "unix:///var/run/docker.sock",
-                                         "image", "pull", "--quiet", "--platform", platform, container["image"]],
-                                        env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                        stderr=subprocess.DEVNULL, timeout=1800)
+                # The classic image store binds a digest reference to one platform's image and
+                # refuses to repoint it ("cannot overwrite digest"), so every pull starts without it.
+                image("rm", container["image"])
+                result = image("pull", "--quiet", "--platform", platform, container["image"])
             except (OSError, subprocess.TimeoutExpired):
                 raise ValueError(f"Anonymous image verification failed for {platform}; check the Docker daemon and public registry access") from None
             if result.returncode:
-                raise ValueError(f"Release image is not anonymously pullable for {platform}; make the digest-pinned GHCR package public before publishing")
+                raise ValueError(f"Release image is not anonymously pullable for {platform}: {docker_failure(result.stderr)}")
 
 
 def publish_bundle(artifacts, base_url, prefix, public_keys, store, verify_public=public_readback,
@@ -283,7 +296,7 @@ def publish_bundle(artifacts, base_url, prefix, public_keys, store, verify_publi
         name = f"flow-like-standalone-{record['target']}"
         path = artifacts / name
         if (path.is_symlink() or not path.is_file() or type(record.get("size")) is not int
-                or not 0 < record["size"] <= 2 * 1024**3 or path.stat().st_size != record["size"]
+                or not 0 < record["size"] <= MAX_RELEASE_BINARY_BYTES or path.stat().st_size != record["size"]
                 or record.get("url") != f"{base_url}/releases/{sequence}/{name}"):
             raise ValueError("Signed artifact path, size or immutable URL mismatch")
         with path.open("rb") as stream:

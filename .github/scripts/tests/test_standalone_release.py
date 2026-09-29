@@ -119,34 +119,52 @@ class StandalonePublisherTests(unittest.TestCase):
     def test_anonymous_pulls_use_each_exact_platform_without_credentials_or_helpers(self):
         container = {"image": "ghcr.io/example/agent@sha256:" + "a" * 64,
                      "platforms": ["linux/amd64", "linux/arm64"]}
-        platforms = []
-        def pull(command, **options):
+        operations = []
+        def docker(command, **options):
             self.assertEqual(command[-1], container["image"])
-            platforms.append(command[-2])
             config = Path(command[2])
             self.assertEqual(json.loads((config / "config.json").read_text()), {"auths": {}})
             self.assertEqual(options["env"], {"PATH": str(config), "DOCKER_CONFIG": str(config)})
-            self.assertEqual(command[3:5], ["--host", "unix:///var/run/docker.sock"])
-            self.assertEqual(options["stderr"], subprocess.DEVNULL)
-            return subprocess.CompletedProcess(command, 0)
-        with patch.object(release.shutil, "which", return_value="/usr/bin/docker"), patch.object(release.subprocess, "run", side_effect=pull):
+            self.assertEqual(command[3:6], ["--host", "unix:///var/run/docker.sock", "image"])
+            if command[6] == "rm":
+                operations.append("rm")
+                return subprocess.CompletedProcess(command, 1, stderr=b"No such image")
+            operations.append(command[-2])
+            return subprocess.CompletedProcess(command, 0, stderr=b"")
+        with patch.object(release.shutil, "which", return_value="/usr/bin/docker"), patch.object(release.subprocess, "run", side_effect=docker):
             release.anonymous_container_readback(container)
-        self.assertEqual(platforms, container["platforms"])
-        with patch.object(release.shutil, "which", return_value="/usr/bin/docker"), patch.object(release.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)):
-            with self.assertRaisesRegex(ValueError, "anonymously pullable"):
+        self.assertEqual(operations, ["rm", "linux/amd64", "rm", "linux/arm64"])
+
+    def test_anonymous_pull_failures_report_the_docker_error(self):
+        container = {"image": "ghcr.io/example/agent@sha256:" + "a" * 64, "platforms": ["linux/amd64"]}
+        def failing(stderr):
+            return patch.object(release.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, stderr=stderr))
+        with patch.object(release.shutil, "which", return_value="/usr/bin/docker"):
+            with failing(b"Error response from daemon: denied\n"), self.assertRaisesRegex(ValueError, "linux/amd64: Error response from daemon: denied; make the digest-pinned GHCR package public"):
+                release.anonymous_container_readback(container)
+            with failing(b"Error response from daemon: cannot overwrite digest sha256:abc\n"), self.assertRaisesRegex(ValueError, r"cannot overwrite digest sha256:abc$"):
+                release.anonymous_container_readback(container)
+            with failing(None), self.assertRaisesRegex(ValueError, "anonymously pullable for linux/amd64: Docker reported no error message"):
                 release.anonymous_container_readback(container)
 
-    def test_oversized_binary_requires_a_usable_signed_docker_platform(self):
-        records = [{"target": "x86_64-unknown-linux-gnu", "size": release.MAX_BROWSER_BINARY_BYTES + 1}]
-        release.usable_package_modes(records, {"platforms": ["linux/amd64"]})
-        for container in [None, {"platforms": ["linux/arm64"]}]:
-            with self.assertRaisesRegex(ValueError, "256 MiB"):
-                release.usable_package_modes(records, container)
-        records[0]["target"] = "aarch64-apple-darwin"
-        with self.assertRaisesRegex(ValueError, "no signed Docker alternative"):
-            release.usable_package_modes(records, {"platforms": ["linux/arm64"]})
-        records[0]["size"] = release.MAX_BROWSER_BINARY_BYTES
-        release.usable_package_modes(records, None)
+    def test_large_binaries_have_a_native_bootstrap_package_for_every_target(self):
+        for target in release.TARGETS:
+            for size in [256 * 1024 * 1024, 657979008, release.MAX_RELEASE_BINARY_BYTES]:
+                release.usable_package_modes([{"target": target, "size": size}], None)
+        for size in [0, True, release.MAX_RELEASE_BINARY_BYTES + 1]:
+            with self.assertRaisesRegex(ValueError, "2 GiB"):
+                release.usable_package_modes([{"target": "aarch64-apple-darwin", "size": size}], None)
+
+    def test_describe_rejects_oversized_binary_before_execution_or_copy(self):
+        with tempfile.TemporaryDirectory() as folder:
+            binary = Path(folder) / "binary"
+            with binary.open("wb") as stream:
+                stream.truncate(release.MAX_RELEASE_BINARY_BYTES + 1)
+            with patch.object(release, "binary_info") as info, patch.object(release.shutil, "copyfile") as copy:
+                with self.assertRaisesRegex(ValueError, "2 GiB"):
+                    release.describe(binary, "aarch64-apple-darwin", Path(folder) / "output")
+                info.assert_not_called()
+                copy.assert_not_called()
 
     def test_signed_immutable_artifacts_read_back_before_manifest_and_idempotent_retry(self):
         signed = self.signed(10)

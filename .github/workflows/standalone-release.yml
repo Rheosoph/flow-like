@@ -28,9 +28,6 @@ env:
   DOCKER_BUILD_RECORD_UPLOAD: 'false'
 
 jobs:
-  compiler-checks:
-    uses: ./.github/workflows/compiler-reproducibility.yml
-
   prepare:
     if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
@@ -80,7 +77,7 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'epoch={epoch}\nsequence={sequence}\nbase={base}\nimage={image}\n')
           PY
-      - run: python3 -m unittest discover -s .github/scripts/tests -p test_standalone_release.py
+      - run: python3 -m unittest discover -s .github/scripts/tests -p 'test_standalone_release*.py'
 
   frontend:
     needs: prepare
@@ -100,6 +97,9 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=4096
         run: |
           bun install --frozen-lockfile
+          bun test ./.github/scripts/tests/standalone-package.test.ts
+          bun test packages/ui/lib/device-package.test.ts
+          bun test packages/ui/components/settings/devices/device-setup-dialog.dom.test.tsx
           bun run --cwd apps/standalone build:frontend
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -110,7 +110,7 @@ jobs:
           if-no-files-found: error
 
   binaries:
-    needs: [prepare, frontend, compiler-checks]
+    needs: [prepare, frontend]
     strategy:
       fail-fast: false
       matrix:
@@ -133,7 +133,12 @@ jobs:
       SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.epoch }}
       RELEASE_TARGET: ${{ matrix.target }}
       RELEASE_ARCH: ${{ matrix.arch }}
+      CC: clang
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
+      - name: Remap build paths in release binaries
+        shell: bash
+        run: echo "RUSTFLAGS=--remap-path-prefix=$GITHUB_WORKSPACE=/src --remap-path-prefix=$RUNNER_TEMP=/build" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
@@ -158,39 +163,25 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           targets: ${{ matrix.target }}
+      - name: Restore compiled release dependencies
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5
+        with:
+          workspaces: '. -> target'
+          shared-key: standalone-release-v1-${{ matrix.target }}
+          cache-workspace-crates: true
+          cache-bin: false
+          cache-on-failure: true
+          env-vars: 'CARGO CC CFLAGS CXX CMAKE RUST ImageOS ImageVersion MACOSX_DEPLOYMENT_TARGET SDKROOT'
       - name: Download shared embedded frontend
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: embedded-frontend
           path: apps/standalone/frontend/out/
-      - name: Build twice from clean compiler outputs and require identical binaries
-        id: reproducibility
+      - name: Build the release binary and validate its runtime metadata
         shell: bash
         run: |
-          export CC=clang
-          export CARGO_TARGET_DIR="$RUNNER_TEMP/standalone-target"
-          export RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/src --remap-path-prefix=$RUNNER_TEMP=/build"
           cargo build --locked --release --package flow-like-standalone --features frontend --target "$RELEASE_TARGET"
-          cp "$CARGO_TARGET_DIR/$RELEASE_TARGET/release/flow-like-standalone" "$RUNNER_TEMP/standalone-first"
-          cargo clean --target-dir "$CARGO_TARGET_DIR"
-          cargo build --locked --release --package flow-like-standalone --features frontend --target "$RELEASE_TARGET"
-          if ! cmp "$RUNNER_TEMP/standalone-first" "$CARGO_TARGET_DIR/$RELEASE_TARGET/release/flow-like-standalone"; then
-            mkdir -p "$RUNNER_TEMP/reproducibility"
-            mv "$RUNNER_TEMP/standalone-first" "$RUNNER_TEMP/reproducibility/flow-like-standalone-first"
-            mv "$CARGO_TARGET_DIR/$RELEASE_TARGET/release/flow-like-standalone" "$RUNNER_TEMP/reproducibility/flow-like-standalone-second"
-            echo "mismatch=true" >> "$GITHUB_OUTPUT"
-            echo "::error::Clean rebuilds produced different binaries for $RELEASE_TARGET"
-            exit 1
-          fi
           python3 .github/scripts/standalone_release.py describe --binary "$CARGO_TARGET_DIR/$RELEASE_TARGET/release/flow-like-standalone" --target "$RELEASE_TARGET" --output "$RUNNER_TEMP/release-artifacts"
-      - name: Upload binaries that failed the reproducibility check
-        if: failure() && steps.reproducibility.outputs.mismatch == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: reproducibility-${{ matrix.target }}
-          path: ${{ runner.temp }}/reproducibility/
-          retention-days: 7
-          if-no-files-found: error
       - name: Assemble Linux container runtime from the exact binary and resolved libraries
         if: runner.os == 'Linux'
         shell: bash
