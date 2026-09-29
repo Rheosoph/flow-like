@@ -2179,7 +2179,7 @@ declare namespace events {
      * @returns session — App and Event reference for sending new mail from this automation address
      * @returns addresses — Sender, header recipients and SMTP envelope addresses
      * @returns content — Subject and body previews, plus temporary files with the complete bodies
-     * @returns attachments — Attachment filenames, content types, byte sizes and temporary files. Copy files to app storage to keep them
+     * @returns attachments — Attachment filenames, content types, byte sizes and temporary files. Embedded is true for parts the HTML body shows through cid:<content_id>, such as signature logos, which are rarely real attachments. Copy files to app storage to keep them
      * @returns delivery — Machine-generated flag, file expiry, raw EML file, headers and authentication verdicts
      * @impure has side effects / drives control flow
      */

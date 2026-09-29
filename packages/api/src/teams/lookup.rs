@@ -292,7 +292,7 @@ async fn channel_messages(
     Ok(thread(history_message(&root), graph_list(&replies)?, limit))
 }
 
-async fn team_group(
+pub(super) async fn team_group(
     state: &AppState,
     session: &Session,
     c: &Connection,

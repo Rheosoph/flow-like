@@ -125,8 +125,12 @@ const DOCUMENT_EXTENSIONS: [&str; 14] = [
 /// Where a Teams attachment's bytes can come from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Source {
-    /// Teams-hosted content; the only place the bot token is sent.
+    /// A Teams-hosted view Teams declared; with `TeamsDerived`, the only places the bot token
+    /// is sent.
     Teams(Url),
+    /// The Bot Connector view of an image only the message's HTML names. It gets the bot token
+    /// too, but Microsoft may refuse bot tokens for the object itself.
+    TeamsDerived(Url),
     /// A pre-authorized SharePoint download URL, fetched without credentials.
     SharePoint(Url),
     Unavailable {
@@ -143,6 +147,9 @@ pub(super) struct Candidate {
     pub source: Source,
     /// Where the user can open the file in SharePoint or OneDrive; the bot never fetches it.
     pub link: Option<String>,
+    /// The host of the URL the bot declined to fetch. Logs may name it, never the URL, whose
+    /// query can carry credentials.
+    rejected_host: Option<String>,
 }
 
 /// One entry of `local_session.teams.message.files`.
@@ -232,7 +239,7 @@ pub(super) fn with_placeholders(text: &str, files: &[FileEntry]) -> String {
 }
 
 /// The files of a message that Teams exposes to the bot: its attachments in order, then the
-/// media that only the message's HTML carries.
+/// media that only the message's HTML carries. `collect` limits how many are downloaded.
 pub(super) fn classify(activity: &Value) -> Vec<Candidate> {
     let attachments = activity["attachments"]
         .as_array()
@@ -262,12 +269,16 @@ pub(super) fn classify(activity: &Value) -> Vec<Candidate> {
         let number = candidates.len() + 1;
         let candidate = match kind {
             Inline::Image if id.is_none() && !image_urls.is_empty() => continue,
-            Inline::Image => Candidate {
-                name: None,
-                mime: "image/*".into(),
-                source: inline_image(service_url, id),
-                link: None,
-            },
+            Inline::Image => {
+                let source = inline_image(service_url, id);
+                Candidate {
+                    name: None,
+                    mime: "image/*".into(),
+                    rejected_host: rejected_host(&source, id.and(service_url)),
+                    source,
+                    link: None,
+                }
+            }
             Inline::Video => not_downloadable(format!("video-{number}"), "video/*"),
             Inline::Sticker => not_downloadable(format!("sticker-{number}"), "image/*"),
         };
@@ -291,17 +302,20 @@ fn candidate(attachment: &Value) -> Option<Candidate> {
     }
     let name = attachment["name"].as_str().and_then(file_label);
     let content_url = attachment["contentUrl"].as_str();
-    let (mime, source) = if kind == DOWNLOAD_INFO {
-        personal_file(&attachment["content"], name.as_deref())
+    let (mime, source, fetched) = if kind == DOWNLOAD_INFO {
+        let content = &attachment["content"];
+        let (mime, source) = personal_file(content, name.as_deref());
+        (mime, source, content["downloadUrl"].as_str())
     } else if kind.starts_with("image/") {
-        let source = image(content_url?);
-        (kind, source)
+        (kind, image(content_url?), content_url)
     } else {
-        shared_file(&kind, content_url, name.as_deref())?
+        let (mime, source) = shared_file(&kind, content_url, name.as_deref())?;
+        (mime, source, None)
     };
     Some(Candidate {
         name,
         mime,
+        rejected_host: rejected_host(&source, fetched),
         source,
         link: browsable_link(content_url),
     })
@@ -314,10 +328,12 @@ fn unavailable(link: Option<String>, error: &str) -> Source {
     }
 }
 
-/// Logs only the host, because Microsoft download URLs carry credentials in their query.
-fn rejected(error: &str, raw_url: &str) -> Source {
-    tracing::warn!(host = ?url_host(raw_url), reason = error, "Teams sent a file on a host the bot does not download from");
-    unavailable(None, error)
+/// The host of `fetched` when the bot declined to download from it.
+fn rejected_host(source: &Source, fetched: Option<&str>) -> Option<String> {
+    match source {
+        Source::Unavailable { .. } => fetched.and_then(url_host),
+        _ => None,
+    }
 }
 
 fn url_host(raw: &str) -> Option<String> {
@@ -342,15 +358,16 @@ fn personal_file(content: &Value, name: Option<&str>) -> (String, Source) {
         .filter(|raw| !raw.is_empty());
     let source = match download_url {
         None => unavailable(None, NO_DOWNLOAD_LINK),
-        Some(raw) => {
-            sharepoint_url(raw).map_or_else(|| rejected(FOREIGN_DOWNLOAD, raw), Source::SharePoint)
-        }
+        Some(raw) => sharepoint_url(raw).map_or_else(
+            || unavailable(None, FOREIGN_DOWNLOAD),
+            Source::SharePoint,
+        ),
     };
     (mime, source)
 }
 
 fn image(content_url: &str) -> Source {
-    media_url(content_url).map_or_else(|| rejected(FOREIGN_IMAGE, content_url), Source::Teams)
+    media_url(content_url).map_or_else(|| unavailable(None, FOREIGN_IMAGE), Source::Teams)
 }
 
 fn ams_host(host: &str) -> bool {
@@ -431,15 +448,13 @@ enum Inline {
 }
 
 /// The AMS images, videos and stickers in a message's HTML, each with the AMS object id its
-/// markup names. Scans a bounded prefix and stops after `MAX_FILES` items.
+/// markup names. Scans a bounded prefix.
 fn inline_media(html: &str) -> Vec<(Inline, Option<&str>)> {
     let html = &html[..html.floor_char_boundary(MAX_HTML_BYTES)];
     let lower = html.to_ascii_lowercase();
     let mut found = Vec::new();
     let mut at = 0;
-    while found.len() < MAX_FILES
-        && let Some(open) = lower[at..].find('<')
-    {
+    while let Some(open) = lower[at..].find('<') {
         let start = at + open + 1;
         let end = lower[start..]
             .find('>')
@@ -500,9 +515,10 @@ fn inline_image(service_url: Option<&str>, id: Option<&str>) -> Source {
     let Some(id) = id else {
         return unavailable(None, FOREIGN_IMAGE);
     };
-    let service_url = service_url.unwrap_or_default();
-    attachment_view(service_url, id)
-        .map_or_else(|| rejected(FOREIGN_IMAGE, service_url), Source::Teams)
+    attachment_view(service_url.unwrap_or_default(), id).map_or_else(
+        || unavailable(None, FOREIGN_IMAGE),
+        Source::TeamsDerived,
+    )
 }
 
 fn attachment_view(service_url: &str, id: &str) -> Option<Url> {
@@ -524,6 +540,7 @@ fn not_downloadable(name: String, mime: &str) -> Candidate {
         mime: mime.into(),
         source: unavailable(None, INLINE_MEDIA),
         link: None,
+        rejected_host: None,
     }
 }
 
@@ -821,6 +838,15 @@ fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
         .join(": ")
 }
 
+/// The bot token a Teams-hosted download sends.
+#[derive(Clone, Copy)]
+struct Bearer<'a> {
+    token: &'a str,
+    /// Only views Teams declared are known to take the bot token, so only their refusals mean
+    /// the cached token went stale.
+    declared: bool,
+}
+
 struct Fetcher<'a> {
     connection: &'a Connection,
     client: reqwest::Client,
@@ -835,12 +861,12 @@ struct Fetcher<'a> {
 
 impl Fetcher<'_> {
     /// Logs hosts and statuses only: download URLs carry tempauth credentials in their query.
-    async fn download(&self, url: Url, token: Option<&str>) -> Result<Download, String> {
+    async fn download(&self, url: Url, bearer: Option<Bearer<'_>>) -> Result<Download, String> {
         let connection_id = self.connection.id.as_str();
         let host = url.host_str().unwrap_or_default().to_owned();
         let mut request = self.client.get(url.clone());
-        if let Some(token) = token {
-            request = request.bearer_auth(token);
+        if let Some(bearer) = bearer {
+            request = request.bearer_auth(bearer.token);
         }
         let transport = |error: reqwest::Error| {
             let error = error.without_url();
@@ -871,7 +897,8 @@ impl Fetcher<'_> {
         }
         if !status.is_success() {
             tracing::warn!(connection_id, %host, status = status.as_u16(), "Microsoft answered a Teams file download with an error");
-            if token.is_some() && matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+            if bearer.is_some_and(|bearer| bearer.declared)
+                && matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
             {
                 tracing::warn!(connection_id, %host, "Forgetting the cached bot token because Microsoft rejected it");
                 auth::forget_bot_token(self.connection);
@@ -913,17 +940,20 @@ impl Fetcher<'_> {
         let Candidate {
             name, mime, source, ..
         } = candidate;
-        let (url, token) = match source {
-            Source::Teams(url) => {
-                let token = self.token.as_deref().ok_or_else(|| {
-                    "The bot could not sign in to Teams to download this file".to_owned()
-                })?;
-                (url, Some(token))
-            }
+        let (url, bearer) = match source {
+            Source::Teams(url) => (url, Some(self.bearer(true)?)),
+            Source::TeamsDerived(url) => (url, Some(self.bearer(false)?)),
             Source::SharePoint(url) => (url, None),
             Source::Unavailable { error, .. } => return Err(error),
         };
-        within(self.deadline, self.keep(index, name, &mime, url, token)).await
+        within(self.deadline, self.keep(index, name, &mime, url, bearer)).await
+    }
+
+    fn bearer(&self, declared: bool) -> Result<Bearer<'_>, String> {
+        let token = self.token.as_deref().ok_or_else(|| {
+            "The bot could not sign in to Teams to download this file".to_owned()
+        })?;
+        Ok(Bearer { token, declared })
     }
 
     /// A stored file whose download link cannot be signed keeps its `path`, so flows can
@@ -934,9 +964,9 @@ impl Fetcher<'_> {
         name: Option<String>,
         declared: &str,
         url: Url,
-        token: Option<&str>,
+        bearer: Option<Bearer<'_>>,
     ) -> Result<FileEntry, String> {
-        let download = tokio::time::timeout(FILE_TIMEOUT, self.download(url, token))
+        let download = tokio::time::timeout(FILE_TIMEOUT, self.download(url, bearer))
             .await
             .map_err(|_| TIMED_OUT.to_owned())??;
         let mime = resolve_mime(
@@ -1059,17 +1089,21 @@ impl<'a> Fetcher<'a> {
     }
 }
 
-/// Splits off the files to download, marking any beyond the first ten.
-fn jobs(candidates: Vec<Candidate>, entries: &mut [FileEntry]) -> Vec<(usize, Candidate)> {
+/// Splits off the files to download, marking and logging any beyond the first ten.
+fn jobs(
+    connection_id: &str,
+    candidates: Vec<Candidate>,
+    entries: &mut [FileEntry],
+) -> Vec<(usize, Candidate)> {
     let mut jobs = Vec::new();
     for (index, candidate) in candidates.into_iter().enumerate() {
         if matches!(candidate.source, Source::Unavailable { .. }) {
             continue;
         }
         if jobs.len() == MAX_FILES {
-            entries[index].error = Some(format!(
-                "Only the first {MAX_FILES} files of a message are downloaded"
-            ));
+            let error = format!("Only the first {MAX_FILES} files of a message are downloaded");
+            not_downloaded(connection_id, index, &origin(&candidate.source), &error);
+            entries[index].error = Some(error);
             continue;
         }
         jobs.push((index, candidate));
@@ -1085,10 +1119,11 @@ fn report_unavailable(connection_id: &str, candidates: &[Candidate]) {
             let Source::Unavailable { link, error } = &candidate.source else {
                 return None;
             };
-            let host = link
-                .as_deref()
-                .or(candidate.link.as_deref())
-                .and_then(url_host);
+            let host = candidate.rejected_host.clone().or_else(|| {
+                link.as_deref()
+                    .or(candidate.link.as_deref())
+                    .and_then(url_host)
+            });
             Some(format!(
                 "{error} ({})",
                 host.as_deref().unwrap_or("no host")
@@ -1104,6 +1139,7 @@ fn report_unavailable(connection_id: &str, candidates: &[Candidate]) {
 fn origin(source: &Source) -> (&'static str, String) {
     let (kind, url) = match source {
         Source::Teams(url) => ("teams", Some(url)),
+        Source::TeamsDerived(url) => ("teams_derived", Some(url)),
         Source::SharePoint(url) => ("sharepoint", Some(url)),
         Source::Unavailable { .. } => ("unavailable", None),
     };
@@ -1134,7 +1170,7 @@ pub(super) async fn collect(
         .enumerate()
         .map(|(index, candidate)| FileEntry::pending(index, candidate))
         .collect();
-    let jobs = jobs(candidates, &mut entries);
+    let jobs = jobs(&c.id, candidates, &mut entries);
     if jobs.is_empty() {
         return entries;
     }
@@ -1142,9 +1178,12 @@ pub(super) async fn collect(
         .iter()
         .map(|(_, candidate)| origin(&candidate.source))
         .collect();
-    let needs_token = jobs
-        .iter()
-        .any(|(_, candidate)| matches!(candidate.source, Source::Teams(_)));
+    let needs_token = jobs.iter().any(|(_, candidate)| {
+        matches!(
+            candidate.source,
+            Source::Teams(_) | Source::TeamsDerived(_)
+        )
+    });
     let prepared = tokio::time::timeout_at(
         deadline,
         Fetcher::prepare(state, c, sink, run, deadline, needs_token),
@@ -1232,6 +1271,7 @@ mod tests {
                         "https://smba.trafficmanager.net/emea/v3/attachments/a/views/original"
                     ),
                     link: None,
+                    rejected_host: None,
                 },
                 Candidate {
                     name: Some("x.png".into()),
@@ -1241,6 +1281,7 @@ mod tests {
                         error: FOREIGN_IMAGE.into()
                     },
                     link: None,
+                    rejected_host: Some("attacker.invalid".into()),
                 },
                 Candidate {
                     name: Some("Report.PDF".into()),
@@ -1249,6 +1290,7 @@ mod tests {
                         Url::parse("https://contoso.sharepoint.com/personal/x/_layouts/15/download.aspx?UniqueId=1&tempauth=t").unwrap()
                     ),
                     link: None,
+                    rejected_host: None,
                 },
                 Candidate {
                     name: Some("notes.md".into()),
@@ -1258,6 +1300,7 @@ mod tests {
                         error: FOREIGN_DOWNLOAD.into()
                     },
                     link: None,
+                    rejected_host: Some("sharepoint.com.attacker.invalid".into()),
                 },
                 Candidate {
                     name: Some("Plan.docx".into()),
@@ -1273,6 +1316,7 @@ mod tests {
                         "https://contoso.sharepoint.com/sites/team/Shared%20Documents/Plan.docx"
                             .into()
                     ),
+                    rejected_host: None,
                 },
                 Candidate {
                     name: Some("sheet.xlsx".into()),
@@ -1283,6 +1327,7 @@ mod tests {
                         error: SHARED_FILE.into()
                     },
                     link: Some("https://contoso-my.sharepoint.com/x/sheet.xlsx".into()),
+                    rejected_host: None,
                 },
                 Candidate {
                     name: Some("odd".into()),
@@ -1292,6 +1337,7 @@ mod tests {
                         error: SHARED_FILE.into()
                     },
                     link: None,
+                    rejected_host: None,
                 },
             ]
         );
@@ -1312,31 +1358,39 @@ mod tests {
                     Url::parse("https://m365x9462XXXX-my.sharepoint.com/personal/admin_m365x9462XXXX_onmicrosoft_com/_layouts/15/download.aspx?UniqueId=2392290d-ff20-4520-9862-f5bf588688e0&Translate=false&tempauth=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9lNA&ApiVersion=2.0").unwrap()
                 ),
                 link: Some("https://m365x9462xxxx-my.sharepoint.com/personal/admin_m365x9462XXXX_onmicrosoft_com/Documents/Microsoft%20Teams%20Chat%20Files/outline.png".into()),
+                rejected_host: None,
             }]
         );
         let failed = FileEntry::pending(0, &personal[0]);
         assert_eq!(failed.link, personal[0].link);
         assert!(failed.downloadable);
 
-        for (raw, url, mime) in [
+        let html_only = "https://smba.trafficmanager.net/amer/v3/attachments/0-cus-d17-c53459922d66463fb94af32a61057191/views/original";
+        for (raw, source, mime) in [
             (
                 include_str!("testdata/attachments/web-paste.json"),
-                "https://smba.trafficmanager.net/amer/v3/attachments/0-cus-d17-c53459922d66463fb94af32a61057191/views/original",
+                teams(
+                    "https://smba.trafficmanager.net/amer/v3/attachments/0-cus-d17-c53459922d66463fb94af32a61057191/views/original",
+                ),
                 "image/*",
             ),
             (
                 include_str!("testdata/attachments/ios-photo.json"),
-                "https://smba.trafficmanager.net/amer/v3/attachments/0-eus-d20-fd7c8146fbc34613ddb246bed1988c0e/views/original",
+                teams(
+                    "https://smba.trafficmanager.net/amer/v3/attachments/0-eus-d20-fd7c8146fbc34613ddb246bed1988c0e/views/original",
+                ),
                 "image/*",
             ),
             (
                 include_str!("testdata/attachments/concrete-png.json"),
-                "https://smba.trafficmanager.net/emea/v3/attachments/0-weu-d3-1a2b3c4d5e6f/views/original",
+                teams(
+                    "https://smba.trafficmanager.net/emea/v3/attachments/0-weu-d3-1a2b3c4d5e6f/views/original",
+                ),
                 "image/png",
             ),
             (
                 include_str!("testdata/attachments/html-only-image.json"),
-                "https://smba.trafficmanager.net/amer/v3/attachments/0-cus-d17-c53459922d66463fb94af32a61057191/views/original",
+                Source::TeamsDerived(Url::parse(html_only).unwrap()),
                 "image/*",
             ),
         ] {
@@ -1345,10 +1399,11 @@ mod tests {
                 vec![Candidate {
                     name: None,
                     mime: mime.into(),
-                    source: teams(url),
+                    source: source.clone(),
                     link: None,
+                    rejected_host: None,
                 }],
-                "{url}"
+                "{source:?}"
             );
         }
 
@@ -1367,6 +1422,7 @@ mod tests {
                 mime: "video/*".into(),
                 source: unavailable(None, INLINE_MEDIA),
                 link: None,
+                rejected_host: None,
             }]
         );
         let cloud_pick = classify(&fixture(include_str!(
@@ -1379,6 +1435,7 @@ mod tests {
                 mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
                 source: unavailable(None, NO_DOWNLOAD_LINK),
                 link: None,
+                rejected_host: None,
             }]
         );
     }
@@ -2103,9 +2160,11 @@ mod tests {
         );
         assert!(logs.text().contains("Forgetting the cached bot token"));
 
-        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = closed.local_addr().unwrap().port();
-        drop(closed);
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
         let unreachable = fetcher
             .download(
                 Url::parse(&format!("http://127.0.0.1:{port}/x?tempauth=secret-marker")).unwrap(),

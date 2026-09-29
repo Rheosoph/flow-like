@@ -2,7 +2,7 @@ use super::{
     Connection, TeamsPermission, auth, cards, client,
     context::{self, Context, Enrichment},
     files::{self, FileEntry},
-    hash,
+    hash, lookup,
     microsoft::{self, MicrosoftError},
     now, store,
 };
@@ -597,16 +597,12 @@ async fn input_payload(
             })
     };
     let graph_copy = async {
-        let path =
-            graph_message_path(session, teams.graph_group()).filter(|_| reads_messages(c))?;
+        if !reads_messages(c) {
+            return None;
+        }
         let until = deadline.min(Instant::now() + GRAPH_COPY_TIMEOUT);
-        best_effort(
-            c,
-            until,
-            "graph_message",
-            graph_message(state, c, &path, until),
-        )
-        .await
+        let copy = graph_message(state, c, session, teams.graph_group(), until);
+        best_effort(c, until, "graph_message", copy).await.flatten()
     };
     let (enrichment, files, graph_copy) = tokio::join!(
         enrichment,
@@ -700,26 +696,41 @@ fn graph_message_path(session: &Session, graph_group: Option<&str>) -> Option<St
     }
 }
 
+/// The triggering message as Graph lists it. Channel activities rarely carry the team's
+/// Microsoft 365 group, so the connector's team details supply it.
 async fn graph_message(
     state: &AppState,
     c: &Connection,
-    path: &str,
+    session: &Session,
+    graph_group: Option<&str>,
     until: Instant,
-) -> Result<Value, MicrosoftError> {
-    match microsoft::graph_get(state, c, path).await {
+) -> Result<Option<Value>, MicrosoftError> {
+    let group = match graph_group {
+        None if session.conversation_type == "channel" => {
+            Some(lookup::team_group(state, session, c).await?)
+        }
+        group => group.map(str::to_owned),
+    };
+    let Some(path) = graph_message_path(session, group.as_deref()) else {
+        return Ok(None);
+    };
+    match microsoft::graph_get(state, c, &path).await {
         Err(MicrosoftError::NotFound)
             if until.saturating_duration_since(Instant::now()) >= GRAPH_COPY_RETRY_BUDGET =>
         {
             tokio::time::sleep(GRAPH_COPY_LAG).await;
-            microsoft::graph_get(state, c, path).await
+            microsoft::graph_get(state, c, &path).await
         }
         result => result,
     }
+    .map(Some)
 }
 
 /// Teams leaves files shared in group chats, channels and meetings off the activity, but the
-/// Graph copy lists them. They are named and linked, never downloaded.
+/// Graph copy lists them. They are named and linked, never downloaded. A file the activity
+/// delivered keeps its entry, even when Graph links it elsewhere.
 fn with_shared_files(mut files: Vec<FileEntry>, graph_copy: Option<&Value>) -> Vec<FileEntry> {
+    let delivered = files.len();
     let shared = graph_copy
         .map(files::classify)
         .unwrap_or_default()
@@ -727,7 +738,10 @@ fn with_shared_files(mut files: Vec<FileEntry>, graph_copy: Option<&Value>) -> V
         .filter(|candidate| matches!(candidate.source, files::Source::Unavailable { .. }));
     for candidate in shared {
         let entry = FileEntry::pending(files.len(), &candidate);
-        if files.iter().all(|file| file.name != entry.name) {
+        let (activity, graph) = files.split_at(delivered);
+        let known = activity.iter().any(|file| file.name == entry.name)
+            || (entry.link.is_some() && graph.iter().any(|file| file.link == entry.link));
+        if !known {
             files.push(entry);
         }
     }
@@ -921,6 +935,8 @@ fn url_host(raw: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// `None` when there is nothing to report: no attachments, or only the text/html copy of the
+/// text that Teams adds to plain messages too.
 fn attachment_shape(activity: &Value) -> Option<AttachmentShape> {
     let attachments = activity["attachments"]
         .as_array()
@@ -957,7 +973,12 @@ fn attachment_shape(activity: &Value) -> Option<AttachmentShape> {
             shape.attachment_markers |= html.contains("<attachment id=");
         }
     }
-    Some(shape)
+    let plain_text = shape
+        .content_types
+        .iter()
+        .all(|kind| kind.eq_ignore_ascii_case("text/html"))
+        && !(shape.ams_image || shape.ams_video || shape.attachment_markers);
+    (!plain_text).then_some(shape)
 }
 
 /// The only record of what Teams delivered when a message's files could not be used.
@@ -1107,7 +1128,36 @@ fn record_delete(conversation: &mut Conversation, id: &str) -> bool {
     true
 }
 
+/// The `[image: …]` / `[file: …]` lines that end an entry's content, as files.
+fn placeholder_files(content: &str, author: &str) -> Vec<FileEntry> {
+    let prefix = format!("{author}: ");
+    let mut files: Vec<FileEntry> = content
+        .lines()
+        .rev()
+        .map_while(|line| {
+            let line = line.strip_prefix(prefix.as_str()).unwrap_or(line);
+            let (kind, name) = line
+                .strip_prefix('[')?
+                .strip_suffix(']')?
+                .split_once(": ")?;
+            let mime = match kind {
+                "image" => "image/*",
+                "file" => "",
+                _ => return None,
+            };
+            Some(FileEntry {
+                name: name.into(),
+                mime: mime.into(),
+                ..FileEntry::default()
+            })
+        })
+        .collect();
+    files.reverse();
+    files
+}
+
 /// Rewrites the entry's content from the edited message, keeping its ID, author and time.
+/// Files the edit does not carry, such as those only Graph listed, stay in the entry.
 fn record_edit(conversation: &mut Conversation, id: &str, activity: &Value) -> bool {
     let passive = conversation.passive.contains(&passive_key(id));
     let Some(entry) = conversation
@@ -1117,10 +1167,6 @@ fn record_edit(conversation: &mut Conversation, id: &str, activity: &Value) -> b
     else {
         return false;
     };
-    let files = pending_files(activity);
-    if !has_content(activity, &files) {
-        return false;
-    }
     let author = match entry["author"].as_str() {
         Some(author) => author.to_owned(),
         None => context::display_name(
@@ -1128,6 +1174,15 @@ fn record_edit(conversation: &mut Conversation, id: &str, activity: &Value) -> b
             context::field(activity, "/from/aadObjectId").is_none(),
         ),
     };
+    let mut files = pending_files(activity);
+    for kept in placeholder_files(entry["content"].as_str().unwrap_or_default(), &author) {
+        if files.iter().all(|file| file.name != kept.name) {
+            files.push(kept);
+        }
+    }
+    if !has_content(activity, &files) {
+        return false;
+    }
     let conversation_type = context::scope(activity).conversation_type;
     let limit = if passive {
         MAX_PASSIVE_BYTES
@@ -2331,6 +2386,13 @@ mod tests {
         let mut groupless = root.clone();
         groupless["channelData"]["team"] = json!({"id":"19:team@thread.tacv2"});
         assert_eq!(path(&groupless), None);
+        assert_eq!(
+            graph_message_path(
+                &graph_session(&groupless),
+                Some("0b3e1c52-5d4f-4b7a-9a61-2f0e6c7d8e9f")
+            ),
+            path(&root)
+        );
         assert_eq!(path(&message("personal", "hi")), None);
     }
 
@@ -2386,6 +2448,37 @@ mod tests {
             with_shared_files(vec![image.clone()], Some(&json!({"attachments": []}))),
             vec![image]
         );
+
+        let report = |folder: &str| json!({"contentType":"reference","name":"Report.docx","contentUrl":format!("https://contoso.sharepoint.com/sites/team/Shared%20Documents/{folder}/Report.docx")});
+        let reports = json!({"attachments": [report("A"), report("B"), report("A")]});
+        let links = with_shared_files(Vec::new(), Some(&reports))
+            .into_iter()
+            .map(|file| (file.name, file.link.unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            links,
+            [
+                (
+                    "Report.docx".to_owned(),
+                    "https://contoso.sharepoint.com/sites/team/Shared%20Documents/A/Report.docx"
+                        .to_owned()
+                ),
+                (
+                    "Report.docx".to_owned(),
+                    "https://contoso.sharepoint.com/sites/team/Shared%20Documents/B/Report.docx"
+                        .to_owned()
+                ),
+            ]
+        );
+        let delivered = FileEntry {
+            name: "Report.docx".into(),
+            link: Some("https://contoso-my.sharepoint.com/personal/x/Report.docx".into()),
+            ..FileEntry::default()
+        };
+        assert_eq!(
+            with_shared_files(vec![delivered.clone()], Some(&reports)),
+            vec![delivered]
+        );
     }
 
     #[test]
@@ -2423,6 +2516,17 @@ mod tests {
         assert_eq!(attachment_shape(&message("groupChat", "hi")), None);
         activity["attachments"] = json!([]);
         assert_eq!(attachment_shape(&activity), None);
+
+        let mut mention = message("groupChat", "<at>Flow Bot</at> hi");
+        mention["attachments"] = json!([{"contentType":"text/html","content":"<p><span itemtype=\"http://schema.skype.com/Mention\" itemscope=\"\" itemid=\"0\">Flow Bot</span>&nbsp;hi</p>"}]);
+        assert_eq!(attachment_shape(&mention), None);
+        mention["attachments"][0]["content"] =
+            json!("<p>hi</p><attachment id=\"153fa47d\"></attachment>");
+        assert!(attachment_shape(&mention).unwrap().attachment_markers);
+        mention["attachments"][0]["content"] = json!(
+            "<video itemtype=\"http://schema.skype.com/AMSVideo\" src=\"https://eu-api.asm.skype.com/v1/objects/0-weu/views/video\"></video>"
+        );
+        assert!(attachment_shape(&mention).unwrap().ams_video);
     }
 
     #[test]
@@ -2756,6 +2860,32 @@ mod tests {
         ));
         assert_eq!(invoked.messages[0]["content"], long);
         assert_eq!(invoked.messages[0]["author"], "Felix");
+    }
+
+    #[test]
+    fn edits_keep_the_files_the_edited_message_does_not_carry() {
+        let mut conversation = history(&[
+            ("1", "Anna: check the budget\n[file: Budget.docx]"),
+            ("2", "Anna: [image: image-1.png]\n[file: Notes.txt]"),
+        ]);
+        let fixed = edit("groupChat", "1", "check the budgets");
+        assert!(record_edit(&mut conversation, "1", &fixed));
+        assert_eq!(
+            conversation.messages[0]["content"],
+            "Anna: check the budgets\n[file: Budget.docx]"
+        );
+        assert!(!record_edit(&mut conversation, "1", &fixed));
+
+        let mut attached = edit("groupChat", "2", "see these");
+        attached["attachments"] = json!([{"contentType":"reference","name":"Notes.txt","contentUrl":"https://contoso.sharepoint.com/sites/team/Shared%20Documents/Notes.txt"}]);
+        assert!(record_edit(&mut conversation, "2", &attached));
+        assert_eq!(
+            conversation.messages[1]["content"],
+            "Anna: see these\n[file: Notes.txt]\n[image: image-1.png]"
+        );
+
+        assert!(placeholder_files("Anna: [file: a.txt]\nsee above", "Anna").is_empty());
+        assert!(placeholder_files("Anna: [note: a.txt]", "Anna").is_empty());
     }
 
     #[test]
