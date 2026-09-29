@@ -869,7 +869,9 @@ mod tests {
             "rotated"
         );
         c.secret_expires_at = expires_in(now, -60_000);
-        let error = renewed_or_current(&c, failed(), now).unwrap_err();
+        let Err(error) = renewed_or_current(&c, failed(), now) else {
+            panic!("an expired secret cannot stand in for a failed renewal");
+        };
         assert_eq!(error.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
     }
 
