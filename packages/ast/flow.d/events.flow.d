@@ -242,31 +242,15 @@ declare namespace events {
     /**
      * Run a server workflow when an email arrives at its assigned address
      * @node events_inbound_email @alias eventsInboundEmail
-     * @returns email — Email content, envelope recipients, headers and temporary file paths that expire at Expires At
-     * @returns session — App and Event reference for sending through this automation address
-     * @returns message — Original inbound message reference for replies
-     * @returns attachments — Temporary attachment files for file and path nodes. Copy them to app storage to keep them
-     * @returns attachmentMetadata — Attachment filenames, content types, byte sizes and temporary file paths
-     * @returns sender — Sender header, falling back to the first From address
-     * @returns from — From header addresses
-     * @returns to — To header addresses
-     * @returns cc — Carbon copy header addresses
-     * @returns replyTo — Addresses for replies
-     * @returns subject — Email subject, empty when absent
-     * @returns text — Plain text preview, empty when absent
-     * @returns html — HTML preview, empty when absent
-     * @returns envelopeFrom — SMTP envelope sender
-     * @returns recipient — The receiving automation address
-     * @returns automated — True for bounces, auto-replies, mailing lists and other machine-generated mail. Platform replies to it are refused to prevent mail loops
-     * @returns raw — Complete MIME message as a temporary EML file. Copy it to app storage to keep it
-     * @returns textPath — Complete plain text body as a temporary file, when present
-     * @returns htmlPath — Complete HTML body as a temporary file, when present
-     * @returns expiresAt — When the email's stored files are deleted. Copy files to app storage before then to keep them
-     * @returns textTruncated — Read Text File for the complete plain text body
-     * @returns htmlTruncated — Read HTML File for the complete HTML body
+     * @returns message — Reference to this email for Reply Platform Email
+     * @returns session — App and Event reference for sending new mail from this automation address
+     * @returns addresses — Sender, header recipients and SMTP envelope addresses
+     * @returns content — Subject and body previews, plus temporary files with the complete bodies
+     * @returns attachments — Attachment filenames, content types, byte sizes and temporary files. Copy files to app storage to keep them
+     * @returns delivery — Machine-generated flag, file expiry, raw EML file, headers and authentication verdicts
      * @impure has side effects / drives control flow
      */
-    function inboundEmail(): { email: Struct, session: Struct, message: Struct, attachments: Struct[], attachmentMetadata: Struct[], sender: Struct, from: Struct[], to: Struct[], cc: Struct[], replyTo: Struct[], subject: string, text: string, html: string, envelopeFrom: string, recipient: string, automated: bool, raw: Struct, textPath: Struct, htmlPath: Struct, expiresAt: Date, textTruncated: bool, htmlTruncated: bool };
+    function inboundEmail(): { message: Struct, session: Struct, addresses: Struct, content: Struct, attachments: Struct[], delivery: Struct };
 
     /**
      * Starts when the device enters or leaves a configured circular region. Configure foreground or background monitoring in the Event settings.
@@ -405,6 +389,51 @@ declare namespace remote {
 
 declare namespace teams {
     // === Events/Chat/Teams ===
+
+    /**
+     * Read the conversation, user, team, channel, meeting and message details of a Teams Chat Event
+     * @node events_teams_context @alias eventsTeamsContext
+     * @param session — Local Session from the Teams Chat Event
+     * @returns context — Everything Teams and Microsoft shared about this message
+     * @returns user — The person who sent the message
+     * @returns userName — Display name of the sender
+     * @returns userEmail — Email address of the sender, empty when Teams does not share it
+     * @returns conversationType — personal, groupChat or channel
+     * @returns teamName — Team of a channel conversation, empty elsewhere
+     * @returns channelName — Channel of a channel conversation, empty elsewhere
+     * @returns locale — Locale of the sender's Teams client, e.g. de-DE
+     * @returns timezone — IANA timezone of the sender's Teams client, e.g. Europe/Berlin
+     * @returns messageHtml — Formatted HTML of the message, empty for plain text messages
+     * @returns isGroup — True in group chats and channels
+     * @returns files — Files and images from the message that the server downloaded
+     */
+    function context({ session: Struct }): { context: Struct, user: Struct, userName: string, userEmail: string, conversationType: string, teamName: string, channelName: string, locale: string, timezone: string, messageHtml: string, isGroup: bool, files: Struct[] };
+
+    /**
+     * List the members of the Teams conversation of a Chat Event session, one page at a time
+     * @node events_teams_get_members @alias eventsTeamsGetMembers
+     * @param session — Local or global session from the Teams Chat Event
+     * @param limit (optional) — Maximum number of members in this page, 1 to 500
+     * @param continuationToken (optional) — Next Continuation Token of the previous page, empty for the first page
+     * @returns members — Members of the conversation
+     * @returns nextContinuationToken — Pass it to the next call for more members, empty on the last page
+     * @impure has side effects / drives control flow
+     */
+    function getMembers({ session: Struct, limit?: int, continuationToken?: string }): { members: Struct[], nextContinuationToken: string };
+
+    /**
+     * Read recent messages of the Teams thread or conversation of a Chat Event session, with author names
+     * @node events_teams_get_messages @alias eventsTeamsGetMessages
+     * @param session — Local or global session from the Teams Chat Event
+     * @param scope (optional) — thread reads the channel thread of the message, conversation reads the whole channel or chat
+     * @param limit (optional) — Maximum number of messages, 1 to 50
+     * @returns messages — Messages oldest first
+     * @returns history — Chat history with people's messages as "Name: text" and bot messages as assistant
+     * @returns transcript — One "Name: text" line per message
+     * @returns source — graph for Microsoft Graph, bot_history for the bot's own 1:1 history
+     * @impure has side effects / drives control flow
+     */
+    function getMessages({ session: Struct, scope?: string, limit?: int }): { messages: Struct[], history: Struct, transcript: string, source: string };
 
     /**
      * Send an Adaptive Card to the Teams conversation of a Chat Event session

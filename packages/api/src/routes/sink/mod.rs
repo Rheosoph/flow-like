@@ -28,6 +28,10 @@ pub fn routes(mail_max_bytes: usize) -> Router<AppState> {
             post(crate::teams::runtime::incoming)
                 .layer(axum::extract::DefaultBodyLimit::max(256 * 1024)),
         )
+        .route(
+            "/trigger/teams/{connection_id}/consent",
+            get(crate::teams::management::consent),
+        )
         .nest("/mail", crate::mail_ingress::routes(mail_max_bytes))
         // List all active sinks for apps user has access to
         .route("/", get(management::list_sinks))

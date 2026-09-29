@@ -62037,14 +62037,14 @@
       "inputs": [],
       "outputs": [
         {
-          "name": "email",
+          "name": "message",
           "ty": {
             "base": "Struct",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Email content, envelope recipients, headers and temporary file paths that expire at Expires At",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmail\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"delivery_id\":{\"type\":\"string\"},\"envelope_from\":{\"type\":\"string\"},\"recipient\":{\"type\":\"string\"},\"session\":{\"anyOf\":[{\"$ref\":\"#/$defs/MailSession\"},{\"type\":\"null\"}],\"default\":null},\"reference\":{\"anyOf\":[{\"$ref\":\"#/$defs/MailMessageRef\"},{\"type\":\"null\"}],\"default\":null},\"sender\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAddress\"},{\"type\":\"null\"}],\"default\":null},\"from\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"cc\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"reply_to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"},\"default\":[]},\"subject\":{\"type\":[\"string\",\"null\"],\"default\":null},\"message_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"text\":{\"type\":[\"string\",\"null\"],\"default\":null},\"html\":{\"type\":[\"string\",\"null\"],\"default\":null},\"text_truncated\":{\"type\":\"boolean\",\"default\":false},\"html_truncated\":{\"type\":\"boolean\",\"default\":false},\"text_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"default\":null},\"html_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"default\":null},\"headers\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailHeader\"},\"default\":[]},\"attachments\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAttachment\"},\"default\":[]},\"raw_path\":{\"$ref\":\"#/$defs/FlowPath\"},\"received_at\":{\"type\":[\"string\",\"null\"],\"default\":null},\"expires_at\":{\"type\":[\"string\",\"null\"],\"default\":null},\"authentication\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAuthentication\"},{\"type\":\"null\"}],\"default\":null},\"automated\":{\"description\":\"Bounce, auto-reply, list or other machine-generated mail. Replies to it are refused.\",\"type\":\"boolean\",\"default\":false}},\"required\":[\"id\",\"delivery_id\",\"envelope_from\",\"recipient\",\"raw_path\"],\"$defs\":{\"MailSession\":{\"type\":\"object\",\"properties\":{\"app_id\":{\"type\":\"string\"},\"event_id\":{\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"app_id\",\"event_id\"]},\"MailMessageRef\":{\"type\":\"object\",\"properties\":{\"session\":{\"$ref\":\"#/$defs/MailSession\"},\"delivery_id\":{\"description\":\"Internal inbound delivery ID. The mail provider's ID stays on InboundEmail.\",\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"session\",\"delivery_id\"]},\"InboundEmailAddress\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]},\"InboundEmailHeader\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"value\":{\"type\":\"string\"}},\"required\":[\"name\",\"value\"]},\"InboundEmailAttachment\":{\"type\":\"object\",\"properties\":{\"filename\":{\"type\":[\"string\",\"null\"],\"default\":null},\"content_type\":{\"type\":\"string\"},\"size\":{\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"path\":{\"$ref\":\"#/$defs/FlowPath\"}},\"required\":[\"content_type\",\"size\",\"path\"]},\"InboundEmailAuthentication\":{\"type\":\"object\",\"properties\":{\"provider\":{\"type\":[\"string\",\"null\"],\"default\":null},\"spam\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"virus\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"spf\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dkim\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc_policy\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"InboundEmailVerdict\":{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\"}},\"required\":[\"status\"]}}}"
+          "doc": "Reference to this email for Reply Platform Email",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"MailMessageRef\",\"type\":\"object\",\"properties\":{\"session\":{\"$ref\":\"#/$defs/MailSession\"},\"delivery_id\":{\"description\":\"Internal inbound delivery ID. The mail provider's ID stays on InboundEmail.\",\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"session\",\"delivery_id\"],\"$defs\":{\"MailSession\":{\"type\":\"object\",\"properties\":{\"app_id\":{\"type\":\"string\"},\"event_id\":{\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"app_id\",\"event_id\"]}}}"
         },
         {
           "name": "session",
@@ -62053,18 +62053,28 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "App and Event reference for sending through this automation address",
+          "doc": "App and Event reference for sending new mail from this automation address",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"MailSession\",\"type\":\"object\",\"properties\":{\"app_id\":{\"type\":\"string\"},\"event_id\":{\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"app_id\",\"event_id\"]}"
         },
         {
-          "name": "message",
+          "name": "addresses",
           "ty": {
             "base": "Struct",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Original inbound message reference for replies",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"MailMessageRef\",\"type\":\"object\",\"properties\":{\"session\":{\"$ref\":\"#/$defs/MailSession\"},\"delivery_id\":{\"description\":\"Internal inbound delivery ID. The mail provider's ID stays on InboundEmail.\",\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"session\",\"delivery_id\"],\"$defs\":{\"MailSession\":{\"type\":\"object\",\"properties\":{\"app_id\":{\"type\":\"string\"},\"event_id\":{\"type\":\"string\"}},\"additionalProperties\":false,\"required\":[\"app_id\",\"event_id\"]}}}"
+          "doc": "Sender, header recipients and SMTP envelope addresses",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddresses\",\"type\":\"object\",\"properties\":{\"sender\":{\"description\":\"Sender header, falling back to the first From address\",\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAddress\"},{\"type\":\"null\"}]},\"from\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"}},\"to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"}},\"cc\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"}},\"reply_to\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailAddress\"}},\"envelope_from\":{\"description\":\"SMTP envelope sender\",\"type\":\"string\"},\"recipient\":{\"description\":\"The automation address that received the email\",\"type\":\"string\"}},\"required\":[\"from\",\"to\",\"cc\",\"reply_to\",\"envelope_from\",\"recipient\"],\"$defs\":{\"InboundEmailAddress\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}}}"
+        },
+        {
+          "name": "content",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Subject and body previews, plus temporary files with the complete bodies",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailContent\",\"type\":\"object\",\"properties\":{\"subject\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"},\"html\":{\"type\":\"string\"},\"text_truncated\":{\"description\":\"Text is a preview. Read text_path for the complete plain text body\",\"type\":\"boolean\"},\"html_truncated\":{\"description\":\"HTML is a preview. Read html_path for the complete HTML body\",\"type\":\"boolean\"},\"text_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]},\"html_path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"subject\",\"text\",\"html\",\"text_truncated\",\"html_truncated\"],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
         },
         {
           "name": "attachments",
@@ -62073,179 +62083,18 @@
             "container": "Array"
           },
           "optional": false,
-          "doc": "Temporary attachment files for file and path nodes. Copy them to app storage to keep them",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
-        },
-        {
-          "name": "attachment_metadata",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "Attachment filenames, content types, byte sizes and temporary file paths",
+          "doc": "Attachment filenames, content types, byte sizes and temporary files. Copy files to app storage to keep them",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAttachment\",\"type\":\"object\",\"properties\":{\"filename\":{\"type\":[\"string\",\"null\"],\"default\":null},\"content_type\":{\"type\":\"string\"},\"size\":{\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"path\":{\"$ref\":\"#/$defs/FlowPath\"}},\"required\":[\"content_type\",\"size\",\"path\"],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
         },
         {
-          "name": "sender",
+          "name": "delivery",
           "ty": {
             "base": "Struct",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Sender header, falling back to the first From address",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Nullable_InboundEmailAddress\",\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAddress\"},{\"type\":\"null\"}],\"$defs\":{\"InboundEmailAddress\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}}}"
-        },
-        {
-          "name": "from",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "From header addresses",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddress\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
-        },
-        {
-          "name": "to",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "To header addresses",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddress\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
-        },
-        {
-          "name": "cc",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "Carbon copy header addresses",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddress\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
-        },
-        {
-          "name": "reply_to",
-          "ty": {
-            "base": "Struct",
-            "container": "Array"
-          },
-          "optional": false,
-          "doc": "Addresses for replies",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailAddress\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
-        },
-        {
-          "name": "subject",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Email subject, empty when absent"
-        },
-        {
-          "name": "text",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Plain text preview, empty when absent"
-        },
-        {
-          "name": "html",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "HTML preview, empty when absent"
-        },
-        {
-          "name": "envelope_from",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "SMTP envelope sender"
-        },
-        {
-          "name": "recipient",
-          "ty": {
-            "base": "string",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "The receiving automation address"
-        },
-        {
-          "name": "automated",
-          "ty": {
-            "base": "bool",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "True for bounces, auto-replies, mailing lists and other machine-generated mail. Platform replies to it are refused to prevent mail loops"
-        },
-        {
-          "name": "raw",
-          "ty": {
-            "base": "Struct",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Complete MIME message as a temporary EML file. Copy it to app storage to keep it",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
-        },
-        {
-          "name": "text_path",
-          "ty": {
-            "base": "Struct",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Complete plain text body as a temporary file, when present",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Nullable_FlowPath\",\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
-        },
-        {
-          "name": "html_path",
-          "ty": {
-            "base": "Struct",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Complete HTML body as a temporary file, when present",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Nullable_FlowPath\",\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
-        },
-        {
-          "name": "expires_at",
-          "ty": {
-            "base": "Date",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "When the email's stored files are deleted. Copy files to app storage before then to keep them"
-        },
-        {
-          "name": "text_truncated",
-          "ty": {
-            "base": "bool",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Read Text File for the complete plain text body"
-        },
-        {
-          "name": "html_truncated",
-          "ty": {
-            "base": "bool",
-            "container": "Normal"
-          },
-          "optional": false,
-          "doc": "Read HTML File for the complete HTML body"
+          "doc": "Machine-generated flag, file expiry, raw EML file, headers and authentication verdicts",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"InboundEmailDelivery\",\"type\":\"object\",\"properties\":{\"automated\":{\"description\":\"Bounce, auto-reply, mailing list or other machine-generated mail. Platform replies to it are refused to prevent mail loops\",\"type\":\"boolean\"},\"expires_at\":{\"description\":\"When the raw, body and attachment files are deleted\",\"type\":[\"string\",\"null\"],\"format\":\"date-time\"},\"raw_path\":{\"description\":\"Complete MIME message as a temporary EML file\",\"$ref\":\"#/$defs/FlowPath\"},\"received_at\":{\"type\":[\"string\",\"null\"],\"format\":\"date-time\"},\"message_id\":{\"type\":[\"string\",\"null\"]},\"provider_delivery_id\":{\"description\":\"The mail provider's delivery ID\",\"type\":\"string\"},\"headers\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/InboundEmailHeader\"}},\"authentication\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailAuthentication\"},{\"type\":\"null\"}]}},\"required\":[\"automated\",\"raw_path\",\"provider_delivery_id\",\"headers\"],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]},\"InboundEmailHeader\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"value\":{\"type\":\"string\"}},\"required\":[\"name\",\"value\"]},\"InboundEmailAuthentication\":{\"type\":\"object\",\"properties\":{\"provider\":{\"type\":[\"string\",\"null\"],\"default\":null},\"spam\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"virus\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"spf\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dkim\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc\":{\"anyOf\":[{\"$ref\":\"#/$defs/InboundEmailVerdict\"},{\"type\":\"null\"}],\"default\":null},\"dmarc_policy\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"InboundEmailVerdict\":{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\"}},\"required\":[\"status\"]}}}"
         }
       ],
       "impure": true,
@@ -62333,6 +62182,282 @@
       "doc": "A simple event without input or output",
       "namespace": "events",
       "alias": "simple"
+    },
+    {
+      "node_type": "events_teams_context",
+      "display": "eventsTeamsContext",
+      "friendly": "Teams Context",
+      "category": "Events/Chat/Teams",
+      "inputs": [
+        {
+          "name": "session",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local Session from the Teams Chat Event",
+          "schema": "{\"type\":\"object\",\"additionalProperties\":true}"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "context",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Everything Teams and Microsoft shared about this message",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TeamsContext\",\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"permissions\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"default\":[]},\"conversation\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsConversation\"},{\"type\":\"null\"}],\"default\":null},\"user\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsUser\"},{\"type\":\"null\"}],\"default\":null},\"team\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsTeam\"},{\"type\":\"null\"}],\"default\":null},\"channel\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsChannel\"},{\"type\":\"null\"}],\"default\":null},\"meeting\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsMeeting\"},{\"type\":\"null\"}],\"default\":null},\"message\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsMessageInfo\"},{\"type\":\"null\"}],\"default\":null}},\"$defs\":{\"TeamsConversation\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"type\":{\"description\":\"`personal`, `groupChat` or `channel`\",\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"topic\":{\"type\":[\"string\",\"null\"],\"default\":null},\"web_url\":{\"type\":[\"string\",\"null\"],\"default\":null},\"tenant_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"thread_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"is_group\":{\"type\":[\"boolean\",\"null\"],\"default\":null}}},\"TeamsUser\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"given_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"surname\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null},\"user_principal_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"tenant_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"role\":{\"type\":[\"string\",\"null\"],\"default\":null},\"external\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"anonymous\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"meeting_role\":{\"type\":[\"string\",\"null\"],\"default\":null},\"locale\":{\"type\":[\"string\",\"null\"],\"default\":null},\"timezone\":{\"type\":[\"string\",\"null\"],\"default\":null},\"platform\":{\"type\":[\"string\",\"null\"],\"default\":null},\"country\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsTeam\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"graph_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"description\":{\"type\":[\"string\",\"null\"],\"default\":null},\"web_url\":{\"type\":[\"string\",\"null\"],\"default\":null},\"visibility\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsChannel\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"description\":{\"type\":[\"string\",\"null\"],\"default\":null},\"membership_type\":{\"type\":[\"string\",\"null\"],\"default\":null},\"web_url\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsMeeting\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"title\":{\"type\":[\"string\",\"null\"],\"default\":null},\"start\":{\"type\":[\"string\",\"null\"],\"default\":null},\"end\":{\"type\":[\"string\",\"null\"],\"default\":null},\"join_url\":{\"type\":[\"string\",\"null\"],\"default\":null},\"organizer\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsMessageInfo\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"timestamp\":{\"type\":[\"string\",\"null\"],\"default\":null},\"local_timestamp\":{\"type\":[\"string\",\"null\"],\"default\":null},\"text\":{\"type\":[\"string\",\"null\"],\"default\":null},\"html\":{\"type\":[\"string\",\"null\"],\"default\":null},\"reply_to_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"mentions_bot\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"mentions\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/TeamsMention\"},\"default\":[]},\"quoted\":{\"anyOf\":[{\"$ref\":\"#/$defs/TeamsQuote\"},{\"type\":\"null\"}],\"default\":null},\"files\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/TeamsFile\"},\"default\":[]}}},\"TeamsMention\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsQuote\":{\"type\":\"object\",\"properties\":{\"message_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"sender_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"sender_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"preview\":{\"type\":[\"string\",\"null\"],\"default\":null},\"time\":{\"type\":[\"string\",\"null\"],\"default\":null}}},\"TeamsFile\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"type\":{\"type\":[\"string\",\"null\"],\"default\":null},\"size\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint64\",\"minimum\":0,\"default\":null},\"url\":{\"description\":\"Signed download URL, present when the server downloaded the file\",\"type\":[\"string\",\"null\"],\"default\":null},\"path\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}],\"default\":null},\"downloadable\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"link\":{\"description\":\"SharePoint or OneDrive link for files the bot cannot download\",\"type\":[\"string\",\"null\"],\"default\":null},\"error\":{\"description\":\"Why the file was skipped\",\"type\":[\"string\",\"null\"],\"default\":null}}},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
+        },
+        {
+          "name": "user",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "The person who sent the message",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TeamsUser\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"given_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"surname\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null},\"user_principal_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"tenant_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"role\":{\"type\":[\"string\",\"null\"],\"default\":null},\"external\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"anonymous\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"meeting_role\":{\"type\":[\"string\",\"null\"],\"default\":null},\"locale\":{\"type\":[\"string\",\"null\"],\"default\":null},\"timezone\":{\"type\":[\"string\",\"null\"],\"default\":null},\"platform\":{\"type\":[\"string\",\"null\"],\"default\":null},\"country\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
+        },
+        {
+          "name": "user_name",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Display name of the sender"
+        },
+        {
+          "name": "user_email",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Email address of the sender, empty when Teams does not share it"
+        },
+        {
+          "name": "conversation_type",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "personal, groupChat or channel"
+        },
+        {
+          "name": "team_name",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Team of a channel conversation, empty elsewhere"
+        },
+        {
+          "name": "channel_name",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Channel of a channel conversation, empty elsewhere"
+        },
+        {
+          "name": "locale",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Locale of the sender's Teams client, e.g. de-DE"
+        },
+        {
+          "name": "timezone",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "IANA timezone of the sender's Teams client, e.g. Europe/Berlin"
+        },
+        {
+          "name": "message_html",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Formatted HTML of the message, empty for plain text messages"
+        },
+        {
+          "name": "is_group",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "True in group chats and channels"
+        },
+        {
+          "name": "files",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Files and images from the message that the server downloaded",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        }
+      ],
+      "impure": false,
+      "doc": "Read the conversation, user, team, channel, meeting and message details of a Teams Chat Event",
+      "namespace": "teams",
+      "alias": "context"
+    },
+    {
+      "node_type": "events_teams_get_members",
+      "display": "eventsTeamsGetMembers",
+      "friendly": "Get Teams Members",
+      "category": "Events/Chat/Teams",
+      "inputs": [
+        {
+          "name": "session",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local or global session from the Teams Chat Event",
+          "schema": "{\"type\":\"object\",\"additionalProperties\":true}"
+        },
+        {
+          "name": "limit",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Maximum number of members in this page, 1 to 500"
+        },
+        {
+          "name": "continuation_token",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Next Continuation Token of the previous page, empty for the first page"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "members",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Members of the conversation",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TeamsMember\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"given_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"surname\":{\"type\":[\"string\",\"null\"],\"default\":null},\"email\":{\"type\":[\"string\",\"null\"],\"default\":null},\"user_principal_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"tenant_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"user_role\":{\"type\":[\"string\",\"null\"],\"default\":null}}}"
+        },
+        {
+          "name": "next_continuation_token",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Pass it to the next call for more members, empty on the last page"
+        }
+      ],
+      "impure": true,
+      "doc": "List the members of the Teams conversation of a Chat Event session, one page at a time",
+      "namespace": "teams",
+      "alias": "getMembers"
+    },
+    {
+      "node_type": "events_teams_get_messages",
+      "display": "eventsTeamsGetMessages",
+      "friendly": "Get Teams Messages",
+      "category": "Events/Chat/Teams",
+      "inputs": [
+        {
+          "name": "session",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local or global session from the Teams Chat Event",
+          "schema": "{\"type\":\"object\",\"additionalProperties\":true}"
+        },
+        {
+          "name": "scope",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "thread reads the channel thread of the message, conversation reads the whole channel or chat"
+        },
+        {
+          "name": "limit",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Maximum number of messages, 1 to 50"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "messages",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Messages oldest first",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TeamsHistoryMessage\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"author_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"author_aad_object_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"author_name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"is_bot\":{\"type\":[\"boolean\",\"null\"],\"default\":null},\"text\":{\"type\":[\"string\",\"null\"],\"default\":null},\"html\":{\"type\":[\"string\",\"null\"],\"default\":null},\"created_at\":{\"type\":[\"string\",\"null\"],\"default\":null},\"reply_to_id\":{\"type\":[\"string\",\"null\"],\"default\":null},\"attachments\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/TeamsFileLink\"},\"default\":[]}},\"$defs\":{\"TeamsFileLink\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"default\":null},\"type\":{\"type\":[\"string\",\"null\"],\"default\":null},\"link\":{\"type\":[\"string\",\"null\"],\"default\":null}}}}}"
+        },
+        {
+          "name": "history",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Chat history with people's messages as \"Name: text\" and bot messages as assistant",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"History\",\"type\":\"object\",\"properties\":{\"model\":{\"type\":\"string\"},\"messages\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/HistoryMessage\"}},\"preset\":{\"type\":[\"string\",\"null\"]},\"stream\":{\"type\":[\"boolean\",\"null\"]},\"stream_options\":{\"anyOf\":[{\"$ref\":\"#/$defs/StreamOptions\"},{\"type\":\"null\"}]},\"max_completion_tokens\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"top_p\":{\"type\":[\"number\",\"null\"],\"format\":\"float\"},\"temperature\":{\"type\":[\"number\",\"null\"],\"format\":\"float\"},\"thinking\":{\"anyOf\":[{\"$ref\":\"#/$defs/HistoryThinking\"},{\"type\":\"null\"}]},\"seed\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"presence_penalty\":{\"type\":[\"number\",\"null\"],\"format\":\"float\"},\"frequency_penalty\":{\"type\":[\"number\",\"null\"],\"format\":\"float\"},\"user\":{\"type\":[\"string\",\"null\"]},\"stop\":{\"type\":[\"array\",\"null\"],\"items\":{\"type\":\"string\"}},\"response_format\":{\"anyOf\":[{\"$ref\":\"#/$defs/ResponseFormat\"},{\"type\":\"null\"}]},\"n\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0},\"tools\":{\"type\":[\"array\",\"null\"],\"items\":{\"$ref\":\"#/$defs/Tool\"}},\"tool_choice\":{\"anyOf\":[{\"$ref\":\"#/$defs/ToolChoice\"},{\"type\":\"null\"}]},\"usage\":{\"anyOf\":[{\"$ref\":\"#/$defs/Usage\"},{\"type\":\"null\"}]}},\"required\":[\"model\",\"messages\"],\"$defs\":{\"HistoryMessage\":{\"type\":\"object\",\"properties\":{\"role\":{\"$ref\":\"#/$defs/Role\"},\"content\":{\"$ref\":\"#/$defs/MessageContent\"},\"name\":{\"type\":[\"string\",\"null\"]},\"tool_calls\":{\"type\":[\"array\",\"null\"],\"items\":{\"$ref\":\"#/$defs/ToolCall\"}},\"tool_call_id\":{\"type\":[\"string\",\"null\"]},\"annotations\":{\"type\":[\"array\",\"null\"],\"items\":{\"$ref\":\"#/$defs/Annotation\"}}},\"required\":[\"role\",\"content\"]},\"Role\":{\"type\":\"string\",\"enum\":[\"system\",\"user\",\"assistant\",\"function\",\"tool\"]},\"MessageContent\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Content\"}}]},\"Content\":{\"anyOf\":[{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"text\":{\"type\":\"string\"}},\"required\":[\"type\",\"text\"]},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"image_url\":{\"$ref\":\"#/$defs/ImageUrl\"}},\"required\":[\"type\",\"image_url\"]},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"audio_url\":{\"type\":\"string\"},\"media_type\":{\"type\":[\"string\",\"null\"]},\"additional_params\":true},\"required\":[\"type\",\"audio_url\"]},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"video_url\":{\"type\":\"string\"},\"media_type\":{\"type\":[\"string\",\"null\"]},\"additional_params\":true},\"required\":[\"type\",\"video_url\"]},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ContentType\"},\"document_url\":{\"type\":\"string\"},\"media_type\":{\"type\":[\"string\",\"null\"]},\"additional_params\":true},\"required\":[\"type\",\"document_url\"]}]},\"ContentType\":{\"type\":\"string\",\"enum\":[\"text\",\"image_url\",\"audio_url\",\"video_url\",\"document_url\"]},\"ImageUrl\":{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},\"detail\":{\"type\":[\"string\",\"null\"]},\"media_type\":{\"type\":[\"string\",\"null\"]},\"additional_params\":true},\"required\":[\"url\"]},\"ToolCall\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"type\":{\"type\":\"string\"},\"function\":{\"$ref\":\"#/$defs/ToolCallFunction\"}},\"required\":[\"id\",\"type\",\"function\"]},\"ToolCallFunction\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"arguments\":{\"type\":\"string\"}},\"required\":[\"name\",\"arguments\"]},\"Annotation\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\"},\"url_citation\":{\"anyOf\":[{\"$ref\":\"#/$defs/UrlCitation\"},{\"type\":\"null\"}]}},\"required\":[\"type\"]},\"UrlCitation\":{\"type\":\"object\",\"properties\":{\"end_index\":{\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"start_index\":{\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"title\":{\"type\":\"string\"},\"url\":{\"type\":\"string\"},\"content\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"end_index\",\"start_index\",\"title\",\"url\"]},\"StreamOptions\":{\"type\":\"object\",\"properties\":{\"include_usage\":{\"type\":\"boolean\"}},\"required\":[\"include_usage\"]},\"HistoryThinking\":{\"type\":\"string\",\"enum\":[\"off\",\"low\",\"mid\",\"high\"]},\"ResponseFormat\":{\"anyOf\":[{\"type\":\"string\"},true]},\"Tool\":{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ToolType\"},\"function\":{\"$ref\":\"#/$defs/HistoryFunction\"}},\"required\":[\"type\",\"function\"]},\"ToolType\":{\"type\":\"string\",\"enum\":[\"function\"]},\"HistoryFunction\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"description\":{\"type\":[\"string\",\"null\"]},\"parameters\":{\"$ref\":\"#/$defs/HistoryFunctionParameters\"}},\"required\":[\"name\",\"parameters\"]},\"HistoryFunctionParameters\":{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/HistoryJSONSchemaType\"},\"properties\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"$ref\":\"#/$defs/HistoryJSONSchemaDefine\"}},\"required\":{\"type\":[\"array\",\"null\"],\"items\":{\"type\":\"string\"}}},\"required\":[\"type\"]},\"HistoryJSONSchemaType\":{\"type\":\"string\",\"enum\":[\"object\",\"number\",\"string\",\"array\",\"null\",\"boolean\"]},\"HistoryJSONSchemaDefine\":{\"type\":\"object\",\"properties\":{\"type\":{\"anyOf\":[{\"$ref\":\"#/$defs/HistoryJSONSchemaType\"},{\"type\":\"null\"}]},\"description\":{\"type\":[\"string\",\"null\"]},\"default\":true,\"enum\":{\"type\":[\"array\",\"null\"],\"items\":{\"type\":\"string\"}},\"properties\":{\"type\":[\"object\",\"null\"],\"additionalProperties\":{\"$ref\":\"#/$defs/HistoryJSONSchemaDefine\"}},\"required\":{\"type\":[\"array\",\"null\"],\"items\":{\"type\":\"string\"}},\"items\":{\"anyOf\":[{\"$ref\":\"#/$defs/HistoryJSONSchemaDefine\"},{\"type\":\"null\"}]}}},\"ToolChoice\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"null\"},{\"type\":\"null\"},{\"type\":\"object\",\"properties\":{\"type\":{\"$ref\":\"#/$defs/ToolType\"},\"function\":{\"$ref\":\"#/$defs/HistoryFunction\"}},\"required\":[\"type\",\"function\"]}]},\"Usage\":{\"type\":\"object\",\"properties\":{\"include\":{\"type\":\"boolean\"}},\"required\":[\"include\"]}}}"
+        },
+        {
+          "name": "transcript",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "One \"Name: text\" line per message"
+        },
+        {
+          "name": "source",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "graph for Microsoft Graph, bot_history for the bot's own 1:1 history"
+        }
+      ],
+      "impure": true,
+      "doc": "Read recent messages of the Teams thread or conversation of a Chat Event session, with author names",
+      "namespace": "teams",
+      "alias": "getMessages"
     },
     {
       "node_type": "events_teams_send_card",

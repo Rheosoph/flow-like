@@ -5,7 +5,10 @@ use crate::{
     utils::crypto::{decrypt_secret, encrypt_secret},
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, FromQueryResult, Statement, Value};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{
+    Serialize,
+    de::{DeserializeOwned, IgnoredAny},
+};
 use std::time::{Duration, Instant};
 
 const SWEEP_BATCH: u64 = 1000;
@@ -157,6 +160,40 @@ pub(super) async fn update_until<T: Serialize>(
         r#"UPDATE "TeamsBotState" SET "data"=$1,"revision"="revision"+1,"expiresAt"=GREATEST("expiresAt",$2) WHERE "id"=$3 AND "revision"=$4 AND "expiresAt">$5"#,
         vec![encode(state,value)?.into(),expires.into(),id.into(),revision.into(),now().into()],
     )).await?.rows_affected() == 1)
+}
+
+/// Writes `value` whether or not the row exists, retrying when another writer wins the race.
+pub(super) async fn put<T: Serialize>(
+    state: &AppState,
+    id: &str,
+    connection: &str,
+    value: &T,
+    expires: i64,
+) -> Result<(), ApiError> {
+    for _ in 0..3 {
+        if insert(state, id, connection, value, expires).await? {
+            return Ok(());
+        }
+        if let Some((_, revision)) = get::<IgnoredAny>(state, id).await?
+            && update_until(state, id, value, revision, expires).await?
+        {
+            return Ok(());
+        }
+    }
+    Err(ApiError::conflict(
+        "Teams state changed while it was being saved. Retry shortly.",
+    ))
+}
+
+pub(super) async fn remove(state: &AppState, id: &str) -> Result<(), ApiError> {
+    state
+        .db
+        .execute_raw(sql(
+            r#"DELETE FROM "TeamsBotState" WHERE "id"=$1"#,
+            vec![id.into()],
+        ))
+        .await?;
+    Ok(())
 }
 
 pub(crate) async fn sweep(state: &AppState) -> Result<u64, ApiError> {

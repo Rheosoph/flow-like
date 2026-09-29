@@ -6165,12 +6165,24 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/events/chat/teams"
               },
               {
+                "label": "Get Teams Members",
+                "slug": "nodes/events/chat/teams/events-teams-get-members"
+              },
+              {
+                "label": "Get Teams Messages",
+                "slug": "nodes/events/chat/teams/events-teams-get-messages"
+              },
+              {
                 "label": "Send Teams Card",
                 "slug": "nodes/events/chat/teams/events-teams-send-card"
               },
               {
                 "label": "Send Teams Message",
                 "slug": "nodes/events/chat/teams/events-teams-send-message"
+              },
+              {
+                "label": "Teams Context",
+                "slug": "nodes/events/chat/teams/events-teams-context"
               },
               {
                 "label": "Update Teams Message",

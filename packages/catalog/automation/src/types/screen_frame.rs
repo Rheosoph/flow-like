@@ -219,7 +219,7 @@ pub fn monitor_pixel_size(monitor: &xcap::Monitor) -> flow_like_types::Result<(u
         1.0
     };
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    let scale = 1.0;
+    let scale: f64 = 1.0;
     if !scale.is_finite() || scale <= 0.0 {
         return Err(flow_like_types::anyhow!(
             "Display reports an invalid scale factor {}",
@@ -391,7 +391,10 @@ mod tests {
     fn crop_and_resize_keep_desktop_geometry() {
         let frame = retina_secondary();
         let crop = frame.crop(200, 100, 400, 200).unwrap();
-        assert_eq!((crop.x, crop.y, crop.width, crop.height), (-1340, -150, 200, 100));
+        assert_eq!(
+            (crop.x, crop.y, crop.width, crop.height),
+            (-1340, -150, 200, 100)
+        );
         assert_eq!(crop.pixel_to_input(0.0, 0.0).unwrap(), (-1340, -150));
         let small = frame.resized(1440, 900).unwrap();
         assert_eq!(small.pixel_to_input(500.0, 300.0).unwrap(), (-940, 100));
@@ -410,7 +413,10 @@ mod tests {
             (1000, 600, 20, 10)
         );
         let crop = frame.crop(1000, 600, 20, 10).unwrap();
-        assert_eq!((crop.x, crop.y, crop.width, crop.height), (-940, 100, 10, 5));
+        assert_eq!(
+            (crop.x, crop.y, crop.width, crop.height),
+            (-940, 100, 10, 5)
+        );
         assert!(frame.input_rect_to_pixels(-10, 0, 20, 20).is_err());
         assert!(frame.input_rect_to_pixels(-940, 100, 0, 5).is_err());
         let fractional = ScreenFrame::new(None, (0, 0, 1000, 1000), (1500, 1500)).unwrap();

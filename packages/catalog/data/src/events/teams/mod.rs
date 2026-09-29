@@ -7,7 +7,11 @@ use flow_like::{
     hub::{HubRetry, hub_api_url, hub_response_error, send_hub_request},
 };
 use flow_like_types::{Value, anyhow, async_trait, json::json, reqwest};
+use serde::de::DeserializeOwned;
 use std::time::Duration;
+
+pub mod context;
+pub mod lookup;
 
 fn transient(status: reqwest::StatusCode) -> bool {
     matches!(
@@ -27,6 +31,21 @@ enum TeamsReply {
     Message,
     Card,
     Update,
+}
+
+fn teams_node(name: &str, label: &str, description: &str, alias: &str, scores: NodeScores) -> Node {
+    let mut node = Node::new(name, label, description, "Events/Chat/Teams");
+    node.set_flowscript_name("teams", alias);
+    node.add_icon("/flow/icons/teams.svg");
+    node.set_scores(scores);
+    node
+}
+
+const ANY_SESSION: &str = "Local or global session from the Teams Chat Event";
+
+fn add_session_pin(node: &mut Node, description: &str) {
+    node.add_input_pin("session", "Session", description, VariableType::Struct)
+        .set_open_schema();
 }
 
 fn node(reply: TeamsReply) -> Node {
@@ -50,10 +69,11 @@ fn node(reply: TeamsReply) -> Node {
             "updateMessage",
         ),
     };
-    let mut node = Node::new(name, label, description, "Events/Chat/Teams");
-    node.set_flowscript_name("teams", alias);
-    node.add_icon("/flow/icons/teams.svg");
-    node.set_scores(
+    let mut node = teams_node(
+        name,
+        label,
+        description,
+        alias,
         NodeScores::new()
             .set_privacy(5)
             .set_security(6)
@@ -69,13 +89,7 @@ fn node(reply: TeamsReply) -> Node {
         "Send the Teams response",
         VariableType::Execution,
     );
-    node.add_input_pin(
-        "session",
-        "Session",
-        "Local or global session from the Teams Chat Event",
-        VariableType::Struct,
-    )
-    .set_open_schema();
+    add_session_pin(&mut node, ANY_SESSION);
     node.add_input_pin(
         "text",
         "Text",
@@ -123,6 +137,80 @@ fn session_id(session: &Value) -> flow_like_types::Result<&str> {
         .ok_or_else(|| anyhow!("Connect the local or global session from a Teams Chat Event"))
 }
 
+struct TeamsCall {
+    auth: ExecutorApiAuth,
+    app_id: String,
+    session_id: String,
+    secure: bool,
+}
+
+impl TeamsCall {
+    async fn bind(context: &mut ExecutionContext, action: &str) -> flow_like_types::Result<Self> {
+        context.deactivate_exec_pin("exec_out").await?;
+        let app = context
+            .execution_cache
+            .as_ref()
+            .ok_or_else(|| anyhow!("Teams nodes require a server event execution"))?;
+        if app.shadow {
+            return Err(anyhow!("Shadow runs cannot {action}"));
+        }
+        let app_id = app.app_id.clone();
+        let auth = context
+            .executor_api_auth
+            .clone()
+            .ok_or_else(|| anyhow!("Teams nodes require an authenticated server execution"))?;
+        let session: Value = context.evaluate_pin("session").await?;
+        let session_id = session_id(&session)?.to_owned();
+        if session_id != context.run_id() {
+            return Err(anyhow!("This Teams session belongs to another execution"));
+        }
+        Ok(Self {
+            auth,
+            app_id,
+            session_id,
+            secure: context.profile.secure,
+        })
+    }
+
+    async fn post<T: DeserializeOwned>(
+        &self,
+        route: &str,
+        operation: &str,
+        body: &Value,
+        retry: HubRetry,
+    ) -> flow_like_types::Result<T> {
+        let url = hub_api_url(
+            self.auth.api_url(),
+            self.secure,
+            &["execution", "apps", &self.app_id, "teams", route],
+        )?;
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(135))
+            .build()?;
+        let (client_ref, url, token) = (&client, &url, self.auth.token());
+        let response = send_hub_request(&client, retry, move || async move {
+            Ok::<_, flow_like_types::Error>(
+                client_ref
+                    .post(url.clone())
+                    .bearer_auth(token)
+                    .json(body)
+                    .build()?,
+            )
+        })
+        .await?;
+        if !response.status().is_success() {
+            return Err(hub_response_error(operation, response).await);
+        }
+        response
+            .json()
+            .await
+            .map_err(|error| anyhow!("{operation} returned an unexpected body: {error}"))
+    }
+}
+
 async fn reply_body(
     context: &mut ExecutionContext,
     reply: TeamsReply,
@@ -149,66 +237,16 @@ async fn reply_body(
     Ok(body)
 }
 
-async fn deliver(
-    auth: &ExecutorApiAuth,
-    secure: bool,
-    app_id: &str,
-    body: &Value,
-) -> flow_like_types::Result<String> {
-    let url = hub_api_url(
-        auth.api_url(),
-        secure,
-        &["execution", "apps", app_id, "teams", "send"],
-    )?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(135))
-        .build()?;
-    let (client_ref, url, token) = (&client, &url, auth.token());
-    let response = send_hub_request(&client, TEAMS_RETRY, move || async move {
-        Ok::<_, flow_like_types::Error>(
-            client_ref
-                .post(url.clone())
-                .bearer_auth(token)
-                .json(body)
-                .build()?,
-        )
-    })
-    .await?;
-    if !response.status().is_success() {
-        return Err(hub_response_error("Teams response", response).await);
-    }
-    let result: Value = response.json().await?;
-    result["message_id"]
+async fn send(context: &mut ExecutionContext, reply: TeamsReply) -> flow_like_types::Result<()> {
+    let call = TeamsCall::bind(context, "send Teams messages").await?;
+    let body = reply_body(context, reply, &call.session_id).await?;
+    let result: Value = call
+        .post("send", "Teams response", &body, TEAMS_RETRY)
+        .await?;
+    let message = result["message_id"]
         .as_str()
         .filter(|message| !message.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow!("Teams did not confirm a message ID"))
-}
-
-async fn send(context: &mut ExecutionContext, reply: TeamsReply) -> flow_like_types::Result<()> {
-    context.deactivate_exec_pin("exec_out").await?;
-    let app = context
-        .execution_cache
-        .as_ref()
-        .ok_or_else(|| anyhow!("Teams nodes require a server event execution"))?;
-    if app.shadow {
-        return Err(anyhow!("Shadow runs cannot send Teams messages"));
-    }
-    let auth = context
-        .executor_api_auth
-        .clone()
-        .ok_or_else(|| anyhow!("Teams nodes require an authenticated server execution"))?;
-    let app_id = app.app_id.clone();
-    let session: Value = context.evaluate_pin("session").await?;
-    let id = session_id(&session)?;
-    if id != context.run_id() {
-        return Err(anyhow!("This Teams session belongs to another execution"));
-    }
-    let body = reply_body(context, reply, id).await?;
-    let message = deliver(&auth, context.profile.secure, &app_id, &body).await?;
+        .ok_or_else(|| anyhow!("Teams did not confirm a message ID"))?;
     context.set_pin_value("message_id", json!(message)).await?;
     context.activate_exec_pin("exec_out").await?;
     Ok(())
@@ -274,12 +312,16 @@ mod tests {
             TeamsSendMessage.get_node(),
             TeamsSendCard.get_node(),
             TeamsUpdateMessage.get_node(),
+            context::TeamsContextNode.get_node(),
+            lookup::TeamsGetMessages.get_node(),
+            lookup::TeamsGetMembers.get_node(),
         ];
         let descriptions: std::collections::HashSet<_> =
             nodes.iter().map(|node| node.description.as_str()).collect();
         assert_eq!(descriptions.len(), nodes.len());
         for node in &nodes {
             assert!(node.scores.is_some(), "{} has no scores", node.name);
+            assert_eq!(node.category, "Events/Chat/Teams");
             for pin_type in [PinType::Input, PinType::Output] {
                 let mut names: Vec<_> = node
                     .pins
@@ -291,6 +333,20 @@ mod tests {
                 names.sort_unstable();
                 names.dedup();
                 assert_eq!(names.len(), count, "{} repeats a pin name", node.name);
+            }
+            let inputs: std::collections::HashSet<_> = node
+                .pins
+                .values()
+                .filter(|pin| pin.pin_type == PinType::Input)
+                .map(|pin| pin.name.as_str())
+                .collect();
+            for pin in node.pins.values() {
+                assert!(
+                    pin.pin_type == PinType::Input || !inputs.contains(pin.name.as_str()),
+                    "{} uses {} as input and output",
+                    node.name,
+                    pin.name
+                );
             }
         }
         let update = &nodes[2];

@@ -9,9 +9,12 @@ import type { IEvent } from "./schema/flow/event";
 import { IEventExecutionMode } from "./schema/flow/event";
 import {
 	TEAMS_AUTH_MODES,
+	TEAMS_PERMISSIONS,
+	TEAMS_PERMISSION_RSC,
 	type TeamsBotConnection,
 	type TeamsBotSetup,
 	isTeamsBotLocked,
+	teamsConsentUrl,
 	teamsFailure,
 	teamsFailureDetail,
 	teamsPackageFilename,
@@ -19,6 +22,7 @@ import {
 	teamsSetupFromConnection,
 	validateTeamsSetup,
 	withTeamsAuthMode,
+	withTeamsPermission,
 } from "./teams-bot";
 
 const id = "12345678-1234-1234-1234-123456789012";
@@ -32,6 +36,7 @@ const input: TeamsBotSetup = {
 	client_id: id,
 	client_secret: "secret-value",
 	allowed_responders: [],
+	permissions: [],
 };
 const saved = {
 	...input,
@@ -115,7 +120,12 @@ describe("Teams bot setup", () => {
 		expect(teamsSetupChangesConnectedBot(unchanged, saved)).toBe(false);
 		expect(
 			teamsSetupChangesConnectedBot(
-				{ ...unchanged, name: "Renamed", allowed_responders: [other] },
+				{
+					...unchanged,
+					name: "Renamed",
+					allowed_responders: [other],
+					permissions: ["read_messages", "meeting_details"],
+				},
 				saved,
 			),
 		).toBe(false);
@@ -155,6 +165,80 @@ describe("Teams bot setup", () => {
 			...input,
 			mode: "customer_azure",
 		});
+	});
+
+	test("read permissions use the wire names in manifest order", () => {
+		expect([...TEAMS_PERMISSIONS]).toEqual([
+			"read_messages",
+			"meeting_details",
+			"conversation_details",
+		]);
+		expect(TEAMS_PERMISSION_RSC.read_messages).toEqual([
+			"ChannelMessage.Read.Group",
+			"ChatMessage.Read.Chat",
+		]);
+		expect(TEAMS_PERMISSION_RSC.meeting_details).toEqual([
+			"OnlineMeeting.ReadBasic.Chat",
+			"ChannelMeeting.ReadBasic.Group",
+		]);
+		expect(TEAMS_PERMISSION_RSC.conversation_details).toEqual([
+			"TeamSettings.Read.Group",
+			"ChannelSettings.Read.Group",
+			"ChatSettings.Read.Chat",
+		]);
+	});
+
+	test("toggling read permissions keeps them unique and in manifest order", () => {
+		const details = withTeamsPermission(input, "conversation_details", true);
+		const both = withTeamsPermission(details, "read_messages", true);
+		expect(both.permissions).toEqual(["read_messages", "conversation_details"]);
+		expect(withTeamsPermission(both, "read_messages", true)).toEqual(both);
+		expect(
+			withTeamsPermission(both, "conversation_details", false).permissions,
+		).toEqual(["read_messages"]);
+		expect(withTeamsPermission(input, "meeting_details", false)).toEqual(input);
+		expect(input.permissions).toEqual([]);
+	});
+
+	test("reads permissions from a connection, treating older responses as none", () => {
+		expect(teamsSetupFromConnection(saved).permissions).toEqual([]);
+		const { permissions: _omitted, ...older } = saved;
+		expect(teamsSetupFromConnection(older).permissions).toEqual([]);
+		expect(
+			teamsSetupFromConnection({ ...saved, permissions: ["meeting_details"] })
+				.permissions,
+		).toEqual(["meeting_details"]);
+		expect(
+			withTeamsAuthMode(
+				{ ...input, permissions: ["read_messages"] },
+				"flow_like_managed",
+			).permissions,
+		).toEqual(["read_messages"]);
+	});
+
+	test("offers only an https admin-consent link, and only when consent is required", () => {
+		const url =
+			"https://login.microsoftonline.com/tenant/adminconsent?client_id=app";
+		expect(
+			teamsConsentUrl({ status: "consent_required", consent_url: url }),
+		).toBe(url);
+		expect(teamsConsentUrl({ status: "consent_required" })).toBeUndefined();
+		expect(
+			teamsConsentUrl({ status: "consent_required", consent_url: null }),
+		).toBeUndefined();
+		expect(
+			teamsConsentUrl({
+				status: "consent_required",
+				consent_url: "javascript:alert(1)",
+			}),
+		).toBeUndefined();
+		expect(
+			teamsConsentUrl({ status: "consent_required", consent_url: "not a url" }),
+		).toBeUndefined();
+		expect(
+			teamsConsentUrl({ status: "ready", consent_url: url }),
+		).toBeUndefined();
+		expect(teamsConsentUrl(undefined)).toBeUndefined();
 	});
 
 	test("locks the management path while a bot exists", () => {

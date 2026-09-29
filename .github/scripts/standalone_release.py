@@ -229,6 +229,16 @@ class S3Store:
             raise ValueError("S3 refused the conditional release upload")
 
 
+def docker_failure(stderr):
+    # Pulls run with an empty config and no credential helpers, so Docker errors hold no secrets.
+    detail = re.sub(r"[^\x20-\x7e]", "?", " ".join((stderr or b"").decode("utf-8", "replace").split()))[:400]
+    if not detail:
+        return "Docker reported no error message"
+    if re.search(r"unauthorized|denied|forbidden", detail, re.IGNORECASE):
+        return f"{detail}; make the digest-pinned GHCR package public before publishing"
+    return detail
+
+
 def anonymous_container_readback(container):
     if (not isinstance(container, dict) or not pinned_image(container.get("image", ""))
             or not isinstance(container.get("platforms"), list) or not container["platforms"]
@@ -243,16 +253,20 @@ def anonymous_container_readback(container):
         # An empty PATH also prevents Docker from discovering native credential
         # helpers. Only this fresh config and the local CI daemon are permitted.
         environment = {"PATH": folder, "DOCKER_CONFIG": folder}
+        def image(*arguments):
+            return subprocess.run([docker, "--config", folder, "--host", "unix:///var/run/docker.sock", "image", *arguments],
+                                  env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.PIPE, timeout=1800)
         for platform in container["platforms"]:
             try:
-                result = subprocess.run([docker, "--config", folder, "--host", "unix:///var/run/docker.sock",
-                                         "image", "pull", "--quiet", "--platform", platform, container["image"]],
-                                        env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                        stderr=subprocess.DEVNULL, timeout=1800)
+                # The classic image store binds a digest reference to one platform's image and
+                # refuses to repoint it ("cannot overwrite digest"), so every pull starts without it.
+                image("rm", container["image"])
+                result = image("pull", "--quiet", "--platform", platform, container["image"])
             except (OSError, subprocess.TimeoutExpired):
                 raise ValueError(f"Anonymous image verification failed for {platform}; check the Docker daemon and public registry access") from None
             if result.returncode:
-                raise ValueError(f"Release image is not anonymously pullable for {platform}; make the digest-pinned GHCR package public before publishing")
+                raise ValueError(f"Release image is not anonymously pullable for {platform}: {docker_failure(result.stderr)}")
 
 
 def publish_bundle(artifacts, base_url, prefix, public_keys, store, verify_public=public_readback,

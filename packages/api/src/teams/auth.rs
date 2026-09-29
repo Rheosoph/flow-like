@@ -1,7 +1,11 @@
-use super::{Connection, client, now};
+use super::{
+    Connection, client,
+    microsoft::{MicrosoftError, retry_after},
+    now,
+};
 use crate::{error::ApiError, state::AppState};
 use axum::http::HeaderMap;
-use flow_like_types::tokio::sync::Mutex as AsyncMutex;
+use flow_like_types::tokio::{self, sync::Mutex as AsyncMutex};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::Jwk};
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -13,10 +17,16 @@ use std::{
 
 const KEYS_URL: &str = "https://login.botframework.com/v1/.well-known/keys";
 pub(super) const BOT_SCOPE: &str = "https://api.botframework.com/.default";
+pub(super) const GRAPH_SCOPE: &str = "https://graph.microsoft.com/.default";
+/// Missing service principal, unknown application, or missing consent in the tenant.
+const CONSENT_CODES: [u64; 4] = [7_000_229, 700_016, 650_052, 500_011];
+/// Invalid or expired client secret.
+const SECRET_CODES: [u64; 2] = [7_000_215, 7_000_222];
 const KEYS_TTL_MS: i64 = 24 * 3_600_000;
 const KEYS_MAX_STALE_MS: i64 = 7 * 24 * 3_600_000;
 const KEYS_REFETCH_INTERVAL_MS: i64 = 5 * 60_000;
 const TOKEN_MARGIN_SECS: i64 = 300;
+const RENEWAL_WINDOW_MS: i64 = 14 * 86_400_000;
 
 #[derive(Clone)]
 struct KeySet {
@@ -27,12 +37,17 @@ struct KeySet {
 
 static CONNECTOR_KEYS: LazyLock<Mutex<Option<KeySet>>> = LazyLock::new(|| Mutex::new(None));
 static KEY_REFRESH: LazyLock<AsyncMutex<()>> = LazyLock::new(|| AsyncMutex::new(()));
-static BOT_TOKENS: LazyLock<moka::sync::Cache<String, (String, i64)>> = LazyLock::new(|| {
+static BOT_TOKENS: LazyLock<TokenCache> = LazyLock::new(token_cache);
+static GRAPH_TOKENS: LazyLock<TokenCache> = LazyLock::new(token_cache);
+
+type TokenCache = moka::sync::Cache<String, (String, i64)>;
+
+fn token_cache() -> TokenCache {
     moka::sync::Cache::builder()
         .max_capacity(10_000)
         .time_to_live(Duration::from_secs(24 * 3600))
         .build()
-});
+}
 
 #[derive(Clone, Deserialize)]
 struct ConnectorClaims {
@@ -216,14 +231,14 @@ fn endorsed_for_teams(key: &Value) -> bool {
     }
 }
 
-pub(super) async fn client_token(
+async fn token_request(
     tenant: &str,
     id: &str,
     secret: &str,
     scope: &str,
-) -> Result<(String, i64), ApiError> {
+) -> Result<reqwest::Response, ApiError> {
     let tenant = super::guid(tenant)?;
-    let response = client()?
+    client()?
         .post(format!(
             "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
         ))
@@ -235,19 +250,10 @@ pub(super) async fn client_token(
         ])
         .send()
         .await
-        .map_err(|_| ApiError::bad_gateway("Microsoft authentication could not be reached"))?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(if super::transient(status) {
-            ApiError::bad_gateway(format!(
-                "Microsoft authentication returned HTTP {status}. Retry shortly."
-            ))
-        } else {
-            ApiError::bad_request(
-                "Microsoft rejected the bot credentials. Check the home tenant, application ID, and secret value.",
-            )
-        });
-    }
+        .map_err(|_| ApiError::bad_gateway("Microsoft authentication could not be reached"))
+}
+
+async fn issued_token(response: reqwest::Response) -> Result<(String, i64), ApiError> {
     let result: Value = response
         .json()
         .await
@@ -262,56 +268,217 @@ pub(super) async fn client_token(
     ))
 }
 
+pub(super) async fn client_token(
+    tenant: &str,
+    id: &str,
+    secret: &str,
+    scope: &str,
+) -> Result<(String, i64), ApiError> {
+    let response = token_request(tenant, id, secret, scope).await?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(if super::transient(status) {
+            ApiError::bad_gateway(format!(
+                "Microsoft authentication returned HTTP {status}. Retry shortly."
+            ))
+        } else {
+            ApiError::bad_request(
+                "Microsoft rejected the bot credentials. Check the home tenant, application ID, and secret value.",
+            )
+        });
+    }
+    issued_token(response).await
+}
+
+/// The AADSTS numbers of a token endpoint error, from `error_codes` and the description.
+fn aadsts_codes(body: &Value) -> Vec<u64> {
+    let mut codes: Vec<u64> = body["error_codes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_u64)
+        .collect();
+    if let Some(code) = body["error_description"]
+        .as_str()
+        .and_then(|description| description.strip_prefix("AADSTS"))
+        .map(|rest| {
+            rest.chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+        })
+        .and_then(|digits| digits.parse().ok())
+        && !codes.contains(&code)
+    {
+        codes.push(code);
+    }
+    codes
+}
+
+/// Maps a failed Graph token request. Only the status and AADSTS number are surfaced,
+/// because Microsoft's error bodies can echo identifiers that do not belong in messages.
+/// `invalid_client` means consent is missing only when the customer tenant is not the
+/// application's home tenant and the secret itself was not rejected.
+fn graph_token_rejection(
+    status: reqwest::StatusCode,
+    retry_after: Option<u64>,
+    body: &[u8],
+    cross_tenant: bool,
+) -> MicrosoftError {
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return MicrosoftError::Throttled(retry_after);
+    }
+    if status.is_server_error() {
+        return MicrosoftError::Unavailable(format!(
+            "Microsoft authentication returned HTTP {status}. Retry shortly."
+        ));
+    }
+    let body: Value = serde_json::from_slice(body).unwrap_or_default();
+    let codes = aadsts_codes(&body);
+    if codes.iter().any(|code| CONSENT_CODES.contains(code))
+        || (body["error"] == "invalid_client"
+            && cross_tenant
+            && !codes.iter().any(|code| SECRET_CODES.contains(code)))
+    {
+        return MicrosoftError::ConsentRequired;
+    }
+    MicrosoftError::Invalid(match codes.first() {
+        Some(code) => format!(
+            "Microsoft refused a Microsoft Graph token for the customer tenant (AADSTS{code}). Check the bot's application ID and secret."
+        ),
+        None => format!(
+            "Microsoft refused a Microsoft Graph token for the customer tenant with HTTP {status}. Check the bot's application ID and secret."
+        ),
+    })
+}
+
+/// An app-only Microsoft Graph token in the customer tenant, for RSC-granted reads.
+pub(super) async fn graph_token(
+    state: &AppState,
+    connection: &Connection,
+) -> Result<String, MicrosoftError> {
+    let connection = fresh_connection(state, connection).await?;
+    let key = graph_token_key(&connection);
+    if let Some((token, expires)) = GRAPH_TOKENS.get(&key)
+        && expires > now()
+    {
+        return Ok(token);
+    }
+    let response = token_request(
+        &connection.customer_tenant_id,
+        &connection.client_id,
+        &connection.secret,
+        GRAPH_SCOPE,
+    )
+    .await?;
+    let status = response.status();
+    if !status.is_success() {
+        let retry_after = retry_after(response.headers());
+        let body = response.bytes().await.unwrap_or_default();
+        return Err(graph_token_rejection(
+            status,
+            retry_after,
+            &body,
+            connection.customer_tenant_id != connection.home_tenant_id,
+        ));
+    }
+    let (token, expires) = issued_token(response).await?;
+    GRAPH_TOKENS.insert(key, (token.clone(), expires));
+    Ok(token)
+}
+
+fn graph_token_key(connection: &Connection) -> String {
+    format!(
+        "{}:{}",
+        token_key(connection),
+        connection.customer_tenant_id
+    )
+}
+
+/// Graph rejected a cached token: the next request acquires a fresh one.
+pub(super) fn forget_graph_token(connection: &Connection) {
+    GRAPH_TOKENS.invalidate(&graph_token_key(connection));
+}
+
 /// Tokens are reused until a margin before Microsoft's stated expiry.
 fn token_expiry(now: i64, expires_in: Option<i64>) -> i64 {
     let lifetime = expires_in.unwrap_or(300).clamp(60, 86_400);
     now + (lifetime - TOKEN_MARGIN_SECS.min(lifetime / 2)) * 1000
 }
 
-pub(super) async fn bot_token(
-    state: &AppState,
-    connection: &Connection,
-) -> Result<String, ApiError> {
-    let refreshed;
-    let connection = if connection.mode == super::AuthMode::FlowLikeManaged
+fn needs_renewal(connection: &Connection, now: i64) -> bool {
+    connection.mode == super::AuthMode::FlowLikeManaged
         && connection
             .secret_expires_at
             .as_deref()
             .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-            .is_some_and(|expiry| expiry.timestamp_millis() < now() + 14 * 86400000)
-    {
-        let (mut current, mut revision) = store_connection(state, &connection.id).await?;
-        if current.operation_until > now() {
-            return Err(ApiError::service_unavailable(
-                "Bot credentials are being renewed. Retry shortly.",
-            ));
-        }
-        // Recheck after loading: another API instance may already have rotated.
-        if current.secret == connection.secret {
-            current.operation_until = now() + 300_000;
-            super::store::save_connection(state, &current, revision).await?;
-            revision += 1;
-            let result = super::provision::rotate(state, &mut current, &mut revision).await;
-            current.operation_until = 0;
-            super::store::save_connection(state, &current, revision).await?;
-            if let Err(error) = result {
-                if current
-                    .secret_expires_at
-                    .as_deref()
-                    .and_then(|expiry| chrono::DateTime::parse_from_rfc3339(expiry).ok())
-                    .is_none_or(|expiry| expiry.timestamp_millis() <= now())
-                {
-                    return Err(error);
-                }
-                tracing::warn!(connection_id = %current.id, "Teams credential renewal needs a retry; retaining the valid active credential");
+            .is_some_and(|expiry| expiry.timestamp_millis() < now + RENEWAL_WINDOW_MS)
+}
+
+/// Runs `work` on its own task, so a caller that times out or is dropped cannot abandon it
+/// halfway through.
+async fn detached<T: Send + 'static>(
+    operation: &'static str,
+    work: impl Future<Output = Result<T, ApiError>> + Send + 'static,
+) -> Result<T, ApiError> {
+    tokio::spawn(work).await.map_err(|error| {
+        tracing::error!(operation, %error, "Teams background task did not complete");
+        ApiError::internal(format!("{operation} did not complete. Retry shortly."))
+    })?
+}
+
+/// The connection whose credentials to use. A managed bot's secret is renewed when it
+/// expires within two weeks.
+pub(super) async fn fresh_connection(
+    state: &AppState,
+    connection: &Connection,
+) -> Result<Connection, ApiError> {
+    if !needs_renewal(connection, now()) {
+        return Ok(connection.clone());
+    }
+    let (state, connection) = (state.clone(), connection.clone());
+    detached("Teams bot credential renewal", async move {
+        renew(&state, &connection).await
+    })
+    .await
+}
+
+/// Rotates the secret under the connection's operation lease.
+async fn renew(state: &AppState, connection: &Connection) -> Result<Connection, ApiError> {
+    let (mut current, mut revision) = store_connection(state, &connection.id).await?;
+    if current.operation_until > now() {
+        return Err(ApiError::service_unavailable(
+            "Bot credentials are being renewed. Retry shortly.",
+        ));
+    }
+    // Recheck after loading: another API instance may already have rotated.
+    if current.secret == connection.secret {
+        current.operation_until = now() + 300_000;
+        super::store::save_connection(state, &current, revision).await?;
+        revision += 1;
+        let result = super::provision::rotate(state, &mut current, &mut revision).await;
+        current.operation_until = 0;
+        super::store::save_connection(state, &current, revision).await?;
+        if let Err(error) = result {
+            if current
+                .secret_expires_at
+                .as_deref()
+                .and_then(|expiry| chrono::DateTime::parse_from_rfc3339(expiry).ok())
+                .is_none_or(|expiry| expiry.timestamp_millis() <= now())
+            {
+                return Err(error);
             }
+            tracing::warn!(connection_id = %current.id, "Teams credential renewal needs a retry; retaining the valid active credential");
         }
-        refreshed = current;
-        &refreshed
-    } else {
-        connection
-    };
-    let key = token_key(connection);
+    }
+    Ok(current)
+}
+
+pub(super) async fn bot_token(
+    state: &AppState,
+    connection: &Connection,
+) -> Result<String, ApiError> {
+    let connection = fresh_connection(state, connection).await?;
+    let key = token_key(&connection);
     if let Some((token, expires)) = BOT_TOKENS.get(&key)
         && expires > now()
     {
@@ -465,6 +632,149 @@ mod tests {
         let expired = now - KEYS_TTL_MS;
         assert!(needs_refresh(Some(&at(expired, expired)), "known", now));
         assert!(!needs_refresh(Some(&at(expired, now - 1000)), "known", now));
+    }
+
+    fn reject(body: Value, cross_tenant: bool) -> MicrosoftError {
+        graph_token_rejection(
+            reqwest::StatusCode::BAD_REQUEST,
+            None,
+            body.to_string().as_bytes(),
+            cross_tenant,
+        )
+    }
+
+    #[test]
+    fn graph_token_errors_surface_consent_from_aadsts_codes() {
+        for body in [
+            json!({"error":"invalid_client","error_codes":[7000229],"error_description":"AADSTS7000229: The client application 00000000-0000-0000-0000-000000000001 is missing service principal in the tenant 00000000-0000-0000-0000-000000000002. Trace ID: 1 Correlation ID: 2 Timestamp: 2026-09-28 10:00:00Z"}),
+            json!({"error":"unauthorized_client","error_description":"AADSTS700016: Application with identifier 'x' was not found in the directory 'Contoso'."}),
+            json!({"error":"invalid_grant","error_codes":[650052]}),
+            json!({"error":"invalid_resource","error_codes":[500011],"error_description":"AADSTS500011: The resource principal named https://graph.microsoft.com was not found in the tenant named Contoso."}),
+        ] {
+            assert_eq!(
+                reject(body.clone(), false),
+                MicrosoftError::ConsentRequired,
+                "{body}"
+            );
+        }
+        let invalid_client =
+            json!({"error":"invalid_client","error_description":"The client does not exist."});
+        assert_eq!(
+            reject(invalid_client.clone(), true),
+            MicrosoftError::ConsentRequired
+        );
+        assert!(matches!(
+            reject(invalid_client, false),
+            MicrosoftError::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn graph_token_errors_report_only_the_status_and_aadsts_code() {
+        let secret = json!({"error":"invalid_client","error_codes":[7000215],"error_description":"AADSTS7000215: Invalid client secret provided. Ensure the secret being sent is the client secret value test-only-secret. Trace ID: abc"});
+        let MicrosoftError::Invalid(message) = reject(secret, true) else {
+            panic!("a rejected secret is not a consent problem");
+        };
+        assert!(message.contains("AADSTS7000215"));
+        assert!(!message.contains("test-only-secret") && !message.contains("Trace ID"));
+
+        let near_miss =
+            json!({"error":"invalid_request","error_description":"AADSTS7000161: Something else."});
+        let MicrosoftError::Invalid(message) = reject(near_miss, true) else {
+            panic!("AADSTS7000161 is not AADSTS700016");
+        };
+        assert!(message.contains("AADSTS7000161"));
+
+        let MicrosoftError::Invalid(message) = graph_token_rejection(
+            reqwest::StatusCode::BAD_REQUEST,
+            None,
+            b"<html>secret</html>",
+            true,
+        ) else {
+            panic!("an unreadable body is an invalid response");
+        };
+        assert!(message.contains("400") && !message.contains("secret</html>"));
+        assert_eq!(
+            graph_token_rejection(reqwest::StatusCode::TOO_MANY_REQUESTS, Some(5), b"", true),
+            MicrosoftError::Throttled(Some(5))
+        );
+        assert!(matches!(
+            graph_token_rejection(reqwest::StatusCode::SERVICE_UNAVAILABLE, None, b"", true),
+            MicrosoftError::Unavailable(_)
+        ));
+    }
+
+    #[test]
+    fn aadsts_codes_merge_the_list_and_the_description() {
+        assert_eq!(
+            aadsts_codes(
+                &json!({"error_codes":[7000229, "x"],"error_description":"AADSTS7000229: missing"})
+            ),
+            vec![7_000_229]
+        );
+        assert_eq!(
+            aadsts_codes(&json!({"error_description":"AADSTS650052: The app needs access"})),
+            vec![650_052]
+        );
+        assert!(aadsts_codes(&json!({"error_description":"No code here"})).is_empty());
+        assert!(aadsts_codes(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn graph_tokens_are_cached_per_customer_tenant_and_secret() {
+        let (mut c, ..) = fixture();
+        let key = graph_token_key(&c);
+        assert_ne!(key, token_key(&c));
+        c.customer_tenant_id = "other-tenant".into();
+        assert_ne!(key, graph_token_key(&c));
+        let (mut c, ..) = fixture();
+        c.secret = "rotated".into();
+        assert_ne!(key, graph_token_key(&c));
+    }
+
+    #[test]
+    fn only_managed_secrets_close_to_expiry_are_renewed() {
+        let (mut c, ..) = fixture();
+        let now = chrono::Utc::now().timestamp_millis();
+        let at = |offset_ms: i64| {
+            chrono::DateTime::from_timestamp_millis(now + offset_ms)
+                .unwrap()
+                .to_rfc3339()
+        };
+        c.secret_expires_at = Some(at(86_400_000));
+        assert!(!needs_renewal(&c, now));
+        c.mode = crate::teams::AuthMode::FlowLikeManaged;
+        assert!(needs_renewal(&c, now));
+        c.secret_expires_at = Some(at(RENEWAL_WINDOW_MS + 60_000));
+        assert!(!needs_renewal(&c, now));
+        c.secret_expires_at = Some("not a date".into());
+        assert!(!needs_renewal(&c, now));
+        c.secret_expires_at = None;
+        assert!(!needs_renewal(&c, now));
+    }
+
+    #[tokio::test]
+    async fn detached_work_finishes_after_its_caller_gives_up() {
+        let (done, finished) = tokio::sync::oneshot::channel();
+        let caller = detached("Test renewal", async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = done.send(());
+            Ok(())
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), caller)
+                .await
+                .is_err()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), finished)
+                .await
+                .is_ok_and(|sent| sent.is_ok())
+        );
+        let error = detached::<()>("Test renewal", async { panic!("renewal bug") })
+            .await
+            .unwrap_err();
+        assert_eq!(error.status(), reqwest::StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[test]

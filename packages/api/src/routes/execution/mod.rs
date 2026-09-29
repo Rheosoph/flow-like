@@ -28,6 +28,14 @@ pub fn routes() -> Router<AppState> {
             post(crate::teams::runtime::send),
         )
         .route(
+            "/apps/{app_id}/teams/messages",
+            post(crate::teams::lookup::messages),
+        )
+        .route(
+            "/apps/{app_id}/teams/members",
+            post(crate::teams::lookup::members),
+        )
+        .route(
             "/apps/{app_id}/mail/send",
             post(crate::routes::app::mail::executor_send_mail),
         )
