@@ -358,10 +358,8 @@ fn personal_file(content: &Value, name: Option<&str>) -> (String, Source) {
         .filter(|raw| !raw.is_empty());
     let source = match download_url {
         None => unavailable(None, NO_DOWNLOAD_LINK),
-        Some(raw) => sharepoint_url(raw).map_or_else(
-            || unavailable(None, FOREIGN_DOWNLOAD),
-            Source::SharePoint,
-        ),
+        Some(raw) => sharepoint_url(raw)
+            .map_or_else(|| unavailable(None, FOREIGN_DOWNLOAD), Source::SharePoint),
     };
     (mime, source)
 }
@@ -515,10 +513,8 @@ fn inline_image(service_url: Option<&str>, id: Option<&str>) -> Source {
     let Some(id) = id else {
         return unavailable(None, FOREIGN_IMAGE);
     };
-    attachment_view(service_url.unwrap_or_default(), id).map_or_else(
-        || unavailable(None, FOREIGN_IMAGE),
-        Source::TeamsDerived,
-    )
+    attachment_view(service_url.unwrap_or_default(), id)
+        .map_or_else(|| unavailable(None, FOREIGN_IMAGE), Source::TeamsDerived)
 }
 
 fn attachment_view(service_url: &str, id: &str) -> Option<Url> {
@@ -950,9 +946,10 @@ impl Fetcher<'_> {
     }
 
     fn bearer(&self, declared: bool) -> Result<Bearer<'_>, String> {
-        let token = self.token.as_deref().ok_or_else(|| {
-            "The bot could not sign in to Teams to download this file".to_owned()
-        })?;
+        let token = self
+            .token
+            .as_deref()
+            .ok_or_else(|| "The bot could not sign in to Teams to download this file".to_owned())?;
         Ok(Bearer { token, declared })
     }
 
@@ -1179,10 +1176,7 @@ pub(super) async fn collect(
         .map(|(_, candidate)| origin(&candidate.source))
         .collect();
     let needs_token = jobs.iter().any(|(_, candidate)| {
-        matches!(
-            candidate.source,
-            Source::Teams(_) | Source::TeamsDerived(_)
-        )
+        matches!(candidate.source, Source::Teams(_) | Source::TeamsDerived(_))
     });
     let prepared = tokio::time::timeout_at(
         deadline,
@@ -1234,6 +1228,10 @@ mod tests {
 
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n rest";
     const DOCX: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    const BOT: Option<Bearer<'static>> = Some(Bearer {
+        token: "bot-token",
+        declared: true,
+    });
 
     fn teams(url: &str) -> Source {
         Source::Teams(Url::parse(url).unwrap())
@@ -1553,12 +1551,18 @@ mod tests {
         let text = logs.text();
         assert_eq!(text.lines().count(), 1, "{text}");
         assert!(text.contains("connection_id=\"c\""), "{text}");
-        assert!(text.contains(&format!("{FOREIGN_IMAGE} (attacker.invalid)")), "{text}");
+        assert!(
+            text.contains(&format!("{FOREIGN_IMAGE} (attacker.invalid)")),
+            "{text}"
+        );
         assert!(
             text.contains(&format!("{FOREIGN_DOWNLOAD} (files.example.invalid)")),
             "{text}"
         );
-        assert!(text.contains(&format!("{SHARED_FILE} (contoso.sharepoint.com)")), "{text}");
+        assert!(
+            text.contains(&format!("{SHARED_FILE} (contoso.sharepoint.com)")),
+            "{text}"
+        );
         assert!(!text.contains("secret-marker"), "{text}");
     }
 
@@ -1810,6 +1814,7 @@ mod tests {
                     error: SHARED_FILE.into(),
                 },
                 link: None,
+                rejected_host: None,
             },
         );
         assert_eq!(
@@ -1854,6 +1859,7 @@ mod tests {
                 mime: "image/*".into(),
                 source: teams("https://smba.trafficmanager.net/x"),
                 link: None,
+                rejected_host: None,
             },
         );
         assert_eq!(
@@ -1898,12 +1904,14 @@ mod tests {
             mime: OCTET_STREAM.into(),
             source: unavailable(None, SHARED_FILE),
             link: None,
+            rejected_host: None,
         };
         let image = Candidate {
             name: None,
             mime: "image/png".into(),
             source: teams("https://smba.trafficmanager.net/x"),
             link: None,
+            rejected_host: None,
         };
         let candidates = std::iter::once(shared)
             .chain(std::iter::repeat_n(image, 11))
@@ -1913,7 +1921,10 @@ mod tests {
             .enumerate()
             .map(|(index, candidate)| FileEntry::pending(index, candidate))
             .collect::<Vec<_>>();
-        let jobs = jobs(candidates, &mut entries);
+        let logs = Logs::default();
+        let jobs = tracing::subscriber::with_default(logs.subscriber(), || {
+            jobs("c", candidates, &mut entries)
+        });
         assert_eq!(
             jobs.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
             (1..=10).collect::<Vec<_>>()
@@ -1921,6 +1932,12 @@ mod tests {
         assert_eq!(
             entries[11].error.as_deref(),
             Some("Only the first 10 files of a message are downloaded")
+        );
+        let text = logs.text();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert!(
+            text.contains("index=11 kind=\"teams\" host=smba.trafficmanager.net"),
+            "{text}"
         );
         assert_eq!(entries[11].name, "image-12.png");
         assert_eq!(entries[0].error.as_deref(), Some(SHARED_FILE));
@@ -2087,13 +2104,7 @@ mod tests {
         let fetcher = fetcher(&connection, store.clone());
 
         let entry = fetcher
-            .keep(
-                0,
-                None,
-                "image/*",
-                base.join("png").unwrap(),
-                Some("bot-token"),
-            )
+            .keep(0, None, "image/*", base.join("png").unwrap(), BOT)
             .await
             .unwrap();
         let path = "tmp/user/u/apps/a/runs/r/request/teams/0000-image-1.png";
@@ -2119,13 +2130,7 @@ mod tests {
         );
 
         let entry = fetcher
-            .keep(
-                1,
-                None,
-                "image/*",
-                base.join("bare").unwrap(),
-                Some("bot-token"),
-            )
+            .keep(1, None, "image/*", base.join("bare").unwrap(), BOT)
             .await
             .unwrap();
         let path = "tmp/user/u/apps/a/runs/r/request/teams/0001-image-2";
@@ -2193,7 +2198,7 @@ mod tests {
         let logs = Logs::default();
 
         let redirected = fetcher
-            .download(base.join("redirect").unwrap(), Some("bot-token"))
+            .download(base.join("redirect").unwrap(), BOT)
             .with_subscriber(logs.subscriber())
             .await
             .err();
@@ -2220,8 +2225,26 @@ mod tests {
         assert!(logs.text().contains("status=401"));
         assert!(!logs.text().contains("Forgetting the cached bot token"));
 
+        let derived = Candidate {
+            name: None,
+            mime: "image/*".into(),
+            source: Source::TeamsDerived(base.join("denied").unwrap()),
+            link: None,
+            rejected_host: None,
+        };
         let denied = fetcher
-            .download(base.join("denied").unwrap(), Some("bot-token"))
+            .fetch(0, derived)
+            .with_subscriber(logs.subscriber())
+            .await
+            .err();
+        assert_eq!(
+            denied.as_deref(),
+            Some("Microsoft returned HTTP 401 for this file")
+        );
+        assert!(!logs.text().contains("Forgetting the cached bot token"));
+
+        let denied = fetcher
+            .download(base.join("denied").unwrap(), BOT)
             .with_subscriber(logs.subscriber())
             .await
             .err();
