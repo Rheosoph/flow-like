@@ -93,3 +93,7 @@ ndk-sys = "0.6"
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 dotenv = "0.15.0"
+
+[[example]]
+name = "embedding_probe"
+required-features = ["local-ml"]

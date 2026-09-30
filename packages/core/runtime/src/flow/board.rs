@@ -112,6 +112,77 @@ fn draft_was_replaced(before: &Option<String>, after: &Option<String>) -> bool {
     matches!((before, after), (Some(before), Some(after)) if before != after)
 }
 
+const VERSION_SNAPSHOT_SUFFIX: &str = ".board";
+const VERSION_META_SUFFIX: &str = ".meta.json";
+const VERSION_META_READ_CONCURRENCY: usize = 8;
+
+/// A published board snapshot and who published it, when that was recorded.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct BoardVersionInfo {
+    /// `[major, minor, patch]`.
+    #[cfg_attr(feature = "openapi", schema(value_type = Vec<u32>))]
+    pub version: (u32, u32, u32),
+    /// Unix milliseconds when the snapshot was published: the sidecar's `published_at`,
+    /// else the snapshot object's `last_modified` from the store listing.
+    pub published_at: Option<u64>,
+    /// Account id (`sub`) of whoever published it, when one was recorded.
+    pub published_by: Option<String>,
+}
+
+/// The `{version}.meta.json` sidecar written next to an immutable snapshot.
+#[derive(Serialize, Deserialize)]
+struct BoardVersionMeta {
+    #[serde(default)]
+    published_by: Option<String>,
+    #[serde(default)]
+    published_at: Option<u64>,
+}
+
+/// The version encoded in a `versions/{board_id}` file name ending in `suffix`. Accepts the
+/// legacy `v` prefix; `latest` and names without three `_`-separated parts are not versions.
+fn parse_version_file_name(file_name: &str, suffix: &str) -> Option<(u32, u32, u32)> {
+    let stem = file_name.strip_suffix(suffix)?;
+    if stem == "latest" {
+        return None;
+    }
+    let stem = stem.strip_prefix('v').unwrap_or(stem);
+    let parts = stem.split('_').collect::<Vec<&str>>();
+    if parts.len() < 3 {
+        return None;
+    }
+    Some((
+        parts[0].parse::<u32>().unwrap_or(0),
+        parts[1].parse::<u32>().unwrap_or(0),
+        parts[2].parse::<u32>().unwrap_or(0),
+    ))
+}
+
+async fn read_version_meta(store: Arc<dyn ObjectStore>, path: &Path) -> Option<BoardVersionMeta> {
+    let read = async {
+        let bytes = store.get(path).await?.bytes().await?;
+        flow_like_types::Result::<BoardVersionMeta>::Ok(flow_like_types::json::from_slice(&bytes)?)
+    };
+    match read.await {
+        Ok(meta) => Some(meta),
+        Err(error) => {
+            tracing::warn!(
+                path = %path,
+                error = %error,
+                "Board version sidecar is unreadable; falling back to the snapshot listing"
+            );
+            None
+        }
+    }
+}
+
+fn unix_millis(time: impl Into<SystemTime>) -> Option<u64> {
+    time.into()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
+}
+
 #[derive(Debug, Clone)]
 pub enum BoardParent {
     App(Weak<Mutex<App>>),
@@ -2198,58 +2269,19 @@ impl Board {
         &self,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<Vec<(u32, u32, u32)>> {
-        let versions_dir = self
-            .board_dir
-            .clone()
-            .join("versions")
-            .join(self.id.clone());
-
-        let store = match store {
-            Some(store) => store,
-            None => self
-                .app_state
-                .as_ref()
-                .expect("app_state should always be set")
-                .config
-                .read()
-                .await
-                .stores
-                .app_meta_store
-                .clone()
-                .ok_or(flow_like_types::anyhow!("Project store not found"))?
-                .as_generic(),
-        };
-
-        let mut versions = store.list(Some(&versions_dir));
+        let store = self.get_store(store).await?;
+        let mut versions = store.list(Some(&self.versions_dir()));
         let mut version_list = Vec::new();
 
         while let Some(meta) = versions.next().await {
             let meta = meta?;
-            let file_name = match meta.location.filename() {
-                Some(name) => name,
-                None => continue,
-            };
-            if !file_name.ends_with(".board") {
-                continue;
+            if let Some(version) = meta
+                .location
+                .filename()
+                .and_then(|name| parse_version_file_name(name, VERSION_SNAPSHOT_SUFFIX))
+            {
+                version_list.push(version);
             }
-            let version = file_name.strip_suffix(".board").unwrap_or(file_name);
-            if version == "latest" {
-                continue;
-            }
-            let version = version.strip_prefix("v").unwrap_or(version);
-            let version = version.split("_").collect::<Vec<&str>>();
-
-            if version.len() < 3 {
-                continue;
-            }
-
-            let version = (
-                version[0].parse::<u32>().unwrap_or(0),
-                version[1].parse::<u32>().unwrap_or(0),
-                version[2].parse::<u32>().unwrap_or(0),
-            );
-
-            version_list.push(version);
         }
 
         // Newest first. Store listings are ordered by object key, which sorts
@@ -2257,6 +2289,115 @@ impl Board {
         // consumer rendering this list would show a jumbled order.
         version_list.sort_unstable_by(|a, b| b.cmp(a));
         Ok(version_list)
+    }
+
+    /// Newest first, same ordering and filtering as [`Self::get_versions`], with the publisher
+    /// sidecar merged in. A missing or unreadable sidecar falls back to the snapshot's listing
+    /// timestamp and an unknown publisher.
+    pub async fn get_version_infos(
+        &self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<Vec<BoardVersionInfo>> {
+        let store = self.get_store(store).await?;
+        let versions_dir = self.versions_dir();
+        let mut listing = store.list(Some(&versions_dir));
+        let mut snapshots = Vec::new();
+        let mut sidecars = HashMap::new();
+
+        while let Some(meta) = listing.next().await {
+            let meta = meta?;
+            let Some(file_name) = meta.location.filename() else {
+                continue;
+            };
+            if let Some(version) = parse_version_file_name(file_name, VERSION_SNAPSHOT_SUFFIX) {
+                snapshots.push((version, unix_millis(meta.last_modified)));
+            } else if let Some(version) = parse_version_file_name(file_name, VERSION_META_SUFFIX)
+                && meta
+                    .location
+                    .prefix_match(&versions_dir)
+                    .is_some_and(|parts| parts.count() == 1)
+            {
+                sidecars.insert(version, meta.location);
+            }
+        }
+
+        let wanted = snapshots
+            .iter()
+            .filter_map(|(version, _)| sidecars.remove(version).map(|path| (*version, path)))
+            .collect::<Vec<_>>();
+        let recorded = futures::stream::iter(wanted)
+            .map(|(version, path)| {
+                let store = store.clone();
+                async move { (version, read_version_meta(store, &path).await) }
+            })
+            .buffer_unordered(VERSION_META_READ_CONCURRENCY)
+            .filter_map(|(version, meta)| async move { meta.map(|meta| (version, meta)) })
+            .collect::<HashMap<_, _>>()
+            .await;
+
+        let mut infos = snapshots
+            .into_iter()
+            .map(|(version, listed_at)| {
+                let meta = recorded.get(&version);
+                BoardVersionInfo {
+                    version,
+                    published_at: meta.and_then(|meta| meta.published_at).or(listed_at),
+                    published_by: meta.and_then(|meta| meta.published_by.clone()),
+                }
+            })
+            .collect::<Vec<_>>();
+        infos.sort_unstable_by_key(|info| std::cmp::Reverse(info.version));
+        Ok(infos)
+    }
+
+    /// Writes the publisher sidecar for an already published version. Create-only: an existing
+    /// sidecar is left untouched. Callers only pass versions that have a snapshot.
+    pub async fn record_version_publisher(
+        &self,
+        version: (u32, u32, u32),
+        published_by: Option<String>,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<()> {
+        let store = self.get_store(store).await?;
+        let path = self.version_meta_path(version);
+        let meta = BoardVersionMeta {
+            published_by,
+            published_at: unix_millis(SystemTime::now()),
+        };
+        let payload = flow_like_types::json::to_vec(&meta)?;
+        let options = object_store::PutOptions {
+            mode: object_store::PutMode::Create,
+            ..Default::default()
+        };
+        match store
+            .put_opts(&path, object_store::PutPayload::from(payload), options)
+            .await
+        {
+            Ok(_)
+            | Err(object_store::Error::AlreadyExists { .. })
+            | Err(object_store::Error::Precondition { .. }) => Ok(()),
+            Err(error) => Err(flow_like_types::anyhow!(
+                "Recording the publisher of board {} version {}.{}.{} at {path} failed: {error}",
+                self.id,
+                version.0,
+                version.1,
+                version.2
+            )),
+        }
+    }
+
+    fn versions_dir(&self) -> Path {
+        self.board_dir
+            .clone()
+            .join("versions")
+            .join(self.id.clone())
+    }
+
+    fn version_meta_path(&self, version: (u32, u32, u32)) -> Path {
+        self.versions_dir().join(format!(
+            "{}_{}_{}{VERSION_META_SUFFIX}",
+            version.0, version.1, version.2
+        ))
     }
 
     /// Resolve the on-disk storage path for a board's compressed proto.
@@ -5296,6 +5437,179 @@ mod tests {
             versions.windows(2).all(|pair| pair[0] > pair[1]),
             "versions must be returned newest first, got {versions:?}"
         );
+    }
+
+    async fn board_with_published_page_versions(
+        count: usize,
+    ) -> (super::Board, Vec<(u32, u32, u32)>) {
+        use crate::a2ui::widget::Page;
+
+        let mut board = super::Board::new(None, Path::from("boards"), flow_state().await);
+        board
+            .save_page(&Page::new("page-1", "Page", "/"), None)
+            .await
+            .unwrap();
+        board.save(None).await.unwrap();
+        let mut published = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (_, version) = board
+                .create_version_returning_published(super::VersionType::Patch, None)
+                .await
+                .unwrap();
+            published.push(version);
+        }
+        (board, published)
+    }
+
+    async fn snapshot_listed_at(board: &super::Board, version: (u32, u32, u32)) -> Option<u64> {
+        use flow_like_storage::object_store::ObjectStoreExt;
+
+        let store = board.get_store(None).await.unwrap();
+        let snapshot = store
+            .head(&super::Board::proto_path(
+                &board.board_dir,
+                &board.id,
+                Some(version),
+            ))
+            .await
+            .unwrap();
+        super::unix_millis(snapshot.last_modified)
+    }
+
+    #[tokio::test]
+    async fn version_infos_list_snapshots_newest_first_and_skip_page_files() {
+        use futures::StreamExt;
+
+        let (board, mut published) = board_with_published_page_versions(3).await;
+        let store = board.get_store(None).await.unwrap();
+        let listed = store
+            .list(Some(&board.versions_dir()))
+            .map(|meta| meta.unwrap().location)
+            .collect::<Vec<_>>()
+            .await;
+        assert!(
+            listed
+                .iter()
+                .any(|path| path.as_ref().ends_with("/page-1.page")),
+            "the fixture must place page files under the versions directory, got {listed:?}"
+        );
+
+        let infos = board.get_version_infos(None).await.unwrap();
+        let versions = infos.iter().map(|info| info.version).collect::<Vec<_>>();
+        published.sort_unstable_by(|a, b| b.cmp(a));
+        assert_eq!(versions, published);
+        assert_eq!(versions, board.get_versions(None).await.unwrap());
+        for info in &infos {
+            assert_eq!(info.published_by, None);
+            assert!(info.published_at.is_some());
+            assert_eq!(
+                info.published_at,
+                snapshot_listed_at(&board, info.version).await
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn version_infos_read_top_level_sidecars_and_degrade_on_bad_ones() {
+        use flow_like_storage::object_store::{ObjectStoreExt, PutPayload};
+        use std::collections::HashMap;
+
+        let (board, published) = board_with_published_page_versions(4).await;
+        let [recorded, explicit, nested_only, malformed] = published[..] else {
+            panic!("expected four published versions, got {published:?}");
+        };
+        let store = board.get_store(None).await.unwrap();
+        let sidecar = |publisher: &str, published_at: u64| {
+            PutPayload::from(
+                format!(r#"{{"published_by":"{publisher}","published_at":{published_at}}}"#)
+                    .into_bytes(),
+            )
+        };
+
+        board
+            .record_version_publisher(recorded, Some("user-a".to_string()), None)
+            .await
+            .unwrap();
+        store
+            .put(&board.version_meta_path(explicit), sidecar("user-b", 1234))
+            .await
+            .unwrap();
+        store
+            .put(
+                &board.versioned_pages_dir(nested_only).join(format!(
+                    "{}_{}_{}.meta.json",
+                    nested_only.0, nested_only.1, nested_only.2
+                )),
+                sidecar("nested", 5678),
+            )
+            .await
+            .unwrap();
+        store
+            .put(
+                &board.version_meta_path(malformed),
+                PutPayload::from_static(b"not json"),
+            )
+            .await
+            .unwrap();
+        store
+            .put(&board.version_meta_path((9, 9, 9)), sidecar("orphan", 1))
+            .await
+            .unwrap();
+
+        let infos = board.get_version_infos(None).await.unwrap();
+        assert_eq!(
+            infos.iter().map(|info| info.version).collect::<Vec<_>>(),
+            board.get_versions(None).await.unwrap(),
+            "sidecars must never surface as versions"
+        );
+        let by_version = infos
+            .iter()
+            .map(|info| (info.version, info))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(by_version.len(), 4, "got {infos:?}");
+
+        assert_eq!(
+            by_version[&recorded].published_by.as_deref(),
+            Some("user-a")
+        );
+        assert!(by_version[&recorded].published_at.is_some());
+        assert_eq!(
+            by_version[&explicit].published_by.as_deref(),
+            Some("user-b")
+        );
+        assert_eq!(by_version[&explicit].published_at, Some(1234));
+        for version in [nested_only, malformed] {
+            assert_eq!(by_version[&version].published_by, None, "{version:?}");
+            assert_eq!(
+                by_version[&version].published_at,
+                snapshot_listed_at(&board, version).await,
+                "{version:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn recording_a_version_publisher_is_create_only() {
+        let (board, published) = board_with_published_page_versions(1).await;
+        let version = published[0];
+
+        board
+            .record_version_publisher(version, Some("first".to_string()), None)
+            .await
+            .unwrap();
+        let first = board.get_version_infos(None).await.unwrap();
+        board
+            .record_version_publisher(version, Some("second".to_string()), None)
+            .await
+            .unwrap();
+        board
+            .record_version_publisher(version, None, None)
+            .await
+            .unwrap();
+
+        let after = board.get_version_infos(None).await.unwrap();
+        assert_eq!(after, first);
+        assert_eq!(after[0].published_by.as_deref(), Some("first"));
     }
 
     #[tokio::test]

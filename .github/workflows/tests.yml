@@ -68,6 +68,14 @@ jobs:
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
 
+      - name: Test browser nodes against the runner's Chrome
+        if: github.event_name == 'pull_request' && hashFiles('packages/catalog/automation/tests/browser_nodes_e2e.rs') != ''
+        # The grep fails the step when every test was filtered out or ignored.
+        run: |
+          set -o pipefail
+          cargo test --locked -p flow-like-catalog-automation --features execute --profile ci --test browser_nodes_e2e -- --include-ignored | tee "$RUNNER_TEMP/e2e.log"
+          grep -E 'test result: ok\. [1-9]' "$RUNNER_TEMP/e2e.log"
+
       - name: Test standalone workflow updates and crash recovery
         run: cargo test --locked --package flow-like-standalone --profile ci --test workflow_rollout -- --include-ignored
 
@@ -98,6 +106,112 @@ jobs:
           )
           sudo scripts/test-standalone-isolation-linux.sh --disposable-linux-host "$test_binary"
 
+  browser-e2e:
+    name: Browser e2e (${{ matrix.runner }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Google Chrome is preinstalled with an AppArmor profile that allows its sandbox.
+          - runner: ubuntu-24.04
+            provision: installed
+          # No preinstalled Chrome: the pinned Chrome for Testing build is downloaded.
+          - runner: ubuntu-24.04-arm
+            provision: download
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+        with:
+          shared-key: workspace-${{ runner.arch }}-browser-e2e
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+
+      # Ubuntu 24.04 only grants unprivileged user namespaces to AppArmor-profiled
+      # binaries, so a downloaded Chrome cannot start its sandbox otherwise.
+      - name: Allow the Chromium sandbox for the downloaded browser
+        if: matrix.provision == 'download'
+        run: echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+
+      - name: Read the pinned Chrome for Testing version
+        id: cft
+        if: matrix.provision == 'download'
+        run: |
+          CFT=$(grep -m1 -oP 'CFT_PINNED: &str = "\K[^"]+' packages/browser/src/launch/cft.rs)
+          test -n "$CFT"
+          echo "version=$CFT" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        if: matrix.provision == 'download'
+        with:
+          path: ${{ runner.temp }}/flow-like-browser
+          key: cft-${{ runner.arch }}-${{ steps.cft.outputs.version }}
+
+      # Installs the system libraries from the zip's own deb.deps, as Puppeteer's
+      # install-deps does, instead of a hand-written package list.
+      - name: Provision Chrome for Testing and its system libraries
+        if: matrix.provision == 'download' && hashFiles('packages/browser/tests/e2e_core.rs') != ''
+        env:
+          CFT: ${{ steps.cft.outputs.version }}
+          FLOW_LIKE_BROWSER_E2E_PROVISION: download
+          FLOW_LIKE_BROWSER_CACHE_DIR: ${{ runner.temp }}/flow-like-browser
+        run: |
+          cargo test --locked --profile ci -p flow-like-browser --test e2e_core -- --ignored --exact provision_browser --nocapture
+          deps=$(find "$FLOW_LIKE_BROWSER_CACHE_DIR/chrome-for-testing" -path "*-$CFT/*" -name deb.deps -print -quit)
+          if [ -z "$deps" ]; then
+            echo "deb.deps of Chrome for Testing $CFT not found under $FLOW_LIKE_BROWSER_CACHE_DIR/chrome-for-testing" >&2
+            exit 1
+          fi
+          sudo apt-get update
+          sudo apt-get satisfy -y --no-install-recommends "$(paste -sd, "$deps")"
+
+      - name: Run browser tests including e2e
+        env:
+          FLOW_LIKE_BROWSER_E2E_PROVISION: ${{ matrix.provision }}
+          FLOW_LIKE_BROWSER_CACHE_DIR: ${{ runner.temp }}/flow-like-browser
+        run: cargo test --locked --profile ci -p flow-like-browser -- --include-ignored --test-threads=4
+
+      - name: Upload browser e2e logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-e2e-${{ matrix.runner }}
+          path: target/browser-e2e-logs
+          if-no-files-found: ignore
+          retention-days: 7
+
+  browser-platforms:
+    name: Browser crate (${{ matrix.runner }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2022, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      # Vendored scripts, templates and fixtures must keep their LF bytes.
+      - name: Disable line-ending conversion
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+        with:
+          shared-key: workspace-${{ runner.os }}-${{ runner.arch }}-browser-platforms
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+
+      - name: Lint the browser crate
+        run: cargo clippy --locked -p flow-like-browser --all-targets -- -D clippy::correctness -D clippy::suspicious
+
+      # Runs the Windows job-object tests and the macOS process lifecycle harness; no browser needed.
+      - name: Test the browser crate
+        run: cargo test --locked -p flow-like-browser
+
   package-security:
     name: Package manager security
     needs: changes
@@ -115,7 +229,7 @@ jobs:
 
   test-application:
     name: Test Application
-    needs: [changes, rust-tests, package-security]
+    needs: [changes, rust-tests, browser-e2e, browser-platforms, package-security]
     if: always()
     runs-on: ubuntu-latest
     steps:

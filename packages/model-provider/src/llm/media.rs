@@ -1,8 +1,8 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rig::completion::{CompletionRequest, Message};
 use rig::message::{
-    Audio, Document, DocumentMediaType, DocumentSourceKind, Image, ImageMediaType, MimeType,
-    UserContent, Video,
+    Audio, AudioMediaType, Document, DocumentMediaType, DocumentSourceKind, Image, ImageMediaType,
+    MimeType, UserContent, Video,
 };
 
 /// The user-content conversion a Rig 0.38.2 client runs before it sends a request.
@@ -131,7 +131,12 @@ fn audio_fits(dialect: MediaDialect, model: &str, audio: &Audio) -> bool {
         return false;
     }
     match dialect {
-        MediaDialect::OpenAIChat => model.to_ascii_lowercase().contains("audio"),
+        MediaDialect::OpenAIChat => {
+            matches!(
+                audio.media_type,
+                Some(AudioMediaType::WAV | AudioMediaType::MP3)
+            ) && model.to_ascii_lowercase().contains("audio")
+        }
         MediaDialect::OpenRouter => audio.media_type.is_some(),
         MediaDialect::OpenAIResponses | MediaDialect::Anthropic => false,
     }
@@ -218,7 +223,7 @@ fn source_label(source: &DocumentSourceKind) -> &'static str {
 mod tests {
     use super::*;
     use rig::OneOrMany;
-    use rig::message::{AudioMediaType, VideoMediaType};
+    use rig::message::VideoMediaType;
 
     const PRESIGNED: &str = "https://flow-like-content.s3.eu-central-1.amazonaws.com/tmp/user/u/apps/a/runs/r/request/teams/files/0/report.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=ASIAEXAMPLE%2F20260929%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Security-Token=secret-token&X-Amz-Signature=deadbeef";
     const PDF_BASE64: &str = "JVBERi0xLjQK";
@@ -462,6 +467,19 @@ mod tests {
                 request(vec![original.clone()]),
             );
             assert_eq!(user_parts(&filtered)[0] == original, kept, "{model}");
+        }
+        for media_type in [Some(AudioMediaType::OGG), Some(AudioMediaType::FLAC), None] {
+            let original = UserContent::Audio(Audio {
+                data: DocumentSourceKind::Base64("AAAA".into()),
+                media_type: media_type.clone(),
+                additional_params: None,
+            });
+            let filtered = retain_supported(
+                MediaDialect::OpenAIChat,
+                "gpt-4o-audio-preview",
+                request(vec![original.clone()]),
+            );
+            assert_ne!(user_parts(&filtered)[0], original, "{media_type:?}");
         }
     }
 

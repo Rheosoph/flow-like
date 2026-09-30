@@ -92,7 +92,10 @@ import {
 import { isExpiredPin } from "@flow-like/flow-like-ui/lib/package-license";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { timeRunStep } from "@flow-like/flow-like-ui/lib/run-timing";
-import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
+import {
+	type IBoardVersionInfo,
+	normalizeBoardVersion,
+} from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import type { IElementDemand } from "@flow-like/flow-like-ui/lib/schema/flow/element-demand";
 import type { AppPackage } from "@flow-like/flow-like-ui/lib/schema/wasm";
 import type {
@@ -1792,6 +1795,7 @@ export class BoardState implements IBoardState {
 				appId: appId,
 				boardId: boardId,
 				versionType: versionType,
+				publishedBy: this.backend.auth?.user?.profile?.sub,
 			},
 		);
 
@@ -1883,6 +1887,54 @@ export class BoardState implements IBoardState {
 		this.backend.backgroundTaskHandler(promise);
 
 		return boardVersions;
+	}
+	async getBoardVersionInfos(
+		appId: string,
+		boardId: string,
+	): Promise<IBoardVersionInfo[]> {
+		const versionInfos: IBoardVersionInfo[] = await invoke(
+			"get_board_version_infos",
+			{
+				appId: appId,
+				boardId: boardId,
+			},
+		);
+
+		const isOffline = await this.backend.isOffline(appId);
+		const { profile, auth, queryClient } = this.backend;
+		if (isOffline || !profile || !auth || !queryClient) {
+			return versionInfos;
+		}
+
+		const promise = injectDataFunction(
+			async () => {
+				const remoteData = await fetcher<IBoardVersionInfo[]>(
+					profile,
+					`apps/${appId}/board/${boardId}/version/info`,
+					{
+						method: "GET",
+					},
+					auth,
+				);
+
+				// This replaces the local list in the query cache; only a real list may.
+				return Array.isArray(remoteData)
+					? remoteData.filter(
+							(entry) => isRecord(entry) && Array.isArray(entry.version),
+						)
+					: versionInfos;
+			},
+			this,
+			queryClient,
+			this.getBoardVersionInfos,
+			[appId, boardId],
+			[],
+			versionInfos,
+		);
+
+		this.backend.backgroundTaskHandler(promise);
+
+		return versionInfos;
 	}
 	async deleteBoard(appId: string, boardId: string): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
@@ -3947,6 +3999,20 @@ export class BoardState implements IBoardState {
 			);
 			return flowScriptFromResponse(response, boardId);
 		}
+	}
+
+	async renderFlowScript(
+		_appId: string,
+		boardId: string,
+		board: IBoard,
+		anchors = true,
+	): Promise<string> {
+		if (board.id !== boardId) {
+			throw new Error(
+				`renderFlowScript: board ${board.id} does not match board ${boardId}`,
+			);
+		}
+		return invoke<string>("render_board_flowscript", { board, anchors });
 	}
 
 	async getFlowScriptAuthoritative(

@@ -224,7 +224,7 @@ pub fn parse_private_key_pem(
 
 #[cfg(feature = "execute")]
 fn ensure_crypto_provider() {
-    let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+    let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
 
 #[cfg(feature = "execute")]
@@ -270,7 +270,7 @@ impl tokio_rustls::rustls::client::danger::ServerCertVerifier for NoVerifier {
     }
 
     fn supported_verify_schemes(&self) -> Vec<tokio_rustls::rustls::SignatureScheme> {
-        tokio_rustls::rustls::crypto::ring::default_provider()
+        tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
             .signature_verification_algorithms
             .supported_schemes()
     }

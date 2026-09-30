@@ -70,7 +70,10 @@ import type {
 	UnifiedChatMessage,
 	UnifiedCopilotResponse,
 } from "@flow-like/flow-like-ui/lib/schema/copilot";
-import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
+import {
+	type IBoardVersionInfo,
+	normalizeBoardVersion,
+} from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import type { IElementDemand } from "@flow-like/flow-like-ui/lib/schema/flow/element-demand";
 import type { IPrerunBoardResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { globalChatTransportRunId } from "@flow-like/flow-like-ui/state/global-chat/global-chat-run-control";
@@ -496,6 +499,20 @@ export class WebBoardState implements IBoardState {
 		try {
 			return await apiGet<[number, number, number][]>(
 				`apps/${appId}/board/${boardId}/version`,
+				this.backend.auth,
+			);
+		} catch {
+			return [];
+		}
+	}
+
+	async getBoardVersionInfos(
+		appId: string,
+		boardId: string,
+	): Promise<IBoardVersionInfo[]> {
+		try {
+			return await apiGet<IBoardVersionInfo[]>(
+				`apps/${appId}/board/${boardId}/version/info`,
 				this.backend.auth,
 			);
 		} catch {
@@ -1123,6 +1140,20 @@ export class WebBoardState implements IBoardState {
 		params.set("anchors", String(anchors));
 		const response = await apiGet<{ flowscript: string }>(
 			`apps/${appId}/board/${boardId}/flowscript?${params}`,
+			this.backend.auth,
+		);
+		return response.flowscript;
+	}
+
+	async renderFlowScript(
+		appId: string,
+		boardId: string,
+		board: IBoard,
+		anchors = true,
+	): Promise<string> {
+		const response = await apiPost<{ flowscript: string }>(
+			`apps/${appId}/board/${boardId}/flowscript/render`,
+			{ board, anchors },
 			this.backend.auth,
 		);
 		return response.flowscript;
