@@ -45,7 +45,7 @@ present in the executor environment, but process-wide storage keys, SAS tokens,
 client secrets, client-certificate credentials, connection strings, emulator
 flags, and custom storage endpoints are rejected. Flow nodes run in-process
 and can read the environment. See the exact
-[executor guard](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/azure/executor/src/config.rs).
+[executor guard](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/azure/executor/src/config.rs).
 
 Metrics include matched-route request counts and duration, execution counts,
 duration, and active jobs. Streaming handlers return at the first event, so
@@ -133,5 +133,5 @@ reference to data staged in Blob Storage. Dispatch envelopes carry `v`,
 `job_id`, and `payload`; the signed job ID must agree with the resolved payload.
 Delivery is at least once, so a settle failure after completed work can cause a
 repeat. Callback and run persistence provide the final idempotency boundary.
-The [worker implementation](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/azure/queue-worker/src/main.rs)
+The [worker implementation](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/azure/queue-worker/src/main.rs)
 defines decoding, renewal, and poison handling.

@@ -19,13 +19,14 @@ const { data } = Astro.props as { data: BlogLayoutData };
 
 const site = Astro.site ?? import.meta.env.SITE ?? "https://flow-like.com";
 const siteUrl = typeof site === "string" ? site : site.toString();
-const canonical = data.canonical ?? new URL(Astro.url.pathname, siteUrl).toString();
+const canonicalPath = `${Astro.url.pathname.replace(/\/+$/, "")}/`;
+const canonical = data.canonical ?? new URL(canonicalPath, siteUrl).toString();
 const htmlLang = data.lang ?? "en";
 const ogLocale = getOgLocale(htmlLang);
 const alternateLinks = data.alternateLinks ?? [];
 
 const title = data.title ?? "Flow-Like Blog";
-const desc = data.description ?? "Enterprise-grade workflow automation built for scale.";
+const desc = data.description ?? "Workflow automation tutorials, local AI guides, and product updates from Flow-Like.";
 const tags = data.tags ?? [];
 
 function toAbsoluteUrl(value: string | undefined, base: string): string | undefined {
@@ -75,7 +76,7 @@ const rawOgImage = data.cover ?? "/og.png";
 const ogImage = toAbsoluteUrl(rawOgImage, siteUrl) ?? new URL("/og.png", siteUrl).toString();
 const ogImageType = mimeFromImageUrl(ogImage);
 const ogImageAlt = `${title} preview image`;
-const robots = data.noindex
+const robots = data.noindex || data.draft
 	? "noindex,nofollow,max-image-preview:none"
 	: "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1";
 
@@ -87,6 +88,7 @@ const ldStructuredData = isArticle
 			description: desc,
 			url: canonical,
 			mainEntityOfPage: canonical,
+			inLanguage: htmlLang,
 			datePublished: pubISO,
 			dateModified: updISO ?? pubISO,
 			image: [ogImage],
@@ -94,10 +96,12 @@ const ldStructuredData = isArticle
 			author: {
 				"@type": "Organization",
 				name: "Flow-Like",
+				url: siteUrl,
 			},
 			publisher: {
 				"@type": "Organization",
 				name: "Flow-Like",
+				url: siteUrl,
 				logo: {
 					"@type": "ImageObject",
 					url: new URL("/favicon-32x32.png", siteUrl).toString(),
@@ -111,6 +115,20 @@ const ldStructuredData = isArticle
 			description: desc,
 			url: canonical,
 		};
+
+const breadcrumbs = isArticle
+	? {
+			"@context": "https://schema.org",
+			"@type": "BreadcrumbList",
+			itemListElement: [
+				{ "@type": "ListItem", position: 1, name: "Home", item: new URL("/", siteUrl).toString() },
+				{ "@type": "ListItem", position: 2, name: "Blog", item: new URL("/blog/", siteUrl).toString() },
+				{ "@type": "ListItem", position: 3, name: title, item: canonical },
+			],
+		}
+	: undefined;
+
+const serializeJsonLd = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
 ---
 
 <!doctype html>
@@ -168,7 +186,8 @@ const ldStructuredData = isArticle
 		<meta name="twitter:image:alt" content={ogImageAlt} />
 
 		{tags.length > 0 && <meta name="keywords" content={tags.join(", ")} />}
-		<script type="application/ld+json" is:inline set:html={JSON.stringify(ldStructuredData)} />
+		<script type="application/ld+json" is:inline set:html={serializeJsonLd(ldStructuredData)} />
+		{breadcrumbs && <script type="application/ld+json" is:inline set:html={serializeJsonLd(breadcrumbs)} />}
 	</head>
 	<body class="flex flex-col min-h-screen bg-background text-foreground bg-dot pt-16">
 		<div class="pointer-events-none fixed inset-0 h-full w-full bg-white bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] -z-[100]"/>
@@ -176,6 +195,6 @@ const ldStructuredData = isArticle
 		<main class="flex flex-col flex-grow py-2 md:py-2 lg:py-6 xl:py-8 2xl:py-16">
 			<slot />
 		</main>
-		<BlogFooter client:only="react" />
+		<BlogFooter client:load />
 	</body>
 </html>

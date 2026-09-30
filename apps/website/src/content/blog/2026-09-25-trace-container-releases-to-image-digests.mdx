@@ -1,0 +1,39 @@
+---
+title: "Trace a container release from source to deployed digest"
+description: "Connect a running container to its source revision and build through published image digest records and compiler reproducibility checks."
+date: 2026-09-25
+tags: ["containers", "self-hosting", "engineering"]
+cover: "/images/community-U5.png"
+draft: true
+---
+
+A release tag is a convenient name to deploy. During an incident, an operator needs a more exact answer: which image did this service actually run, and which source revision and build produced it?
+
+Flow-Like's container workflow records image digests alongside the source commit, workflow run, run attempt, and build target. A digest identifies the resulting image artifact. The release record connects that artifact to the work that produced it.
+
+## Follow the image through publication
+
+The workflow builds an image locally, inspects its contents, and scans for secrets before pushing it. The checks include the final image and printable text extracted from compiled binaries, where an accidentally embedded value might otherwise be harder to notice.
+
+After pushing, the workflow checks that the registry's single-image manifest references the configuration of the scanned image. It records the registry digest and combines the required target records into a complete manifest. That manifest includes the source revision and build-run identity, so an operator can investigate a specific attempt instead of relying on a moving channel name.
+
+The [container publication workflow](https://github.com/Rheosoph/flow-like/blob/dev/.github/workflows/containers.yml) ties the scan to the artifact that is pushed. Operators can use the recorded digest to select that artifact without relying solely on a release tag whose target may later change.
+
+<figure>
+  <img src="/posts/community/U5/overview.svg" alt="A source commit connects to a build run, the resulting image digest, and a deployment that records the image actually in use." loading="lazy" width="1600" height="1000" />
+  <figcaption>A release trail is useful when the deployed artifact can be matched back to its recorded build.</figcaption>
+</figure>
+
+## Understand the reproducibility check
+
+The container pipeline also depends on compiler reproducibility checks. These compare independent optimized builds of controlled fixtures across the configured target matrix. Selected targets additionally check linked fixture builds, and failed comparisons preserve artifacts for investigation.
+
+The reproducibility check applies to those controlled compiler fixtures and their configured targets. The complete container has its own dependencies and build inputs, so its digest record serves a different purpose: identifying the exact artifact produced by a particular run. The [compiler workflow](https://github.com/Rheosoph/flow-like/blob/dev/.github/workflows/compiler-reproducibility.yml) shows the comparison matrix.
+
+The manifest provides source, build, and artifact identifiers. It is an operational release record, with no signed-attestation claim attached to it. Keep that record alongside the deployment so the relationship between the chosen revision and running image remains available during an incident.
+
+## Keep the record with the deployment
+
+When promoting a release, retain the complete image manifest with your deployment record and record the digest the service actually uses. Check that the target matches the service and platform you intended to deploy. If a rollout is retried, preserve the run attempt as well as the commit.
+
+This turns an incident question into a traceable comparison: the source selected for release, the artifact produced, and the artifact running. A mismatch becomes something to investigate directly instead of a guess based on a familiar tag.

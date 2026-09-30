@@ -5,6 +5,7 @@ import type {
 	CatalogCategory,
 	CatalogNode,
 } from "../components/node-docs/NodeReference";
+import { toCatalogSummary, type CatalogSummary } from "../components/node-docs/catalog-summary";
 
 export const catalogNodes: CatalogNode[] = [
   {
@@ -181641,13 +181642,15 @@ export const nodesBySlug = Object.fromEntries(
 	catalogNodes.map((node) => [node.slug, node]),
 ) as Record<string, CatalogNode | undefined>;
 
+export const catalogSummaries = catalogNodes.map(toCatalogSummary);
+
 export const nodesByCategory = Object.fromEntries(
 	catalogCategories.map((category) => [
 		category.path,
-		catalogNodes.filter(
+		catalogSummaries.filter(
 			(node) =>
 				node.category === category.path ||
 				node.category.startsWith(`${category.path}/`),
 		),
 	]),
-) as Record<string, CatalogNode[] | undefined>;
+) as Record<string, CatalogSummary[] | undefined>;

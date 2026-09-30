@@ -38,7 +38,7 @@ A bare internal hostname may fail TLS verification. The development-only
 certificate verification. The scheduler rejects static Azure credentials,
 storage endpoint/emulator overrides, alternate identity endpoints, and proxy
 variables, even when empty. See its
-[configuration guard](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/azure/scheduler/src/config.rs).
+[configuration guard](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/azure/scheduler/src/config.rs).
 
 Grant the scheduler identity `Cosmos DB Built-in Data Contributor` scoped to
 the scheduler container, provisioned with partition key `/app_id` and no TTL.
@@ -55,7 +55,7 @@ The token uses HS256 and contains `sub=sink-trigger`, `iss=flow-like`, and
 `sink_types=["cron"]`. Supply only the compact token, without a `Bearer `
 prefix or whitespace. It must contain at least 32 bytes. The scheduler does
 not need the API's signing key. The
-[registration handler](https://github.com/Rheosoph/flow-like/blob/main/packages/api/src/routes/admin/sinks/register_sink.rs)
+[registration handler](https://github.com/Rheosoph/flow-like/blob/dev/packages/api/src/routes/admin/sinks/register_sink.rs)
 defines the request and response.
 
 ### Catch-up and failed occurrences
@@ -119,7 +119,7 @@ configured execution state backends unchanged.
 When payment servicing is enabled, schedule a separate `MAINTENANCE_JOB=payments`
 execution at least once per minute. A daily `all` job does not provide timely
 payment recovery when the API has no continuous CPU. See
-[Payments rollout and recovery](/dev/platform-administration/#payments-rollout-and-recovery)
+[Payments rollout and recovery](/self-hosting/administration/payments/)
 for configuration and alert requirements. Provider sandbox validation remains a
 rollout prerequisite.
 

@@ -5,9 +5,9 @@ sidebar:
   order: 80
 ---
 
-Flow-Like can save immutable versions of a Flow while keeping a separate
-editable draft. Events, Pages, and Templates can then refer to either the
-latest draft or a known version.
+Flow-Like can save immutable versions of a Flow and its owned Pages while
+keeping a separate editable draft. Events and Templates can then refer to
+either the latest draft or a known version.
 
 ## Version Format
 
@@ -29,22 +29,34 @@ matches how the Flow is consumed.
 ## Create a Flow version
 
 1. Open the Flow in Studio.
-2. Open **Manage Board** from the Studio toolbar.
-3. Under **Version**, select **Create Version**.
-4. Choose **Major**, **Minor**, or **Patch**.
+2. Open **Version** in the Studio status bar.
+3. Under **Create Version**, choose **Major**, **Minor**, or **Patch**.
 
 The current draft is saved as an immutable snapshot and the editable draft
 moves to the next version number. Existing snapshots are not overwritten.
 
-![The Manage Board dialog in Flow-Like Studio, showing the version selector and version-creation menu](../../../assets/BoardVersions.webp)
+![The Version controls in Flow-Like Studio, showing the version selector and snapshot actions](../../../assets/BoardVersions.webp)
 
 The **Version** selector distinguishes:
 
-- **Latest** — the editable Flow draft and its current version number.
-- A numbered version — a read-only snapshot.
+- **Latest**: the editable Flow draft and its current version number.
+- A numbered version: a read-only snapshot.
 
 Open a numbered version to inspect its graph or execution history. Return to
 **Latest** before editing.
+
+### What the snapshot includes
+
+The snapshot records the Flow graph and the Pages owned by that Flow. An Event
+pinned to a version loads its Page from that same snapshot, so later Page edits
+do not change that pinned interface.
+
+App styles, reusable Widget definitions, table data, files, and credentials are
+separate resources. A Flow version does not freeze them. Check their versions
+or current values when reproducing a release.
+
+Studio's Page editor tab opens the latest Page, even when the graph tab shows a
+numbered Flow version. Test the pinned Event to inspect the released Page.
 
 ## Pin an Event
 
@@ -87,12 +99,16 @@ when you want an App entry point to keep running a known implementation.
 
 ## App version metadata
 
-An App also has a free-form **Version** field in its details. That value is
+An App also has a free-form **Version** field under **Dashboard → Pricing & release**. That value is
 release metadata for people browsing the App; editing it does not create a
 snapshot of the App, its Flows, storage, or Events.
 
 Treat the App version as a label for a tested collection of Flow and interface
 versions, and record the corresponding changes in the App changelog.
+
+For candidate testing, traffic splitting, and restoring an Event snapshot, use
+the [Event release and rollback walkthrough](/apps/event-releases/). Event
+versions record Event configuration separately from Flow versions.
 
 ## Roll back safely
 
@@ -105,6 +121,6 @@ If a pinned entry point needs to be rolled back:
 
 ## Related
 
-- [Events](/apps/events/) — configure app entry points
-- [Logging](/studio/logging/) — inspect version-specific runs
-- [Templates](/apps/templates/) — create reusable Flow snapshots
+- [Events](/apps/events/): configure app entry points
+- [Logging](/studio/logging/): inspect version-specific runs
+- [Templates](/apps/templates/): create reusable Flow snapshots

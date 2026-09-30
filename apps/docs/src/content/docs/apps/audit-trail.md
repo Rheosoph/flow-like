@@ -19,7 +19,7 @@ Your app has two chains:
 | `<app-id>#activity` | Activity: request attempts and outcomes, editor commands, graph writes, file read grants and run lifecycle. Only filled when the platform records them |
 
 Which actions are recorded, and for how long, is set by the platform operator; see
-[Platform administration](/dev/platform-administration/#audit-trail). With the
+[Platform administration](/self-hosting/administration/audit/). With the
 defaults, evidence stays readable in the app for about 13 months and is kept in
 immutable monthly archives until the end of the third calendar year after the month,
 while activity is kept for 90 days, or six months for apps assessed as high-risk AI

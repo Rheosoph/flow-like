@@ -1,0 +1,55 @@
+---
+title: "What Aurora DSQL changed in our backend"
+description: "Renewable credentials, asynchronous indexes, migration ordering, and retry boundaries were the real work behind Flow-Like's Aurora DSQL support."
+date: 2026-07-10
+tags: ["engineering", "aws", "dsql", "databases"]
+cover: "/images/community-H3.png"
+draft: true
+---
+
+A database can speak the PostgreSQL protocol and still require a different migration strategy. That was the useful lesson in bringing Aurora DSQL support to Flow-Like. The connection could be established long before the whole application's assumptions were accounted for.
+
+The work reached beyond a connection string: credentials needed renewal, schema changes returned asynchronous jobs, and retrying a transaction required a clear decision about which failures were safe to repeat.
+
+For teams considering the same move, those are the parts worth inspecting first. They affect the behavior of an application that is already running, including how it recovers during a schema rollout.
+
+<figure>
+  <img src="/posts/community/H3/overview.svg" alt="DSQL integration covers renewable IAM connections, asynchronous schema changes, ordered migrations, and bounded recovery." width="1600" height="1000" loading="lazy" />
+  <figcaption>The compatibility work follows the database's lifecycle, from opening a connection to recovering a failed operation.</figcaption>
+</figure>
+
+## A warm connection pool still needs fresh credentials
+
+The [Flow-Like connector](https://github.com/Rheosoph/flow-like/blob/dev/packages/aws-data/src/dsql.rs) uses IAM authentication and maintains the connection options used for new pooled connections. It refreshes credentials before the relevant token or signing credentials expire.
+
+A timer alone is insufficient for a Lambda process that can be frozen between requests. The next invocation may arrive long after the last timer tick. The connector therefore provides an on-demand freshness check as well as the support needed for continuously running services.
+
+It also retires pooled connections before the service's maximum connection lifetime. Renewal of connection credentials and retirement of existing connections are related but separate jobs: a new token does not change a connection already open.
+
+Configuration validation protects the destination of that token. When a DSQL endpoint is selected, the connector refuses competing static database and libpq settings that could redirect the connection or replace authentication. TLS verifies the endpoint rather than accepting an arbitrary server.
+
+## A submitted index is not yet a usable index
+
+In DSQL, `CREATE INDEX ASYNC` returns a job identifier. The application can inspect the job and wait for it to finish. AWS documents that asynchronous completion changes the catalog and can cause concurrency errors in other transactions. See [asynchronous indexes](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-create-index-async.html).
+
+That changes migration ordering. A later constraint can depend on a unique index that has been submitted but is still building. Running the next statement immediately can fail even though the earlier statement returned successfully.
+
+Our [migration runner](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/aws/migration/migrate.ts) tracks the submitted jobs and waits at the required boundaries. It records a migration as finished only after its asynchronous work has completed. The record then describes a usable schema rather than a list of requests sent to the database.
+
+The runner also executes schema statements individually. DSQL's transaction rules and asynchronous syntax do not fit an assumption that an entire migration file can be sent as one conventional SQL batch. AWS's [DDL documentation](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-ddl.html) explains the service-side behavior.
+
+## Retry a known failure within a budget
+
+A serialization or schema conflict can be transient. A constraint violation generally needs a different response. A lost connection around commit introduces another question: did the transaction commit before the client lost the answer?
+
+Flow-Like's database work makes those distinctions explicit. A retry policy needs an error classification, an attempt or time budget, and an understanding of the operation's side effects. Replaying an external email or payment while retrying database work would create a second problem.
+
+Schema retries have their own subtlety. A repeated statement can encounter an object that already exists because an earlier attempt took effect. The migration runner treats those cases according to the retry context; it does not broadly ignore errors on the first attempt.
+
+## Verify relationships as well as row counts
+
+A data copy can move the expected number of rows and still leave relationships incomplete. The migration work included deferred updates for cyclic relationships. If progress tracking marks one deferred update as complete under a key shared with another, a row-count check sees no difference.
+
+Verification therefore needs to inspect the values that restore those relationships, along with constraints and index state. Count the rows, but also ask whether the application can resolve the references it depends on.
+
+DSQL support is a compatibility and operations story. Whether it improves cost or throughput for a particular installation requires a workload measurement. The engineering result here is a backend path that accounts for credential renewal, asynchronous schema work, and bounded recovery, with those choices visible in code.

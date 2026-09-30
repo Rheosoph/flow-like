@@ -1,0 +1,62 @@
+---
+import { Image } from "astro:assets";
+import type { ImageMetadata } from "astro";
+
+interface Props {
+  src: string;
+  alt: string;
+  variant?: "hero" | "lead" | "compact";
+  class?: string;
+}
+
+const { src, alt, variant = "compact", class: className } = Astro.props;
+
+// Import the originals so Astro can generate responsive assets while their
+// public URLs remain available for social previews and existing links.
+const covers = import.meta.glob<ImageMetadata>(
+  "../../../public/images/*.{jpg,jpeg,png,webp,avif}",
+  { import: "default" },
+);
+const loadCover = covers[`../../../public${src}`];
+const cover = loadCover ? await loadCover() : undefined;
+const requestedWidths = variant === "hero" ? [640, 960, 1280, 1920] : [384, 640, 960, 1280];
+const widths = cover
+  ? [...new Set(requestedWidths.map((width) => Math.min(width, cover.width)))]
+  : [];
+
+const sizes = {
+  hero: "(min-width: 1152px) 1088px, (min-width: 1024px) calc(100vw - 64px), (min-width: 640px) calc(100vw - 48px), calc(100vw - 32px)",
+  lead: "(min-width: 1152px) 544px, (min-width: 1024px) calc(50vw - 32px), (min-width: 768px) calc(50vw - 24px), (min-width: 640px) calc(100vw - 48px), calc(100vw - 32px)",
+  compact: "(min-width: 1152px) 347px, (min-width: 1024px) calc(33.333vw - 38px), (min-width: 640px) calc(50vw - 36px), calc(100vw - 32px)",
+};
+const priority = variant !== "compact";
+---
+
+{cover ? (
+  <Image
+    data-blog-cover
+    src={cover}
+    alt={alt}
+    width={Math.min(variant === "hero" ? 1280 : 640, cover.width)}
+    widths={widths}
+    sizes={sizes[variant]}
+    format="webp"
+    quality={80}
+    loading={priority ? "eager" : "lazy"}
+    fetchpriority={priority ? "high" : "auto"}
+    decoding="async"
+    class={className}
+  />
+) : (
+  <img
+    data-blog-cover
+    src={src}
+    alt={alt}
+    width={1280}
+    height={800}
+    loading={priority ? "eager" : "lazy"}
+    fetchpriority={priority ? "high" : "auto"}
+    decoding="async"
+    class={className}
+  />
+)}

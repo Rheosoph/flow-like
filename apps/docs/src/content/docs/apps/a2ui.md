@@ -1,5 +1,5 @@
 ---
-title: Custom UI (A2UI)
+title: Build interfaces with A2UI
 description: Build rich user interfaces with AI or by hand
 sidebar:
   order: 46
@@ -13,23 +13,36 @@ Because the interface is data rather than hard-coded application markup, you
 can build it visually, edit its JSON, or ask FlowPilot to help generate and
 refine it.
 
+## Choose your task
+
+| Goal | Guide |
+| --- | --- |
+| Create a full App interface | [Create Pages](/apps/pages/) |
+| Reuse a component group | [Create Widgets](/apps/widgets/) |
+| Give an interface a path | [Configure App routes](/apps/routes/) |
+| Learn the shared editing controls | [Visual Builder controls](/dev/a2ui/visual-builder/) |
+| Generate or refine a design with AI | [FlowPilot UI generation](/reference/flowpilot-ui/) |
+| Integrate a renderer or write runtime messages | [A2UI runtime and messages](/dev/a2ui/overview/) |
+| Look up an exact component property | [Component reference](/reference/a2ui-components/) |
+
+The App guides describe authoring and publication tasks. The developer guides
+specify runtime messages and state APIs. This page defines the interface
+concepts they share; [App terminology](/apps/overview/#terms-you-will-see)
+explains their relationship to Flows and Events.
+
 ## Where A2UI appears
 
 ### Pages
 
 A [Page](/apps/pages/) is a full interface owned by a Flow. It combines an A2UI
 component tree with Page-level settings such as layout, lifecycle events, and
-SEO metadata. A UI Event gives the Page a navigable [route](/apps/routes/).
-
-![A support operations Page rendered in Flow-Like's visual Page Builder](../../../assets/PageBuilder.webp)
+SEO metadata. A Page-target Event gives the Page a navigable [route](/apps/routes/).
 
 ### Widgets
 
 A [Widget](/apps/widgets/) is a reusable A2UI component tree owned by an app.
 It can expose selected component properties for each instance and define named
 events that the containing workflow can handle.
-
-![A reusable support health card in Flow-Like's visual Widget Builder](../../../assets/WidgetBuilder.webp)
 
 ### Flow-generated interfaces
 
@@ -122,9 +135,10 @@ For the available component types and their exact properties, use the
 ## Create and expose a Page
 
 1. Open the Flow that should provide the Page's behavior.
-2. Open its **Pages** panel and select **New**.
+2. Open **Explorer → UI**, select **Create Page** (+), enter its name and
+   suggested route, then select **Create** and open the new Page row.
 3. Build the interface visually, with FlowPilot, or in Dev Mode.
-4. In the app's **Events** workspace, create or edit a UI Event.
+4. In the app's **Events** workspace, create or edit an Event with a Page target.
 5. Configure that Event to open the Page and assign a unique route.
 6. Preview the Page with representative data before sharing the app.
 

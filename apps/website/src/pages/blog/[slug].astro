@@ -5,6 +5,7 @@ import "../../styles/blog.css";
 import BlogLayout from "../../layouts/Blog-Layout.astro";
 import BlogNewsletter from "../../components/blog-newsletter.astro";
 import { BlogCodeEnhancer } from "../../components/blog/BlogCodeEnhancer";
+import BlogCover from "../../components/blog/BlogCover.astro";
 import { LuCopy, LuShare } from "react-icons/lu";
 
 export async function getStaticPaths() {
@@ -19,32 +20,44 @@ export async function getStaticPaths() {
 
 const { entry } = Astro.props;
 const { Content, headings } = await render(entry);
-const { title, description, date, tags = [], cover } = entry.data;
+const { title, description, date, updated, tags = [], cover } = entry.data;
 const postCover = cover;
 const hasFencedCode = /^ {0,3}(?:`{3,}|~{3,})/m.test(entry.body ?? "");
+const relatedPosts = (await getCollection("blog", ({ data }) => !data.draft))
+  .filter((post) => post.id !== entry.id)
+  .map((post) => ({
+    post,
+    sharedTags: post.data.tags.filter((tag) => tags.includes(tag)).length,
+  }))
+  .filter(({ sharedTags }) => sharedTags > 0)
+  .sort((a, b) => b.sharedTags - a.sharedTags || b.post.data.date.getTime() - a.post.data.date.getTime())
+  .slice(0, 3)
+  .map(({ post }) => post);
 
 const site = Astro.site ?? import.meta.env.SITE;
-const canonical = site ? new URL(Astro.url.pathname, site).toString() : "";
+const canonical = entry.data.canonical ?? new URL(`/blog/${entry.id.split("-").slice(3).join("-")}/`, site).toString();
 ---
 
-<BlogLayout data={entry.data} content={Content}>
+<BlogLayout data={entry.data}>
   <div class="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 pb-12 sm:pb-14 lg:pb-16">
-    <a
-      href="/blog/"
-      class="mb-8 inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/80 px-3.5 py-1.5 text-sm text-muted-foreground transition hover:border-border hover:text-foreground"
-    >
-      <span aria-hidden="true">←</span>
-      Back to blog
-    </a>
+    <nav aria-label="Breadcrumb" class="mb-8 text-sm text-muted-foreground">
+      <ol class="flex flex-wrap items-center gap-2">
+        <li><a href="/" class="hover:text-foreground">Home</a></li>
+        <li aria-hidden="true">/</li>
+        <li><a href="/blog/" class="hover:text-foreground">Blog</a></li>
+        <li aria-hidden="true">/</li>
+        <li aria-current="page">{title}</li>
+      </ol>
+    </nav>
 
     <header class="mb-10 overflow-hidden rounded-2xl border border-border/50 bg-card/50 backdrop-blur-sm">
       {postCover && (
         <div class="relative overflow-hidden border-b border-border/40">
-          <img
+          <BlogCover
             src={postCover}
             alt=""
+            variant="hero"
             class="h-56 w-full object-cover sm:h-64 md:h-72 lg:h-80"
-            loading="eager"
           />
           <div class="absolute inset-0 bg-gradient-to-t from-black/25 via-transparent to-transparent" />
         </div>
@@ -62,13 +75,21 @@ const canonical = site ? new URL(Astro.url.pathname, site).toString() : "";
         )}
 
         <div class="mt-5 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted-foreground">
+          <a href="/" rel="author" class="hover:text-foreground">Flow-Like</a>
+          <span aria-hidden="true" class="text-zinc-300 dark:text-zinc-700">·</span>
           <time datetime={new Date(date).toISOString()} class="whitespace-nowrap">
             {new Date(date).toLocaleDateString("en-US", {
               year: "numeric",
               month: "short",
               day: "numeric",
+              timeZone: "UTC",
             })}
           </time>
+          {updated && updated.getTime() > date.getTime() && (
+            <span>
+              Updated <time datetime={updated.toISOString()}>{updated.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" })}</time>
+            </span>
+          )}
           <span aria-hidden="true" class="text-zinc-300 dark:text-zinc-700">·</span>
           <span id="reading-time" class="whitespace-nowrap">— min read</span>
         </div>
@@ -93,7 +114,7 @@ const canonical = site ? new URL(Astro.url.pathname, site).toString() : "";
     <div class="grid gap-10 lg:grid-cols-[minmax(0,1fr)_260px] xl:gap-12 xl:grid-cols-[minmax(0,1fr)_280px]">
       <article
         id="post-content"
-        class="post-prose prose prose-zinc dark:prose-invert min-w-0 w-full max-w-none prose-headings:scroll-mt-20 first-h1-hidden"
+        class="post-prose prose prose-zinc dark:prose-invert min-w-0 w-full max-w-none prose-headings:scroll-mt-20"
       >
         <Content />
 
@@ -141,7 +162,7 @@ const canonical = site ? new URL(Astro.url.pathname, site).toString() : "";
               </p>
               <ul class="space-y-1.5">
                 {headings
-                  .filter((h) => h.depth <= 3 && h.slug)
+                  .filter((h) => h.depth >= 2 && h.depth <= 3 && h.slug)
                   .map((h) => (
                     <li class="toc-item" style={`padding-left: ${(h.depth - 1) * 10}px`}>
                       <a
@@ -159,6 +180,22 @@ const canonical = site ? new URL(Astro.url.pathname, site).toString() : "";
         }
       </aside>
     </div>
+
+    {relatedPosts.length > 0 && (
+      <section aria-labelledby="related-posts" class="mt-12 border-t border-border/50 pt-8">
+        <h2 id="related-posts" class="mb-5 text-2xl font-semibold">Related articles</h2>
+        <ul class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {relatedPosts.map((post) => (
+            <li>
+              <a href={`/blog/${post.id.split("-").slice(3).join("-")}/`} class="block h-full rounded-xl border border-border/50 bg-card/40 p-5 transition hover:border-border">
+                <h3 class="font-semibold">{post.data.title}</h3>
+                {post.data.description && <p class="mt-2 text-sm text-muted-foreground">{post.data.description}</p>}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
   </div>
 
   <div class="fixed inset-x-0 top-0 z-40 h-1">

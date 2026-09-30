@@ -129,7 +129,7 @@ For security vulnerabilities, **do not open a public issue**. Report privately t
 
 ## Code of Conduct
 
-By contributing, you agree to our [Code of Conduct](https://github.com/Rheosoph/flow-like/blob/main/CODE_OF_CONDUCT.md). We expect respectful, constructive interactions.
+By contributing, you agree to our [Code of Conduct](https://github.com/Rheosoph/flow-like/blob/dev/CODE_OF_CONDUCT.md). We expect respectful, constructive interactions.
 
 ## Thank You
 

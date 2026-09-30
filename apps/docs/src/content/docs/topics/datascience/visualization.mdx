@@ -5,7 +5,101 @@ sidebar:
   order: 5
 ---
 
+import ChartPreview from "../../../../components/docs/ChartPreview";
+
 Flow-Like pages can present analytical results with NivoChart, PlotlyChart, Table, and supporting text components. Choose the visual from the question and data shape, then keep units, scope, and freshness visible.
+
+## Build a quarterly chart
+
+This example uses invented data in **USD thousands**. It needs no database or AI model.
+
+1. Create a [Page](/apps/pages/) and open it in the visual builder.
+2. Open **Dev Mode** and paste the JSON below into the editor. It replaces the components while keeping the Page's current widget references and canvas settings. The example uses `root` for the Page's root container. If your root container has a different ID, keep that ID in the first component.
+3. Click **Apply Changes**, then close **Dev Mode** to return to the canvas. You should see four groups, Q1 through Q4, with revenue and profit bars. Q4 has the tallest revenue bar at 210.
+
+```json title="Chart surface"
+{
+  "components": [
+    {
+      "id": "root",
+      "component": {
+        "type": "column",
+        "children": {
+          "explicitList": ["revenue"]
+        }
+      }
+    },
+    {
+      "id": "revenue",
+      "component": {
+        "type": "nivoChart",
+        "chartType": {
+          "literalString": "bar"
+        },
+        "title": {
+          "literalString": "Quarterly revenue and profit (USD thousands)"
+        },
+        "height": {
+          "literalNumber": 350
+        },
+        "data": {
+          "literalJson": "[{\"quarter\":\"Q1\",\"revenue\":120,\"profit\":30},{\"quarter\":\"Q2\",\"revenue\":150,\"profit\":42},{\"quarter\":\"Q3\",\"revenue\":170,\"profit\":55},{\"quarter\":\"Q4\",\"revenue\":210,\"profit\":70}]"
+        },
+        "indexBy": {
+          "literalString": "quarter"
+        },
+        "keys": {
+          "literalJson": "[\"revenue\",\"profit\"]"
+        },
+        "barStyle": {
+          "literalJson": "{\"groupMode\":\"grouped\"}"
+        },
+        "showLegend": {
+          "literalBool": true
+        },
+        "animate": {
+          "literalBool": false
+        }
+      }
+    }
+  ]
+}
+```
+
+`literalJson` is a JSON string inside the component payload. `indexBy` names the category field, and `keys` identifies the numeric series. These names must match the data fields exactly.
+
+The sample renders as follows. The preview uses the same Nivo library and chart-data parser as Flow-Like's Markdown preview.
+
+<ChartPreview language="nivo" source={"{\"chartType\": \"bar\", \"data\": [{\"quarter\": \"Q1\", \"revenue\": 120, \"profit\": 30}, {\"quarter\": \"Q2\", \"revenue\": 150, \"profit\": 42}, {\"quarter\": \"Q3\", \"revenue\": 170, \"profit\": 55}, {\"quarter\": \"Q4\", \"revenue\": 210, \"profit\": 70}], \"keys\": [\"revenue\", \"profit\"], \"indexBy\": \"quarter\", \"groupMode\": \"grouped\", \"animate\": false, \"legends\": [{\"dataFrom\": \"keys\", \"anchor\": \"top-left\", \"direction\": \"row\", \"itemWidth\": 110, \"itemHeight\": 20, \"symbolSize\": 10, \"translateY\": -25}]}"} client:visible />
+
+| Quarter | Revenue (USD thousands) | Profit (USD thousands) |
+| --- | ---: | ---: |
+| Q1 | 120 | 30 |
+| Q2 | 150 | 42 |
+| Q3 | 170 | 55 |
+| Q4 | 210 | 70 |
+
+### Replace the data from a Flow
+
+Bind a Page button or load action to a workflow Event. Add **Push Data to Chart** after that Event and set:
+
+| Pin | Value |
+| --- | --- |
+| Chart | An element reference with `id` set to `revenue`, the component ID above |
+| Library | `Nivo` |
+| Format | `JSON` |
+| Data | The JSON array below, parsed as structured data |
+
+```json title="Replacement chart data"
+[
+  { "quarter": "Q1", "revenue": 130, "profit": 35 },
+  { "quarter": "Q2", "revenue": 160, "profit": 48 }
+]
+```
+
+Obtain **Chart** with [Get Element](/nodes/ui/elements/a2ui-get-element/) or the builder's element picker. Connect the execution wire from the Event to **Push Data to Chart**. Invoke it through the Page so the run has an active surface to update. The result has two groups, and Q2 revenue is 160. Running an unrelated event from Studio does not by itself open that Page.
+
+Before pushing query results, handle an empty array with an explicit “No results for these filters” message. Handle query failure with a visible error and retain the last successful chart only when it is labeled as stale. Never substitute zero for an unknown value.
 
 ## Chart libraries
 

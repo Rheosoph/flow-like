@@ -1,0 +1,61 @@
+---
+title: "An alternative to Langdock and GPTs that you can build on"
+description: "We built Knowledge Chat so you can share an AI assistant, fork its workflow, connect SharePoint and other sources, and run it on your own infrastructure."
+date: 2026-09-28
+tags: ["knowledge-chat", "comparison", "gpts", "langdock", "self-hosting"]
+cover: "/images/community-S1.png"
+draft: true
+---
+
+Your team has the documents. Finding the right answer still means searching through product pages, PDFs, and an internal handbook. A shared AI assistant lets colleagues ask about that material in one place.
+
+We built Knowledge Chat for exactly this use case. Add content from websites and files, give colleagues a place to ask questions, and share the assistant with the people who need it. If you have built a custom GPT or a Langdock Agent, the idea will feel familiar.
+
+The part we care about most is what you get behind the chat: **a Flow-Like project you can fork and change.** You can add SharePoint, change how the assistant finds information, or connect an answer to the next step in your business. You can also run the application on your own infrastructure.
+
+## Start with a working assistant, then make it yours
+
+Knowledge Chat gives you a starting project with a chat interface and a workflow for turning source material into answers. The workflow prepares the documents for search, retrieves relevant passages when someone asks a question, and passes those passages to the model.
+
+Forking gives you a copy to develop for your own use. You can open the workflow and follow how a document becomes searchable, which passages reach the model, and how the response is assembled. If the assistant keeps missing a useful section of your handbook, you can change the document preparation or search step directly.
+
+An onboarding assistant might begin with PDFs and public product pages. When the support team needs internal troubleshooting notes or a different model, you can add those to the same project while colleagues keep using a familiar chat.
+
+## Where GPTs and Langdock fit
+
+Custom GPTs bring instructions and attached knowledge into ChatGPT. They can also call external services through [GPT Actions](https://developers.openai.com/api/docs/actions/introduction). For a team already working in ChatGPT, that is a direct way to share a specialized assistant. Sharing and connected services follow the [workspace's controls](https://learn.chatgpt.com/docs/enterprise/gpts-and-sharing).
+
+Langdock brings agents into a shared workplace environment. Its [Agents](https://docs.langdock.com/en/using-langdock/agents/configuration) support files, knowledge collections, integrations, and workflows. It also offers [Folder Sync](https://docs.langdock.com/en/using-langdock/guides/integrations/folder-sync) for sources including SharePoint, Google Drive, OneDrive, and Confluence Cloud.
+
+In Flow-Like, you can edit the ingestion, retrieval, model calls, and follow-up actions in the app's workflow.
+
+<figure>
+  <img src="/posts/community/S1/comparison.svg" alt="Flow-Like offers an editable app and workflow; custom GPTs configure an assistant in ChatGPT; Langdock provides agents, connected knowledge, and workflows in a shared workspace." width="1800" height="1150" loading="lazy" />
+  <figcaption>All three support assistants grounded in your knowledge. Flow-Like gives you a project you can fork, extend, and operate yourself.</figcaption>
+</figure>
+
+## Bring SharePoint into your own workflow
+
+Suppose your product documentation lives on a website, the installation guides arrive as PDFs, and your team keeps its internal handbook in SharePoint. Those sources belong together in the assistant even though different people maintain them in different places.
+
+In your Knowledge Chat fork, connect SharePoint, choose the site and document library, and feed the selected files into the extraction and indexing workflow. The chat can then draw on that content alongside your other sources. Our [SharePoint walkthrough](/blog/knowledge-chat-sharepoint-extension/) follows that extension in detail.
+
+Because the import is a workflow, you decide which folders belong in the collection, how often to refresh them, and what happens when a document changes or disappears. You can use the same approach for another source through its connector or API.
+
+Keep the audience of the collection clear. Importing a document into a search index does not automatically carry over its SharePoint permissions. For a team handbook, you can use a collection approved for that team; finer access rules belong in the retrieval workflow, before the model receives the passages.
+
+## Built in Germany, run on your terms
+
+We're RHEOSOPH, the Munich-based team behind Flow-Like. We believe a German AI product should give you practical control over the application you rely on: where it runs, which services it connects to, and how it uses your data.
+
+You can [host Flow-Like on your own infrastructure](https://docs.flow-like.com/self-hosting/containers/), keep the knowledge store there, and use a model you operate yourself. If you prefer a hosted model, you can connect that instead. The choice determines where the model inputs are processed, so it belongs with the team responsible for the data.
+
+Langdock also offers [EU hosting and dedicated deployment options](https://langdock.com/de/security). With Flow-Like, self-hosting sits alongside the ability to edit the application itself.
+
+## Let the assistant do something with the answer
+
+A support assistant can find an installation guide. It can also become the starting point for a support process: collect the missing details, prepare a ticket, and ask a colleague to approve the handoff. In Flow-Like, you can build those steps around the retrieval and chat you already have.
+
+GPT Actions and Langdock's [workflows](https://langdock.com/products/workflows) offer extensions too. In Knowledge Chat, those steps become part of your app, with its own interface and a workflow you can keep developing.
+
+[Open Knowledge Chat](https://app.flow-like.com/use?id=mkz4u2pqwy46ip8izswmwewq), fork the project, and bring a few of the sources your team reaches for every day.

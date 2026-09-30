@@ -10,7 +10,7 @@ The HTTP sink allows you to trigger workflow executions via standard HTTP reques
 ## Endpoint Format
 
 ```
-POST/GET/PATCH/DELETE /sink/trigger/http/{app_id}/{path}
+POST/GET/PATCH/DELETE /api/v1/sink/trigger/http/{app_id}{path}
 ```
 
 - `app_id`: Your application's unique identifier
@@ -45,13 +45,13 @@ curl -X POST "http://localhost:9657/app_abc123/webhook" \
 When deployed to a server, the endpoint is publicly accessible:
 
 ```
-https://your-domain.com/sink/trigger/http/{app_id}{path}
+https://your-domain.com/api/v1/sink/trigger/http/{app_id}{path}
 ```
 
 ### Example Request
 
 ```bash
-curl -X POST "https://your-domain.com/sink/trigger/http/app_abc123/webhook" \
+curl -X POST "https://your-domain.com/api/v1/sink/trigger/http/app_abc123/webhook" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-auth-token" \
   -d '{"event": "test", "data": {"key": "value"}}'
@@ -64,7 +64,7 @@ curl -X POST "https://your-domain.com/sink/trigger/http/app_abc123/webhook" \
 If you configure an `auth_token`, all requests must include it in the `Authorization` header:
 
 ```bash
-curl -X POST "https://your-domain.com/sink/trigger/http/app_abc123/webhook" \
+curl -X POST "https://your-domain.com/api/v1/sink/trigger/http/app_abc123/webhook" \
   -H "Authorization: Bearer your-secret-token" \
   -d '{"data": "payload"}'
 ```
@@ -83,22 +83,39 @@ For production deployments, always use authentication when possible.
 
 ## Response Format
 
-The HTTP sink returns a streaming response with execution progress:
+The sink waits up to 120 seconds for the Flow's first `generic_result` and
+returns its payload as JSON. For example, a Flow that returns
+`{"accepted": true}` produces:
 
-```
+```http
 HTTP/1.1 200 OK
-Content-Type: text/event-stream
+Content-Type: application/json
 
-data: {"type":"progress","run_id":"run_xyz","progress":25}
-
-data: {"type":"progress","run_id":"run_xyz","progress":50}
-
-data: {"type":"progress","run_id":"run_xyz","progress":100}
-
-data: {"type":"complete","run_id":"run_xyz","output":{...}}
+{"accepted":true}
 ```
 
-For non-streaming clients, the final result is included in the last event.
+The returned payload belongs to your Flow. Configure a Generic Event with a
+return value when the caller needs a result. Test the request above with that
+Event active before connecting an external service.
+
+If execution ends without a result, the result stream fails, or the result wait
+expires, the hosted endpoint returns an acknowledgement:
+
+```json
+{"triggered":true,"run_id":"run_xyz","message":"Event triggered"}
+```
+
+The desktop endpoint instead returns the plain text `Event triggered` when no
+result arrives. HTTP 200 alone does not prove the Flow completed successfully.
+Inspect the run and its logs; do not automatically retry a request that may
+already have produced effects. A reverse proxy or caller can impose a shorter
+timeout than the sink's result wait.
+
+For progress events, use the Event invocation API:
+`POST /api/v1/apps/{app_id}/events/{event_id}/invoke`. The SDKs expose it as
+[`triggerEvent()`](/dev/sdks/nodejs/#trigger-an-event) and
+[`trigger_event()`](/dev/sdks/python/#trigger-an-event). Their asynchronous
+invocation methods return a run ID and poll token for longer work.
 
 ## Use Cases
 

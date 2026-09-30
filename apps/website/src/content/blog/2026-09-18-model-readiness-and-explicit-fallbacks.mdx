@@ -1,0 +1,35 @@
+---
+title: "Know which model connection is ready to use"
+description: "Flow-Like keeps provider startup, authentication, and model discovery visible, with deliberate recovery when a saved model is unavailable."
+date: 2026-09-18
+tags: ["AI", "models", "FlowPilot"]
+cover: "/images/community-U2.png"
+draft: true
+---
+
+A saved model name tells you what someone selected. It does not tell you whether the provider is running, whether the current session is authenticated, or whether that model is still available through the installed runtime. Those questions become visible when a person switches machines or returns after a provider configuration changed.
+
+Flow-Like tracks provider startup and connection progress, authentication status, model discovery, and a diagnostic. That gives recovery a specific next step. A stopped backend needs to start; an unauthenticated session needs sign-in; a changed model catalog needs a valid selection.
+
+## Wait for the provider's catalog
+
+While the provider is loading or unavailable, the interface can use a small static model list. The authoritative list comes from the installed backend runtime. The state records whether that catalog request completed, so a temporary loading choice need not overwrite a valid selection discovered elsewhere.
+
+The [selection logic](https://github.com/Rheosoph/flow-like/blob/dev/packages/ui/components/global-chat/model-selection.ts) restores a remembered model when the current list contains it. An empty selection can use the first available choice. Replacing a nonempty selection that is absent from the list requires permission to treat that list as authoritative.
+
+This distinction matters when several surfaces share the selected model. An offline fallback list leaves a nonempty selection alone while discovery is pending. Retry can start a stopped backend or refresh model and authentication information. The [connection hook](https://github.com/Rheosoph/flow-like/blob/dev/packages/ui/hooks/use-copilot-sdk.tsx) keeps those actions tied to the connection state.
+
+<figure>
+  <img src="/posts/community/U2/overview.svg" alt="Inspect a model connection, use an available model, or follow an explicitly configured alternative and review the resulting provider." loading="lazy" width="1600" height="1000" />
+  <figcaption>A connection check informs the next action. A workflow fallback still needs an explicit policy.</figcaption>
+</figure>
+
+## Decide what an unavailable model should mean
+
+Catalog recovery and workflow fallback are separate decisions. Choosing another item for a model selector does not establish a universal retry policy for failed model requests.
+
+For a workflow that summarizes an internal document, an unavailable connection might mean stopping with a useful message. If an alternate provider is acceptable, configure that branch deliberately and make the provider used visible in the result. Consider the document's data restrictions and the alternate model's capabilities before sending the same input elsewhere.
+
+Make that choice visible to the person waiting for the result. If the workflow stops, explain which connection needs attention. If it uses an approved alternate provider, identify that provider with the answer. This keeps recovery understandable when a saved preference cannot be used.
+
+A readiness check is a statement about observable connection state. It is not a remaining-quota guarantee, and it cannot promise that the next request will succeed. Keeping those meanings separate makes a saved model choice easier to trust and a failed call easier to diagnose.

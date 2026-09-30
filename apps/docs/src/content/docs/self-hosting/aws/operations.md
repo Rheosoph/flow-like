@@ -24,7 +24,7 @@ The API uses `lambda_http` with streaming responses. Configure `SECRET_PREFIX`
 for SSM secret lookup and `CDN_BUCKET_NAME` for the CDN store. External S3-compatible
 CDN stores can also use `CDN_BUCKET_ENDPOINT` and `CDN_BUCKET_ACCESS_KEY_ID`, with
 `CDN_BUCKET_SECRET_ACCESS_KEY` in the secret store. See the
-[API entrypoint](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/aws/api/src/main.rs)
+[API entrypoint](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/aws/api/src/main.rs)
 for how the store is constructed.
 
 `DSQL_CLUSTER_ENDPOINT` selects Aurora DSQL. The API and file tracker otherwise
@@ -61,7 +61,7 @@ that timeout and monitor its dead-letter queue.
 For local invocation, use `cargo lambda watch` and pass an SQS event fixture to
 `cargo lambda invoke --data-file <fixture.json>`. The message body must contain
 the actual execution request; an API Gateway fixture does not exercise this
-handler. The [SQS handler](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/aws/executor-async/src/main.rs)
+handler. The [SQS handler](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/aws/executor-async/src/main.rs)
 defines the batch response behavior.
 
 ## Email automation
@@ -106,7 +106,7 @@ asynchronous executor. Repeated receipt notifications use the same delivery ID.
    you pass a customer managed key, also pass its ARN as the stack's
    `SecretKmsKeyArn`.
 4. Build and deploy
-   [the SAM template](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/aws/mail-ingress/template.yaml)
+   [the SAM template](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/aws/mail-ingress/template.yaml)
    from the repository root. AWS SAM CLI and Docker are required.
 
    ```sh

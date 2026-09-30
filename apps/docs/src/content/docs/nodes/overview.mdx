@@ -11,11 +11,11 @@ sidebar:
 import { NodeCatalogOverview } from "../../../components/node-docs/NodeReference";
 import {
   catalogCategories,
-  catalogNodes,
+  catalogSummaries,
 } from "../../../generated/catalog-nodes";
 
 <NodeCatalogOverview
-  nodes={catalogNodes}
+  nodes={catalogSummaries}
   categories={catalogCategories}
   client:load
 />

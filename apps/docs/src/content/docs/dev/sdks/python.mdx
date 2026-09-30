@@ -1,6 +1,6 @@
 ---
 title: Python SDK
-description: Complete reference for the flow-like Python package — authenticate, trigger workflows, manage files, query databases, and use LLMs from Python.
+description: Use the Python SDK for authentication, workflows, files, databases, and model calls.
 sidebar:
   order: 2
 ---
@@ -171,22 +171,31 @@ db = client.create_lance_connection("app-id", access_mode="write")
 
 # Use with the LanceDB API
 table = db.open_table("my-embeddings")
-results = table.search([0.1, 0.2, ...]).limit(10).to_pandas()
+results = table.search([0.1, 0.2, 0.3]).limit(10).to_pandas()
 ```
 
 Access modes:
-- `"read"` (default) — read-only credentials
-- `"write"` — full read-write credentials
+- `"read"` (default): read-only credentials
+- `"write"`: full read-write credentials
 
 ## Chat Completions
 
-Use `list_llms()` to discover available model `bit_id` values.
+Select a model whose `api_surface` is `ChatCompletions`. Models without that
+field use the same surface for compatibility. The API returns HTTP 400 if the
+selected model requires a different surface.
 
-```python
-# Non-streaming
+```python title="chat-completions.py"
+models = client.list_llms()
+model = next(
+    (item for item in models if (item.api_surface or "ChatCompletions") == "ChatCompletions"),
+    None,
+)
+if model is None:
+    raise RuntimeError("This hub has no Chat Completions model.")
+
 result = client.chat_completions(
     messages=[{"role": "user", "content": "Explain quantum computing in one sentence."}],
-    bit_id="bit-id-for-gpt4",
+    bit_id=model.bit_id,
     temperature=0.7,
     max_tokens=200,
 )
@@ -198,13 +207,37 @@ print(result.choices[0].message.content)
 ```python
 for event in client.chat_completions(
     messages=[{"role": "user", "content": "Hello!"}],
-    bit_id="bit-id-for-gpt4",
+    bit_id=model.bit_id,
     stream=True,
 ):
     print(event.data, end="")
 ```
 
-### Usage tracking
+## Responses
+
+Use `responses()` for a model whose `api_surface` is `Responses`. The method
+returns the raw Responses dictionary. `aresponses()` is its async counterpart.
+
+```python title="responses.py"
+models = client.list_llms()
+model = next((item for item in models if item.api_surface == "Responses"), None)
+if model is None:
+    raise RuntimeError("This hub has no Responses model.")
+
+result = client.responses(
+    input="Explain quantum computing in one sentence.",
+    bit_id=model.bit_id,
+    max_output_tokens=200,
+)
+print(result["output"])
+```
+
+For streaming, iterate `client.responses(input, model.bit_id, stream=True)`.
+Each event contains an event name and its JSON `data` string. Keep the event
+type when handling progress and final output.
+
+
+## Usage tracking
 
 ```python
 usage = client.get_usage()
@@ -229,7 +262,7 @@ result = client.embed(bit_id="bit-id-for-embedding", input=["Hello", "World"])
 # List all remotely-available LLMs
 llms = client.list_llms()
 for m in llms:
-    print(m.bit_id, m.name, m.provider_name, m.context_length)
+    print(m.bit_id, m.name, m.api_surface, m.context_length)
 
 # List all remotely-available embedding models
 embeddings = client.list_embedding_models()
@@ -252,6 +285,7 @@ class ModelInfo:
     name: str
     description: str
     provider_name: str | None
+    api_surface: str | None  # "ChatCompletions", "Responses", or None
     model_id: str | None
     context_length: int | None   # LLMs only
     vector_length: int | None    # Embeddings only
@@ -397,13 +431,25 @@ vectors = await embeddings.aembed_documents(["text1", "text2"])
 
 ## Error Handling
 
-The SDK raises `httpx.HTTPStatusError` for non-2xx responses:
+API responses outside the successful HTTP range raise the public SDK
+exceptions. Catch a specific error when recovery differs, then `APIError` for
+other HTTP failures:
 
-```python
-import httpx
+```python title="api-errors.py"
+from flow_like import APIError, NotFoundError, RateLimitError
 
 try:
     result = client.get_app("nonexistent-id")
-except httpx.HTTPStatusError as e:
-    print(f"HTTP {e.response.status_code}: {e.response.text}")
+except NotFoundError:
+    print("App not found or unavailable to this caller.")
+except RateLimitError:
+    print("Request rate limited. Retry after the service permits it.")
+except APIError as error:
+    print(f"HTTP {error.status_code}: {error.response_body}")
 ```
+
+`ServerError` covers HTTP 5xx and also inherits from `APIError`. Configuration
+and credential-format failures raise `ConfigurationError` and
+`AuthenticationError`. Transport failures, such as a connection error or
+request timeout, remain `httpx.RequestError` subclasses. A timeout does not
+establish whether a mutation committed, so check its result before retrying.

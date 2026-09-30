@@ -282,8 +282,8 @@ the libpq connection settings (`PGPASSWORD`, `PGPASSFILE`, `PGSERVICE`,
 and supported `CSQL_PROXY_*` selectors. These controls keep identity acquisition
 on the instance metadata path and database connections on the configured direct
 TLS path. The exact lists are in the
-[API guard](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/gcp/api/src/config.rs)
-and [PostgreSQL client](https://github.com/Rheosoph/flow-like/blob/main/packages/gcp-data/src/postgres.rs).
+[API guard](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/gcp/api/src/config.rs)
+and [PostgreSQL client](https://github.com/Rheosoph/flow-like/blob/dev/packages/gcp-data/src/postgres.rs).
 
 ## Database bootstrap and token rotation
 
@@ -389,7 +389,7 @@ Prisma passes the datasource URL to its schema-engine child as an argument,
 so its SQL-login token is visible to processes sharing the container during
 the push. Run only the migration processes in that container. This is a
 current limitation of the
-[migration entrypoint](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/gcp/migration/migrate.ts).
+[migration entrypoint](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/gcp/migration/migrate.ts).
 For runner checks from `apps/backend/gcp/migration`, use `bun install`,
 `bun test tests/`, and `bun run typecheck`.
 

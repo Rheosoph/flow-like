@@ -1,10 +1,12 @@
 ---
+import BlogCover from "./blog/BlogCover.astro";
+
 const { entry, variant = "lead" } = Astro.props;
 const { title, description, date, tags, cover } = entry.data;
 const href = "/blog/" + entry.id.split("-").slice(3).join("-") + "/";
 
 const formatDate = (d: Date) =>
-  d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 
 const tagColors: Record<string, string> = {
   release: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20",
@@ -25,12 +27,10 @@ const displayTags = (tags ?? []).slice(0, 3);
       <div class="grid md:grid-cols-2">
         <div class="relative aspect-[16/10] md:aspect-auto overflow-hidden">
           {cover ? (
-            <img
+            <BlogCover
               src={cover}
               alt={title}
-              width={1280}
-              height={896}
-              loading="eager"
+              variant="lead"
               class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
             />
           ) : (
@@ -79,12 +79,10 @@ const displayTags = (tags ?? []).slice(0, 3);
     <article class="relative flex flex-col h-full overflow-hidden rounded-2xl border border-border/50 bg-card/50 backdrop-blur-sm transition-all duration-300 hover:border-border hover:shadow-lg hover:shadow-primary/5 hover:-translate-y-0.5">
       <div class="relative aspect-[16/10] overflow-hidden">
         {cover ? (
-          <img
+          <BlogCover
             src={cover}
             alt={title}
-            width={640}
-            height={400}
-            loading="lazy"
+            variant="compact"
             class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
           />
         ) : (

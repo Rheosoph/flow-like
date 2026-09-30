@@ -1,38 +1,72 @@
 ---
-title: Sharing and Visibility
-description: Collaborate and Share Your Flow-Like Apps
+title: Sharing and visibility
+description: Give people and connected Apps access to an online App.
 sidebar:
   order: 20
 ---
 
-Sharing and visibility features require that you [log in with your Flow-Like account](/start/login/) and set your app to **online** (see [Offline vs. Online](/apps/offline-online/)).
+Sharing requires an [online App](/apps/offline-online/) and a signed-in account
+with permission to manage its access. Visibility controls how people discover
+or request the App; roles control what members can do inside it.
 
-## App Visibility
+## Change visibility
 
-By default, an online app is **Private**, meaning it is only accessible to your
-account. To change this, open the app’s **Dashboard**, select the **Details**
-tab, and use the **Visibility Status** section:
+1. Open the App's **Dashboard**.
+2. Open **Access & sharing** in its settings.
+3. Choose the visibility appropriate for the App and save the change.
 
-![The Visibility Status section on the Details tab of an app Dashboard in Flow-Like Desktop](../../../assets/AppVisibilitySettings.webp)
+![App visibility controls in the Dashboard's Access and sharing settings](../../../assets/AppVisibilitySettings.webp)
 
-The minimum visibility level for sharing your app with others is **Prototype**. This allows you to share your app with other Flow-Like users.
+An online App starts **Private**, accessible to its owner. **Prototype**
+enables sharing with other Flow-Like users and unlocks the Team area.
+**Public Request** and **Public** support the App Store publication path.
+Changing visibility does not give every member permission to edit Flows or data.
 
-As your app develops, you can increase its visibility to **Public Request** or **Public**, making it available in the **Flow-Like App Store**.
+## Invite people
 
-## Sharing Your App
+1. With the App at least **Prototype**, open **Team**. The page is titled
+   **Access**.
+2. Use **Invite people** for a direct invitation, or open **Invites & links**
+   to create and manage invitation links.
+3. Choose the intended access and any available limits before sharing a link.
+4. Check **People** after the invitation is accepted and review the member's
+   assigned role.
 
-Once your app has at least **Prototype** visibility, **Team** appears in the
-app navigation. The Team page is titled **Access & Relationships**.
+![The Access workspace for managing App members and invitations](../../../assets/ShareApps.webp)
 
-On that page, open the **Invite & Access** tab to invite Flow-Like users
-directly or generate an invite link for your app:
+The Access sections have different jobs:
 
-![The Invite and Access tab on the Access and Relationships page in Flow-Like Desktop](../../../assets/ShareApps.webp)
+| Section | Use it to |
+| --- | --- |
+| **People** | Inspect current members and their roles. |
+| **Join requests** | Review people asking to join; approval uses the default role. |
+| **Invites & links** | Invite users and manage reusable invitation links. |
+| **API keys** | Issue and manage programmatic App access. |
+| **Connected apps** | Review access relationships with other Apps. |
 
-## Rights and Roles
+The screen reports when your role cannot read or change a section. Missing
+permission is different from an empty list.
 
-As the app **owner**, you can assign different **roles** to team members. Open
-**Roles** in the app navigation to define roles, choose their permissions and
-attributes, and set the default role for new members:
+## Rights and roles
 
-![The Roles page in Flow-Like Desktop with the dialog for creating a role and assigning permissions](../../../assets/RightsAndRoles.webp)
+Enable [Developer Mode](/start/developer-mode/) to see **Roles** in the App
+navigation. Open it to create roles, choose permissions and attributes, and set
+the default role for new members. Owners and authorized administrators should
+review that default before inviting a group.
+
+![The Roles page with an expanded role and permission levels for team access, data, workflows, and Events](../../../assets/RightsAndRoles.webp)
+
+For example, permission to invoke an Event does not necessarily include
+permission to read or edit its Flow. Local execution needs enough access to
+load the Flow; see [execution permissions](/apps/offline-online/#permissions-and-local-execution).
+
+## Release an interface
+
+Set the App's display version and changelog under **Dashboard → Pricing &
+release**. That version is release metadata. To keep a live interface on tested
+logic, [pin its Flow version](/studio/versioning/) and follow the
+[Event release walkthrough](/apps/event-releases/).
+
+For a browser link that opens a chat, form, or Page, configure
+[Event hosting](/apps/events/#publish-a-hosted-chat-form-or-page). App Store
+visibility and anonymous hosted access are separate settings.

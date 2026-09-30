@@ -156,7 +156,7 @@ dead-letter grants on the Pub/Sub identities that perform those operations.
 Static credentials, metadata/proxy overrides, emulator settings, and the
 worker's custom Pub/Sub/Storage endpoint settings fail startup, including
 empty values. The exact list is in the
-[worker entrypoint](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/gcp/queue-worker/src/main.rs).
+[worker entrypoint](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/gcp/queue-worker/src/main.rs).
 
 ## Delivery validation and object events
 
@@ -236,5 +236,5 @@ acknowledgement window, and account for parked requests in concurrency planning.
 Delivery remains at least once. Callback and run persistence are the final
 boundary when settlement fails after completed work; claim ownership alone
 does not make external side effects exactly once. See the
-[claim implementation](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/gcp/queue-worker/src/claim.rs)
+[claim implementation](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/gcp/queue-worker/src/claim.rs)
 for takeover and release behavior.

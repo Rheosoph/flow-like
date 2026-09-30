@@ -5,34 +5,49 @@ sidebar:
     order: 25
 ---
 
-### Connection Types
+## Connection types
 
 There are two types of *wires* / *connections* between nodes:
+
 - **Execution Wires** (*white*) represent execution flow throughout the graph, typically starting with an *event node*. Executions can branch at *Branch Nodes*, repeat in *Loop Nodes*, or split for *parallel* execution.
 - **Data Wires** (*colored, dashed*) represent data transmission between nodes. The *color* of a data wire indicates the *data type* (see also [Variables and Types](/studio/variables/)).
 
-All pins in Flow-Like Studio *enforce types*:
+Studio checks connection compatibility:
+
 - You can only connect execution pins to other execution pins.
-- You can only connect data pins to pins of the *same type* (aka *color*).
+- Data pins must have compatible types and collection shapes. A String value
+  and an array of Strings are different shapes, even though their pins share
+  a color.
+- Generic pins can accept different data types within the node's declared
+  constraints.
 
 Some nodes additionally enforce a *schema* on complex types (structs, *purple*). For example, a *Path* output is only accepted by nodes that also have a *Path* input pin.
 
 ![A screenshot showing different wire / connection types in Flow-Like Studio](../../../assets/ConnectionsWires.webp)
 
-Some nodes come with *generic (unspecified) types* when selected from the node catalog. For example, the *For Node* allows looping over arrays of different types, but once an upstream data pin is connected, its type is *fixed* (e.g., a *For Node* for *Paths*):
+A **Generic** input can accept values from several data types. In the
+illustrated connection, a String output feeds a Generic input:
 
-![A screenshot showing how an upstream data pin sets the type of a generically typed input pin](../../../assets/GenericPinTypes.webp)
+![A String output connected to a Generic input in the example workflow](../../../assets/GenericPinTypes.webp)
 
-### Auto-Suggestions Based on Types
+Some nodes also update their pin types when connected. For example,
+**For Each** begins with a Generic Array input. Connecting an array lets it
+match that input's type and the type of its **Value** output. Check the node's
+pins after wiring it; generic acceptance and pin-type updates depend on the
+node.
 
-Thanks to Flow-Like's strong typing mechanism, we can leverage the fact that only pins of the same type can be connected and suggest matching nodes.
+## Find compatible nodes
 
-Drag a pin (input or output) onto the open canvas to create a new node that is immediately connected to the current node:
+Drag a pin onto open canvas to search for a compatible node:
+
+1. Drag an input or output pin away from its node.
+2. Drop it on an empty part of the canvas.
+3. Search the filtered catalog and inspect the proposed pin connection.
+4. Choose a node to add it with that connection.
 
 ![A screenshot showing how to drag a node pin into the open canvas to immediately create a new node + wire.](../../../assets/DrawPin.webp)
 
-Once you drop the dragged pin, the node catalog dialog opens and suggests only those nodes that can actually be connected to this pin:
+The catalog identifies the source pin and previews which pin will receive the
+wire:
 
 ![A screenshot showing how the node catalog is reduced to the set of nodes that can actually be connected to the selected pin](../../../assets/TypedCatalogSuggestions.webp)
-
-Catalog filtering based on *types* can significantly speed up your flow creation process.

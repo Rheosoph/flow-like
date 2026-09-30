@@ -94,4 +94,4 @@ when Developer Mode is on.
 
 Curators with the **Write landing page** permission see **Edit layout** in the
 header, which opens the Explore editor in the admin area (see
-[Platform administration](/dev/platform-administration/)).
+[Curate Explore](/self-hosting/administration/explore/)).
