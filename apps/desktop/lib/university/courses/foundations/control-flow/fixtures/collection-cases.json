@@ -1,0 +1,32 @@
+[
+  {
+    "labels": [
+      "cedar",
+      "birch",
+      "ash"
+    ],
+    "expectedMessages": [
+      "cedar",
+      "birch",
+      "ash",
+      "DONE"
+    ]
+  },
+  {
+    "labels": [],
+    "expectedMessages": [
+      "DONE"
+    ]
+  },
+  {
+    "labels": [
+      "BOX-A",
+      "BOX-B"
+    ],
+    "expectedMessages": [
+      "BOX-A",
+      "BOX-B",
+      "DONE"
+    ]
+  }
+]

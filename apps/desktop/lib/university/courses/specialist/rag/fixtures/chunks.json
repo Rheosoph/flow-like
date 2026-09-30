@@ -1,0 +1,26 @@
+[
+  {
+    "chunk_id": "refund-v1-1",
+    "source_id": "refund",
+    "version": "v1",
+    "location": "section 1",
+    "public": true,
+    "text": "REF-201. Annual plans can be refunded within 30 days of purchase."
+  },
+  {
+    "chunk_id": "support-v1-1",
+    "source_id": "support",
+    "version": "v1",
+    "location": "section 1",
+    "public": true,
+    "text": "Support is available Monday to Friday. The standard response target is 4 hours."
+  },
+  {
+    "chunk_id": "enterprise-v1-1",
+    "source_id": "enterprise",
+    "version": "v1",
+    "location": "section 1",
+    "public": false,
+    "text": "Enterprise-only practice addendum: the negotiated discount is 17 percent."
+  }
+]

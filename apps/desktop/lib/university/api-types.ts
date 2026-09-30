@@ -291,3 +291,27 @@ export interface SignedUploadOptions {
 	headers?: HeadersInit;
 	signal?: AbortSignal;
 }
+
+export interface LearningPathStepView {
+	course_id: string;
+	position: number;
+	course: CourseListItem | null;
+}
+
+export interface LearningPathView {
+	id: string;
+	slug: string | null;
+	title: string;
+	description: string | null;
+	position: number;
+	is_published: boolean;
+	steps: LearningPathStepView[];
+}
+
+export interface LearningPathUpsertBody {
+	title: string;
+	slug: string | null;
+	description: string | null;
+	position: number;
+	is_published: boolean;
+}

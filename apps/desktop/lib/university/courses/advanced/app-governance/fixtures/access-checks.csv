@@ -1,0 +1,8 @@
+actor,operation,expected
+operator,run_practice_flow,allowed
+operator,trigger_practice_event,allowed
+operator,read_run_logs,allowed
+operator,save_flow_edit,denied
+operator,change_event_configuration,denied
+table_reader,read_practice_table,allowed
+table_reader,read_app_file,denied

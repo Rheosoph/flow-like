@@ -4,6 +4,11 @@ import sharp from "sharp";
 
 import { type UniversityClient, createUniversityClient } from "./client";
 import { buildUniversityOperations } from "./plan";
+import {
+	type UniversityRetirement,
+	findUniversityRetirements,
+	retireUniversityEntity,
+} from "./reconciliation";
 import type {
 	UniversityAssetPlan,
 	UniversityCoursePlan,
@@ -24,7 +29,7 @@ export type UniversityOperationStatus =
 
 export interface UniversityOperationResult {
 	index: number;
-	type: UniversityOperationKind | "verify" | "inspect" | "list";
+	type: UniversityOperationKind | "verify" | "prune" | "inspect" | "list";
 	status: UniversityOperationStatus;
 	description: string;
 	durationMs?: number;
@@ -49,6 +54,11 @@ export interface UniversityRemoteOptions {
 	timeoutMs: number;
 }
 
+export interface UniversityApplyOptions {
+	prune?: boolean;
+	legacyMediaAssets?: boolean;
+}
+
 export interface UploadSingleUniversityAssetOptions {
 	courseId: string;
 	name: string;
@@ -56,11 +66,13 @@ export interface UploadSingleUniversityAssetOptions {
 	kind?: "IMAGE" | "VIDEO" | "AUDIO" | "DOCUMENT";
 	mimeType?: string;
 	replace: boolean;
+	legacyMediaAssets?: boolean;
 }
 
 interface ExecutionStep {
 	operation?: UniversityOperation;
 	verify?: true;
+	prune?: true;
 }
 
 interface KnownAsset {
@@ -70,11 +82,13 @@ interface KnownAsset {
 	mimeType: string;
 	size: number;
 	kind: string;
+	storageKey?: string;
 	raw: unknown;
 }
 
 interface ApplyState {
 	assets?: KnownAsset[];
+	legacyMediaAssets?: boolean;
 }
 
 const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
@@ -162,7 +176,10 @@ function courseBody(course: UniversityCoursePlan, publish: boolean) {
 	};
 }
 
-function operationDescription(operation: UniversityOperation): string {
+function operationDescription(
+	operation: UniversityOperation,
+	legacyMediaAssets = false,
+): string {
 	switch (operation.type) {
 		case "upsertCourse":
 			return operation.publish
@@ -171,7 +188,7 @@ function operationDescription(operation: UniversityOperation): string {
 		case "uploadMedia":
 			return `Upload course ${operation.item} from ${basename(operation.file)}`;
 		case "uploadAsset":
-			return `Upload asset @${operation.asset.name} from ${basename(operation.asset.file)}`;
+			return `Upload asset @${operation.asset.name} from ${basename(operation.asset.file)}${legacyMediaAssets && operation.asset.kind === "DOCUMENT" ? " (legacy .webp storage key)" : ""}`;
 		case "upsertAppLink":
 			return `Upsert application link ${operation.appLink.id}`;
 		case "upsertModule":
@@ -185,30 +202,49 @@ function operationDescription(operation: UniversityOperation): string {
 	}
 }
 
-function executionSteps(plan: UniversityPlan): ExecutionStep[] {
+function executionSteps(
+	plan: UniversityPlan,
+	options: UniversityApplyOptions,
+): ExecutionStep[] {
 	const operations = buildUniversityOperations(plan);
+	const retirements: ExecutionStep[] = options.prune ? [{ prune: true }] : [];
 	const finalPublish = operations.at(-1);
 	if (finalPublish?.type === "upsertCourse" && finalPublish.publish) {
 		return [
 			...operations.slice(0, -1).map((operation) => ({ operation })),
+			...retirements,
 			{ verify: true },
 			{ operation: finalPublish },
 		];
 	}
-	return [...operations.map((operation) => ({ operation })), { verify: true }];
+	return [
+		...operations.map((operation) => ({ operation })),
+		...retirements,
+		{ verify: true },
+	];
 }
 
 function operationResults(
 	steps: ExecutionStep[],
 	status: UniversityOperationStatus,
+	options: UniversityApplyOptions = {},
 ): UniversityOperationResult[] {
 	return steps.map((step, index) => ({
 		index,
-		type: step.verify ? "verify" : (step.operation?.type ?? "verify"),
+		type: step.prune
+			? "prune"
+			: step.verify
+				? "verify"
+				: (step.operation?.type ?? "verify"),
 		status,
-		description: step.verify
-			? "Verify the remote course structure and authored children"
-			: operationDescription(step.operation as UniversityOperation),
+		description: step.prune
+			? "Inspect and retire undeclared remote children; IDs are discovered during apply"
+			: step.verify
+				? "Verify the remote course structure and authored children"
+				: operationDescription(
+						step.operation as UniversityOperation,
+						options.legacyMediaAssets,
+					),
 	}));
 }
 
@@ -217,12 +253,12 @@ function remoteRuntime(options: UniversityRemoteOptions): {
 	close: () => void;
 } {
 	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
 	const client = createUniversityClient({
 		baseUrl: options.apiUrl,
 		pat: options.pat,
 		signal: controller.signal,
 	});
+	const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
 	return { client, close: () => clearTimeout(timeout) };
 }
 
@@ -272,6 +308,8 @@ function parseAsset(value: unknown): KnownAsset {
 		mimeType: stringField(item.mime_type, "Course asset MIME type"),
 		size: numberField(item.size, "Course asset size"),
 		kind: stringField(item.kind, "Course asset kind"),
+		storageKey:
+			typeof item.storage_key === "string" ? item.storage_key : undefined,
 		raw: value,
 	};
 }
@@ -305,9 +343,19 @@ async function applyAsset(
 	asset: UniversityAssetPlan,
 	state: ApplyState,
 ): Promise<"completed" | "skipped"> {
+	const legacyDocument = state.legacyMediaAssets && asset.kind === "DOCUMENT";
 	state.assets ??= await loadKnownAssets(client, courseId);
 	const existing = state.assets.find((item) => item.name === asset.name);
 	if (existing) {
+		if (
+			!asset.replace &&
+			legacyDocument &&
+			!existing.storageKey?.endsWith(".webp")
+		) {
+			throw new Error(
+				`Asset @${asset.name} uses a storage key affected by the legacy media worker. Re-upload it with --asset, --replace, and --legacy-media-assets, or set the plan asset's replace field to true.`,
+			);
+		}
 		if (!asset.replace && assetMatches(existing, asset)) return "skipped";
 		if (!asset.replace) {
 			throw new Error(
@@ -325,12 +373,28 @@ async function applyAsset(
 			mime_type: asset.mimeType,
 			size: asset.size,
 			kind: asset.kind,
-			extension: asset.extension,
+			extension: legacyDocument ? "webp" : asset.extension,
 		},
 		await fileBlob(asset.file, asset.mimeType),
+		legacyDocument
+			? {
+					headers: {
+						"Content-Disposition": documentDisposition(asset.filename),
+					},
+				}
+			: {},
 	);
 	state.assets.push(parseAsset(uploaded));
 	return "completed";
+}
+
+function documentDisposition(filename: string): string {
+	const fallback = filename.replace(/[^\x20-\x7e]|["\\]/g, "_");
+	const encoded = encodeURIComponent(filename).replace(
+		/['()*]/g,
+		(character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+	);
+	return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 async function applyOperation(
@@ -451,11 +515,21 @@ function expectField(
 	}
 }
 
+class UniversityVerificationError extends Error {
+	constructor(
+		message: string,
+		readonly retirements: UniversityRetirement[],
+	) {
+		super(message);
+	}
+}
+
 async function verifyRemotePlan(
 	client: UniversityClient,
 	plan: UniversityPlan,
 ): Promise<void> {
 	const errors: string[] = [];
+	const retirements: UniversityRetirement[] = [];
 	const structure = record(
 		await client.getCourseStructure(plan.course.id, plan.course.language),
 		"Course structure",
@@ -493,6 +567,7 @@ async function verifyRemotePlan(
 	for (const remote of remoteModules) {
 		if (typeof remote.id === "string" && !expectedModuleIds.has(remote.id)) {
 			errors.push(`unexpected module ${remote.id} remains on the course`);
+			retirements.push({ kind: "module", id: remote.id });
 		}
 	}
 	const lessonRequests: Array<Promise<unknown>> = [];
@@ -541,6 +616,11 @@ async function verifyRemotePlan(
 				errors.push(
 					`unexpected lesson ${summary.id} remains in module ${module.id}`,
 				);
+				retirements.push({
+					kind: "lesson",
+					id: summary.id,
+					moduleId: module.id,
+				});
 			}
 		}
 		for (const lesson of module.lessons) {
@@ -583,6 +663,12 @@ async function verifyRemotePlan(
 				!expectedChallengeIds.has(challenge.id)
 			) {
 				errors.push(`unexpected challenge ${challenge.id} remains in ${label}`);
+				retirements.push({
+					kind: "challenge",
+					id: challenge.id,
+					moduleId: expected.module.id,
+					lessonId: expected.lesson.id,
+				});
 			}
 		}
 		for (const challenge of expected.lesson.challenges) {
@@ -615,6 +701,12 @@ async function verifyRemotePlan(
 				errors.push(
 					`unexpected application reference ${appRef.id} remains in ${label}`,
 				);
+				retirements.push({
+					kind: "appRef",
+					id: appRef.id,
+					moduleId: expected.module.id,
+					lessonId: expected.lesson.id,
+				});
 			}
 		}
 		for (const appRef of expected.lesson.appRefs) {
@@ -713,6 +805,15 @@ async function verifyRemotePlan(
 		await client.listAppLinks(plan.course.id),
 		"Application links",
 	).map((item) => record(item, "Application link"));
+	const expectedLinkIds = new Set(plan.course.appLinks.map((link) => link.id));
+	for (const link of appLinks) {
+		if (typeof link.id === "string" && !expectedLinkIds.has(link.id)) {
+			errors.push(
+				`unexpected application link ${link.id} remains on the course`,
+			);
+			retirements.push({ kind: "appLink", id: link.id });
+		}
+	}
 	for (const link of plan.course.appLinks) {
 		const remote = appLinks.find((item) => item.id === link.id);
 		if (!remote) {
@@ -736,9 +837,12 @@ async function verifyRemotePlan(
 		}
 	}
 	if (errors.length > 0) {
-		const suffix = errors.length > 8 ? `; and ${errors.length - 8} more` : "";
-		throw new Error(
-			`Remote verification failed: ${errors.slice(0, 8).join("; ")}${suffix}.`,
+		const hint = retirements.length
+			? " Review data.retirements, then use --prune to delete obsolete content and its learner records, or remove it in the authoring interface."
+			: "";
+		throw new UniversityVerificationError(
+			`Remote verification failed: ${errors.join("; ")}.${hint}`,
+			retirements,
 		);
 	}
 }
@@ -830,9 +934,14 @@ async function inspectData(
 
 export function planUniversityRun(
 	plan: UniversityPlan,
+	options: UniversityApplyOptions = {},
 ): UniversityCommandResult {
 	const startedAt = Date.now();
-	const operations = operationResults(executionSteps(plan), "planned");
+	const operations = operationResults(
+		executionSteps(plan, options),
+		"planned",
+		options,
+	);
 	return {
 		schema: UNIVERSITY_RESULT_SCHEMA,
 		command: "plan",
@@ -847,17 +956,42 @@ export function planUniversityRun(
 export async function runUniversityPlan(
 	plan: UniversityPlan,
 	options: UniversityRemoteOptions,
+	applyOptions: UniversityApplyOptions = {},
 ): Promise<UniversityCommandResult> {
 	const startedAt = Date.now();
-	const steps = executionSteps(plan);
-	const operations = operationResults(steps, "planned");
+	const steps = executionSteps(plan, applyOptions);
+	const operations = operationResults(steps, "planned", applyOptions);
 	const runtime = remoteRuntime(options);
-	const state: ApplyState = {};
+	const state: ApplyState = {
+		legacyMediaAssets: applyOptions.legacyMediaAssets,
+	};
+	let retirements: Array<
+		UniversityRetirement & { status: UniversityOperationStatus; error?: string }
+	> = [];
 	try {
 		for (let index = 0; index < steps.length; index += 1) {
 			const stepStartedAt = Date.now();
 			try {
-				if (steps[index].verify) {
+				if (steps[index].prune) {
+					retirements = (
+						await findUniversityRetirements(runtime.client, plan)
+					).map((item) => ({ ...item, status: "planned" }));
+					for (const retirement of retirements) {
+						try {
+							await retireUniversityEntity(
+								runtime.client,
+								plan.course.id,
+								retirement,
+							);
+							retirement.status = "completed";
+						} catch (error) {
+							retirement.status = "failed";
+							retirement.error = errorMessage(error);
+							throw error;
+						}
+					}
+					operations[index].status = "completed";
+				} else if (steps[index].verify) {
 					await verifyRemotePlan(runtime.client, plan);
 					operations[index].status = "completed";
 				} else {
@@ -871,6 +1005,19 @@ export async function runUniversityPlan(
 				operations[index].durationMs = elapsed(stepStartedAt);
 			} catch (error) {
 				const message = errorMessage(error);
+				if (error instanceof UniversityVerificationError) {
+					const known = new Set(
+						retirements.map((item) => `${item.kind}:${item.id}`),
+					);
+					retirements.push(
+						...error.retirements
+							.filter((item) => !known.has(`${item.kind}:${item.id}`))
+							.map((item) => ({ ...item, status: "skipped" as const })),
+					);
+				}
+				for (const retirement of retirements) {
+					if (retirement.status === "planned") retirement.status = "skipped";
+				}
 				operations[index].status = "failed";
 				operations[index].durationMs = elapsed(stepStartedAt);
 				operations[index].error = message;
@@ -886,6 +1033,7 @@ export async function runUniversityPlan(
 					summary: "Apply stopped before the remaining operations were run.",
 					error: message,
 					operations,
+					data: { retirements },
 				};
 			}
 		}
@@ -900,6 +1048,7 @@ export async function runUniversityPlan(
 				: "Course applied and verified as a draft.",
 			operations,
 			data: {
+				retirements,
 				published: plan.course.isPublished,
 				modules: plan.course.modules.length,
 				lessons: plan.course.modules.reduce(
@@ -1075,7 +1224,10 @@ export async function uploadSingleUniversityAsset(
 			size: info.size,
 			extension,
 		};
-		const state: ApplyState = {};
+		if (input.legacyMediaAssets && kind === "DOCUMENT") {
+			operation.description += " (legacy .webp storage key)";
+		}
+		const state: ApplyState = { legacyMediaAssets: input.legacyMediaAssets };
 		operation.status = await applyAsset(
 			runtime.client,
 			input.courseId,

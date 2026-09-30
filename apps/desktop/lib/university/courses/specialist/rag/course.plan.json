@@ -1,0 +1,276 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-rag",
+		"name": "Build and Evaluate RAG",
+		"language": "en",
+		"slug": "rag",
+		"difficulty": "INTERMEDIATE",
+		"category": "AI",
+		"estimatedMinutes": 35,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": [
+			"events",
+			"triggers",
+			"routes",
+			"api",
+			"automation"
+		],
+		"position": 20,
+		"description": "Retrieve evidence from a small corpus and test the answer against it.",
+		"longDescription": "35 minutes required. Prerequisites: Storage and Tables and Models and Profiles. Use a configured text embedding model and a configured chat model. Build separate index and question flows over supplied synthetic chunks, then test citations, source updates, no-answer and access cases. Model output and retrieval rankings must be inspected; the course does not promise exact wording or automatic verification.",
+		"media": {
+			"icon": "assets/course-icon.webp",
+			"banner": "assets/course-banner-v2.webp"
+		},
+		"assets": [
+			{
+				"name": "PracticeFiles",
+				"file": "fixtures/practice-files.zip",
+				"kind": "DOCUMENT",
+				"mimeType": "application/zip",
+				"filename": "rag-practice-files.zip",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "module-rag-1",
+				"title": "Build and check",
+				"description": "Complete the practical steps and inspect the result.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "lesson-rag-index-the-corpus",
+						"language": "en",
+						"videoUrl": null,
+						"appRefs": [],
+						"title": "Build a small evidence index",
+						"contentFile": "content/index-the-corpus.md",
+						"estimatedMinutes": 10,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "lesson-rag-index-the-corpus-check-1",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The same chunk is indexed again. Which key keeps one logical record?",
+								"explanation": "Its deterministic chunk_id, used by Upsert.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "choice-1",
+											"label": "Its deterministic chunk_id, used by Upsert."
+										},
+										{
+											"id": "choice-2",
+											"label": "A new random ID for each embedding attempt."
+										},
+										{
+											"id": "choice-3",
+											"label": "Only the time that the question arrived."
+										}
+									],
+									"correct": [
+										"choice-1"
+									]
+								}
+							}
+						],
+						"position": 0
+					},
+					{
+						"id": "lesson-rag-retrieve-and-answer",
+						"language": "en",
+						"videoUrl": null,
+						"appRefs": [],
+						"title": "Retrieve before generating",
+						"contentFile": "content/retrieve-and-answer.md",
+						"estimatedMinutes": 10,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "lesson-rag-retrieve-and-answer-check-1",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The retrieved text contains an instruction to reveal restricted pricing. Where must access be enforced?",
+								"explanation": "Before text reaches the model, using trusted caller authorization and allowed sources.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "choice-2",
+											"label": "Only by deleting the restricted document title after generation."
+										},
+										{
+											"id": "choice-3",
+											"label": "Only in the user’s natural-language prompt."
+										},
+										{
+											"id": "choice-1",
+											"label": "Before text reaches the model, using trusted caller authorization and allowed sources."
+										}
+									],
+									"correct": [
+										"choice-1"
+									]
+								}
+							}
+						],
+						"position": 1
+					},
+					{
+						"id": "lesson-rag-evaluate-and-update",
+						"language": "en",
+						"videoUrl": null,
+						"appRefs": [],
+						"title": "Test retrieval and source changes",
+						"contentFile": "content/evaluate-and-update.md",
+						"estimatedMinutes": 8,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "lesson-rag-evaluate-and-update-check-1",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The refund source changed to v2 but v1 chunks remain eligible. What can go wrong?",
+								"explanation": "Retrieval can return stale evidence, so source-version reconciliation must retire v1.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "choice-3",
+											"label": "A new prompt title guarantees only v2 is retrieved."
+										},
+										{
+											"id": "choice-1",
+											"label": "Retrieval can return stale evidence, so source-version reconciliation must retire v1."
+										},
+										{
+											"id": "choice-2",
+											"label": "The model automatically knows which source is latest."
+										}
+									],
+									"correct": [
+										"choice-1"
+									]
+								}
+							}
+						],
+						"position": 2
+					}
+				]
+			},
+			{
+				"id": "module-rag-2",
+				"title": "Apply it",
+				"description": "Use the result to solve a new case.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "lesson-rag-final-assessment",
+						"language": "en",
+						"videoUrl": null,
+						"appRefs": [],
+						"title": "Explain a retrieval failure",
+						"contentFile": "content/final-assessment.md",
+						"estimatedMinutes": 7,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "lesson-rag-final-assessment-check-1",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The answer is polished, but the refund chunk never reached the prompt. What should you investigate first?",
+								"explanation": "Retrieval coverage and source selection, separately from answer style.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "choice-1",
+											"label": "Retrieval coverage and source selection, separately from answer style."
+										},
+										{
+											"id": "choice-2",
+											"label": "Only the response temperature."
+										},
+										{
+											"id": "choice-3",
+											"label": "Only the chat theme."
+										}
+									],
+									"correct": [
+										"choice-1"
+									]
+								}
+							},
+							{
+								"id": "lesson-rag-final-assessment-check-2",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A public caller receives a restricted discount with no document title. Which failure does title removal leave unresolved?",
+								"explanation": "Unauthorized content reached the model before generation.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "choice-2",
+											"label": "The citation font is too small."
+										},
+										{
+											"id": "choice-3",
+											"label": "The answer was too short."
+										},
+										{
+											"id": "choice-1",
+											"label": "Unauthorized content reached the model before generation."
+										}
+									],
+									"correct": [
+										"choice-1"
+									]
+								}
+							},
+							{
+								"id": "lesson-rag-final-assessment-check-3",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Every question re-embeds the full corpus. What should change?",
+								"explanation": "Index on source changes and let question-time retrieval reuse the current index.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "choice-3",
+											"label": "Remove stable source IDs to make inserts faster."
+										},
+										{
+											"id": "choice-1",
+											"label": "Index on source changes and let question-time retrieval reuse the current index."
+										},
+										{
+											"id": "choice-2",
+											"label": "Increase the answer length."
+										}
+									],
+									"correct": [
+										"choice-1"
+									]
+								}
+							}
+						],
+						"position": 0
+					}
+				]
+			}
+		]
+	}
+}

@@ -15,6 +15,8 @@ import type {
 	CourseUpsertBody,
 	CreateCourseAssetBody,
 	CreateCourseAssetResponse,
+	LearningPathUpsertBody,
+	LearningPathView,
 	Lesson,
 	LessonAppRef,
 	LessonUpsertBody,
@@ -33,6 +35,7 @@ interface RequestOptions {
 	query?: Record<string, QueryValue>;
 	body?: unknown;
 	response?: "object" | "array" | "void";
+	requireCompletedDeletion?: boolean;
 	signal?: AbortSignal | null;
 }
 
@@ -275,6 +278,16 @@ export async function uploadToSignedUrl(
 	if (isAzureBlobStorageUrl(url.toString()) && !headers.has("x-ms-blob-type")) {
 		headers.set("x-ms-blob-type", "BlockBlob");
 	}
+	if (
+		isAzureBlobStorageUrl(url.toString()) &&
+		headers.has("Content-Disposition")
+	) {
+		headers.set(
+			"x-ms-blob-content-disposition",
+			headers.get("Content-Disposition") ?? "",
+		);
+		headers.delete("Content-Disposition");
+	}
 
 	const response = await fetch(url, {
 		method: "PUT",
@@ -332,6 +345,13 @@ export class UniversityClient {
 		});
 		if (!response.ok)
 			throw await errorFromResponse(response, method, url.toString());
+		if (response.status === 202 && options.requireCompletedDeletion) {
+			const payload = objectValue((await responsePayload(response)).value);
+			const jobId = stringValue(payload?.job_id);
+			throw new Error(
+				`Deletion is queued${jobId ? ` as job ${jobId}` : ""}. The course remains a draft. An administrator must confirm completion at GET /admin/deletions/${jobId ? encodePathSegment(jobId) : "{job_id}"} before retrying the import.`,
+			);
+		}
 
 		if (options.response === "void") return undefined as T;
 		const payload = await responsePayload(response);
@@ -352,6 +372,36 @@ export class UniversityClient {
 			);
 		}
 		return payload.value as T;
+	}
+
+	getLearningPath(pathId: string): Promise<LearningPathView> {
+		return this.request("GET", `/courses/paths/${encodePathSegment(pathId)}`, {
+			query: { language: "en" },
+		});
+	}
+
+	upsertLearningPath(
+		pathId: string,
+		body: LearningPathUpsertBody,
+	): Promise<LearningPathView> {
+		return this.request("PUT", `/courses/paths/${encodePathSegment(pathId)}`, {
+			body,
+		});
+	}
+
+	upsertLearningPathStep(
+		pathId: string,
+		courseId: string,
+		position: number,
+	): Promise<void> {
+		return this.request(
+			"PUT",
+			`/courses/paths/${encodePathSegment(pathId)}/courses/${encodePathSegment(courseId)}`,
+			{
+				body: { position },
+				response: "void",
+			},
+		);
 	}
 
 	listCourses(query: ListCoursesQuery = {}): Promise<CourseListItem[]> {
@@ -405,11 +455,15 @@ export class UniversityClient {
 		);
 	}
 
-	deleteModule(courseId: string, moduleId: string): Promise<void> {
+	deleteModule(
+		courseId: string,
+		moduleId: string,
+		requireCompletedDeletion = false,
+	): Promise<void> {
 		return this.request(
 			"DELETE",
 			`/courses/${encodePathSegment(courseId)}/modules/${encodePathSegment(moduleId)}`,
-			{ response: "void" },
+			{ response: "void", requireCompletedDeletion },
 		);
 	}
 
@@ -441,11 +495,12 @@ export class UniversityClient {
 		courseId: string,
 		moduleId: string,
 		lessonId: string,
+		requireCompletedDeletion = false,
 	): Promise<void> {
 		return this.request(
 			"DELETE",
 			`/courses/${encodePathSegment(courseId)}/modules/${encodePathSegment(moduleId)}/lessons/${encodePathSegment(lessonId)}`,
-			{ response: "void" },
+			{ response: "void", requireCompletedDeletion },
 		);
 	}
 
@@ -466,11 +521,12 @@ export class UniversityClient {
 		courseId: string,
 		lessonId: string,
 		challengeId: string,
+		requireCompletedDeletion = false,
 	): Promise<void> {
 		return this.request(
 			"DELETE",
 			`/courses/${encodePathSegment(courseId)}/lessons/${encodePathSegment(lessonId)}/challenges/${encodePathSegment(challengeId)}`,
-			{ response: "void" },
+			{ response: "void", requireCompletedDeletion },
 		);
 	}
 

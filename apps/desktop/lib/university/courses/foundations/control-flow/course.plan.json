@@ -1,0 +1,232 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-control-flow",
+		"name": "Control Flow",
+		"slug": "control-flow",
+		"language": "en",
+		"difficulty": "BEGINNER",
+		"category": "FLOWS",
+		"isPublished": true,
+		"tags": [
+			"control-flow"
+		],
+		"media": {
+			"icon": "../welcome-to-flow-like/media/app-logo.webp",
+			"banner": "assets/course-banner-v2.webp"
+		},
+		"description": "Route decisions, iterate a collection, and test a failure branch.",
+		"longDescription": "Prerequisite: Thinking in Flows. Use Desktop with the standard node catalog. In 25 minutes, run both branches of a decision, process a synthetic list including an empty case, and observe Try Catch handling an assertion. No provider, account, or network call is required. All practice checks are manual.",
+		"assets": [
+			{
+				"name": "CollectionCases",
+				"file": "fixtures/collection-cases.json",
+				"kind": "DOCUMENT",
+				"mimeType": "application/json",
+				"filename": "collection-cases.json",
+				"replace": true
+			}
+		],
+		"position": 2,
+		"modules": [
+			{
+				"id": "course-control-flow-module-0",
+				"title": "Decisions and collections",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "course-control-flow-lesson-01-branch",
+						"title": "Run both sides of a decision",
+						"contentFile": "content/01-branch.md",
+						"position": 0,
+						"estimatedMinutes": 6,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-control-one-branch",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Branch Condition is false. Which output becomes active?",
+								"explanation": "Branch activates one execution output according to its Boolean condition.",
+								"points": 10,
+								"payload": {
+									"options": [
+										{
+											"id": "answer-0",
+											"label": "False only"
+										},
+										{
+											"id": "answer-1",
+											"label": "True and False"
+										},
+										{
+											"id": "answer-2",
+											"label": "Neither until its data output is connected"
+										}
+									],
+									"correct": [
+										"answer-0"
+									]
+								},
+								"position": 0
+							}
+						]
+					},
+					{
+						"id": "course-control-flow-lesson-02-for-each",
+						"title": "Iterate a list and handle empty input",
+						"contentFile": "content/02-for-each.md",
+						"position": 1,
+						"estimatedMinutes": 7,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-control-empty-array",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Labels is empty. What should this Flow log?",
+								"explanation": "An empty For Each has no item executions, then activates Done.",
+								"points": 10,
+								"payload": {
+									"options": [
+										{
+											"id": "answer-1",
+											"label": "The previous run’s last label"
+										},
+										{
+											"id": "answer-2",
+											"label": "One blank item and DONE"
+										},
+										{
+											"id": "answer-0",
+											"label": "DONE only"
+										}
+									],
+									"correct": [
+										"answer-0"
+									]
+								},
+								"position": 0
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "course-control-flow-module-1",
+				"title": "Failures and verification",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "course-control-flow-lesson-03-try-catch",
+						"title": "Make an error observable",
+						"contentFile": "content/03-try-catch.md",
+						"position": 0,
+						"estimatedMinutes": 7,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-control-catch-success",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The Try branch throws, and Catch logs REJECTED. What proves the intended recovery ran?",
+								"explanation": "The branch-specific evidence shows the failure was observed and handled as intended.",
+								"points": 10,
+								"payload": {
+									"options": [
+										{
+											"id": "answer-2",
+											"label": "The name Check label"
+										},
+										{
+											"id": "answer-0",
+											"label": "The assertion failure and REJECTED log, with no ACCEPTED log"
+										},
+										{
+											"id": "answer-1",
+											"label": "Only a green overall status"
+										}
+									],
+									"correct": [
+										"answer-0"
+									]
+								},
+								"position": 0
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "course-control-flow-module-2",
+				"title": "Check your result",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "course-control-flow-lesson-04-final-assessment",
+						"title": "Test a shipment list",
+						"contentFile": "content/04-final-assessment.md",
+						"position": 0,
+						"estimatedMinutes": 5,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-control-final-done",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A For Each run reaches Done after logging an error in one item. What can you conclude?",
+								"explanation": "For Each logs item errors and continues. Done indicates completion of iteration, not universal item success.",
+								"points": 10,
+								"payload": {
+									"options": [
+										{
+											"id": "answer-0",
+											"label": "Iteration finished, but you must inspect the item failure"
+										},
+										{
+											"id": "answer-1",
+											"label": "Every item succeeded"
+										},
+										{
+											"id": "answer-2",
+											"label": "The failed item was automatically rolled back"
+										}
+									],
+									"correct": [
+										"answer-0"
+									]
+								},
+								"position": 0
+							},
+							{
+								"id": "challenge-control-final-branch",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A shipment must be held when validation is false. Where should the HOLD action be connected?",
+								"explanation": "The false execution branch must lead to the action for invalid input.",
+								"points": 10,
+								"payload": {
+									"options": [
+										{
+											"id": "answer-1",
+											"label": "Branch True execution output"
+										},
+										{
+											"id": "answer-2",
+											"label": "Only a data input on the logger"
+										},
+										{
+											"id": "answer-0",
+											"label": "Branch False execution output"
+										}
+									],
+									"correct": [
+										"answer-0"
+									]
+								},
+								"position": 1
+							}
+						],
+						"finalAssessment": true
+					}
+				]
+			}
+		],
+		"estimatedMinutes": 25
+	}
+}

@@ -15,6 +15,42 @@ describe("University CLI arguments", () => {
 		});
 	});
 
+	test("requires a plan for explicit pruning and permits offline review", () => {
+		expect(
+			parseUniversityArgs(["--plan=course.plan.json", "--prune", "--dry-run"]),
+		).toMatchObject({ prune: true, dryRun: true });
+		expect(parseUniversityArgs(["--plan=course.plan.json"])).toMatchObject({
+			prune: false,
+		});
+		expect(() => parseUniversityArgs(["--list", "--prune"])).toThrow(
+			"--prune can only be used with --plan",
+		);
+	});
+
+	test("limits the legacy media workaround to explicit plan or asset uploads", () => {
+		expect(
+			parseUniversityArgs([
+				"--plan=course.plan.json",
+				"--legacy-media-assets",
+				"--dry-run",
+			]),
+		).toMatchObject({ legacyMediaAssets: true, dryRun: true });
+		expect(
+			parseUniversityArgs([
+				"--asset=course",
+				"--name=Cases",
+				"--file=cases.json",
+				"--legacy-media-assets",
+			]),
+		).toMatchObject({ legacyMediaAssets: true });
+		expect(parseUniversityArgs(["--plan=course.plan.json"])).toMatchObject({
+			legacyMediaAssets: false,
+		});
+		expect(() =>
+			parseUniversityArgs(["--list", "--legacy-media-assets"]),
+		).toThrow("--legacy-media-assets can only be used with --plan or --asset");
+	});
+
 	test("parses direct screenshot asset upload options", () => {
 		expect(
 			parseUniversityArgs([

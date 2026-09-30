@@ -1,59 +1,22 @@
-Three requests land in the support team channel. Marketing wants a Discord presence for the community. Ops wants the reconciliation job on the company server, hourly. A power user wants a desktop shortcut that opens triage. You have one flow with a Simple Event node.
+An Event must match both its entry node and an available execution environment. Check these independently.
 
-> **Predict first:** Which of the three can you build on that node today — Discord, the hosted hourly job, the desktop shortcut? Lock in your guesses.
+| Input needed | Entry node | Examples |
+| --- | --- | --- |
+| No payload | Simple Event | Quick Action, Cron, API, REST, MCP |
+| Named fields | Generic Event | Generic Form, API, Deeplink |
+| Conversation context | Chat Event | Chat UI, Discord, Telegram, Teams |
+| IMAP mail context | Mail Event | Email |
+| Mail at a generated address | Inbound Email | Inbound Email |
+| Device enters or leaves a region | Location Event | Geolocation |
 
-Every Event decision passes two independent filters: **what the entry node supports**, then **where the sink can run**. Apply them in order and impossible configurations reject themselves before they waste your afternoon.
+This table is a selection aid. The Create Event dialog is the current list for the selected node and deployment.
 
-## 1 · Filter one: the node decides the menu
+**Local** execution uses the desktop environment. **Remote** execution uses the configured server. Availability also depends on the hub's supported sinks. Discord and Telegram have local adapters and can have hosted delivery on a supporting hub; their static local defaults do not describe every deployment. Teams and generated-address Inbound Email require server support. Geolocation monitoring needs the device even when its Event invokes a remote flow.
 
-The Create Event dialog reads your selected entry node and offers only the types that node supports:
+## Inspect your environment
 
-| Flow event node | Available Event types                                |
-| --------------- | ---------------------------------------------------- |
-| Chat Event      | Chat UI, Discord, Telegram                           |
-| Mail Event      | Email                                                |
-| Generic Event   | Generic Form, API, Deeplink                          |
-| Simple Event    | Quick Action, API, Cron, Daemon, Deeplink, REST, MCP |
+Open Practice action for editing. Inspect its execution setting without changing it. Then inspect the types offered for a Generic Event in a scratch flow. Note which runtime choices are actually available.
 
-Score your predictions. Discord sits in the **Chat Event** row — your Simple Event flow fails filter one, and no amount of configuration changes that. The hourly job (Cron) and the desktop shortcut (Deeplink) both live in the Simple Event row: still alive.
+For each planned Event, write three facts: the input it receives, the environment that receives the trigger, and where the flow executes. A local device being asleep can stop trigger delivery even if remote execution is configured.
 
-Several Event records may target the same node. The triage node could carry a Quick Action *and* a Deeplink — two doors, one contract — as long as each is intentional.
-
-## 2 · Filter two: where the sink can run
-
-In the current availability model:
-
-- **API and Cron** run locally or remotely.
-- **Daemon, Deeplink, Discord, Telegram, and Email** are local.
-- **REST and MCP** are remote.
-- **Quick Action, Chat UI, Generic Form, and Page targets** are invoked through the app interface itself.
-
-Rows in this matrix will shift as hosting expands, so learn the reasoning, not the list: *a sink runs where its connection and runtime live*. A Daemon supervises a long-running local process. A Deeplink is a desktop invocation path. Discord and Telegram hold persistent service connections from a local environment. REST and MCP are hosted service surfaces.
-
-When the editor doesn't offer Remote for a type, that's filter two talking. It's not a bug and not a missing permission — it's the sink telling you where it can exist. Your move is to re-check the caller's needs against location, not to fight the dropdown.
-
-Prediction two, confirmed: the hosted hourly reconciliation is Simple Event → Cron → Remote. Passes both filters.
-
-## 3 · API, REST, MCP: siblings, not synonyms
-
-Three types sound alike and get confused constantly:
-
-- **API** exposes *one* configured HTTP endpoint — method, path, exposure, size limits, error codes — and runs locally or remotely.
-- **REST** exposes a *multi-endpoint*, authenticated service surface. Remote only.
-- **MCP** exposes a Model Context Protocol server for tool-capable clients. Remote only.
-
-Need one inbound webhook? API. Need a real service with several authenticated routes? REST. Want agents and IDEs to call your flows as tools? MCP.
-
-## 4 · Credentials live where the run lives
-
-An interactive local run can stop and ask you for a missing value. An unattended remote run at 3 a.m. cannot — and locally stored **Secret** runtime variables are deliberately excluded from remote execution payloads. The moment reconciliation moves to the server, the token saved on your laptop stops traveling with it. Provision a server-side credential and test the remote path before anyone depends on it.
-
-Location is never just a performance choice. It decides which storage, network, service connections, and credentials your flow can reach.
-
-> **Watch out:** "Board tests pass, Event fails" usually means the sink environment was never tested. A local board run proves logic, not location.
-
-## Recap
-
-- Filter one: the entry node decides which Event types exist at all.
-- Filter two: the sink decides where it can run — and the editor enforces it.
-- Credentials, connections, and storage all follow the execution location.
+Credentials must exist in the execution environment. Laptop Secret runtime values are excluded from remote execution payloads. Follow the deployment's supported credential setup before testing remotely; changing a dropdown does not provision a credential.

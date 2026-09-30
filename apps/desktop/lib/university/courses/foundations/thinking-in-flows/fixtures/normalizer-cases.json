@@ -1,0 +1,18 @@
+[
+  {
+    "input": "  cedar  ",
+    "expected": "CEDAR"
+  },
+  {
+    "input": " Birch ",
+    "expected": "BIRCH"
+  },
+  {
+    "input": "two words",
+    "expected": "TWO WORDS"
+  },
+  {
+    "input": "   ",
+    "expected": ""
+  }
+]

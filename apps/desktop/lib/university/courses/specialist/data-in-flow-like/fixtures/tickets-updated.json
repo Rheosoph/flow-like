@@ -1,0 +1,17 @@
+[
+  {
+    "ticket_id": "T-001",
+    "customer_id": "C-001",
+    "status": "open"
+  },
+  {
+    "ticket_id": "T-002",
+    "customer_id": "C-001",
+    "status": "closed"
+  },
+  {
+    "ticket_id": "T-003",
+    "customer_id": "C-002",
+    "status": "closed"
+  }
+]

@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "properties": {
+    "request_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Copy the explicit request identifier, or null when absent."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "billing",
+        "technical",
+        "other"
+      ]
+    },
+    "amount_eur": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Explicit euro amount, or null when absent."
+    }
+  },
+  "required": [
+    "request_id",
+    "category",
+    "amount_eur"
+  ],
+  "additionalProperties": false
+}

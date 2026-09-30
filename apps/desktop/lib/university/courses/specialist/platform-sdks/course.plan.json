@@ -1,0 +1,231 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-platform-sdks",
+		"name": "Invoke Flow-Like from Code",
+		"language": "en",
+		"slug": "platform-sdks",
+		"difficulty": "INTERMEDIATE",
+		"category": "INTEGRATIONS",
+		"isPublished": true,
+		"tags": [
+			"platform-sdks"
+		],
+		"position": 20,
+		"media": {
+			"icon": "../../advanced/agentic-in-flow-like/assets/course-icon.webp",
+			"banner": "assets/course-banner-v2.webp"
+		},
+		"modules": [
+			{
+				"id": "module-sdk-core",
+				"title": "Invoke and inspect",
+				"description": null,
+				"position": 0,
+				"lessons": [
+					{
+						"id": "lesson-sdk-prepare",
+						"title": "Prepare a scoped Event client",
+						"language": "en",
+						"contentFile": "content/prepare-an-event.md",
+						"videoUrl": null,
+						"estimatedMinutes": 5,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-sdk-origin",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Which base URL does the SDK expect?",
+								"explanation": "The client builds its API paths.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "b",
+											"label": "The Event invoke endpoint"
+										},
+										{
+											"id": "a",
+											"label": "The API origin without /api/v1"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-sdk-invoke",
+						"title": "Invoke the Event and read its result",
+						"language": "en",
+						"contentFile": "content/invoke-and-read.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-sdk-stream",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "What should establish business completion?",
+								"explanation": "A stream can carry progress before the result.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "b",
+											"label": "The first streamed entry"
+										},
+										{
+											"id": "a",
+											"label": "The returned result and terminal run outcome"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-sdk-async",
+						"title": "Distinguish acceptance, failure and completion",
+						"language": "en",
+						"contentFile": "content/async-and-failures.md",
+						"videoUrl": null,
+						"estimatedMinutes": 5,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-sdk-accepted",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Background invocation returns a run ID. What is known?",
+								"explanation": "Inspect terminal status/result for success.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "a",
+											"label": "The request was accepted for a run"
+										},
+										{
+											"id": "b",
+											"label": "The business operation succeeded"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-sdk-final",
+						"title": "Verify a new payload and denied call",
+						"language": "en",
+						"contentFile": "content/final-assessment.md",
+						"videoUrl": null,
+						"estimatedMinutes": 5,
+						"position": 3,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-sdk-transfer",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The client times out after sending an action. What should happen before retry?",
+								"explanation": "Client timeout does not prove server-side failure.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "a",
+											"label": "Reconcile the existing run and effects"
+										},
+										{
+											"id": "b",
+											"label": "Assume the action did not happen"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							},
+							{
+								"id": "challenge-sdk-auth",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A revoked key is rejected. Which repair fits?",
+								"explanation": "Fix the credential without widening the intended job.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "b",
+											"label": "Grant every app permission"
+										},
+										{
+											"id": "a",
+											"label": "Restore a properly scoped test credential"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		],
+		"description": "Invoke a pinned Event from Python or TypeScript and verify its result. Core: 25 min.",
+		"longDescription": "Prerequisites: a working remotely executable Generic Event, an online app, scoped API key and Python or TypeScript tooling. Choose one language in this 25-minute course. Supplied clients and synthetic payloads cover streaming, background acceptance, output checks and authorization failure. Environment setup is separate; live results are manually verified.",
+		"assets": [
+			{
+				"name": "SDKRequest",
+				"file": "fixtures/request.json",
+				"kind": "DOCUMENT",
+				"replace": true
+			},
+			{
+				"name": "PythonClient",
+				"file": "fixtures/invoke.py",
+				"kind": "DOCUMENT",
+				"replace": true
+			},
+			{
+				"name": "TypeScriptClient",
+				"file": "fixtures/invoke.ts",
+				"kind": "DOCUMENT",
+				"replace": true
+			},
+			{
+				"name": "NodePackage",
+				"file": "fixtures/package.json",
+				"kind": "DOCUMENT",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"estimatedMinutes": 25
+	}
+}

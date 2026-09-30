@@ -1,0 +1,19 @@
+[
+  {
+    "text": "  Mixed CASE  ",
+    "expected": "mixed case",
+    "changed": true
+  },
+  {
+    "text": "clean",
+    "expected": "clean",
+    "changed": false
+  },
+  {
+    "text": " Ab ",
+    "trim": false,
+    "lowercase": false,
+    "expected": " Ab ",
+    "changed": false
+  }
+]

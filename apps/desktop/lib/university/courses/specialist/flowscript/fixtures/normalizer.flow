@@ -1,0 +1,5 @@
+eventsSimple normalizeLabel() {
+    const trimmed = string::trim({ string: "  cedar  " })
+    const upper = string::toUpper({ string: trimmed })
+    log::info({ message: upper, toast: false })
+}

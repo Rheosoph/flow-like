@@ -1,0 +1,14 @@
+{
+  "customer": {
+    "id": "C-001",
+    "plan": "practice"
+  },
+  "pagination_ids": [
+    "C-001",
+    "C-002"
+  ],
+  "unknown_status": 404,
+  "bad_token_status": 401,
+  "idempotent_note_count": 1,
+  "key_conflict_status": 409
+}

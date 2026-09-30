@@ -1,0 +1,6 @@
+stage,operation,expected
+connected_and_exposed,discover_contract,available
+installed,query_parts,two_objects
+refreshed,read_new_property,property_in_contract
+exposure_off,new_run_query,denied
+connection_inactive,uninstall_local_contract,allowed
