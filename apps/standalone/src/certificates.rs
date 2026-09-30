@@ -243,7 +243,7 @@ pub(crate) fn validate_material(
     let key = CertifiedKey::from_der(
         chain,
         keys.pop().unwrap(),
-        &rustls::crypto::ring::default_provider(),
+        &crate::crypto::tls_provider(),
     )
     .context("Unsupported or mismatched TLS private key")?;
     // Unknown key consistency is rejected, even if a provider would accept it.

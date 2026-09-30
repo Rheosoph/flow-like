@@ -5502,7 +5502,7 @@ mod tests {
             let mut resolver = rustls::server::ResolvesServerCertUsingSni::new();
             resolver.add("api.example.test", (*identity).clone())?;
             let server = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
-                rustls::crypto::ring::default_provider(),
+                crate::crypto::tls_provider(),
             ))
             .with_safe_default_protocol_versions()?
             .with_no_client_auth()
@@ -5532,7 +5532,7 @@ mod tests {
                 "TLS test must trust only the exported organisation root"
             );
             let client = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
-                rustls::crypto::ring::default_provider(),
+                crate::crypto::tls_provider(),
             ))
             .with_safe_default_protocol_versions()?
             .with_root_certificates(trusted)

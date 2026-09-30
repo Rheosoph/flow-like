@@ -36,6 +36,7 @@ import "@xyflow/react/dist/style.css";
 import { useMediaQuery } from "@uidotdev/usehooks";
 import {
 	ArrowBigLeftDashIcon,
+	BellDotIcon,
 	CheckIcon,
 	Columns2Icon,
 	Eye,
@@ -43,6 +44,7 @@ import {
 	FilesIcon,
 	FlaskConicalIcon,
 	GitBranchIcon,
+	GitCompareArrowsIcon,
 	GroupIcon,
 	HistoryIcon,
 	HouseIcon,
@@ -95,6 +97,10 @@ import {
 	useMobileHeader,
 } from "../..";
 import { BoardActivityIndicator } from "../../components/flow/board-activity-indicator";
+import {
+	BoardDiffDialogs,
+	useBoardDiffController,
+} from "../../components/flow/board-diff/board-diff-controller";
 import {
 	BoardSyncRecoveryDialog,
 	BoardSyncStatusPill,
@@ -684,6 +690,27 @@ export function FlowBoard({
 			? boardQuery
 			: ({ ...boardQuery, data: undefined } as unknown as typeof boardQuery);
 	const boardRef = useRef<IBoard | undefined>(undefined);
+	const boardDiff = useBoardDiffController({
+		appId,
+		boardId,
+		userKey: sub ?? "local",
+		board: board.data,
+		// Both apps restore persisted queries first; only a fetch after mount says
+		// what the board is now.
+		boardFresh: !boardQuery.isFetching && boardQuery.isFetchedAfterMount,
+		version,
+	});
+	const refetchBoard = boardQuery.refetch;
+	const reusedCachedBoard =
+		version === undefined &&
+		boardQuery.data !== undefined &&
+		!boardQuery.isFetchedAfterMount &&
+		!boardQuery.isFetching;
+	useEffect(() => {
+		// A cache entry inside its stale time is not refetched on mount, so the
+		// "changed since your last visit" check would never see the current board.
+		if (reusedCachedBoard) void refetchBoard();
+	}, [refetchBoard, reusedCachedBoard]);
 	const currentProfile = useInvoke(
 		backend.userState.getProfile,
 		backend.userState,
@@ -4856,6 +4883,10 @@ export function FlowBoard({
 		handleClearRunContext,
 	]);
 
+	const boardDiffOpenCompare = boardDiff.openCompare;
+	const boardDiffOpenReview = boardDiff.openReview;
+	const boardDiffHasNotice = Boolean(boardDiff.notice);
+
 	// One registry behind the rail, the chords and the Spotlight palette, so a
 	// board action cannot exist in one of the three and be missing from the others.
 	const boardCommands = useMemo<IBoardCommand[]>(
@@ -4984,6 +5015,23 @@ export function FlowBoard({
 				run: () => setAutoLayoutDialogOpen(true),
 			},
 			{
+				id: "compare-board-versions",
+				surface: "palette",
+				title: t("boardDiffCompareTitle", "Compare versions"),
+				icon: GitCompareArrowsIcon,
+				keywords: ["diff", "history", "changes", "version", "compare"],
+				run: () => boardDiffOpenCompare(),
+			},
+			{
+				id: "review-board-changes",
+				surface: "palette",
+				title: t("boardDiffSinceTitle", "Changes since your last visit"),
+				icon: HistoryIcon,
+				keywords: ["diff", "changes", "notice", "seen"],
+				when: boardDiffHasNotice,
+				run: () => boardDiffOpenReview(),
+			},
+			{
 				id: "find-groups",
 				surface: "editor",
 				title: t("findGroups", "Find groups"),
@@ -5032,6 +5080,9 @@ export function FlowBoard({
 			grouping.close,
 			grouping.start,
 			version,
+			boardDiffOpenCompare,
+			boardDiffOpenReview,
+			boardDiffHasNotice,
 		],
 	);
 	useBoardCommands(boardCommands);
@@ -5853,12 +5904,30 @@ export function FlowBoard({
 												board={board.data}
 												version={version}
 												selectVersion={setVersion}
+												onCompare={boardDiff.openCompare}
 											/>
 										}
 									>
 										{version
 											? `v${version.join(".")} · ${t("readonly", "- Read-Only")}`
 											: `v${(board.data.version ?? [0, 0, 0]).join(".")} · ${board.data.stage}`}
+									</BoardStatusItem>
+								)}
+								{boardDiff.notice && (
+									<BoardStatusItem
+										icon={<BellDotIcon />}
+										tone="accent"
+										onClick={() => boardDiff.setNoticeOpen(true)}
+										title={t(
+											"boardDiffStatusTitle",
+											"Show what changed since your last visit",
+										)}
+									>
+										{t("boardDiffStatusChanges", {
+											defaultValue_one: "{{count}} change since your last visit",
+											defaultValue_other: "{{count}} changes since your last visit",
+											count: boardDiff.notice.diff.logicCount,
+										})}
 									</BoardStatusItem>
 								)}
 								<BoardStatusItem
@@ -6221,6 +6290,14 @@ export function FlowBoard({
 				packagePermissions={wasmPackagePermissions}
 				onConfirm={handleWasmConfirm}
 				onCancel={handleWasmCancel}
+			/>
+
+			<BoardDiffDialogs
+				controller={boardDiff}
+				appId={appId}
+				boardId={boardId}
+				board={version ? undefined : board.data}
+				onOpenVersion={setVersion}
 			/>
 
 			{/* Auto Layout Algorithm Picker */}

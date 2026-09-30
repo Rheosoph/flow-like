@@ -116,7 +116,7 @@ fn server_config(identity: &CertificateIdentity) -> Result<Arc<rustls::ServerCon
         .context("Invalid placement private key")?
         .context("Missing placement private key")?;
     let config = rustls::ServerConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
+        crate::crypto::tls_provider(),
     ))
     .with_safe_default_protocol_versions()?
     .with_no_client_auth()
@@ -237,7 +237,7 @@ mod tests {
         trust.add(first.cert.der().clone())?;
         trust.add(second.cert.der().clone())?;
         let client = rustls::ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
+            crate::crypto::tls_provider(),
         ))
         .with_safe_default_protocol_versions()?
         .with_root_certificates(trust)

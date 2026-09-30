@@ -22,7 +22,8 @@ repos:
       # -   id: end-of-file-fixer
       -   id: trailing-whitespace
           # identify tags `.manifest` as text; the hook strips bytes out of Lance's binary manifests.
-          exclude: ^packages/storage/tests/fixtures/
+          # Vendored browser atoms, templates and parity goldens are byte-exact copies.
+          exclude: ^(packages/storage/tests/fixtures/|packages/browser/tests/fixtures/|packages/browser/src/js/|packages/browser/src/templates/)
 
   -   repo: https://github.com/astral-sh/ruff-pre-commit
       # Ruff version.
