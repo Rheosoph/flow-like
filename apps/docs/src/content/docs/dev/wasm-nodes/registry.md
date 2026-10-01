@@ -21,7 +21,7 @@ Use the desktop app's **Store → Packages** view to search the registry and ope
 Installing a package downloads the selected version into the local registry cache. Installed packages appear under **Packages › Library**, where you can check for updates, update a package, or uninstall it.
 
 :::note
-Only active versions that the current user can access are downloadable. Private and request-access packages apply their package membership rules before download.
+Only active versions that the current user can access are downloadable. Private and request-access packages apply their package membership rules before download. Members of an App that uses a package can download and run the version that App pins, even without access to the package themselves.
 :::
 
 ## Publish a package
