@@ -249,7 +249,7 @@ describe("University course reconciliation", () => {
 	test("keeps prune dry runs offline and before verification", () => {
 		globalThis.fetch = (() => {
 			throw new Error("No network allowed");
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 		const result = planUniversityRun(plan(), { prune: true });
 		expect(result.passed).toBe(true);
 		expect(
