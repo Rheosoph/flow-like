@@ -2655,8 +2655,7 @@ mod tests {
         let test_path = format!("./tmp/{}", create_id());
         std::fs::create_dir_all(&test_path)?;
         let mut db =
-            LanceDBVectorStore::new(PathBuf::from(&test_path), "small_vectors".to_string())
-                .await?;
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "small_vectors".to_string()).await?;
         let query_vector = insert_scattered_vectors(&mut db, 111).await?;
 
         for selection in ["AUTO", "VECTOR"] {

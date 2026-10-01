@@ -21562,7 +21562,10 @@ eventsSimple() {
             for imports in ["", "use struct::*\n\n"] {
                 let result = reconcile_text_with_catalog(
                     &empty_board(),
-                    &format!("{imports}{}", source.replace("AttachmentPaths", interface_name)),
+                    &format!(
+                        "{imports}{}",
+                        source.replace("AttachmentPaths", interface_name)
+                    ),
                     &catalog,
                 );
                 assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
@@ -21642,7 +21645,11 @@ eventsSimple() {
             &format!("use files::*\n\n{source}"),
             &catalog,
         );
-        assert!(imported.diagnostics.is_empty(), "{:?}", imported.diagnostics);
+        assert!(
+            imported.diagnostics.is_empty(),
+            "{:?}",
+            imported.diagnostics
+        );
         assert!(added_node_ref(&imported, "get_file").is_some());
         assert!(added_node_ref(&imported, "get_other_file").is_none());
     }
