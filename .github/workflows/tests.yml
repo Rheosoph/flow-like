@@ -70,11 +70,12 @@ jobs:
 
       - name: Test browser nodes against the runner's Chrome
         if: github.event_name == 'pull_request' && hashFiles('packages/catalog/automation/tests/browser_nodes_e2e.rs') != ''
-        # The grep fails the step when every test was filtered out or ignored.
+        # The Chrome flows are #[ignore]d, so the grep fails the step unless they ran: some tests
+        # passed and none was ignored or filtered out.
         run: |
           set -o pipefail
           cargo test --locked -p flow-like-catalog-automation --features execute --profile ci --test browser_nodes_e2e -- --include-ignored | tee "$RUNNER_TEMP/e2e.log"
-          grep -E 'test result: ok\. [1-9]' "$RUNNER_TEMP/e2e.log"
+          grep -E 'test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' "$RUNNER_TEMP/e2e.log"
 
       - name: Test standalone workflow updates and crash recovery
         run: cargo test --locked --package flow-like-standalone --profile ci --test workflow_rollout -- --include-ignored
@@ -120,46 +121,76 @@ jobs:
           # No preinstalled Chrome: the pinned Chrome for Testing build is downloaded.
           - runner: ubuntu-24.04-arm
             provision: download
+          # These images ship Google Chrome, which the tests bypass: each run installs the pinned
+          # Chrome for Testing through the production installer (setup.exe on Windows, plus one test
+          # of its icacls fallback; quarantine removal on macOS) into the user cache folder, with no
+          # restored cache.
+          - runner: windows-2022
+            provision: download
+          - runner: macos-15
+            provision: download
+          - runner: macos-15-intel
+            provision: download
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
+      # Vendored scripts, templates and fixtures must keep their LF bytes.
+      - name: Disable line-ending conversion
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
         with:
-          shared-key: workspace-${{ runner.arch }}-browser-e2e
+          shared-key: workspace-${{ runner.os }}-${{ runner.arch }}-browser-e2e
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+
+      # Windows and macOS use the per-user cache folder the desktop app installs into, so the
+      # installer's permission and quarantine handling meets the same folder as for users.
+      - name: Choose the Chrome for Testing folder
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) dir="$LOCALAPPDATA\\flow-like-e2e\\browsers" ;;
+            macOS) dir="$HOME/Library/Caches/flow-like-e2e/browsers" ;;
+            *) dir="$RUNNER_TEMP/flow-like-browser" ;;
+          esac
+          echo "FLOW_LIKE_BROWSER_CACHE_DIR=$dir" >> "$GITHUB_ENV"
 
       # Ubuntu 24.04 only grants unprivileged user namespaces to AppArmor-profiled
       # binaries, so a downloaded Chrome cannot start its sandbox otherwise.
       - name: Allow the Chromium sandbox for the downloaded browser
-        if: matrix.provision == 'download'
+        if: matrix.provision == 'download' && runner.os == 'Linux'
         run: echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
 
       - name: Read the pinned Chrome for Testing version
         id: cft
-        if: matrix.provision == 'download'
+        if: matrix.provision == 'download' && runner.os == 'Linux'
         run: |
           CFT=$(grep -m1 -oP 'CFT_PINNED: &str = "\K[^"]+' packages/browser/src/launch/cft.rs)
           test -n "$CFT"
           echo "version=$CFT" >> "$GITHUB_OUTPUT"
 
       - uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
-        if: matrix.provision == 'download'
+        if: matrix.provision == 'download' && runner.os == 'Linux'
         with:
           path: ${{ runner.temp }}/flow-like-browser
           key: cft-${{ runner.arch }}-${{ steps.cft.outputs.version }}
 
-      # Installs the system libraries from the zip's own deb.deps, as Puppeteer's
-      # install-deps does, instead of a hand-written package list.
-      - name: Provision Chrome for Testing and its system libraries
+      # Prints the executable the e2e tests launch: a chrome-for-testing path on every download leg.
+      - name: Provision Chrome for Testing
         if: matrix.provision == 'download' && hashFiles('packages/browser/tests/e2e_core.rs') != ''
         env:
-          CFT: ${{ steps.cft.outputs.version }}
           FLOW_LIKE_BROWSER_E2E_PROVISION: download
-          FLOW_LIKE_BROWSER_CACHE_DIR: ${{ runner.temp }}/flow-like-browser
+        run: cargo test --locked --profile ci -p flow-like-browser --test e2e_core -- --ignored --exact provision_browser --nocapture
+
+      # Installs the system libraries from the zip's own deb.deps, as Puppeteer's
+      # install-deps does, instead of a hand-written package list.
+      - name: Install the system libraries of Chrome for Testing
+        if: matrix.provision == 'download' && runner.os == 'Linux' && hashFiles('packages/browser/tests/e2e_core.rs') != ''
+        env:
+          CFT: ${{ steps.cft.outputs.version }}
         run: |
-          cargo test --locked --profile ci -p flow-like-browser --test e2e_core -- --ignored --exact provision_browser --nocapture
           deps=$(find "$FLOW_LIKE_BROWSER_CACHE_DIR/chrome-for-testing" -path "*-$CFT/*" -name deb.deps -print -quit)
           if [ -z "$deps" ]; then
             echo "deb.deps of Chrome for Testing $CFT not found under $FLOW_LIKE_BROWSER_CACHE_DIR/chrome-for-testing" >&2
@@ -168,10 +199,13 @@ jobs:
           sudo apt-get update
           sudo apt-get satisfy -y --no-install-recommends "$(paste -sd, "$deps")"
 
+      # The parity goldens carry the recording Mac's font metrics and day-first date fields, so
+      # every runner compares rects with the in-page atoms and skips the date case when its
+      # locale orders the fields differently (strict is only the local default on macOS).
       - name: Run browser tests including e2e
         env:
           FLOW_LIKE_BROWSER_E2E_PROVISION: ${{ matrix.provision }}
-          FLOW_LIKE_BROWSER_CACHE_DIR: ${{ runner.temp }}/flow-like-browser
+          FLOW_LIKE_BROWSER_E2E_PARITY_LAYOUT: relative
         run: cargo test --locked --profile ci -p flow-like-browser -- --include-ignored --test-threads=4
 
       - name: Upload browser e2e logs

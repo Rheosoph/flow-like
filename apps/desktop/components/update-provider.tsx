@@ -26,6 +26,7 @@ import { isMobileDevice, isTauriRuntime } from "../lib/platform";
 
 const UPDATE_CHECK_INTERVAL = 30 * 60_000;
 const UPDATE_CHECK_TIMEOUT = 30_000;
+const UPDATE_CHECK_RETRY_DELAYS = [1_000, 3_000] as const;
 const UPDATE_TOAST_ID = "flow-like-update";
 const UPDATE_MENU_TOAST_ID = "flow-like-update-menu";
 const DISMISSED_VERSION_KEY = "updater:dismissed-version";
@@ -54,6 +55,7 @@ type UpdaterErrorStage =
 	| "tray_listener";
 
 interface UpdaterErrorContext {
+	check_attempts?: number;
 	check_source?: CheckSource;
 	check_trigger?: CheckTrigger;
 	content_length_bytes?: number;
@@ -163,6 +165,12 @@ function updaterVersionContext(update: Update): UpdaterErrorContext {
 	};
 }
 
+function isRetryableUpdateCheckError(error: unknown): boolean {
+	// The native updater serializes reqwest errors as strings. Match request
+	// failures so invalid manifests and updater configuration still fail promptly.
+	return normalizeError(error).value.startsWith("error sending request");
+}
+
 function addUpdaterBreadcrumb(
 	message: string,
 	level: TelemetryBreadcrumbLevel = "info",
@@ -229,6 +237,7 @@ export function UpdateProvider() {
 		let lastBreadcrumbUpdateVersion: string | undefined;
 		let unlistenTray: UnlistenFn | undefined;
 		let registeringTrayListener = false;
+		let cancelCheckRetry: (() => void) | undefined;
 
 		const reportInterruptedUpdate = async () => {
 			const attempt = readUpdateAttempt();
@@ -675,6 +684,7 @@ export function UpdateProvider() {
 
 		const runCheck = async (trigger: CheckTrigger): Promise<Update | null> => {
 			const checkStartedAt = Date.now();
+			let checkAttempts = 0;
 			const source: CheckSource =
 				trigger === "automatic" ? "automatic" : "manual";
 			const checkSpan = startTelemetrySpan("desktop.updater.check", {
@@ -682,8 +692,37 @@ export function UpdateProvider() {
 				attributes: { check_source: source, check_trigger: trigger },
 			});
 			try {
-				const update = await check({ timeout: UPDATE_CHECK_TIMEOUT });
+				let update: Update | null;
+				for (;;) {
+					checkAttempts += 1;
+					try {
+						update = await check({ timeout: UPDATE_CHECK_TIMEOUT });
+						break;
+					} catch (error) {
+						const retryDelay = UPDATE_CHECK_RETRY_DELAYS[checkAttempts - 1];
+						if (
+							!active ||
+							!navigator.onLine ||
+							retryDelay === undefined ||
+							!isRetryableUpdateCheckError(error)
+						) {
+							throw error;
+						}
+						addUpdaterBreadcrumb("check_retry_scheduled", "warning");
+						await new Promise<void>((resolve) => {
+							const finish = () => {
+								window.clearTimeout(timeoutId);
+								cancelCheckRetry = undefined;
+								resolve();
+							};
+							const timeoutId = window.setTimeout(finish, retryDelay);
+							cancelCheckRetry = finish;
+						});
+						if (!active || !navigator.onLine) throw error;
+					}
+				}
 				checkSpan.end("ok", {
+					check_attempts: checkAttempts,
 					update_available: update !== null,
 					target_version: update?.version,
 				});
@@ -700,6 +739,7 @@ export function UpdateProvider() {
 					if (update) await closeUpdate(update);
 					return null;
 				}
+				if (checkAttempts > 1) addUpdaterBreadcrumb("check_retry_recovered");
 				if (hasVisibleCheckError) {
 					hasVisibleCheckError = false;
 					toast.dismiss(UPDATE_TOAST_ID);
@@ -752,7 +792,7 @@ export function UpdateProvider() {
 				void promptForUpdate(update, effectiveTrigger);
 				return update;
 			} catch (error) {
-				checkSpan.end("error");
+				checkSpan.end("error", { check_attempts: checkAttempts });
 				if (!active) return null;
 				hasVisibleCheckError = true;
 				const normalized = normalizeError(error);
@@ -784,6 +824,7 @@ export function UpdateProvider() {
 						error,
 						retry,
 						{
+							check_attempts: checkAttempts,
 							check_source: effectiveSource,
 							check_trigger: effectiveTrigger,
 							duration_ms: Date.now() - checkStartedAt,
@@ -901,6 +942,7 @@ export function UpdateProvider() {
 
 		return () => {
 			active = false;
+			cancelCheckRetry?.();
 			window.clearInterval(intervalId);
 			unlistenTray?.();
 			if (pendingUpdate && !installing) {

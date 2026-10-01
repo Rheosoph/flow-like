@@ -1,3 +1,7 @@
+use super::super::{
+    board_commits::flow_ir_durable_receipt_ref_key,
+    board_jobs::{board_edit_job_dismissal_receipt, recover_board_edit_job_dismissal_receipt},
+};
 use super::*;
 
 #[test]
@@ -322,6 +326,8 @@ fn board_edit_job_snapshot_round_trips_the_exact_host_batch_and_policy() {
     );
     record.replacement_mode = true;
     record.job.review.replacement_mode = true;
+    let source = "// Preserve the authored source, including comments.\nevent start() {}\n";
+    record.job.flowscript_source = Some(source.to_string());
     let reviewed_commands = record.board_commands.clone();
     let encoded = serde_json::to_vec(&PersistedBoardEditJobEntry::Current(
         PersistedBoardEditJobRecord {
@@ -340,10 +346,32 @@ fn board_edit_job_snapshot_round_trips_the_exact_host_batch_and_policy() {
     assert!(recovered.replacement_mode);
     assert_eq!(recovered.job.review.command_count, reviewed_commands.len());
     assert!(recovered.job.review.replacement_mode);
+    assert_eq!(recovered.job.flowscript_source.as_deref(), Some(source));
     assert!(exact_board_command_batch_matches(
         &reviewed_commands,
         &recovered.board_commands
     ));
+}
+
+#[test]
+fn board_edit_job_snapshot_without_source_remains_recoverable() {
+    let record = board_edit_job_test_record(
+        "older-review",
+        BoardEditJobPhase::AwaitingApproval,
+        Instant::now(),
+    );
+    let value = serde_json::to_value(PersistedBoardEditJobRecord {
+        job: record.job,
+        board_commands: record.board_commands,
+        replacement_mode: record.replacement_mode,
+    })
+    .unwrap();
+    assert!(value["job"].get("flowscriptSource").is_none());
+    let recovered = board_edit_job_record_from_persisted(serde_json::from_value(value).unwrap())
+        .expect("existing reviews remain recoverable without authored source");
+    assert_eq!(recovered.job.phase, BoardEditJobPhase::AwaitingApproval);
+    assert!(recovered.job.flowscript_source.is_none());
+    assert!(!recovered.board_commands.is_empty());
 }
 
 #[test]
@@ -398,6 +426,223 @@ fn interrupted_apply_restarts_as_retryable_failed_with_the_exact_batch() {
             .as_deref()
             .is_some_and(|message| message.contains("restarted"))
     );
+}
+
+#[tokio::test]
+async fn dismissal_recovers_a_committed_receipt_after_an_interrupted_apply_restarts() {
+    use flow_like::flow_like_storage::object_store::memory::InMemory;
+    use flow_like_types::FromProto;
+
+    let record = board_edit_job_test_record(
+        "dismiss-after-restart",
+        BoardEditJobPhase::Applying,
+        Instant::now(),
+    );
+    let mut board =
+        Board::new_detached(Some(record.job.board_id.clone()), "apps/review-app".into());
+    let receipt = compact_job_test_receipt();
+    board
+        .insert_internal_ref(
+            flow_ir_durable_receipt_ref_key(&record.job.app_id, &record.job.token),
+            serde_json::json!({
+                "version": 1,
+                "created_at_ms": 1,
+                "identity": flow_ir_applied_receipt_key(&record.job.app_id, &record.job.token),
+                "result": compact_durable_apply_receipt(&receipt),
+            })
+            .to_string(),
+        )
+        .unwrap();
+    let store = Arc::new(InMemory::new());
+    board.save(Some(store.clone())).await.unwrap();
+    let saved = Board::from_proto(
+        Board::load_proto(store, &board.board_dir, &board.id, None)
+            .await
+            .unwrap(),
+    );
+    let recovered = board_edit_job_record_from_persisted(PersistedBoardEditJobEntry::Current(
+        PersistedBoardEditJobRecord {
+            job: record.job,
+            board_commands: record.board_commands,
+            replacement_mode: false,
+        },
+    ))
+    .unwrap();
+    assert_eq!(recovered.job.phase, BoardEditJobPhase::Failed);
+
+    let pending_receipt = board_edit_job_dismissal_receipt(&recovered.job, &saved)
+        .expect("a committed edit must finish receipt delivery when dismissed");
+    assert_eq!(pending_receipt.status, "applied");
+    assert!(pending_receipt.replayed);
+    assert_eq!(pending_receipt.commands.len(), receipt.commands.len());
+    assert_eq!(
+        pending_receipt.persisted_board_fingerprint,
+        receipt.persisted_board_fingerprint
+    );
+
+    let mut unrelated = recovered.job.clone();
+    unrelated.token.claim_id.push_str("-other");
+    assert!(board_edit_job_dismissal_receipt(&unrelated, &saved).is_none());
+}
+
+#[test]
+fn failed_review_without_a_committed_receipt_can_still_be_dismissed() {
+    let record = board_edit_job_test_record(
+        "dismiss-uncommitted",
+        BoardEditJobPhase::Failed,
+        Instant::now(),
+    );
+    let board = Board::new_detached(Some(record.job.board_id.clone()), "apps/review-app".into());
+    assert!(board_edit_job_dismissal_receipt(&record.job, &board).is_none());
+}
+
+#[tokio::test]
+async fn dismissal_checks_the_saved_receipt_after_the_live_draft_was_discarded() {
+    use flow_like::flow_like_storage::object_store::memory::InMemory;
+    use flow_like::{
+        flow::{
+            board::{BoardCell, BoardParent},
+            node::Node,
+        },
+        state::{FlowLikeConfig, FlowLikeState},
+        utils::http::HTTPClient,
+    };
+    use flow_like_types::FromProto;
+
+    let mut record = board_edit_job_test_record(
+        "dismiss-save-failed",
+        BoardEditJobPhase::Failed,
+        Instant::now(),
+    );
+    record.job.token.claim_id = uuid::Uuid::new_v4().to_string();
+    record
+        .job
+        .record_apply_result(ApplyFlowIrCommitResult::empty(
+            "error",
+            "IR_COMMIT_SAVE_FAILED",
+            "Saving and restoring the board both failed.",
+        ));
+    let mut live = Board::new_detached(Some(record.job.board_id.clone()), "apps/review-app".into());
+    let state = Arc::new(FlowLikeState::new(
+        FlowLikeConfig::new(),
+        HTTPClient::new_without_refetch(),
+    ));
+    live.app_state = Some(state.clone());
+    live.parent = Some(BoardParent::App(std::sync::Weak::new()));
+    let mut saved = live.clone();
+    let saved_node = Node::new("saved_node", "Saved node", "", "test");
+    let saved_node_id = saved_node.id.clone();
+    saved.nodes.insert(saved_node_id.clone(), saved_node);
+    let receipt = compact_job_test_receipt();
+    saved
+        .insert_internal_ref(
+            flow_ir_durable_receipt_ref_key(&record.job.app_id, &record.job.token),
+            serde_json::json!({
+                "version": 1,
+                "created_at_ms": 1,
+                "identity": flow_ir_applied_receipt_key(&record.job.app_id, &record.job.token),
+                "result": compact_durable_apply_receipt(&receipt),
+            })
+            .to_string(),
+        )
+        .unwrap();
+    let store = Arc::new(InMemory::new());
+    saved.save(Some(store.clone())).await.unwrap();
+    assert!(board_edit_job_dismissal_receipt(&record.job, &live).is_none());
+    let page_source = live.page_metadata_source();
+    let board_dir = live.board_dir.clone();
+    let live = BoardCell::new(live);
+    let original = live.snapshot();
+
+    let recovered = recover_board_edit_job_dismissal_receipt(&record.job, Some(&live), async {
+        Board::load_proto(store, &saved.board_dir, &saved.id, None)
+            .await
+            .map(Board::from_proto)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .unwrap()
+    .expect("a saved receipt must survive discarding the live draft");
+    assert_eq!(recovered.status, "applied");
+    assert!(recovered.replayed);
+    assert_eq!(recovered.commands.len(), receipt.commands.len());
+    assert_eq!(
+        recovered.persisted_board_fingerprint,
+        receipt.persisted_board_fingerprint
+    );
+    // The graph is published before the resolver can offer this receipt for acknowledgement.
+    let restored = live.snapshot();
+    assert!(restored.nodes.contains_key(&saved_node_id));
+    assert!(!original.nodes.contains_key(&saved_node_id));
+    assert_eq!(restored.board_dir, board_dir);
+    assert_eq!(restored.page_metadata_source(), page_source);
+    assert!(matches!(restored.parent, Some(BoardParent::App(_))));
+    assert!(Arc::ptr_eq(restored.app_state.as_ref().unwrap(), &state));
+    assert!(board_edit_job_dismissal_receipt(&record.job, &restored).is_some());
+    let replay = replay_flow_ir_applied_receipt(&record.job.app_id, &record.job.token)
+        .expect("receipt delivery can replay the saved result after restoring the live board");
+    assert_eq!(replay.commands.len(), receipt.commands.len());
+
+    FLOW_IR_APPLIED_RECEIPTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&flow_ir_applied_receipt_key(
+            &record.job.app_id,
+            &record.job.token,
+        ));
+}
+
+#[tokio::test]
+async fn uncertain_dismissal_requires_a_readable_saved_board() {
+    let mut record = board_edit_job_test_record(
+        "dismiss-unreadable-board",
+        BoardEditJobPhase::Failed,
+        Instant::now(),
+    );
+    record.job.token.claim_id = uuid::Uuid::new_v4().to_string();
+    let live = Board::new_detached(Some(record.job.board_id.clone()), "apps/review-app".into());
+    let live = flow_like::flow::board::BoardCell::new(live);
+    let result = recover_board_edit_job_dismissal_receipt(&record.job, Some(&live), async {
+        Err("The saved board is unavailable.".to_string())
+    })
+    .await;
+    assert_eq!(
+        result.err().as_deref(),
+        Some("The saved board is unavailable.")
+    );
+}
+
+#[tokio::test]
+async fn unapplied_failures_can_be_dismissed_without_loading_a_saved_board() {
+    for code in [
+        "IR_COMMIT_PERSISTENCE_UNAVAILABLE",
+        "IR_COMMIT_CATALOG_UNAVAILABLE",
+        "IR_COMMIT_APP_UNAVAILABLE",
+        "IR_COMMIT_DESTRUCTIVE_APPROVAL_DENIED",
+        "IR_COMMIT_APPLY_FAILED",
+        "IR_COMMIT_FINGERPRINT_FAILED",
+        "IR_COMMIT_RECEIPT_PERSISTENCE_FAILED",
+    ] {
+        let mut record = board_edit_job_test_record(
+            "dismiss-unapplied",
+            BoardEditJobPhase::Failed,
+            Instant::now(),
+        );
+        record.job.token.claim_id = uuid::Uuid::new_v4().to_string();
+        record
+            .job
+            .record_apply_result(ApplyFlowIrCommitResult::empty(
+                "error",
+                code,
+                "Nothing was persisted.",
+            ));
+        let receipt = recover_board_edit_job_dismissal_receipt(&record.job, None, async {
+            panic!("{code} must not need a readable saved board")
+        })
+        .await
+        .unwrap();
+        assert!(receipt.is_none());
+    }
 }
 
 #[test]
@@ -457,6 +702,209 @@ fn board_mutation_gate_reserves_matching_apply_recovery_and_delivery_phases() {
     )]);
     assert!(board_mutation_is_reserved(
         &failed,
+        "review-app",
+        "review-board"
+    ));
+}
+
+#[test]
+fn known_unapplied_failures_allow_manual_edits_and_corrected_reviews() {
+    for code in [
+        "IR_COMMIT_PERSISTENCE_UNAVAILABLE",
+        "IR_COMMIT_CATALOG_UNAVAILABLE",
+        "IR_COMMIT_APP_UNAVAILABLE",
+        "IR_COMMIT_DESTRUCTIVE_APPROVAL_DENIED",
+        "IR_COMMIT_APPLY_FAILED",
+        "IR_COMMIT_FINGERPRINT_FAILED",
+        "IR_COMMIT_RECEIPT_PERSISTENCE_FAILED",
+    ] {
+        let mut failed =
+            board_edit_job_test_record("failed", BoardEditJobPhase::Failed, Instant::now());
+        failed
+            .job
+            .record_apply_result(ApplyFlowIrCommitResult::empty(
+                "error",
+                code,
+                "Nothing was persisted.",
+            ));
+        let recovered = board_edit_job_record_from_persisted(PersistedBoardEditJobEntry::Current(
+            PersistedBoardEditJobRecord {
+                job: failed.job,
+                board_commands: failed.board_commands,
+                replacement_mode: false,
+            },
+        ))
+        .expect("failed review remains available after restart");
+        assert_eq!(recovered.job.phase, BoardEditJobPhase::Failed);
+        assert!(!recovered.board_commands.is_empty());
+        let jobs = HashMap::from([("failed".to_string(), recovered)]);
+
+        assert!(
+            !board_mutation_is_reserved(&jobs, "review-app", "review-board"),
+            "manual edits should proceed after {code}"
+        );
+        assert!(
+            !another_board_edit_job_reserves_mutation(
+                &jobs,
+                "corrected-review",
+                "review-app",
+                "review-board",
+            ),
+            "a corrected review should proceed after {code}"
+        );
+    }
+}
+
+#[test]
+fn uncertain_failed_results_keep_the_board_reserved() {
+    for code in [
+        None,
+        Some("IR_COMMIT_BOARD_UNAVAILABLE"),
+        Some("IR_COMMIT_SAVE_FAILED"),
+        Some("UNRECOGNIZED_FAILURE"),
+    ] {
+        let mut failed =
+            board_edit_job_test_record("failed", BoardEditJobPhase::Failed, Instant::now());
+        let mut result = ApplyFlowIrCommitResult::empty("error", "", "Recovery is required.");
+        result.code = code.map(str::to_string);
+        failed.job.record_apply_result(result);
+        let jobs = HashMap::from([("failed".to_string(), failed)]);
+
+        assert!(board_mutation_is_reserved(
+            &jobs,
+            "review-app",
+            "review-board"
+        ));
+        assert!(another_board_edit_job_reserves_mutation(
+            &jobs,
+            "corrected-review",
+            "review-app",
+            "review-board"
+        ));
+    }
+}
+
+#[test]
+fn active_or_replayed_jobs_cannot_release_the_board_using_an_old_failure_code() {
+    for (phase, status, replayed) in [
+        (BoardEditJobPhase::Applying, "error", false),
+        (BoardEditJobPhase::AppliedPendingDelivery, "error", false),
+        (BoardEditJobPhase::Failed, "applied", false),
+        (BoardEditJobPhase::Failed, "error", true),
+    ] {
+        let mut record = board_edit_job_test_record("reserved", phase, Instant::now());
+        let mut result =
+            ApplyFlowIrCommitResult::empty(status, "IR_COMMIT_APPLY_FAILED", "Old result.");
+        result.replayed = replayed;
+        record.job.result = Some(result);
+        let jobs = HashMap::from([("reserved".to_string(), record)]);
+        assert!(board_mutation_is_reserved(
+            &jobs,
+            "review-app",
+            "review-board"
+        ));
+    }
+}
+
+#[test]
+fn known_failed_apply_attempts_leave_the_board_available_for_repair() {
+    let mut record =
+        board_edit_job_test_record("retry", BoardEditJobPhase::AwaitingApproval, Instant::now());
+    for code in ["IR_COMMIT_APPLY_FAILED", "IR_COMMIT_CATALOG_UNAVAILABLE"] {
+        let recovery_required = record.job.begin_resolution(true);
+        assert!(!recovery_required);
+        assert_eq!(record.job.phase, BoardEditJobPhase::Applying);
+        record.job.finish_apply_attempt(
+            ApplyFlowIrCommitResult::empty("error", code, "Nothing was persisted."),
+            recovery_required,
+        );
+        assert_eq!(record.job.phase, BoardEditJobPhase::Failed);
+        assert_eq!(
+            record.job.result.as_ref().unwrap().code.as_deref(),
+            Some(code)
+        );
+        let jobs = HashMap::from([("retry".to_string(), record.clone())]);
+        assert!(!board_mutation_is_reserved(
+            &jobs,
+            "review-app",
+            "review-board"
+        ));
+        assert!(!another_board_edit_job_reserves_mutation(
+            &jobs,
+            "corrected-review",
+            "review-app",
+            "review-board"
+        ));
+    }
+}
+
+#[test]
+fn uncertain_apply_retries_keep_reserving_the_board_after_known_failures() {
+    for (phase, code) in [
+        (BoardEditJobPhase::Failed, None),
+        (BoardEditJobPhase::Failed, Some("IR_COMMIT_SAVE_FAILED")),
+        (BoardEditJobPhase::Applying, None),
+    ] {
+        let mut record = board_edit_job_test_record("retry", phase, Instant::now());
+        if let Some(code) = code {
+            record
+                .job
+                .record_apply_result(ApplyFlowIrCommitResult::empty(
+                    "error",
+                    code,
+                    "The saved board could not be restored.",
+                ));
+        }
+        for retry_code in ["IR_COMMIT_CATALOG_UNAVAILABLE", "IR_COMMIT_APPLY_FAILED"] {
+            let recovery_required = record.job.begin_resolution(true);
+            assert!(recovery_required);
+            record.job.finish_apply_attempt(
+                ApplyFlowIrCommitResult::empty("error", retry_code, "The retry failed."),
+                recovery_required,
+            );
+            assert_eq!(record.job.phase, BoardEditJobPhase::Failed);
+            assert!(record.job.result.is_none());
+            assert_eq!(record.job.error.as_deref(), Some("The retry failed."));
+            let jobs = HashMap::from([("retry".to_string(), record.clone())]);
+            assert!(board_mutation_is_reserved(
+                &jobs,
+                "review-app",
+                "review-board"
+            ));
+            assert!(another_board_edit_job_reserves_mutation(
+                &jobs,
+                "corrected-review",
+                "review-app",
+                "review-board"
+            ));
+        }
+    }
+}
+
+#[test]
+fn successful_uncertain_apply_retry_moves_to_receipt_delivery() {
+    let mut record = board_edit_job_test_record("retry", BoardEditJobPhase::Failed, Instant::now());
+    record
+        .job
+        .record_apply_result(ApplyFlowIrCommitResult::empty(
+            "error",
+            "IR_COMMIT_SAVE_FAILED",
+            "The saved board could not be restored.",
+        ));
+    let recovery_required = record.job.begin_resolution(true);
+    assert!(recovery_required);
+    let mut receipt = compact_job_test_receipt();
+    receipt.replayed = true;
+    let fingerprint = receipt.persisted_board_fingerprint.clone();
+    record.job.finish_apply_attempt(receipt, recovery_required);
+    assert_eq!(record.job.phase, BoardEditJobPhase::AppliedPendingDelivery);
+    assert_eq!(record.job.persisted_board_fingerprint, fingerprint);
+    assert!(record.job.result.is_none());
+    assert!(record.job.error.is_none());
+    assert!(record.job.expires_at_ms > record.job.updated_at_ms);
+    let jobs = HashMap::from([("retry".to_string(), record)]);
+    assert!(board_mutation_is_reserved(
+        &jobs,
         "review-app",
         "review-board"
     ));
@@ -816,6 +1264,11 @@ fn restarted_incomplete_job_cannot_keep_post_apply_proof() {
         Instant::now(),
     );
     record.job.persisted_board_fingerprint = compact_job_test_receipt().persisted_board_fingerprint;
+    record.job.result = Some(ApplyFlowIrCommitResult::empty(
+        "error",
+        "IR_COMMIT_APPLY_FAILED",
+        "An earlier attempt was rolled back.",
+    ));
     let recovered = board_edit_job_record_from_persisted(PersistedBoardEditJobEntry::Current(
         PersistedBoardEditJobRecord {
             job: record.job,
@@ -826,4 +1279,11 @@ fn restarted_incomplete_job_cannot_keep_post_apply_proof() {
     .unwrap();
     assert_eq!(recovered.job.phase, BoardEditJobPhase::Failed);
     assert!(recovered.job.persisted_board_fingerprint.is_none());
+    assert!(recovered.job.result.is_none());
+    let jobs = HashMap::from([("interrupted-proof".to_string(), recovered)]);
+    assert!(board_mutation_is_reserved(
+        &jobs,
+        "review-app",
+        "review-board"
+    ));
 }

@@ -11,7 +11,7 @@
 		},
 		"theme": "dark",
 		"format": "webp",
-		"timeoutMs": 120000,
+		"timeoutMs": 300000,
 		"settleMs": 500,
 		"disableAnimations": true,
 		"hideScrollbars": true
@@ -31,8 +31,7 @@
 				},
 				{
 					"type": "click",
-					"selector": "[data-slot=\"tabs-list\"] > [data-slot=\"tabs-trigger\"]",
-					"index": 1
+					"selector": "main button:has(svg.lucide-settings)"
 				},
 				{
 					"type": "waitFor",
@@ -42,8 +41,26 @@
 					"type": "capture",
 					"name": "AppVisibilitySettings",
 					"mode": "element",
-					"selector": "[data-slot=\"tabs-content\"][data-state=\"active\"] > [data-slot=\"card\"]:first-child",
+					"selector": "[data-slot=\"sheet-content\"]",
 					"padding": 0
+				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}",
+				"oidc.user:https://docs-auth.example:docs-capture": "{\"access_token\": \"documentation-fixture-access-token\", \"id_token\": \"documentation-fixture-id-token\", \"token_type\": \"Bearer\", \"scope\": \"openid profile\", \"profile\": {\"sub\": \"docs-user\", \"name\": \"Documentation\"}, \"expires_at\": 4102444800}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		},
@@ -57,23 +74,49 @@
 			"steps": [
 				{
 					"type": "waitFor",
-					"text": "Access & Relationships"
+					"selector": "h1::-p-text(Access)",
+					"state": "visible"
 				},
 				{
 					"type": "click",
-					"selector": "[data-slot=\"tabs-list\"] [data-slot=\"tabs-trigger\"]",
-					"index": 1
+					"selector": "nav[aria-label=\"Access sections\"] > div:first-child button",
+					"index": 2
 				},
 				{
 					"type": "waitFor",
-					"text": "Direct Invite"
+					"text": "Invite links"
 				},
 				{
 					"type": "capture",
 					"name": "ShareApps",
 					"mode": "viewport"
 				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}",
+				"oidc.user:https://docs-auth.example:docs-capture": "{\"access_token\": \"documentation-fixture-access-token\", \"id_token\": \"documentation-fixture-id-token\", \"token_type\": \"Bearer\", \"scope\": \"openid profile\", \"profile\": {\"sub\": \"docs-user\", \"name\": \"Documentation\"}, \"expires_at\": 4102444800}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"reason": "The hub hook aborts its first fixture-backed request when the synthetic authenticated profile scope settles; the replacement request renders Access successfully.",
+					"maxCount": 2
+				}
 			]
 		}
-	]
+	],
+	"httpFixture": "../fixtures/docs-account.http.json"
 }

@@ -279,6 +279,11 @@ pub(super) struct WorkflowToolLoopSnapshot {
     pub(super) flowscript_operation_attempts: u16,
     pub(super) stalled_edit_attempts: u8,
     pub(super) flowscript_commit_attempts: u8,
+    pub(super) continuation_budget: Option<u8>,
+    pub(super) edit_attempt_budget: Option<u8>,
+    pub(super) flowscript_operation_budget: Option<u16>,
+    pub(super) commit_attempt_budget: Option<u8>,
+    pub(super) nested_wall_clock_budget: Option<Duration>,
     /// Human-readable name of the loop budget that is currently exhausted, if any. A continuation
     /// phase that starts in this state would be refused-on-arrival unless the host grants a fresh
     /// bounded slice first.
@@ -548,6 +553,13 @@ impl WorkflowToolLoopState {
             flowscript_operation_attempts: self.flowscript_operation_attempts,
             stalled_edit_attempts: self.stalled_edit_attempts,
             flowscript_commit_attempts: self.flowscript_commit_attempts,
+            continuation_budget: Some(self.continuation_budget()),
+            edit_attempt_budget: Some(self.edit_attempt_budget()),
+            flowscript_operation_budget: Some(self.flowscript_operation_budget()),
+            commit_attempt_budget: Some(self.commit_attempt_budget()),
+            nested_wall_clock_budget: Some(
+                NESTED_RUN_WALL_CLOCK_BUDGET.saturating_add(self.wall_clock_extension()),
+            ),
             exhausted_budget: self.exhausted_budget(),
             last_structured_diagnostics: self.last_structured_diagnostics.clone(),
             last_review_notes: self.last_review_notes,

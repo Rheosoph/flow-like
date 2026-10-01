@@ -28894,7 +28894,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_attach",
     "friendlyName": "Attach to Browser",
-    "description": "Attaches ChromeDriver or EdgeDriver to an existing debugging-enabled browser.",
+    "description": "Attaches to a running Chrome or Edge over the DevTools protocol: a dedicated debugging browser (host:port or ws:// URL), or your everyday browser after you allow remote debugging (leave Debugger Address empty).",
     "category": "Automation/Browser",
     "categoryPath": [
       "Automation",
@@ -28925,7 +28925,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "webdriver_url",
         "friendlyName": "WebDriver URL",
-        "description": "Running ChromeDriver or EdgeDriver URL",
+        "description": "Legacy WebDriver URL; ignored for loopback addresses",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
@@ -28935,7 +28935,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "debugger_address",
         "friendlyName": "Debugger Address",
-        "description": "Existing browser debugging host:port",
+        "description": "DevTools address of a browser started with --remote-debugging-port (host:port, http:// or ws:// URL). Leave empty to attach to your everyday Chrome or Edge via chrome://inspect/#remote-debugging",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
@@ -29295,7 +29295,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_execute_plan",
     "friendlyName": "Execute Browser Action Plan",
-    "description": "Executes a validated LLM browser plan in order, stopping on the first failed action. Navigate actions follow the session navigation policy (HTTP and HTTPS only when none is set), including the final URL after redirects.",
+    "description": "Executes a validated LLM browser plan in order, stopping on the first failed action. Navigate actions follow the session navigation policy (HTTP and HTTPS only when none is set), including the final URL after redirects. A 'select' action fails when no option has the value.",
     "category": "Automation/Browser",
     "categoryPath": [
       "Automation",
@@ -29788,7 +29788,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_open",
     "friendlyName": "Open Browser",
-    "description": "Connects to a WebDriver server and opens a new browser session, optionally with a persistent profile, proxy, locale and relaxed certificate checks",
+    "description": "Launches a local Chrome or Edge (or Chrome for Testing) with its own profile and connects over the DevTools protocol, optionally with a persistent profile, proxy, locale and relaxed certificate checks",
     "category": "Automation/Browser",
     "categoryPath": [
       "Automation",
@@ -29827,7 +29827,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "webdriver_url",
         "friendlyName": "WebDriver URL",
-        "description": "URL of the WebDriver server (e.g., http://localhost:9515 for ChromeDriver)",
+        "description": "Legacy WebDriver URL. Loopback addresses are ignored (the browser is launched locally); remote WebDriver hosts are not supported",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
@@ -29837,7 +29837,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "browser_type",
         "friendlyName": "Browser Type",
-        "description": "Browser to use (Chrome, Firefox, Edge, Safari)",
+        "description": "Chrome or Edge. Firefox and Safari are not supported yet",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
@@ -29905,7 +29905,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "user_data_dir",
         "friendlyName": "Profile Directory",
-        "description": "Local directory for a persistent browser profile (cookies, storage, logins survive between runs). Chrome and Edge allow one browser per profile at a time. Requires WebDriver on this machine.",
+        "description": "Local directory for a persistent browser profile (cookies, storage, logins survive between runs). Chrome and Edge allow one browser per profile at a time.",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -29915,7 +29915,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "user_data_path",
         "friendlyName": "Profile Path",
-        "description": "Absolute profile directory on the WebDriver host; used when Profile Directory is not connected",
+        "description": "Absolute profile directory on this machine; used when Profile Directory is not connected",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
@@ -29974,7 +29974,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "debugger_address",
         "friendlyName": "Debugger Address",
-        "description": "Chrome or Edge debugger endpoint, when available",
+        "description": "DevTools endpoint of the launched browser (localhost:port)",
         "pinType": "Output",
         "dataType": "String",
         "valueType": "Normal",
@@ -30213,7 +30213,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "debugger_address",
         "friendlyName": "Debugger Address",
-        "description": "Chrome or Edge debugging address (host:port)",
+        "description": "Ignored (legacy); the observer uses the session's own browser connection",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
@@ -30255,7 +30255,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_start_driver",
     "friendlyName": "Start WebDriver",
-    "description": "Starts an installed WebDriver executable and waits until it is ready.",
+    "description": "Legacy node kept for existing boards: browsers are now launched directly, so no WebDriver is started. Outputs a local URL for compatibility.",
     "category": "Automation/Browser",
     "categoryPath": [
       "Automation",
@@ -30286,7 +30286,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "executable",
         "friendlyName": "Executable",
-        "description": "Path to chromedriver, geckodriver, or msedgedriver",
+        "description": "Ignored (legacy)",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
@@ -30325,7 +30325,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "webdriver_url",
         "friendlyName": "WebDriver URL",
-        "description": "Ready local WebDriver endpoint",
+        "description": "Local compatibility URL (ignored by Open Browser)",
         "pinType": "Output",
         "dataType": "String",
         "valueType": "Normal",
@@ -30347,7 +30347,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_stop_driver",
     "friendlyName": "Stop WebDriver",
-    "description": "Stops the WebDriver process started for this automation session.",
+    "description": "Legacy node kept for existing boards: closes the session's browser like Close Browser.",
     "category": "Automation/Browser",
     "categoryPath": [
       "Automation",
@@ -30510,7 +30510,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_clear_cookies",
     "friendlyName": "Clear Cookies",
-    "description": "Clears cookies: every domain on Chrome and Edge, the current document's cookies on other browsers",
+    "description": "Clears every cookie of the browser (all domains)",
     "category": "Automation/Browser/Auth",
     "categoryPath": [
       "Automation",
@@ -30582,7 +30582,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_load_cookies",
     "friendlyName": "Load Cookies",
-    "description": "Loads cookies from a file into the browser session. Chrome and Edge accept cookies for every domain with their HttpOnly, Secure and SameSite flags; other browsers only accept cookies for the current page's domain.",
+    "description": "Loads cookies from a file into the browser for every domain, keeping their HttpOnly, Secure and SameSite flags; cookies without a domain are bound to the current page.",
     "category": "Automation/Browser/Auth",
     "categoryPath": [
       "Automation",
@@ -30691,7 +30691,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_load_storage_state",
     "friendlyName": "Load Storage State",
-    "description": "Restores cookies and web storage from a Playwright-compatible storageState JSON file. Cookies for every domain are restored on Chrome and Edge (only the current domain elsewhere). Storage is applied only to the origin the page is on, without navigating; other origins are reported as skipped.",
+    "description": "Restores cookies and web storage from a Playwright-compatible storageState JSON file. Cookies for every domain are restored. Storage is applied only to the origin the page is on, without navigating; other origins are reported as skipped.",
     "category": "Automation/Browser/Auth",
     "categoryPath": [
       "Automation",
@@ -30809,7 +30809,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_save_cookies",
     "friendlyName": "Save Cookies",
-    "description": "Saves browser cookies to a file for later restoration: every domain including HttpOnly cookies on Chrome and Edge, the current document's cookies on other browsers",
+    "description": "Saves every browser cookie (all domains, including HttpOnly) to a file for later restoration",
     "category": "Automation/Browser/Auth",
     "categoryPath": [
       "Automation",
@@ -30900,7 +30900,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_save_storage_state",
     "friendlyName": "Save Storage State",
-    "description": "Saves all cookies (every domain, including HttpOnly, on Chrome and Edge) and the current origin's localStorage to a Playwright-compatible storageState JSON file. The file holds login sessions; store it like a password.",
+    "description": "Saves all cookies (every domain, including HttpOnly) and the current origin's localStorage to a Playwright-compatible storageState JSON file. The file holds login sessions; store it like a password.",
     "category": "Automation/Browser/Auth",
     "categoryPath": [
       "Automation",
@@ -31082,7 +31082,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "debugger_address",
         "friendlyName": "Debugger Address",
-        "description": "Optional Chrome or Edge debugger address; defaults to the attached browser",
+        "description": "Ignored (legacy); the session's own browser connection is used",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
@@ -31240,7 +31240,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_print_pdf",
     "friendlyName": "Save Page as PDF",
-    "description": "Prints the current page to a PDF file, the way the browser's print dialog would. Chrome and Edge print through DevTools (headless Chrome is the most reliable); other browsers use WebDriver printing.",
+    "description": "Prints the current page to a PDF file, the way the browser's print dialog would, through the DevTools protocol (Chrome and Edge).",
     "category": "Automation/Browser/Capture",
     "categoryPath": [
       "Automation",
@@ -32921,7 +32921,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_list_elements",
     "friendlyName": "List Elements",
-    "description": "Lists elements matching a selector with their text, chosen attributes, box and visibility. When a browser snapshot exists for the page, each main-frame element also gets a ref usable as a Ref selector.",
+    "description": "Lists elements matching a selector with their text, chosen attributes, box and visibility. When a browser snapshot exists for the page, each element, including elements inside frames, also gets a ref usable as a Ref selector.",
     "category": "Automation/Browser/Extract",
     "categoryPath": [
       "Automation",
@@ -33060,7 +33060,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_set_download_dir",
     "friendlyName": "Set Download Directory",
-    "description": "Sets the default download directory for the browser (must be called before downloads)",
+    "description": "Sets the default download directory for the browser (must be called before downloads). When attached to a debugging Chrome, this changes that Chrome's download handling until it restarts. Fails when attached to your everyday Chrome, whose downloads stay in its own download folder; there, use Trigger Download and point Wait For Download at that folder.",
     "category": "Automation/Browser/Files",
     "categoryPath": [
       "Automation",
@@ -33470,7 +33470,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_wait_for_download",
     "friendlyName": "Wait For Download",
-    "description": "Waits for a file to appear in the download directory",
+    "description": "Waits for the next download started after Set Download Directory or Trigger Download to finish, using browser download events. Downloads from popup windows count, except when attached to your everyday Chrome.",
     "category": "Automation/Browser/Files",
     "categoryPath": [
       "Automation",
@@ -33805,7 +33805,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_select_option",
     "friendlyName": "Select Option",
-    "description": "Selects an option in a dropdown/select element",
+    "description": "Selects an option in a dropdown/select element. Fails when no option has this value.",
     "category": "Automation/Browser/Input",
     "categoryPath": [
       "Automation",
@@ -34154,7 +34154,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_click_at_point",
     "friendlyName": "Click At Point",
-    "description": "Clicks at viewport CSS coordinates instead of an element, for canvas apps and coordinates read off a screenshot by a vision model. Works in every WebDriver browser.",
+    "description": "Clicks at viewport CSS coordinates instead of an element, for canvas apps and coordinates read off a screenshot by a vision model. Requires Chrome or Edge.",
     "category": "Automation/Browser/Interact",
     "categoryPath": [
       "Automation",
@@ -35635,7 +35635,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "debugger_address",
         "friendlyName": "Debugger Address",
-        "description": "Optional Chrome or Edge debugger address; defaults to the attached browser",
+        "description": "Ignored (legacy); the session's own browser connection is used",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
@@ -35778,7 +35778,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "automation",
     "name": "browser_snapshot",
     "friendlyName": "Browser Snapshot",
-    "description": "Captures the page accessibility tree as compact text with element refs (e1, e2, …) that any selector pin accepts as a Ref selector. Refs stay valid until the page navigates or the element is removed; a stale ref fails with a request to take a new snapshot. Covers the current tab including same-process iframes; out-of-process (cross-site) iframes are omitted. Requires Chrome or Edge.",
+    "description": "Captures the page accessibility tree as compact text with element refs (e1, e2, …) that any selector pin accepts as a Ref selector. Refs stay valid until the page navigates or the element is removed; a stale ref fails with a request to take a new snapshot. Covers the current tab including same-site and cross-site iframes (up to 20 frames). Requires Chrome or Edge.",
     "category": "Automation/Browser/Snapshot",
     "categoryPath": [
       "Automation",
@@ -67963,7 +67963,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "type",
         "friendlyName": "Type",
-        "description": "Index type to build. Vector indexes use cosine distance; VECTOR and vector AUTO retain IVF-PQ.",
+        "description": "Index type to build. Vector indexes use cosine distance. VECTOR and vector AUTO build IVF-PQ, or exact IVF-FLAT while the table has fewer than 256 rows, too few to train PQ; explicit PQ types fail on such tables.",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",

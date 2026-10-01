@@ -306,6 +306,25 @@ pub(crate) fn session_token(hub: &str, subject: &str) -> Option<String> {
     SESSIONS.lock().ok()?.current_token(&hub, subject)
 }
 
+/// The signed-in webview session of `subject` as (session id, webview label, token), so
+/// background work can `prepare` through that session when the account is signed in in
+/// several webviews.
+pub(crate) fn session_binding(hub: &str, subject: &str) -> Option<(String, String, String)> {
+    let hub = canonical_hub(hub).ok()?;
+    let sessions = SESSIONS.lock().ok()?;
+    sessions.bridges.iter().find_map(|(webview, bridge)| {
+        let session = bridge.authority.as_ref()?;
+        if session.hub != hub
+            || session.subject != subject
+            || session.revoked.load(Ordering::Acquire)
+        {
+            return None;
+        }
+        let token = session.token.lock().ok()?.clone();
+        (!token.is_empty()).then(|| (bridge.id.clone(), webview.clone(), token))
+    })
+}
+
 pub(crate) fn open_session(window: &str, webview: &str) -> Result<String, String> {
     SESSIONS
         .lock()
@@ -678,18 +697,6 @@ pub(crate) async fn prepare(
         .await?;
     credentials.authorization_current()?;
     Ok(SharedCredentials::Renewable(credentials.clone()))
-}
-
-/// Credentials choose where a run's data lives; whether it may run at all is
-/// decided by its execution identity. An issuer that cannot be reached or
-/// answers garbage therefore sends the run to device storage. A reachable
-/// issuer's refusal (401, 403) or a malformed request still stops it, so an
-/// online run never silently writes to the device instead of the project.
-pub(crate) fn falls_back_to_device_storage(error: &flow_like_types::Error) -> bool {
-    matches!(
-        error.downcast_ref::<AuthorizationError>(),
-        Some(AuthorizationError::Unavailable | AuthorizationError::InvalidResponse)
-    )
 }
 
 pub(crate) fn install_registry(

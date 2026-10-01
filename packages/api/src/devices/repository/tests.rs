@@ -523,7 +523,6 @@ async fn authoritative_enrollment_and_replay() {
             .await
             .is_err()
     );
-    drop(repository);
     db.close().await.unwrap();
     admin
         .execute_unprepared(&format!("DROP SCHEMA {schema} CASCADE"))

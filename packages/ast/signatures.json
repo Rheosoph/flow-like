@@ -15475,7 +15475,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Running ChromeDriver or EdgeDriver URL"
+          "doc": "Legacy WebDriver URL; ignored for loopback addresses"
         },
         {
           "name": "debugger_address",
@@ -15484,7 +15484,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Existing browser debugging host:port"
+          "doc": "DevTools address of a browser started with --remote-debugging-port (host:port, http:// or ws:// URL). Leave empty to attach to your everyday Chrome or Edge via chrome://inspect/#remote-debugging"
         },
         {
           "name": "browser_type",
@@ -15509,7 +15509,7 @@
         }
       ],
       "impure": true,
-      "doc": "Attaches ChromeDriver or EdgeDriver to an existing debugging-enabled browser.",
+      "doc": "Attaches to a running Chrome or Edge over the DevTools protocol: a dedicated debugging browser (host:port or ws:// URL), or your everyday browser after you allow remote debugging (leave Debugger Address empty).",
       "namespace": "browser",
       "alias": "attach"
     },
@@ -15663,7 +15663,7 @@
         }
       ],
       "impure": true,
-      "doc": "Clears cookies: every domain on Chrome and Edge, the current document's cookies on other browsers",
+      "doc": "Clears every cookie of the browser (all domains)",
       "namespace": "browser",
       "alias": "clearCookies"
     },
@@ -15865,7 +15865,7 @@
         }
       ],
       "impure": true,
-      "doc": "Clicks at viewport CSS coordinates instead of an element, for canvas apps and coordinates read off a screenshot by a vision model. Works in every WebDriver browser.",
+      "doc": "Clicks at viewport CSS coordinates instead of an element, for canvas apps and coordinates read off a screenshot by a vision model. Requires Chrome or Edge.",
       "namespace": "browser",
       "alias": "clickAtPoint"
     },
@@ -16297,7 +16297,7 @@
         }
       ],
       "impure": true,
-      "doc": "Executes a validated LLM browser plan in order, stopping on the first failed action. Navigate actions follow the session navigation policy (HTTP and HTTPS only when none is set), including the final URL after redirects.",
+      "doc": "Executes a validated LLM browser plan in order, stopping on the first failed action. Navigate actions follow the session navigation policy (HTTP and HTTPS only when none is set), including the final URL after redirects. A 'select' action fails when no option has the value.",
       "namespace": "browser",
       "alias": "executePlan"
     },
@@ -17900,7 +17900,7 @@
         }
       ],
       "impure": true,
-      "doc": "Lists elements matching a selector with their text, chosen attributes, box and visibility. When a browser snapshot exists for the page, each main-frame element also gets a ref usable as a Ref selector.",
+      "doc": "Lists elements matching a selector with their text, chosen attributes, box and visibility. When a browser snapshot exists for the page, each element, including elements inside frames, also gets a ref usable as a Ref selector.",
       "namespace": "browser",
       "alias": "listElements"
     },
@@ -18006,7 +18006,7 @@
         }
       ],
       "impure": true,
-      "doc": "Loads cookies from a file into the browser session. Chrome and Edge accept cookies for every domain with their HttpOnly, Secure and SameSite flags; other browsers only accept cookies for the current page's domain.",
+      "doc": "Loads cookies from a file into the browser for every domain, keeping their HttpOnly, Secure and SameSite flags; cookies without a domain are bound to the current page.",
       "namespace": "browser",
       "alias": "loadCookies"
     },
@@ -18086,7 +18086,7 @@
         }
       ],
       "impure": true,
-      "doc": "Restores cookies and web storage from a Playwright-compatible storageState JSON file. Cookies for every domain are restored on Chrome and Edge (only the current domain elsewhere). Storage is applied only to the origin the page is on, without navigating; other origins are reported as skipped.",
+      "doc": "Restores cookies and web storage from a Playwright-compatible storageState JSON file. Cookies for every domain are restored. Storage is applied only to the origin the page is on, without navigating; other origins are reported as skipped.",
       "namespace": "browser",
       "alias": "loadStorageState"
     },
@@ -18147,7 +18147,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "URL of the WebDriver server (e.g., http://localhost:9515 for ChromeDriver)"
+          "doc": "Legacy WebDriver URL. Loopback addresses are ignored (the browser is launched locally); remote WebDriver hosts are not supported"
         },
         {
           "name": "browser_type",
@@ -18156,7 +18156,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Browser to use (Chrome, Firefox, Edge, Safari)"
+          "doc": "Chrome or Edge. Firefox and Safari are not supported yet"
         },
         {
           "name": "headless",
@@ -18210,7 +18210,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Local directory for a persistent browser profile (cookies, storage, logins survive between runs). Chrome and Edge allow one browser per profile at a time. Requires WebDriver on this machine.",
+          "doc": "Local directory for a persistent browser profile (cookies, storage, logins survive between runs). Chrome and Edge allow one browser per profile at a time.",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
         },
         {
@@ -18220,7 +18220,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Absolute profile directory on the WebDriver host; used when Profile Directory is not connected"
+          "doc": "Absolute profile directory on this machine; used when Profile Directory is not connected"
         },
         {
           "name": "proxy_server",
@@ -18267,7 +18267,7 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Chrome or Edge debugger endpoint, when available"
+          "doc": "DevTools endpoint of the launched browser (localhost:port)"
         },
         {
           "name": "session_out",
@@ -18281,7 +18281,7 @@
         }
       ],
       "impure": true,
-      "doc": "Connects to a WebDriver server and opens a new browser session, optionally with a persistent profile, proxy, locale and relaxed certificate checks",
+      "doc": "Launches a local Chrome or Edge (or Chrome for Testing) with its own profile and connects over the DevTools protocol, optionally with a persistent profile, proxy, locale and relaxed certificate checks",
       "namespace": "browser",
       "alias": "open"
     },
@@ -18442,7 +18442,7 @@
         }
       ],
       "impure": true,
-      "doc": "Prints the current page to a PDF file, the way the browser's print dialog would. Chrome and Edge print through DevTools (headless Chrome is the most reliable); other browsers use WebDriver printing.",
+      "doc": "Prints the current page to a PDF file, the way the browser's print dialog would, through the DevTools protocol (Chrome and Edge).",
       "namespace": "browser",
       "alias": "printPdf"
     },
@@ -18582,7 +18582,7 @@
         }
       ],
       "impure": true,
-      "doc": "Saves browser cookies to a file for later restoration: every domain including HttpOnly cookies on Chrome and Edge, the current document's cookies on other browsers",
+      "doc": "Saves every browser cookie (all domains, including HttpOnly) to a file for later restoration",
       "namespace": "browser",
       "alias": "saveCookies"
     },
@@ -18653,7 +18653,7 @@
         }
       ],
       "impure": true,
-      "doc": "Saves all cookies (every domain, including HttpOnly, on Chrome and Edge) and the current origin's localStorage to a Playwright-compatible storageState JSON file. The file holds login sessions; store it like a password.",
+      "doc": "Saves all cookies (every domain, including HttpOnly) and the current origin's localStorage to a Playwright-compatible storageState JSON file. The file holds login sessions; store it like a password.",
       "namespace": "browser",
       "alias": "saveStorageState"
     },
@@ -19009,7 +19009,7 @@
         }
       ],
       "impure": true,
-      "doc": "Selects an option in a dropdown/select element",
+      "doc": "Selects an option in a dropdown/select element. Fails when no option has this value.",
       "namespace": "browser",
       "alias": "selectOption"
     },
@@ -19124,7 +19124,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Optional Chrome or Edge debugger address; defaults to the attached browser"
+          "doc": "Ignored (legacy); the session's own browser connection is used"
         }
       ],
       "outputs": [
@@ -19184,7 +19184,7 @@
         }
       ],
       "impure": true,
-      "doc": "Sets the default download directory for the browser (must be called before downloads)",
+      "doc": "Sets the default download directory for the browser (must be called before downloads). When attached to a debugging Chrome, this changes that Chrome's download handling until it restarts. Fails when attached to your everyday Chrome, whose downloads stay in its own download folder; there, use Trigger Download and point Wait For Download at that folder.",
       "namespace": "browser",
       "alias": "setDownloadDir"
     },
@@ -19680,7 +19680,7 @@
         }
       ],
       "impure": true,
-      "doc": "Captures the page accessibility tree as compact text with element refs (e1, e2, …) that any selector pin accepts as a Ref selector. Refs stay valid until the page navigates or the element is removed; a stale ref fails with a request to take a new snapshot. Covers the current tab including same-process iframes; out-of-process (cross-site) iframes are omitted. Requires Chrome or Edge.",
+      "doc": "Captures the page accessibility tree as compact text with element refs (e1, e2, …) that any selector pin accepts as a Ref selector. Refs stay valid until the page navigates or the element is removed; a stale ref fails with a request to take a new snapshot. Covers the current tab including same-site and cross-site iframes (up to 20 frames). Requires Chrome or Edge.",
       "namespace": "browser",
       "alias": "snapshot"
     },
@@ -19707,7 +19707,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Chrome or Edge debugging address (host:port)"
+          "doc": "Ignored (legacy); the observer uses the session's own browser connection"
         }
       ],
       "outputs": [
@@ -19750,7 +19750,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Path to chromedriver, geckodriver, or msedgedriver"
+          "doc": "Ignored (legacy)"
         },
         {
           "name": "port",
@@ -19780,11 +19780,11 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Ready local WebDriver endpoint"
+          "doc": "Local compatibility URL (ignored by Open Browser)"
         }
       ],
       "impure": true,
-      "doc": "Starts an installed WebDriver executable and waits until it is ready.",
+      "doc": "Legacy node kept for existing boards: browsers are now launched directly, so no WebDriver is started. Outputs a local URL for compatibility.",
       "namespace": "browser",
       "alias": "startDriver"
     },
@@ -19820,7 +19820,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Optional Chrome or Edge debugger address; defaults to the attached browser"
+          "doc": "Ignored (legacy); the session's own browser connection is used"
         }
       ],
       "outputs": [
@@ -19870,7 +19870,7 @@
         }
       ],
       "impure": true,
-      "doc": "Stops the WebDriver process started for this automation session.",
+      "doc": "Legacy node kept for existing boards: closes the session's browser like Close Browser.",
       "namespace": "browser",
       "alias": "stopDriver"
     },
@@ -20500,7 +20500,7 @@
         }
       ],
       "impure": true,
-      "doc": "Waits for a file to appear in the download directory",
+      "doc": "Waits for the next download started after Set Download Directory or Trigger Download to finish, using browser download events. Downloads from popup windows count, except when attached to your everyday Chrome.",
       "namespace": "browser",
       "alias": "waitForDownload"
     },
@@ -81261,7 +81261,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Index type to build. Vector indexes use cosine distance; VECTOR and vector AUTO retain IVF-PQ."
+          "doc": "Index type to build. Vector indexes use cosine distance. VECTOR and vector AUTO build IVF-PQ, or exact IVF-FLAT while the table has fewer than 256 rows, too few to train PQ; explicit PQ types fail on such tables."
         }
       ],
       "outputs": [],

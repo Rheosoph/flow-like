@@ -57,6 +57,12 @@ const GRAPH_COPY_LAG: Duration = Duration::from_millis(700);
 const GRAPH_COPY_RETRY_BUDGET: Duration = Duration::from_millis(1_500);
 const DOWNLOAD_INFO: &str = "application/vnd.microsoft.teams.file.download.info";
 const MAX_LOGGED_ATTACHMENTS: usize = 20;
+const MAX_EARLIER_FILE_MESSAGES: usize = 3;
+/// Stored files expire with the Tmp store's two-day lifecycle, so older ones are not linked.
+const MAX_EARLIER_FILE_AGE: chrono::TimeDelta = chrono::TimeDelta::hours(47);
+/// Set on an invoking entry once its own run answered, so only files a model already took
+/// are linked again.
+const ANSWERED: &str = "answered";
 const ANONYMOUS: &str = "anonymous:";
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -567,8 +573,9 @@ async fn dispatch(
     Ok(())
 }
 
-/// Builds the Chat Event payload once per message: it looks up context, downloads files and
-/// persists the user's message to the conversation history before the run starts.
+/// Builds the Chat Event payload once per message: it looks up context, downloads files,
+/// persists the user's message to the conversation history and links the files of recent
+/// earlier messages again before the run starts.
 async fn input_payload(
     state: &AppState,
     c: &Connection,
@@ -627,6 +634,8 @@ async fn input_payload(
         record_invocation(history, &session.run_id, &entry)
     })
     .await?;
+    let refs = earlier_files(&conversation.messages, &entry, chrono::Utc::now());
+    let earlier = files::resign(state, c, sink, &refs, &files, deadline).await;
     let global = store::get::<UserSession>(state, &user_key(session))
         .await?
         .map(|v| v.0.value)
@@ -636,6 +645,7 @@ async fn input_payload(
         history: conversation.messages,
         entry,
         files: &files,
+        earlier: &earlier,
         local: conversation.local,
         global,
         teams: teams.into_value(),
@@ -1020,7 +1030,8 @@ fn entry_content(
     )
 }
 
-/// A user message as history stores it.
+/// A user message as history stores it. 1:1 messages keep their stored files by object path,
+/// never by link, for later messages of the same user to link again.
 fn user_entry(
     activity: &Value,
     conversation_type: &str,
@@ -1030,6 +1041,10 @@ fn user_entry(
     let author = context::display_name(context::field(activity, "/from/name"), anonymous);
     let content = entry_content(activity, conversation_type, &author, files);
     let mut entry = json!({"role":"user","content":content,"author":author});
+    let stored = files::stored_refs(files);
+    if conversation_type == "personal" && !stored.is_empty() {
+        entry["files"] = json!(stored);
+    }
     if let Some(id) = context::field(activity, "/id") {
         entry["id"] = json!(id);
     }
@@ -1261,6 +1276,8 @@ struct Invocation<'a> {
     history: Vec<Value>,
     entry: Value,
     files: &'a [FileEntry],
+    /// Freshly signed files that earlier entries of `history` stored.
+    earlier: &'a [FileEntry],
     local: Value,
     global: Value,
     teams: Value,
@@ -1273,13 +1290,97 @@ fn object_or_empty(value: Value) -> Value {
     if value.is_object() { value } else { json!({}) }
 }
 
-/// The Chat Event payload. The invoking message is last, with downloaded files as media parts.
+/// The stored files a model can take of the newest earlier messages that their own run
+/// answered and that are recent enough for their objects to still exist, newest first. Only
+/// entries before `entry` count. Files whose run never answered, such as one a provider
+/// rejected, stay placeholders so they cannot fail every later run too.
+fn earlier_files(
+    history: &[Value],
+    entry: &Value,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<Value> {
+    let Some(id) = entry["id"].as_str() else {
+        return Vec::new();
+    };
+    history
+        .iter()
+        .rev()
+        .skip_while(|message| message["id"] != id)
+        .skip(1)
+        .filter(|message| message[ANSWERED] == true)
+        .filter(|message| {
+            timestamp(message)
+                .is_some_and(|at| now.signed_duration_since(at) < MAX_EARLIER_FILE_AGE)
+        })
+        .map(|message| {
+            message["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|reference| files::linkable(reference))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .filter(|linkable| !linkable.is_empty())
+        .take(MAX_EARLIER_FILE_MESSAGES)
+        .flatten()
+        .collect()
+}
+
+/// Marks the invoking entry with stored files once its run answered. Returns whether it
+/// changed.
+fn mark_answered(messages: &mut [Value], id: &str) -> bool {
+    let Some(message) = messages.iter_mut().find(|message| {
+        message["id"] == id && message.get("files").is_some() && message[ANSWERED] != true
+    }) else {
+        return false;
+    };
+    message[ANSWERED] = json!(true);
+    true
+}
+
+/// Flows never see stored object paths or whether a run answered the entry.
+fn take_files(message: &mut Value) -> Option<Value> {
+    let message = message.as_object_mut()?;
+    message.remove(ANSWERED);
+    message.remove("files")
+}
+
+/// An earlier message whose stored files were signed again carries them as media parts.
+fn with_earlier_files(mut message: Value, earlier: &[FileEntry]) -> Value {
+    let Some(stored) = take_files(&mut message) else {
+        return message;
+    };
+    let linked: Vec<FileEntry> = stored
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|reference| {
+            let path = reference["path"].as_str()?;
+            earlier
+                .iter()
+                .find(|file| file.path.as_deref() == Some(path))
+        })
+        .cloned()
+        .collect();
+    let parts = message["content"]
+        .as_str()
+        .and_then(|text| files::content_parts(text, &linked));
+    if let Some(parts) = parts {
+        message["content"] = parts;
+    }
+    message
+}
+
+/// The Chat Event payload. The invoking message is last, with downloaded files as media parts;
+/// recent earlier messages carry their re-signed files the same way.
 fn payload(invocation: Invocation) -> Value {
     let Invocation {
         chat_id,
         history,
         entry,
         files,
+        earlier,
         local,
         global,
         teams,
@@ -1290,8 +1391,10 @@ fn payload(invocation: Invocation) -> Value {
     let mut messages: Vec<Value> = history
         .into_iter()
         .filter(|message| entry["id"].is_null() || message["id"] != entry["id"])
+        .map(|message| with_earlier_files(message, earlier))
         .collect();
     let mut last = entry;
+    take_files(&mut last);
     if let Some(parts) = files::content_parts(last["content"].as_str().unwrap_or_default(), files) {
         last["content"] = parts;
     }
@@ -1847,7 +1950,8 @@ fn record_reply(
 }
 
 /// Records a reply sent by `chat_out` or the send endpoint. Only `chat_out` carries the
-/// sessions the workflow returned, so only it updates them.
+/// sessions the workflow returned, so only it updates them, and only a `chat_out` with text
+/// marks the user's message as answered: the send endpoint also posts progress notes.
 async fn remember(
     state: &AppState,
     s: &Session,
@@ -1874,15 +1978,18 @@ async fn remember(
         .as_array()
         .and_then(|messages| messages.last());
     let entry = hash(&[&s.run_id, key]);
+    let answered = sessions.is_some() && !text.is_empty();
     update_history(state, &s.history_key, &s.connection_id, |conversation| {
-        record_reply(
+        let recorded = record_reply(
             conversation,
             &s.run_id,
             &entry,
             user_message,
             text,
             local.as_ref(),
-        )
+        );
+        let marked = answered && mark_answered(&mut conversation.messages, &s.activity_id);
+        recorded || marked
     })
     .await?;
     let expires = now() + HISTORY_MS;
@@ -2919,6 +3026,7 @@ mod tests {
             history: conversation.messages.clone(),
             entry: entry.clone(),
             files: &[],
+            earlier: &[],
             local: Value::Null,
             global: Value::Null,
             teams: json!({"session_id":"run"}),
@@ -3067,6 +3175,7 @@ mod tests {
             history,
             entry: entry.clone(),
             files: &files,
+            earlier: &[],
             local: json!({"topic":"billing"}),
             global: Value::Null,
             teams: json!({"session_id":"run"}),
@@ -3111,6 +3220,7 @@ mod tests {
             history: vec![entry.clone()],
             entry: entry.clone(),
             files: &files[1..],
+            earlier: &[],
             local: json!("not an object"),
             global: json!({"plan":"pro","teams":{"stale":true}}),
             teams: json!({"session_id":"run"}),
@@ -3127,6 +3237,269 @@ mod tests {
         assert_eq!(
             plain["global_session"],
             json!({"plan":"pro","teams":{"session_id":"run"}})
+        );
+    }
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n rest";
+
+    fn stored_png(run: &str, name: &str) -> FileEntry {
+        FileEntry {
+            name: name.into(),
+            mime: "image/png".into(),
+            size: Some(PNG.len() as u64),
+            url: Some(format!("https://store.example/{name}?sig=secret")),
+            path: Some(format!(
+                "tmp/user/u/apps/a/runs/{run}/request/teams/0000-{name}"
+            )),
+            downloadable: true,
+            ..FileEntry::default()
+        }
+    }
+
+    fn entry_at(id: &str, at: chrono::DateTime<chrono::Utc>, files: &[FileEntry]) -> Value {
+        let mut activity = message("personal", &format!("message {id}"));
+        activity["id"] = json!(id);
+        activity["timestamp"] = json!(at.to_rfc3339());
+        user_entry(&activity, "personal", false, files)
+    }
+
+    fn answered(mut entry: Value) -> Value {
+        let id = entry["id"].as_str().unwrap().to_owned();
+        assert!(mark_answered(std::slice::from_mut(&mut entry), &id));
+        entry
+    }
+
+    #[test]
+    fn only_personal_invoking_entries_store_file_paths_and_never_links() {
+        let files = [
+            stored_png("run", "a.png"),
+            FileEntry {
+                name: "Plan.docx".into(),
+                mime: "application/octet-stream".into(),
+                link: Some("https://contoso.sharepoint.com/Plan.docx".into()),
+                error: Some("not downloadable".into()),
+                ..FileEntry::default()
+            },
+        ];
+        let entry = user_entry(&message("personal", "look"), "personal", false, &files);
+        let mut conversation = Conversation::default();
+        assert!(record_invocation(&mut conversation, "run", &entry));
+        trim_history(&mut conversation.messages);
+        let stored = &conversation.messages[0];
+        assert_eq!(
+            stored["files"],
+            json!([{"path":"tmp/user/u/apps/a/runs/run/request/teams/0000-a.png","name":"a.png","type":"image/png","size":PNG.len()}])
+        );
+        assert_eq!(&stored_message(stored), stored);
+        let row = serde_json::to_string(&conversation).unwrap();
+        assert!(!row.contains("https://"), "{row}");
+
+        for conversation_type in ["groupChat", "channel"] {
+            let entry = user_entry(
+                &message(conversation_type, "look"),
+                conversation_type,
+                false,
+                &files,
+            );
+            assert!(entry.get("files").is_none(), "{conversation_type}: {entry}");
+            assert!(
+                entry["content"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("[image: a.png]\n[file: Plan.docx]"),
+                "{entry}"
+            );
+        }
+
+        let mut pasted = unmentioned("groupChat", "look");
+        pasted["attachments"] = json!([{"contentType":"image/*","contentUrl":"https://smba.trafficmanager.net/emea/v3/attachments/a/views/original"}]);
+        let passive = passive_entry(&pasted).unwrap();
+        assert!(
+            passive["content"]
+                .as_str()
+                .unwrap()
+                .ends_with("[image: image-1]")
+        );
+        assert!(passive.get("files").is_none());
+    }
+
+    #[tokio::test]
+    async fn recent_earlier_files_are_signed_again_and_older_ones_stay_placeholders() {
+        use flow_like_storage::{
+            Path as StoragePath,
+            files::store::FlowLikeStore,
+            object_store::{ObjectStoreExt, memory::InMemory},
+        };
+        let store = FlowLikeStore::Memory(std::sync::Arc::new(InMemory::new()));
+        let now = chrono::Utc::now();
+        let hours_ago = |hours| now - chrono::TimeDelta::hours(hours);
+        let old = stored_png("old", "old.png");
+        let recent = stored_png("recent", "recent.png");
+        let current = stored_png("current", "now.png");
+        for file in [&old, &recent, &current] {
+            store
+                .as_generic()
+                .put(
+                    &StoragePath::from(file.path.as_deref().unwrap()),
+                    PNG.into(),
+                )
+                .await
+                .unwrap();
+        }
+        let entry = entry_at("3", now, std::slice::from_ref(&current));
+        let history = vec![
+            answered(entry_at("1", hours_ago(50), std::slice::from_ref(&old))),
+            json!({"role":"assistant","content":"seen"}),
+            answered(entry_at("2", hours_ago(1), std::slice::from_ref(&recent))),
+            entry.clone(),
+        ];
+        let refs = earlier_files(&history, &entry, now);
+        assert_eq!(refs, files::stored_refs(std::slice::from_ref(&recent)));
+        let storage = files::Storage {
+            store,
+            prefix: "tmp/user/u/apps/a".into(),
+            ttl: Duration::from_secs(60),
+        };
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let earlier = files::sign_stored(
+            "c",
+            &storage,
+            &refs,
+            std::slice::from_ref(&current),
+            deadline,
+        )
+        .await;
+        let payload = payload(Invocation {
+            chat_id: "chat".into(),
+            history,
+            entry,
+            files: std::slice::from_ref(&current),
+            earlier: &earlier,
+            local: Value::Null,
+            global: Value::Null,
+            teams: json!({"session_id":"run"}),
+            run: "run",
+            sub: "tenant:user".into(),
+            name: "Felix".into(),
+        });
+        let messages = payload["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 4);
+        assert!(
+            messages
+                .iter()
+                .all(|message| message.get("files").is_none() && message.get(ANSWERED).is_none()),
+            "{messages:?}"
+        );
+        assert_eq!(messages[0]["content"], "message 1\n[image: old.png]");
+        let relinked = &messages[2]["content"];
+        assert_eq!(
+            relinked[0],
+            json!({"type":"text","text":"message 2\n[image: recent.png]"})
+        );
+        assert!(
+            relinked[1]["image_url"]["url"]
+                .as_str()
+                .is_some_and(|url| url.starts_with("data:image/png;base64,")),
+            "{relinked}"
+        );
+        assert_eq!(
+            messages[3]["content"][1]["image_url"]["url"],
+            json!(current.url)
+        );
+        assert_eq!(payload["attachments"], json!([current.attachment()]));
+    }
+
+    #[test]
+    fn only_the_three_newest_answered_messages_with_media_link_their_files_again() {
+        let now = chrono::Utc::now();
+        let minutes_ago = |minutes| now - chrono::TimeDelta::minutes(minutes);
+        let mut history: Vec<Value> = (1..=5)
+            .map(|index| {
+                let file = stored_png(&format!("run-{index}"), &format!("{index}.png"));
+                answered(entry_at(
+                    &index.to_string(),
+                    minutes_ago(10 - index),
+                    &[file],
+                ))
+            })
+            .collect();
+        let undated = stored_png("run-u", "undated.png");
+        history.insert(
+            4,
+            json!({"role":"user","content":"no time","id":"u","files":files::stored_refs(&[undated]),ANSWERED:true}),
+        );
+        let docx = FileEntry {
+            mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document".into(),
+            ..stored_png("run-d", "Plan.docx")
+        };
+        history.push(answered(entry_at("docx", minutes_ago(3), &[docx])));
+        history.push(entry_at(
+            "unanswered",
+            minutes_ago(2),
+            &[stored_png("run-f", "failed.png")],
+        ));
+        let entry = entry_at("6", now, &[]);
+        history.push(entry.clone());
+        history.push(answered(entry_at(
+            "7",
+            now,
+            &[stored_png("run-7", "7.png")],
+        )));
+        let names = earlier_files(&history, &entry, now)
+            .iter()
+            .map(|reference| reference["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["5.png", "4.png", "3.png"]);
+        assert!(earlier_files(&history, &json!({"role":"user","content":"no id"}), now).is_empty());
+    }
+
+    #[test]
+    fn files_are_linked_again_only_after_their_own_run_answered() {
+        let now = chrono::Utc::now();
+        let sent = entry_at(
+            "1",
+            now - chrono::TimeDelta::minutes(5),
+            &[stored_png("run-1", "screenshot.png")],
+        );
+        let mut conversation = Conversation::default();
+        assert!(record_invocation(&mut conversation, "run-1", &sent));
+        assert!(record_reply(
+            &mut conversation,
+            "run-1",
+            "node:progress",
+            None,
+            "Looking at it…",
+            None
+        ));
+        let next = entry_at("2", now, &[]);
+        assert!(record_invocation(&mut conversation, "run-2", &next));
+        assert!(earlier_files(&conversation.messages, &next, now).is_empty());
+        let unanswered = payload(Invocation {
+            chat_id: "chat".into(),
+            history: conversation.messages.clone(),
+            entry: next.clone(),
+            files: &[],
+            earlier: &[],
+            local: Value::Null,
+            global: Value::Null,
+            teams: json!({"session_id":"run-2"}),
+            run: "run-2",
+            sub: "tenant:user".into(),
+            name: "Felix".into(),
+        });
+        assert_eq!(
+            unanswered["messages"][0],
+            json!({"role":"user","content":"message 1\n[image: screenshot.png]","author":"Felix Schultz","id":"1","at":sent["at"]})
+        );
+
+        assert!(!mark_answered(&mut conversation.messages, "2"));
+        assert!(!mark_answered(&mut conversation.messages, "missing"));
+        assert!(mark_answered(&mut conversation.messages, "1"));
+        assert!(!mark_answered(&mut conversation.messages, "1"));
+        assert_eq!(conversation.messages[0][ANSWERED], true);
+        assert_eq!(
+            earlier_files(&conversation.messages, &next, now),
+            files::stored_refs(&[stored_png("run-1", "screenshot.png")])
         );
     }
 }

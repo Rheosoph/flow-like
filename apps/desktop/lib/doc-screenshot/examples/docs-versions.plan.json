@@ -1,0 +1,93 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "desktop",
+	"outputDir": "apps/docs/src/assets",
+	"tauriFixture": "../fixtures/docs-versions.tauri.json",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 2
+		},
+		"theme": "dark",
+		"format": "webp",
+		"timeoutMs": 300000,
+		"settleMs": 600,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "board-versions",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 300000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 300000
+				},
+				{
+					"type": "click",
+					"selector": "footer [data-slot=\"popover-trigger\"][title=\"Version\"]"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"popover-content\"][data-state=\"open\"] [data-slot=\"select-trigger\"]",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "click",
+					"selector": "[data-slot=\"popover-content\"][data-state=\"open\"] [data-slot=\"select-trigger\"]",
+					"index": 0
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"select-content\"][data-state=\"open\"] [role=\"option\"]:nth-child(5)",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "waitFor",
+					"text": "1.2.1",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "capture",
+					"name": "BoardVersions",
+					"output": "BoardVersions.webp",
+					"mode": "viewport"
+				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
+			]
+		}
+	]
+}

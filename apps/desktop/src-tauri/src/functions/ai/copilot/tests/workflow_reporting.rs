@@ -519,6 +519,68 @@ fn nested_wall_clock_budget_terminates_gracefully_through_the_incomplete_path() 
     assert!(error.contains("draft_id=uptime-monitor, revision=11"));
     assert!(error.contains("missing pin"));
     assert!(error.contains("checks 3/12"));
+    assert!(error.contains("12-minute wall-clock budget"));
+}
+
+#[test]
+fn reports_use_effective_budgets_after_segmentation_and_earned_time() {
+    let mut state = WorkflowToolLoopState {
+        board_node_count: 404,
+        granted_time_extensions: 2,
+        edit_attempts: 8,
+        flowscript_operation_attempts: 17,
+        flowscript_commit_attempts: 2,
+        last_status: Some("validation_errors".to_string()),
+        last_errors: vec!["missing pin".to_string()],
+        flowscript_draft_id: Some("character-repair".to_string()),
+        flowscript_draft_retained: true,
+        flowscript_revision: Some(7),
+        ..Default::default()
+    };
+    let mut plan = staged_plan_args(4);
+    plan["strategy"] = serde_json::json!("incremental");
+    state
+        .accept_scope_plan_args(serde_json::from_value(plan).expect("valid scope plan"))
+        .expect("accepted scope plan");
+    let snapshot = state.snapshot();
+
+    let error = nested_wall_clock_incomplete_error(Some(&snapshot), 3);
+    assert!(error.contains("81-minute wall-clock budget"), "{error}");
+    for expected in [
+        "provider continuations 3/4",
+        "checks 8/33",
+        "source operations 17/66",
+        "commit attempts 2/9",
+        "draft_id=character-repair, revision=7",
+        "missing pin",
+    ] {
+        assert!(error.contains(expected), "missing {expected}: {error}");
+    }
+    let continuation = build_external_workflow_continuation_prompt(
+        "Repair the character workflow",
+        Some(&snapshot),
+        3,
+    );
+    assert!(continuation.contains("source operations: 17/66"));
+
+    let summary = workflow_run_summary_payload(
+        "incomplete",
+        "codex",
+        "test-model",
+        81 * 60 * 1000,
+        4,
+        3,
+        2,
+        Some(&snapshot),
+        0,
+    );
+    assert_eq!(summary["time_budget"]["limit_secs"], 81 * 60);
+    assert_eq!(summary["budget"]["checks"]["limit"], 33);
+    assert_eq!(summary["budget"]["source_ops"]["limit"], 66);
+    assert_eq!(summary["budget"]["commits"]["limit"], 9);
+    assert_eq!(summary["budget"]["continuations"]["limit"], 4);
+    assert_eq!(summary["retained_draft"]["id"], "character-repair");
+    assert_eq!(summary["retained_draft"]["revision"], 7);
 }
 
 #[test]
@@ -1007,6 +1069,29 @@ fn unchanged_source_echo_is_replaced_with_a_retention_summary() {
     let payload: serde_json::Value =
         serde_json::from_str(&normalized_result.text_result_for_llm).expect("payload is JSON");
     assert!(payload["source"].as_str().is_some());
+
+    // An initial write made from edits returns the host's merged source for the first time.
+    let mut edited_result = copilot_sdk::ToolResultObject::text(
+        serde_json::json!({
+            "status": "draft_written",
+            "draft_id": "mail-agent",
+            "revision": 0,
+            "source": source
+        })
+        .to_string(),
+    );
+    suppress_unchanged_flowscript_source_echo(
+        "write_flowscript",
+        &serde_json::json!({
+            "draft_id": "mail-agent",
+            "edits": [{ "old_text": "hello before", "new_text": "hello" }]
+        }),
+        &mut edited_result,
+    );
+    let payload: serde_json::Value =
+        serde_json::from_str(&edited_result.text_result_for_llm).expect("payload is JSON");
+    assert_eq!(payload["source"], source);
+    assert!(payload.get("source_echo").is_none());
 
     // check_flowscript on the expected revision cannot change the source.
     let mut check_result = copilot_sdk::ToolResultObject::text(

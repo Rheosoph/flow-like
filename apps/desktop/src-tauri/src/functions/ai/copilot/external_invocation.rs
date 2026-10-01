@@ -48,8 +48,7 @@ impl ExternalAgentInvocation {
         append_system_prompt: Option<&str>,
     ) -> Result<Self, String> {
         match backend {
-            // Codex has no session-resume or system-prompt-append surface; both options are
-            // Claude-only and deliberately ignored here.
+            // Codex resumes its own transcript; appending a system prompt is Claude-only.
             FlowPilotAgentBackendKind::Codex => Self::codex(
                 backend,
                 cli,
@@ -60,6 +59,7 @@ impl ExternalAgentInvocation {
                 tool_names,
                 global_orchestrator,
                 images,
+                resume_session,
             ),
             FlowPilotAgentBackendKind::ClaudeCode => Self::claude(
                 backend,
@@ -91,6 +91,7 @@ impl ExternalAgentInvocation {
         tool_names: Vec<String>,
         global_orchestrator: bool,
         images: &[ChatImage],
+        resume_session: Option<&str>,
     ) -> Result<Self, String> {
         let web_search = if global_orchestrator && !tool_names.is_empty() {
             "live"
@@ -201,6 +202,11 @@ impl ExternalAgentInvocation {
             for path in write_chat_image_temp_files(images)? {
                 args.push(format!("--image={}", path.display()));
             }
+        }
+        if let Some(session) = resume_session.map(str::trim).filter(|s| !s.is_empty()) {
+            // Keep exec-level sandbox, cwd, and fresh scoped MCP settings before the subcommand.
+            // The continuation stays on stdin so retained board context never reaches argv.
+            args.extend(["resume".to_string(), session.to_string(), "-".to_string()]);
         }
 
         Ok(Self {

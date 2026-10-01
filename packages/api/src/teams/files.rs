@@ -6,7 +6,7 @@ use flow_like::credentials::StoreType;
 use flow_like_storage::{
     Path as StoragePath,
     files::store::FlowLikeStore,
-    object_store::{Attribute, ObjectStore, PutOptions},
+    object_store::{Attribute, ObjectStore, ObjectStoreExt, PutOptions},
 };
 use flow_like_types::{
     dispatch::REQUEST_FILES_STORE_REF,
@@ -235,6 +235,44 @@ pub(super) fn with_placeholders(text: &str, files: &[FileEntry]) -> String {
         }
         body.push_str(&file.placeholder());
         body
+    })
+}
+
+/// The stored files of a message as its history entry keeps them: object paths, never links.
+pub(super) fn stored_refs(files: &[FileEntry]) -> Vec<Value> {
+    files
+        .iter()
+        .filter_map(|file| {
+            let path = file.path.as_ref()?;
+            Some(json!({"path": path, "name": file.name, "type": file.mime, "size": file.size}))
+        })
+        .collect()
+}
+
+/// Whether a stored file becomes a media part once it is signed again.
+pub(super) fn linkable(reference: &Value) -> bool {
+    let Some(path) = reference["path"].as_str() else {
+        return false;
+    };
+    let mime = reference["type"]
+        .as_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    media_key(&mime, path).is_some()
+}
+
+/// A file an earlier message stored under this app's runs, back from its history entry.
+fn stored_file(reference: &Value, runs: &str) -> Option<FileEntry> {
+    let path = reference["path"]
+        .as_str()
+        .filter(|path| path.starts_with(runs))?;
+    Some(FileEntry {
+        name: reference["name"].as_str()?.to_owned(),
+        mime: reference["type"].as_str().unwrap_or_default().to_owned(),
+        size: reference["size"].as_u64(),
+        path: Some(path.to_owned()),
+        downloadable: true,
+        ..FileEntry::default()
     })
 }
 
@@ -1019,10 +1057,10 @@ impl Fetcher<'_> {
     }
 }
 
-struct Storage {
-    store: FlowLikeStore,
-    prefix: String,
-    ttl: Duration,
+pub(super) struct Storage {
+    pub(super) store: FlowLikeStore,
+    pub(super) prefix: String,
+    pub(super) ttl: Duration,
 }
 
 /// The run's request-files area in the Tmp store, owned like the sink's other runs.
@@ -1209,6 +1247,109 @@ pub(super) async fn collect(
         }
     }
     entries
+}
+
+/// Fresh download links for files that earlier messages stored, signed by `deadline`.
+/// Never fails: files that cannot be signed in time are left out.
+pub(super) async fn resign(
+    state: &AppState,
+    c: &Connection,
+    sink: &event_sink::Model,
+    refs: &[Value],
+    current: &[FileEntry],
+    deadline: Instant,
+) -> Vec<FileEntry> {
+    if refs.is_empty() {
+        return Vec::new();
+    }
+    match tokio::time::timeout_at(deadline, storage(state, sink, &c.app_id)).await {
+        Ok(Ok(storage)) => sign_stored(&c.id, &storage, refs, current, deadline).await,
+        Ok(Err(error)) => {
+            tracing::warn!(connection_id = %c.id, %error, "Could not prepare storage to re-sign earlier Teams files");
+            Vec::new()
+        }
+        Err(_) => {
+            tracing::warn!(connection_id = %c.id, "Storage for earlier Teams files was not ready in time");
+            Vec::new()
+        }
+    }
+}
+
+/// Signs the stored files that still exist and fit beside the message's own linked files
+/// within the per-message limits, first come first. Files outside this app's runs are never
+/// signed. A missing object is left out, because a link to it fails the model request.
+pub(super) async fn sign_stored(
+    connection_id: &str,
+    storage: &Storage,
+    refs: &[Value],
+    current: &[FileEntry],
+    deadline: Instant,
+) -> Vec<FileEntry> {
+    let runs = format!("{}/runs/", storage.prefix);
+    let mut skipped = Vec::new();
+    let mut files = Vec::new();
+    for reference in refs {
+        match stored_file(reference, &runs) {
+            Some(file) => files.push(file),
+            None => skipped.push(format!(
+                "not stored under this app's runs ({})",
+                reference["path"].as_str().unwrap_or("no path")
+            )),
+        }
+    }
+    let (kept, over) = within_limits(files, current);
+    skipped.extend(
+        over.into_iter()
+            .filter_map(|file| Some(format!("over the per-message file limits ({})", file.path?))),
+    );
+    if !skipped.is_empty() {
+        tracing::warn!(connection_id, %runs, ?skipped, "Earlier Teams files were not linked again");
+    }
+    let signing = kept.into_iter().map(|file| async move {
+        let path = file.path.clone()?;
+        let object = StoragePath::from(path.as_str());
+        let signed = tokio::time::timeout_at(deadline, async {
+            storage.store.as_generic().head(&object).await?;
+            storage.store.sign("GET", &object, storage.ttl).await
+        })
+        .await;
+        match signed {
+            Ok(Ok(url)) => Some(FileEntry {
+                url: Some(url.to_string()),
+                ..file
+            }),
+            Ok(Err(error)) => {
+                tracing::warn!(connection_id, %path, %error, "Could not link an earlier Teams file again");
+                None
+            }
+            Err(_) => {
+                tracing::warn!(connection_id, %path, "An earlier Teams file was not re-signed in time");
+                None
+            }
+        }
+    });
+    futures::future::join_all(signing)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Splits `files` into those that fit beside the message's own linked files within the
+/// per-message limits, first come first, and those that do not.
+fn within_limits(files: Vec<FileEntry>, current: &[FileEntry]) -> (Vec<FileEntry>, Vec<FileEntry>) {
+    let linked = current.iter().filter(|file| file.url.is_some());
+    let mut count = linked.clone().count();
+    let mut total: u64 = linked.filter_map(|file| file.size).sum();
+    files.into_iter().partition(|file| {
+        let size = file.size.unwrap_or_default();
+        let fits = count < MAX_FILES && total.saturating_add(size) <= MAX_TOTAL_BYTES;
+        if fits {
+            count += 1;
+            total += size;
+        }
+        fits
+    })
 }
 
 #[cfg(test)]
@@ -2188,6 +2329,106 @@ mod tests {
             attribute_value(&attributes, &Attribute::ContentDisposition).as_deref(),
             Some("attachment; filename*=UTF-8''Plan.docx")
         );
+    }
+
+    #[tokio::test]
+    async fn earlier_files_are_signed_again_unless_they_cannot_be() {
+        let objects = Arc::new(InMemory::new());
+        let storage = Storage {
+            store: FlowLikeStore::Memory(objects.clone()),
+            prefix: "tmp/user/u/apps/a".into(),
+            ttl: Duration::from_secs(60),
+        };
+        let kept = downloaded("photo.png", "image/png");
+        let foreign = "tmp/user/other/apps/a/runs/r/request/teams/0000-x.png";
+        for path in [kept.path.as_deref().unwrap(), foreign] {
+            objects
+                .put(&StoragePath::from(path), PNG.into())
+                .await
+                .unwrap();
+        }
+        let mut refs = stored_refs(&[
+            kept.clone(),
+            downloaded("missing.png", "image/png"),
+            FileEntry::default(),
+        ]);
+        assert_eq!(
+            refs[0],
+            json!({"path": kept.path, "name": "photo.png", "type": "image/png", "size": 4})
+        );
+        assert_eq!(refs.len(), 2);
+        refs.extend([
+            json!({"path": foreign, "name": "x.png", "type": "image/png", "size": 4}),
+            json!({"name": "no-path.png", "type": "image/png"}),
+        ]);
+        let deadline = Instant::now() + Duration::from_secs(60);
+
+        let logs = Logs::default();
+        let signed = sign_stored("c", &storage, &refs, &[], deadline)
+            .with_subscriber(logs.subscriber())
+            .await;
+        assert_eq!(signed.len(), 1, "{signed:?}");
+        let url = signed[0].url.clone().unwrap();
+        assert!(url.starts_with("data:image/png;base64,"), "{url}");
+        assert_eq!(
+            signed[0],
+            FileEntry {
+                url: Some(url),
+                ..kept.clone()
+            }
+        );
+        let logged = logs.text();
+        assert!(logged.contains("Earlier Teams files were not linked again"));
+        assert!(logged.contains(&format!("not stored under this app's runs ({foreign})")));
+        assert!(logged.contains("not stored under this app's runs (no path)"));
+        assert!(logged.contains("Could not link an earlier Teams file again"));
+        assert!(logged.contains("0000-missing.png"));
+        assert!(!logged.contains("data:"), "{logged}");
+
+        let refusing = Storage {
+            store: FlowLikeStore::Other(objects),
+            prefix: storage.prefix.clone(),
+            ttl: storage.ttl,
+        };
+        assert!(
+            sign_stored("c", &refusing, &refs, &[], deadline)
+                .await
+                .is_empty()
+        );
+        let full = vec![downloaded("other.png", "image/png"); MAX_FILES];
+        let logs = Logs::default();
+        assert!(
+            sign_stored("c", &storage, &refs, &full, deadline)
+                .with_subscriber(logs.subscriber())
+                .await
+                .is_empty()
+        );
+        assert!(logs.text().contains(&format!(
+            "over the per-message file limits ({})",
+            kept.path.as_deref().unwrap()
+        )));
+        let heavy = FileEntry {
+            size: Some(MAX_TOTAL_BYTES - 3),
+            ..downloaded("big.png", "image/png")
+        };
+        assert!(
+            sign_stored("c", &storage, &refs, &[heavy], deadline)
+                .await
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn only_stored_files_a_model_can_take_are_linked_again() {
+        let path = "tmp/user/u/apps/a/runs/r/request/teams/0000-";
+        let reference = |name: &str, mime: &str| json!({"path": format!("{path}{name}"), "name": name, "type": mime});
+        assert!(linkable(&reference("a.png", "image/png")));
+        assert!(linkable(&reference("a.pdf", "application/pdf")));
+        assert!(linkable(&reference("a.JPG", "")));
+        assert!(linkable(&json!({"path": format!("{path}a.png")})));
+        assert!(!linkable(&reference("a.docx", DOCX)));
+        assert!(!linkable(&reference("a.bin", OCTET_STREAM)));
+        assert!(!linkable(&json!({"name": "a.png", "type": "image/png"})));
     }
 
     #[tokio::test]

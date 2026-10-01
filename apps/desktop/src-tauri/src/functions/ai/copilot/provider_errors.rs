@@ -6,12 +6,12 @@ use super::workflow_state::WorkflowToolLoopSnapshot;
 pub(super) const EXTERNAL_AGENT_TOOL_CALL_ID: &str = "external-agent";
 
 /// Result of one external agent CLI run. `error` carries a non-fatal failure (agent error event,
-/// non-zero exit) when partial text was still produced, so callers can surface both.
+/// non-zero exit) when partial text or a resumable session was produced.
 pub(super) struct ExternalAgentRunOutput {
     pub(super) text: String,
     pub(super) error: Option<String>,
-    /// Claude Code session id captured from the stream's init/result frames; lets the phase loop
-    /// resume the CLI transcript on continuation phases. Always the latest observed id.
+    /// Provider session captured from the stream, including phases stopped before their first
+    /// answer. Continuations resume this transcript with the host's current recovery state.
     pub(super) session_id: Option<String>,
 }
 

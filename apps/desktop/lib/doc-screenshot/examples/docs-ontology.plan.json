@@ -2,7 +2,7 @@
 	"schema": "flow-like.doc-screenshot-plan/v1",
 	"app": "desktop",
 	"outputDir": "apps/docs/src/assets",
-	"tauriFixture": "../fixtures/docs-apps.tauri.json",
+	"tauriFixture": "../fixtures/docs-ontology.tauri.json",
 	"defaults": {
 		"viewport": {
 			"width": 1624,
@@ -11,7 +11,7 @@
 		},
 		"theme": "dark",
 		"format": "webp",
-		"timeoutMs": 120000,
+		"timeoutMs": 300000,
 		"settleMs": 500,
 		"disableAnimations": true,
 		"hideScrollbars": true
@@ -37,6 +37,23 @@
 					"type": "capture",
 					"name": "DataStudioOverview",
 					"mode": "viewport"
+				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		},
@@ -71,6 +88,23 @@
 					"type": "capture",
 					"name": "OntologyObjectInspector",
 					"mode": "viewport"
+				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		},
@@ -109,6 +143,23 @@
 					"type": "capture",
 					"name": "OntologyRelationships",
 					"mode": "viewport"
+				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		},
@@ -151,29 +202,22 @@
 					"name": "OntologyActionEditor",
 					"mode": "viewport"
 				}
-			]
-		},
-		{
-			"name": "ontology-sharing",
-			"path": "/library/config/explore",
-			"query": {
-				"id": "docs-app",
-				"view": "sharing",
-				"capture": "docs"
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
-			"steps": [
+			"diagnosticAllowlist": [
 				{
-					"type": "waitFor",
-					"text": "Product Knowledge"
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
 				},
 				{
-					"type": "waitFor",
-					"text": "Installed bindings"
-				},
-				{
-					"type": "capture",
-					"name": "OntologySharing",
-					"mode": "viewport"
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		},
@@ -188,7 +232,7 @@
 			"steps": [
 				{
 					"type": "waitFor",
-					"text": "19 nodes · 21 edges"
+					"text": "19 nodes \u00b7 21 edges"
 				},
 				{
 					"type": "waitFor",
@@ -237,6 +281,23 @@
 					"type": "capture",
 					"name": "OntologyGraphInspector",
 					"mode": "viewport"
+				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		}

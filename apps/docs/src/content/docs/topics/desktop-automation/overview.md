@@ -46,7 +46,7 @@ The Browser catalog covers the complete page lifecycle:
 
 | Capability | Current nodes |
 |------------|---------------|
-| Lifecycle | **Start WebDriver**, **Stop WebDriver**, **Attach to Browser**, **Open Browser**, **New Page**, **Close Page**, **Close Browser** |
+| Lifecycle | **Open Browser**, **Attach to Browser**, **New Page**, **Close Page**, **Close Browser** (**Start WebDriver** and **Stop WebDriver** are kept only for existing Flows) |
 | Context | **List Tabs**, **Select Tab**, **Enter Frame**, **Leave Frame**, **Handle Browser Dialog** |
 | Navigation | **Go To URL**, **Go Back**, **Go Forward**, **Reload** |
 | Interaction | **Click Element**, **Double Click Element**, **Right Click Element**, **Drag Element**, **Hover Element**, **Scroll Into View** |
@@ -74,19 +74,151 @@ handle for the intended tab and frame; switching one branch does not retarget a
 different branch's handle.
 
 **Start Network Observer** must run before the requests you want to observe.
-**Wait For Network Idle** uses outstanding requests from that observer. Network
-and console observers and HTTP Basic authentication use Chrome or Edge's CDP
-connection. Basic authentication credentials are restricted to the configured
-HTTP(S) origin and are not exposed to page JavaScript. Standard page actions use
-WebDriver; protocol-specific nodes report an error on an unsupported browser.
+**Wait For Network Idle** uses outstanding requests from that observer. Basic
+authentication credentials are restricted to the configured HTTP(S) origin and
+are not exposed to page JavaScript.
 
-Use **Start WebDriver** with an installed, compatible driver or provide an
-existing endpoint. **Attach to Browser** connects to an explicitly configured
-Chrome or Edge debugging instance. Closing the automation session disconnects
-an attached browser; it does not own the browser's lifetime.
+[Select Option](/nodes/automation/browser/input/browser-select-option/) fails
+when no option has the requested value, so a changed dropdown stops the Flow
+instead of leaving the old selection in place. A `select` step in
+**Execute Browser Action Plan** behaves the same way.
 
 Coordinate-based desktop input is more fragile when zoom, layout, or window
 position changes.
+
+### Which browser runs a Flow
+
+Browser nodes control Chrome or Microsoft Edge directly through the browser's
+DevTools protocol. You do not need to install or start a WebDriver such as
+chromedriver, and a run never downloads a browser.
+
+[Open Browser](/nodes/automation/browser/browser-open/) launches its own browser
+window with a fresh temporary profile, or with the folder in **Profile
+Directory** when cookies and logins should persist between runs. **Browser
+Type** decides which browser it looks for:
+
+- **Chrome** uses an installed Google Chrome first (stable, then Beta, Dev and
+  Canary), then Chromium on macOS and Linux, then Chrome for Testing if you
+  installed it. On Linux, Chromium from Snap comes last, after Chrome for
+  Testing.
+- **Edge** uses an installed Microsoft Edge only.
+
+When no matching browser is installed, the run fails with a message that lists
+the locations searched. Install the browser that **Browser Type** names, set
+**Browser Type** to the browser you have, or, for **Chrome**, open **Settings >
+Automation** in Flow-Like Desktop and install Chrome for Testing (about 200 MB
+from storage.googleapis.com; on Linux, read the AppArmor note below first). The
+same page lists the browsers it detected, and updates and removes Chrome for
+Testing. Chrome for Testing is not available for Windows on ARM; use Chrome or
+Edge there.
+
+Firefox and Safari are not supported yet. A Flow whose **Browser Type** is
+Firefox or Safari fails with an error that asks for Chrome or Edge; support for
+them is planned through WebDriver BiDi.
+
+On Linux, Chromium from your distribution's package is used before Chrome for
+Testing. Chromium from Snap, which is what Ubuntu runs for `chromium` and
+`chromium-browser`, is used only when no other Chrome, Chromium or Chrome for
+Testing is found. Snap Chromium keeps its temporary profiles in
+`~/snap/chromium/common` and needs a **Profile Directory** inside your home
+folder. If Flow-Like itself crashes, a Snap Chromium window can stay open;
+close it yourself. Chromium from Flatpak is not used.
+
+Ubuntu 23.10 and newer, and other distributions that restrict unprivileged
+user namespaces with AppArmor, block the sandbox of Chrome for Testing.
+Flow-Like checks this before launch: a run that would use Chrome for Testing
+fails with a message that suggests Google Chrome, Microsoft Edge or the
+`sysctl` command below, and the browser is never started without its sandbox.
+Google Chrome, Microsoft Edge and Snap Chromium are not affected. On such a
+system, do one of these:
+
+- Install Google Chrome from Google's package. It is used before Chrome for
+  Testing, so it also takes over from an installed Chrome for Testing.
+- Install Microsoft Edge and set **Browser Type** to Edge.
+- Use Snap Chromium. Chrome for Testing is used before it, so do not install
+  Chrome for Testing, or remove it in **Settings > Automation**.
+- To use Chrome for Testing anyway, allow unprivileged user namespaces with
+  `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`. This relaxes a
+  security setting for the whole system and lasts until the next restart.
+
+A **Profile Directory** cannot be your everyday Chrome or Edge profile, because
+Chrome 136 and newer block automation there. Only one browser can use a profile
+directory at a time, and a profile last opened by a newer browser version is
+refused rather than downgraded.
+
+### Attach to a running browser
+
+[Attach to Browser](/nodes/automation/browser/browser-attach/) controls a Chrome
+or Edge that is already running. **Debugger Address** decides how it connects:
+
+| Debugger Address | Connects to |
+|------------------|-------------|
+| `host:port` or `http(s)://host:port` | A dedicated debugging browser started with `--remote-debugging-port` and its own `--user-data-dir` |
+| Empty | Your everyday Chrome or Edge, after you allow remote debugging |
+| `ws://` or `wss://` on another machine | The browser-level DevTools WebSocket of a remote browser service, such as `wss://browser.example.com/devtools/browser/<id>` |
+| `ws://127.0.0.1:<port>/devtools/browser/<id>` or `ws://localhost:…` | Handled like an empty address: the everyday-browser connection, with its consent wait and download limits |
+
+For a dedicated debugging browser on this computer, use `host:port`, not its
+`ws://` URL. With a remote browser service, uploads and downloads would use
+paths on the remote machine, so the file nodes are not supported there.
+
+Start a dedicated debugging browser with its own profile folder, then enter
+`127.0.0.1:9333` as the Debugger Address:
+
+```text
+# macOS
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9333 --user-data-dir="$HOME/flow-like-debug-profile"
+# Windows (Command Prompt)
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9333 --user-data-dir="%LOCALAPPDATA%\flow-like-debug-profile"
+# Windows (PowerShell)
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9333 --user-data-dir="$env:LOCALAPPDATA\flow-like-debug-profile"
+# Linux
+google-chrome --remote-debugging-port=9333 --user-data-dir="$HOME/flow-like-debug-profile"
+```
+
+A Chrome installed for your user only lives in
+`%LOCALAPPDATA%\Google\Chrome\Application` instead. Edge takes the same two
+flags.
+
+To attach to your everyday browser instead (Chrome 144 or newer, or an Edge
+version that offers the same setting):
+
+1. In that browser, open `chrome://inspect/#remote-debugging` and turn on
+   **Allow remote debugging for this browser instance**.
+2. Clear **Debugger Address** on **Attach to Browser**. For Edge, also set
+   **Browser** on that node to Edge.
+3. Run the Flow while a browser window is open. The browser asks **Allow remote
+   debugging?**; click **Allow** within two minutes. It asks again on every run.
+
+While the Flow is connected, the browser shows a banner saying it is controlled
+by automated software. The Flow can read and change everything in that profile,
+including cookies, saved logins and open tabs, so use this mode only for Flows
+you trust.
+
+After you allow remote debugging, your everyday browser usually listens on
+`127.0.0.1:9222`, which is also the default Debugger Address. Attach to Browser
+does not take over the everyday profile through that address; it stops and asks
+you to clear the address. Use another port, such as 9333, for a dedicated
+debugging browser.
+
+Closing the automation session disconnects an attached browser; it does not own
+the browser's lifetime. With your everyday browser, downloads stay in its own
+download folder and **Set Download Directory** reports an error; use **Trigger
+Download** and point **Wait For Download** at that folder. Downloads from popup
+windows are not reported in this mode. With a dedicated debugging browser,
+**Set Download Directory** changes that browser's download folder until it
+restarts.
+
+### Legacy WebDriver inputs
+
+The **WebDriver URL** inputs on **Open Browser** and **Attach to Browser** remain
+so existing Flows keep loading. A local address, such as the defaults
+`http://localhost:9515` and `http://127.0.0.1:9515`, is ignored and the browser
+is launched or attached directly. A remote WebDriver host, or a local WebDriver server other than
+ChromeDriver or msedgedriver (for example geckodriver or Selenium Grid), makes
+the node fail. **Start WebDriver** starts nothing and outputs a local address
+for compatibility. **Stop WebDriver** closes the session's browser like **Close
+Browser**. New Flows need neither node.
 
 ## Computer automation
 
@@ -245,8 +377,13 @@ secrets can be saved. Pause before entering secrets and configure credentials
 explicitly in the Flow.
 
 For web pages, select browser recording and supply the debugger address of a
-Chrome or Edge instance started with remote debugging, plus its compatible
-WebDriver endpoint. Browser recording creates selector-based actions, waits for
+dedicated Chrome or Edge debugging browser, started with
+`--remote-debugging-port` and its own `--user-data-dir` as described in
+[Attach to a running browser](#attach-to-a-running-browser). Recording cannot
+use the consent connection to your everyday browser. No WebDriver is needed:
+replay launches or attaches to Chrome or Edge directly, and the recorder's
+**Legacy WebDriver URL (not needed)** field can keep its default. A remote host
+in that field makes replay fail. Browser recording creates selector-based actions, waits for
 their targets, and keeps tab and frame context. It does not require desktop Input Monitoring. The
 browser must expose its debugging endpoint before recording begins. Cross-origin
 frames and shadow-DOM targets cannot currently be recorded as document selectors;

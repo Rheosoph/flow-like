@@ -11,16 +11,10 @@
 		"isPublished": true,
 		"iconUrl": null,
 		"bannerUrl": null,
-		"tags": [
-			"rpa",
-			"browser",
-			"desktop",
-			"selectors",
-			"vision"
-		],
+		"tags": ["rpa", "browser", "desktop", "selectors", "vision"],
 		"position": 16,
 		"description": "Read a practice interface and stop when its result is unavailable.",
-		"longDescription": "30 minutes required for the browser path. Prerequisites: Thinking in Flows, local Desktop execution, a compatible browser and running WebDriver. Python 3 serves the supplied test page. Optional desktop/vision practice adds 15 minutes; action review adds 6 minutes. Use owned test surfaces throughout.",
+		"longDescription": "30 minutes required for the browser path. Prerequisites: Thinking in Flows, local Desktop execution, and Google Chrome, Chromium or Microsoft Edge (no WebDriver needed). Python 3 serves the supplied test page. Optional desktop/vision practice adds 15 minutes; action review adds 6 minutes. Use owned test surfaces throughout.",
 		"media": {
 			"icon": "media/app-logo.webp",
 			"banner": "assets/course-banner-v2.webp"
@@ -57,28 +51,26 @@
 							{
 								"id": "challenge-rpa-first-question",
 								"kind": "SINGLE_CHOICE",
-								"prompt": "The test page opens manually but Open Browser cannot connect to port 9515. What should you check?",
-								"explanation": "The matching WebDriver service and configured WebDriver URL.",
+								"prompt": "The test page opens manually, but Open Browser fails with \"No Chrome browser was found\". What should you do?",
+								"explanation": "Open Browser launches an installed browser directly; no WebDriver is involved. Install Google Chrome or Chrome for Testing, or set Browser Type to Edge if Edge is installed. The page server and the selector play no part in this error.",
 								"points": 10,
 								"position": 0,
 								"payload": {
 									"options": [
 										{
 											"id": "choice-1",
-											"label": "The matching WebDriver service and configured WebDriver URL."
+											"label": "Install Google Chrome or Chrome for Testing, or set Browser Type to Edge if Edge is installed."
 										},
 										{
 											"id": "choice-2",
-											"label": "The page’s status text."
+											"label": "Restart the page server."
 										},
 										{
 											"id": "choice-3",
-											"label": "The app’s UI route."
+											"label": "Change the selector."
 										}
 									],
-									"correct": [
-										"choice-1"
-									]
+									"correct": ["choice-1"]
 								}
 							}
 						],
@@ -117,9 +109,7 @@
 											"label": "Branch to the unavailable result and cleanup, rather than extracting a result that was not ready."
 										}
 									],
-									"correct": [
-										"choice-1"
-									]
+									"correct": ["choice-1"]
 								}
 							}
 						],
@@ -158,9 +148,7 @@
 											"label": "Only the existence of the old cell."
 										}
 									],
-									"correct": [
-										"choice-1"
-									]
+									"correct": ["choice-1"]
 								}
 							}
 						],
@@ -207,9 +195,7 @@
 											"label": "Whether a longer arbitrary sleep changes the pixels."
 										}
 									],
-									"correct": [
-										"choice-1"
-									]
+									"correct": ["choice-1"]
 								}
 							}
 						],
@@ -248,9 +234,7 @@
 											"label": "Stop at the allowed read/proposal and obtain the required authority before any write."
 										}
 									],
-									"correct": [
-										"choice-1"
-									]
+									"correct": ["choice-1"]
 								}
 							}
 						],
@@ -297,9 +281,7 @@
 											"label": "A coordinate recorded before the banner."
 										}
 									],
-									"correct": [
-										"choice-1"
-									]
+									"correct": ["choice-1"]
 								}
 							},
 							{
@@ -324,9 +306,7 @@
 											"label": "Whether the button was blue."
 										}
 									],
-									"correct": [
-										"choice-1"
-									]
+									"correct": ["choice-1"]
 								}
 							},
 							{
@@ -351,9 +331,7 @@
 											"label": "Cleanup after the failure, including browser/session ownership."
 										}
 									],
-									"correct": [
-										"choice-1"
-									]
+									"correct": ["choice-1"]
 								}
 							}
 						],

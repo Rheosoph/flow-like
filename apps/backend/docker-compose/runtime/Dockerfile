@@ -77,6 +77,7 @@ RUN apt-get update && apt-get install -y \
 
 FROM runtime-deps AS runtime
 COPY LICENSE /usr/share/licenses/flow-like/LICENSE
+COPY packages/browser/NOTICE* packages/browser/LICENSE-* /usr/share/licenses/flow-like/flow-like-browser/
 
 WORKDIR /app
 

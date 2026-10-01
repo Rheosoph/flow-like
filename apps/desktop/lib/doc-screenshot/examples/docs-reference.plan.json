@@ -11,7 +11,7 @@
 		},
 		"theme": "dark",
 		"format": "webp",
-		"timeoutMs": 120000,
+		"timeoutMs": 300000,
 		"settleMs": 350,
 		"disableAnimations": true,
 		"hideScrollbars": true

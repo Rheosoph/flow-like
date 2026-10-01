@@ -33,6 +33,8 @@ Modes:
 
 Plan and asset options:
   --dry-run              Validate a plan and print ordered operations without API access
+  --prune                Delete undeclared course children and their learner records
+  --legacy-media-assets  Store DOCUMENT uploads with .webp keys for older media workers
   --name <name>          Asset reference name used as @Name in lesson Markdown
   --file <path>          Local asset file, including a doc-screenshot artifact path
   --kind <kind>          IMAGE, VIDEO, AUDIO, or DOCUMENT; inferred when omitted
@@ -94,8 +96,14 @@ async function run(options: UniversityCliOptions): Promise<number> {
 		case "apply": {
 			const plan = await loadUniversityPlan(options.plan ?? "");
 			result = options.dryRun
-				? planUniversityRun(plan)
-				: await runUniversityPlan(plan, remoteOptions(options));
+				? planUniversityRun(plan, {
+						prune: options.prune,
+						legacyMediaAssets: options.legacyMediaAssets,
+					})
+				: await runUniversityPlan(plan, remoteOptions(options), {
+						prune: options.prune,
+						legacyMediaAssets: options.legacyMediaAssets,
+					});
 			break;
 		}
 		case "inspect":
@@ -120,6 +128,7 @@ async function run(options: UniversityCliOptions): Promise<number> {
 					kind: options.assetKind,
 					mimeType: options.assetMimeType,
 					replace: options.replaceAsset,
+					legacyMediaAssets: options.legacyMediaAssets,
 				},
 				remoteOptions(options),
 			);

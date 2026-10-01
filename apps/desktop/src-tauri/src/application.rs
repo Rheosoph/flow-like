@@ -20,6 +20,7 @@ mod functions;
 mod local_page_actions;
 #[cfg(any(test, not(debug_assertions)))]
 mod logging;
+mod offline_writes;
 mod profile;
 mod run_index;
 mod run_reports;
@@ -635,6 +636,7 @@ pub fn run() {
         .manage(state::TauriWasmEngineState(shared_wasm_engine))
         .manage(state::TauriRecordingState::new())
         .manage(run_report_queue)
+        .manage(offline_writes::OfflineWrites::new())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
@@ -706,6 +708,7 @@ pub fn run() {
             });
 
             run_reports::spawn_drain(app.app_handle().clone());
+            offline_writes::spawn(app.app_handle().clone());
 
             // Start the WasmEngine epoch ticker inside the async runtime
             if let Some(wasm_state) = app.try_state::<state::TauriWasmEngineState>() {
@@ -1223,6 +1226,7 @@ pub fn run() {
             functions::flow::catalog::get_catalog,
             functions::flow::board::create_board_version,
             functions::flow::board::get_board_versions,
+            functions::flow::board::get_board_version_infos,
             functions::flow::board::close_board,
             functions::flow::board::get_board,
             functions::flow::board::sync_board,
@@ -1237,6 +1241,7 @@ pub fn run() {
             functions::flow::board::redact_flowscript,
             functions::flow::board::check_flowscript_reconcile,
             functions::flow::board::get_flowscript,
+            functions::flow::board::render_board_flowscript,
             functions::flow::board::get_flowscript_scoped,
             functions::flow::board::get_flowscript_file,
             functions::flow::board::get_execution_elements,
@@ -1385,6 +1390,19 @@ pub fn run() {
             functions::registry::registry_set_auth_token,
             execution_open_auth_session,
             execution_set_auth,
+            offline_writes::commands::offline_writes_overview,
+            offline_writes::commands::offline_writes_set_table,
+            offline_writes::commands::offline_writes_remove_table,
+            offline_writes::commands::offline_writes_set_prefetch,
+            offline_writes::commands::offline_writes_set_limits,
+            offline_writes::commands::offline_writes_operations,
+            offline_writes::commands::offline_writes_operation_state,
+            offline_writes::commands::offline_writes_retry,
+            offline_writes::commands::offline_writes_skip,
+            offline_writes::commands::offline_writes_keep_both,
+            offline_writes::commands::offline_writes_sync_now,
+            offline_writes::commands::offline_writes_table_route,
+            offline_writes::commands::offline_writes_forget_app,
             functions::registry::registry_describe_widget_policy,
             functions::registry::registry_mint_widget_grant,
             functions::registry::registry_revoke_widget_grants,
@@ -1400,6 +1418,14 @@ pub fn run() {
             functions::recording::get_recorded_actions,
             functions::recording::clear_recorded_actions,
             functions::recording::insert_recording_to_board,
+            #[cfg(desktop)]
+            functions::browser_engine::browser_engine_status,
+            #[cfg(desktop)]
+            functions::browser_engine::browser_engine_install_cft,
+            #[cfg(desktop)]
+            functions::browser_engine::browser_engine_latest_cft,
+            #[cfg(desktop)]
+            functions::browser_engine::browser_engine_remove_cft,
             functions::statistics::get_board_statistics,
             functions::statistics::get_cached_statistics,
             functions::notifications::get_pending_notification_tap,

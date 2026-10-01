@@ -485,7 +485,7 @@ describe("board edit guard", () => {
 		expect([...storage.values.values()].join("\n")).toContain(currentBaseline);
 	});
 
-	test("allows two zero-progress retries and refuses a fourth equivalent board run", () => {
+	test("allows one zero-progress retry and refuses a third equivalent board run", () => {
 		const guard = new BoardZeroProgressRetryGuard();
 		const boardKey = boardEditRecoveryKey("app-1", "board-1");
 
@@ -501,10 +501,6 @@ describe("board edit guard", () => {
 		expect(
 			guard.recordRunOutcome("assistant-turn-1", boardKey, "request-2", false),
 		).toBe(2);
-		expect(guard.canStart("assistant-turn-1", boardKey)).toBe(true);
-		expect(
-			guard.recordRunOutcome("assistant-turn-1", boardKey, "request-3", false),
-		).toBe(3);
 		expect(guard.canStart("assistant-turn-1", boardKey)).toBe(false);
 
 		// The guard is scoped to one assistant owner and board, not future user turns or boards.
@@ -519,7 +515,7 @@ describe("board edit guard", () => {
 		guard.clear("assistant-turn-1", boardKey);
 		expect(guard.canStart("assistant-turn-1", boardKey)).toBe(true);
 		expect(
-			guard.recordRunOutcome("assistant-turn-1", boardKey, "request-4", true),
+			guard.recordRunOutcome("assistant-turn-1", boardKey, "request-3", true),
 		).toBe(0);
 
 		const deadlineRace = new BoardZeroProgressRetryGuard();
@@ -557,8 +553,10 @@ describe("board edit guard", () => {
 
 		// A spent graph budget must not block a genuinely different repair on the same board.
 		expect(burn("domain_logic", "request-1")).toBe(1);
+		expect(guard.canStart("assistant-turn-1", boardKey, "domain_logic")).toBe(
+			true,
+		);
 		expect(burn("domain_logic", "request-2")).toBe(2);
-		expect(burn("domain_logic", "request-3")).toBe(3);
 		expect(guard.canStart("assistant-turn-1", boardKey, "domain_logic")).toBe(
 			false,
 		);
@@ -569,12 +567,20 @@ describe("board edit guard", () => {
 		expect(
 			guard.canStart("assistant-turn-1", boardKey, "attachment-repair"),
 		).toBe(true);
-		expect(burn("attachment-repair", "request-4")).toBe(1);
+		expect(burn("attachment-repair", "request-3")).toBe(1);
 		expect(guard.canStart("assistant-turn-1", boardKey)).toBe(true);
-		expect(burn("", "request-5")).toBe(2);
+		expect(burn("", "request-4")).toBe(2);
+		expect(
+			guard.canStart("assistant-turn-1", boardKey, "renamed-attachment-repair"),
+		).toBe(false);
+
+		expect(burn("foundation", "request-5")).toBe(1);
+		expect(guard.canStart("assistant-turn-1", boardKey, "foundation")).toBe(
+			true,
+		);
 
 		// The board ceiling still bounds the total across scopes: six zero-progress runs are spent.
-		expect(burn("foundation", "request-6")).toBe(1);
+		expect(burn("observability", "request-6")).toBe(1);
 		expect(guard.canStart("assistant-turn-1", boardKey, "foundation")).toBe(
 			false,
 		);
@@ -595,6 +601,7 @@ describe("board edit guard", () => {
 		expect(guard.canStart("assistant-turn-1", boardKey, "domain_logic")).toBe(
 			true,
 		);
+		expect(guard.canStart("assistant-turn-1", boardKey)).toBe(true);
 		expect(
 			guard.canStart("assistant-turn-1", boardKey, "outputs_and_review"),
 		).toBe(true);
@@ -802,6 +809,16 @@ eventsSimple() {
 	});
 
 	test("pins build mutations to the app created in this turn", () => {
+		for (const operation of ["list", "status", "apply", "dismiss"]) {
+			expect(
+				isCreatedAppBuildTargetMismatch({
+					createdAppId: "new-app",
+					requestedAppId: "older-app",
+					toolName: "flowpilot_board_review",
+					operation,
+				}),
+			).toBe(operation === "apply" || operation === "dismiss");
+		}
 		for (const mode of ["inspect", "create", "edit"]) {
 			expect(
 				isCreatedAppBuildTargetMismatch({

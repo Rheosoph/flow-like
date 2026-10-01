@@ -115,13 +115,12 @@ fn server_config(identity: &CertificateIdentity) -> Result<Arc<rustls::ServerCon
     let key = rustls_pemfile::private_key(&mut Cursor::new(identity.private_key_pem.0.as_bytes()))
         .context("Invalid placement private key")?
         .context("Missing placement private key")?;
-    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
-        crate::crypto::tls_provider(),
-    ))
-    .with_safe_default_protocol_versions()?
-    .with_no_client_auth()
-    .with_single_cert(certs, key)
-    .context("Invalid placement TLS identity")?;
+    let config =
+        rustls::ServerConfig::builder_with_provider(Arc::new(crate::crypto::tls_provider()))
+            .with_safe_default_protocol_versions()?
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .context("Invalid placement TLS identity")?;
     Ok(Arc::new(config))
 }
 
@@ -236,12 +235,11 @@ mod tests {
         let mut trust = rustls::RootCertStore::empty();
         trust.add(first.cert.der().clone())?;
         trust.add(second.cert.der().clone())?;
-        let client = rustls::ClientConfig::builder_with_provider(Arc::new(
-            crate::crypto::tls_provider(),
-        ))
-        .with_safe_default_protocol_versions()?
-        .with_root_certificates(trust)
-        .with_no_client_auth();
+        let client =
+            rustls::ClientConfig::builder_with_provider(Arc::new(crate::crypto::tls_provider()))
+                .with_safe_default_protocol_versions()?
+                .with_root_certificates(trust)
+                .with_no_client_auth();
         let connector = tokio_rustls::TlsConnector::from(Arc::new(client));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;

@@ -3,7 +3,9 @@
 use super::board_commits::{
     ApplyFlowIrCommitResult, FlowIrCommitDisposition, RecoveredBoardEditBatch,
     flow_ir_durable_receipt_ref_key, flowpilot_apply_flow_ir_commit_with_recovery,
-    flowpilot_flow_ir_commit_disposition, typed_commit_destructive_review_items,
+    flowpilot_flow_ir_commit_disposition, replay_flow_ir_applied_receipt,
+    replay_flow_ir_applied_receipt_from_board, retain_flow_ir_applied_receipt,
+    typed_commit_destructive_review_items,
 };
 use super::stream_events::utf8_prefix;
 use crate::{
@@ -15,11 +17,17 @@ use crate::{
 use flow_like::{
     app::{App, AppVisibility},
     copilot::FlowIrCommitToken,
-    flow::copilot::BoardCommand,
+    flow::{
+        board::{Board, BoardCell},
+        copilot::BoardCommand,
+    },
+    flow_like_storage::object_store::path::Path,
 };
+use flow_like_types::FromProto;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
+    future::Future,
     path::PathBuf,
     sync::{Arc, LazyLock, Mutex as StdMutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -85,6 +93,9 @@ pub struct BoardEditJob {
     pub token: FlowIrCommitToken,
     pub approval: flow_like::flow::copilot::tool_spec::ResolvedToolApproval,
     pub review: BoardEditJobReview,
+    /// Original authored source belonging to this exact compiler claim, retained for review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flowscript_source: Option<String>,
     /// Compact post-apply evidence survives delivery without retaining command vectors.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persisted_board_fingerprint: Option<String>,
@@ -95,6 +106,49 @@ pub struct BoardEditJob {
 }
 
 impl BoardEditJob {
+    pub(super) fn begin_resolution(&mut self, applying: bool) -> bool {
+        let recovery_required = applying && board_edit_job_reserves_mutation(self);
+        self.phase = if applying {
+            BoardEditJobPhase::Applying
+        } else {
+            // The per-job lock protects this provisional denial until the claim is released.
+            BoardEditJobPhase::Denied
+        };
+        self.updated_at_ms = wall_clock_ms();
+        self.clear_apply_result();
+        self.error = None;
+        recovery_required
+    }
+
+    pub(super) fn finish_apply_attempt(
+        &mut self,
+        result: ApplyFlowIrCommitResult,
+        recovery_required: bool,
+    ) {
+        self.phase = match result.status.as_str() {
+            "applied" => BoardEditJobPhase::AppliedPendingDelivery,
+            "stale" => BoardEditJobPhase::Stale,
+            _ => BoardEditJobPhase::Failed,
+        };
+        self.updated_at_ms = wall_clock_ms();
+        if self.phase == BoardEditJobPhase::AppliedPendingDelivery {
+            self.expires_at_ms = self
+                .updated_at_ms
+                .saturating_add(BOARD_EDIT_DELIVERY_DISPLAY_TTL_MS);
+        }
+        self.error = matches!(
+            self.phase,
+            BoardEditJobPhase::Stale | BoardEditJobPhase::Failed
+        )
+        .then(|| result.message.clone());
+        self.record_apply_result(result);
+        if recovery_required && self.phase == BoardEditJobPhase::Failed {
+            // A failed retry cannot prove an earlier uncertain save was never persisted.
+            // Keep its error visible and reserve the board until recovery or dismissal.
+            self.clear_apply_result();
+        }
+    }
+
     pub(super) fn clear_apply_result(&mut self) {
         self.result = None;
         self.persisted_board_fingerprint = None;
@@ -240,6 +294,7 @@ pub(super) fn board_edit_job_record_from_persisted(
         BoardEditJobPhase::Preparing | BoardEditJobPhase::Applying
     ) {
         job.phase = BoardEditJobPhase::Failed;
+        job.clear_apply_result();
         job.updated_at_ms = now_ms;
         job.error = Some(
             "The desktop process restarted during the native apply transition. Retry this exact retained review; a durable board receipt prevents duplicate mutation if persistence already completed."
@@ -421,7 +476,7 @@ pub(super) fn board_mutation_is_reserved(
     jobs.values().any(|record| {
         record.job.app_id == app_id
             && record.job.board_id == board_id
-            && board_edit_job_phase_reserves_mutation(record.job.phase)
+            && board_edit_job_reserves_mutation(&record.job)
     })
 }
 
@@ -435,17 +490,37 @@ pub(super) fn another_board_edit_job_reserves_mutation(
         job_id != current_job_id
             && record.job.app_id == app_id
             && record.job.board_id == board_id
-            && board_edit_job_phase_reserves_mutation(record.job.phase)
+            && board_edit_job_reserves_mutation(&record.job)
     })
 }
 
-fn board_edit_job_phase_reserves_mutation(phase: BoardEditJobPhase) -> bool {
-    matches!(
-        phase,
-        BoardEditJobPhase::Applying
-            | BoardEditJobPhase::AppliedPendingDelivery
-            | BoardEditJobPhase::Failed
-    )
+fn board_edit_job_reserves_mutation(job: &BoardEditJob) -> bool {
+    match job.phase {
+        BoardEditJobPhase::Applying | BoardEditJobPhase::AppliedPendingDelivery => true,
+        BoardEditJobPhase::Failed => {
+            // These failures happen before persistence and restore any in-memory changes.
+            // Keeping their review retryable must also allow a corrected batch or manual edit.
+            // An interrupted apply, unavailable board, or failed save may still need receipt
+            // recovery, so missing and unrecognized results continue reserving the board.
+            !job.result.as_ref().is_some_and(|result| {
+                result.status == "error"
+                    && !result.replayed
+                    && matches!(
+                        result.code.as_deref(),
+                        Some(
+                            "IR_COMMIT_PERSISTENCE_UNAVAILABLE"
+                                | "IR_COMMIT_CATALOG_UNAVAILABLE"
+                                | "IR_COMMIT_APP_UNAVAILABLE"
+                                | "IR_COMMIT_DESTRUCTIVE_APPROVAL_DENIED"
+                                | "IR_COMMIT_APPLY_FAILED"
+                                | "IR_COMMIT_FINGERPRINT_FAILED"
+                                | "IR_COMMIT_RECEIPT_PERSISTENCE_FAILED"
+                        )
+                    )
+            })
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn wall_clock_ms() -> u64 {
@@ -608,8 +683,8 @@ pub async fn flowpilot_create_board_edit_job(
         .get_board(&token.board_id, None)
         .map_err(|_| "The review board is not open in this desktop process.".to_string())?;
     let board = live_board.write().await;
-    let commands = store
-        .pending_commands_if_current(
+    let (commands, replacement_mode) = store
+        .pending_commit_payload_if_current(
             &board,
             &token.draft_id,
             token.revision,
@@ -619,14 +694,7 @@ pub async fn flowpilot_create_board_edit_job(
         .ok_or_else(|| {
             "The retained compiler claim is stale relative to the live board.".to_string()
         })?;
-    let replacement_mode = store
-        .pending_commit_requires_destructive_approval(
-            &token.draft_id,
-            token.revision,
-            &token.base_fingerprint,
-            &token.claim_id,
-        )
-        .ok_or_else(|| "The retained compiler review policy is no longer current.".to_string())?;
+    let flowscript_source = store.pending_flowscript_source_for_commit(&token);
     let batch_bytes = serde_json::to_vec(&commands)
         .map_err(|error| format!("The compiled board-edit batch could not be retained: {error}"))?
         .len();
@@ -692,6 +760,9 @@ pub async fn flowpilot_create_board_edit_job(
         // durable artifact as well as the display-only review metadata.
         existing.board_commands = commands;
         existing.replacement_mode = replacement_mode;
+        if flowscript_source.is_some() {
+            existing.job.flowscript_source = flowscript_source;
+        }
         if existing.job.request_id.is_none() {
             existing.job.request_id = request_id
                 .as_deref()
@@ -748,6 +819,7 @@ pub async fn flowpilot_create_board_edit_job(
         token,
         approval,
         review,
+        flowscript_source,
         persisted_board_fingerprint: None,
         result: None,
         error: None,
@@ -826,6 +898,90 @@ pub fn flowpilot_get_board_edit_job(job_id: String) -> Option<BoardEditJob> {
     jobs.get(job_id.trim()).map(|record| record.job.clone())
 }
 
+pub(super) fn board_edit_job_dismissal_receipt(
+    job: &BoardEditJob,
+    board: &Board,
+) -> Option<ApplyFlowIrCommitResult> {
+    if job.phase != BoardEditJobPhase::Failed {
+        return None;
+    }
+    replay_flow_ir_applied_receipt_from_board(board, &job.app_id, &job.token)
+}
+
+pub(super) async fn recover_board_edit_job_dismissal_receipt(
+    job: &BoardEditJob,
+    live_board: Option<&BoardCell>,
+    saved_board: impl Future<Output = Result<Board, String>>,
+) -> Result<Option<ApplyFlowIrCommitResult>, String> {
+    if job.phase != BoardEditJobPhase::Failed {
+        return Ok(None);
+    }
+    let cached_receipt = replay_flow_ir_applied_receipt(&job.app_id, &job.token);
+    let mut live_board = match live_board {
+        Some(board) => Some(board.write().await),
+        None => None,
+    };
+    if let Some(board) = live_board.as_deref()
+        && let Some(receipt) = board_edit_job_dismissal_receipt(job, board)
+    {
+        return Ok(Some(receipt));
+    }
+    if live_board.is_none() && cached_receipt.is_some() {
+        return Ok(cached_receipt);
+    }
+    if !board_edit_job_reserves_mutation(job) && cached_receipt.is_none() {
+        return Ok(None);
+    }
+    // A failed save and failed restore can leave the saved edit ahead of the discarded live
+    // draft. Only the saved board can establish whether its receipt still needs delivery.
+    let board = saved_board.await?;
+    let receipt = board_edit_job_dismissal_receipt(job, &board);
+    if let Some(receipt) = &receipt {
+        if let Some(live_board) = live_board.as_deref_mut() {
+            live_board
+                .restore_persisted_snapshot(board)
+                .map_err(|error| {
+                    format!("Could not restore the saved board before receipt delivery: {error}")
+                })?;
+        }
+        retain_flow_ir_applied_receipt(&job.app_id, &job.token, receipt);
+    } else if cached_receipt.is_some() {
+        return Err("The retained receipt is missing from both the live and saved board. Recovery must finish before dismissing this edit.".to_string());
+    }
+    Ok(receipt)
+}
+
+async fn recover_board_edit_job_before_dismissal(
+    app_handle: &AppHandle,
+    job: &BoardEditJob,
+) -> Result<Option<ApplyFlowIrCommitResult>, String> {
+    if job.phase != BoardEditJobPhase::Failed {
+        return Ok(None);
+    }
+    let live_board = app_handle
+        .try_state::<TauriFlowLikeState>()
+        .and_then(|state| state.0.get_board(&job.board_id, None).ok());
+    recover_board_edit_job_dismissal_receipt(job, live_board.as_deref(), async {
+        let store = TauriFlowLikeState::get_project_meta_store(app_handle)
+            .await
+            .map_err(|error| {
+                format!("Could not check the board's applied receipt before dismissal: {error}")
+            })?;
+        let proto = Board::load_proto(
+            store,
+            &Path::from("apps").join(job.app_id.clone()),
+            &job.board_id,
+            None,
+        )
+        .await
+        .map_err(|error| {
+            format!("Could not check the saved board's applied receipt before dismissal: {error}")
+        })?;
+        Ok(Board::from_proto(proto))
+    })
+    .await
+}
+
 /// Atomically claim a pending review and resolve it. Duplicate callers observe the same native job
 /// instead of applying the batch twice; exact-batch CAS remains enforced by the existing Apply API.
 ///
@@ -862,6 +1018,19 @@ pub async fn flowpilot_resolve_board_edit_job(
             .ok_or_else(|| "The board-edit review job is no longer retained.".to_string())?
     };
     let _resolution_guard = resolution_lock.lock().await;
+    // A restart can leave a committed edit marked Failed if its lifecycle snapshot was not
+    // saved. Dismissal must finish that receipt's delivery instead of releasing the board.
+    let dismissal_receipt = if !approved {
+        let job = BOARD_EDIT_JOBS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&job_id)
+            .map(|record| record.job.clone())
+            .ok_or_else(|| "The board-edit review job is no longer retained.".to_string())?;
+        recover_board_edit_job_before_dismissal(&app_handle, &job).await?
+    } else {
+        None
+    };
     let requires_remote_identity = if approved {
         let Some(state) = app_handle.try_state::<TauriFlowLikeState>() else {
             return Err("The live board registry is unavailable.".to_string());
@@ -876,7 +1045,7 @@ pub async fn flowpilot_resolve_board_edit_job(
     } else {
         false
     };
-    let (app_id, token, recovered_batch) = {
+    let (app_id, token, recovered_batch, recovery_required) = {
         let mut jobs = BOARD_EDIT_JOBS
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -974,16 +1143,9 @@ pub async fn flowpilot_resolve_board_edit_job(
                 record.job.remote_hub = remote_hub;
             }
         }
-        record.job.phase = if approved {
-            BoardEditJobPhase::Applying
-        } else {
-            // Reserve the transition while the exact claim is released below. The per-job lock
-            // prevents a duplicate resolver from observing this provisional value.
-            BoardEditJobPhase::Denied
-        };
-        record.job.updated_at_ms = wall_clock_ms();
-        record.job.clear_apply_result();
-        record.job.error = None;
+        let recovery_required = record
+            .job
+            .begin_resolution(approved || dismissal_receipt.is_some());
         record.touched_at = Instant::now();
         let transition = (
             record.job.app_id.clone(),
@@ -992,6 +1154,7 @@ pub async fn flowpilot_resolve_board_edit_job(
                 board_commands: record.board_commands.clone(),
                 replacement_mode: record.replacement_mode,
             },
+            recovery_required,
         );
         if let Err(error) = persist_board_edit_jobs(&jobs) {
             jobs.insert(job_id.clone(), previous);
@@ -1000,19 +1163,19 @@ pub async fn flowpilot_resolve_board_edit_job(
         transition
     };
 
-    if approved {
-        let result = flowpilot_apply_flow_ir_commit_with_recovery(
-            app_handle,
-            app_id,
-            token,
-            Some(recovered_batch),
-            destructive_preapproved.unwrap_or(false),
-        )
-        .await;
-        let phase = match result.status.as_str() {
-            "applied" => BoardEditJobPhase::AppliedPendingDelivery,
-            "stale" => BoardEditJobPhase::Stale,
-            _ => BoardEditJobPhase::Failed,
+    if approved || dismissal_receipt.is_some() {
+        let result = match dismissal_receipt {
+            Some(receipt) => receipt,
+            None => {
+                flowpilot_apply_flow_ir_commit_with_recovery(
+                    app_handle,
+                    app_id,
+                    token,
+                    Some(recovered_batch),
+                    destructive_preapproved.unwrap_or(false),
+                )
+                .await
+            }
         };
         let mut jobs = BOARD_EDIT_JOBS
             .lock()
@@ -1024,17 +1187,8 @@ pub async fn flowpilot_resolve_board_edit_job(
         let record = jobs
             .get_mut(&job_id)
             .expect("board-edit job existed while registry lock was held");
-        record.job.phase = phase;
-        record.job.updated_at_ms = wall_clock_ms();
-        if phase == BoardEditJobPhase::AppliedPendingDelivery {
-            record.job.expires_at_ms = record
-                .job
-                .updated_at_ms
-                .saturating_add(BOARD_EDIT_DELIVERY_DISPLAY_TTL_MS);
-        }
-        record.job.error = matches!(phase, BoardEditJobPhase::Stale | BoardEditJobPhase::Failed)
-            .then(|| result.message.clone());
-        record.job.record_apply_result(result);
+        record.job.finish_apply_attempt(result, recovery_required);
+        let phase = record.job.phase;
         record.delivery_lease = None;
         if matches!(
             phase,

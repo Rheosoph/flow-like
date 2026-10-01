@@ -1,6 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
-use flow_like::app::{App, AppVisibility};
+use flow_like::app::App;
 use flow_like::credentials::SharedCredentials;
 use flow_like::flow::compiled::{
     CompiledRunTemplate, TemplateCache,
@@ -34,6 +34,7 @@ use crate::{
         LOCAL_DYNAMIC_PAGE_ACTION_ID_PREFIX, LocalPageActionScope, LocalPageActionSealingContext,
         LocalPagePrincipalBinding, resolve_local_dynamic_page_action,
     },
+    offline_writes::run_storage::{RunStorage, RunStorageRequest},
     state::{TauriFlowLikeState, TauriSettingsState},
     utils::{UiEmitTarget, local_execution_environment},
 };
@@ -659,35 +660,24 @@ async fn execute_prepared(
         overrides.execution_webview.as_deref(),
     );
 
-    let credentials = if matches!(app.visibility, AppVisibility::Offline) {
-        credentials
-    } else {
-        match crate::execution_credentials::prepare(
-            &profile.hub_profile.hub,
-            &app_id,
-            token.as_deref(),
-            overrides.execution_session_id.as_deref(),
-            overrides.execution_webview.as_deref(),
-        )
-        .await
-        {
-            Ok(credentials) => Some(credentials),
-            Err(error) if crate::execution_credentials::falls_back_to_device_storage(&error) => {
-                tracing::warn!(
-                    app_id = %app_id,
-                    %error,
-                    "Hub credentials unavailable; running against device storage"
-                );
-                None
-            }
-            Err(error) => return Err(error.into()),
-        }
-    };
+    let storage = RunStorage::resolve(
+        &app_handle,
+        RunStorageRequest {
+            visibility: &app.visibility,
+            app_id: &app_id,
+            hub: &profile.hub_profile.hub,
+            secure: profile.hub_profile.secure,
+            token: token.as_deref(),
+            session_id: overrides.execution_session_id.as_deref(),
+            webview: overrides.execution_webview.as_deref(),
+            event_id: event_id.as_deref(),
+            device_credentials: credentials,
+        },
+    )
+    .await?;
     let mut execution_state = (*flow_like_state).clone();
     execution_state.request_authorizer = Some(request_authorizer);
-    if let Some(credentials) = &credentials {
-        crate::execution_credentials::install_registry(&mut execution_state, credentials)?;
-    }
+    let credentials = storage.install(&mut execution_state).await?;
     let flow_like_state = Arc::new(execution_state);
     timer.lap("renewable_credentials");
 
@@ -967,8 +957,10 @@ async fn execute_prepared(
 
     // Spawn execution as a task so cancellation can be observed while the UI remains responsive.
     let flow_like_state_for_task = flow_like_state.clone();
-    let mut handle =
-        tokio::spawn(async move { internal_run.execute(flow_like_state_for_task).await });
+    let mut handle = tokio::spawn(async move {
+        let _storage = storage;
+        internal_run.execute(flow_like_state_for_task).await
+    });
 
     let abort_handle = handle.abort_handle();
     let e2e_deadline = crate::e2e_runtime::isolated_runtime_active().then(|| {
@@ -996,6 +988,7 @@ async fn execute_prepared(
                 Err(_) => {
                     println!("Timeout while waiting for cancelled run to stop: {}", run_id);
                     abort_handle.abort();
+                    let _ = (&mut handle).await;
                     match tokio::time::timeout(Duration::from_secs(30), flush_run_cancelled(&run_arc)).await {
                         Ok(Ok(meta)) => meta,
                         Ok(Err(e)) => {
@@ -1108,12 +1101,12 @@ pub(crate) async fn execute_daemon_event(
             .await
             {
                 Ok(credentials) => credentials,
-                Err(err) if crate::execution_credentials::falls_back_to_device_storage(&err) => {
+                Err(err) if crate::offline_writes::run_storage::hub_unreachable(&err) => {
                     tracing::warn!(
                         app_id = %app_id,
                         event_id = %event_id,
                         error = %err,
-                        "Hub credentials unavailable; running the daemon event against device storage"
+                        "Hub credentials unavailable; the daemon event runs disconnected"
                     );
                     break 'credentials (None, None);
                 }

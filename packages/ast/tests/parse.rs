@@ -412,6 +412,76 @@ fn parses_untyped_let_assignment_sugar() {
 }
 
 #[test]
+fn typed_const_bindings_preserve_values_and_node_anchors() {
+    let source = concat!(
+        "eventsSimple() {\n",
+        "    const count: int = 0\n",
+        "    const rows: Row[] = readRows()   //@n:READ_ROWS\n",
+        "    const selected: Row = rows.first\n",
+        "}\n",
+    );
+    let ast = parse(source).expect("typed const bindings parse");
+    let canonical = concat!(
+        "eventsSimple() {\n",
+        "    let count = 0\n",
+        "    const rows = readRows()   //@n:READ_ROWS\n",
+        "    let selected = rows.first\n",
+        "}\n",
+    );
+    assert_eq!(render(&ast, &anchored_opts()), canonical);
+    assert_idempotent(canonical, &anchored_opts());
+    for declaration in [
+        "const count: int",
+        "const count: = 0",
+        "const count int = 0",
+    ] {
+        assert!(parse(&format!("eventsSimple() {{ {declaration} }}")).is_err());
+    }
+}
+
+#[test]
+fn uninitialized_local_const_diagnostic_points_to_the_binding() {
+    let source = concat!(
+        "eventsSimple() {\n",
+        "    const result: Record\n",
+        "    consume({ value: result.text })\n",
+        "}\n",
+    );
+    let error = parse(source).expect_err("a local const needs a value");
+    assert_eq!((error.line, error.col), (2, 11));
+    assert!(
+        error
+            .message
+            .contains("local `const result` requires an initializer"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn top_level_for_loop_diagnostic_explains_the_missing_block() {
+    for statement in [
+        "for (const _ of control::forEach()) {}",
+        "for (const [index, item] of items) {}",
+    ] {
+        let source = format!("eventsSimple() {{}}\n\n    {statement}\n}}");
+        let error = parse(&source).expect_err("stray statements must remain invalid");
+        assert_eq!((error.line, error.col), (3, 5));
+        assert!(
+            error
+                .message
+                .contains("inside an event, function, or `detached` block")
+        );
+        assert!(error.message.contains("check the preceding closing braces"));
+    }
+    assert_idempotent(
+        "detached {\n    for (const _ of control::forEach()) {\n    }\n}\n",
+        &RenderOptions::default(),
+    );
+    assert_idempotent("for() {\n}\n", &RenderOptions::default());
+}
+
+#[test]
 fn parses_bare_group_blocks_inside_event_body() {
     let text = "onStart() {\n    {\n        const request = httpMakeRequest({ method: \"GET\", url: \"https://example.com\" })\n        const response = httpFetch({ request: request.request })\n    }\n}\n";
     let ast = parse(text).expect("parse should accept grouped statement blocks");
@@ -856,6 +926,91 @@ fn trailing_at_comment_is_not_an_anchor() {
             );
         }
         other => panic!("expected call, got {other:?}"),
+    }
+}
+
+#[test]
+fn comments_inside_call_arguments_and_collections_keep_the_values() {
+    for (source, plain) in [
+        (
+            "logInfo({ message: \"hi\", toast: false // watch it log in the first few runs\n})",
+            "logInfo({ message: \"hi\", toast: false })",
+        ),
+        (
+            "logInfo(// arguments\n{ // fields\nmessage // key\n: // value\n\"hi\" // separator\n, // next field\ntoast: false, // final field\n} // options\n, // trailing comma\n)",
+            "logInfo({ message: \"hi\", toast: false })",
+        ),
+        (
+            "consume(// first value\n{ // object\nx: first, // field\ny: second // last field\n}, // second argument\n[ // elements\nfirst // separator\n, // next element\nsecond, // last element\n] // end\n)",
+            "consume({ x: first, y: second }, [first, second])",
+        ),
+        (
+            "consume({ values: [// list\nfirst, // next\n{ x: second // last value\n}, // end\n], empty: { // empty object\n}, list: [// empty array\n] })",
+            "consume({ values: [first, { x: second }], empty: { }, list: [ ] })",
+        ),
+        ("consume(// no arguments\n)", "consume()"),
+        ("consume({ // no fields\n})", "consume({})"),
+    ] {
+        let source = format!("eventsSimple() {{\n    {source}\n}}\n");
+        let plain = format!("eventsSimple() {{\n    {plain}\n}}\n");
+        let ast = parse(&source).unwrap_or_else(|err| panic!("{source}\n{err:?}"));
+        let expected = parse(&plain).expect("plain source parses");
+        assert_eq!(
+            serde_json::to_value(&ast).unwrap(),
+            serde_json::to_value(&expected).unwrap(),
+            "comments must keep argument and value bindings"
+        );
+        let rendered = render(&ast, &RenderOptions::default());
+        assert_idempotent(&rendered, &RenderOptions::default());
+    }
+}
+
+#[test]
+fn argument_comments_preserve_statement_comments_and_anchors() {
+    let source = concat!(
+        "eventsSimple() {\n",
+        "    // before call\n",
+        "    logInfo({ message: \"hi\" // value note\n",
+        "    })   //@n:KEEP\n",
+        "    // after call\n",
+        "    logInfo({ message: \"done\" }) // trailing statement note\n",
+        "}\n",
+    );
+    let ast = parse(source).expect("argument comments parse");
+    let rendered = render(&ast, &anchored_opts());
+    assert_eq!(
+        rendered,
+        concat!(
+            "eventsSimple() {\n",
+            "    // before call\n",
+            "    logInfo({ message: \"hi\" })   //@n:KEEP\n",
+            "    // after call\n",
+            "    logInfo({ message: \"done\" })\n",
+            "    // trailing statement note\n",
+            "}\n",
+        )
+    );
+    for anchor in ["@n:NODE", "@v:VARIABLE", "@l:LAYER"] {
+        let source = format!("eventsSimple() {{ logInfo({{ message: \"hi\" //{anchor}\n}}) }}");
+        assert!(
+            parse(&source).is_err(),
+            "misplaced anchors must stay visible"
+        );
+    }
+}
+
+#[test]
+fn argument_comments_do_not_replace_required_punctuation() {
+    for expression in [
+        "consume({ first: 1 // missing comma\nsecond: 2 })",
+        "consume({ first // missing colon\n1 })",
+        "consume([first // missing comma\nsecond])",
+        "consume(first // missing comma\nsecond)",
+    ] {
+        assert!(
+            parse(&format!("eventsSimple() {{ {expression} }}")).is_err(),
+            "comments must not make malformed expressions valid: {expression}"
+        );
     }
 }
 
@@ -1786,6 +1941,16 @@ fn roundtrip_object_destructuring() {
         &ast.events[0].body.stmts[0],
         flow_like_ast::Stmt::Destructure { anchor: Some(anchor), .. } if anchor == "node1"
     ));
+}
+
+#[test]
+fn underscore_destructuring_aliases_require_a_colon() {
+    assert_idempotent(
+        "eventsSimple() {\n    const { value: _, found } = read()\n}\n",
+        &RenderOptions::default(),
+    );
+    assert!(parse("eventsSimple() { const { value _ } = read() }").is_err());
+    assert!(parse("eventsSimple() { consume({ value _ }) }").is_err());
 }
 
 #[test]
