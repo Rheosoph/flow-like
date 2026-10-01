@@ -47,9 +47,9 @@ impl NodeLogic for BrowserRightClickNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
         let locator = super::selector::evaluate_locator(context, &selector).await?;
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let element = super::selector::find(&driver, &locator).await?;
-        click_with_modifiers(&driver, &element, "right", &[]).await?;
+        let page = session.browser_page(context).await?;
+        let element = super::selector::find_element(&page, &locator).await?;
+        super::driver::click_element(&page, &element, "right", &[], 1).await?;
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
@@ -92,17 +92,13 @@ impl NodeLogic for BrowserDragNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let source: Selector = context.evaluate_pin("source").await?;
         let target: Selector = context.evaluate_pin("target").await?;
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let source = super::selector::find(&driver, &source).await?;
-        let target = super::selector::find(&driver, &target).await?;
-        let result = driver
-            .action_chain()
-            .drag_and_drop_element(&source, &target)
-            .perform()
-            .await;
-        let reset = driver.action_chain().reset_actions().await;
-        result?;
-        reset?;
+        let page = session.browser_page(context).await?;
+        let source = super::selector::find_element(&page, &source).await?;
+        let target = super::selector::find_element(&page, &target).await?;
+        if let Err(error) = source.drag_to(&target).await {
+            release_input(&page).await;
+            return Err(error.into());
+        }
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
@@ -155,8 +151,8 @@ impl NodeLogic for BrowserKeyChordNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let key: String = context.evaluate_pin("key").await?;
         let modifiers: Vec<String> = context.evaluate_pin("modifiers").await?;
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        key_chord(&driver, &key, &modifiers).await?;
+        let page = session.browser_page(context).await?;
+        super::driver::key_chord(&page, &key, &modifiers).await?;
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
@@ -183,7 +179,7 @@ impl NodeLogic for BrowserExecutePlanNode {
         let mut node = base_node(
             "browser_execute_plan",
             "Execute Browser Action Plan",
-            "Executes a validated LLM browser plan in order, stopping on the first failed action. Navigate actions follow the session navigation policy (HTTP and HTTPS only when none is set), including the final URL after redirects.",
+            "Executes a validated LLM browser plan in order, stopping on the first failed action. Navigate actions follow the session navigation policy (HTTP and HTTPS only when none is set), including the final URL after redirects. A 'select' action fails when no option has the value.",
         );
         node.set_version(2);
         node.set_flowscript_name("browser", "executePlan");
@@ -245,25 +241,16 @@ impl NodeLogic for BrowserExecutePlanNode {
         {
             session.browser_frame_selectors.clear();
         }
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let timeout = std::time::Duration::from_millis(timeout as u64);
+        let operation = session.browser_page(context).await?;
+        let mut top_frame: Option<super::driver::PageContext> = None;
         for (index, action) in plan.actions.iter().enumerate() {
             context.check_cancelled()?;
-            let cancellation = context.get_cancellation_token();
-            let result = tokio::select! {
-                biased;
-                _ = async { if let Some(token) = cancellation { token.cancelled().await } else { std::future::pending::<()>().await } } => Err(flow_like_types::anyhow!("Execution was cancelled")),
-                result = tokio::time::timeout(std::time::Duration::from_millis(timeout as u64), execute_action(context, &driver, action, &policy)) => result.map_err(|_| flow_like_types::anyhow!("Plan action {} timed out", index + 1)).and_then(|result| result),
-            };
-            if result.is_err() {
-                let _ = tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    driver.action_chain().reset_actions(),
-                )
-                .await;
-            }
-            result?;
-            if action.action_type == "navigate" {
+            let page = top_frame.as_ref().unwrap_or(&*operation);
+            run_planned_action(context, page, action, &policy, timeout, index).await?;
+            if action.action_type == "navigate" && !session.browser_frame_selectors.is_empty() {
                 session.browser_frame_selectors.clear();
+                top_frame = Some(main_frame_view(&operation));
             }
             context
                 .set_pin_value("executed_count", json!(index + 1))
@@ -323,8 +310,7 @@ fn validate_plan(
                 }
             }
             "navigate" => {
-                let url =
-                    super::policy::NavigationPolicy::parse(text_parameter(action, "url")?)?;
+                let url = super::policy::NavigationPolicy::parse(text_parameter(action, "url")?)?;
                 policy.check_static(&url)?;
             }
             "wait" => {
@@ -457,68 +443,47 @@ fn action_selector(action: &PlannedAction) -> flow_like_types::Result<Selector> 
     Ok(selector)
 }
 #[cfg(feature = "execute")]
-fn browser_key(name: &str) -> flow_like_types::Result<thirtyfour::common::keys::TypingData> {
-    validate_key(name)?;
-    use thirtyfour::Key;
-    let key = match name.to_ascii_lowercase().as_str() {
-        "enter" | "return" => Key::Enter,
-        "tab" => Key::Tab,
-        "escape" | "esc" => Key::Escape,
-        "backspace" => Key::Backspace,
-        "delete" => Key::Delete,
-        "arrowup" | "up" => Key::Up,
-        "arrowdown" | "down" => Key::Down,
-        "arrowleft" | "left" => Key::Left,
-        "arrowright" | "right" => Key::Right,
-        "home" => Key::Home,
-        "end" => Key::End,
-        "pageup" => Key::PageUp,
-        "pagedown" => Key::PageDown,
-        "space" => Key::Space,
-        _ if name.chars().count() == 1 => return Ok(name.into()),
-        _ => return Err(flow_like_types::anyhow!("Unknown browser key")),
-    };
-    Ok(key.into())
-}
-#[cfg(feature = "execute")]
-pub(crate) async fn key_chord(
-    driver: &thirtyfour::WebDriver,
-    key: &str,
-    modifiers: &[String],
+async fn run_planned_action(
+    context: &ExecutionContext,
+    page: &super::driver::PageContext,
+    action: &PlannedAction,
+    policy: &super::policy::NavigationPolicy,
+    timeout: std::time::Duration,
+    index: usize,
 ) -> flow_like_types::Result<()> {
-    use thirtyfour::Key;
-    let keys = modifiers
-        .iter()
-        .map(|modifier| match modifier.to_ascii_lowercase().as_str() {
-            "ctrl" | "control" => Ok(Key::Control),
-            "shift" => Ok(Key::Shift),
-            "alt" => Ok(Key::Alt),
-            "meta" | "cmd" | "command" | "win" => Ok(Key::Meta),
-            _ => Err(flow_like_types::anyhow!(
-                "Unknown browser modifier: {}",
-                modifier
-            )),
-        })
-        .collect::<flow_like_types::Result<Vec<_>>>()?;
-    let key = browser_key(key)?;
-    let mut chain = driver.action_chain();
-    for modifier in &keys {
-        chain = chain.key_down(modifier.clone());
+    let cancellation = context.get_cancellation_token();
+    let result = tokio::select! {
+        biased;
+        _ = async { if let Some(token) = cancellation { token.cancelled().await } else { std::future::pending::<()>().await } } => Err(flow_like_types::anyhow!("Execution was cancelled")),
+        result = tokio::time::timeout(timeout, execute_action(context, page, action, policy)) => result.map_err(|_| flow_like_types::anyhow!("Plan action {} timed out", index + 1)).and_then(|result| result),
+    };
+    if result.is_err() {
+        release_input(page).await;
     }
-    chain = chain.send_keys(key);
-    for modifier in keys.iter().rev() {
-        chain = chain.key_up(modifier.clone());
-    }
-    let result = chain.perform().await;
-    let reset = driver.action_chain().reset_actions().await;
-    result?;
-    reset?;
-    Ok(())
+    result
+}
+/// Releases held keys and buttons after a failed action, bounded so a hung renderer
+/// cannot delay the reported error.
+#[cfg(feature = "execute")]
+async fn release_input(page: &super::driver::PageContext) {
+    let _ =
+        tokio::time::timeout(std::time::Duration::from_secs(2), page.page.release_input()).await;
+}
+/// The same page with the main frame current, as WebDriver Navigate To leaves it. The plan
+/// keeps its operation lock, so no parallel branch runs between the navigate and the next action.
+#[cfg(feature = "execute")]
+fn main_frame_view(page: &super::driver::PageContext) -> super::driver::PageContext {
+    super::driver::PageContext::new(
+        page.browser.clone(),
+        page.page.clone(),
+        page.slot.clone(),
+        Vec::new(),
+    )
 }
 #[cfg(feature = "execute")]
 async fn execute_action(
     context: &ExecutionContext,
-    driver: &thirtyfour::WebDriver,
+    page: &super::driver::PageContext,
     action: &PlannedAction,
     policy: &super::policy::NavigationPolicy,
 ) -> flow_like_types::Result<()> {
@@ -533,27 +498,28 @@ async fn execute_action(
         "navigate" => {
             let url = text_parameter(action, "url")?;
             let target = policy.check(url).await?;
-            driver.goto(target.as_str()).await?;
-            super::policy::verify_landing(driver, policy, url).await?;
+            page.page.goto(target.as_str()).await?;
+            super::policy::verify_landing(page, policy, url).await?;
             return Ok(());
         }
         "press" => {
             let modifiers = action_modifiers(action)?;
             if !action.target.is_empty() || action.parameters.get("selector").is_some() {
-                super::selector::find(driver, &action_selector(action)?)
+                super::selector::find_element(page, &action_selector(action)?)
                     .await?
                     .focus()
                     .await?;
             }
-            return key_chord(driver, text_parameter(action, "key")?, &modifiers).await;
+            return super::driver::key_chord(page, text_parameter(action, "key")?, &modifiers)
+                .await;
         }
         _ => {}
     }
-    let element = super::selector::find(driver, &action_selector(action)?).await?;
+    let element = super::selector::find_element(page, &action_selector(action)?).await?;
     match action.action_type.as_str() {
         "click" | "double_click" | "right_click" => {
-            click_with_modifiers_count(
-                driver,
+            super::driver::click_element(
+                page,
                 &element,
                 action_button(action)?,
                 &action_modifiers(action)?,
@@ -572,22 +538,17 @@ async fn execute_action(
             element.send_keys(text_parameter(action, "text")?).await?;
         }
         "hover" => {
-            driver
-                .action_chain()
-                .move_to_element_center(&element)
-                .perform()
-                .await?
+            element.hover().await?;
         }
         "scroll" => element.scroll_into_view().await?,
         "select" => {
-            thirtyfour::components::SelectElement::new(&element)
-                .await?
+            element
                 .select_by_value(text_parameter(action, "value")?)
                 .await?
         }
         "check" | "uncheck" => {
             if element.is_selected().await? != (action.action_type == "check") {
-                element.click().await?;
+                element.element_click().await?;
             }
         }
         _ => return Err(flow_like_types::anyhow!("Unsupported action")),
@@ -683,76 +644,4 @@ mod tests {
         assert!(validate_plan(&navigate("https://example.org"), 10, &policy).is_err());
         assert!(validate_plan(&navigate("http://www.example.com"), 10, &policy).is_err());
     }
-}
-
-#[cfg(feature = "execute")]
-pub(crate) async fn click_with_modifiers(
-    driver: &thirtyfour::WebDriver,
-    element: &thirtyfour::WebElement,
-    button: &str,
-    modifiers: &[String],
-) -> flow_like_types::Result<()> {
-    click_with_modifiers_count(driver, element, button, modifiers, 1).await
-}
-#[cfg(feature = "execute")]
-pub(crate) async fn click_with_modifiers_count(
-    driver: &thirtyfour::WebDriver,
-    element: &thirtyfour::WebElement,
-    button: &str,
-    modifiers: &[String],
-    count: usize,
-) -> flow_like_types::Result<()> {
-    use thirtyfour::Key;
-    let button = match button {
-        "left" => 0,
-        "middle" => 1,
-        "right" => 2,
-        _ => {
-            return Err(flow_like_types::anyhow!(
-                "Supported click buttons are left, middle, and right"
-            ));
-        }
-    };
-    let keys = modifiers
-        .iter()
-        .map(|value| match value.to_ascii_lowercase().as_str() {
-            "ctrl" | "control" => Ok(Key::Control),
-            "shift" => Ok(Key::Shift),
-            "alt" => Ok(Key::Alt),
-            "meta" | "cmd" | "command" | "win" => Ok(Key::Meta),
-            _ => Err(flow_like_types::anyhow!("Unknown click modifier")),
-        })
-        .collect::<flow_like_types::Result<Vec<_>>>()?;
-    let pause = json!({"type":"pause","duration":0});
-    let mut key_actions = Vec::new();
-    let mut pointer_actions = Vec::new();
-    for key in &keys {
-        key_actions.push(json!({"type":"keyDown","value":char::from(key.clone()).to_string()}));
-        pointer_actions.push(pause.clone());
-    }
-    pointer_actions.push(json!({"type":"pointerMove","duration":0,"origin":{"element-6066-11e4-a52e-4f735466cecf":element.element_id()},"x":0,"y":0}));
-    key_actions.push(pause.clone());
-    for _ in 0..count {
-        pointer_actions.push(json!({"type":"pointerDown","button":button}));
-        pointer_actions.push(json!({"type":"pointerUp","button":button}));
-        key_actions.extend([pause.clone(), pause.clone()]);
-    }
-    for key in keys.iter().rev() {
-        key_actions.push(json!({"type":"keyUp","value":char::from(key.clone()).to_string()}));
-        pointer_actions.push(pause.clone());
-    }
-    let actions = thirtyfour::common::command::Actions::from(json!([
-        {"type":"key","id":"automation-keyboard","actions":key_actions},
-        {"type":"pointer","id":"automation-mouse","parameters":{"pointerType":"mouse"},"actions":pointer_actions},
-    ]));
-    let result = driver
-        .handle
-        .cmd(thirtyfour::common::command::Command::PerformActions(
-            actions,
-        ))
-        .await;
-    let reset = driver.action_chain().reset_actions().await;
-    result?;
-    reset?;
-    Ok(())
 }

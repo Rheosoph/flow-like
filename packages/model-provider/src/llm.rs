@@ -37,6 +37,7 @@ pub mod huggingface;
 pub mod hyperbolic;
 pub mod llamacpp;
 pub mod lmstudio;
+pub mod media;
 pub mod mira;
 pub mod mistral;
 pub mod mlx;
@@ -46,6 +47,7 @@ pub mod ollama;
 pub mod openai;
 pub mod openrouter;
 pub mod perplexity;
+mod responses_tools;
 pub mod subscription;
 #[cfg(test)]
 pub(crate) mod test_support;

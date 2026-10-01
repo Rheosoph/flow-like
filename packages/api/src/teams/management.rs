@@ -963,10 +963,14 @@ fn resource_specific(permissions: &[TeamsPermission]) -> Vec<Value> {
         .collect()
 }
 
+/// Bump with any change to the manifest JSON, `bots[]`, scopes, `supportsFiles`, the RSC
+/// mapping or the icons, so installed apps see the new package as an update.
+const MANIFEST_REVISION: u32 = 1;
+
 fn app_package(c: Connection, revision: i32) -> Result<Vec<u8>, ApiError> {
     let mut manifest = json!({
         "$schema":"https://developer.microsoft.com/json-schemas/teams/v1.21/MicrosoftTeams.schema.json",
-        "manifestVersion":"1.21","version":format!("1.0.{}",revision.max(0)),"id":c.id,
+        "manifestVersion":"1.21","version":format!("1.{MANIFEST_REVISION}.{}",revision.max(0)),"id":c.id,
         "developer":{"name":"Flow-Like","websiteUrl":"https://flow-like.com","privacyUrl":"https://flow-like.com/privacy-policy","termsOfUseUrl":"https://flow-like.com/eula"},
         "name":{"short":c.name,"full":c.name},
         "description":{"short":if c.description.is_empty(){c.name.clone()}else{c.description.chars().take(80).collect::<String>()},"full":if c.description.is_empty(){format!("{} powered by Flow-Like",c.name)}else{c.description}},
@@ -1041,7 +1045,7 @@ mod tests {
         assert_eq!(archive.len(), 3);
         let manifest: Value =
             serde_json::from_reader(archive.by_name("manifest.json").unwrap()).unwrap();
-        assert_eq!(manifest["version"], "1.0.12");
+        assert_eq!(manifest["version"], "1.1.12");
         assert_eq!(
             manifest["bots"][0]["scopes"],
             json!(["personal", "team", "groupchat"])
@@ -1065,6 +1069,18 @@ mod tests {
                 image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).unwrap();
             assert_eq!((image.width(), image.height()), (size, size));
         }
+    }
+
+    #[test]
+    fn package_version_carries_the_manifest_revision_and_accepts_files() {
+        let manifest = packaged_manifest(packaged_connection());
+        assert!(
+            manifest["version"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("1.{MANIFEST_REVISION}."))
+        );
+        assert_eq!(manifest["bots"][0]["supportsFiles"], true);
     }
 
     #[test]

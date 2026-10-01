@@ -1,0 +1,12 @@
+{
+  "execution": [
+    "Simple Event",
+    "Print Info"
+  ],
+  "data": [
+    "Trim String",
+    "To Upper Case",
+    "Print Info.Message"
+  ],
+  "fault": "To Upper Case should be To Lower Case"
+}

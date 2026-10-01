@@ -1,0 +1,38 @@
+{
+  "isolatedWorld": {
+    "checked": 51,
+    "mismatches": [],
+    "pagePollution_se_exportedFunctionSymbol": "undefined"
+  },
+  "costMsPerCall": {
+    "freshDeclaration30KB": 0.788,
+    "installedOnce": 0.288,
+    "innerText": 0.142,
+    "installedEqualsWd": true
+  },
+  "hostileGetComputedStyle": {
+    "chromedriver": {
+      "text": "",
+      "displayed": false
+    },
+    "atomMainWorld": {
+      "text": "",
+      "displayed": false
+    },
+    "atomIsolatedWorld": {
+      "text": "Hello world",
+      "displayed": true
+    }
+  },
+  "atomSizesBytes": {
+    "GET_TEXT": 29963,
+    "IS_DISPLAYED": 19139,
+    "CLEAR": 29997,
+    "GET_LOCATION": 4252,
+    "GET_SIZE": 1912,
+    "GET_LOCATION_IN_VIEW": 10194,
+    "IS_SELECTED": 10283,
+    "IS_ENABLED": 1756,
+    "FIND_ELEMENT": 30831
+  }
+}

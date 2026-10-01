@@ -22,10 +22,7 @@ import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import { firstEventAction } from "../event-handlers";
 import type { BoundValue, ImageInputComponent } from "../types";
-import {
-	limitUploadBatch,
-	mergeSuccessfulUploadBatch,
-} from "./upload-input-state";
+import { limitUploadBatch, settleUploadBatch } from "./upload-input-state";
 
 interface ImageData {
 	name: string;
@@ -284,17 +281,14 @@ export function A2UIImageInput({
 		setIsUploading(false);
 
 		const successfulUploads = uploadedImages.filter((img) => img.backendUrl);
-		const failedUploads = uploadedImages.filter((img) => img.uploadError);
-		const committedImages = mergeSuccessfulUploadBatch(
+		const { committed: committedImages, display } = settleUploadBatch(
 			currentImages,
 			uploadedImages,
 			Boolean(multiple),
 			maxFiles,
 			(image) => Boolean(image.backendUrl),
 		);
-		setLocalImages(
-			multiple ? [...committedImages, ...failedUploads] : committedImages,
-		);
+		setLocalImages(display);
 
 		if (successfulUploads.length === 0) {
 			if (inputRef.current) inputRef.current.value = "";
@@ -330,12 +324,13 @@ export function A2UIImageInput({
 
 	const handleRemove = (index: number) => {
 		const newImages = displayImages.filter((_, i) => i !== index);
+		setLocalImages(newImages);
+		if (displayImages[index]?.uploadError) return;
+
 		const committedImages = newImages.filter(
 			(image) => !image.uploading && !image.uploadError,
 		);
 		const newValue = multiple ? committedImages : null;
-
-		setLocalImages(newImages);
 
 		if (component.value && "path" in component.value) {
 			setByPath(component.value.path, newValue);

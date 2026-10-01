@@ -14,7 +14,7 @@ use flow_like::{
             ensure_module_layer, validate_module_apply_params,
         },
         board::{
-            Board, BoardCell, BoardWriter, VersionType,
+            Board, BoardCell, BoardVersionInfo, BoardWriter, VersionType,
             commands::GenericCommand,
             sync::{BoardSyncRequest, BoardSyncResponse, BoardSyncSnapshot},
         },
@@ -64,28 +64,56 @@ pub async fn create_board_version(
     app_id: String,
     board_id: String,
     version_type: VersionType,
+    published_by: Option<String>,
 ) -> Result<(u32, u32, u32), TauriFunctionError> {
     let board_state = TauriFlowLikeState::construct(&handler).await?;
-    let board = board_state.get_board(&board_id, None);
-    if let Ok(board) = board {
-        let version = board
-            .write()
-            .await
-            .create_version(version_type, None)
-            .await?;
-        return Ok(version);
+    let board = match board_state.get_board(&board_id, None) {
+        Ok(board) => board,
+        Err(_) => {
+            let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
+            let app = App::load(app_id, flow_like_state)
+                .await
+                .map_err(|_| TauriFunctionError::new("Board not found"))?;
+            app.open_board(board_id, Some(true), None).await?
+        }
+    };
+
+    let (version, published) = board
+        .write()
+        .await
+        .create_version_returning_published(version_type, None)
+        .await?;
+    let snapshot = board.snapshot();
+    if let Err(error) = snapshot
+        .record_version_publisher(published, published_by, None)
+        .await
+    {
+        tracing::warn!(
+            board_id = %snapshot.id,
+            version = ?published,
+            error = %error,
+            "Publisher of the published board version could not be recorded"
+        );
+    }
+    Ok(version)
+}
+
+#[tauri::command(async)]
+pub async fn get_board_version_infos(
+    handler: AppHandle,
+    app_id: String,
+    board_id: String,
+) -> Result<Vec<BoardVersionInfo>, TauriFunctionError> {
+    let board_state = TauriFlowLikeState::construct(&handler).await?;
+    if let Ok(board) = board_state.get_board(&board_id, None) {
+        return Ok(board.snapshot().get_version_infos(None).await?);
     }
 
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
 
     if let Ok(app) = App::load(app_id, flow_like_state).await {
         let board = app.open_board(board_id, Some(true), None).await?;
-        let version = board
-            .write()
-            .await
-            .create_version(version_type, None)
-            .await?;
-        return Ok(version);
+        return Ok(board.snapshot().get_version_infos(None).await?);
     }
 
     Err(TauriFunctionError::new("Board not found"))
@@ -280,6 +308,19 @@ pub async fn get_flowscript(
     }
 
     Err(TauriFunctionError::new("Board not found"))
+}
+
+/// Render a board the webview already holds, such as a stored version snapshot.
+#[tauri::command(async)]
+pub async fn render_board_flowscript(
+    board: Board,
+    anchors: Option<bool>,
+) -> Result<String, TauriFunctionError> {
+    let render_options = RenderOptions {
+        anchors: anchors.unwrap_or(true),
+        ..RenderOptions::default()
+    };
+    Ok(board_to_flowscript(&board, &render_options))
 }
 
 /// A selection-scoped FlowScript render: the sections containing the selected nodes plus the

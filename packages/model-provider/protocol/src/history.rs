@@ -1556,7 +1556,7 @@ pub enum HistoryJSONSchemaType {
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct HistoryJSONSchemaDefine {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub schema_type: Option<HistoryJSONSchemaType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -1945,5 +1945,32 @@ mod tests {
                 .iter()
                 .any(|part| matches!(part, RigToolResultContent::Image(_)))
         );
+    }
+
+    #[test]
+    fn untyped_tool_properties_reach_rig_without_a_null_type() {
+        let parameters = json::json!({
+            "type": "object",
+            "properties": {
+                "value": { "description": "Any value." },
+                "count": { "type": "number" }
+            },
+            "required": ["count"]
+        });
+        let history = History {
+            tools: Some(vec![Tool {
+                tool_type: ToolType::Function,
+                function: HistoryFunction {
+                    name: "set_value".to_string(),
+                    description: None,
+                    parameters: json::from_value(parameters.clone()).expect("tool parameters"),
+                },
+            }]),
+            ..History::new("model".to_string(), Vec::new())
+        };
+
+        let definitions = history.tools_to_rig().expect("rig tools");
+
+        assert_eq!(definitions[0].parameters, parameters);
     }
 }

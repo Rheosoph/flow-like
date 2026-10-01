@@ -125,9 +125,11 @@ members = [
     "packages/catalog/std-text",
     "packages/core/runtime",
     "packages/core/editor",
+    "packages/browser",
 ]
 
 [workspace.dependencies]
+flow-like-browser = { path = "packages/browser", default-features = false }
 flow-like-editor = { path = "packages/core/editor", default-features = false }
 flow-like-runtime = { path = "packages/core/runtime", default-features = false }
 flow-like-catalog-media-document = { path = "packages/catalog/media-document", default-features = false }

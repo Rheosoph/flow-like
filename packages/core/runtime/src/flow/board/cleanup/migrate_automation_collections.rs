@@ -61,7 +61,7 @@ fn collect_changes(node: &Node, layer: Option<&str>, catalog: &Node, changes: &m
         let Some((version, data_type, direction)) = expected_contract(&node.name, &old.name) else {
             continue;
         };
-        if catalog.version != Some(version)
+        if catalog.version.is_none_or(|catalog| catalog < version)
             || node.version.is_some_and(|placed| placed >= version)
             || old.data_type != VariableType::Generic
             || !matches!(old.value_type, ValueType::Normal | ValueType::Array)

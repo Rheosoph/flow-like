@@ -33,10 +33,30 @@ pub(crate) async fn optional_input<T: serde::de::DeserializeOwned>(
     name: &str,
     default: T,
 ) -> flow_like_types::Result<T> {
-    match context.get_pin_by_name(name).await {
-        Ok(pin) => context.evaluate_pin_ref(pin).await,
-        Err(_) => Ok(default),
+    let Ok(pin) = context.get_pin_by_name(name).await else {
+        return Ok(default);
+    };
+    if is_unset(context, &pin).await {
+        return Ok(default);
     }
+    context.evaluate_pin_ref(pin).await
+}
+
+/// The runtime gives optional pins no implicit default: `evaluate_pin_value` fails on a pin with
+/// no override, value, dependency or default.
+#[cfg(feature = "execute")]
+async fn is_unset(
+    context: &flow_like::flow::execution::context::ExecutionContext,
+    pin: &flow_like::flow::execution::internal_pin::InternalPin,
+) -> bool {
+    let overridden = context
+        .context_pin_overrides
+        .as_ref()
+        .is_some_and(|overrides| overrides.contains_key(pin.id()));
+    !overridden
+        && pin.depends_on().is_empty()
+        && pin.default_value.is_none()
+        && !pin.has_value().await
 }
 
 pub(crate) async fn optional_output(
@@ -111,7 +131,9 @@ pub(crate) enum NameMatch {
 
 /// Parses `role`, `role|name` (substring), `role|=name` (exact) and `role|/pattern/flags`.
 #[cfg(any(feature = "execute", test))]
-pub(crate) fn parse_role_value(value: &str) -> flow_like_types::Result<(String, Option<NameMatch>)> {
+pub(crate) fn parse_role_value(
+    value: &str,
+) -> flow_like_types::Result<(String, Option<NameMatch>)> {
     let (role, name) = match value.split_once('|') {
         Some((role, name)) => (role, Some(name)),
         None => (value, None),
@@ -272,12 +294,12 @@ const ranked = candidates
 return ranked.length ? [ranked[0].el] : [];
 "#;
 
+/// Arguments of `RESOLVE_SCRIPT`, in its destructuring order.
 #[cfg(feature = "execute")]
-async fn resolve_in_page(
-    driver: &thirtyfour::WebDriver,
+fn resolve_args(
     selector: &Selector,
     all: bool,
-) -> flow_like_types::Result<Vec<thirtyfour::WebElement>> {
+) -> flow_like_types::Result<Vec<flow_like_types::Value>> {
     let (xpath, role, name) = if selector.kind == SelectorKind::Role {
         let (role, name) = parse_role_value(&selector.value)?;
         (String::new(), role, name)
@@ -291,7 +313,7 @@ async fn resolve_in_page(
         Some(NameMatch::Regex { pattern, flags }) => ("regex", pattern, flags),
     };
     let scope = selector.scope.clone().unwrap_or_default();
-    let args = vec![
+    Ok(vec![
         flow_like_types::json::json!(format!("{:?}", selector.kind)),
         flow_like_types::json::json!(selector.value),
         flow_like_types::json::json!(xpath),
@@ -301,48 +323,51 @@ async fn resolve_in_page(
         flow_like_types::json::json!(name_text),
         flow_like_types::json::json!(name_flags),
         flow_like_types::json::json!(all),
-    ];
-    let result = driver.execute(RESOLVE_SCRIPT, args).await.map_err(|error| {
-        flow_like_types::anyhow!(
+    ])
+}
+
+/// Runs `RESOLVE_SCRIPT` in the main world of the current frame. The error keeps the typed
+/// browser error in its chain, so waits can tell an interrupted probe from a failure.
+#[cfg(feature = "execute")]
+async fn resolve_elements(
+    ctx: &super::driver::PageContext,
+    selector: &Selector,
+    all: bool,
+) -> flow_like_types::Result<Vec<flow_like_browser::Element>> {
+    let args = resolve_args(selector, all)?
+        .into_iter()
+        .map(flow_like_browser::script::ScriptArg::Json)
+        .collect();
+    let result = ctx.probe(RESOLVE_SCRIPT, args).await.map_err(|error| {
+        let message = format!(
             "Failed to resolve {:?} selector '{}': {error}",
-            selector.kind,
-            selector.value
-        )
+            selector.kind, selector.value
+        );
+        error.context(message)
     })?;
     Ok(result.elements()?)
 }
 
 #[cfg(feature = "execute")]
-fn no_match(selector: &Selector) -> flow_like_types::Error {
-    thirtyfour::error::no_such_element(format!(
-        "No element matches {:?} selector '{}'",
-        selector.kind, selector.value
-    ))
+fn no_match_message(kind: &SelectorKind, value: &str) -> String {
+    format!("No element matches {kind:?} selector '{value}'")
+}
+
+#[cfg(feature = "execute")]
+fn not_found(kind: &SelectorKind, value: &str) -> flow_like_types::Error {
+    flow_like_browser::BrowserError::NotFound {
+        message: no_match_message(kind, value),
+    }
     .into()
 }
 
-#[cfg(feature = "execute")]
-fn native_by(selector: &Selector) -> thirtyfour::By {
-    use thirtyfour::By;
-    match selector.kind {
-        SelectorKind::Css => By::Css(selector.value.clone()),
-        _ if selector.scope.as_deref().is_some_and(|s| !s.is_empty())
-            && selector.value.starts_with('/') =>
-        {
-            By::XPath(format!(".{}", selector.value))
-        }
-        _ => By::XPath(selector.value.clone()),
-    }
-}
-
-#[cfg(feature = "execute")]
-async fn native_root(
-    driver: &thirtyfour::WebDriver,
-    selector: &Selector,
-) -> flow_like_types::Result<Option<thirtyfour::WebElement>> {
-    match selector.scope.as_deref().filter(|s| !s.is_empty()) {
-        Some(scope) => Ok(Some(driver.find(thirtyfour::By::Css(scope)).await?)),
-        None => Ok(None),
+/// An absolute XPath below a scope element searches from the scope, not the document root.
+#[cfg(any(feature = "execute", test))]
+fn scoped_xpath(selector: &Selector) -> String {
+    if selector.scope.as_deref().is_some_and(|s| !s.is_empty()) && selector.value.starts_with('/') {
+        format!(".{}", selector.value)
+    } else {
+        selector.value.clone()
     }
 }
 
@@ -359,49 +384,66 @@ fn check_resolvable(selector: &Selector) -> flow_like_types::Result<()> {
     Ok(())
 }
 
+/// The first match in the current frame; no match is a typed `NotFound`.
 #[cfg(feature = "execute")]
-pub(crate) async fn find(
-    driver: &thirtyfour::WebDriver,
+pub(crate) async fn find_element(
+    ctx: &super::driver::PageContext,
     selector: &Selector,
-) -> flow_like_types::Result<thirtyfour::WebElement> {
+) -> flow_like_types::Result<flow_like_browser::Element> {
     check_resolvable(selector)?;
-    match selector.kind {
-        SelectorKind::Ref => super::refs::resolve_ref(driver, &selector.value).await,
-        SelectorKind::Css | SelectorKind::Xpath => {
-            let by = native_by(selector);
-            match native_root(driver, selector).await? {
-                Some(root) => Ok(root.find(by).await?),
-                None => Ok(driver.find(by).await?),
-            }
-        }
-        _ => resolve_in_page(driver, selector, false)
-            .await?
-            .into_iter()
-            .next()
-            .ok_or_else(|| no_match(selector)),
-    }
+    let matches = match selector.kind {
+        SelectorKind::Ref => return super::driver::resolve_ref(ctx, &selector.value).await,
+        SelectorKind::Css | SelectorKind::Xpath => native_elements(ctx, selector).await?,
+        _ => resolve_elements(ctx, selector, false).await?,
+    };
+    matches
+        .into_iter()
+        .next()
+        .ok_or_else(|| not_found(&selector.kind, &selector.value))
 }
 
-/// All matches in document order; an empty list when nothing matches.
+/// All matches in the current frame in document order; an empty list when nothing matches.
 #[cfg(feature = "execute")]
-pub(crate) async fn find_all(
-    driver: &thirtyfour::WebDriver,
+pub(crate) async fn find_elements(
+    ctx: &super::driver::PageContext,
     selector: &Selector,
-) -> flow_like_types::Result<Vec<thirtyfour::WebElement>> {
+) -> flow_like_types::Result<Vec<flow_like_browser::Element>> {
     check_resolvable(selector)?;
     match selector.kind {
         SelectorKind::Ref => Ok(vec![
-            super::refs::resolve_ref(driver, &selector.value).await?,
+            super::driver::resolve_ref(ctx, &selector.value).await?,
         ]),
-        SelectorKind::Css | SelectorKind::Xpath => {
-            let by = native_by(selector);
-            match native_root(driver, selector).await? {
-                Some(root) => Ok(root.find_all(by).await?),
-                None => Ok(driver.find_all(by).await?),
-            }
-        }
-        _ => resolve_in_page(driver, selector, true).await,
+        SelectorKind::Css | SelectorKind::Xpath => native_elements(ctx, selector).await,
+        _ => resolve_elements(ctx, selector, true).await,
     }
+}
+
+#[cfg(feature = "execute")]
+async fn native_elements(
+    ctx: &super::driver::PageContext,
+    selector: &Selector,
+) -> flow_like_types::Result<Vec<flow_like_browser::Element>> {
+    let frame = ctx.frame();
+    let root = match selector.scope.as_deref().filter(|scope| !scope.is_empty()) {
+        Some(scope) => Some(
+            frame
+                .find_css(scope, None)
+                .await?
+                .into_iter()
+                .next()
+                .ok_or_else(|| not_found(&SelectorKind::Css, scope))?,
+        ),
+        None => None,
+    };
+    let elements = match selector.kind {
+        SelectorKind::Css => frame.find_css(&selector.value, root.as_ref()).await?,
+        _ => {
+            frame
+                .find_xpath(&scoped_xpath(selector), root.as_ref())
+                .await?
+        }
+    };
+    Ok(elements)
 }
 
 #[cfg(test)]
@@ -439,14 +481,23 @@ mod tests {
     }
 
     #[test]
+    fn absolute_xpaths_below_a_scope_search_from_the_scope() {
+        let mut query = selector(SelectorKind::Xpath, "//button");
+        assert_eq!(scoped_xpath(&query), "//button");
+        query.scope = Some(String::new());
+        assert_eq!(scoped_xpath(&query), "//button");
+        query.scope = Some("#toolbar".into());
+        assert_eq!(scoped_xpath(&query), ".//button");
+        query.value = "./button".into();
+        assert_eq!(scoped_xpath(&query), "./button");
+    }
+
+    #[test]
     fn role_values_carry_name_filters() {
         assert_eq!(parse_role_value("Button").unwrap(), ("button".into(), None));
         assert_eq!(
             parse_role_value("button|  Sign   in ").unwrap(),
-            (
-                "button".into(),
-                Some(NameMatch::Contains("Sign in".into()))
-            )
+            ("button".into(), Some(NameMatch::Contains("Sign in".into())))
         );
         assert_eq!(
             parse_role_value("link|=Home").unwrap().1,

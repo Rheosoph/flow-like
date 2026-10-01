@@ -337,6 +337,10 @@ once. It costs one call and decides how the build reaches the board.
   requested behavior remains the acceptance contract. Never drop a capability because it landed in a
   later segment, and never quietly turn a large plan into a smaller one.
 - Order segments so each depends only on earlier ones. `depends_on` must point backwards.
+- After a no-source timeout, make the first segment smaller in executable behavior. Keep later
+  work in the plan; merging several earlier segments into the first one does not reduce its size.
+  On an existing board, use `write_flowscript` with exact `edits` to retain that segment without
+  reproducing unchanged source. Continue the returned draft with `patch_flowscript`.
 - If a segment cannot be completed after its repairs, you may call `plan_board_scope` ONE more time
   to re-split only the segments that have NOT reached the board yet. Segments already committed are
   immutable; do not re-declare them.

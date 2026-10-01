@@ -240,12 +240,8 @@ pub(crate) fn validate_material(
         serde_json::to_vec(&metadata)?.len() <= 8 * 1024,
         "Certificate metadata exceeds its encrypted response limit"
     );
-    let key = CertifiedKey::from_der(
-        chain,
-        keys.pop().unwrap(),
-        &rustls::crypto::ring::default_provider(),
-    )
-    .context("Unsupported or mismatched TLS private key")?;
+    let key = CertifiedKey::from_der(chain, keys.pop().unwrap(), &crate::crypto::tls_provider())
+        .context("Unsupported or mismatched TLS private key")?;
     // Unknown key consistency is rejected, even if a provider would accept it.
     key.keys_match()
         .context("Certificate and private key do not match")?;

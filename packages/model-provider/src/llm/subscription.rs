@@ -2,7 +2,7 @@
 
 mod microsoft;
 
-use super::{ModelConstructor, ModelLogic};
+use super::{ModelConstructor, ModelLogic, responses_tools::NonStrictToolsClient};
 use crate::{history::History, provider::ModelProvider};
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
@@ -159,6 +159,15 @@ fn rig_http_client() -> Result<reqwest_rig::Client> {
         .build()?)
 }
 
+fn codex_client_builder(
+    provider: &ModelProvider,
+) -> Result<chatgpt::ClientBuilder<reqwest_rig::Client>> {
+    Ok(chatgpt::Client::builder()
+        .api_key(codex_auth(provider)?)
+        .originator("flow-like")
+        .http_client(rig_http_client()?))
+}
+
 async fn github_auth(provider: &ModelProvider) -> Result<(String, String)> {
     if let Some(token) = param(provider, "api_key") {
         validate_token(token, "GitHub Copilot")?;
@@ -271,7 +280,7 @@ impl ModelLogic for SubscriptionModel {
     async fn provider(&self) -> Result<ModelConstructor> {
         Ok(ModelConstructor {
             inner: match &self.client {
-                Client::Codex(client) => Box::new(client.clone()),
+                Client::Codex(client) => Box::new(NonStrictToolsClient(client.clone())),
                 Client::GitHub(client) => Box::new(client.clone()),
             },
         })
@@ -333,11 +342,7 @@ fn subscription_params(history: &History, codex: bool, model: &str) -> Result<Op
 pub async fn build(provider: &ModelProvider) -> Result<Arc<dyn ModelLogic>> {
     match provider.provider_name.trim().to_ascii_lowercase().as_str() {
         "custom:codex" => {
-            let client = chatgpt::Client::builder()
-                .api_key(codex_auth(provider)?)
-                .originator("flow-like")
-                .http_client(rig_http_client()?)
-                .build()?;
+            let client = codex_client_builder(provider)?.build()?;
             Ok(Arc::new(SubscriptionModel {
                 client: Client::Codex(client),
                 model: model_id(provider, chatgpt::GPT_5_3_CODEX),
@@ -465,6 +470,52 @@ mod tests {
             .unwrap();
         assert_eq!(github_codex["reasoning"]["effort"], "medium");
         assert!(codex.get("stream").is_none());
+    }
+
+    #[tokio::test]
+    async fn codex_sends_tool_schemas_as_written() {
+        use crate::llm::test_support::{
+            assert_sends_tool_as_written, serve_once, sse_response, typeless_tool,
+        };
+        use futures::StreamExt;
+        use rig::completion::Completion;
+
+        let (endpoint, server) = serve_once(sse_response(&[])).await;
+        let mut provider = provider();
+        provider
+            .params
+            .as_mut()
+            .unwrap()
+            .insert("access_token".into(), json!("test-token"));
+        let client = codex_client_builder(&provider)
+            .unwrap()
+            .base_url(&endpoint)
+            .build()
+            .unwrap();
+        let model = SubscriptionModel {
+            client: Client::Codex(client),
+            model: model_id(&provider, chatgpt::GPT_5_3_CODEX),
+        };
+        let agent = model
+            .provider()
+            .await
+            .unwrap()
+            .into_client()
+            .agent(&model.model)
+            .build();
+
+        let mut stream = agent
+            .completion("Fill in the form.", Vec::<rig::completion::Message>::new())
+            .await
+            .unwrap()
+            .tools(vec![typeless_tool()])
+            .stream()
+            .await
+            .unwrap();
+        let _ = stream.next().await;
+
+        let body: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+        assert_sends_tool_as_written(&body, &typeless_tool());
     }
 
     #[tokio::test]

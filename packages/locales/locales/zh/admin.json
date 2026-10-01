@@ -1290,5 +1290,11 @@
 	"exploreLeaveTitle": "",
 	"explorePreviewUnavailable": "",
 	"exploreRuleMatches": "",
-	"exploreSummarySpotlightVisible": ""
+	"exploreSummarySpotlightVisible": "",
+	"agentBackendOperationsDescription": "匿名 CLI 运行状态诊断事件。记录涵盖启动、身份验证检查、模型发现、运行和关闭的结果与耗时。",
+	"agentErrorReports_one": "{{count}} 个错误报告",
+	"agentErrorReports_other": "{{count}} 个错误报告",
+	"agentOperation_one": "次操作",
+	"agentOperation_other": "次操作",
+	"agentOperationP95": "操作耗时第 95 百分位数"
 }

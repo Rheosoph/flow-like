@@ -187,7 +187,7 @@ pub(crate) async fn issue(
             c.device_sas_tokens
                 .into_iter()
                 .map(|(key, sas_token)| (key, InstanceStorageCredential::AzureSas { sas_token }))
-                .collect(),
+                .collect::<BTreeMap<_, _>>(),
         ),
         #[cfg(feature = "gcp")]
         super::RuntimeCredentials::Gcp(c) => (

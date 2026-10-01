@@ -1,0 +1,3452 @@
+{
+	"schema": "flow-like.docs-screenshot-manifest/v1",
+	"screenshots": {
+		"AddingModelToProfile.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-models.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-models.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "7b0c3a4d6d8d2a32c2041c7cd5f07f4f5d87cd1a84f0a0ac8b39af175b73fad0",
+			"fixtureSha256": "76a487299f961285bdf89ebeaf7e974e6edc9e21d7ac3dfb5d07bf4084b74612",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "model-catalog",
+			"sourceSha256": "38e2e9c41c87b0d2255131f66a58e29007ccb4b93a992fea4ceaba1b2f9e128d",
+			"url": "http://127.0.0.1:3137/settings/ai?capture=docs",
+			"capturedAt": "2026-09-30T08:52:03.552Z",
+			"reviewedAt": "2026-09-30T08:53:56.532Z",
+			"sha256": "172f3ffa60d8780d5b039760f16de005c5ff6f18cbbc4edca6213bbbe644e2a8",
+			"bytes": 8184,
+			"mode": "element",
+			"selector": "[data-slot=\"dropdown-menu-content\"][data-state=\"open\"]",
+			"pixels": {
+				"width": 432,
+				"height": 196
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 350
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"AppBoards.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-apps.tauri.json",
+			"planSha256": "27ade83712ab674ab7e7f525b60290c239bddcfffacc968f6840b59d4552dbec",
+			"fixtureSha256": "09cb950f3a2db8093221a0b963c654976bc90778651f3c1cc64f687bb14112b1",
+			"scenario": "app-flows",
+			"sourceSha256": "a0991fa208b203d6e58c3a999a81e099f81f7b9703324332522457f4e3cc63e0",
+			"url": "http://127.0.0.1:3137/library/config/flows?id=docs-app&capture=docs",
+			"capturedAt": "2026-09-30T08:27:10.375Z",
+			"reviewedAt": "2026-09-30T08:28:22.601Z",
+			"sha256": "cb79e8fe4ab11f07b4f20c647fa3b0de6221ceabd8b80f46f2a10175e2adc105",
+			"bytes": 291078,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"AppDatabases.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-apps.tauri.json",
+			"planSha256": "8ed63e6b98cd40719dcc0d410d0aa3eae093ea6d05d9204680891f314d6e552f",
+			"fixtureSha256": "09cb950f3a2db8093221a0b963c654976bc90778651f3c1cc64f687bb14112b1",
+			"scenario": "data-studio-source",
+			"sourceSha256": "4e8b8f3ac6c877285c56b3205ec92669b9bb40a6ca1ece4ac368f7e1c54f44ba",
+			"url": "http://127.0.0.1:3137/library/config/explore?id=docs-app&view=sources&table=customers&capture=docs",
+			"capturedAt": "2026-09-30T08:41:17.255Z",
+			"reviewedAt": "2026-09-30T08:42:35.300Z",
+			"sha256": "434ecb92b6081335de5ea05fd93e9269022a885c825e4cd1d7440b1100199c28",
+			"bytes": 266188,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"AppEvents.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-apps.tauri.json",
+			"planSha256": "27ade83712ab674ab7e7f525b60290c239bddcfffacc968f6840b59d4552dbec",
+			"fixtureSha256": "09cb950f3a2db8093221a0b963c654976bc90778651f3c1cc64f687bb14112b1",
+			"scenario": "app-events",
+			"sourceSha256": "6f8a3f157ff747300085e9c5dbaff6f37dee6443b9904b68fd7707f97812367a",
+			"url": "http://127.0.0.1:3137/library/config/pages?id=docs-app&capture=docs",
+			"capturedAt": "2026-09-30T08:29:55.552Z",
+			"reviewedAt": "2026-09-30T08:31:42.665Z",
+			"sha256": "aaed274eafa6473055ce22a38bfbd15f6f64f0d97dec75fa208e0c5d2e5e4f9a",
+			"bytes": 255944,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"AppStorage.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-apps.tauri.json",
+			"planSha256": "27ade83712ab674ab7e7f525b60290c239bddcfffacc968f6840b59d4552dbec",
+			"fixtureSha256": "09cb950f3a2db8093221a0b963c654976bc90778651f3c1cc64f687bb14112b1",
+			"scenario": "app-storage",
+			"sourceSha256": "53c931907c93effd8337e1d3594467a3d18cac9da09e060d8d902169eb3fb33c",
+			"url": "http://127.0.0.1:3137/library/config/storage?id=docs-app&capture=docs",
+			"capturedAt": "2026-09-30T08:28:07.803Z",
+			"reviewedAt": "2026-09-30T08:31:42.652Z",
+			"sha256": "57983b19ba926c919a84a4ed8d041193ec7d78943316dff8bde224c3d0e1bc32",
+			"bytes": 278560,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"AppVisibilitySettings.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-sharing.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-sharing.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "bfc921b04449b8563ef1fba9727914463890bfb97b7836afb63ebf448ebd2260",
+			"fixtureSha256": "8bfae3b3d5828d361d09fe547a271b06b017f07f340426c7a3ebfdd63cd670e9",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "visibility",
+			"sourceSha256": "dc1eed8b030e0b23e04a8b651d404b7725dc1ff911f11ab70b23fea07bd27ebe",
+			"url": "http://127.0.0.1:3137/library/config?id=docs-app&capture=docs",
+			"capturedAt": "2026-09-30T08:43:09.369Z",
+			"reviewedAt": "2026-09-30T08:49:15.933Z",
+			"sha256": "1ab11fae500828ff4f1a100835be6aff38b21fdb099bf3a3d5320c43df30256b",
+			"bytes": 209924,
+			"mode": "element",
+			"selector": "[data-slot=\"sheet-content\"]",
+			"pixels": {
+				"width": 1152,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				}
+			]
+		},
+		"BoardVersions.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-versions.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-versions.tauri.json",
+			"planSha256": "ae6abd9f17632a679b6597993dba46a208fb85977c05213328908ab563004048",
+			"fixtureSha256": "7957fbe5bb0806bd27a3d5e7e5a0c081d4e54fe22b95adf4962cad63ceac16e1",
+			"scenario": "board-versions",
+			"sourceSha256": "ea89990ba5322b0e0f65bc28d3f9c9bdc4e0a17c0f4df51b8826e50f48c17078",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:42:17.740Z",
+			"reviewedAt": "2026-09-30T08:46:46.546Z",
+			"sha256": "31a72cfb0f9cea38851d406a1a00b9edaeab26befb9188b6c0a8a3067f686b3c",
+			"bytes": 271892,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"ChatUI.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-chat.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-apps.tauri.json",
+			"planSha256": "c28de6e0adb61aa69079ff42c70698dbcb7a25e2d7d2fef6552cb9b9e37b7f15",
+			"fixtureSha256": "09cb950f3a2db8093221a0b963c654976bc90778651f3c1cc64f687bb14112b1",
+			"scenario": "chat-ui",
+			"sourceSha256": "12b9f5271b7bf29302686acbb56d4f5671626b41572db574ee81874f185a820f",
+			"url": "http://127.0.0.1:3137/store?id=docs-app",
+			"capturedAt": "2026-09-30T08:37:06.470Z",
+			"reviewedAt": "2026-09-30T08:37:58.110Z",
+			"sha256": "4733ed1918df483c73aa535d8cbe541af59caef40e74d430f8efc78f98ea5476",
+			"bytes": 60442,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"CollapsingNodes.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "c9bebeb2bd142508c7da213f4c4a13f361e137c86407c7e127555fc1e41a2026",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "collapsing-nodes",
+			"sourceSha256": "5e97da4757032e1ba9f291afe005aa2d40a615dc16c2cb749d9d03b2d23bcbfc",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:14:54.339Z",
+			"reviewedAt": "2026-09-30T08:18:49.367Z",
+			"sha256": "d82c3ecce01f59134bd2068e5a6a8633bcdc209cda99f1ab4dcfc27138fcc9b8",
+			"bytes": 267366,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"ConnectionsWires.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "d8f7bbf3f61019216f65e80a787f5d5487e081d2a5d9aca0d86431c20b5fefbe",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "connections-wires",
+			"sourceSha256": "d3ba168e59c59cc74a616ef8da37fb46858fce89b797acdf57458bc06a58ef55",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board&node=docs-layer",
+			"capturedAt": "2026-09-30T08:20:57.127Z",
+			"reviewedAt": "2026-09-30T08:24:37.237Z",
+			"sha256": "dbc5eb1d9c16af62c0a3f60e678e6680773319c4b9cda975dac461e0e47a6a2d",
+			"bytes": 129658,
+			"mode": "viewport",
+			"pixels": {
+				"width": 2200,
+				"height": 1160
+			},
+			"render": {
+				"viewport": {
+					"width": 1100,
+					"height": 580,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"CreateApp.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-apps.tauri.json",
+			"planSha256": "27ade83712ab674ab7e7f525b60290c239bddcfffacc968f6840b59d4552dbec",
+			"fixtureSha256": "09cb950f3a2db8093221a0b963c654976bc90778651f3c1cc64f687bb14112b1",
+			"scenario": "create-app",
+			"sourceSha256": "ec75a523ecba575513375622bb1d082520ddcc25134c93bb57643b560d30c451",
+			"url": "http://127.0.0.1:3137/library?capture=docs",
+			"capturedAt": "2026-09-30T08:26:02.460Z",
+			"reviewedAt": "2026-09-30T08:28:22.599Z",
+			"sha256": "4cd8c675497516d11e274a4ee9980e39103af9bde61d23ca24abef171b54e564",
+			"bytes": 170236,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"DataStudioOverview.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-ontology.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-ontology.tauri.json",
+			"planSha256": "2d9e726461c62a8fede1fba1343cff8a9851285eca55de6d5b370dab723d57fc",
+			"fixtureSha256": "f2b28114c9fbff79dd307ea42de12f1e74f38fa953194623eb0e41d2d0e58624",
+			"scenario": "data-studio-overview",
+			"sourceSha256": "db5109740230eea02af919deb23f1a83a11e26005fe91ed53bbe2561a01c0030",
+			"url": "http://127.0.0.1:3137/library/config/explore?id=docs-app&capture=docs",
+			"capturedAt": "2026-09-30T08:42:01.585Z",
+			"reviewedAt": "2026-09-30T08:49:15.941Z",
+			"sha256": "8b82b1a69de4d6d500e9ad04c67877f09f5f0409597ecd574ea6c66d53c64c93",
+			"bytes": 298856,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"DeveloperModeCard.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-developer-mode.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-developer-mode.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "3eaf44b2e9ca32186959381a94b6ff03bc3db7cd8153f75c5dba1218f9c5828a",
+			"fixtureSha256": "44ad767069a38c2c1a2d2c950f79b69887ca2de490a489f6686b4afe4fc4bd5b",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "settings-developer-mode",
+			"sourceSha256": "b67320c45cc6aec313b2b94e4889c7aad121e8e69999eba34c6f5308e3ff338d",
+			"url": "http://127.0.0.1:3137/settings?capture=docs",
+			"capturedAt": "2026-09-30T08:45:20.845Z",
+			"reviewedAt": "2026-09-30T08:51:43.029Z",
+			"sha256": "7e2bf919352445e66f12d174a31aaa9bc21a4c475d7f0cf189b5f54a8afca7e8",
+			"bytes": 52894,
+			"mode": "element",
+			"selector": "#developer-mode-card",
+			"pixels": {
+				"width": 2704,
+				"height": 376
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 350
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"DeveloperModeSettings.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-developer-mode.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-developer-mode.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "3eaf44b2e9ca32186959381a94b6ff03bc3db7cd8153f75c5dba1218f9c5828a",
+			"fixtureSha256": "44ad767069a38c2c1a2d2c950f79b69887ca2de490a489f6686b4afe4fc4bd5b",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "settings-developer-mode",
+			"sourceSha256": "b67320c45cc6aec313b2b94e4889c7aad121e8e69999eba34c6f5308e3ff338d",
+			"url": "http://127.0.0.1:3137/settings?capture=docs",
+			"capturedAt": "2026-09-30T08:45:50.920Z",
+			"reviewedAt": "2026-09-30T08:51:43.031Z",
+			"sha256": "1a4fba68d2fc5f8f48931522c786fb5384f081f588dd03f22c668b517bfcf846",
+			"bytes": 788790,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 350
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"DeveloperModeTour.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-developer-mode.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-developer-mode.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "cd718b06e41cff7b0856defef01f15b024cec16fe1d72f41c211d4e58c443d74",
+			"fixtureSha256": "44ad767069a38c2c1a2d2c950f79b69887ca2de490a489f6686b4afe4fc4bd5b",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "welcome-tour-developer-mode",
+			"sourceSha256": "c12a9bfeb0c40cb451f6a38cdcf9d6ec1e331a1cf886c8302ded2c7ed9037561",
+			"url": "http://127.0.0.1:3137/?capture=docs",
+			"capturedAt": "2026-09-30T08:46:04.892Z",
+			"reviewedAt": "2026-09-30T08:51:43.028Z",
+			"sha256": "e761ec972a312898533ef42a4f156b2d26cfdef3c00dd215506575deed65c1a4",
+			"bytes": 565940,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 350
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"DrawPin.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "c9bebeb2bd142508c7da213f4c4a13f361e137c86407c7e127555fc1e41a2026",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "draw-pin",
+			"sourceSha256": "0a7f00676a51ac8f535c154327d258eaeb864d905d299a66ca8ad54f53c19bcc",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:14:14.225Z",
+			"reviewedAt": "2026-09-30T08:18:49.370Z",
+			"sha256": "b7117f34e5ae7a0bf18c8cad367208b2df56e598825f4533fd88a5f3db220e87",
+			"bytes": 269064,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"EditingLayerPins.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "c9bebeb2bd142508c7da213f4c4a13f361e137c86407c7e127555fc1e41a2026",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "editing-layer-pins",
+			"sourceSha256": "31182f6f6b1a8da8eb5634598728963ff5d1942289651c2725949152d764dd6f",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:15:31.876Z",
+			"reviewedAt": "2026-09-30T08:18:49.378Z",
+			"sha256": "533dbf16a1a003a124c38fc88f65ec5440dddeaa039cf571b90fffaad3137ff8",
+			"bytes": 230490,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"FlowLikeNodes.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "c9bebeb2bd142508c7da213f4c4a13f361e137c86407c7e127555fc1e41a2026",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "flow-like-nodes",
+			"sourceSha256": "25d3ccb97266048b4b1e67f93e694ee51b2713e482f89d57d6ad84942d017603",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:12:43.747Z",
+			"reviewedAt": "2026-09-30T08:14:32.672Z",
+			"sha256": "d8d015ae1fefd2fa670d4cfbad3ba9ba03264bb595f4d4e452d6f4568f1d4aef",
+			"bytes": 264804,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"FlowLikeStudio.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "c9bebeb2bd142508c7da213f4c4a13f361e137c86407c7e127555fc1e41a2026",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "flow-like-studio",
+			"sourceSha256": "772c5463d6fee509a946bb074190e53fc762f096867c95da63859287d2bbc6a9",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:12:22.253Z",
+			"reviewedAt": "2026-09-30T08:13:20.253Z",
+			"sha256": "dd47d9859d679aedf4790b69cd05041da50b1193e26b0ecef28a142e907ea93a",
+			"bytes": 259592,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"FlowWithLayers.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "184521f67187ad4de89c33345b78bee11485cd06c95b522693631a07289e9f65",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "flow-with-layers",
+			"sourceSha256": "1180b144a46cf631e8ca50b06e22e357de1fb89a43b7f3af70e37127d7e9be3c",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:52:02.161Z",
+			"reviewedAt": "2026-09-30T08:53:05.575Z",
+			"sha256": "e06b03071499962935318a85dac274d9ce1162394812d6e5325a1fb3aacfaaaa",
+			"bytes": 12818,
+			"mode": "element",
+			"selector": ".react-flow__node[data-id=\"docs-layer\"]",
+			"pixels": {
+				"width": 416,
+				"height": 194
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"GenericPinTypes.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "950d4ddac26e847ffa693ee94e46d804730c8694af87b1561bab11159b70273c",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "generic-pin-types",
+			"sourceSha256": "43587194bcbac57aadaeed12bd42eca031d7eef5e27724721e2ee5ab5d2b92bb",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board&node=docs-generic-target",
+			"capturedAt": "2026-09-30T08:41:16.220Z",
+			"reviewedAt": "2026-09-30T08:42:35.306Z",
+			"sha256": "a9fe62a98a598ef5a66034b8f39b5aa7513941b4d426acb110b2313e6beb52c1",
+			"bytes": 86350,
+			"mode": "viewport",
+			"pixels": {
+				"width": 2200,
+				"height": 1000
+			},
+			"render": {
+				"viewport": {
+					"width": 1100,
+					"height": 500,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"HomeCustomize.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-start.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-start.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "cc30f36a02947c8cd27c3c9d08ced27492c3d59404cd95d17f0ff302831ce63b",
+			"fixtureSha256": "33d0824184365dfa486858c0cee94b078ded777cd0fe7be95a067e29d2ada089",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "customize-home",
+			"sourceSha256": "93bfb5f17ac9597c8da5ae4906eb2b668817846d1ec105c17647678ec7bc6786",
+			"url": "http://127.0.0.1:3137/?capture=docs",
+			"capturedAt": "2026-09-30T08:44:55.636Z",
+			"reviewedAt": "2026-09-30T08:46:46.540Z",
+			"sha256": "9b579ae88f0a9e8e6a3203fe537859e05b0c64f4c85519af4097beda7b85b8ff",
+			"bytes": 334152,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 350
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"HomeWidgets.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-start.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-start.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "cc30f36a02947c8cd27c3c9d08ced27492c3d59404cd95d17f0ff302831ce63b",
+			"fixtureSha256": "33d0824184365dfa486858c0cee94b078ded777cd0fe7be95a067e29d2ada089",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "customize-home",
+			"sourceSha256": "93bfb5f17ac9597c8da5ae4906eb2b668817846d1ec105c17647678ec7bc6786",
+			"url": "http://127.0.0.1:3137/?capture=docs",
+			"capturedAt": "2026-09-30T08:44:40.044Z",
+			"reviewedAt": "2026-09-30T08:46:46.537Z",
+			"sha256": "7e2d9f2916a64e985a6378824ad6346f47983b7dbcf604abac0b7c7dc8bac5a9",
+			"bytes": 398902,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 350
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"InsideLayers.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "c9bebeb2bd142508c7da213f4c4a13f361e137c86407c7e127555fc1e41a2026",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "inside-layers",
+			"sourceSha256": "0a8d748d09d830a4284f5e7b83c1349925c4a4e880ef0cdc2038412066072983",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:15:53.457Z",
+			"reviewedAt": "2026-09-30T08:18:49.380Z",
+			"sha256": "ffca3bf2fa9dd4c238ecdd105b054d279b491a4e783d4f6b8813748d38c29c63",
+			"bytes": 214584,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"LandingPage.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-start.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-start.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "cc30f36a02947c8cd27c3c9d08ced27492c3d59404cd95d17f0ff302831ce63b",
+			"fixtureSha256": "33d0824184365dfa486858c0cee94b078ded777cd0fe7be95a067e29d2ada089",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "home-and-profile-menu",
+			"sourceSha256": "41b711d9ab4300ca70a1f4c7ed59b69aa6c5d3a1c3af3fd95d698ef1bee45364",
+			"url": "http://127.0.0.1:3137/?capture=docs",
+			"capturedAt": "2026-09-30T08:42:08.026Z",
+			"reviewedAt": "2026-09-30T08:46:46.531Z",
+			"sha256": "ad006477f853eeef88731a5e88b4aaa048dab4c6dc5201271f395cc46fba0b4e",
+			"bytes": 430710,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 350
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"LoadingFirstModels.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-start.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-start.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "cc30f36a02947c8cd27c3c9d08ced27492c3d59404cd95d17f0ff302831ce63b",
+			"fixtureSha256": "33d0824184365dfa486858c0cee94b078ded777cd0fe7be95a067e29d2ada089",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "first-use",
+			"sourceSha256": "f98982460a9b97561bbbdfa3ea157a3c0e77e8b028841109554024cc3ae4f9ec",
+			"url": "http://127.0.0.1:3137/onboarding/download?profiles=starter-chatting&capture=docs",
+			"capturedAt": "2026-09-30T08:41:23.616Z",
+			"reviewedAt": "2026-09-30T08:46:46.526Z",
+			"sha256": "71552036b587c05fe38a75a276d24c50edd05e6df2bcf731b8573da6e26809c6",
+			"bytes": 211124,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 350
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"ModelCatalog.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-models.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-models.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "7b0c3a4d6d8d2a32c2041c7cd5f07f4f5d87cd1a84f0a0ac8b39af175b73fad0",
+			"fixtureSha256": "76a487299f961285bdf89ebeaf7e974e6edc9e21d7ac3dfb5d07bf4084b74612",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "model-catalog",
+			"sourceSha256": "38e2e9c41c87b0d2255131f66a58e29007ccb4b93a992fea4ceaba1b2f9e128d",
+			"url": "http://127.0.0.1:3137/settings/ai?capture=docs",
+			"capturedAt": "2026-09-30T08:52:02.643Z",
+			"reviewedAt": "2026-09-30T08:53:56.491Z",
+			"sha256": "34b0ab8bad1a8758cd3b0816909eafe9a9a22ef88b58bcbd062e857fffa7891c",
+			"bytes": 758026,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 350
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"NodeCatalog.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "c9bebeb2bd142508c7da213f4c4a13f361e137c86407c7e127555fc1e41a2026",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "node-catalog",
+			"sourceSha256": "aafb18c0afc22492f4100f55a4de92e15a0c595ccf17ff726a97da23c7d6d96f",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:13:10.987Z",
+			"reviewedAt": "2026-09-30T08:14:32.675Z",
+			"sha256": "d5fb38c5173fdd60882faceecd321048c963344fecff83e0152c4ed35059d301",
+			"bytes": 292164,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"OntologyActionEditor.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-ontology.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-ontology.tauri.json",
+			"planSha256": "2d9e726461c62a8fede1fba1343cff8a9851285eca55de6d5b370dab723d57fc",
+			"fixtureSha256": "f2b28114c9fbff79dd307ea42de12f1e74f38fa953194623eb0e41d2d0e58624",
+			"scenario": "ontology-actions",
+			"sourceSha256": "d30ec7ab88deec392f3dc71cb602265028d63b4c5770ec4982b0a387953f2f00",
+			"url": "http://127.0.0.1:3137/library/config/explore?id=docs-app&view=actions&capture=docs",
+			"capturedAt": "2026-09-30T08:45:13.160Z",
+			"reviewedAt": "2026-09-30T08:49:15.961Z",
+			"sha256": "40166f025d28e31e7c309d986953c2bf1fd7b21a2b83ac16910a50d2dc5282ca",
+			"bytes": 511500,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2480
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1240,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"OntologyActions.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-ontology.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-ontology.tauri.json",
+			"planSha256": "2d9e726461c62a8fede1fba1343cff8a9851285eca55de6d5b370dab723d57fc",
+			"fixtureSha256": "f2b28114c9fbff79dd307ea42de12f1e74f38fa953194623eb0e41d2d0e58624",
+			"scenario": "ontology-actions",
+			"sourceSha256": "d30ec7ab88deec392f3dc71cb602265028d63b4c5770ec4982b0a387953f2f00",
+			"url": "http://127.0.0.1:3137/library/config/explore?id=docs-app&view=actions&capture=docs",
+			"capturedAt": "2026-09-30T08:44:58.864Z",
+			"reviewedAt": "2026-09-30T08:49:15.954Z",
+			"sha256": "03d0ea97a7244ac07f4863bf604b7a42b99f35102ac5694c8c95b8c1f78d1079",
+			"bytes": 333260,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2480
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1240,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"OntologyGraphInspector.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-ontology.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-ontology.tauri.json",
+			"planSha256": "2d9e726461c62a8fede1fba1343cff8a9851285eca55de6d5b370dab723d57fc",
+			"fixtureSha256": "f2b28114c9fbff79dd307ea42de12f1e74f38fa953194623eb0e41d2d0e58624",
+			"scenario": "ontology-knowledge-graph",
+			"sourceSha256": "43c3aaab66bccc4d9fe7c8eaa4373f40b6127ded0aa2c3e4f51b688d9af89234",
+			"url": "http://127.0.0.1:3137/library/config/explore?id=docs-app&overlay=customer-operations&capture=docs",
+			"capturedAt": "2026-09-30T08:46:19.571Z",
+			"reviewedAt": "2026-09-30T08:49:15.972Z",
+			"sha256": "a60ab7c2a3f59cc61811f79f315503f62932e07170e969c8a5d22c699ab3c1ed",
+			"bytes": 322232,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"OntologyKnowledgeGraph.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-ontology.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-ontology.tauri.json",
+			"planSha256": "2d9e726461c62a8fede1fba1343cff8a9851285eca55de6d5b370dab723d57fc",
+			"fixtureSha256": "f2b28114c9fbff79dd307ea42de12f1e74f38fa953194623eb0e41d2d0e58624",
+			"scenario": "ontology-knowledge-graph",
+			"sourceSha256": "43c3aaab66bccc4d9fe7c8eaa4373f40b6127ded0aa2c3e4f51b688d9af89234",
+			"url": "http://127.0.0.1:3137/library/config/explore?id=docs-app&overlay=customer-operations&capture=docs",
+			"capturedAt": "2026-09-30T08:46:10.789Z",
+			"reviewedAt": "2026-09-30T08:49:15.969Z",
+			"sha256": "e59c5bb72256c1998a87b10772c1b5d120b231db0b035f5d639602ee481fb4ee",
+			"bytes": 332962,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"OntologyModel.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-ontology.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-ontology.tauri.json",
+			"planSha256": "2d9e726461c62a8fede1fba1343cff8a9851285eca55de6d5b370dab723d57fc",
+			"fixtureSha256": "f2b28114c9fbff79dd307ea42de12f1e74f38fa953194623eb0e41d2d0e58624",
+			"scenario": "ontology-model",
+			"sourceSha256": "84d35fd23727d7e561c696be8a80244fc5bf2d2309c97ac6f0f9e317767afab6",
+			"url": "http://127.0.0.1:3137/library/config/explore?id=docs-app&view=model&capture=docs",
+			"capturedAt": "2026-09-30T08:44:14.983Z",
+			"reviewedAt": "2026-09-30T08:49:15.949Z",
+			"sha256": "5760a9c60d9d3e9a4afc494dc208d697b3b7f4cd510d0c3c7de78d4e12503584",
+			"bytes": 430032,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"OntologyObjectInspector.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-ontology.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-ontology.tauri.json",
+			"planSha256": "2d9e726461c62a8fede1fba1343cff8a9851285eca55de6d5b370dab723d57fc",
+			"fixtureSha256": "f2b28114c9fbff79dd307ea42de12f1e74f38fa953194623eb0e41d2d0e58624",
+			"scenario": "ontology-object-explorer",
+			"sourceSha256": "38ff07d21c65fe71ad72d534135dfbae104fb7d8f6183d980051020d76bcca6d",
+			"url": "http://127.0.0.1:3137/library/config/explore?id=docs-app&view=objects&source=customer-operations&capture=docs",
+			"capturedAt": "2026-09-30T08:43:22.219Z",
+			"reviewedAt": "2026-09-30T08:49:15.945Z",
+			"sha256": "70454f2bb6f077e0b5ad01e2516a43ca3c7596a63cfe1335e69c0d0ef8df97a4",
+			"bytes": 351642,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"OntologyObjects.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-ontology.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-ontology.tauri.json",
+			"planSha256": "2d9e726461c62a8fede1fba1343cff8a9851285eca55de6d5b370dab723d57fc",
+			"fixtureSha256": "f2b28114c9fbff79dd307ea42de12f1e74f38fa953194623eb0e41d2d0e58624",
+			"scenario": "ontology-object-explorer",
+			"sourceSha256": "38ff07d21c65fe71ad72d534135dfbae104fb7d8f6183d980051020d76bcca6d",
+			"url": "http://127.0.0.1:3137/library/config/explore?id=docs-app&view=objects&source=customer-operations&capture=docs",
+			"capturedAt": "2026-09-30T08:42:56.716Z",
+			"reviewedAt": "2026-09-30T08:49:15.943Z",
+			"sha256": "004aba6aebf4d2b51d04480b6161f10a3d391341d6fab15edb7f1d8b68013138",
+			"bytes": 338632,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"OntologyRelationships.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-ontology.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-ontology.tauri.json",
+			"planSha256": "2d9e726461c62a8fede1fba1343cff8a9851285eca55de6d5b370dab723d57fc",
+			"fixtureSha256": "f2b28114c9fbff79dd307ea42de12f1e74f38fa953194623eb0e41d2d0e58624",
+			"scenario": "ontology-model",
+			"sourceSha256": "84d35fd23727d7e561c696be8a80244fc5bf2d2309c97ac6f0f9e317767afab6",
+			"url": "http://127.0.0.1:3137/library/config/explore?id=docs-app&view=model&capture=docs",
+			"capturedAt": "2026-09-30T08:44:25.821Z",
+			"reviewedAt": "2026-09-30T08:49:15.952Z",
+			"sha256": "bf87af45ef475ec789abde28a1aadbabf5068efe96fb4c960010630fd931735c",
+			"bytes": 355660,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"OntologySharing.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-ontology-sharing.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-ontology.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "b37aff63ac298ec0d888c18757e25fe112d63251225ed8333f99c77b68a5c6da",
+			"fixtureSha256": "f2b28114c9fbff79dd307ea42de12f1e74f38fa953194623eb0e41d2d0e58624",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "ontology-sharing",
+			"sourceSha256": "9924d7f9c42da07c36341fa6f366e82c95cff3e8c1da6ce66c28dc978c630f18",
+			"url": "http://127.0.0.1:3137/library/config/explore?id=docs-app&view=sharing&capture=docs",
+			"capturedAt": "2026-09-30T08:47:50.823Z",
+			"reviewedAt": "2026-09-30T08:53:05.594Z",
+			"sha256": "ca8db1d78c52af887b23dcdbd9fea659f04f234458bf48a436cf983bdcb6f083",
+			"bytes": 356556,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"PageBuilder.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-apps.tauri.json",
+			"planSha256": "27ade83712ab674ab7e7f525b60290c239bddcfffacc968f6840b59d4552dbec",
+			"fixtureSha256": "09cb950f3a2db8093221a0b963c654976bc90778651f3c1cc64f687bb14112b1",
+			"scenario": "page-builder",
+			"sourceSha256": "5d03b437deb12c9b45994daac7e921c2041a2bc1f31d2cce129be7b728a3a981",
+			"url": "http://127.0.0.1:3137/page-builder?id=support-operations-page&app=docs-app&board=docs-board&capture=docs",
+			"capturedAt": "2026-09-30T08:31:42.024Z",
+			"reviewedAt": "2026-09-30T08:35:12.257Z",
+			"sha256": "4a68d0cc483824b25e752a77b844f6eebfd9e55e9cec3abcbda8d7963cdc52c5",
+			"bytes": 234414,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"PagesOverview.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-apps.tauri.json",
+			"planSha256": "27ade83712ab674ab7e7f525b60290c239bddcfffacc968f6840b59d4552dbec",
+			"fixtureSha256": "09cb950f3a2db8093221a0b963c654976bc90778651f3c1cc64f687bb14112b1",
+			"scenario": "pages-overview",
+			"sourceSha256": "bd58175863e86ec7cc93f23492bbb86ca21c362323799331506db18b45ecce7c",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board&capture=docs",
+			"capturedAt": "2026-09-30T08:30:51.370Z",
+			"reviewedAt": "2026-09-30T08:31:51.806Z",
+			"sha256": "7fabfcc34afdb434e448414bc2dcf97c2bf7f65e66448513fc1d67d9a95ee160",
+			"bytes": 352960,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"PlaceholdersForPrototyping.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "d8f7bbf3f61019216f65e80a787f5d5487e081d2a5d9aca0d86431c20b5fefbe",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "placeholders-for-prototyping",
+			"sourceSha256": "fd5f9f75007609f40be4602576379aef7bc697bf8e1ca88e40f15cbe807e60b2",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:25:33.231Z",
+			"reviewedAt": "2026-09-30T08:28:22.607Z",
+			"sha256": "4ea2b1aab25cd2a398e8795a96703a8ec31973f9a021505e5aa5661bd52d6fa8",
+			"bytes": 285366,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"ProfileSettings.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-start.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-start.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "cc30f36a02947c8cd27c3c9d08ced27492c3d59404cd95d17f0ff302831ce63b",
+			"fixtureSha256": "33d0824184365dfa486858c0cee94b078ded777cd0fe7be95a067e29d2ada089",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "profile-settings",
+			"sourceSha256": "3e83e2ecf7d4b8ee3f7fb5e5c494adc4b1714c0e26d0f39c6770dba9bb4ececb",
+			"url": "http://127.0.0.1:3137/settings/profiles?capture=docs",
+			"capturedAt": "2026-09-30T08:43:09.942Z",
+			"reviewedAt": "2026-09-30T08:49:15.921Z",
+			"sha256": "8234c209f11cec4c88ee8130acef0a8cf22fd6c8699f90afd0b9a0a0ad5c3101",
+			"bytes": 203646,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 350
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"QuickActionEvent.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-apps.tauri.json",
+			"planSha256": "8ed63e6b98cd40719dcc0d410d0aa3eae093ea6d05d9204680891f314d6e552f",
+			"fixtureSha256": "09cb950f3a2db8093221a0b963c654976bc90778651f3c1cc64f687bb14112b1",
+			"scenario": "quick-action-event",
+			"sourceSha256": "118bbc7c4d112ec3925c111e900c4b92d47c54d252eef5ef1de85afe9e7d5c84",
+			"url": "http://127.0.0.1:3137/library/config/pages?id=docs-app&eventId=triage-selected-request&capture=docs",
+			"capturedAt": "2026-09-30T08:44:25.537Z",
+			"reviewedAt": "2026-09-30T08:49:15.928Z",
+			"sha256": "42be88cd60d29211bb497feaa0c7d1ba3067928c222f30e4d8b4456fb322ece4",
+			"bytes": 323358,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"QuickStartFlow.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-quickstart.plan.json",
+			"appCommit": "951d0dfb621fa4719ca52fc8dbab82ddf96b7da6",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-quickstart.tauri.json",
+			"planSha256": "0d6642d8fc1574fcdcd4ce8adc42f8c4ce77dd43620bae0794a1c5bf20795e0c",
+			"fixtureSha256": "ebf1d897452aebd2afd04063a0408fc4e0daa7c19403aa06810e6d1ff398b370",
+			"scenario": "quickstart-flow",
+			"sourceSha256": "1038c07d9197887b76c9a3701b90299a5d03fb9aeb4ce3d27cae1dccc3573f26",
+			"url": "http://127.0.0.1:3047/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T09:22:27.856Z",
+			"reviewedAt": "2026-09-30T09:22:52.137Z",
+			"sha256": "954057cd199d434a2355806ba5807e0bbb441257658ee6411d6f61d7fe553271",
+			"bytes": 142976,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 1520
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 760,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"RightsAndRoles.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-roles.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-roles.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "15547eb52b6d8196998ffb4e7865408de271ec659cf9ff4e77a34034f993ea95",
+			"fixtureSha256": "c8093f0d50e38dc6e17c2197b2379a5a89eabfbc2dbb91437c6794d08846e555",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "roles",
+			"sourceSha256": "aceaa2279dfa2febadfe9dd043d1b43f4a6ceb2415549d0deb9bd2b149a199fa",
+			"url": "http://127.0.0.1:3137/library/config/roles?id=docs-app&capture=docs",
+			"capturedAt": "2026-09-30T08:54:18.875Z",
+			"reviewedAt": "2026-09-30T08:55:09.316Z",
+			"sha256": "e693a0a74e3ac76636a64a6070a48950e52551dea57374af3a4a348028c94a7c",
+			"bytes": 337684,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"RouteConfiguration.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-apps.tauri.json",
+			"planSha256": "8ed63e6b98cd40719dcc0d410d0aa3eae093ea6d05d9204680891f314d6e552f",
+			"fixtureSha256": "09cb950f3a2db8093221a0b963c654976bc90778651f3c1cc64f687bb14112b1",
+			"scenario": "route-configuration",
+			"sourceSha256": "6d4fd90c03fc826ccc74e6dd89f310753bd2bcf34f8dc3c42f48348e6dc66552",
+			"url": "http://127.0.0.1:3137/library/config/pages?id=docs-app&eventId=triage-selected-request&capture=docs",
+			"capturedAt": "2026-09-30T08:42:48.793Z",
+			"reviewedAt": "2026-09-30T08:46:46.544Z",
+			"sha256": "c7a2dba258a2dbfe20393d0d2713a7bf67a383a00669bbe7cb40a6cb7001abd0",
+			"bytes": 369344,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"RoutesOverview.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-apps.tauri.json",
+			"planSha256": "8ed63e6b98cd40719dcc0d410d0aa3eae093ea6d05d9204680891f314d6e552f",
+			"fixtureSha256": "09cb950f3a2db8093221a0b963c654976bc90778651f3c1cc64f687bb14112b1",
+			"scenario": "routes-overview",
+			"sourceSha256": "98affaf69d41adb0e582d8a91f220bbb075e9543daf161f016dff2859ee49d4c",
+			"url": "http://127.0.0.1:3137/library/config/pages?id=docs-app&capture=docs",
+			"capturedAt": "2026-09-30T08:41:59.220Z",
+			"reviewedAt": "2026-09-30T08:46:46.542Z",
+			"sha256": "28886e5ec5e5e976070bc0401f30f4c809d4b93393286bb3c7da94d3ebae478a",
+			"bytes": 254974,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"RunsAndLogs.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-runs.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-runs.tauri.json",
+			"planSha256": "49548060ac16d4cbe475cc3d932bd57f1c447fb87171d8f11d608f80cb7cb7a9",
+			"fixtureSha256": "8bcdb0fba88cd0d78d094391a9d4892027bfc28a1b5a25070832d5e470f24956",
+			"scenario": "runs-and-logs",
+			"sourceSha256": "a474b98e4007a27ab9b1b353730c058cc3d8f6d943f3bc0b077d36188b92fbf3",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:41:25.717Z",
+			"reviewedAt": "2026-09-30T08:42:35.304Z",
+			"sha256": "effe46364d8dbf93ac0a64837367e43f7d16509e2bd5b9d37e08f5858891b93c",
+			"bytes": 249584,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"RuntimeVariables.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-setup.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-setup.tauri.json",
+			"planSha256": "38283e3ef44f0723a58a5701c8c15ce010a6bd40f2b163cb278795a0b3ced55a",
+			"fixtureSha256": "45134abf375bc6292af11efecff4bebb2a3f5ca78a4b10c8416877f5df0562b1",
+			"scenario": "runtime-variables",
+			"sourceSha256": "e59e9c444aa099de6c8c8e6b0a4419af75a40b0661f6b0e8fce629c7d77907dc",
+			"url": "http://127.0.0.1:3137/library/config/setup?id=docs-app&capture=docs",
+			"capturedAt": "2026-09-30T08:39:57.769Z",
+			"reviewedAt": "2026-09-30T08:40:40.189Z",
+			"sha256": "022b95855c7d5c376f690b4ab9add6ddf2a44733c2c27991dfa627daa05bec23",
+			"bytes": 280864,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"SelectingFirstProfile.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-start.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-start.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "cc30f36a02947c8cd27c3c9d08ced27492c3d59404cd95d17f0ff302831ce63b",
+			"fixtureSha256": "33d0824184365dfa486858c0cee94b078ded777cd0fe7be95a067e29d2ada089",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "first-use",
+			"sourceSha256": "f98982460a9b97561bbbdfa3ea157a3c0e77e8b028841109554024cc3ae4f9ec",
+			"url": "http://127.0.0.1:3137/onboarding?capture=docs",
+			"capturedAt": "2026-09-30T08:40:04.127Z",
+			"reviewedAt": "2026-09-30T08:46:46.523Z",
+			"sha256": "414921ad94b05784ad0bfcb6cd4d677981b7d5bd2c320ff113c986156935571d",
+			"bytes": 850326,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 350
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"SetLayerName.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "c9bebeb2bd142508c7da213f4c4a13f361e137c86407c7e127555fc1e41a2026",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "set-layer-name",
+			"sourceSha256": "62135839af82b042953fe01745319a46c9dc8a3b36bb6fcc42648f5130298309",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:15:11.498Z",
+			"reviewedAt": "2026-09-30T08:18:49.382Z",
+			"sha256": "5380980d66803d57ad672a45b212b37506d3d700ab672cc4bda75fb6a2d2d95f",
+			"bytes": 195418,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"SetVariableType.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "d8f7bbf3f61019216f65e80a787f5d5487e081d2a5d9aca0d86431c20b5fefbe",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "set-variable-type",
+			"sourceSha256": "7c89d5ea71df59f46ef606fe814b653033a14422ceb67d1c6237698630826266",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:29:13.062Z",
+			"reviewedAt": "2026-09-30T08:31:42.669Z",
+			"sha256": "5c5739959fd6d9a5cbdead8b38b060de1d1d3968acaae9f1ea1066e2388fb5a6",
+			"bytes": 329270,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"SetVariableValue.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "d8f7bbf3f61019216f65e80a787f5d5487e081d2a5d9aca0d86431c20b5fefbe",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "set-variable-value",
+			"sourceSha256": "34b9e63f51ce22b3e05dab8b28692a9733051645d31195e7776d48383e80da05",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:30:16.493Z",
+			"reviewedAt": "2026-09-30T08:31:51.808Z",
+			"sha256": "4dcf2db09fa2ef1ce81a54c5bf029a61f5ebd9a64c968897d9cf575debef3b05",
+			"bytes": 346470,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"ShareApps.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-sharing.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-sharing.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "bfc921b04449b8563ef1fba9727914463890bfb97b7836afb63ebf448ebd2260",
+			"fixtureSha256": "8bfae3b3d5828d361d09fe547a271b06b017f07f340426c7a3ebfdd63cd670e9",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "team-access",
+			"sourceSha256": "b656f5a1d3f5a916917f8db980cc8adf7a1e7b625fc162be7e22f2c84300c0ee",
+			"url": "http://127.0.0.1:3137/library/config/team?id=docs-app&capture=docs",
+			"capturedAt": "2026-09-30T08:44:05.059Z",
+			"reviewedAt": "2026-09-30T08:49:15.939Z",
+			"sha256": "4bdc0958377c3770911dab70b3c458d474fd63c9f1b5ef7c5d9e480c6b857108",
+			"bytes": 337252,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"allowance": "The hub hook aborts its first fixture-backed request when the synthetic authenticated profile scope settles; the replacement request renders Access successfully."
+				}
+			]
+		},
+		"SwitchAndEditProfiles.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-start.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-start.tauri.json",
+			"httpFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-account.http.json",
+			"planSha256": "cc30f36a02947c8cd27c3c9d08ced27492c3d59404cd95d17f0ff302831ce63b",
+			"fixtureSha256": "33d0824184365dfa486858c0cee94b078ded777cd0fe7be95a067e29d2ada089",
+			"httpFixtureSha256": "dd5282dad88551c9855a3b3a509853d8f3edd678211db8eddc430e8a2337932d",
+			"scenario": "home-and-profile-menu",
+			"sourceSha256": "41b711d9ab4300ca70a1f4c7ed59b69aa6c5d3a1c3af3fd95d698ef1bee45364",
+			"url": "http://127.0.0.1:3137/?capture=docs",
+			"capturedAt": "2026-09-30T08:42:11.626Z",
+			"reviewedAt": "2026-09-30T08:46:46.533Z",
+			"sha256": "aae2edc3f61aaa13e5db7d36c5466b8445c5dc95dd9c861138f40bc49112b8fb",
+			"bytes": 32424,
+			"mode": "element",
+			"selector": "[data-slot=\"dropdown-menu-content\"][data-state=\"open\"]",
+			"pixels": {
+				"width": 496,
+				"height": 566
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 350
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"TypedCatalogSuggestions.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "c9bebeb2bd142508c7da213f4c4a13f361e137c86407c7e127555fc1e41a2026",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "typed-catalog-suggestions",
+			"sourceSha256": "c9f7247ca2d445ec65b272c5991266b699d47f76c1ea546f7a23f5c0abd83171",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:14:35.954Z",
+			"reviewedAt": "2026-09-30T08:18:49.376Z",
+			"sha256": "6d6ede7369429b0dfd7e47fc45c5035b2fd459a6ed0ca4f4adc3d8aba60b3955",
+			"bytes": 300328,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"WidgetBuilder.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-apps.tauri.json",
+			"planSha256": "27ade83712ab674ab7e7f525b60290c239bddcfffacc968f6840b59d4552dbec",
+			"fixtureSha256": "09cb950f3a2db8093221a0b963c654976bc90778651f3c1cc64f687bb14112b1",
+			"scenario": "widget-builder",
+			"sourceSha256": "d218476682b9b2240ce0a93048d7d07f18c3f523de78163aaf49f8ffc7e5edc0",
+			"url": "http://127.0.0.1:3137/widget?id=support-health-widget&app=docs-app&capture=docs",
+			"capturedAt": "2026-09-30T08:40:06.810Z",
+			"reviewedAt": "2026-09-30T08:42:35.311Z",
+			"sha256": "838d4c979fd0cf50be60f27616d39c1f2fe2e67f8ea6ced2b6cecc92c12c025c",
+			"bytes": 130870,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"WidgetsOverview.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-apps.tauri.json",
+			"planSha256": "8ed63e6b98cd40719dcc0d410d0aa3eae093ea6d05d9204680891f314d6e552f",
+			"fixtureSha256": "09cb950f3a2db8093221a0b963c654976bc90778651f3c1cc64f687bb14112b1",
+			"scenario": "widgets-overview",
+			"sourceSha256": "aee4f73fb3df61cfd61e563753021a2890666b244e51409263d1e2f4f5692487",
+			"url": "http://127.0.0.1:3137/library/config/widgets?id=docs-app&widgetId=support-health-widget&capture=docs",
+			"capturedAt": "2026-09-30T08:43:52.471Z",
+			"reviewedAt": "2026-09-30T08:49:15.924Z",
+			"sha256": "f494486b7d21848529673c9780d42a5365a8ce82a7d265d3b4a8e44c42058fe3",
+			"bytes": 309908,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 500
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"allowance": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		},
+		"WorkingWithVariables.webp": {
+			"plan": "apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json",
+			"appCommit": "780a902bc73a02805f9bc71abdd27aad1b994627",
+			"workingTreeDirty": true,
+			"staticAssetsFromDisk": "apps/desktop/.next/dev/static",
+			"tauriFixture": "apps/desktop/lib/doc-screenshot/fixtures/docs-studio.tauri.json",
+			"planSha256": "d8f7bbf3f61019216f65e80a787f5d5487e081d2a5d9aca0d86431c20b5fefbe",
+			"fixtureSha256": "6d3f844fa182d9bbc7f47b173950184cc0384024fe47db7eabffbe35e8ebc3b7",
+			"scenario": "working-with-variables",
+			"sourceSha256": "f2e3ae6fd0251b6b3bb78b981c77a8ed2efde05399f304131e0b6e382a3f3195",
+			"url": "http://127.0.0.1:3137/flow?app=docs-app&id=docs-board",
+			"capturedAt": "2026-09-30T08:28:21.891Z",
+			"reviewedAt": "2026-09-30T08:31:42.674Z",
+			"sha256": "7dfe99bcc22ee107ad146125d2f2af0292ff05a2317be43aa6b8bf93e897790c",
+			"bytes": 274724,
+			"mode": "viewport",
+			"pixels": {
+				"width": 3248,
+				"height": 2120
+			},
+			"render": {
+				"viewport": {
+					"width": 1624,
+					"height": 1060,
+					"deviceScaleFactor": 2
+				},
+				"theme": "dark",
+				"locale": "en-US",
+				"timezone": "UTC",
+				"reducedMotion": true,
+				"colorProfile": "srgb",
+				"disableAnimations": true,
+				"hideScrollbars": true,
+				"settleMs": 600
+			},
+			"browser": {
+				"product": "Chromium",
+				"version": "Chrome/148.0.7778.97",
+				"headless": true
+			},
+			"diagnosticAllowances": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				},
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"allowance": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately."
+				}
+			]
+		}
+	}
+}

@@ -1300,5 +1300,13 @@
 	"exploreLeaveTitle": "",
 	"explorePreviewUnavailable": "",
 	"exploreRuleMatches": "",
-	"exploreSummarySpotlightVisible": ""
+	"exploreSummarySpotlightVisible": "",
+	"agentBackendOperationsDescription": "Événements anonymes sur le fonctionnement de la CLI. Les résultats et les durées couvrent le démarrage, les vérifications d’authentification, la découverte des modèles, les exécutions et l’arrêt.",
+	"agentErrorReports_many": "{{count}} rapports d’erreur",
+	"agentErrorReports_one": "{{count}} rapport d’erreur",
+	"agentErrorReports_other": "{{count}} rapports d’erreur",
+	"agentOperationP95": "Durée des opérations au 95e centile",
+	"agentOperation_many": "opérations",
+	"agentOperation_one": "opération",
+	"agentOperation_other": "opérations"
 }

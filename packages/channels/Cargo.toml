@@ -17,7 +17,13 @@ aws = [
     "dep:rustls",
     "dep:webpki-roots",
 ]
-azure = ["dep:jsonwebtoken", "dep:tokio-tungstenite", "dep:percent-encoding"]
+azure = [
+    "dep:jsonwebtoken",
+    "dep:tokio-tungstenite",
+    "dep:percent-encoding",
+    "dep:rustls",
+    "dep:webpki-roots",
+]
 gcp = ["dep:jsonwebtoken", "dep:eventsource-stream"]
 
 [dependencies]
@@ -39,11 +45,13 @@ aws-smithy-runtime-api = { version = "1", features = ["client"], optional = true
 http = { version = "1", optional = true }
 percent-encoding = { workspace = true, optional = true }
 rumqttc = { workspace = true, features = ["websocket", "use-rustls"], optional = true }
-rustls = { version = "0.23", optional = true }
-webpki-roots = { version = "1", optional = true }
 
 # ---- azure ----
 tokio-tungstenite = { workspace = true, optional = true }
+
+# ---- shared aws/azure ----
+rustls = { version = "0.23", optional = true }
+webpki-roots = { version = "1", optional = true }
 
 # ---- shared azure/gcp ----
 jsonwebtoken = { workspace = true, optional = true }

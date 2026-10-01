@@ -486,6 +486,9 @@
 		"set_current_profile": null,
 		"upsert_profile": null,
 		"update": null,
+		"$http": {
+			"/api/v1/info/home-defaults": {}
+		},
 		"get_app": {
 			"id": "docs-app",
 			"status": "Active",

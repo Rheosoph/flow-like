@@ -20,7 +20,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
-use tokio::sync::{OwnedSemaphorePermit, mpsc};
+use tokio::sync::{mpsc, OwnedSemaphorePermit};
 
 /// All events are sent as InterComEvent for consistent frontend handling
 pub type StreamEvent = InterComEvent;

@@ -5,6 +5,31 @@
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
+/* The menu button has an inverted surface, so its icon follows button text. */
+starlight-menu-button button {
+	--sl-icon-color: currentColor;
+}
+
+/* Reuse the application chart renderer within the documentation theme. */
+.docs-chart-preview {
+	--fl-chat-chart-1: #fb562d;
+	--fl-chat-chart-2: #8b5cf6;
+	--fl-chat-chart-3: #2fb8c6;
+	--fl-chat-chart-4: #f0a93c;
+	--fl-chat-chart-5: #4f7fe0;
+	--fl-chat-chart-6: #3fb27f;
+	--fl-chat-chart-7: #e0559b;
+	--fl-chat-chart-8: #7c8593;
+	--fl-chat-chart-text: var(--sl-color-text);
+	--fl-chat-chart-text-muted: var(--sl-color-gray-3);
+	--fl-chat-chart-grid: var(--sl-color-gray-5);
+	--fl-chat-chart-axis: var(--sl-color-gray-4);
+	--fl-chat-chart-empty: var(--sl-color-gray-6);
+	--fl-chat-chart-tooltip-background: var(--sl-color-bg);
+	--fl-chat-chart-tooltip-foreground: var(--sl-color-text);
+	--fl-chat-chart-tooltip-border: var(--sl-color-gray-5);
+}
+
 @theme {
 	/* Website/UI package brand tokens */
 	--sl-color-accent: oklch(0.6724 0.208 34.7886);
@@ -396,6 +421,7 @@ html:has(.node-doc) mobile-starlight-toc {
 
 .node-tag-row span,
 .node-subcategory-list span,
+.node-subcategory-list a,
 .node-pin-options span {
 	display: inline-flex;
 	max-width: 100%;
@@ -1228,4 +1254,19 @@ html:has(.node-doc) mobile-starlight-toc {
 		width: auto;
 		max-height: 72vh;
 	}
+}
+
+.node-load-more {
+	display: block;
+	margin: 1.5rem auto 0;
+	padding: 0.7rem 1.1rem;
+	color: var(--sl-color-text);
+	background: var(--sl-color-bg-nav);
+	border: 1px solid var(--flx-border);
+	border-radius: var(--radius);
+	cursor: pointer;
+}
+.node-load-more:hover,
+.node-load-more:focus-visible {
+	border-color: var(--sl-color-accent);
 }

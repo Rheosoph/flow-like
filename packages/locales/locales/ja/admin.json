@@ -1290,5 +1290,11 @@
 	"exploreLeaveTitle": "",
 	"explorePreviewUnavailable": "",
 	"exploreRuleMatches": "",
-	"exploreSummarySpotlightVisible": ""
+	"exploreSummarySpotlightVisible": "",
+	"agentBackendOperationsDescription": "匿名化されたCLIの稼働状況イベントです。結果と所要時間には、起動、認証確認、モデル検出、実行、終了が含まれます。",
+	"agentErrorReports_one": "{{count}}件のエラーレポート",
+	"agentErrorReports_other": "{{count}}件のエラーレポート",
+	"agentOperation_one": "件の操作",
+	"agentOperation_other": "件の操作",
+	"agentOperationP95": "操作時間の95パーセンタイル"
 }

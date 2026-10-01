@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Input fixture</title>
+<style>body { font: 16px sans-serif; } input, textarea, [contenteditable] { display: block; margin: 4px; width: 300px; }</style>
+</head>
+<body>
+<form id="f1" onsubmit="event.preventDefault(); window.__log.push({t:'submit', id:'f1'});">
+  <input id="i_text" type="text">
+  <input id="i_prefilled" type="text" value="abc">
+  <input id="i_email" type="email" value="x@">
+  <input id="i_number" type="number">
+  <input id="i_password" type="password">
+  <input id="i_date" type="date">
+  <input id="i_color" type="color">
+  <input id="i_max" type="text" maxlength="3">
+  <input id="i_mask" type="text">
+  <input id="i_readonly" type="text" readonly value="ro">
+  <input id="i_disabled" type="text" disabled value="dis">
+  <input id="i_react" type="text" value="react">
+  <input id="i_next" type="text">
+</form>
+<textarea id="i_textarea">line</textarea>
+<div id="i_ce" contenteditable="true">Hello <b>ce</b></div>
+<div id="i_ce_empty" contenteditable="true"></div>
+<input id="i_hidden_display" type="text" style="display:none" value="hid">
+<input id="i_opacity0" type="text" style="opacity:0" value="op">
+<input id="i_offscreen" type="text" style="position:absolute;left:-5000px" value="off">
+<script>
+window.__log = [];
+const describe = (el) => el && (el.id || el.localName) || null;
+const types = ['focus','blur','keydown','keypress','keyup','beforeinput','input','change','compositionstart','compositionupdate','compositionend','select','textInput'];
+for (const el of document.querySelectorAll('input, textarea, [contenteditable]')) {
+  for (const t of types) {
+    el.addEventListener(t, (e) => {
+      const entry = { t, id: el.id, trusted: e.isTrusted };
+      if (e instanceof KeyboardEvent) Object.assign(entry, { key: e.key, code: e.code, keyCode: e.keyCode, which: e.which, charCode: e.charCode, shift: e.shiftKey, repeat: e.repeat, composing: e.isComposing, location: e.location });
+      if (e instanceof InputEvent) Object.assign(entry, { inputType: e.inputType, data: e.data, composing: e.isComposing });
+      if (t === 'textInput') entry.data = e.data;
+      if (t === 'input' || t === 'change' || t === 'keyup') entry.value = el.isContentEditable ? el.innerHTML : el.value;
+      window.__log.push(entry);
+    });
+  }
+}
+document.getElementById('i_mask').addEventListener('keydown', (e) => { if (e.key === 'x') e.preventDefault(); });
+(() => {
+  const el = document.getElementById('i_react');
+  const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  let tracked = el.value;
+  Object.defineProperty(el, 'value', {
+    configurable: true,
+    get() { return desc.get.call(this); },
+    set(v) { tracked = String(v); desc.set.call(this, v); },
+  });
+  el.addEventListener('input', () => {
+    const now = desc.get.call(el);
+    window.__log.push({ t: 'react-onChange', fired: tracked !== now, value: now });
+    tracked = now;
+  });
+})();
+window.__state = () => {
+  const out = {};
+  for (const el of document.querySelectorAll('input, textarea, [contenteditable]')) {
+    out[el.id] = el.isContentEditable ? el.innerHTML : el.value;
+  }
+  out.__active = describe(document.activeElement);
+  const sel = window.getSelection();
+  out.__selection = sel && sel.rangeCount ? { anchor: describe(sel.anchorNode && (sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement)), offset: sel.anchorOffset } : null;
+  const a = document.activeElement;
+  if (a && typeof a.selectionStart === 'number') out.__caret = [a.selectionStart, a.selectionEnd];
+  return out;
+};
+</script>
+</body>
+</html>

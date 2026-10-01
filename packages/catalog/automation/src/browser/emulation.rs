@@ -313,10 +313,9 @@ impl NodeLogic for BrowserSetEmulationNode {
         };
         settings.commands("")?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
         let current_user_agent = if settings.needs_current_user_agent() {
-            driver
-                .execute("return navigator.userAgent;", vec![])
+            page.probe("return navigator.userAgent;", vec![])
                 .await?
                 .json()
                 .as_str()
@@ -326,9 +325,9 @@ impl NodeLogic for BrowserSetEmulationNode {
             String::new()
         };
         for (method, params) in settings.commands(&current_user_agent)? {
-            super::cdp::cdp(&driver, method, params).await?;
+            super::cdp::send(&page, method, params).await?;
         }
-        drop(driver);
+        drop(page);
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -435,7 +434,7 @@ impl NodeLogic for BrowserSetExtraHeadersNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use super::cdp::cdp;
+        use super::cdp::send;
         context.check_cancelled()?;
         context.deactivate_exec_pin("exec_out").await?;
         let session: AutomationSession = context.evaluate_pin("session").await?;
@@ -443,15 +442,15 @@ impl NodeLogic for BrowserSetExtraHeadersNode {
         let headers: Value = context.evaluate_pin("headers").await?;
         let headers = extra_headers(&headers)?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        cdp(&driver, "Network.enable", json!({})).await?;
-        cdp(
-            &driver,
+        let page = session.browser_page(context).await?;
+        send(&page, "Network.enable", json!({})).await?;
+        send(
+            &page,
             "Network.setExtraHTTPHeaders",
             json!({"headers": headers}),
         )
         .await?;
-        drop(driver);
+        drop(page);
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -533,17 +532,17 @@ impl NodeLogic for BrowserBlockUrlsNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use super::cdp::cdp;
+        use super::cdp::send;
         context.check_cancelled()?;
         context.deactivate_exec_pin("exec_out").await?;
         let session: AutomationSession = context.evaluate_pin("session").await?;
         require_chromium(&session, "URL blocking")?;
         let patterns = blocked_url_patterns(context.evaluate_pin("patterns").await?)?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        cdp(&driver, "Network.enable", json!({})).await?;
-        cdp(&driver, "Network.setBlockedURLs", json!({"urls": patterns})).await?;
-        drop(driver);
+        let page = session.browser_page(context).await?;
+        send(&page, "Network.enable", json!({})).await?;
+        send(&page, "Network.setBlockedURLs", json!({"urls": patterns})).await?;
+        drop(page);
 
         context
             .set_pin_value("blocked_count", json!(patterns.len() as i64))

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Text fixture</title>
+<style>
+  body { font: 16px/1.3 sans-serif; margin: 8px; }
+  .before::before { content: "PRE "; }
+  .before::after { content: " POST"; }
+  .clipbox { width: 60px; height: 20px; overflow: hidden; position: relative; }
+  .clipbox > span { position: absolute; left: 200px; top: 0; }
+  #t_table td, #t_table th { border: 1px solid #999; }
+</style>
+</head>
+<body>
+<p id="t_plain">Hello world</p>
+<p id="t_nbsp">a&nbsp;&nbsp;b   c&nbsp;</p>
+<p id="t_ws">
+    leading and
+    trailing   spaces
+</p>
+<p id="t_upper" style="text-transform:uppercase">hello World straße</p>
+<p id="t_cap" style="text-transform:capitalize">hello world-foo o'neil snake_case éclair</p>
+<p id="t_lower" style="text-transform:lowercase">MiXeD CaSe</p>
+<div id="t_hidden_child">Visible <span style="display:none">DisplayNone</span> <span style="visibility:hidden">VisHidden</span> <span style="opacity:0">OpacityZero</span> <span aria-hidden="true">AriaHidden</span> end</div>
+<div id="t_display_none" style="display:none">None text <b>bold</b></div>
+<div id="t_vis_hidden" style="visibility:hidden">VH text <span id="t_vis_child_visible" style="visibility:visible">child visible</span></div>
+<div id="t_opacity0" style="opacity:0">Opacity zero text</div>
+<div id="t_aria_hidden" aria-hidden="true">Aria hidden text</div>
+<div id="t_hidden_attr" hidden>Hidden attr text</div>
+<div id="t_offscreen" style="position:absolute;left:-10000px;top:0">Offscreen text</div>
+<div id="t_far_below" style="position:absolute;top:5000px">Far below text</div>
+<div id="t_zero" style="width:0;height:0;overflow:hidden">Zero size overflow hidden</div>
+<div id="t_zero_visible_overflow" style="width:0;height:0">Zero size overflow visible</div>
+<div id="t_empty"></div>
+<div class="clipbox" id="t_clip_parent"><span id="t_clipped">Clipped away</span></div>
+<p id="t_before" class="before">Main</p>
+<div id="t_block">Line1<br>Line2<div>Block</div><p>Para</p>tail   <span>inline</span></div>
+<table id="t_table"><tr><th>H1</th><th>H2</th></tr><tr><td>c1</td><td>c2</td></tr></table>
+<ul id="t_list"><li>one</li><li>two</li></ul>
+<pre id="t_pre">  a
+    b  	tab</pre>
+<p id="t_prewrap" style="white-space:pre-wrap">x   y
+z</p>
+<input id="t_input" value="input value">
+<textarea id="t_textarea">textarea text</textarea>
+<select id="t_select"><option value="1">One</option><option value="2" selected>Two</option></select>
+<select id="t_select_hidden" style="display:none"><option id="t_option_in_hidden" value="h">HiddenOpt</option></select>
+<input id="t_input_hidden" type="hidden" value="hv">
+<details id="t_details"><summary id="t_summary">Summary</summary><span id="t_details_body">Details body</span></details>
+<div id="t_cv_hidden" style="content-visibility:hidden">Content visibility hidden</div>
+<noscript id="t_noscript">Noscript text</noscript>
+<div id="t_script_style">A<script>var x = "script text";</script><style>.x{color:red}</style>B</div>
+<div id="t_zw">zero&#8203;width&#8206;marks&#8207;here</div>
+<div id="t_emoji">Emoji 😀 and ä and 中文 and עברית</div>
+<div id="t_inline_blocks"><span style="display:inline-block">ib1</span><span style="display:inline-block">ib2</span></div>
+<div id="t_flex" style="display:flex"><span>f1</span><span>f2</span></div>
+<div id="t_grid" style="display:grid;grid-template-columns:1fr 1fr"><span>g1</span><span>g2</span></div>
+<div id="t_scale0" style="transform:scale(0)">Scaled to zero</div>
+<div id="t_clip_path" style="clip-path:inset(50%)">Clip path hidden</div>
+<div id="t_covered_wrap" style="position:relative;height:30px"><span id="t_covered">Covered text</span><div style="position:absolute;inset:0;background:#fff"></div></div>
+<svg id="t_svg" width="120" height="30"><text id="t_svg_text" x="0" y="20">SVG text</text></svg>
+<div id="t_shadow_host">Light <span slot="s">Slotted</span></div>
+<div id="t_shadow_host2"></div>
+<a id="t_link" href="/rel/path?q=1">Link text</a>
+<input id="t_checkbox" type="checkbox" checked>
+<input id="t_checkbox_prop" type="checkbox">
+<input id="t_disabled" disabled value="d">
+<button id="t_button" type="button">Button <b>bold</b></button>
+<label id="t_label" for="t_input">Label text</label>
+<div id="t_nested_vis"><span style="visibility:hidden">H<span style="visibility:visible">V</span>H</span></div>
+<script>
+  const root = document.getElementById('t_shadow_host').attachShadow({ mode: 'open' });
+  root.innerHTML = '<span id="in_shadow">Shadow text</span> <slot name="s"></slot>';
+  const root2 = document.getElementById('t_shadow_host2').attachShadow({ mode: 'open' });
+  root2.innerHTML = '<p>Only shadow <b>content</b></p>';
+  document.getElementById('t_checkbox_prop').checked = true;
+</script>
+</body>
+</html>

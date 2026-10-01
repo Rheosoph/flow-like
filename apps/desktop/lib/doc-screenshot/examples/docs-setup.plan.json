@@ -1,0 +1,79 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "desktop",
+	"outputDir": "apps/docs/src/assets",
+	"tauriFixture": "../fixtures/docs-setup.tauri.json",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 2
+		},
+		"theme": "dark",
+		"format": "webp",
+		"timeoutMs": 300000,
+		"settleMs": 500,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "runtime-variables",
+			"path": "/library/config/setup",
+			"query": {
+				"id": "docs-app",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "CRM_API_TOKEN"
+				},
+				{
+					"type": "fill",
+					"selector": "[data-setup-row] input[type=\"password\"]",
+					"value": "docs_crm_token_8fb2c1"
+				},
+				{
+					"type": "click",
+					"selector": "[data-setup-row]:has(input[type=\"password\"]) button[aria-label=\"Save on this device\"]"
+				},
+				{
+					"type": "fill",
+					"selector": "[data-setup-row] textarea",
+					"value": "https://support-api.eu.example"
+				},
+				{
+					"type": "click",
+					"selector": "[data-setup-row]:has(textarea) button[aria-label=\"Save on this device\"]"
+				},
+				{
+					"type": "waitFor",
+					"text": "Ready to run"
+				},
+				{
+					"type": "capture",
+					"name": "RuntimeVariables",
+					"mode": "viewport"
+				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
+			]
+		}
+	]
+}

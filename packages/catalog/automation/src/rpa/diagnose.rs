@@ -94,9 +94,11 @@ impl NodeLogic for DiagnoseFailureNode {
         let ((screen_width, screen_height), bytes) = tokio::task::spawn_blocking(move || {
             let dimensions = crate::types::screen_match::screen_dimensions();
             let bytes = if capture {
-                Some(crate::types::screen_match::capture_screen_png().ok_or_else(|| {
-                    flow_like_types::anyhow!("Could not capture diagnostic screenshot")
-                })?)
+                Some(
+                    crate::types::screen_match::capture_screen_png().ok_or_else(|| {
+                        flow_like_types::anyhow!("Could not capture diagnostic screenshot")
+                    })?,
+                )
             } else {
                 None
             };

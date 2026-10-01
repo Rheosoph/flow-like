@@ -1,39 +1,13 @@
-The pull works — because Orbit's API token is sitting in the Token pin's default value, in plain sight. Now play the tape forward: the app syncs, three teammates get the flow, the token rides along in every copy. Friday you rotate it; Monday three flows break and the old credential lives on in places you can't reach. This lesson gets the token out of the flow before any of that happens.
+Replace the practice token pin with a runtime value.
 
-> **Predict first:** You mark `CRM_API_TOKEN` as Secret and Runtime Configured, save your value, and a teammate opens the same app on their laptop. What do they see on the Runtime Variables screen for that variable?
+1. In the flow variables panel, create a String variable `PRACTICE_API_TOKEN`. Enable **Runtime Configured** and **Secret**.
+2. Create `PRACTICE_API_URL` as a runtime-configured String without Secret.
+3. Open the app's **Runtime Variables**. Set the token to `practice-token` and the URL to `http://127.0.0.1:8765`.
+4. Use the generated **Get PRACTICE_API_TOKEN** node as Set Bearer Auth's Token input. Build the customer URL from the configured base URL.
+5. Run the successful request. Then set the runtime token to `wrong` and run again. Expect 401. Restore the fixture token.
 
-## 1 · Split the value from the flow
+The definition stores names and settings; the configured values stay on the device. Secret values are masked and excluded from remote execution payloads. Another device needs its own values.
 
-Open the flow in Studio and open its variables panel. Create `CRM_API_TOKEN`, then enable two settings on it: **Runtime Configured** and **Secret**. Add `SUPPORT_API_URL` too, Runtime Configured only — it's not sensitive, it just differs between environments.
+For a real remote integration, use the credential mechanism supported by that deployment and verify it through the remote Event. Laptop runtime secrets do not become server credentials. This local fixture deliberately does not simulate that provisioning.
 
-The split works like this: the flow definition keeps the variable's name, type, and settings. The *value* lives in Flow-Like's local application storage on the device that configured it, keyed by app and variable. It is never written back into the flow and never synced with the app. Your teammate gets the variable — and an empty slot where your value would be. That's the answer to the prediction, and it's the point: each person and machine supplies its own.
-
-## 2 · Configure it once per device
-
-Open the app and select **Runtime Variables**.
-
-@RuntimeVariables
-
-The screen shows the *Customer Support Automation* flow fully configured — 2 of 2. `CRM_API_TOKEN` carries a **Secret** badge and displays only masked dots; `SUPPORT_API_URL` carries a **Runtime** badge and shows its environment-specific URL in the clear. The security notice at the bottom states the contract in one sentence: values are stored locally on your device and never uploaded to the server, and for remote execution only non-secret runtime variables are sent.
-
-You don't even have to configure ahead of time. When an interactive run needs a value nobody has saved, Flow-Like opens the **Configure Runtime Variables** dialog before execution — save it and the pending run continues.
-
-## 3 · Use it in the flow
-
-Variables read through generated **Get** nodes — search the catalog for `Get CRM_API_TOKEN` or drag the variable from the panel onto the canvas. Feed it into **Set Bearer Auth**'s Token pin from last lesson, and the request carries `Authorization: Bearer …` without the flow definition ever containing the credential. `SUPPORT_API_URL` feeds Make Request's URL the same way, so your staging laptop and the production machine call different endpoints from the same flow.
-
-The execution rules are worth memorizing, because lesson 4 will lean on them hard:
-
-- A **local run** receives runtime-configured values *and* secrets.
-- A **remote run** receives only non-secret runtime-configured values; secrets are filtered out before the request ever leaves your device.
-- A saved runtime value takes precedence over anything the flow definition carries.
-
-> **Watch out:** A remotely executed flow never sees a secret that exists only on someone's laptop. If an unattended or web-triggered flow needs a credential, provision it through a server-side mechanism for that deployment — don't design the flow to depend on your device being awake.
-
-Name your variables like you'll be reading them at 3 a.m. — `CRM_API_TOKEN`, `SUPPORT_API_URL` — and give each a description that tells the runner what to provide without including the value. Keep credentials out of regular defaults entirely; that's the mess we just cleaned up.
-
-## Recap
-
-- Runtime Configured splits value from definition: the flow syncs, the value stays in local application storage, per app and device.
-- Secret adds masking and exclusion from remote execution payloads — combine both for every credential.
-- Read values with generated Get nodes; a saved runtime value beats whatever the flow carries.
+Log a request identifier and status, not authorization headers. Before exporting a real flow, inspect pin defaults and fixture files for accidental credentials.

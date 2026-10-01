@@ -11,6 +11,15 @@ use webp::Encoder;
 
 const WEBP_QUALITY: f32 = 92.0;
 
+fn is_course_asset(key: &str) -> bool {
+    let mut parts = key.split('/');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some("media"), Some("courses"), Some(course_id), Some("assets"), Some(file), None)
+            if !course_id.is_empty() && !file.is_empty()
+    )
+}
+
 fn decode(key: &str) -> Result<String, Error> {
     let key = key.replace("+", " ");
     urlencoding::decode(&key)
@@ -114,6 +123,11 @@ async fn process_single_record(
 
     if bucket != bucket_name {
         tracing::warn!("Skipping object from different bucket: {}", bucket);
+        return Ok(());
+    }
+
+    // The course asset API owns these filenames and handles image optimization explicitly.
+    if is_course_asset(&key) {
         return Ok(());
     }
 
@@ -320,6 +334,30 @@ fn encode_as_webp(img: image::DynamicImage) -> Result<Vec<u8>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn course_assets_keep_their_original_format() {
+        for file in ["training.csv", "cases.json", "practice.zip", "diagram.png"] {
+            assert!(is_course_asset(&format!(
+                "media/courses/course-1/assets/{file}"
+            )));
+        }
+        for key in [
+            "media/courses/course-1/banner.png",
+            "media/courses/course-1/icon.jpg",
+            "media/apps/app-1/assets/diagram.png",
+            "media/courses//assets/cases.json",
+            "media/courses/course-1/assets/",
+            "media/courses/course-1/assets/nested/cases.json",
+        ] {
+            assert!(!is_course_asset(key), "{key}");
+        }
+        assert!(is_supported_image_format("png"));
+        assert_eq!(
+            generate_webp_key("media/courses/course-1/banner.png").unwrap(),
+            "media/courses/course-1/banner.webp"
+        );
+    }
 
     #[tokio::test]
     async fn test_key_decoding_1() {

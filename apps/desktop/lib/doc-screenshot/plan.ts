@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, isAbsolute, relative, resolve } from "node:path";
 import {
@@ -6,6 +7,7 @@ import {
 	DOC_SCREENSHOT_TAURI_FIXTURE_SCHEMA,
 	type DocScreenshotCaptureStep,
 	type DocScreenshotDefaults,
+	type DocScreenshotDiagnosticAllowance,
 	type DocScreenshotFormat,
 	type DocScreenshotHttpFixture,
 	type DocScreenshotHttpFixtureResponse,
@@ -30,6 +32,7 @@ const MAX_HTTP_FIXTURE_BLOCKED_ORIGINS = 100;
 const NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
 const HTTP_TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Z]+$/;
 const STEP_KEYS: Record<DocScreenshotStep["type"], readonly string[]> = {
+	seedIndexedDB: ["type", "database", "stores"],
 	goto: ["type", "path", "query"],
 	click: ["type", "selector", "index", "button", "clickCount", "modifiers"],
 	drag: [
@@ -589,6 +592,29 @@ function validateStep(value: unknown, label: string): DocScreenshotStep {
 							),
 			};
 		}
+		case "seedIndexedDB": {
+			const database = optionalString(input.database, `${label}.database`);
+			if (!database) throw new Error(`${label}.database is required.`);
+			const source = record(input.stores, `${label}.stores`);
+			const stores: Record<string, { [key: string]: JsonValue }[]> = {};
+			if (!Object.keys(source).length)
+				throw new Error(`${label}.stores must not be empty.`);
+			for (const [name, rows] of Object.entries(source)) {
+				if (!name || !Array.isArray(rows) || rows.length > 1000)
+					throw new Error(
+						`${label}.stores.${name} must contain at most 1000 records.`,
+					);
+				stores[name] = rows.map((row) => {
+					const value = record(row, `${label}.stores.${name} record`);
+					if (!isJsonValue(value))
+						throw new Error(
+							`${label}.stores.${name} records must contain JSON values.`,
+						);
+					return value as { [key: string]: JsonValue };
+				});
+			}
+			return { type, database, stores };
+		}
 		case "delay":
 			return {
 				type,
@@ -660,6 +686,39 @@ function defaultsValue(value: unknown): DocScreenshotDefaults {
 				? DEFAULT_DOC_SCREENSHOT_OPTIONS.hideScrollbars
 				: booleanValue(input.hideScrollbars, "plan.defaults.hideScrollbars"),
 	};
+}
+
+function diagnosticAllowlistValue(
+	value: unknown,
+	label: string,
+): DocScreenshotDiagnosticAllowance[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value) || value.length > 20)
+		throw new Error(`${label} must be an array of at most 20 allowances.`);
+	return value.map((entry, index) => {
+		const itemLabel = `${label}[${index}]`;
+		const item = record(entry, itemLabel);
+		rejectUnknownObjectKeys(item, itemLabel, [
+			"kind",
+			"message",
+			"reason",
+			"maxCount",
+		]);
+		const message = optionalString(item.message, `${itemLabel}.message`);
+		const reason = optionalString(item.reason, `${itemLabel}.reason`);
+		if (!message || !reason)
+			throw new Error(`${itemLabel} needs an exact message and a reason.`);
+		return {
+			kind: enumValue(item.kind, `${itemLabel}.kind`, [
+				"console",
+				"page",
+				"request",
+			] as const),
+			message,
+			reason,
+			maxCount: integerInRange(item.maxCount, `${itemLabel}.maxCount`, 1, 100),
+		};
+	});
 }
 
 export function validateDocScreenshotPlan(value: unknown): DocScreenshotPlan {
@@ -752,6 +811,10 @@ export function validateDocScreenshotPlan(value: unknown): DocScreenshotPlan {
 				`${label}.sessionStorage`,
 			),
 			steps,
+			diagnosticAllowlist: diagnosticAllowlistValue(
+				scenarioInput.diagnosticAllowlist,
+				`${label}.diagnosticAllowlist`,
+			),
 		} satisfies DocScreenshotScenario;
 	});
 	return {
@@ -1142,4 +1205,21 @@ export function safeCaptureOutputPath(
 		throw new Error(`Capture output escapes outputDir: ${requested}`);
 	}
 	return absoluteOutput;
+}
+
+export function screenshotScenarioFingerprint(
+	plan: DocScreenshotPlan,
+	scenario: DocScreenshotScenario,
+): string {
+	return createHash("sha256")
+		.update(
+			JSON.stringify({
+				app: plan.app,
+				defaults: plan.defaults,
+				tauriFixture: plan.tauriFixture,
+				httpFixture: plan.httpFixture,
+				scenario,
+			}),
+		)
+		.digest("hex");
 }

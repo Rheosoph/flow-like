@@ -943,7 +943,10 @@ mod tests {
             .unwrap();
         let identity = DeviceIdentity {
             auth_key: SigningKey::generate().public_key(),
-            management_key: x25519_dalek::x25519(random_key(), x25519_dalek::X25519_BASEPOINT_BYTES),
+            management_key: x25519_dalek::x25519(
+                random_key(),
+                x25519_dalek::X25519_BASEPOINT_BYTES,
+            ),
             telemetry_key: SigningKey::generate().public_key(),
         };
         let receipt = |issued_at: i64| DeviceReceipt {

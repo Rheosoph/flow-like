@@ -1,0 +1,49 @@
+---
+title: "Make the Wires Easier to Follow"
+description: "Use Compact and Routed layout on the same workflow, inspect automatic reroute nodes, and choose an arrangement that helps the next reader follow the data."
+date: 2026-06-22
+tags: ["flow-editor", "layout", "workflow-design"]
+cover: "/images/community-E5.png"
+draft: true
+---
+
+The difficult part of reading a graph is often the space between its nodes. A value travels across the board, disappears behind a box, and arrives at an input whose source you have already lost.
+
+Flow-Like offers two layout choices for this work. **Compact** places nodes close to their consumers. **Routed** adds reroute points so edge paths can avoid nodes and reduce crossings. Both deserve a look on a crowded board because the shortest arrangement is not always the easiest one to read.
+
+Use a workflow you already understand for your first comparison. That lets you judge whether the new arrangement improves reading, rather than trying to learn the logic and the layout simultaneously.
+
+<figure>
+  <img src="/posts/community/E5/overview.svg" alt="Conceptual layout sequence from dense connections through a Compact or Routed choice to reroute points and inspection of the result" loading="lazy" width="1600" height="1000" />
+  <figcaption>Routed layout places nodes and adds intermediate points that make data connections easier to follow.</figcaption>
+</figure>
+
+## Compare the same content
+
+Take a sample order-processing flow that reads an order, calculates a total, checks a delivery area, and prepares a response. Shared values such as the order ID may connect to several later nodes. Those long connections are good places to start inspecting readability.
+
+Before changing the layout, note the node values and run a known order. Keep that result for a later check. You are evaluating the arrangement of an existing workflow, so use the same node content for both layouts.
+
+Apply Compact and follow the execution path from the entry. Then trace the order ID and calculated total to their consumers. Notice where a pure calculation sits relative to the operation that needs its result. Compact's close spacing can work well for a small, local chain.
+
+Apply Routed and repeat the same reading exercise. Look for small reroute nodes along the connections. They provide intermediate points that shape the route through the board. Judge the result by whether you can follow a value with fewer interruptions, including at the zoom level you normally use.
+
+## Why reroutes need a cleanup step
+
+An automatic router cannot keep treating every point from the previous arrangement as a new independent constraint. Repeated layout would accumulate decisions made for positions that no longer exist.
+
+The [Routed pipeline](https://github.com/Rheosoph/flow-like/blob/dev/packages/ui/lib/flow-layout/index.ts) first normalizes existing automatic reroute chains. It then computes node positions and plans data routes against those positions. The [reroute command builder](https://github.com/Rheosoph/flow-like/blob/dev/packages/ui/lib/flow-layout/reroute-commands.ts) turns that plan into changes on the Board.
+
+This order gives the router a current view of the obstacles. A route that made sense before a wide node moved may need different intermediate points afterward. The result is still inspectable graph structure, so you can see where the connections go.
+
+Routing searches are bounded. If a route cannot be found, Routed keeps the existing chain for that connection. A remaining awkward wire is therefore a reason to inspect the local arrangement, rather than evidence that every edge has received an ideal path. Dense graphs can still have crossings.
+
+## Use a smaller scope when it helps
+
+You do not always need to rearrange the whole workflow. Selecting multiple nodes can scope layout to a region. The surrounding nodes are considered as obstacles, helping the selected area fit into the rest of the board.
+
+That is useful when most of a hand-arranged flow already reads well. Select the calculation cluster that has become crowded and improve that region first. Check the connections crossing the selection boundary afterward; those are the places where a local improvement can still leave a difficult path for the reader.
+
+If the graph contains several separate responsibilities, review group boundaries before spending time on every wire. A group can expose the connections readers need at the outer level, while Routed layout helps them follow the details inside. Neither choice determines the other.
+
+Finish by running the same sample order and inspecting its result. Then ask someone unfamiliar with your arrangement to find the total and the delivery decision. That small reading task is a more useful test of the layout than simply counting how many pixels the graph occupies.

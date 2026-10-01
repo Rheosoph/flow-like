@@ -1,0 +1,5 @@
+file,expected_text,expected_object,observed_result
+invoice-01.png,INV-1001,,
+invoice-02.png,INV-1002,,
+photo-01.png,,chosen_model_class,
+photo-02.png,,no_target,

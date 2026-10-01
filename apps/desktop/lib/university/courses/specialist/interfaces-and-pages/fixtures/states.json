@@ -1,0 +1,7 @@
+{
+  "initial": "Not loaded",
+  "loading": "Loading requests",
+  "empty": "No requests waiting",
+  "ready": "2 requests waiting",
+  "error": "Could not load requests. Try again."
+}

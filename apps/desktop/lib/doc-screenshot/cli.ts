@@ -14,6 +14,7 @@ import {
 export interface DocScreenshotCliOptions {
 	app: DocScreenshotApp;
 	plan?: string;
+	scenario?: string;
 	path?: string;
 	query: Array<[string, string]>;
 	output?: string;
@@ -116,6 +117,10 @@ export function parseDocScreenshotArgs(
 			const [value, consumed] = valueAfter(normalizedArgs, index, "--plan");
 			index = consumed;
 			options.plan = resolve(process.cwd(), value);
+		} else if (arg === "--scenario" || arg.startsWith("--scenario=")) {
+			const [value, consumed] = valueAfter(normalizedArgs, index, "--scenario");
+			index = consumed;
+			options.scenario = value;
 		} else if (arg === "--path" || arg.startsWith("--path=")) {
 			const [value, consumed] = valueAfter(normalizedArgs, index, "--path");
 			index = consumed;
@@ -230,10 +235,11 @@ export function parseDocScreenshotArgs(
 		].filter((value) => value !== undefined);
 		if (directFlags.length > 0) {
 			throw new Error(
-				"--plan cannot be combined with direct capture options; only --frontend-url, --output-dir, --port, --json, and --keep-server may override a plan.",
+				"--plan cannot be combined with direct capture options; only --scenario, --frontend-url, --output-dir, --port, --json, and --keep-server may override a plan.",
 			);
 		}
 	} else if (!options.help) {
+		if (options.scenario) throw new Error("--scenario requires --plan.");
 		if (!options.path) throw new Error("Direct mode requires --path.");
 		if (options.fullPage && options.selector) {
 			throw new Error("Use either --full-page or --selector, not both.");

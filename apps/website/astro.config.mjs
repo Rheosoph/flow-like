@@ -11,7 +11,7 @@ import sitemap from "@astrojs/sitemap";
 // https://astro.build/config
 export default defineConfig({
 	site: "https://flow-like.com",
-	adapter: cloudflare(),
+	adapter: cloudflare({ imageService: "compile" }),
 	// CSSO previously rewrote generated CSS after Vite assigned its content hash.
 	// Use a new asset namespace once so clients cannot reuse those immutable URLs.
 	build: {

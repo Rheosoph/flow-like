@@ -418,6 +418,20 @@ fn cache_key(app_id: &str, token: &str) -> String {
     format!("{}|{}", app_id, hasher.finalize().to_hex())
 }
 
+/// The subject the hub last confirmed for this caller on this device, from the in-memory
+/// cache or the persisted authority (≤ OFFLINE_AUTHORITY_MAX_AGE). None when never confirmed.
+pub(crate) fn confirmed_subject(hub_url: &str, app_id: &str, token: &str) -> Option<String> {
+    cached(&cache_key(app_id, token), None)
+        .or_else(|| {
+            load_authority(
+                &authority_key(hub_url, app_id, token),
+                OFFLINE_AUTHORITY_MAX_AGE,
+            )
+        })
+        .map(|context| context.sub)
+        .filter(|subject| !subject.is_empty())
+}
+
 /// `max_age` of `None` accepts an entry of any age — the deliberate fallback
 /// when the hub cannot be reached.
 fn cached(key: &str, max_age: Option<Duration>) -> Option<UserExecutionContext> {

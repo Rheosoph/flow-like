@@ -69,7 +69,7 @@ THIS IS A WORKFLOW MUTATION RUN. Follow this bounded loop exactly:
 1. FlowScript is the ONE model-authored representation for executable workflow behavior. Direct commands are reserved for visual/layout and non-FlowScript changes; never author workflow logic as command JSON.
 2. The system prompt already embeds the current board as anchored FlowScript — that render IS the board, so do not call get_current_flowscript before authoring; re-read only after the host applies an incremental segment. Plan the whole request, then make ONE bounded, focused get_declarations batch for only the highest-leverage catalog calls needed to establish the end-to-end shape. Never enumerate every utility or guess a declaration or pin. Use at most six ancillary database/UI/storage inspections before the first write.
 3. After any usable declaration result and BEFORE the first source write, call plan_board_scope exactly ONCE. Use one `single` segment for an ordinary edit; split only work too large to compose safely in one pass. Once the host accepts a plan, never call plan_board_scope again unless the host explicitly rejects the plan or a source repair proves the active segment impossible and the tool explicitly permits one revision.
-4. Then call write_flowscript IMMEDIATELY with a stable draft id and the accepted active segment as a real executable checkpoint. Under a `single` plan this is the complete full-shape request; under a segmented plan follow the returned strategy_rule without dropping the remaining accepted scope. It may retain compiler diagnostics; that is recoverable progress, not success. Do not chase omitted/unmatched declaration queries first. For an existing board, edit the exact returned document and preserve every kept //@n anchor. For a new board, author real functions and Event entries with concrete catalog calls.
+4. Then call write_flowscript IMMEDIATELY with a stable draft id and the accepted active segment as a real executable checkpoint. Under a `single` plan this is the complete full-shape request; under a segmented plan follow the returned strategy_rule without dropping the remaining accepted scope. It may retain compiler diagnostics; that is recoverable progress, not success. Do not chase omitted/unmatched declaration queries first. For a focused existing-board change, omit source and pass edits: [{old_text, new_text}] matching the embedded board exactly; the host retains the complete merged document. Preserve every kept //@n anchor. Use full source for a new board or broad rewrite. For a new board, author real functions and Event entries with concrete catalog calls.
 5. If the write/patch result carries diagnostics, repair the SAME retained source with patch_flowscript. A coherent whole-document rewrite may use write_flowscript with the same draft id and `replace_existing: true`; then use the newly returned revision. Structured line/column, declaration, pin, type and execution diagnostics are authoritative. A newly named missing declaration permits one bounded deduplicated lookup; never restart broad discovery. check_flowscript is only the staged-plan growth gate or a re-validation after catalog drift or a host-applied segment — a zero-diagnostic write/patch needs no separate check round.
 6. For an eligible deterministic Generic Event transformation, use test_flowscript at the zero-diagnostic revision with a fixture payload and expected_output derived from the request. Repair and retest mismatches without weakening the expectation. A blocked test remains unverified; preserve the requested scope. Then call commit_flowscript at the latest zero-diagnostic revision; commit runs the identical validation inline and returns the same structured validation_errors on failure. Only commit may create the exact review claim. Preserve every requested capability, helper, variable and Event across retries; a tiny smoke test, empty Event, or reduced workflow never counts as success.
 7. When commit_flowscript returns `queued`/`already_queued`, stop workflow tools. A BOARD specialist hands any requested UI work back to the parent for the UI specialist; only an explicit combined root session may finish it with emit_ui.
@@ -470,6 +470,9 @@ pub(super) fn build_external_workflow_continuation_prompt(
     let source_operations = snapshot
         .map(|state| state.flowscript_operation_attempts)
         .unwrap_or_default();
+    let source_operation_budget = snapshot
+        .and_then(|state| state.flowscript_operation_budget)
+        .unwrap_or(MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS);
     let retained_revision = snapshot
         .filter(|state| state.flowscript_draft_retained)
         .map(|state| {
@@ -498,7 +501,7 @@ pub(super) fn build_external_workflow_continuation_prompt(
 
     format!(
         r#"INTERNAL FLOWPILOT EXTERNAL CONTINUATION #{attempt}
-The previous CLI turn ended without queueing workflow changes (last status: {status}, prior checks: {prior_attempts}, source operations: {source_operations}/{MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS}). Nothing has been applied.
+The previous CLI turn ended without queueing workflow changes (last status: {status}, prior checks: {prior_attempts}, source operations: {source_operations}/{source_operation_budget}). Nothing has been applied.
 {errors}{structured_diagnostics}{behavioral_feedback}{draft}{retained_revision}{declarations}{unresolved_declarations}{repair_declarations}{accepted_scope_plan}
 {continuation_action} The turn is complete only when commit returns `queued`/`already_queued` or the bounded repair budget reports its final compiler diagnostics.
 
@@ -578,9 +581,12 @@ pub(super) fn nested_wall_clock_incomplete_error(
     snapshot: Option<&WorkflowToolLoopSnapshot>,
     provider_continuations: u8,
 ) -> String {
+    let wall_clock_budget = snapshot
+        .and_then(|state| state.nested_wall_clock_budget)
+        .unwrap_or(NESTED_RUN_WALL_CLOCK_BUDGET);
     format!(
         "NESTED_RUN_WALL_CLOCK_BUDGET_EXHAUSTED: this nested FlowPilot run reached its {}-minute wall-clock budget and was stopped gracefully; this result is terminal for this run. {}",
-        NESTED_RUN_WALL_CLOCK_BUDGET.as_secs() / 60,
+        wall_clock_budget.as_secs() / 60,
         external_workflow_incomplete_error_with_fallback(
             snapshot,
             provider_continuations,
@@ -623,11 +629,15 @@ fn external_workflow_incomplete_error_with_fallback(
     let budgets = snapshot
         .map(|state| {
             format!(
-                "provider continuations {provider_continuations}/{MAX_EXTERNAL_WORKFLOW_CONTINUATIONS}, checks {}/{MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS}, source operations {}/{MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS}, stalled repeats {}/{MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS}, commit attempts {}/{MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS}",
+                "provider continuations {provider_continuations}/{}, checks {}/{}, source operations {}/{}, stalled repeats {}/{MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS}, commit attempts {}/{}",
+                state.continuation_budget.unwrap_or(MAX_EXTERNAL_WORKFLOW_CONTINUATIONS),
                 state.edit_attempts,
+                state.edit_attempt_budget.unwrap_or(MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS),
                 state.flowscript_operation_attempts,
+                state.flowscript_operation_budget.unwrap_or(MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS),
                 state.stalled_edit_attempts,
                 state.flowscript_commit_attempts,
+                state.commit_attempt_budget.unwrap_or(MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS),
             )
         })
         .unwrap_or_else(|| {

@@ -17,6 +17,8 @@ export interface UniversityCliOptions {
 	apiUrl?: string;
 	timeoutMs?: number;
 	dryRun: boolean;
+	prune: boolean;
+	legacyMediaAssets: boolean;
 	replaceAsset: boolean;
 	json: boolean;
 	help: boolean;
@@ -64,6 +66,8 @@ function setMode(
 export function parseUniversityArgs(args: string[]): UniversityCliOptions {
 	const options: UniversityCliOptions = {
 		dryRun: false,
+		prune: false,
+		legacyMediaAssets: false,
 		replaceAsset: false,
 		json: false,
 		help: false,
@@ -75,6 +79,8 @@ export function parseUniversityArgs(args: string[]): UniversityCliOptions {
 		if (arg === "--help" || arg === "-h") options.help = true;
 		else if (arg === "--json") options.json = true;
 		else if (arg === "--dry-run") options.dryRun = true;
+		else if (arg === "--prune") options.prune = true;
+		else if (arg === "--legacy-media-assets") options.legacyMediaAssets = true;
 		else if (arg === "--replace") options.replaceAsset = true;
 		else if (arg === "--list") setMode(options, "list", "--list");
 		else if (arg === "--plan" || arg.startsWith("--plan=")) {
@@ -149,6 +155,18 @@ export function parseUniversityArgs(args: string[]): UniversityCliOptions {
 	}
 	if (options.mode !== "apply" && options.dryRun) {
 		throw new Error("--dry-run can only be used with --plan.");
+	}
+	if (options.mode !== "apply" && options.prune) {
+		throw new Error("--prune can only be used with --plan.");
+	}
+	if (
+		options.legacyMediaAssets &&
+		options.mode !== "apply" &&
+		options.mode !== "asset"
+	) {
+		throw new Error(
+			"--legacy-media-assets can only be used with --plan or --asset.",
+		);
 	}
 	if (options.mode === "asset") {
 		if (!options.assetCourseId || !options.assetName || !options.assetFile) {

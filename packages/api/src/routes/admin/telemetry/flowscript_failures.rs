@@ -20,7 +20,7 @@ use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use flow_like_types::tokio::try_join;
-use sea_orm::sea_query::{Alias, Expr, ExprTrait, LikeExpr, extension::postgres::PgExpr};
+use sea_orm::sea_query::{Alias, Expr, ExprTrait, extension::postgres::PgExpr};
 use sea_orm::{
     ColumnTrait, Condition, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
     Select,
@@ -264,11 +264,11 @@ fn filtered(
         select = select.filter(Column::AppId.eq(app_id));
     }
     if let Some(query) = q.query.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-        // Escaped, so a `%` typed into the search box matches a literal `%` instead of turning the
-        // filter into a full scan of the source column.
+        // Escape SQL wildcards so the search text matches literally.
         let pattern = format!("%{}%", escape_like_pattern(query));
-        let contains =
-            |column: Column| Expr::col(column).ilike(LikeExpr::new(pattern.clone()).escape('\\'));
+        // PostgreSQL defaults to backslash escaping. SeaQuery 1.0.2 puts an explicit
+        // ILIKE escape clause inside parentheses, which PostgreSQL rejects.
+        let contains = |column: Column| Expr::col(column).ilike(pattern.clone());
         select = select.filter(
             Condition::any()
                 .add(contains(Column::Cause))
@@ -556,4 +556,57 @@ pub async fn get_flowscript_failure(
         flowscript,
         corrections,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{DbBackend, QueryTrait, Statement};
+
+    fn search_statement(query: Option<&str>) -> Statement {
+        let q = serde_json::from_value(serde_json::json!({
+            "query": query,
+            "origin": "editor",
+        }))
+        .unwrap();
+        let cutoff = DateTime::parse_from_rfc3339("2026-09-01T00:00:00Z").unwrap();
+        filtered(&q, cutoff).build(DbBackend::Postgres)
+    }
+
+    #[test]
+    fn search_uses_valid_parameterized_ilike_for_all_three_columns() {
+        let query = "FlowPilot has an applying, failed-recovery, or pending-delivery edit";
+        let statement = search_statement(Some(query));
+
+        assert!(
+            statement.sql.ends_with(
+                r#"AND (("cause" ILIKE $3) OR ("errorMessage" ILIKE $4) OR ("flowscript" ILIKE $5))"#
+            ),
+            "{}",
+            statement.sql
+        );
+        let values = statement.values.unwrap().0;
+        assert_eq!(values.len(), 5);
+        assert_eq!(values[1], "editor".into());
+        assert_eq!(values[2..], vec![format!("%{query}%").into(); 3]);
+    }
+
+    #[test]
+    fn search_binds_literal_wildcards_backslashes_and_quotes() {
+        let statement = search_statement(Some(r"  100%_C:\O'Brien  "));
+        let values = statement.values.unwrap().0;
+        assert_eq!(values[2..], vec![r"%100\%\_C:\\O'Brien%".into(); 3]);
+        assert!(!statement.sql.as_str().contains("O'Brien"));
+    }
+
+    #[test]
+    fn empty_search_keeps_the_window_and_origin_filters() {
+        for query in [None, Some(""), Some(" \t\n ")] {
+            let statement = search_statement(query);
+            assert!(!statement.sql.as_str().contains("ILIKE"));
+            assert!(statement.sql.as_str().contains(r#""createdAt" >= $1"#));
+            assert!(statement.sql.as_str().contains(r#""origin" = $2"#));
+            assert_eq!(statement.values.unwrap().0.len(), 2);
+        }
+    }
 }

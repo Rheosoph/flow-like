@@ -1,0 +1,276 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-release-and-rollback",
+		"name": "Release and Rollback",
+		"language": "en",
+		"slug": "release-and-rollback",
+		"difficulty": "INTERMEDIATE",
+		"category": "DEPLOYMENT",
+		"estimatedMinutes": 20,
+		"isPublished": true,
+		"iconUrl": null,
+		"bannerUrl": null,
+		"tags": [
+			"events",
+			"triggers",
+			"routes",
+			"api",
+			"automation"
+		],
+		"position": 21,
+		"description": "Pin a tested flow version, promote a change and restore the prior target.",
+		"longDescription": "20 minutes required. Prerequisite: Events. Use a log-only practice flow so promotion and rollback have observable results without external effects. This course owns flow snapshots and Event version pins; package distribution and infrastructure deployment remain separate workflows.",
+		"media": {
+			"icon": "assets/course-icon.webp",
+			"banner": "assets/course-banner-v2.webp"
+		},
+		"assets": [
+			{
+				"name": "PracticeFiles",
+				"file": "fixtures/practice-files.zip",
+				"kind": "DOCUMENT",
+				"mimeType": "application/zip",
+				"filename": "release-and-rollback-practice-files.zip",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"modules": [
+			{
+				"id": "module-release-and-rollback-1",
+				"title": "Build and check",
+				"description": "Complete the practical steps and inspect the result.",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "lesson-release-and-rollback-snapshot-and-pin",
+						"language": "en",
+						"videoUrl": null,
+						"appRefs": [],
+						"title": "Freeze an observable version",
+						"contentFile": "content/snapshot-and-pin.md",
+						"estimatedMinutes": 5,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "lesson-release-and-rollback-snapshot-and-pin-check-1",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A pinned Event still prints release A after the draft is saved as release B. What does that show?",
+								"explanation": "The Event is still invoking its selected immutable snapshot.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "choice-1",
+											"label": "The Event is still invoking its selected immutable snapshot."
+										},
+										{
+											"id": "choice-2",
+											"label": "The draft save failed necessarily."
+										},
+										{
+											"id": "choice-3",
+											"label": "The Event automatically adopted release B but changed the log."
+										}
+									],
+									"correct": [
+										"choice-1"
+									]
+								}
+							}
+						],
+						"position": 0
+					},
+					{
+						"id": "lesson-release-and-rollback-test-and-promote",
+						"language": "en",
+						"videoUrl": null,
+						"appRefs": [],
+						"title": "Test the candidate through an Event",
+						"contentFile": "content/test-and-promote.md",
+						"estimatedMinutes": 6,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "lesson-release-and-rollback-test-and-promote-check-1",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The candidate works in Studio but the Event targets an entry node removed in that version. What remains before promotion?",
+								"explanation": "Repair the Event/entry contract and test through the candidate Event.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "choice-2",
+											"label": "Assume Studio success covers Event configuration."
+										},
+										{
+											"id": "choice-3",
+											"label": "Change the version label without testing."
+										},
+										{
+											"id": "choice-1",
+											"label": "Repair the Event/entry contract and test through the candidate Event."
+										}
+									],
+									"correct": [
+										"choice-1"
+									]
+								}
+							}
+						],
+						"position": 1
+					},
+					{
+						"id": "lesson-release-and-rollback-rollback-and-recover",
+						"language": "en",
+						"videoUrl": null,
+						"appRefs": [],
+						"title": "Restore the prior Event target",
+						"contentFile": "content/rollback-and-recover.md",
+						"estimatedMinutes": 5,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "lesson-release-and-rollback-rollback-and-recover-check-1",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Repointing an Event restores old logic after a bad version sent a message. What remains true?",
+								"explanation": "The already sent message is an effect that rollback does not undo.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "choice-3",
+											"label": "The old snapshot now contains the draft fix."
+										},
+										{
+											"id": "choice-1",
+											"label": "The already sent message is an effect that rollback does not undo."
+										},
+										{
+											"id": "choice-2",
+											"label": "Repointing deletes every effect from the bad version."
+										}
+									],
+									"correct": [
+										"choice-1"
+									]
+								}
+							}
+						],
+						"position": 2
+					}
+				]
+			},
+			{
+				"id": "module-release-and-rollback-2",
+				"title": "Apply it",
+				"description": "Use the result to solve a new case.",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "lesson-release-and-rollback-final-assessment",
+						"language": "en",
+						"videoUrl": null,
+						"appRefs": [],
+						"title": "Review a new release decision",
+						"contentFile": "content/final-assessment.md",
+						"estimatedMinutes": 4,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "lesson-release-and-rollback-final-assessment-check-1",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A release renames a required API field. Which preparation fits?",
+								"explanation": "Plan caller migration or compatibility and test the changed contract before promotion.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "choice-1",
+											"label": "Plan caller migration or compatibility and test the changed contract before promotion."
+										},
+										{
+											"id": "choice-2",
+											"label": "Call it Patch solely because one line changed."
+										},
+										{
+											"id": "choice-3",
+											"label": "Rely on the new display label to update every caller."
+										}
+									],
+									"correct": [
+										"choice-1"
+									]
+								}
+							},
+							{
+								"id": "lesson-release-and-rollback-final-assessment-check-2",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The prior flow expects a database column that the release removed. Is repointing alone a proven rollback?",
+								"explanation": "No. Check or restore dependency compatibility before relying on the prior flow.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "choice-2",
+											"label": "Yes. Snapshots include every external database state."
+										},
+										{
+											"id": "choice-3",
+											"label": "Yes, if the old flow has a smaller version number."
+										},
+										{
+											"id": "choice-1",
+											"label": "No. Check or restore dependency compatibility before relying on the prior flow."
+										}
+									],
+									"correct": [
+										"choice-1"
+									]
+								}
+							},
+							{
+								"id": "lesson-release-and-rollback-final-assessment-check-3",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The draft is fixed but callers still use a pinned bad version. What changes their behavior?",
+								"explanation": "Create and test a new snapshot, then deliberately repoint the Event.",
+								"points": 10,
+								"position": 2,
+								"payload": {
+									"options": [
+										{
+											"id": "choice-3",
+											"label": "Edit the app description."
+										},
+										{
+											"id": "choice-1",
+											"label": "Create and test a new snapshot, then deliberately repoint the Event."
+										},
+										{
+											"id": "choice-2",
+											"label": "Save the draft and assume every pin follows it."
+										}
+									],
+									"correct": [
+										"choice-1"
+									]
+								}
+							}
+						],
+						"position": 0
+					}
+				]
+			}
+		]
+	}
+}

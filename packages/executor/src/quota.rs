@@ -236,13 +236,13 @@ pub async fn reject(claims: &ExecutorClaims, token: &str) {
 mod tests {
     use super::*;
     use axum::{
-        Json, Router,
         http::{HeaderMap, StatusCode},
         routing::{post, put},
+        Json, Router,
     };
     use std::sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     };
 
     #[tokio::test]

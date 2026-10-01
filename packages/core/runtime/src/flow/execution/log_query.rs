@@ -23,9 +23,11 @@ use super::log_summary::{LogSummary, LogSummaryBuilder, fingerprint};
 
 pub const MAX_PAGE_SIZE: usize = 1_000;
 const MAX_LIST_ENTRIES: usize = 256;
+const MAX_PHRASES: usize = 16;
 const MAX_PHRASE_CHARS: usize = 512;
 const LEGACY_SUMMARY_ROW_CAP: usize = 250_000;
 const FINGERPRINT_COLUMN: &str = "fingerprint";
+const FOLD_KEY_SEPARATOR: char = '@';
 const ROW_ID_COLUMN: &str = "_rowid";
 
 fn null_as_empty<'de, D, T>(deserializer: D) -> std::result::Result<Vec<T>, D::Error>
@@ -104,10 +106,16 @@ fn contains_pattern(phrase: &str) -> String {
     pattern
 }
 
-fn check_list<T>(field: &str, values: &[T]) -> Result<()> {
-    if values.len() > MAX_LIST_ENTRIES {
+/// Matches `concat(fingerprint, '@', CAST(start AS STRING))`, so one list binds
+/// every fold's first occurrence instead of two parameters per fold.
+fn fold_key(fingerprint: &str, first_start: u64) -> String {
+    format!("{fingerprint}{FOLD_KEY_SEPARATOR}{first_start}")
+}
+
+fn check_list<T>(field: &str, values: &[T], max: usize) -> Result<()> {
+    if values.len() > max {
         return Err(anyhow!(
-            "Log query field `{field}` has {} entries; at most {MAX_LIST_ENTRIES} are allowed",
+            "Log query field `{field}` has {} entries; at most {max} are allowed",
             values.len()
         ));
     }
@@ -116,15 +124,19 @@ fn check_list<T>(field: &str, values: &[T]) -> Result<()> {
 
 impl LogQuery {
     fn validate(&self) -> Result<()> {
-        check_list("levels", &self.levels)?;
-        check_list("exclude_levels", &self.exclude_levels)?;
-        check_list("nodes", &self.nodes)?;
-        check_list("exclude_nodes", &self.exclude_nodes)?;
-        check_list("text", &self.text)?;
-        check_list("exclude_text", &self.exclude_text)?;
-        check_list("fingerprints", &self.fingerprints)?;
-        check_list("exclude_fingerprints", &self.exclude_fingerprints)?;
-        check_list("fold", &self.fold)?;
+        check_list("levels", &self.levels, MAX_LIST_ENTRIES)?;
+        check_list("exclude_levels", &self.exclude_levels, MAX_LIST_ENTRIES)?;
+        check_list("nodes", &self.nodes, MAX_LIST_ENTRIES)?;
+        check_list("exclude_nodes", &self.exclude_nodes, MAX_LIST_ENTRIES)?;
+        check_list("text", &self.text, MAX_PHRASES)?;
+        check_list("exclude_text", &self.exclude_text, MAX_PHRASES)?;
+        check_list("fingerprints", &self.fingerprints, MAX_LIST_ENTRIES)?;
+        check_list(
+            "exclude_fingerprints",
+            &self.exclude_fingerprints,
+            MAX_LIST_ENTRIES,
+        )?;
+        check_list("fold", &self.fold, MAX_LIST_ENTRIES)?;
         if let Some(level) = self
             .levels
             .iter()
@@ -245,20 +257,17 @@ impl LogQuery {
                     .iter()
                     .map(|fold| fold.fingerprint.clone())
                     .collect::<Vec<_>>();
-                let list = builder.list(&folded);
-                let mut alternatives = vec![format!(
-                    "{FINGERPRINT_COLUMN} IS NULL OR {FINGERPRINT_COLUMN} NOT IN ({list})"
-                )];
-                for fold in &self.fold {
-                    let fingerprint = builder.param(Value::String(fold.fingerprint.clone()));
-                    let first = builder.param(Value::from(fold.first_start));
-                    alternatives.push(format!(
-                        "({FINGERPRINT_COLUMN} = {fingerprint} AND start = {first})"
-                    ));
-                }
-                builder
-                    .clauses
-                    .push(format!("({})", alternatives.join(" OR ")));
+                let firsts = self
+                    .fold
+                    .iter()
+                    .map(|fold| fold_key(&fold.fingerprint, fold.first_start))
+                    .collect::<Vec<_>>();
+                let folded = builder.list(&folded);
+                let firsts = builder.list(&firsts);
+                builder.clauses.push(format!(
+                    "{FINGERPRINT_COLUMN} IS NULL OR {FINGERPRINT_COLUMN} NOT IN ({folded}) \
+                     OR concat({FINGERPRINT_COLUMN}, '{FOLD_KEY_SEPARATOR}', CAST(start AS STRING)) IN ({firsts})"
+                ));
             }
         }
 
@@ -616,6 +625,69 @@ mod tests {
             ..LogQuery::default()
         };
         assert_eq!(count_logs(&table, &hide_group).await.unwrap(), 4);
+    }
+
+    #[tokio::test]
+    async fn folding_many_groups_keeps_exactly_each_first_occurrence() {
+        const GROUPS: u64 = 200;
+        let node = |i: u64| format!("node-{i}");
+        let logs = (0..GROUPS)
+            .flat_map(|i| {
+                [
+                    log(&node(i), LogLevel::Info, "repeated", 100 + i),
+                    log(&node(i), LogLevel::Info, "repeated", 101 + i),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let table = table_with(vec![logs]).await;
+
+        let fold = (0..GROUPS)
+            .map(|i| LogFold {
+                fingerprint: fingerprint(Some(&node(i)), LogLevel::Info.to_u8(), "repeated").id,
+                first_start: 100 + i,
+            })
+            .collect::<Vec<_>>();
+        let folded = LogQuery {
+            fold,
+            ..LogQuery::default()
+        };
+        assert_eq!(count_logs(&table, &folded).await.unwrap(), GROUPS as usize);
+
+        let page = query_log_page(&table, &folded, 0, MAX_PAGE_SIZE)
+            .await
+            .unwrap();
+        let kept = page
+            .iter()
+            .map(|log| log.node_id.clone().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(kept, (0..GROUPS).map(node).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn phrase_lists_stay_within_the_parameter_budget() {
+        let phrases = |n: usize| (0..n).map(|i| format!("p{i}")).collect::<Vec<_>>();
+        let busiest = LogQuery {
+            levels: vec![1],
+            exclude_levels: vec![0],
+            nodes: vec!["a".into()],
+            exclude_nodes: vec!["b".into()],
+            text: phrases(MAX_PHRASES),
+            exclude_text: phrases(MAX_PHRASES),
+            fingerprints: vec!["f".into()],
+            exclude_fingerprints: vec!["g".into()],
+            from: Some(1),
+            to: Some(2),
+            fold: vec![LogFold {
+                fingerprint: "h".into(),
+                first_start: 3,
+            }],
+        };
+        assert!(busiest.to_filter(true).is_ok());
+        let too_many = LogQuery {
+            text: phrases(MAX_PHRASES + 1),
+            ..LogQuery::default()
+        };
+        assert!(too_many.to_filter(true).is_err());
     }
 
     #[tokio::test]

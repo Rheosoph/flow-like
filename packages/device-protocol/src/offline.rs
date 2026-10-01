@@ -219,8 +219,8 @@ pub enum OfflineReplayStatus {
     Blocked,
 }
 
+/// Tolerates fields a newer hub adds, so an older device keeps draining its queue.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct OfflineReplayResponse {
     pub operation_id: String,
     pub digest: String,
@@ -856,6 +856,30 @@ mod tests {
         assert_eq!(format_limit(3 * 1024 * 1024), "3 MiB");
         assert_eq!(format_limit(5_000_000), "5.0 MB");
         assert_eq!(format_limit(4_800_000), "4.8 MB");
+    }
+
+    #[test]
+    fn replay_responses_tolerate_unknown_fields() {
+        let response: OfflineReplayResponse = serde_json::from_value(serde_json::json!({
+            "operation_id": "71bfc449-a2f1-4fa1-aed8-a3819d0f32d5",
+            "digest": "abc",
+            "status": "applied",
+            "result": {"kind": "file_revision", "e_tag": "e", "version": null},
+            "message": null,
+            "future_field": {"nested": true}
+        }))
+        .unwrap();
+        assert_eq!(response.status, OfflineReplayStatus::Applied);
+        assert_eq!(
+            response.result,
+            Some(OfflineExpected::FileRevision {
+                e_tag: Some("e".into()),
+                version: None,
+            })
+        );
+        let mut request = serde_json::to_value(request()).unwrap();
+        request["future_field"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<OfflineReplayRequest>(request).is_err());
     }
 
     #[test]

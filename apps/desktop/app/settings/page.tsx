@@ -16,6 +16,7 @@ import {
 	ChevronRight,
 	Cpu,
 	ExternalLink,
+	Globe,
 	HardDrive,
 	type LucideIcon,
 	Scroll,
@@ -26,7 +27,8 @@ import {
 	Zap,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { isMobileDevice } from "../../lib/platform";
 
 interface SettingsCard {
 	title: string;
@@ -35,6 +37,7 @@ interface SettingsCard {
 	icon: LucideIcon;
 	external?: boolean;
 	devOnly?: boolean;
+	desktopOnly?: boolean;
 }
 
 interface SettingsSection {
@@ -104,6 +107,16 @@ function buildSettingsSections(
 					),
 					href: "/settings/devices",
 					icon: Server,
+				},
+				{
+					title: t("automation", "Automation"),
+					description: t(
+						"automationSettingsDescription",
+						"Browsers for browser flows and Chrome for Testing",
+					),
+					href: "/settings/automation",
+					icon: Globe,
+					desktopOnly: true,
 				},
 				{
 					title: t("sinksAmpTriggers", "Sinks & Triggers"),
@@ -210,16 +223,22 @@ function SettingsCardItem({ card }: Readonly<{ card: SettingsCard }>) {
 export default function SettingsPage() {
 	const { t } = useTranslation("common");
 	const { developerMode } = useDeveloperMode();
+	const [mobile, setMobile] = useState(false);
+
+	useEffect(() => setMobile(isMobileDevice()), []);
 
 	const sections = useMemo(
 		() =>
 			buildSettingsSections(t)
 				.map((section) => ({
 					...section,
-					cards: section.cards.filter((card) => developerMode || !card.devOnly),
+					cards: section.cards.filter(
+						(card) =>
+							(developerMode || !card.devOnly) && !(mobile && card.desktopOnly),
+					),
 				}))
 				.filter((section) => section.cards.length > 0),
-		[developerMode, t],
+		[developerMode, mobile, t],
 	);
 
 	return (

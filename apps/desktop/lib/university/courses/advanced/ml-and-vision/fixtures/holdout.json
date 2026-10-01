@@ -1,0 +1,34 @@
+[
+  {
+    "id": "test-1",
+    "features": [
+      2.0,
+      2.0
+    ],
+    "label": "small"
+  },
+  {
+    "id": "test-2",
+    "features": [
+      5.0,
+      3.0
+    ],
+    "label": "small"
+  },
+  {
+    "id": "test-3",
+    "features": [
+      21.0,
+      16.0
+    ],
+    "label": "large"
+  },
+  {
+    "id": "test-4",
+    "features": [
+      24.0,
+      18.0
+    ],
+    "label": "large"
+  }
+]

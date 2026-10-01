@@ -4,8 +4,8 @@ use super::stream_events::send_correlated_stream_json_event;
 use super::workflow_state::{
     EXTERNAL_EXTENSION_CONTINUATION_GRANT, MAX_EXTERNAL_EARNED_WALL_CLOCK,
     MAX_EXTERNAL_WORKFLOW_CONTINUATIONS, MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS,
-    WorkflowToolLoopSnapshot, WorkflowToolLoopState, scoped_commit_budget, scoped_edit_budget,
-    scoped_operation_budget,
+    NESTED_RUN_WALL_CLOCK_BUDGET, WorkflowToolLoopSnapshot, WorkflowToolLoopState,
+    scoped_commit_budget, scoped_edit_budget, scoped_operation_budget,
 };
 use flow_like::flow::copilot::{BoardScopePlan, WorkflowSessionSnapshot};
 use flow_like_types::tokio_util::sync::CancellationToken;
@@ -186,6 +186,10 @@ pub(super) fn workflow_run_summary_payload(
         // How much wall clock this run EARNED by proving progress, so a long build is auditable
         // after the fact rather than looking like an unexplained multi-hour hang.
         "time_budget": {
+            "limit_secs": snapshot
+                .and_then(|snapshot| snapshot.nested_wall_clock_budget)
+                .unwrap_or(NESTED_RUN_WALL_CLOCK_BUDGET)
+                .as_secs(),
             "granted_extensions": snapshot.map_or(0, |snapshot| snapshot.granted_time_extensions),
             "earned_secs": snapshot.map_or(0, |snapshot| snapshot.earned_wall_clock.as_secs()),
             "ceiling_secs": MAX_EXTERNAL_EARNED_WALL_CLOCK.as_secs(),
@@ -197,15 +201,21 @@ pub(super) fn workflow_run_summary_payload(
         "budget": {
             "checks": workflow_run_summary_budget_entry(
                 snapshot.map_or(0, |snapshot| u64::from(snapshot.edit_attempts)),
-                u64::from(scoped_edit_budget(scope_plan)),
+                u64::from(snapshot
+                    .and_then(|snapshot| snapshot.edit_attempt_budget)
+                    .unwrap_or_else(|| scoped_edit_budget(scope_plan))),
             ),
             "source_ops": workflow_run_summary_budget_entry(
                 snapshot.map_or(0, |snapshot| u64::from(snapshot.flowscript_operation_attempts)),
-                u64::from(scoped_operation_budget(scope_plan)),
+                u64::from(snapshot
+                    .and_then(|snapshot| snapshot.flowscript_operation_budget)
+                    .unwrap_or_else(|| scoped_operation_budget(scope_plan))),
             ),
             "commits": workflow_run_summary_budget_entry(
                 snapshot.map_or(0, |snapshot| u64::from(snapshot.flowscript_commit_attempts)),
-                u64::from(scoped_commit_budget(scope_plan)),
+                u64::from(snapshot
+                    .and_then(|snapshot| snapshot.commit_attempt_budget)
+                    .unwrap_or_else(|| scoped_commit_budget(scope_plan))),
             ),
             "stalled": workflow_run_summary_budget_entry(
                 snapshot.map_or(0, |snapshot| u64::from(snapshot.stalled_edit_attempts)),
@@ -217,11 +227,11 @@ pub(super) fn workflow_run_summary_payload(
                 // ran under rather than the flat starting value.
                 u64::from(continuations_limit).max(u64::from(
                     snapshot.map_or(MAX_EXTERNAL_WORKFLOW_CONTINUATIONS, |snapshot| {
-                        MAX_EXTERNAL_WORKFLOW_CONTINUATIONS.saturating_add(
+                        snapshot.continuation_budget.unwrap_or_else(|| MAX_EXTERNAL_WORKFLOW_CONTINUATIONS.saturating_add(
                             snapshot
                                 .granted_time_extensions
                                 .saturating_mul(EXTERNAL_EXTENSION_CONTINUATION_GRANT),
-                        )
+                        ))
                     }),
                 )),
             ),

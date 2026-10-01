@@ -7,13 +7,34 @@ use flow_like_storage::{
     Path,
     files::store::{FlowLikeStore, local_store::LocalObjectStore},
     normalize_object_path,
-    object_store::{GetResult, PutPayload},
+    object_store::{self, GetResult, PutPayload},
 };
 use flow_like_types::{
     Bytes, Cacheable, JsonSchema, anyhow,
     json::{Deserialize, Serialize},
 };
 use std::{path::PathBuf, sync::Arc};
+
+/// Only `NotFound` reads as a missing object; every other store failure names the path and store.
+pub fn found_or_missing(
+    result: object_store::Result<GetResult>,
+    path: &str,
+    store_ref: &str,
+) -> flow_like_types::Result<Option<GetResult>> {
+    match result {
+        Ok(data) => Ok(Some(data)),
+        Err(object_store::Error::NotFound { .. }) => Ok(None),
+        Err(
+            error @ (object_store::Error::PermissionDenied { .. }
+            | object_store::Error::Unauthenticated { .. }),
+        ) => Err(anyhow!(
+            "Reading {path} from store '{store_ref}' failed: {error}; on S3 a missing or expired object and an object outside this run's temporary scope both return 403"
+        )),
+        Err(error) => Err(anyhow!(
+            "Reading {path} from store '{store_ref}' failed: {error}"
+        )),
+    }
+}
 
 fn path_without_final_extension(path: &str, extension: &str) -> String {
     if extension.is_empty() {
@@ -65,7 +86,12 @@ impl FlowPath {
 
         let (get_results, dirty) = self.get_cached_file(context).await?;
         let get_results = get_results.ok_or_else(|| {
-            flow_like_types::anyhow!("File not found in cache or store: {}", self.path)
+            let searched = if self.cache_store_ref.is_some() {
+                "cache or store"
+            } else {
+                "store"
+            };
+            flow_like_types::anyhow!("File not found in {searched}: {}", self.path)
         })?;
         let etag = get_results.meta.e_tag.clone();
 
@@ -262,10 +288,8 @@ impl FlowPath {
     }
 
     async fn get_file(&self, store: &FlowLikeStore) -> flow_like_types::Result<Option<GetResult>> {
-        match store.as_generic().get(&self.object_path()).await {
-            Ok(data) => Ok(Some(data)),
-            Err(_) => Ok(None),
-        }
+        let result = store.as_generic().get(&self.object_path()).await;
+        found_or_missing(result, &self.path, &self.store_ref)
     }
 
     pub async fn get_cached_file(
@@ -550,6 +574,216 @@ mod tests {
             FlowPath::new(serialized.path.clone(), serialized.store_ref, None).path,
             serialized.path
         );
+    }
+
+    mod store_reads {
+        use super::*;
+        use flow_like::{
+            flow::{
+                board::ExecutionStage,
+                execution::{LogLevel, internal_node::InternalNode},
+                node::{Node, NodeLogic},
+            },
+            profile::Profile,
+            state::{FlowLikeConfig, FlowLikeState},
+            utils::http::HTTPClient,
+        };
+        use flow_like_storage::object_store::{
+            CopyOptions, GetOptions, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+            PutMultipartOptions, PutOptions, PutResult,
+        };
+        use flow_like_types::sync::{Mutex, RwLock};
+        use futures::{StreamExt, stream::BoxStream};
+        use std::sync::Weak;
+
+        const HINT: &str = "on S3 a missing or expired object and an object outside this run's temporary scope both return 403";
+
+        #[derive(Debug)]
+        struct DeniedStore;
+
+        impl std::fmt::Display for DeniedStore {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "DeniedStore")
+            }
+        }
+
+        fn denied(location: &Path) -> object_store::Error {
+            object_store::Error::PermissionDenied {
+                path: location.to_string(),
+                source: "403 Forbidden".into(),
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl ObjectStore for DeniedStore {
+            async fn put_opts(
+                &self,
+                location: &Path,
+                _: PutPayload,
+                _: PutOptions,
+            ) -> object_store::Result<PutResult> {
+                Err(denied(location))
+            }
+
+            async fn put_multipart_opts(
+                &self,
+                location: &Path,
+                _: PutMultipartOptions,
+            ) -> object_store::Result<Box<dyn MultipartUpload>> {
+                Err(denied(location))
+            }
+
+            async fn get_opts(
+                &self,
+                location: &Path,
+                _: GetOptions,
+            ) -> object_store::Result<GetResult> {
+                Err(denied(location))
+            }
+
+            fn delete_stream(
+                &self,
+                locations: BoxStream<'static, object_store::Result<Path>>,
+            ) -> BoxStream<'static, object_store::Result<Path>> {
+                locations.map(|location| Err(denied(&location?))).boxed()
+            }
+
+            fn list(
+                &self,
+                prefix: Option<&Path>,
+            ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+                let error = denied(&prefix.cloned().unwrap_or_default());
+                futures::stream::once(async move { Err(error) }).boxed()
+            }
+
+            async fn list_with_delimiter(
+                &self,
+                prefix: Option<&Path>,
+            ) -> object_store::Result<ListResult> {
+                Err(denied(&prefix.cloned().unwrap_or_default()))
+            }
+
+            async fn copy_opts(
+                &self,
+                from: &Path,
+                _: &Path,
+                _: CopyOptions,
+            ) -> object_store::Result<()> {
+                Err(denied(from))
+            }
+        }
+
+        struct Noop;
+
+        #[async_trait::async_trait]
+        impl NodeLogic for Noop {
+            fn get_node(&self) -> Node {
+                Node::new("flow_path_test", "FlowPath test", "FlowPath test", "Tests")
+            }
+
+            async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+                Ok(())
+            }
+        }
+
+        async fn context_with_store(store: FlowLikeStore) -> ExecutionContext {
+            let state = Arc::new(FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            ));
+            let node = Arc::new(InternalNode::new(
+                Noop.get_node(),
+                Default::default(),
+                Arc::new(Noop),
+                Default::default(),
+            ));
+            let context = ExecutionContext::new(
+                Arc::new(Default::default()),
+                &Weak::new(),
+                &state,
+                &node,
+                &Arc::new(Mutex::new(Default::default())),
+                &Arc::new(RwLock::new(Default::default())),
+                LogLevel::Debug,
+                ExecutionStage::Dev,
+                Arc::new(Profile::default()),
+                None,
+                Arc::new(RwLock::new(Vec::new())),
+                None,
+                None,
+                Arc::new(Default::default()),
+                None,
+            )
+            .await;
+            context.set_cache("store", Arc::new(store)).await;
+            context
+        }
+
+        fn error_text(result: flow_like_types::Result<Vec<u8>>) -> String {
+            format!("{:#}", result.expect_err("the read should fail"))
+        }
+
+        #[tokio::test]
+        async fn a_missing_key_reads_as_none_and_reports_not_found() {
+            let memory = Arc::new(InMemory::new());
+            let path = flow_path("uploads/missing.pdf");
+
+            let file = path
+                .get_file(&FlowLikeStore::Memory(memory.clone()))
+                .await
+                .unwrap();
+            assert!(file.is_none());
+
+            let mut bypassed = context_with_store(FlowLikeStore::Memory(memory.clone())).await;
+            assert_eq!(
+                error_text(path.get(&mut bypassed, false).await),
+                "File not found in store: uploads/missing.pdf"
+            );
+
+            let mut uncached = context_with_store(FlowLikeStore::Other(memory)).await;
+            assert_eq!(
+                error_text(path.get(&mut uncached, false).await),
+                "File not found in store: uploads/missing.pdf"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_denied_read_names_the_path_the_store_and_the_403_hint() {
+            let path = flow_path("tmp/runs/mail_1/attachment.pdf");
+            let mut context = context_with_store(FlowLikeStore::Other(Arc::new(DeniedStore))).await;
+
+            for bypass_cache in [false, true] {
+                let message = error_text(path.get(&mut context, bypass_cache).await);
+                assert!(
+                    message.starts_with(
+                        "Reading tmp/runs/mail_1/attachment.pdf from store 'store' failed: "
+                    ),
+                    "{message}"
+                );
+                assert!(message.ends_with(HINT), "{message}");
+                assert!(!message.contains("not found"), "{message}");
+            }
+        }
+
+        #[test]
+        fn other_store_failures_surface_without_the_403_hint() {
+            let error = found_or_missing(
+                Err(object_store::Error::Generic {
+                    store: "S3",
+                    source: "connection reset".into(),
+                }),
+                "uploads/a.pdf",
+                "store",
+            )
+            .expect_err("a generic failure is not a miss");
+            let message = error.to_string();
+            assert!(
+                message.starts_with("Reading uploads/a.pdf from store 'store' failed: "),
+                "{message}"
+            );
+            assert!(message.contains("connection reset"), "{message}");
+            assert!(!message.contains(HINT), "{message}");
+        }
     }
 
     #[test]

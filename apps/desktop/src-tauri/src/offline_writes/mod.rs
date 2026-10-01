@@ -17,6 +17,7 @@ use flow_like_offline_writes::{
     Outbox,
     fs::{private_directory, validate_namespace},
 };
+use host::Services;
 use scope::{AppOfflineScope, CacheDirs, ScopeDescriptor, ScopeKey};
 use serde::Serialize;
 use std::{
@@ -41,6 +42,7 @@ pub(crate) struct OfflineWrites {
     root: PathBuf,
     installation: OnceLock<String>,
     scopes: Mutex<HashMap<ScopeKey, Arc<AppOfflineScope>>>,
+    services: Option<Services>,
 }
 
 impl OfflineWrites {
@@ -53,6 +55,16 @@ impl OfflineWrites {
             root,
             installation: OnceLock::new(),
             scopes: Mutex::new(HashMap::new()),
+            services: None,
+        }
+    }
+
+    /// A registry whose scopes use `services` instead of the application's.
+    #[cfg(test)]
+    pub(crate) fn with_services(root: PathBuf, services: Services) -> Self {
+        Self {
+            services: Some(services),
+            ..Self::at(root)
         }
     }
 
@@ -93,20 +105,31 @@ impl OfflineWrites {
         let descriptor = scope::read_descriptor(&self.root, &id)?
             .filter(|descriptor| descriptor.key() == key)
             .unwrap_or_else(|| ScopeDescriptor::new(&id, &key));
+        let services = self
+            .services
+            .clone()
+            .unwrap_or_else(|| Services::desktop(app_handle));
         let created = AppOfflineScope::new(
-            app_handle,
             self.root.clone(),
             installation,
             id,
             key.clone(),
             descriptor,
             dirs,
+            services,
         );
         Ok(self.scopes().entry(key).or_insert(created).clone())
     }
 
     pub(crate) fn descriptors(&self) -> Vec<ScopeDescriptor> {
         scope::read_descriptors(&self.root)
+    }
+
+    /// Whether any account configured offline tables of `app_id` on `hub` on this device.
+    pub(crate) fn has_configured_tables(&self, hub: &str, app_id: &str) -> bool {
+        self.descriptors().iter().any(|descriptor| {
+            descriptor.hub == hub && descriptor.app_id == app_id && !descriptor.tables.is_empty()
+        })
     }
 
     /// Queued changes of `app_id` in the scopes of other accounts, read without opening them.
@@ -231,7 +254,10 @@ pub(crate) fn spawn(app_handle: AppHandle) {
     });
 }
 
-pub(crate) async fn scope_for(app_handle: &AppHandle, key: ScopeKey) -> Result<Arc<AppOfflineScope>> {
+pub(crate) async fn scope_for(
+    app_handle: &AppHandle,
+    key: ScopeKey,
+) -> Result<Arc<AppOfflineScope>> {
     if let Some(scope) = app_handle
         .try_state::<OfflineWrites>()
         .and_then(|registry| registry.existing(&key))
@@ -303,8 +329,10 @@ pub(crate) fn installation_id(root: &Path) -> Result<String> {
             sync_directory(root)?;
             Ok(id)
         }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => read_installation(&path)?
-            .context("The offline installation identifier of this device is unreadable"),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            read_installation(&path)?
+                .context("The offline installation identifier of this device is unreadable")
+        }
         Err(error) => Err(error.into()),
     }
 }
@@ -504,7 +532,6 @@ pub(crate) mod texts {
     pub(crate) const NO_TABLE_ACCESS: &str =
         "Connect to the hub to download or refresh offline tables";
     pub(crate) const NO_DATA_ACCESS: &str = "Connect to the hub to download offline data";
-    pub(crate) const LAZY_MIRROR_MISSING: &str = "Download everything needs a lazy offline mirror";
 
     pub(crate) fn table_unavailable(table: &str) -> String {
         format!(
@@ -533,6 +560,16 @@ pub(crate) mod texts {
 
     pub(crate) fn unavailable(error: impl Display) -> String {
         format!("Offline changes are unavailable on this device: {error}")
+    }
+
+    pub(crate) fn local_copy_unavailable(table: &str, error: impl Display) -> String {
+        format!(
+            "Table '{table}' is available offline on this device, but its local copy could not be opened: {error}"
+        )
+    }
+
+    pub(crate) fn capabilities_unreachable(error: impl Display) -> String {
+        format!("Could not reach the hub to check offline support: {error}")
     }
 
     pub(crate) fn not_cached(path: &str) -> String {
@@ -592,12 +629,6 @@ pub(crate) mod texts {
     pub(crate) fn disable_pending(table: &str) -> String {
         format!(
             "Table '{table}' still has queued changes. Sync or skip them before turning off offline access."
-        )
-    }
-
-    pub(crate) fn limit_below_required(needed: &str) -> String {
-        format!(
-            "Tables that download everything and tables with queued changes need at least {needed} on this device; choose a limit of at least that size."
         )
     }
 

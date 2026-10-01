@@ -1290,5 +1290,11 @@
 	"exploreLeaveTitle": "",
 	"explorePreviewUnavailable": "",
 	"exploreRuleMatches": "",
-	"exploreSummarySpotlightVisible": ""
+	"exploreSummarySpotlightVisible": "",
+	"agentBackendOperationsDescription": "익명 CLI 상태 진단 이벤트입니다. 결과와 소요 시간에는 시작, 인증 확인, 모델 검색, 실행, 종료가 포함됩니다.",
+	"agentErrorReports_one": "오류 보고서 {{count}}개",
+	"agentErrorReports_other": "오류 보고서 {{count}}개",
+	"agentOperation_one": "회 작업",
+	"agentOperation_other": "회 작업",
+	"agentOperationP95": "작업 시간 95번째 백분위수"
 }

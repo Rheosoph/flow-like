@@ -19,8 +19,8 @@ export class WebAnalyticsState implements IAnalyticsState {
 
 		const query = params.toString();
 		const url = query
-			? `apps/${appId}/analytics/?${query}`
-			: `apps/${appId}/analytics/`;
+			? `apps/${appId}/analytics?${query}`
+			: `apps/${appId}/analytics`;
 		return await apiGet<IAnalyticsOverview>(url, this.backend.auth);
 	}
 

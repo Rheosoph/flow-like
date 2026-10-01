@@ -121,7 +121,9 @@ pub(crate) fn validate_remote(name: &str) -> Result<()> {
 
 pub(crate) fn ensure_repository(path: &Path) -> Result<()> {
     if !path.is_dir() || !path.join(".git").exists() {
-        bail!("Select a Git working tree with its .git metadata. For a stored file snapshot, clone again with Include .git enabled.");
+        bail!(
+            "Select a Git working tree with its .git metadata. For a stored file snapshot, clone again with Include .git enabled."
+        );
     }
     if run(path, &["rev-parse", "--is-inside-work-tree"])?.trim() != "true" {
         bail!("This operation requires a Git working tree; bare repositories are not supported");

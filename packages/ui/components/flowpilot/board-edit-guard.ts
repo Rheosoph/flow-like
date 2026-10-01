@@ -516,7 +516,7 @@ const REPAIR_SCOPE_SEPARATOR = "::";
 /**
  * Deterministic owner+board+scope guard for the zero-progress retry policy.
  *
- * A board specialist that returns no source, checks, or commit may be retried with a materially
+ * A board specialist that returns no source, checks, or commit may be retried once with a materially
  * different strategy. Once a scope has burned its budget, a further run against it cannot add
  * evidence and would only spend another full nested deadline, so the frontend refuses it before
  * dispatch.
@@ -532,7 +532,7 @@ export class BoardZeroProgressRetryGuard {
 	private readonly recordedRuns = new Map<string, true>();
 
 	constructor(
-		private readonly maxRuns = 3,
+		private readonly maxRuns = 2,
 		private readonly maxRunsPerBoard = 6,
 		private readonly maxEntries = 512,
 	) {}
@@ -1351,6 +1351,8 @@ export function isCreatedAppBuildTargetMismatch(
 			);
 		case "flowpilot_board":
 			return options.mode !== "explain" && options.mode !== "inspect";
+		case "flowpilot_board_review":
+			return options.operation === "apply" || options.operation === "dismiss";
 		case "flowpilot_widget":
 			return options.mode !== "inspect";
 		case "database_tool":

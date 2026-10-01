@@ -1,0 +1,37 @@
+---
+title: "Make hosted model usage explainable to an operator"
+description: "Follow a hosted AI request through its saved rate, usage status, and call telemetry to explain what happened and how it was accounted for."
+date: 2026-09-23
+tags: ["operations", "AI", "accounting"]
+cover: "/images/community-U4.png"
+draft: true
+---
+
+When someone asks why a hosted AI request produced a particular charge, an operator needs more than the model's current price. They need the rate that applied when the request was admitted, the usage reported for that request, and its outcome.
+
+Flow-Like keeps a rate snapshot with the reservation. Later changes to model pricing or exchange-rate configuration leave that saved rate intact. An operator can therefore trace a request using the terms that applied when it was admitted, even after the model's published configuration changes.
+
+## Preserve the rate used by the request
+
+Hosted model pricing can come from the model Bit, the reusable configuration that identifies a model and its settings. The pricing reader validates nonnegative integer amounts and creates a versioned rate snapshot from the relevant configuration.
+
+The record distinguishes missing or invalid provider pricing from a known price. A request may still have serving charges when its provider cost is unavailable. Missing provider pricing therefore calls for investigation; it does not establish that the request was free. The [Bit pricing code](https://github.com/Rheosoph/flow-like/blob/dev/packages/api/src/bit_pricing.rs) defines those states.
+
+<figure>
+  <img src="/posts/community/U4/overview.svg" alt="A workflow execution produces eligible usage records, applies the deployed pricing configuration, and leaves accounting records for inspection." loading="lazy" width="1600" height="1000" />
+  <figcaption>Inspect the request's recorded rate and usage state before comparing it with today's configuration.</figcaption>
+</figure>
+
+## Keep uncertainty visible
+
+Accounting distinguishes pending, completed, failed, cancelled, and unknown-usage states. An interrupted request can require a different investigation from a completed request with confirmed usage. An estimate made to reserve capacity is also different from a final measurement.
+
+Some internal embedding pricing is explicitly estimated from input bytes because the returned word count is not tokenizer usage. That boundary should remain visible in any operational report built on these records. See the [usage accounting implementation](https://github.com/Rheosoph/flow-like/blob/dev/packages/api/src/usage_accounting.rs) for the state and rate definitions.
+
+## Use telemetry for the question it can answer
+
+The reusable server-side LLM call record describes provider, model, operation, duration, optional token counts, status, and classified failure information. It can help distinguish a failing provider call from a successful call whose usage requires attention.
+
+That particular record contains aggregate measurements rather than prompts, completions, tool arguments, or file paths. This is a boundary of the [LLM call record](https://github.com/Rheosoph/flow-like/blob/dev/packages/api/src/telemetry/llm.rs), not a statement about every log or telemetry stream in a deployment. Missing token counts also remain optional; absence is not evidence that the model used no tokens.
+
+When a customer asks about a request, start with its outcome and recorded usage, then follow the saved rate used by accounting. A completed call with reported usage has a different explanation from an interrupted call whose usage is unknown. Keep estimated and unavailable values labeled in the response. Another operator can then follow the same record without having to reconstruct yesterday's model configuration.

@@ -66,6 +66,17 @@ pub async fn version_board(
     let (version, published) = board
         .create_version_returning_published(params.version_type.unwrap_or(VersionType::Patch), None)
         .await?;
+    if let Err(error) = board
+        .record_version_publisher(published, Some(sub.clone()), None)
+        .await
+    {
+        tracing::warn!(
+            board_id = %board.id,
+            version = ?published,
+            error = %error,
+            "Publisher of the published board version could not be recorded"
+        );
+    }
     let manifest = Arc::new(PrerunManifest::from_board(&board));
     let page_manifests = published_page_prerun_manifests(&board, published).await;
     let manifest_path = manifest_path(&board.board_dir, &board.id, published);

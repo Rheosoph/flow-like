@@ -504,7 +504,7 @@ mod tests {
         let frame = ScreenFrame::new(Some(1), (-1440, -200, 1440, 900), (2880, 1800)).unwrap();
         let view = model_view(Some(frame), (2880, 1800));
         let (width, height) = view.size();
-        assert!(width <= 1568 && width < 2880);
+        assert!(width <= 1568);
         let (x, y) = view
             .point_from_model(width as f64 / 2.0, height as f64 / 2.0)
             .unwrap();

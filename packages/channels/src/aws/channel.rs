@@ -79,7 +79,7 @@ impl AwsIotChannel {
         let mut options = MqttOptions::new(client_id.clone(), mqtt_wss_url(endpoint), 443);
         options
             .set_transport(Transport::wss_with_config(TlsConfiguration::Rustls(
-                Arc::new(tls_config()?),
+                crate::tls::client_config()?,
             )))
             .set_keep_alive(KEEP_ALIVE)
             .set_clean_session(true)
@@ -167,22 +167,6 @@ impl Drop for AwsIotChannel {
             task.abort();
         }
     }
-}
-
-/// Explicit provider and roots: the workspace links both `ring` and `aws-lc-rs` into rustls, so
-/// `ClientConfig::builder()` (what `Transport::wss_with_default_config` uses) would panic unless
-/// the binary installed a process default first.
-fn tls_config() -> Result<rustls::ClientConfig> {
-    let provider = rustls::crypto::CryptoProvider::get_default()
-        .cloned()
-        .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
-    let mut roots = rustls::RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    Ok(rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .map_err(|error| anyhow!("rustls provider supports no usable TLS version: {error}"))?
-        .with_root_certificates(roots)
-        .with_no_client_auth())
 }
 
 struct EventLoopContext {

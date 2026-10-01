@@ -24,6 +24,8 @@ pub mod public_web;
 mod search;
 pub mod session;
 pub mod stream;
+#[cfg(test)]
+mod tool_schema_tests;
 pub mod tool_spec;
 mod tools;
 mod typed_ir_parse;
@@ -68,11 +70,11 @@ pub use ir_tools::{
     FlowIrEditableDraftContext, FlowIrRequestIdentity, FlowIrRetainedDraftSnapshot,
     FlowIrToolError, FlowScriptDraftRecovery, FlowScriptDraftResponse,
     FlowScriptEditableDraftContext, FlowScriptPendingDelivery, FlowScriptTestSnapshot,
-    MAX_BOARD_SCOPE_SEGMENTS, NEW_BOARD_REF_PREFIX, PatchFlowScriptArgs, PlanBoardScopeArgs,
-    PlanFlowIrTool, PlannedSegment, ScopePlanRejection, ScopeStrategy, TestFlowScriptArgs,
-    UpdateFlowIrDraftArgs, UpdateFlowIrDraftTool, UpsertFlowIrModuleArgs, UpsertFlowIrModuleTool,
-    ValidateFlowIrDraftArgs, ValidateFlowIrDraftTool, WriteFlowScriptArgs, accept_scope_plan,
-    board_fingerprint, render_typed_ir_parse_error, typed_ir_schema_hint,
+    FlowScriptTextEdit, MAX_BOARD_SCOPE_SEGMENTS, NEW_BOARD_REF_PREFIX, PatchFlowScriptArgs,
+    PlanBoardScopeArgs, PlanFlowIrTool, PlannedSegment, ScopePlanRejection, ScopeStrategy,
+    TestFlowScriptArgs, UpdateFlowIrDraftArgs, UpdateFlowIrDraftTool, UpsertFlowIrModuleArgs,
+    UpsertFlowIrModuleTool, ValidateFlowIrDraftArgs, ValidateFlowIrDraftTool, WriteFlowScriptArgs,
+    accept_scope_plan, board_fingerprint, render_typed_ir_parse_error, typed_ir_schema_hint,
 };
 pub use manifest::{
     BOARD_CONTEXT_MANIFEST_VERSION, BoardContextManifest, FlowScriptModuleTemplate, ManifestAudit,

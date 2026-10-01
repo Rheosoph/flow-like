@@ -10,6 +10,55 @@ inspect courses and upload individual assets.
 Install the [repository dependencies](/dev/build/) and run commands from the
 repository root. `--json` reserves stdout for results; diagnostics go to stderr.
 
+## Check the curriculum locally
+
+Run the repository-wide check before applying edited courses:
+
+```sh
+bun run university:check
+bun run university:check -- --json
+```
+
+The checker discovers every `course.plan.json` beneath
+`apps/desktop/lib/university/courses`, loads its lesson files and assets, and
+checks IDs across courses. A course's `estimatedMinutes` must equal the sum
+of its required lessons. Output includes required and optional time, lesson
+and question counts, and approximate whitespace-based word counts. It makes
+no API requests.
+
+`apps/desktop/lib/university/curriculum.json` defines six learning paths by
+learner goal. Each path lists ordered `courses` and optional `electives` as
+plan paths relative to the catalog. The checker resolves those references
+against the discovered plans and reports each path's time. Use
+`--catalog path/to/curriculum.json` to validate another catalog with the same
+schema and a neighboring `courses/` directory. The default command validates
+local files without publishing them.
+
+## Keep a course focused
+
+Give each course one outcome. State prerequisites and the required environment
+in `longDescription`, followed by core time and any optional time. Teach a
+concept in its owning course; later courses should use it in a new exercise
+and link to the reference instead of repeating the introduction.
+
+Mark elective classes with `isOptional: true` and exclude their time from the
+course estimate. Keep the final assessment required and last, after any
+optional classes. Use a short concept check where it helps and a small final
+assessment that applies the skill to a new case.
+
+For practice, specify the actual node names and pin connections, synthetic
+inputs, and expected outputs. Put downloadable inputs or source under the
+course's `fixtures/` directory and register them as named `DOCUMENT` assets.
+Include an empty or failing case when it teaches a meaningful boundary.
+Check FlowScript against current declarations and compiler diagnostics before
+asking learners to apply it.
+
+Manual checks must be described as manual. Use `BOARD_RIDDLE` or
+`EXECUTE_NODE` only when the plan has real, resolvable App and board targets;
+a fixture download alone does not create an automatically scored exercise.
+Preserve IDs when the meaning remains the same, so progress and references
+remain connected to the intended lesson or challenge.
+
 ## Set up access
 
 The tool reads credentials only from the environment:
@@ -52,12 +101,112 @@ lessons, challenges, and app references, then reads the remote structure back
 for verification. A plan with `isPublished: true` is published only after that
 verification passes. A failed run is left as a draft.
 
-Apply does not delete remote modules, lessons, challenges, or app references
-that are absent from the plan. This avoids destructive pruning during a
-retry; verification reports unexpected structural children and prevents
-publication until an author removes them deliberately. A same-named asset is reused only when its metadata matches; set the
+By default, apply keeps remote children absent from the plan. Verification
+reports every unexpected module, lesson, challenge, App reference, and App
+link in `data.retirements` and prevents publication. Use the explicit
+`--prune` option below to retire them. A same-named asset is reused only when its metadata matches; set the
 asset's `replace` field to `true` to force replacement. Without `replace`, the
 API exposes no checksum, so matching metadata cannot prove byte equality.
+
+### Compatibility with older media workers
+
+Older media workers process course downloads as images and delete formats such
+as JSON and ZIP. Until the updated worker is deployed, add
+`--legacy-media-assets` to a plan apply or a single-asset upload:
+
+```sh
+bun run university -- --plan path/to/course.plan.json --legacy-media-assets --json
+bun run university -- --asset <course-id> --name Cases --file cases.json --replace --legacy-media-assets --json
+```
+
+This opt-in mode requests a `.webp` storage key for `DOCUMENT` assets because
+the older worker leaves that extension untouched. The original filename, MIME
+type, asset kind and bytes are preserved. Uploads set `Content-Disposition`
+with the original download filename, including a UTF-8 filename parameter.
+Other asset kinds keep their normal storage extensions.
+
+If an existing document still uses an affected key, explicitly replace it
+with the single-asset command above or the plan asset's `replace: true` field.
+The flag does not repair files already deleted by the worker without that
+replacement. After deploying the corrected media worker, omit the flag for
+new uploads. Existing compatibility uploads remain usable; replacing one
+without the flag restores its normal storage extension.
+
+## Review removals before applying a shorter course
+
+Compare the current course plans with a Git commit before reconciling existing
+remote content:
+
+```sh
+bun run university:check -- --compare-ref HEAD --json
+```
+
+The `migration` result lists removed module, lesson, challenge, App-link, and
+App-reference IDs, plus IDs moved to another parent. Each entry includes its
+source location; moved entries also include the destination. This compares
+repository versions, not the remote database. It does not delete content or
+transfer learner progress.
+
+The API cannot move an existing module, lesson, challenge, or App reference
+to another parent. Give moved entities a new stable ID, such as the former ID
+with `-v2` appended. When a lesson receives a new ID, its retained challenges
+and App references also need new IDs. Keep IDs whose direct parent remains
+unchanged. A new lesson starts with new lesson-level progress; retiring its
+former ID deletes the old progress and challenge attempts.
+
+Inspect the remote course and review the retirement list. To apply the plan
+and delete its obsolete children:
+
+```sh
+bun run university -- --plan path/to/course.plan.json --prune --json
+```
+
+The runner drafts the course and upserts the target content before inspecting
+all existing descendants. It refuses to delete a parent containing an ID
+retained elsewhere in the plan, or to delete anything when a target ID is
+missing. It then deletes obsolete roots through the course API and verifies
+the resulting course before publication. Module and lesson deletion cascades
+to their children and learner records. Course assets are retained. The JSON
+result lists each requested retirement and its status; a parent retirement
+includes its descendants through that cascade. Avoid concurrent authoring
+while applying a plan because the API has no conditional update token.
+
+If deletion returns `202`, the runner stops and leaves the course as a draft.
+The error includes the deletion job ID. An administrator must confirm `DONE`
+at `GET /admin/deletions/{job_id}` before retrying. Pending and failed jobs
+are hidden from course structure, so a later import cannot detect them from
+that view. The CLI does not automatically retry or cancel deletion jobs.
+
+`--prune --dry-run` stays offline and shows the retirement step; discovering
+remote IDs requires an apply or `--inspect`. Authors can also retire content
+through the authoring interface. `--compare-ref` cannot be combined with
+`--apply-paths`, so the comparison remains read-only.
+
+## Publish the learning paths
+
+Apply and publish the referenced course plans first, then use the environment
+credentials described above to publish the catalog's ordered paths:
+
+```sh
+bun run university:check -- --apply-paths --json
+```
+
+The command validates every local course before making an API request. For
+each path it writes a draft, upserts the core course positions, and reads the
+path back. It publishes only when metadata and ordered steps match, and every
+core course exists and is published remotely. Elective names appear in the
+path description; they are not added to its ordered steps.
+
+An existing step absent from the catalog leaves that path as a draft. The
+result names the unexpected course IDs so an author can remove those steps
+deliberately before retrying. No path steps, courses, or lessons are silently
+deleted. Other paths are processed independently.
+
+If a publication response is lost or fails verification, the command attempts
+to restore that path to a draft. A `failed` result reports when it cannot
+confirm recovery; inspect that remote path before retrying. Requests use the
+University client's PAT handling and HTTPS requirement, with a two-minute
+command timeout and a separate ten-second recovery attempt.
 
 ## Add screenshots and files
 

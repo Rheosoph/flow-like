@@ -236,6 +236,19 @@ pub trait LogicalTableMutationAdapter: Send + Sync {
     fn generation(&self) -> u64 {
         0
     }
+
+    /// Called when `read_table()` or a read of its view fails. `retried` is true on the
+    /// second failure of the same read, which is never retried again.
+    async fn read_failed(&self, error: anyhow::Error, _retried: bool) -> ReadRecovery {
+        ReadRecovery::Fail(error)
+    }
+}
+
+/// What a managed store does after a read of its adapter's view failed.
+pub enum ReadRecovery {
+    /// Run the read once more on a fresh `read_table()`.
+    Retry,
+    Fail(anyhow::Error),
 }
 
 #[derive(Clone)]
@@ -318,6 +331,29 @@ impl LanceDBVectorStore {
         self.readable_table()
             .await?
             .ok_or_else(|| anyhow!("Table not initialized"))
+    }
+
+    /// None: run the read again. Failed reads of managed stores go through the adapter's
+    /// `read_failed`, which may ask for one retry.
+    async fn recover_read<T>(&self, result: Result<T>, retried: &mut bool) -> Option<Result<T>> {
+        let error = match result {
+            Ok(value) => return Some(Ok(value)),
+            Err(error) => error,
+        };
+        let Some(adapter) = &self.mutation_adapter else {
+            return Some(Err(error));
+        };
+        match adapter.read_failed(error, *retried).await {
+            ReadRecovery::Retry if !*retried => {
+                *retried = true;
+                None
+            }
+            ReadRecovery::Retry => Some(Err(anyhow!(
+                "Table '{}' could not be read after its offline copy was refreshed",
+                self.table_name
+            ))),
+            ReadRecovery::Fail(error) => Some(Err(error)),
+        }
     }
 
     pub async fn table_exists(&self) -> Result<bool> {
@@ -1051,8 +1087,17 @@ impl LanceDBVectorStore {
     }
 
     pub async fn list_indices(&self) -> Result<Vec<IndexConfigDto>> {
-        let indices = self.require_readable_table().await?;
-        list_table_indices(&indices).await
+        let mut retried = false;
+        loop {
+            let read: Result<Vec<IndexConfigDto>> = async {
+                let indices = self.require_readable_table().await?;
+                list_table_indices(&indices).await
+            }
+            .await;
+            if let Some(result) = self.recover_read(read, &mut retried).await {
+                return result;
+            }
+        }
     }
 
     pub async fn drop_index(&self, name: &str) -> Result<()> {
@@ -1697,8 +1742,52 @@ fn is_vector_data_type(data_type: &DataType) -> bool {
     }
 }
 
+/// Lance trains a product quantizer on 2^8 centroids, one training vector each.
+const PQ_TRAINING_VECTORS: usize = 256;
+
 fn cosine_vector_index() -> Index {
     Index::IvfPq(IvfPqIndexBuilder::default().distance_type(lancedb::DistanceType::Cosine))
+}
+
+/// A PQ index for a single-vector column that holds too few rows to train PQ.
+/// AUTO and VECTOR leave the algorithm to us, so they get exact IVF_FLAT; an
+/// explicit PQ choice fails with the alternatives.
+fn index_below_pq_minimum(selection: Option<&str>, column: &str, rows: usize) -> Result<Index> {
+    match normalized_index_selection(selection).as_str() {
+        "AUTO" | "VECTOR" => Ok(Index::IvfFlat(
+            IvfFlatIndexBuilder::default().distance_type(lancedb::DistanceType::Cosine),
+        )),
+        _ => Err(anyhow!(
+            "{} on column '{column}' needs at least {PQ_TRAINING_VECTORS} rows to train product quantization, but the table has {rows}. Use AUTO or VECTOR, which build IVF_FLAT on tables this small, or an index without PQ such as IVF_FLAT or IVF_SQ",
+            selection.unwrap_or("AUTO")
+        )),
+    }
+}
+
+/// Multivector columns train PQ on every sub-vector, so their row count is no
+/// bound; they, and columns lancedb will reject anyway, keep `index`.
+async fn fit_pq_to_row_count(
+    table: &Table,
+    column: &str,
+    selection: Option<&str>,
+    index: Index,
+) -> Result<Index> {
+    if !matches!(index, Index::IvfPq(_) | Index::IvfHnswPq(_)) {
+        return Ok(index);
+    }
+    let schema = lance::datatypes::Schema::try_from(table.schema().await?.as_ref())?;
+    let single_vector = schema
+        .resolve_case_insensitive(column)
+        .and_then(|path| path.last().map(|field| field.data_type()))
+        .is_some_and(|data_type| matches!(data_type, DataType::FixedSizeList(..)));
+    if !single_vector {
+        return Ok(index);
+    }
+    let rows = table.count_rows(None).await?;
+    if rows >= PQ_TRAINING_VECTORS {
+        return Ok(index);
+    }
+    index_below_pq_minimum(selection, column, rows)
 }
 
 fn normalized_index_selection(selection: Option<&str>) -> String {
@@ -1955,27 +2044,35 @@ impl VectorStore for LanceDBVectorStore {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Value>> {
-        let table = self.require_readable_table().await?;
+        let mut retried = false;
+        loop {
+            let read: Result<Vec<Value>> = async {
+                let table = self.require_readable_table().await?;
 
-        let mut query = table
-            .query()
-            .nearest_to(vector)?
-            .distance_type(lancedb::DistanceType::Cosine)
-            .limit(limit)
-            .offset(offset);
+                let mut query = table
+                    .query()
+                    .nearest_to(vector.clone())?
+                    .distance_type(lancedb::DistanceType::Cosine)
+                    .limit(limit)
+                    .offset(offset);
 
-        if let Some(filter) = filter {
-            query = query.only_if(orient_spatial_relations(filter)?);
+                if let Some(filter) = filter {
+                    query = query.only_if(orient_spatial_relations(filter)?);
+                }
+
+                if let Some(select) = select.clone() {
+                    query = query.select(lancedb::query::Select::Columns(select));
+                }
+
+                let result = query.execute().await?;
+                let result = result.try_collect::<Vec<_>>().await?;
+                record_batches_to_vec(Some(result))
+            }
+            .await;
+            if let Some(result) = self.recover_read(read, &mut retried).await {
+                return result;
+            }
         }
-
-        if let Some(select) = select {
-            query = query.select(lancedb::query::Select::Columns(select));
-        }
-
-        let result = query.execute().await?;
-        let result = result.try_collect::<Vec<_>>().await?;
-        let result = record_batches_to_vec(Some(result))?;
-        Ok(result)
     }
 
     async fn fts_search(
@@ -1987,35 +2084,43 @@ impl VectorStore for LanceDBVectorStore {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Value>> {
-        let table = self.require_readable_table().await?;
+        let mut retried = false;
+        loop {
+            let read: Result<Vec<Value>> = async {
+                let table = self.require_readable_table().await?;
 
-        let mut fts_query = FullTextSearchQuery::new(text.to_string());
-        if let Some(fields) = fields {
-            match fields.len() {
-                1 => fts_query = fts_query.with_column(fields[0].clone())?,
-                n if n > 1 => fts_query = fts_query.with_columns(&fields)?,
-                _ => {}
+                let mut fts_query = FullTextSearchQuery::new(text.to_string());
+                if let Some(fields) = &fields {
+                    match fields.len() {
+                        1 => fts_query = fts_query.with_column(fields[0].clone())?,
+                        n if n > 1 => fts_query = fts_query.with_columns(fields)?,
+                        _ => {}
+                    }
+                }
+
+                let mut query = table
+                    .query()
+                    .full_text_search(fts_query)
+                    .limit(limit)
+                    .offset(offset);
+
+                if let Some(filter) = filter {
+                    query = query.only_if(orient_spatial_relations(filter)?);
+                }
+
+                if let Some(select) = select.clone() {
+                    query = query.select(lancedb::query::Select::Columns(select));
+                }
+
+                let result = query.execute().await?;
+                let result = result.try_collect::<Vec<_>>().await?;
+                record_batches_to_vec(Some(result))
+            }
+            .await;
+            if let Some(result) = self.recover_read(read, &mut retried).await {
+                return result;
             }
         }
-
-        let mut query = table
-            .query()
-            .full_text_search(fts_query)
-            .limit(limit)
-            .offset(offset);
-
-        if let Some(filter) = filter {
-            query = query.only_if(orient_spatial_relations(filter)?);
-        }
-
-        if let Some(select) = select {
-            query = query.select(lancedb::query::Select::Columns(select));
-        }
-
-        let result = query.execute().await?;
-        let result = result.try_collect::<Vec<_>>().await?;
-        let result = record_batches_to_vec(Some(result))?;
-        Ok(result)
     }
 
     async fn hybrid_search(
@@ -2029,50 +2134,58 @@ impl VectorStore for LanceDBVectorStore {
         offset: usize,
         rerank: bool,
     ) -> Result<Vec<Value>> {
-        let table = self.require_readable_table().await?;
-        let schema = table.schema().await?;
-        let (vector_column, fields) = split_hybrid_fields(&schema, fields);
+        let mut retried = false;
+        loop {
+            let read: Result<Vec<Value>> = async {
+                let table = self.require_readable_table().await?;
+                let schema = table.schema().await?;
+                let (vector_column, fields) = split_hybrid_fields(&schema, fields.clone());
 
-        let mut fts_query = FullTextSearchQuery::new(text.to_string());
-        if let Some(ref fields) = fields {
-            match fields.len() {
-                1 => fts_query = fts_query.with_column(fields[0].clone())?,
-                n if n > 1 => fts_query = fts_query.with_columns(fields)?,
-                _ => {}
+                let mut fts_query = FullTextSearchQuery::new(text.to_string());
+                if let Some(ref fields) = fields {
+                    match fields.len() {
+                        1 => fts_query = fts_query.with_column(fields[0].clone())?,
+                        n if n > 1 => fts_query = fts_query.with_columns(fields)?,
+                        _ => {}
+                    }
+                }
+
+                let mut query = table
+                    .query()
+                    .nearest_to(vector.clone())?
+                    .distance_type(lancedb::DistanceType::Cosine)
+                    .full_text_search(fts_query)
+                    .limit(limit)
+                    .offset(offset);
+
+                if let Some(vector_column) = vector_column {
+                    query = query.column(&vector_column);
+                }
+
+                if rerank {
+                    let reranker = Arc::new(lancedb::rerankers::rrf::RRFReranker::new(60.0));
+                    query = query.rerank(reranker);
+                }
+
+                if let Some(filter) = filter {
+                    query = query.only_if(orient_spatial_relations(filter)?);
+                }
+
+                if let Some(select) = select.clone() {
+                    query = query.select(lancedb::query::Select::Columns(select));
+                }
+
+                let result = query
+                    .execute_hybrid(QueryExecutionOptions::default())
+                    .await?;
+                let result = result.try_collect::<Vec<_>>().await?;
+                record_batches_to_vec(Some(result))
+            }
+            .await;
+            if let Some(result) = self.recover_read(read, &mut retried).await {
+                return result;
             }
         }
-
-        let mut query = table
-            .query()
-            .nearest_to(vector)?
-            .distance_type(lancedb::DistanceType::Cosine)
-            .full_text_search(fts_query)
-            .limit(limit)
-            .offset(offset);
-
-        if let Some(vector_column) = vector_column {
-            query = query.column(&vector_column);
-        }
-
-        if rerank {
-            let reranker = Arc::new(lancedb::rerankers::rrf::RRFReranker::new(60.0));
-            query = query.rerank(reranker);
-        }
-
-        if let Some(filter) = filter {
-            query = query.only_if(orient_spatial_relations(filter)?);
-        }
-
-        if let Some(select) = select {
-            query = query.select(lancedb::query::Select::Columns(select));
-        }
-
-        let result = query
-            .execute_hybrid(QueryExecutionOptions::default())
-            .await?;
-        let result = result.try_collect::<Vec<_>>().await?;
-        let result = record_batches_to_vec(Some(result))?;
-        Ok(result)
     }
 
     async fn filter(
@@ -2082,22 +2195,30 @@ impl VectorStore for LanceDBVectorStore {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Value>> {
-        let table = self.require_readable_table().await?;
+        let mut retried = false;
+        loop {
+            let read: Result<Vec<Value>> = async {
+                let table = self.require_readable_table().await?;
 
-        let mut query = table
-            .query()
-            .limit(limit)
-            .only_if(orient_spatial_relations(filter)?)
-            .offset(offset);
+                let mut query = table
+                    .query()
+                    .limit(limit)
+                    .only_if(orient_spatial_relations(filter)?)
+                    .offset(offset);
 
-        if let Some(select) = select {
-            query = query.select(lancedb::query::Select::Columns(select));
+                if let Some(select) = select.clone() {
+                    query = query.select(lancedb::query::Select::Columns(select));
+                }
+
+                let result = query.execute().await?;
+                let result = result.try_collect::<Vec<_>>().await?;
+                record_batches_to_vec(Some(result))
+            }
+            .await;
+            if let Some(result) = self.recover_read(read, &mut retried).await {
+                return result;
+            }
         }
-
-        let result = query.execute().await?;
-        let result = result.try_collect::<Vec<_>>().await?;
-        let result = record_batches_to_vec(Some(result))?;
-        Ok(result)
     }
 
     async fn upsert(&mut self, items: Vec<Value>, id_field: String) -> Result<()> {
@@ -2235,17 +2356,26 @@ impl VectorStore for LanceDBVectorStore {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Value>> {
-        let table = self.require_readable_table().await?;
+        let mut retried = false;
+        loop {
+            let read: Result<Vec<Value>> = async {
+                let table = self.require_readable_table().await?;
 
-        let mut query = table.query().limit(limit).offset(offset);
+                let mut query = table.query().limit(limit).offset(offset);
 
-        if let Some(select) = select {
-            query = query.select(lancedb::query::Select::Columns(select));
+                if let Some(select) = select.clone() {
+                    query = query.select(lancedb::query::Select::Columns(select));
+                }
+
+                let result = query.execute().await?;
+                let result = result.try_collect::<Vec<_>>().await?;
+                record_batches_to_vec(Some(result))
+            }
+            .await;
+            if let Some(result) = self.recover_read(read, &mut retried).await {
+                return result;
+            }
         }
-
-        let result = query.execute().await?;
-        let result = result.try_collect::<Vec<_>>().await?;
-        record_batches_to_vec(Some(result))
     }
 
     async fn index(&self, column: &str, index_type: Option<&str>) -> Result<()> {
@@ -2278,7 +2408,7 @@ impl VectorStore for LanceDBVectorStore {
             wrapper.update(dataset);
             return Ok(());
         }
-        let index_type = if normalized_index_selection(index_type) == "AUTO" {
+        let index = if normalized_index_selection(index_type) == "AUTO" {
             let schema = table.schema().await?;
             let field = schema.field_with_name(column)?;
             index_for_column(index_type, field.data_type())
@@ -2287,8 +2417,9 @@ impl VectorStore for LanceDBVectorStore {
             // Only AUTO needs the field type to choose a vector algorithm.
             index_for_column(index_type, &DataType::Null)
         };
+        let index = fit_pq_to_row_count(&table, column, index_type, index).await?;
 
-        table.create_index(&[column], index_type).execute().await?;
+        table.create_index(&[column], index).execute().await?;
         Ok(())
     }
 
@@ -2303,18 +2434,36 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn count(&self, filter: Option<String>) -> Result<usize> {
-        let table = self.require_readable_table().await?;
-        let filter = filter
-            .map(|filter| orient_spatial_relations(&filter))
-            .transpose()?;
-        Ok(table.count_rows(filter).await?)
+        let mut retried = false;
+        loop {
+            let read: Result<usize> = async {
+                let table = self.require_readable_table().await?;
+                let filter = filter
+                    .as_deref()
+                    .map(orient_spatial_relations)
+                    .transpose()?;
+                Ok(table.count_rows(filter).await?)
+            }
+            .await;
+            if let Some(result) = self.recover_read(read, &mut retried).await {
+                return result;
+            }
+        }
     }
 
     async fn schema(&self) -> Result<arrow_schema::Schema> {
-        let table = self.require_readable_table().await?;
-        let schema = table.schema().await?;
-        let schema = schema.as_ref().clone();
-        Ok(schema)
+        let mut retried = false;
+        loop {
+            let read: Result<arrow_schema::Schema> = async {
+                let table = self.require_readable_table().await?;
+                let schema = table.schema().await?;
+                Ok(schema.as_ref().clone())
+            }
+            .await;
+            if let Some(result) = self.recover_read(read, &mut retried).await {
+                return result;
+            }
+        }
     }
 }
 
@@ -2454,14 +2603,11 @@ mod tests {
         (state >> 40) as f32 / (1_u64 << 24) as f32
     }
 
-    #[tokio::test]
-    async fn regression_lance_vector_and_auto_indices_match_cosine_searches() -> Result<()> {
-        let test_path = format!("./tmp/{}", create_id());
-        std::fs::create_dir_all(&test_path)?;
-        let mut db =
-            LanceDBVectorStore::new(PathBuf::from(&test_path), "cosine_indices".to_string())
-                .await?;
-
+    /// Inserts `rows` scattered 16-d vectors with ids `0..rows`; returns the first vector.
+    async fn insert_scattered_vectors(
+        db: &mut LanceDBVectorStore,
+        rows: usize,
+    ) -> Result<Vec<f64>> {
         let dimension = 16;
         let item = Arc::new(Field::new("item", DataType::Float32, true));
         let schema = Arc::new(Schema::new(vec![
@@ -2472,11 +2618,11 @@ mod tests {
                 false,
             ),
         ]));
-        let ids = Arc::new(Int64Array::from_iter_values(0..512));
-        let values = (0..512 * dimension as usize)
+        let ids = Arc::new(Int64Array::from_iter_values(0..rows as i64));
+        let values = (0..rows * dimension as usize)
             .map(scattered_unit_value)
             .collect::<Vec<_>>();
-        let query_vector = values
+        let first_vector = values
             .iter()
             .take(dimension as usize)
             .map(|v| *v as f64)
@@ -2489,6 +2635,73 @@ mod tests {
         )?);
         db.insert_record_batch(RecordBatch::try_new(schema, vec![ids, vectors])?)
             .await?;
+        Ok(first_vector)
+    }
+
+    async fn vector_index_type(db: &LanceDBVectorStore) -> Result<lancedb::index::IndexType> {
+        let config = db
+            .raw()
+            .await?
+            .list_indices()
+            .await?
+            .into_iter()
+            .find(|index| index.columns.len() == 1 && index.columns[0] == "vector")
+            .expect("vector index should exist");
+        Ok(config.index_type)
+    }
+
+    #[tokio::test]
+    async fn regression_vector_index_on_a_table_too_small_for_pq() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "small_vectors".to_string()).await?;
+        let query_vector = insert_scattered_vectors(&mut db, 111).await?;
+
+        for selection in ["AUTO", "VECTOR"] {
+            db.index("vector", Some(selection)).await?;
+            assert_eq!(
+                vector_index_type(&db).await?,
+                lancedb::index::IndexType::IvfFlat,
+                "{selection}"
+            );
+            let rows = db
+                .vector_search(query_vector.clone(), None, Some(vec!["id".into()]), 1, 0)
+                .await?;
+            assert_eq!(rows[0]["id"].as_i64(), Some(0), "{selection} exact search");
+        }
+
+        for selection in ["IVF_PQ", "IVF_HNSW_PQ"] {
+            let error = db
+                .index("vector", Some(selection))
+                .await
+                .expect_err("explicit PQ must not silently change algorithm");
+            let message = error.to_string();
+            assert!(
+                message.contains(selection) && message.contains("has 111"),
+                "{message}"
+            );
+        }
+
+        insert_scattered_vectors(&mut db, 256).await?;
+        db.index("vector", Some("AUTO")).await?;
+        assert_eq!(
+            vector_index_type(&db).await?,
+            lancedb::index::IndexType::IvfPq
+        );
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn regression_lance_vector_and_auto_indices_match_cosine_searches() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "cosine_indices".to_string())
+                .await?;
+        let query_vector = insert_scattered_vectors(&mut db, 512).await?;
 
         for (selection, expected) in [
             ("VECTOR", lancedb::index::IndexType::IvfPq),

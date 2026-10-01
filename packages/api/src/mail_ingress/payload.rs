@@ -9,10 +9,15 @@ use flow_like_catalog_core::{
 };
 use flow_like_storage::{files::store::FlowLikeStore, object_store::ObjectStoreExt};
 use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
-use mail_parser::{Message, MessageParser, MimeHeaders};
+use mail_parser::{
+    Encoding, Message, MessageParser, MessagePart, MessagePartId, MimeHeaders,
+    decoders::{base64::base64_decode, quoted_printable::quoted_printable_decode},
+};
+use std::{borrow::Cow, collections::HashSet};
 
 const MAX_ATTACHMENT_NAME: usize = 100;
 const MAX_EXTENSION: usize = 16;
+const MAX_ATTACHMENTS: usize = 100;
 
 pub(super) async fn store(state: &crate::state::State) -> Result<FlowLikeStore, ApiError> {
     Ok(state
@@ -311,36 +316,151 @@ fn attachment_name(index: usize, filename: Option<&str>, content_type: &str) -> 
 
 type Objects = Vec<(String, Vec<u8>)>;
 
+/// Named inline text parts that mail-parser files as body text are attachments the sender added.
+fn promoted_text_parts(mail: &Message<'_>) -> Vec<MessagePartId> {
+    let mut listed: HashSet<MessagePartId> = mail.attachments.iter().copied().collect();
+    mail.text_body
+        .iter()
+        .chain(&mail.html_body)
+        .copied()
+        .filter(|id| {
+            mail.part(*id).is_some_and(|part| {
+                part.is_text()
+                    && part
+                        .content_disposition()
+                        .is_some_and(|disposition| disposition.has_attribute("filename"))
+            }) && listed.insert(*id)
+        })
+        .collect()
+}
+
+/// Every body part in order; the first one stays body text even when it is also a file.
+fn joined_body<'x>(
+    ids: &[MessagePartId],
+    promoted: &HashSet<MessagePartId>,
+    body: impl Fn(usize) -> Option<Cow<'x, str>>,
+) -> Option<String> {
+    let parts = ids
+        .iter()
+        .enumerate()
+        .filter(|&(position, id)| position == 0 || !promoted.contains(id))
+        .filter_map(|(position, _)| body(position))
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| parts.join("\n"))
+}
+
+fn utf8_compatible(charset: Option<&str>) -> bool {
+    charset.is_none_or(|charset| {
+        ["utf-8", "utf8", "us-ascii", "ascii"]
+            .iter()
+            .any(|name| charset.eq_ignore_ascii_case(name))
+    })
+}
+
+/// mail-parser transcodes text parts to UTF-8, replacing undecodable bytes. Text in a
+/// UTF-8 compatible or undeclared charset is stored as the sender's transfer-decoded bytes.
+fn attachment_bytes(raw: &[u8], part: &MessagePart<'_>, charset: Option<&str>) -> Vec<u8> {
+    if !part.is_text() || !utf8_compatible(charset) {
+        return part.contents().to_vec();
+    }
+    raw.get(part.raw_body_offset() as usize..part.raw_end_offset() as usize)
+        .and_then(|encoded| match part.encoding {
+            Encoding::Base64 => base64_decode(encoded),
+            Encoding::QuotedPrintable => quoted_printable_decode(encoded),
+            Encoding::None => Some(encoded.to_vec()),
+        })
+        .unwrap_or_else(|| part.contents().to_vec())
+}
+
+fn content_id(part: &MessagePart<'_>) -> Option<String> {
+    part.content_id()
+        .map(|id| id.trim().trim_start_matches('<').trim_end_matches('>'))
+        .filter(|id| !id.is_empty())
+        .map(|id| preview(id, 256).to_owned())
+}
+
+fn disposition(part: &MessagePart<'_>) -> Option<String> {
+    part.content_disposition().and_then(|disposition| {
+        if disposition.is_attachment() {
+            Some("attachment".to_owned())
+        } else {
+            disposition.is_inline().then(|| "inline".to_owned())
+        }
+    })
+}
+
+/// `lowercase_html` must already be ASCII lower-case.
+fn embedded(content_id: Option<&str>, lowercase_html: &str) -> bool {
+    content_id
+        .is_some_and(|id| lowercase_html.contains(&format!("cid:{}", id.to_ascii_lowercase())))
+}
+
+fn attachment(
+    raw: &[u8],
+    prefix: &str,
+    index: usize,
+    part: &MessagePart<'_>,
+    lowercase_html: &str,
+) -> (InboundEmailAttachment, (String, Vec<u8>)) {
+    let content_type = part
+        .content_type()
+        .map(|t| format!("{}/{}", t.ctype(), t.subtype().unwrap_or("octet-stream")))
+        .unwrap_or_else(|| "application/octet-stream".into());
+    let charset = part
+        .content_type()
+        .and_then(|t| t.attribute("charset"))
+        .map(str::trim)
+        .filter(|charset| !charset.is_empty());
+    // Each index owns its folder; the sanitized name only makes the file recognizable.
+    let path = format!(
+        "{prefix}/attachments/{index}/{}",
+        attachment_name(index, part.attachment_name(), &content_type)
+    );
+    let bytes = attachment_bytes(raw, part, charset);
+    let content_id = content_id(part);
+    let attachment = InboundEmailAttachment {
+        filename: part
+            .attachment_name()
+            .map(|name| preview(name, 256).to_owned()),
+        content_type: preview(&content_type, 256).to_owned(),
+        size: bytes.len() as u64,
+        path: flow_path(&path),
+        embedded: embedded(content_id.as_deref(), lowercase_html),
+        content_id,
+        disposition: disposition(part),
+        charset: charset.map(|charset| preview(charset, 256).to_owned()),
+    };
+    (attachment, (path, bytes))
+}
+
 fn parse(raw: &[u8], prefix: &str) -> Result<(InboundEmail, Objects), ApiError> {
     let mail = MessageParser::default()
         .parse(raw)
         .ok_or_else(|| ApiError::bad_request("Invalid MIME message"))?;
-    if mail.attachment_count() > 100 {
-        return Err(ApiError::bad_request("Email has more than 100 attachments"));
-    }
+    let promoted = promoted_text_parts(&mail);
+    let promoted_ids = promoted.iter().copied().collect::<HashSet<_>>();
+    let text = joined_body(&mail.text_body, &promoted_ids, |i| mail.body_text(i));
+    let html = joined_body(&mail.html_body, &promoted_ids, |i| mail.body_html(i));
+    let lowercase_html = html
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let parts = mail
+        .attachments
+        .iter()
+        .chain(&promoted)
+        .filter_map(|id| mail.part(*id))
+        .collect::<Vec<_>>();
+    // Only the first attachments become files; the raw message keeps every part.
+    let omitted_attachments =
+        u32::try_from(parts.len().saturating_sub(MAX_ATTACHMENTS)).unwrap_or(u32::MAX);
     let raw_path = format!("{prefix}/raw.eml");
     let mut objects = vec![(raw_path.clone(), raw.to_vec())];
     let mut attachments = Vec::new();
-    for (index, part) in mail.attachments().enumerate() {
-        let content_type = part
-            .content_type()
-            .map(|t| format!("{}/{}", t.ctype(), t.subtype().unwrap_or("octet-stream")))
-            .unwrap_or_else(|| "application/octet-stream".into());
-        // Each index owns its folder; the sanitized name only makes the file recognizable.
-        let path = format!(
-            "{prefix}/attachments/{index}/{}",
-            attachment_name(index, part.attachment_name(), &content_type)
-        );
-        let bytes = part.contents().to_vec();
-        attachments.push(InboundEmailAttachment {
-            filename: part
-                .attachment_name()
-                .map(|name| preview(name, 256).to_owned()),
-            content_type: preview(&content_type, 256).to_owned(),
-            size: bytes.len() as u64,
-            path: flow_path(&path),
-        });
-        objects.push((path, bytes));
+    for (index, part) in parts.into_iter().take(MAX_ATTACHMENTS).enumerate() {
+        let (attachment, object) = attachment(raw, prefix, index, part, &lowercase_html);
+        attachments.push(attachment);
+        objects.push(object);
     }
     let from = addresses(mail.from());
     let sender = addresses(mail.sender())
@@ -369,6 +489,7 @@ fn parse(raw: &[u8], prefix: &str) -> Result<(InboundEmail, Objects), ApiError> 
         text_path: None,
         html_path: None,
         attachments,
+        omitted_attachments,
         raw_path: flow_path(&raw_path),
         headers: Vec::new(),
         received_at: None,
@@ -376,7 +497,7 @@ fn parse(raw: &[u8], prefix: &str) -> Result<(InboundEmail, Objects), ApiError> 
         authentication: None,
         automated: mime_automated(&mail),
     };
-    for (kind, body) in [("txt", mail.body_text(0)), ("html", mail.body_html(0))] {
+    for (kind, body) in [("txt", text), ("html", html)] {
         if let Some(body) = body {
             let path = format!("{prefix}/body.{kind}");
             let value = Some(preview(&body, 16 * 1024).to_owned());
@@ -391,7 +512,7 @@ fn parse(raw: &[u8], prefix: &str) -> Result<(InboundEmail, Objects), ApiError> 
                 email.html_truncated = truncated;
                 email.html_path = file;
             }
-            objects.push((path, body.as_bytes().to_vec()));
+            objects.push((path, body.into_bytes()));
         }
     }
     let mut budget = 32 * 1024;
@@ -620,6 +741,164 @@ mod tests {
             assert!(path.cache_store_ref.is_none());
             assert!(objects.iter().any(|(key, _)| key == &path.path));
         }
+    }
+
+    fn stored<'a>(objects: &'a Objects, attachment: &InboundEmailAttachment) -> &'a [u8] {
+        &objects
+            .iter()
+            .find(|(path, _)| path == &attachment.path.path)
+            .unwrap()
+            .1
+    }
+
+    fn body<'a>(objects: &'a Objects, kind: &str) -> &'a str {
+        let suffix = format!("body.{kind}");
+        std::str::from_utf8(
+            &objects
+                .iter()
+                .find(|(p, _)| p.ends_with(&suffix))
+                .unwrap()
+                .1,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn named_inline_text_parts_become_attachments_instead_of_vanishing() {
+        let raw = b"From: a@example.com\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello\r\n--x\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: inline; filename=notes.txt\r\n\r\nMeeting notes\r\n--x--\r\n";
+        let (email, objects) = parse(raw, "tmp/test").unwrap();
+        assert_eq!(email.attachments.len(), 1);
+        let notes = &email.attachments[0];
+        assert_eq!(notes.filename.as_deref(), Some("notes.txt"));
+        assert_eq!(notes.path.path, "tmp/test/attachments/0/notes.txt");
+        assert_eq!(notes.disposition.as_deref(), Some("inline"));
+        assert_eq!(notes.charset.as_deref(), Some("utf-8"));
+        assert!(!notes.embedded);
+        assert_eq!(stored(&objects, notes), b"Meeting notes");
+        assert_eq!(email.text.as_deref(), Some("Hello"));
+        assert_eq!(body(&objects, "txt"), "Hello");
+        assert_eq!(email.omitted_attachments, 0);
+    }
+
+    #[test]
+    fn a_single_named_text_part_is_both_body_and_attachment() {
+        let raw = b"From: a@example.com\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: inline; filename=notes.txt\r\n\r\nOnly part";
+        let (email, _) = parse(raw, "tmp/test").unwrap();
+        assert_eq!(email.text.as_deref(), Some("Only part"));
+        assert_eq!(email.attachments.len(), 1);
+        assert_eq!(email.attachments[0].filename.as_deref(), Some("notes.txt"));
+    }
+
+    #[test]
+    fn body_text_after_an_inline_attachment_is_kept() {
+        let raw = b"From: a@example.com\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\nContent-Type: text/plain\r\n\r\nBefore\r\n--x\r\nContent-Type: application/pdf; name=scan.pdf\r\nContent-Disposition: inline; filename=scan.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\nJVBERi0=\r\n--x\r\nContent-Type: text/plain\r\n\r\nAfter\r\n--x--\r\n";
+        let (email, objects) = parse(raw, "tmp/test").unwrap();
+        assert_eq!(email.attachments.len(), 1);
+        assert_eq!(email.attachments[0].filename.as_deref(), Some("scan.pdf"));
+        assert_eq!(stored(&objects, &email.attachments[0]), b"%PDF-");
+        let text = email.text.unwrap();
+        assert!(text.contains("Before") && text.contains("After"), "{text}");
+        let file = body(&objects, "txt");
+        assert!(file.contains("Before") && file.contains("After"), "{file}");
+    }
+
+    #[test]
+    fn apple_layouts_keep_every_html_fragment_and_inline_files_are_not_embedded() {
+        let raw = b"From: a@example.com\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=a\r\n\r\n--a\r\nContent-Type: text/plain; charset=us-ascii\r\n\r\nBefore\r\n\r\nAfter\r\n--a\r\nContent-Type: multipart/mixed; boundary=m\r\n\r\n--m\r\nContent-Type: text/html; charset=us-ascii\r\n\r\n<html><body><div>Before</div></body></html>\r\n--m\r\nContent-Type: application/pdf; name=\"contract.pdf\"\r\nContent-Disposition: inline; filename=\"contract.pdf\"\r\nContent-Id: <5A1B2C3D-apple@example.com>\r\nContent-Transfer-Encoding: base64\r\n\r\nJVBERi0=\r\n--m\r\nContent-Type: text/html; charset=us-ascii\r\n\r\n<html><body><div>After</div></body></html>\r\n--m--\r\n--a--\r\n";
+        let (email, objects) = parse(raw, "tmp/test").unwrap();
+        let html = body(&objects, "html");
+        assert!(
+            html.contains("<div>Before</div>") && html.contains("<div>After</div>"),
+            "{html}"
+        );
+        assert_eq!(email.attachments.len(), 1);
+        let pdf = &email.attachments[0];
+        assert_eq!(pdf.filename.as_deref(), Some("contract.pdf"));
+        assert_eq!(pdf.disposition.as_deref(), Some("inline"));
+        assert_eq!(
+            pdf.content_id.as_deref(),
+            Some("5A1B2C3D-apple@example.com")
+        );
+        assert!(!pdf.embedded);
+    }
+
+    #[test]
+    fn text_attachments_without_a_foreign_charset_keep_their_original_bytes() {
+        let raw = b"From: a@example.com\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\nContent-Type: text/plain\r\n\r\nSee files\r\n--x\r\nContent-Type: text/plain\r\nContent-Disposition: attachment; filename=raw.txt\r\nContent-Transfer-Encoding: base64\r\n\r\nR3Lk32U=\r\n--x\r\nContent-Type: text/csv; charset=utf-8\r\nContent-Disposition: attachment; filename=list.csv\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\na;b=\r\n;c=E4\r\n--x\r\nContent-Type: text/plain; charset=iso-8859-1\r\nContent-Disposition: attachment; filename=latin.txt\r\nContent-Transfer-Encoding: base64\r\n\r\nR3Lk32U=\r\n--x--\r\n";
+        let (email, objects) = parse(raw, "tmp/test").unwrap();
+        assert_eq!(email.attachments.len(), 3);
+        let undeclared = &email.attachments[0];
+        assert_eq!(stored(&objects, undeclared), b"Gr\xe4\xdfe");
+        assert_eq!(undeclared.size, 5);
+        assert!(undeclared.charset.is_none());
+        let utf8 = &email.attachments[1];
+        assert_eq!(stored(&objects, utf8), b"a;b;c\xe4");
+        assert_eq!(utf8.size, 6);
+        let latin = &email.attachments[2];
+        assert_eq!(stored(&objects, latin), "Gr\u{e4}\u{df}e".as_bytes());
+        assert_eq!(latin.size, 7);
+        assert_eq!(latin.charset.as_deref(), Some("iso-8859-1"));
+    }
+
+    #[test]
+    fn outlook_signature_images_are_embedded_but_real_attachments_are_not() {
+        let raw = b"From: a@example.com\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=m\r\n\r\n--m\r\nContent-Type: multipart/related; boundary=r; type=\"text/html\"\r\n\r\n--r\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body><p>Invoice attached</p><img src=\"cid:Image001.png@01DB1234.56789AB0\"></body></html>\r\n--r\r\nContent-Type: image/png; name=\"image001.png\"\r\nContent-Description: image001.png\r\nContent-Disposition: inline; filename=\"image001.png\"\r\nContent-ID: <image001.png@01DB1234.56789AB0>\r\nContent-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n--r--\r\n\r\n--m\r\nContent-Type: application/pdf; name=\"invoice.pdf\"\r\nContent-Disposition: attachment; filename=\"invoice.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\nJVBERi0=\r\n--m--\r\n";
+        let (email, objects) = parse(raw, "tmp/test").unwrap();
+        assert_eq!(email.attachments.len(), 2);
+        let logo = &email.attachments[0];
+        assert_eq!(logo.filename.as_deref(), Some("image001.png"));
+        assert_eq!(
+            logo.content_id.as_deref(),
+            Some("image001.png@01DB1234.56789AB0")
+        );
+        assert_eq!(logo.disposition.as_deref(), Some("inline"));
+        assert!(logo.embedded);
+        assert_eq!(stored(&objects, logo), b"\x89PNG\r\n\x1a\n");
+        let invoice = &email.attachments[1];
+        assert_eq!(invoice.filename.as_deref(), Some("invoice.pdf"));
+        assert_eq!(invoice.disposition.as_deref(), Some("attachment"));
+        assert!(invoice.content_id.is_none());
+        assert!(!invoice.embedded);
+    }
+
+    #[test]
+    fn more_than_one_hundred_attachments_are_truncated_instead_of_refused() {
+        let mut raw = String::from(
+            "From: a@example.com\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\nContent-Type: text/plain\r\n\r\nMany files\r\n",
+        );
+        for index in 0..=MAX_ATTACHMENTS {
+            raw.push_str(&format!(
+                "--x\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=file-{index}.bin\r\n\r\n{index}\r\n"
+            ));
+        }
+        raw.push_str("--x--\r\n");
+        let (email, objects) = parse(raw.as_bytes(), "tmp/test").unwrap();
+        assert_eq!(email.attachments.len(), MAX_ATTACHMENTS);
+        assert_eq!(email.omitted_attachments, 1);
+        assert_eq!(
+            email.attachments[MAX_ATTACHMENTS - 1].filename.as_deref(),
+            Some("file-99.bin")
+        );
+        assert!(!objects.iter().any(|(path, _)| path.contains("file-100")));
+        assert_eq!(email.text.as_deref(), Some("Many files"));
+    }
+
+    #[test]
+    fn payloads_without_attachment_details_still_deserialize() {
+        let file =
+            |path: &str| serde_json::json!({"path": path, "store_ref": REQUEST_FILES_STORE_REF});
+        let legacy: InboundEmail = serde_json::from_value(serde_json::json!({
+            "id": "mail-1", "delivery_id": "provider-1",
+            "envelope_from": "bounce@example.com", "recipient": "orders@example.com",
+            "attachments": [{"filename": "invoice.pdf", "content_type": "application/pdf",
+                "size": 4, "path": file("tmp/mail/attachments/0/invoice.pdf")}],
+            "raw_path": file("tmp/mail/raw.eml")
+        }))
+        .unwrap();
+        assert_eq!(legacy.omitted_attachments, 0);
+        let attachment = &legacy.attachments[0];
+        assert!(attachment.content_id.is_none() && attachment.disposition.is_none());
+        assert!(attachment.charset.is_none() && !attachment.embedded);
     }
 
     fn message(raw: &[u8]) -> Message<'_> {

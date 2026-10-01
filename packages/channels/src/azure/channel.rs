@@ -19,7 +19,7 @@ use tokio::time::{Instant, MissedTickBehavior};
 use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::tungstenite::http::header::{AUTHORIZATION, SEC_WEBSOCKET_PROTOCOL};
 use tokio_tungstenite::tungstenite::{ClientRequestBuilder, Message};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async_tls_with_config};
 use tracing::{debug, info, warn};
 
 use super::protocol::{ClientFrame, SUBPROTOCOL};
@@ -231,14 +231,21 @@ struct Session {
 
 impl Session {
     async fn open(connector: &Connector, shared: &Shared) -> flow_like_types::Result<Self> {
-        let (socket, response) = connect_async(connector.request.clone())
-            .await
-            .map_err(|e| {
-                flow_like_types::anyhow!(
-                    "channel {}: Azure Web PubSub handshake failed: {e}",
-                    shared.channel_id
-                )
-            })?;
+        let (socket, response) = connect_async_tls_with_config(
+            connector.request.clone(),
+            None,
+            false,
+            Some(tokio_tungstenite::Connector::Rustls(
+                crate::tls::client_config()?,
+            )),
+        )
+        .await
+        .map_err(|e| {
+            flow_like_types::anyhow!(
+                "channel {}: Azure Web PubSub handshake failed: {e}",
+                shared.channel_id
+            )
+        })?;
         let negotiated = response
             .headers()
             .get(SEC_WEBSOCKET_PROTOCOL)

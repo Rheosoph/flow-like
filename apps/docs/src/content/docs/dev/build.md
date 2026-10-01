@@ -42,6 +42,18 @@ mise install
 bun install
 ```
 
+Prepare the desktop environment file from the repository root:
+
+```bash
+cp -n apps/desktop/.env.example apps/desktop/.env
+```
+
+Keep an existing `.env` if you already have one. The example sets
+`NEXT_PUBLIC_API_URL` to the hosted API and uses `tauri://localhost/callback`
+and `tauri://localhost/logout` for the desktop OAuth redirects. Review those
+values for your hub before running the app. The macOS ARM task sources this
+file before starting Tauri.
+
 The desktop build also needs:
 
 - the [Tauri 2 system prerequisites](https://v2.tauri.app/start/prerequisites/)
@@ -72,7 +84,9 @@ mise run dev:desktop:linux:x64
 mise run dev:desktop:linux:arm
 ```
 
-To run the desktop app with the local API and runtime:
+To run the desktop app with the local API and runtime, first complete the
+[native local backend setup](/self-hosting/local-development/), including its
+database, storage, identity, and signing configuration. Then run:
 
 ```bash
 mise run dev:desktop:local

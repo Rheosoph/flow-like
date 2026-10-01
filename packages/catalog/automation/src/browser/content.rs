@@ -1,11 +1,17 @@
 #[cfg(feature = "execute")]
-use crate::types::handles::AutomationSession;
+use super::driver::PageContext;
+#[cfg(feature = "execute")]
+use crate::types::{handles::AutomationSession, selectors::Selector};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
+#[cfg(any(feature = "execute", test))]
+use flow_like_browser::input::{ClickOptions, MouseButton, keys::Modifiers};
+#[cfg(feature = "execute")]
+use flow_like_browser::script::{ScriptArg, ScriptOptions};
 use flow_like_catalog_core::{FlowPath, NodeImage};
 #[cfg(any(feature = "execute", test))]
 use flow_like_types::Value;
@@ -16,6 +22,25 @@ pub(crate) fn page_node(id: &str, title: &str, description: &str, category: &str
     let mut node = super::manage::base_node(id, title, description);
     node.category = format!("Automation/Browser/{category}");
     node
+}
+
+/// Script argument for an optional scope: the found element (the script then runs in its frame)
+/// or null when no selector is set.
+#[cfg(feature = "execute")]
+async fn scope_argument(
+    page: &PageContext,
+    locator: &Selector,
+    purpose: &str,
+) -> flow_like_types::Result<ScriptArg> {
+    if locator.value.is_empty() {
+        return Ok(ScriptArg::Json(Value::Null));
+    }
+    let element = super::selector::find_element(page, locator)
+        .await
+        .map_err(|e| {
+            flow_like_types::anyhow!("Failed to find {purpose} '{}': {e}", locator.value)
+        })?;
+    Ok(ScriptArg::Element(element))
 }
 
 #[cfg(any(feature = "execute", test))]
@@ -128,25 +153,13 @@ impl NodeLogic for BrowserGetPageTextNode {
             flow_like_types::anyhow!("Max characters must be nonnegative, got {max_chars}")
         })?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let root = if locator.value.is_empty() {
-            Value::Null
-        } else {
-            super::selector::find(&driver, &locator)
-                .await
-                .map_err(|e| {
-                    flow_like_types::anyhow!(
-                        "Failed to find page text scope '{}': {e}",
-                        locator.value
-                    )
-                })?
-                .to_json()?
-        };
-        let content = driver
-            .execute(PAGE_CONTENT_SCRIPT, vec![root])
+        let page = session.browser_page(context).await?;
+        let root = scope_argument(&page, &locator, "page text scope").await?;
+        let content = page
+            .probe(PAGE_CONTENT_SCRIPT, vec![root])
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to read page content: {e}"))?;
-        drop(driver);
+        drop(page);
         let text = content.json()["text"]
             .as_str()
             .unwrap_or_default()
@@ -311,11 +324,11 @@ impl NodeLogic for BrowserZoomScreenshotNode {
         ];
         let scale: f64 = context.evaluate_pin("scale").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let metrics = super::cdp::cdp(&driver, "Page.getLayoutMetrics", json!({})).await?;
+        let page = session.browser_page(context).await?;
+        let metrics = super::cdp::send(&page, "Page.getLayoutMetrics", json!({})).await?;
         let clip = zoom_clip(region, scale, &metrics)?;
-        let png = super::capture::capture_png_via_cdp(&driver, clip, false).await?;
-        drop(driver);
+        let png = super::capture::capture_png_via_cdp(&page, &clip, false).await?;
+        drop(page);
 
         super::capture::set_screenshot_outputs(context, png).await?;
         context.set_pin_value("session_out", json!(session)).await?;
@@ -393,27 +406,7 @@ impl PdfOptions {
             "paperWidth": self.width_mm / 25.4,
             "paperHeight": self.height_mm / 25.4,
             "preferCSSPageSize": false,
-            "transferMode": "ReturnAsBase64",
         })
-    }
-
-    #[cfg(feature = "execute")]
-    fn webdriver_params(&self) -> thirtyfour::common::print::PrintParameters {
-        use thirtyfour::common::print::{PrintOrientation, PrintPage, PrintParameters};
-        PrintParameters {
-            orientation: if self.landscape {
-                PrintOrientation::Landscape
-            } else {
-                PrintOrientation::Portrait
-            },
-            scale: self.scale,
-            background: self.print_background,
-            page: PrintPage {
-                width: self.width_mm / 10.0,
-                height: self.height_mm / 10.0,
-            },
-            ..Default::default()
-        }
     }
 }
 
@@ -433,7 +426,7 @@ impl NodeLogic for BrowserPrintPdfNode {
         let mut node = page_node(
             "browser_print_pdf",
             "Save Page as PDF",
-            "Prints the current page to a PDF file, the way the browser's print dialog would. Chrome and Edge print through DevTools (headless Chrome is the most reliable); other browsers use WebDriver printing.",
+            "Prints the current page to a PDF file, the way the browser's print dialog would, through the DevTools protocol (Chrome and Edge).",
             "Capture",
         );
         node.set_flowscript_name("browser", "printPdf");
@@ -504,7 +497,6 @@ impl NodeLogic for BrowserPrintPdfNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_types::base64::Engine;
         context.check_cancelled()?;
         context.deactivate_exec_pin("exec_out").await?;
         let session: AutomationSession = context.evaluate_pin("session").await?;
@@ -515,20 +507,13 @@ impl NodeLogic for BrowserPrintPdfNode {
         let scale: f64 = context.evaluate_pin("scale").await?;
         let options = PdfOptions::new(&paper_format, landscape, print_background, scale)?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let pdf = if super::emulation::is_chromium(&session) {
-            let printed = super::cdp::cdp(&driver, "Page.printToPDF", options.cdp_params()).await?;
-            let data = printed["data"]
-                .as_str()
-                .ok_or_else(|| flow_like_types::anyhow!("Page.printToPDF returned no PDF data"))?;
-            flow_like_types::base64::engine::general_purpose::STANDARD.decode(data)?
-        } else {
-            driver
-                .print_page(options.webdriver_params())
-                .await
-                .map_err(|e| flow_like_types::anyhow!("Failed to print page to PDF: {e}"))?
-        };
-        drop(driver);
+        let page = session.browser_page(context).await?;
+        let pdf = page
+            .page
+            .print_pdf(options.cdp_params())
+            .await
+            .map_err(|e| flow_like_types::anyhow!("Failed to print page to PDF: {e}"))?;
+        drop(page);
 
         file_path.put(context, pdf, false).await.map_err(|e| {
             flow_like_types::anyhow!("Failed to write PDF to '{}': {e}", file_path.path)
@@ -551,77 +536,98 @@ const PAPER_FORMAT_NAMES: [&str; 7] = ["A3", "A4", "A5", "Letter", "Legal", "Tab
 
 const MOUSE_BUTTONS: [&str; 3] = ["left", "middle", "right"];
 
-/// W3C WebDriver key codepoints for modifier keys.
 #[cfg(any(feature = "execute", test))]
-fn modifier_key(name: &str) -> flow_like_types::Result<char> {
-    match name.to_ascii_lowercase().as_str() {
-        "ctrl" | "control" => Ok('\u{E009}'),
-        "shift" => Ok('\u{E008}'),
-        "alt" | "option" => Ok('\u{E00A}'),
-        "meta" | "cmd" | "command" | "win" => Ok('\u{E03D}'),
-        _ => Err(flow_like_types::anyhow!(
-            "Unknown click modifier '{name}'; use Control, Shift, Alt, or Meta"
-        )),
-    }
+fn mouse_button(name: &str) -> flow_like_types::Result<MouseButton> {
+    super::driver::parse_button(name).map_err(|_| {
+        flow_like_types::anyhow!("Click button must be left, middle, or right, got '{name}'")
+    })
 }
 
-/// WebDriver action sequence that clicks at a viewport point while holding modifiers.
+/// The top-level viewport as chromedriver measures it for pointer moves.
+#[cfg(feature = "execute")]
+const VIEWPORT_SCRIPT: &str =
+    "return {width: Math.floor(window.innerWidth), height: Math.floor(window.innerHeight)};";
+
+/// chromedriver fails a pointer move beyond the top-level viewport (move target out of bounds)
+/// instead of clicking nothing.
 #[cfg(any(feature = "execute", test))]
-fn point_click_actions(
+fn check_in_viewport(x: f64, y: f64, viewport: &Value) -> flow_like_types::Result<()> {
+    let size = |name: &str| {
+        viewport[name]
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| flow_like_types::anyhow!("the viewport size is unreadable: {viewport}"))
+    };
+    let (width, height) = (size("width")?, size("height")?);
+    if x > width || y > height {
+        return Err(flow_like_types::anyhow!(
+            "the point is outside the {width}x{height} viewport (move target out of bounds)"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "execute")]
+async fn click_in_viewport(
+    page: &PageContext,
+    x: f64,
+    y: f64,
+    options: ClickOptions,
+) -> flow_like_types::Result<()> {
+    let viewport = page
+        .page
+        .main_frame()
+        .execute_script(VIEWPORT_SCRIPT, Vec::new(), ScriptOptions::PROBE)
+        .await?;
+    check_in_viewport(x, y, viewport.json())?;
+    page.page.mouse_click_at(x, y, options).await?;
+    Ok(())
+}
+
+/// Click point rounded to whole viewport CSS pixels (as the WebDriver pointer move was) and the
+/// click options for these pins.
+#[cfg(any(feature = "execute", test))]
+fn point_click(
     x: f64,
     y: f64,
     button: &str,
     modifiers: &[String],
     click_count: i64,
-) -> flow_like_types::Result<Value> {
-    if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
+) -> flow_like_types::Result<(f64, f64, ClickOptions)> {
+    if ![x, y]
+        .iter()
+        .all(|value| value.is_finite() && *value >= 0.0)
+    {
         return Err(flow_like_types::anyhow!(
             "Click point must be finite, nonnegative viewport coordinates, got ({x}, {y})"
         ));
     }
-    let button = MOUSE_BUTTONS
-        .iter()
-        .position(|candidate| *candidate == button)
+    let button = mouse_button(button)?;
+    let click_count = u8::try_from(click_count)
+        .ok()
+        .filter(|count| (1..=3).contains(count))
         .ok_or_else(|| {
-            flow_like_types::anyhow!("Click button must be left, middle, or right, got '{button}'")
+            flow_like_types::anyhow!("Click count must be 1, 2, or 3, got {click_count}")
         })?;
-    if !(1..=3).contains(&click_count) {
-        return Err(flow_like_types::anyhow!(
-            "Click count must be 1, 2, or 3, got {click_count}"
-        ));
+    let mut held = Modifiers::NONE;
+    for name in modifiers {
+        held.insert(
+            super::driver::parse_modifiers(std::slice::from_ref(name)).map_err(|_| {
+                flow_like_types::anyhow!(
+                    "Unknown click modifier '{name}'; use Control, Shift, Alt, or Meta"
+                )
+            })?,
+        );
     }
-    let keys = modifiers
-        .iter()
-        .map(|name| modifier_key(name))
-        .collect::<flow_like_types::Result<Vec<_>>>()?;
-    let pause = json!({"type": "pause", "duration": 0});
-    let mut key_actions = Vec::new();
-    let mut pointer_actions = Vec::new();
-    for key in &keys {
-        key_actions.push(json!({"type": "keyDown", "value": key.to_string()}));
-        pointer_actions.push(pause.clone());
-    }
-    key_actions.push(pause.clone());
-    pointer_actions.push(json!({
-        "type": "pointerMove",
-        "duration": 0,
-        "origin": "viewport",
-        "x": x.round() as i64,
-        "y": y.round() as i64,
-    }));
-    for _ in 0..click_count {
-        pointer_actions.push(json!({"type": "pointerDown", "button": button}));
-        pointer_actions.push(json!({"type": "pointerUp", "button": button}));
-        key_actions.extend([pause.clone(), pause.clone()]);
-    }
-    for key in keys.iter().rev() {
-        key_actions.push(json!({"type": "keyUp", "value": key.to_string()}));
-        pointer_actions.push(pause.clone());
-    }
-    Ok(json!([
-        {"type": "key", "id": "automation-keyboard", "actions": key_actions},
-        {"type": "pointer", "id": "automation-mouse", "parameters": {"pointerType": "mouse"}, "actions": pointer_actions},
-    ]))
+    Ok((
+        x.round(),
+        y.round(),
+        ClickOptions {
+            button,
+            modifiers: held,
+            click_count,
+        },
+    ))
 }
 
 #[crate::register_node]
@@ -640,7 +646,7 @@ impl NodeLogic for BrowserClickAtPointNode {
         let mut node = page_node(
             "browser_click_at_point",
             "Click At Point",
-            "Clicks at viewport CSS coordinates instead of an element, for canvas apps and coordinates read off a screenshot by a vision model. Works in every WebDriver browser.",
+            "Clicks at viewport CSS coordinates instead of an element, for canvas apps and coordinates read off a screenshot by a vision model. Requires Chrome or Edge.",
             "Interact",
         );
         node.set_flowscript_name("browser", "clickAtPoint");
@@ -706,7 +712,6 @@ impl NodeLogic for BrowserClickAtPointNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::common::command::{Actions, Command};
         context.check_cancelled()?;
         context.deactivate_exec_pin("exec_out").await?;
         let session: AutomationSession = context.evaluate_pin("session").await?;
@@ -715,17 +720,13 @@ impl NodeLogic for BrowserClickAtPointNode {
         let button: String = context.evaluate_pin("button").await?;
         let click_count: i64 = context.evaluate_pin("click_count").await?;
         let modifiers: Vec<String> = context.evaluate_pin("modifiers").await?;
-        let actions = point_click_actions(x, y, &button, &modifiers, click_count)?;
+        let (point_x, point_y, options) = point_click(x, y, &button, &modifiers, click_count)?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let result = driver
-            .handle
-            .cmd(Command::PerformActions(Actions::from(actions)))
-            .await;
-        let reset = driver.action_chain().reset_actions().await;
-        result.map_err(|e| flow_like_types::anyhow!("Failed to click at ({x}, {y}): {e}"))?;
-        reset?;
-        drop(driver);
+        let page = session.browser_page(context).await?;
+        click_in_viewport(&page, point_x, point_y, options)
+            .await
+            .map_err(|e| flow_like_types::anyhow!("Failed to click at ({x}, {y}): {e}"))?;
+        drop(page);
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -851,28 +852,21 @@ impl NodeLogic for BrowserScrollPageNode {
         let scope: String = context.evaluate_pin("scope").await?;
         let locator = super::selector::evaluate_locator(context, &scope).await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let container = if locator.value.is_empty() {
-            Value::Null
-        } else {
-            super::selector::find(&driver, &locator)
-                .await
-                .map_err(|e| {
-                    flow_like_types::anyhow!(
-                        "Failed to find scroll container '{}': {e}",
-                        locator.value
-                    )
-                })?
-                .to_json()?
-        };
-        let position = driver
+        let page = session.browser_page(context).await?;
+        let container = scope_argument(&page, &locator, "scroll container").await?;
+        let position = page
             .execute(
                 SCROLL_SCRIPT,
-                vec![container, json!(mode), json!(delta_x), json!(delta_y)],
+                vec![
+                    container,
+                    ScriptArg::Json(json!(mode)),
+                    ScriptArg::Json(json!(delta_x)),
+                    ScriptArg::Json(json!(delta_y)),
+                ],
             )
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to scroll ({mode}): {e}"))?;
-        drop(driver);
+        drop(page);
         let position = position.json();
         let offset = |name: &str| position[name].as_f64().unwrap_or_default().round() as i64;
 
@@ -962,54 +956,81 @@ mod tests {
         assert_eq!(PAPER_FORMATS.map(|(name, _, _)| name), PAPER_FORMAT_NAMES);
     }
 
-    #[cfg(feature = "execute")]
     #[test]
-    fn pdf_options_map_to_webdriver_centimetres() {
-        let params = PdfOptions::new("A4", true, true, 0.5)
-            .unwrap()
-            .webdriver_params();
-        assert_eq!(params.page.width, 21.0);
-        assert_eq!(params.page.height, 29.7);
+    fn point_click_pins_map_to_click_options() {
+        let (x, y, options) = point_click(
+            10.4,
+            20.6,
+            "right",
+            &["Shift".into(), "ctrl".into(), "Option".into()],
+            2,
+        )
+        .unwrap();
+        assert_eq!((x, y), (10.0, 21.0));
+        assert_eq!(options.button, MouseButton::Right);
+        assert_eq!(options.click_count, 2);
+        let mut expected = Modifiers::SHIFT;
+        expected.insert(Modifiers::CTRL);
+        expected.insert(Modifiers::ALT);
+        assert_eq!(options.modifiers, expected);
+        assert!(!options.modifiers.contains(Modifiers::META));
+
+        let (_, _, plain) = point_click(0.0, 0.0, "left", &[], 1).unwrap();
+        assert_eq!(plain.button, MouseButton::Left);
+        assert_eq!(plain.modifiers, Modifiers::NONE);
+        assert_eq!(plain.click_count, 1);
         assert_eq!(
-            params.orientation,
-            thirtyfour::common::print::PrintOrientation::Landscape
+            point_click(0.0, 0.0, "middle", &["CMD".into()], 3)
+                .unwrap()
+                .2
+                .modifiers,
+            Modifiers::META
         );
-        assert!(params.background);
-        assert_eq!(params.scale, 0.5);
+        assert_eq!(
+            MOUSE_BUTTONS.map(|name| mouse_button(name).unwrap()),
+            [MouseButton::Left, MouseButton::Middle, MouseButton::Right]
+        );
     }
 
     #[test]
-    fn point_click_uses_viewport_origin_and_releases_modifiers() {
-        let actions =
-            point_click_actions(10.4, 20.6, "right", &["Shift".into(), "ctrl".into()], 2).unwrap();
-        let keys = actions[0]["actions"].as_array().unwrap();
-        let pointer = actions[1]["actions"].as_array().unwrap();
-        assert_eq!(keys.len(), pointer.len());
-        assert_eq!(keys[0], json!({"type": "keyDown", "value": "\u{E008}"}));
-        assert_eq!(keys[1], json!({"type": "keyDown", "value": "\u{E009}"}));
+    fn point_click_rejects_invalid_pins() {
+        let error = |result: flow_like_types::Result<(f64, f64, ClickOptions)>| {
+            result.unwrap_err().to_string()
+        };
         assert_eq!(
-            keys[keys.len() - 1],
-            json!({"type": "keyUp", "value": "\u{E008}"})
+            error(point_click(-1.0, 0.0, "left", &[], 1)),
+            "Click point must be finite, nonnegative viewport coordinates, got (-1, 0)"
         );
-        let moves: Vec<_> = pointer
-            .iter()
-            .filter(|action| action["type"] == "pointerMove")
-            .collect();
-        assert_eq!(moves.len(), 1);
-        assert_eq!(moves[0]["origin"], json!("viewport"));
+        assert!(point_click(f64::NAN, 0.0, "left", &[], 1).is_err());
         assert_eq!(
-            (moves[0]["x"].clone(), moves[0]["y"].clone()),
-            (json!(10), json!(21))
+            error(point_click(0.0, 0.0, "back", &[], 1)),
+            "Click button must be left, middle, or right, got 'back'"
         );
-        let downs = pointer
-            .iter()
-            .filter(|action| action["type"] == "pointerDown")
-            .count();
-        assert_eq!(downs, 2);
-        assert!(pointer.iter().any(|action| action["button"] == json!(2)));
-        assert!(point_click_actions(-1.0, 0.0, "left", &[], 1).is_err());
-        assert!(point_click_actions(0.0, 0.0, "back", &[], 1).is_err());
-        assert!(point_click_actions(0.0, 0.0, "left", &[], 4).is_err());
-        assert!(point_click_actions(0.0, 0.0, "left", &["hyper".into()], 1).is_err());
+        assert_eq!(
+            error(point_click(0.0, 0.0, "left", &[], 4)),
+            "Click count must be 1, 2, or 3, got 4"
+        );
+        assert!(point_click(0.0, 0.0, "left", &[], 0).is_err());
+        assert!(point_click(0.0, 0.0, "left", &[], 257).is_err());
+        assert_eq!(
+            error(point_click(0.0, 0.0, "left", &["hyper".into()], 1)),
+            "Unknown click modifier 'hyper'; use Control, Shift, Alt, or Meta"
+        );
+    }
+
+    #[test]
+    fn click_points_beyond_the_viewport_fail_like_chromedriver() {
+        let viewport = json!({"width": 800, "height": 600});
+        assert!(check_in_viewport(0.0, 0.0, &viewport).is_ok());
+        assert!(check_in_viewport(800.0, 600.0, &viewport).is_ok());
+        assert_eq!(
+            check_in_viewport(801.0, 10.0, &viewport)
+                .unwrap_err()
+                .to_string(),
+            "the point is outside the 800x600 viewport (move target out of bounds)"
+        );
+        assert!(check_in_viewport(10.0, 601.0, &viewport).is_err());
+        assert!(check_in_viewport(0.0, 0.0, &json!({"width": 800})).is_err());
+        assert!(check_in_viewport(0.0, 0.0, &json!(null)).is_err());
     }
 }

@@ -105,8 +105,7 @@ impl NodeLogic for QueryRemoteOntologyObjectsNode {
         let binding_id: String = context.evaluate_pin("binding_id").await?;
         let object_type: String = context.evaluate_pin("object_type").await?;
         let limit: i64 = context.evaluate_pin("limit").await.unwrap_or(100);
-        let connection =
-            crate::data::db::vector::connection::open_shared(context, false).await?;
+        let connection = crate::data::db::vector::connection::open_shared(context, false).await?;
         let import = match lancegraph::load_ontology_import(&connection, &binding_id).await {
             Ok(import) => import,
             Err(error) => return fail(context, error).await,

@@ -1,19 +1,24 @@
 ---
 title: What is Flow-Like?
-description: Build typed, scalable workflows with visual design and Rust performance
+description: Build typed workflows and connect them to data, interfaces, and existing systems
 sidebar:
   order: 10
 ---
 
 import { Card, CardGrid, Aside, LinkCard } from '@astrojs/starlight/components';
 
-Flow-Like is a **visual workflow platform** that lets you design, execute, and ship typed workflows — from local prototyping to production deployment.
+Flow-Like is a **visual workflow platform** for connecting data, services, and
+user interfaces through typed workflows. Build and inspect the same logic as a
+visual graph or as [FlowScript](/studio/flowscript/).
 
 <Aside type="tip">
-**TL;DR:** Drag-and-drop nodes, connect typed pins, see your data flow. What you build is what you ship — same graph, same visibility, from dev to prod.
+Start with [two nodes and one visible result](/start/getting-started/), then use
+[Apps and core concepts](/apps/overview/) to understand ownership and entry points.
 </Aside>
 
-![Conceptual overview of inputs moving through a typed Flow-Like workflow into application, automation, and structured-data outcomes](../../../assets/WhatIsFlowLike.webp)
+![Flow-Like Studio showing a support-workflow prototype with connected nodes, grouped steps, and notes on the canvas](../../../assets/FlowLikeStudio.webp)
+
+A support-workflow prototype in [Studio](/studio/overview/), organized into request, draft, and review stages.
 
 ## Why Flow-Like?
 
@@ -22,7 +27,8 @@ Flow-Like is a **visual workflow platform** that lets you design, execute, and s
     Build workflows by connecting nodes visually. No code required to get started, but fully extensible when you need it.
   </Card>
   <Card title="Type-Safe" icon="approve-check">
-    Every connection is typed. Catch errors before runtime, not after your pipeline crashes at 3am.
+    Typed pins let the editor reject incompatible connections before a run.
+    Runtime validation and representative tests still matter for actual data.
   </Card>
   <Card title="Rust Performance" icon="rocket">
     The runtime is built in Rust for predictable execution, native performance, and extensibility.
@@ -35,33 +41,36 @@ Flow-Like is a **visual workflow platform** that lets you design, execute, and s
 ## Core Concepts
 
 ### Flows
-A **flow** is a directed graph of nodes. Data enters through input pins, flows through transformations, and exits through output pins. Each step is recorded, so you always know what went in and what came out.
+A **Flow** is a directed graph of nodes. Execution connections control which
+steps run, and data connections supply values. [Run logs](/studio/logging/)
+record the available evidence according to the Flow's logging configuration.
 
 ### Nodes
-**Nodes** are the building blocks. Each node has:
-- **Input pins** — typed data coming in
-- **Output pins** — typed data going out
-- **Execution pins** — control flow (when to run)
+**Nodes** are the building blocks. Their pins can carry input data, output
+data, or execution control. Pure nodes have data pins and run when another node
+needs their output; event nodes start execution. See [Nodes](/studio/nodes/).
 
 ### Type Safety
-Every pin has a type. When you connect two pins, Flow-Like checks that types match. Incompatible connections are blocked at design time — not runtime.
+Every pin has a type. Flow-Like checks compatibility when you connect pins.
+This catches wiring mistakes; it does not guarantee that an API will respond or
+that an input value meets every business rule.
 
 ### Local-First
 Flow-Like Desktop is designed to work offline. Start on your laptop, then connect to a hosted or self-managed environment when collaboration and remote execution are useful.
 
 ## What Can You Build?
 
-- **ETL Pipelines** — Transform and move data between systems
-- **AI Agents** — Embed LLMs, vector search, and reasoning models
-- **Automations** — React to events, schedule tasks, orchestrate services
-- **Data Processing** — Parse, validate, enrich, and route data
-- **Custom Apps** — Build interfaces on top of your flows
+- **ETL Pipelines**: Transform and move data between systems
+- **AI Agents**: Embed LLMs, vector search, and reasoning models
+- **Automations**: React to events, schedule tasks, orchestrate services
+- **Data Processing**: Parse, validate, enrich, and route data
+- **Custom Apps**: Build interfaces on top of your flows
 
 ## Next Steps
 
 <CardGrid>
   <LinkCard title="Download Flow-Like" href="/start/get/" description="Get the desktop app for Windows, macOS, or Linux" />
-  <LinkCard title="Your First Flow" href="/start/first-use/" description="Build something in 5 minutes" />
+  <LinkCard title="Your First Flow" href="/start/getting-started/" description="Connect two nodes and verify your first run" />
   <LinkCard title="Explore Nodes" href="/nodes/overview/" description="See all available nodes" />
   <LinkCard title="Self-Hosting" href="/self-hosting/overview/" description="Run Flow-Like on your infrastructure" />
 </CardGrid>

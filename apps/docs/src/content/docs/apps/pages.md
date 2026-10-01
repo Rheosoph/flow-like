@@ -1,5 +1,5 @@
 ---
-title: Pages
+title: Create and publish Pages
 description: Create visual interfaces for your apps with Pages
 sidebar:
   order: 41
@@ -12,28 +12,33 @@ workflow behavior stay together.
 Use Pages for dashboards, forms, reports, tools, and other experiences that
 need more layout control than a [Chat UI](/apps/chat-ui/).
 
+Enable [Developer Mode](/start/developer-mode/) to open the App's Flows and
+Events workspaces. Your role must also allow editing the Flow and its Pages.
+
 ## Create a Page
 
 1. Open the Flow that will provide the Page's behavior.
-2. Open its **Pages** panel.
-3. Select **New**, enter a Page name, and select **Create Page**.
-4. Flow-Like opens the new Page in the visual builder.
+2. Open **Explorer** and find the **UI** section.
+3. Select its **Create Page** (+) control. Enter **Page Name** and review the
+   suggested route.
+4. Select **Create**, then select the new Page in the Explorer to open it in an
+   editor tab. The Event route is configured separately when exposing it to users.
 
-A Flow can own multiple Pages. To see Pages from across the whole app, open the
-app's **Events** workspace and select the **Pages** tab. From there, you can
-open a Page, jump back to its connected Flow, or delete it.
+A Flow can own multiple Pages. Reopen them from **Explorer → UI** in that
+Flow. The Page opens in an editor tab alongside the graph. The App's **Events**
+workspace manages the entry points that expose those Pages.
 
-![The Pages tab in Flow-Like Desktop, showing Pages connected to the Customer Support Automation Flow](../../../assets/PagesOverview.webp)
+![The Flow Explorer listing Pages under UI, with Widgets, storage, and tables below](../../../assets/PagesOverview.webp)
 
 ## Page Builder
 
 The Page Builder is the same component-based editor used for
 [Widgets](/apps/widgets/):
 
-- **Components / Hierarchy** — add components or inspect the current component
+- **Components / Hierarchy**: add components or inspect the current component
   tree.
-- **Canvas** — arrange and preview the interface.
-- **Inspector** — configure the selected component, including its content,
+- **Canvas**: arrange and preview the interface.
+- **Inspector**: configure the selected component, including its content,
   style, data bindings, and actions.
 
 The toolbar provides copy, cut, paste, and delete controls, plus **Dev Mode**
@@ -44,11 +49,11 @@ saved automatically after you stop editing.
 
 Select **Settings** in the Page header for Page-level configuration:
 
-- **General** — Page name, description, ID, and version.
-- **Behavior** — Flow events to run on load, unload, or at an interval. A
+- **General**: Page name, description, ID, and version.
+- **Behavior**: Flow events to run on load, unload, or at an interval. A
   cached Page can show its last rendered state while its load event refreshes.
-- **Layout** — layout type, background, spacing, and custom canvas styling.
-- **SEO** — browser and social metadata.
+- **Layout**: layout type, background, spacing, and custom canvas styling.
+- **SEO**: browser and social metadata.
 
 ## Components, data, and actions
 
@@ -66,11 +71,16 @@ refresh the surface by returning A2UI updates.
 See the [A2UI component reference](/reference/a2ui-components/) for the full
 catalog and property definitions.
 
-## Make a Page available in the app
+## Publish a Page through an Event
 
-A Page is opened through a UI Event. Configure the Event's Page target and give
+To publish a Page for App users, configure an Event with that Page as its target. Give
 the Event a unique path such as `/support`. That path becomes the Page's
 navigable [route](/apps/routes/).
 
+When creating a [Flow version](/studio/versioning/), Flow-Like also snapshots
+its owned Pages. Pin the Page-target Event to that version to keep using the
+released Page. The Page Builder continues to edit the latest Page.
+
 Use the builder's Preview mode and representative Flow data to test the Page
-before publishing or sharing the app.
+before sharing the App. To publish a Page at a browser link, also configure
+[Event hosting](/apps/events/#publish-a-hosted-chat-form-or-page).

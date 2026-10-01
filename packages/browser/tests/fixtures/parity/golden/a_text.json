@@ -1,0 +1,2366 @@
+{
+  "url": "http://127.0.0.1:57117/text.html",
+  "rows": [
+    {
+      "id": "t_plain",
+      "wd": {
+        "text": "Hello world",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 16
+        }
+      },
+      "cdp": {
+        "innerText": "Hello world",
+        "innerText_nbsp_trim": "Hello world",
+        "textContent": "Hello world",
+        "atom_text": "Hello world",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 16,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 16,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 16,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_nbsp",
+      "wd": {
+        "text": "a  b c ",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 52.796875
+        }
+      },
+      "cdp": {
+        "innerText": "a  b c ",
+        "innerText_nbsp_trim": "a  b c",
+        "textContent": "a  b   c ",
+        "atom_text": "a  b c ",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 52.796875,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 52.796875,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 52.796875,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_ws",
+      "wd": {
+        "text": "leading and trailing spaces",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 89.59375
+        }
+      },
+      "cdp": {
+        "innerText": "leading and trailing spaces",
+        "innerText_nbsp_trim": "leading and trailing spaces",
+        "textContent": "\n    leading and\n    trailing   spaces\n",
+        "atom_text": "leading and trailing spaces",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 89.59375,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 89.59375,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 89.59375,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_upper",
+      "wd": {
+        "text": "HELLO WORLD STRASSE",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 126.390625
+        }
+      },
+      "cdp": {
+        "innerText": "HELLO WORLD STRASSE",
+        "innerText_nbsp_trim": "HELLO WORLD STRASSE",
+        "textContent": "hello World straße",
+        "atom_text": "HELLO WORLD STRASSE",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 126.390625,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 126.390625,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 126.390625,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_cap",
+      "wd": {
+        "text": "Hello World-Foo O'neil Snake_case Éclair",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 163.1875
+        }
+      },
+      "cdp": {
+        "innerText": "Hello World-Foo O'neil Snake_case Éclair",
+        "innerText_nbsp_trim": "Hello World-Foo O'neil Snake_case Éclair",
+        "textContent": "hello world-foo o'neil snake_case éclair",
+        "atom_text": "Hello World-Foo O'neil Snake_case Éclair",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 163.1875,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 163.1875,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 163.1875,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_lower",
+      "wd": {
+        "text": "mixed case",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 199.984375
+        }
+      },
+      "cdp": {
+        "innerText": "mixed case",
+        "innerText_nbsp_trim": "mixed case",
+        "textContent": "MiXeD CaSe",
+        "atom_text": "mixed case",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 199.984375,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 199.984375,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 199.984375,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_hidden_child",
+      "wd": {
+        "text": "Visible AriaHidden end",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 236.78125
+        }
+      },
+      "cdp": {
+        "innerText": "Visible  OpacityZero AriaHidden end",
+        "innerText_nbsp_trim": "Visible  OpacityZero AriaHidden end",
+        "textContent": "Visible DisplayNone VisHidden OpacityZero AriaHidden end",
+        "atom_text": "Visible AriaHidden end",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 236.78125,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 236.78125,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 236.78125,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_display_none",
+      "wd": {
+        "text": "",
+        "displayed": false,
+        "rect": {
+          "height": 21,
+          "width": 107,
+          "x": 0,
+          "y": 0
+        }
+      },
+      "cdp": {
+        "innerText": "None text bold",
+        "innerText_nbsp_trim": "None text bold",
+        "textContent": "None text bold",
+        "atom_text": "",
+        "atom_displayed": false,
+        "checkVisibility_default": false,
+        "checkVisibility_all": false,
+        "repo_probe_shown": false,
+        "quads_nonempty": false,
+        "box_model": "error: Could not compute box model.",
+        "bcr": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "bcr_plus_scroll": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "atom_rect": {
+          "x": 0,
+          "y": 0,
+          "width": 107,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_vis_hidden",
+      "wd": {
+        "text": "child visible",
+        "displayed": false,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 257.578125
+        }
+      },
+      "cdp": {
+        "innerText": "child visible",
+        "innerText_nbsp_trim": "child visible",
+        "textContent": "VH text child visible",
+        "atom_text": "child visible",
+        "atom_displayed": false,
+        "checkVisibility_default": true,
+        "checkVisibility_all": false,
+        "repo_probe_shown": false,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 257.578125,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 257.578125,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 257.578125,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_vis_child_visible",
+      "wd": {
+        "text": "child visible",
+        "displayed": true,
+        "rect": {
+          "height": 18,
+          "width": 82,
+          "x": 64.90625,
+          "y": 258.578125
+        }
+      },
+      "cdp": {
+        "innerText": "child visible",
+        "innerText_nbsp_trim": "child visible",
+        "textContent": "child visible",
+        "atom_text": "child visible",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 64.90625,
+          "y": 258.578125,
+          "width": 81.8125,
+          "height": 18
+        },
+        "bcr_plus_scroll": {
+          "x": 64.90625,
+          "y": 258.578125,
+          "width": 81.8125,
+          "height": 18
+        },
+        "atom_rect": {
+          "x": 64.90625,
+          "y": 258.578125,
+          "width": 82,
+          "height": 18
+        }
+      }
+    },
+    {
+      "id": "t_opacity0",
+      "wd": {
+        "text": "",
+        "displayed": false,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 278.375
+        }
+      },
+      "cdp": {
+        "innerText": "Opacity zero text",
+        "innerText_nbsp_trim": "Opacity zero text",
+        "textContent": "Opacity zero text",
+        "atom_text": "",
+        "atom_displayed": false,
+        "checkVisibility_default": true,
+        "checkVisibility_all": false,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 278.375,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 278.375,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 278.375,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_aria_hidden",
+      "wd": {
+        "text": "Aria hidden text",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 299.171875
+        }
+      },
+      "cdp": {
+        "innerText": "Aria hidden text",
+        "innerText_nbsp_trim": "Aria hidden text",
+        "textContent": "Aria hidden text",
+        "atom_text": "Aria hidden text",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 299.171875,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 299.171875,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 299.171875,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_hidden_attr",
+      "wd": {
+        "text": "",
+        "displayed": false,
+        "rect": {
+          "height": 21,
+          "width": 109,
+          "x": 0,
+          "y": 0
+        }
+      },
+      "cdp": {
+        "innerText": "Hidden attr text",
+        "innerText_nbsp_trim": "Hidden attr text",
+        "textContent": "Hidden attr text",
+        "atom_text": "",
+        "atom_displayed": false,
+        "checkVisibility_default": false,
+        "checkVisibility_all": false,
+        "repo_probe_shown": false,
+        "quads_nonempty": false,
+        "box_model": "error: Could not compute box model.",
+        "bcr": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "bcr_plus_scroll": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "atom_rect": {
+          "x": 0,
+          "y": 0,
+          "width": 109,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_offscreen",
+      "wd": {
+        "text": "",
+        "displayed": false,
+        "rect": {
+          "height": 21,
+          "width": 99,
+          "x": -10000,
+          "y": 0
+        }
+      },
+      "cdp": {
+        "innerText": "Offscreen text",
+        "innerText_nbsp_trim": "Offscreen text",
+        "textContent": "Offscreen text",
+        "atom_text": "",
+        "atom_displayed": false,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": -10000,
+          "y": 0,
+          "width": 99.3125,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": -10000,
+          "y": 0,
+          "width": 99.3125,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": -10000,
+          "y": 0,
+          "width": 99,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_far_below",
+      "wd": {
+        "text": "Far below text",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 100,
+          "x": 8,
+          "y": 5000
+        }
+      },
+      "cdp": {
+        "innerText": "Far below text",
+        "innerText_nbsp_trim": "Far below text",
+        "textContent": "Far below text",
+        "atom_text": "Far below text",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 5000,
+          "width": 100.484375,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 5000,
+          "width": 100.484375,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 5000,
+          "width": 100,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_zero",
+      "wd": {
+        "text": "",
+        "displayed": false,
+        "rect": {
+          "height": 0,
+          "width": 0,
+          "x": 8,
+          "y": 319.96875
+        }
+      },
+      "cdp": {
+        "innerText": "Zero size overflow hidden",
+        "innerText_nbsp_trim": "Zero size overflow hidden",
+        "textContent": "Zero size overflow hidden",
+        "atom_text": "",
+        "atom_displayed": false,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": false,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 319.96875,
+          "width": 0,
+          "height": 0
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 319.96875,
+          "width": 0,
+          "height": 0
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 319.96875,
+          "width": 0,
+          "height": 0
+        }
+      }
+    },
+    {
+      "id": "t_zero_visible_overflow",
+      "wd": {
+        "text": "Zero size overflow visible",
+        "displayed": true,
+        "rect": {
+          "height": 0,
+          "width": 0,
+          "x": 8,
+          "y": 319.96875
+        }
+      },
+      "cdp": {
+        "innerText": "Zero size overflow visible",
+        "innerText_nbsp_trim": "Zero size overflow visible",
+        "textContent": "Zero size overflow visible",
+        "atom_text": "Zero size overflow visible",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": false,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 319.96875,
+          "width": 0,
+          "height": 0
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 319.96875,
+          "width": 0,
+          "height": 0
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 319.96875,
+          "width": 0,
+          "height": 0
+        }
+      }
+    },
+    {
+      "id": "t_empty",
+      "wd": {
+        "text": "",
+        "displayed": false,
+        "rect": {
+          "height": 0,
+          "width": 1169,
+          "x": 8,
+          "y": 319.96875
+        }
+      },
+      "cdp": {
+        "innerText": "",
+        "innerText_nbsp_trim": "",
+        "textContent": "",
+        "atom_text": "",
+        "atom_displayed": false,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": false,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 319.96875,
+          "width": 1169,
+          "height": 0
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 319.96875,
+          "width": 1169,
+          "height": 0
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 319.96875,
+          "width": 1169,
+          "height": 0
+        }
+      }
+    },
+    {
+      "id": "t_clipped",
+      "wd": {
+        "text": "",
+        "displayed": false,
+        "rect": {
+          "height": 42,
+          "width": 54,
+          "x": 208,
+          "y": 319.96875
+        }
+      },
+      "cdp": {
+        "innerText": "Clipped away",
+        "innerText_nbsp_trim": "Clipped away",
+        "textContent": "Clipped away",
+        "atom_text": "",
+        "atom_displayed": false,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 208,
+          "y": 319.96875,
+          "width": 54.265625,
+          "height": 41.59375
+        },
+        "bcr_plus_scroll": {
+          "x": 208,
+          "y": 319.96875,
+          "width": 54.265625,
+          "height": 41.59375
+        },
+        "atom_rect": {
+          "x": 208,
+          "y": 319.96875,
+          "width": 54,
+          "height": 42
+        }
+      }
+    },
+    {
+      "id": "t_before",
+      "wd": {
+        "text": "Main",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 355.96875
+        }
+      },
+      "cdp": {
+        "innerText": "Main",
+        "innerText_nbsp_trim": "Main",
+        "textContent": "Main",
+        "atom_text": "Main",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 355.96875,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 355.96875,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 355.96875,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_block",
+      "wd": {
+        "text": "Line1\nLine2\nBlock\nPara\ntail inline",
+        "displayed": true,
+        "rect": {
+          "height": 136,
+          "width": 1169,
+          "x": 8,
+          "y": 392.765625
+        }
+      },
+      "cdp": {
+        "innerText": "Line1\nLine2\nBlock\n\nPara\n\ntail inline",
+        "innerText_nbsp_trim": "Line1\nLine2\nBlock\n\nPara\n\ntail inline",
+        "textContent": "Line1Line2BlockParatail   inline",
+        "atom_text": "Line1\nLine2\nBlock\nPara\ntail inline",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 392.765625,
+          "width": 1169,
+          "height": 135.984375
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 392.765625,
+          "width": 1169,
+          "height": 135.984375
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 392.765625,
+          "width": 1169,
+          "height": 136
+        }
+      }
+    },
+    {
+      "id": "t_table",
+      "wd": {
+        "text": "H1 H2\nc1 c2",
+        "displayed": true,
+        "rect": {
+          "height": 56,
+          "width": 55,
+          "x": 8,
+          "y": 528.75
+        }
+      },
+      "cdp": {
+        "innerText": "H1\tH2\nc1\tc2",
+        "innerText_nbsp_trim": "H1\tH2\nc1\tc2",
+        "textContent": "H1H2c1c2",
+        "atom_text": "H1 H2\nc1 c2",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 528.75,
+          "width": 54.90625,
+          "height": 55.59375
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 528.75,
+          "width": 54.90625,
+          "height": 55.59375
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 528.75,
+          "width": 55,
+          "height": 56
+        }
+      }
+    },
+    {
+      "id": "t_list",
+      "wd": {
+        "text": "one\ntwo",
+        "displayed": true,
+        "rect": {
+          "height": 42,
+          "width": 1169,
+          "x": 8,
+          "y": 600.34375
+        }
+      },
+      "cdp": {
+        "innerText": "one\ntwo",
+        "innerText_nbsp_trim": "one\ntwo",
+        "textContent": "onetwo",
+        "atom_text": "one\ntwo",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 600.34375,
+          "width": 1169,
+          "height": 41.59375
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 600.34375,
+          "width": 1169,
+          "height": 41.59375
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 600.34375,
+          "width": 1169,
+          "height": 42
+        }
+      }
+    },
+    {
+      "id": "t_pre",
+      "wd": {
+        "text": "  a\n    b   tab",
+        "displayed": true,
+        "rect": {
+          "height": 42,
+          "width": 1169,
+          "x": 8,
+          "y": 657.9375
+        }
+      },
+      "cdp": {
+        "innerText": "  a\n    b  \ttab",
+        "innerText_nbsp_trim": "a\nb  \ttab",
+        "textContent": "  a\n    b  \ttab",
+        "atom_text": "  a\n    b   tab",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 657.9375,
+          "width": 1169,
+          "height": 41.59375
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 657.9375,
+          "width": 1169,
+          "height": 41.59375
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 657.9375,
+          "width": 1169,
+          "height": 42
+        }
+      }
+    },
+    {
+      "id": "t_prewrap",
+      "wd": {
+        "text": "x   y\nz",
+        "displayed": true,
+        "rect": {
+          "height": 42,
+          "width": 1169,
+          "x": 8,
+          "y": 715.53125
+        }
+      },
+      "cdp": {
+        "innerText": "x   y\nz",
+        "innerText_nbsp_trim": "x   y\nz",
+        "textContent": "x   y\nz",
+        "atom_text": "x   y\nz",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 715.53125,
+          "width": 1169,
+          "height": 41.59375
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 715.53125,
+          "width": 1169,
+          "height": 41.59375
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 715.53125,
+          "width": 1169,
+          "height": 42
+        }
+      }
+    },
+    {
+      "id": "t_input",
+      "wd": {
+        "text": "",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 153,
+          "x": 8,
+          "y": 794.125
+        }
+      },
+      "cdp": {
+        "innerText": "",
+        "innerText_nbsp_trim": "",
+        "textContent": "",
+        "atom_text": "",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 794.125,
+          "width": 153,
+          "height": 21
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 794.125,
+          "width": 153,
+          "height": 21
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 794.125,
+          "width": 153,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_textarea",
+      "wd": {
+        "text": "textarea text",
+        "displayed": true,
+        "rect": {
+          "height": 36,
+          "width": 182,
+          "x": 165.453125,
+          "y": 773.125
+        }
+      },
+      "cdp": {
+        "innerText": "",
+        "innerText_nbsp_trim": "",
+        "textContent": "textarea text",
+        "atom_text": "textarea text",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 165.453125,
+          "y": 773.125,
+          "width": 182,
+          "height": 36
+        },
+        "bcr_plus_scroll": {
+          "x": 165.453125,
+          "y": 773.125,
+          "width": 182,
+          "height": 36
+        },
+        "atom_rect": {
+          "x": 165.453125,
+          "y": 773.125,
+          "width": 182,
+          "height": 36
+        }
+      }
+    },
+    {
+      "id": "t_select",
+      "wd": {
+        "text": "One\nTwo",
+        "displayed": true,
+        "rect": {
+          "height": 19,
+          "width": 48,
+          "x": 351.90625,
+          "y": 795.125
+        }
+      },
+      "cdp": {
+        "innerText": "One\nTwo",
+        "innerText_nbsp_trim": "One\nTwo",
+        "textContent": "OneTwo",
+        "atom_text": "One\nTwo",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 351.90625,
+          "y": 795.125,
+          "width": 48,
+          "height": 19
+        },
+        "bcr_plus_scroll": {
+          "x": 351.90625,
+          "y": 795.125,
+          "width": 48,
+          "height": 19
+        },
+        "atom_rect": {
+          "x": 351.90625,
+          "y": 795.125,
+          "width": 48,
+          "height": 19
+        }
+      }
+    },
+    {
+      "id": "t_option_in_hidden",
+      "wd": {
+        "text": "",
+        "displayed": false,
+        "rect": {
+          "height": 0,
+          "width": 0,
+          "x": 0,
+          "y": 0
+        }
+      },
+      "cdp": {
+        "innerText": "HiddenOpt",
+        "innerText_nbsp_trim": "HiddenOpt",
+        "textContent": "HiddenOpt",
+        "atom_text": "",
+        "atom_displayed": false,
+        "checkVisibility_default": false,
+        "checkVisibility_all": false,
+        "repo_probe_shown": false,
+        "quads_nonempty": false,
+        "box_model": "error: Could not compute box model.",
+        "bcr": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "bcr_plus_scroll": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "atom_rect": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        }
+      }
+    },
+    {
+      "id": "t_input_hidden",
+      "wd": {
+        "text": "",
+        "displayed": false,
+        "rect": {
+          "height": 0,
+          "width": 0,
+          "x": 0,
+          "y": 0
+        }
+      },
+      "cdp": {
+        "innerText": "",
+        "innerText_nbsp_trim": "",
+        "textContent": "",
+        "atom_text": "",
+        "atom_displayed": false,
+        "checkVisibility_default": false,
+        "checkVisibility_all": false,
+        "repo_probe_shown": false,
+        "quads_nonempty": false,
+        "box_model": "error: Could not compute box model.",
+        "bcr": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "bcr_plus_scroll": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "atom_rect": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        }
+      }
+    },
+    {
+      "id": "t_details",
+      "wd": {
+        "text": "Summary",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 815.125
+        }
+      },
+      "cdp": {
+        "innerText": "Summary",
+        "innerText_nbsp_trim": "Summary",
+        "textContent": "SummaryDetails body",
+        "atom_text": "Summary",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 815.125,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 815.125,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 815.125,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_summary",
+      "wd": {
+        "text": "Summary",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 815.125
+        }
+      },
+      "cdp": {
+        "innerText": "Summary",
+        "innerText_nbsp_trim": "Summary",
+        "textContent": "Summary",
+        "atom_text": "Summary",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 815.125,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 815.125,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 815.125,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_details_body",
+      "wd": {
+        "text": "",
+        "displayed": false,
+        "rect": {
+          "height": 18,
+          "width": 88,
+          "x": 8,
+          "y": 835.921875
+        }
+      },
+      "cdp": {
+        "innerText": "",
+        "innerText_nbsp_trim": "",
+        "textContent": "Details body",
+        "atom_text": "",
+        "atom_displayed": false,
+        "checkVisibility_default": false,
+        "checkVisibility_all": false,
+        "repo_probe_shown": false,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 836.921875,
+          "width": 88.046875,
+          "height": 18
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 836.921875,
+          "width": 88.046875,
+          "height": 18
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 836.921875,
+          "width": 88,
+          "height": 18
+        }
+      }
+    },
+    {
+      "id": "t_cv_hidden",
+      "wd": {
+        "text": "",
+        "displayed": false,
+        "rect": {
+          "height": 0,
+          "width": 1169,
+          "x": 8,
+          "y": 835.921875
+        }
+      },
+      "cdp": {
+        "innerText": "",
+        "innerText_nbsp_trim": "",
+        "textContent": "Content visibility hidden",
+        "atom_text": "",
+        "atom_displayed": false,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": false,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 835.921875,
+          "width": 1169,
+          "height": 0
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 835.921875,
+          "width": 1169,
+          "height": 0
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 835.921875,
+          "width": 1169,
+          "height": 0
+        }
+      }
+    },
+    {
+      "id": "t_noscript",
+      "wd": {
+        "text": "",
+        "displayed": false,
+        "rect": {
+          "height": 0,
+          "width": 0,
+          "x": 0,
+          "y": 0
+        }
+      },
+      "cdp": {
+        "innerText": "Noscript text",
+        "innerText_nbsp_trim": "Noscript text",
+        "textContent": "Noscript text",
+        "atom_text": "",
+        "atom_displayed": false,
+        "checkVisibility_default": false,
+        "checkVisibility_all": false,
+        "repo_probe_shown": false,
+        "quads_nonempty": false,
+        "box_model": "error: Could not compute box model.",
+        "bcr": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "bcr_plus_scroll": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "atom_rect": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        }
+      }
+    },
+    {
+      "id": "t_script_style",
+      "wd": {
+        "text": "AB",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 835.921875
+        }
+      },
+      "cdp": {
+        "innerText": "AB",
+        "innerText_nbsp_trim": "AB",
+        "textContent": "Avar x = \"script text\";.x{color:red}B",
+        "atom_text": "AB",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 835.921875,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 835.921875,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 835.921875,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_zw",
+      "wd": {
+        "text": "zerowidthmarkshere",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 856.71875
+        }
+      },
+      "cdp": {
+        "innerText": "zero​width‎marks‏here",
+        "innerText_nbsp_trim": "zero​width‎marks‏here",
+        "textContent": "zero​width‎marks‏here",
+        "atom_text": "zerowidthmarkshere",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 856.71875,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 856.71875,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 856.71875,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_emoji",
+      "wd": {
+        "text": "Emoji 😀 and ä and 中文 and עברית",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 877.515625
+        }
+      },
+      "cdp": {
+        "innerText": "Emoji 😀 and ä and 中文 and עברית",
+        "innerText_nbsp_trim": "Emoji 😀 and ä and 中文 and עברית",
+        "textContent": "Emoji 😀 and ä and 中文 and עברית",
+        "atom_text": "Emoji 😀 and ä and 中文 and עברית",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 877.515625,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 877.515625,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 877.515625,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_inline_blocks",
+      "wd": {
+        "text": "ib1ib2",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 898.3125
+        }
+      },
+      "cdp": {
+        "innerText": "ib1ib2",
+        "innerText_nbsp_trim": "ib1ib2",
+        "textContent": "ib1ib2",
+        "atom_text": "ib1ib2",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 898.3125,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 898.3125,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 898.3125,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_flex",
+      "wd": {
+        "text": "f1\nf2",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 919.109375
+        }
+      },
+      "cdp": {
+        "innerText": "f1\nf2",
+        "innerText_nbsp_trim": "f1\nf2",
+        "textContent": "f1f2",
+        "atom_text": "f1\nf2",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 919.109375,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 919.109375,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 919.109375,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_grid",
+      "wd": {
+        "text": "g1\ng2",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 939.90625
+        }
+      },
+      "cdp": {
+        "innerText": "g1\ng2",
+        "innerText_nbsp_trim": "g1\ng2",
+        "textContent": "g1g2",
+        "atom_text": "g1\ng2",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 939.90625,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 939.90625,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 939.90625,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_scale0",
+      "wd": {
+        "text": "Scaled to zero",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 592.5,
+          "y": 971.1015625
+        }
+      },
+      "cdp": {
+        "innerText": "Scaled to zero",
+        "innerText_nbsp_trim": "Scaled to zero",
+        "textContent": "Scaled to zero",
+        "atom_text": "Scaled to zero",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": false,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 592.5,
+          "y": 971.1015625,
+          "width": 0,
+          "height": 0
+        },
+        "bcr_plus_scroll": {
+          "x": 592.5,
+          "y": 971.1015625,
+          "width": 0,
+          "height": 0
+        },
+        "atom_rect": {
+          "x": 592.5,
+          "y": 971.1015625,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_clip_path",
+      "wd": {
+        "text": "Clip path hidden",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 981.5
+        }
+      },
+      "cdp": {
+        "innerText": "Clip path hidden",
+        "innerText_nbsp_trim": "Clip path hidden",
+        "textContent": "Clip path hidden",
+        "atom_text": "Clip path hidden",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 981.5,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 981.5,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 981.5,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_covered",
+      "wd": {
+        "text": "Covered text",
+        "displayed": true,
+        "rect": {
+          "height": 18,
+          "width": 91,
+          "x": 8,
+          "y": 1003.296875
+        }
+      },
+      "cdp": {
+        "innerText": "Covered text",
+        "innerText_nbsp_trim": "Covered text",
+        "textContent": "Covered text",
+        "atom_text": "Covered text",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 1003.296875,
+          "width": 90.71875,
+          "height": 18
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 1003.296875,
+          "width": 90.71875,
+          "height": 18
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 1003.296875,
+          "width": 91,
+          "height": 18
+        }
+      }
+    },
+    {
+      "id": "t_svg_text",
+      "wd": {
+        "text": "SVG text",
+        "displayed": true,
+        "rect": {
+          "height": 18,
+          "width": 64.03125,
+          "x": 8,
+          "y": 1038.296875
+        }
+      },
+      "cdp": {
+        "innerText": "<undefined>",
+        "innerText_nbsp_trim": "<undefined>",
+        "textContent": "SVG text",
+        "atom_text": "SVG text",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 1038.296875,
+          "width": 64.03125,
+          "height": 18
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 1038.296875,
+          "width": 64.03125,
+          "height": 18
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 1038.296875,
+          "width": 64.03125,
+          "height": 18
+        }
+      }
+    },
+    {
+      "id": "t_shadow_host",
+      "wd": {
+        "text": "Shadow text Slotted\nLight",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 1068.09375
+        }
+      },
+      "cdp": {
+        "innerText": "Slotted",
+        "innerText_nbsp_trim": "Slotted",
+        "textContent": "Light Slotted",
+        "atom_text": "Shadow text Slotted\nLight",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 1068.09375,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 1068.09375,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 1068.09375,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_shadow_host2",
+      "wd": {
+        "text": "Only shadow content",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 1104.890625
+        }
+      },
+      "cdp": {
+        "innerText": "",
+        "innerText_nbsp_trim": "",
+        "textContent": "",
+        "atom_text": "Only shadow content",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 1104.890625,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 1104.890625,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 1104.890625,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_link",
+      "wd": {
+        "text": "Link text",
+        "displayed": true,
+        "rect": {
+          "height": 18,
+          "width": 60,
+          "x": 8,
+          "y": 1143.6875
+        }
+      },
+      "cdp": {
+        "innerText": "Link text",
+        "innerText_nbsp_trim": "Link text",
+        "textContent": "Link text",
+        "atom_text": "Link text",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 1143.6875,
+          "width": 59.59375,
+          "height": 18
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 1143.6875,
+          "width": 59.59375,
+          "height": 18
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 1143.6875,
+          "width": 60,
+          "height": 18
+        }
+      }
+    },
+    {
+      "id": "t_button",
+      "wd": {
+        "text": "Button bold",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 86,
+          "x": 278.40625,
+          "y": 1142.6875
+        }
+      },
+      "cdp": {
+        "innerText": "Button bold",
+        "innerText_nbsp_trim": "Button bold",
+        "textContent": "Button bold",
+        "atom_text": "Button bold",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 278.40625,
+          "y": 1142.6875,
+          "width": 86.390625,
+          "height": 21
+        },
+        "bcr_plus_scroll": {
+          "x": 278.40625,
+          "y": 1142.6875,
+          "width": 86.390625,
+          "height": 21
+        },
+        "atom_rect": {
+          "x": 278.40625,
+          "y": 1142.6875,
+          "width": 86,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "t_label",
+      "wd": {
+        "text": "Label text",
+        "displayed": true,
+        "rect": {
+          "height": 18,
+          "width": 69,
+          "x": 369.25,
+          "y": 1143.6875
+        }
+      },
+      "cdp": {
+        "innerText": "Label text",
+        "innerText_nbsp_trim": "Label text",
+        "textContent": "Label text",
+        "atom_text": "Label text",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 369.25,
+          "y": 1143.6875,
+          "width": 69.390625,
+          "height": 18
+        },
+        "bcr_plus_scroll": {
+          "x": 369.25,
+          "y": 1143.6875,
+          "width": 69.390625,
+          "height": 18
+        },
+        "atom_rect": {
+          "x": 369.25,
+          "y": 1143.6875,
+          "width": 69,
+          "height": 18
+        }
+      }
+    },
+    {
+      "id": "t_nested_vis",
+      "wd": {
+        "text": "V",
+        "displayed": true,
+        "rect": {
+          "height": 21,
+          "width": 1169,
+          "x": 8,
+          "y": 1163.6875
+        }
+      },
+      "cdp": {
+        "innerText": "V",
+        "innerText_nbsp_trim": "V",
+        "textContent": "HVH",
+        "atom_text": "V",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 1163.6875,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 1163.6875,
+          "width": 1169,
+          "height": 20.796875
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 1163.6875,
+          "width": 1169,
+          "height": 21
+        }
+      }
+    },
+    {
+      "id": "in_shadow",
+      "wd": {
+        "text": "Shadow text",
+        "displayed": true
+      },
+      "cdp": {
+        "innerText": "Shadow text",
+        "innerText_nbsp_trim": "Shadow text",
+        "textContent": "Shadow text",
+        "atom_text": "Shadow text",
+        "atom_displayed": true,
+        "checkVisibility_default": true,
+        "checkVisibility_all": true,
+        "repo_probe_shown": true,
+        "quads_nonempty": true,
+        "box_model": "ok",
+        "bcr": {
+          "x": 8,
+          "y": 1069.09375,
+          "width": 88.0625,
+          "height": 18
+        },
+        "bcr_plus_scroll": {
+          "x": 8,
+          "y": 1069.09375,
+          "width": 88.0625,
+          "height": 18
+        },
+        "atom_rect": {
+          "x": 8,
+          "y": 1069.09375,
+          "width": 88,
+          "height": 18
+        }
+      }
+    }
+  ],
+  "attrs": [
+    {
+      "id": "t_checkbox",
+      "name": "checked",
+      "wd_attribute": "true",
+      "wd_property": true,
+      "cdp_getAttribute": "",
+      "cdp_property": true
+    },
+    {
+      "id": "t_checkbox_prop",
+      "name": "checked",
+      "wd_attribute": null,
+      "wd_property": true,
+      "cdp_getAttribute": null,
+      "cdp_property": true
+    },
+    {
+      "id": "t_disabled",
+      "name": "disabled",
+      "wd_attribute": "true",
+      "wd_property": true,
+      "cdp_getAttribute": "",
+      "cdp_property": true
+    },
+    {
+      "id": "t_input",
+      "name": "disabled",
+      "wd_attribute": null,
+      "wd_property": false,
+      "cdp_getAttribute": null,
+      "cdp_property": false
+    },
+    {
+      "id": "t_link",
+      "name": "href",
+      "wd_attribute": "/rel/path?q=1",
+      "wd_property": "http://127.0.0.1:57117/rel/path?q=1",
+      "cdp_getAttribute": "/rel/path?q=1",
+      "cdp_property": "http://127.0.0.1:57117/rel/path?q=1"
+    },
+    {
+      "id": "t_input",
+      "name": "value",
+      "wd_attribute": "input value",
+      "wd_property": "input value",
+      "cdp_getAttribute": "input value",
+      "cdp_property": "input value"
+    },
+    {
+      "id": "t_details",
+      "name": "open",
+      "wd_attribute": null,
+      "wd_property": false,
+      "cdp_getAttribute": null,
+      "cdp_property": false
+    },
+    {
+      "id": "t_hidden_attr",
+      "name": "hidden",
+      "wd_attribute": "true",
+      "wd_property": true,
+      "cdp_getAttribute": "",
+      "cdp_property": true
+    },
+    {
+      "id": "t_before",
+      "name": "class",
+      "wd_attribute": "before",
+      "wd_property": null,
+      "cdp_getAttribute": "before",
+      "cdp_property": null
+    },
+    {
+      "id": "t_upper",
+      "name": "style",
+      "wd_attribute": "text-transform:uppercase",
+      "wd_property": [
+        "text-transform"
+      ],
+      "cdp_getAttribute": "text-transform:uppercase",
+      "cdp_property": {
+        "0": "text-transform"
+      }
+    },
+    {
+      "id": "t_input",
+      "name": "readonly",
+      "wd_attribute": null,
+      "wd_property": null,
+      "cdp_getAttribute": null,
+      "cdp_property": null
+    },
+    {
+      "id": "t_select",
+      "name": "multiple",
+      "wd_attribute": null,
+      "wd_property": false,
+      "cdp_getAttribute": null,
+      "cdp_property": false
+    },
+    {
+      "id": "t_link",
+      "name": "nonexistent",
+      "wd_attribute": null,
+      "wd_property": null,
+      "cdp_getAttribute": null,
+      "cdp_property": null
+    },
+    {
+      "id": "t_input",
+      "name": "type",
+      "wd_attribute": null,
+      "wd_property": "text",
+      "cdp_getAttribute": null,
+      "cdp_property": "text"
+    }
+  ],
+  "pollution": {
+    "se_exportedFunctionSymbol": "function",
+    "cdc": [
+      "cdc_adoQpoasnfa76pfcZLmcfl_Array",
+      "cdc_adoQpoasnfa76pfcZLmcfl_Object",
+      "cdc_adoQpoasnfa76pfcZLmcfl_Promise",
+      "cdc_adoQpoasnfa76pfcZLmcfl_Proxy",
+      "cdc_adoQpoasnfa76pfcZLmcfl_Symbol",
+      "cdc_adoQpoasnfa76pfcZLmcfl_JSON",
+      "cdc_adoQpoasnfa76pfcZLmcfl_Window"
+    ],
+    "navigator_webdriver": true
+  }
+}

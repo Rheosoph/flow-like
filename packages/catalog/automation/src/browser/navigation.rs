@@ -89,19 +89,17 @@ impl NodeLogic for BrowserGotoNode {
         .await;
         let target = policy.check(&url).await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        driver
+        page.page
             .goto(target.as_str())
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to navigate to '{}': {}", url, e))?;
 
-        let final_url = super::policy::verify_landing(&driver, &policy, &url).await?;
+        let final_url = super::policy::verify_landing(&page, &policy, &url).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
-        context
-            .set_pin_value("final_url", json!(final_url))
-            .await?;
+        context.set_pin_value("final_url", json!(final_url)).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
@@ -178,9 +176,9 @@ impl NodeLogic for BrowserBackNode {
 
         let mut session: AutomationSession = context.evaluate_pin("session").await?;
         session.browser_frame_selectors.clear();
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        driver
+        page.page
             .back()
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to go back: {}", e))?;
@@ -262,9 +260,9 @@ impl NodeLogic for BrowserForwardNode {
 
         let mut session: AutomationSession = context.evaluate_pin("session").await?;
         session.browser_frame_selectors.clear();
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        driver
+        page.page
             .forward()
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to go forward: {}", e))?;
@@ -346,10 +344,10 @@ impl NodeLogic for BrowserReloadNode {
 
         let mut session: AutomationSession = context.evaluate_pin("session").await?;
         session.browser_frame_selectors.clear();
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        driver
-            .refresh()
+        page.page
+            .reload()
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to reload page: {}", e))?;
 

@@ -1,0 +1,19 @@
+{
+  "attachments": [
+    {
+      "contentType": "image/png",
+      "contentUrl": "https://smba.trafficmanager.net/emea/v3/attachments/0-weu-d3-1a2b3c4d5e6f/views/original"
+    },
+    {
+      "contentType": "text/html",
+      "content": "<p><img src=\"https://eu-api.asm.skype.com/v1/objects/0-weu-d3-1a2b3c4d5e6f/views/imgo\" itemscope=\"png\" itemtype=\"http://schema.skype.com/AMSImage\"></p>"
+    }
+  ],
+  "type": "message",
+  "channelId": "msteams",
+  "serviceUrl": "https://smba.trafficmanager.net/emea/",
+  "conversation": {
+    "conversationType": "groupChat",
+    "id": "19:dummy@thread.v2"
+  }
+}

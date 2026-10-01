@@ -1,5 +1,7 @@
 use super::content::page_node;
 #[cfg(feature = "execute")]
+use super::driver::PageContext;
+#[cfg(feature = "execute")]
 use crate::types::handles::AutomationSession;
 #[cfg(feature = "execute")]
 use crate::types::selectors::Selector;
@@ -9,6 +11,8 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
+use flow_like_browser::script::ScriptArg;
 #[cfg(any(feature = "execute", test))]
 use flow_like_types::Value;
 use flow_like_types::{async_trait, json::json};
@@ -171,43 +175,26 @@ fn json_truthy(value: &Value) -> bool {
     }
 }
 
-#[cfg(feature = "execute")]
-fn is_webdriver_error(
-    error: &flow_like_types::Error,
-    matches: impl Fn(&thirtyfour::error::WebDriverErrorInner) -> bool,
-) -> bool {
-    error
-        .downcast_ref::<thirtyfour::error::WebDriverError>()
-        .is_some_and(|error| matches(error.as_inner()))
-}
-
+/// A missing or stale element counts as not displayed; a stale snapshot ref stays an error.
 #[cfg(feature = "execute")]
 async fn element_displayed(
-    driver: &thirtyfour::WebDriver,
+    page: &PageContext,
     locator: &Selector,
 ) -> flow_like_types::Result<bool> {
-    use thirtyfour::error::WebDriverErrorInner::{NoSuchElement, StaleElementReference};
-    let element = match super::selector::find(driver, locator).await {
-        Ok(element) => element,
-        Err(error)
-            if is_webdriver_error(&error, |inner| {
-                matches!(inner, NoSuchElement(_) | StaleElementReference(_))
-            }) =>
-        {
-            return Ok(false);
-        }
-        Err(error) => return Err(error),
-    };
-    match element.is_displayed().await {
-        Ok(displayed) => Ok(displayed),
-        Err(error) if matches!(error.as_inner(), StaleElementReference(_)) => Ok(false),
-        Err(error) => Err(error.into()),
+    let displayed = async {
+        let element = super::selector::find_element(page, locator).await?;
+        Ok::<bool, flow_like_types::Error>(element.is_displayed().await?)
+    }
+    .await;
+    match displayed {
+        Err(error) if super::driver::is_missing_element(&error) => Ok(false),
+        result => result,
     }
 }
 
 #[cfg(feature = "execute")]
 struct ConditionProbe<'a> {
-    driver: &'a thirtyfour::WebDriver,
+    page: &'a PageContext,
     condition: &'a Condition,
     locator: &'a Selector,
     network: Option<std::sync::Arc<tokio::sync::Mutex<super::protocol::NetworkState>>>,
@@ -216,63 +203,69 @@ struct ConditionProbe<'a> {
 
 #[cfg(feature = "execute")]
 impl ConditionProbe<'_> {
+    /// A check interrupted by a navigation is "not met yet"; the next poll sees the new document.
     async fn is_met(&mut self) -> flow_like_types::Result<bool> {
-        let driver = self.driver;
+        match self.check().await {
+            Err(error) if super::driver::is_navigation_interrupted(&error) => Ok(false),
+            result => result,
+        }
+    }
+
+    async fn check(&mut self) -> flow_like_types::Result<bool> {
+        let page = self.page;
         match self.condition {
             Condition::TextVisible(text) | Condition::TextGone(text) => {
-                let visible = driver
-                    .execute(TEXT_VISIBLE_SCRIPT, vec![json!(text)])
+                let visible = page
+                    .probe(TEXT_VISIBLE_SCRIPT, vec![ScriptArg::Json(json!(text))])
                     .await
-                    .map_err(|e| flow_like_types::anyhow!("Failed to read page text: {e}"))?
+                    .map_err(|error| {
+                        let message = format!("Failed to read page text: {error}");
+                        error.context(message)
+                    })?
                     .json()
                     == &json!(true);
                 Ok(visible == matches!(self.condition, Condition::TextVisible(_)))
             }
-            Condition::UrlMatches(pattern) => {
-                Ok(pattern.matches(driver.current_url().await?.as_str()))
-            }
-            Condition::TitleContains(text) => Ok(driver.title().await?.contains(text.as_str())),
-            Condition::LoadState(state) => {
-                let ready = driver
-                    .execute("return document.readyState;", vec![])
-                    .await?
-                    .json()
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_owned();
-                if !state.reached_by(&ready) {
-                    return Ok(false);
-                }
-                let Some(network) = &self.network else {
-                    return Ok(true);
-                };
-                let network = network.lock().await;
-                if let Some(failure) = &network.failure {
-                    return Err(flow_like_types::anyhow!(failure.clone()));
-                }
-                Ok(super::protocol::has_been_idle(
-                    network.pending.len(),
-                    network.last_activity,
-                    std::time::Instant::now(),
-                    NETWORK_IDLE_WINDOW,
-                ))
-            }
-            Condition::JsTruthy(body) => match driver.execute(body.as_str(), vec![]).await {
+            Condition::UrlMatches(pattern) => Ok(pattern.matches(&page.page.url().await?)),
+            Condition::TitleContains(text) => Ok(page.page.title().await?.contains(text.as_str())),
+            Condition::LoadState(state) => self.load_state_reached(*state).await,
+            Condition::JsTruthy(body) => match page
+                .execute(&super::extract::user_script(body), Vec::new())
+                .await
+            {
                 Ok(result) => Ok(json_truthy(result.json())),
-                Err(error)
-                    if matches!(
-                        error.as_inner(),
-                        thirtyfour::error::WebDriverErrorInner::JavascriptError(_)
-                    ) =>
-                {
+                Err(error) if super::driver::is_javascript_error(&error) => {
                     self.last_script_error = Some(error.to_string());
                     Ok(false)
                 }
-                Err(error) => Err(error.into()),
+                Err(error) => Err(error),
             },
-            Condition::ElementVisible => element_displayed(driver, self.locator).await,
-            Condition::ElementHidden => Ok(!element_displayed(driver, self.locator).await?),
+            Condition::ElementVisible => element_displayed(page, self.locator).await,
+            Condition::ElementHidden => Ok(!element_displayed(page, self.locator).await?),
         }
+    }
+
+    async fn load_state_reached(&self, state: LoadState) -> flow_like_types::Result<bool> {
+        let ready = self
+            .page
+            .probe("return document.readyState;", Vec::new())
+            .await?;
+        if !state.reached_by(ready.json().as_str().unwrap_or_default()) {
+            return Ok(false);
+        }
+        let Some(network) = &self.network else {
+            return Ok(true);
+        };
+        let network = network.lock().await;
+        if let Some(failure) = &network.failure {
+            return Err(flow_like_types::anyhow!(failure.clone()));
+        }
+        Ok(super::protocol::has_been_idle(
+            network.pending.len(),
+            network.last_activity,
+            std::time::Instant::now(),
+            NETWORK_IDLE_WINDOW,
+        ))
     }
 }
 
@@ -403,9 +396,9 @@ impl NodeLogic for BrowserWaitForConditionNode {
             None
         };
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
         let mut probe = ConditionProbe {
-            driver: &driver,
+            page: &page,
             condition: &condition,
             locator: &locator,
             network,
@@ -428,7 +421,7 @@ impl NodeLogic for BrowserWaitForConditionNode {
         let elapsed_ms = start.elapsed().as_millis().min(i64::MAX as u128) as i64;
         let last_script_error = probe.last_script_error.take();
         drop(probe);
-        drop(driver);
+        drop(page);
 
         if let (false, Some(error)) = (met, last_script_error) {
             context.log_message(

@@ -1,6 +1,7 @@
-use flow_like_executor::{
-    ExecutionRequest, ExecutorConfig, execute, execute_streaming, types::DispatchPayload,
-};
+// The edition-2024 Kubernetes executor includes this file via #[path]. Mixed-case
+// import lists sort differently per style edition, so `cargo fmt` would flip them.
+use flow_like_executor::types::DispatchPayload;
+use flow_like_executor::{ExecutionRequest, ExecutorConfig};
 use futures_util::StreamExt;
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
@@ -50,7 +51,7 @@ pub async fn run(mode: &str) -> Result<(), Box<dyn std::error::Error>> {
         config = config.with_required_terminal_status_ack();
     }
     if mode == "stream" {
-        let mut events = execute_streaming(request, config).await?;
+        let mut events = flow_like_executor::execute_streaming(request, config).await?;
         while let Some(event) = events.next().await {
             stdout
                 .write_all(flow_like_executor::streaming::event_to_ndjson(&event).as_bytes())
@@ -58,7 +59,7 @@ pub async fn run(mode: &str) -> Result<(), Box<dyn std::error::Error>> {
             stdout.flush().await?;
         }
     } else {
-        match execute(request, config).await {
+        match flow_like_executor::execute(request, config).await {
             Ok(result) => {
                 let event = serde_json::json!({"event_type": "completed", "payload": result});
                 stdout.write_all(format!("{event}\n").as_bytes()).await?;

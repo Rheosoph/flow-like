@@ -3,9 +3,9 @@ title: Capture documentation screenshots
 description: Capture application states and rendered FlowScript workflows with repository tools
 ---
 
-Capture application screens with `docs:screenshot`, or render a FlowScript
-workflow with `workflow:screenshot`. Both commands use the desktop frontend
-and write images suitable for the documentation site or FlowBook.
+Capture Desktop or Web screens with `docs:screenshot`, or render a FlowScript
+workflow in Studio with `workflow:screenshot`. Both commands write images for
+the documentation site or FlowBook.
 
 Install the [repository toolchain and dependencies](/dev/build/) first.
 The screenshot runner uses Puppeteer and its Chromium browser; workflow
@@ -21,6 +21,7 @@ completed states:
 ```sh
 bun run docs:screenshot -- \
   --plan apps/desktop/lib/doc-screenshot/examples/onboarding.plan.json \
+  --output-dir tmp/doc-screenshots/onboarding \
   --json
 ```
 
@@ -38,26 +39,110 @@ Plan paths use these bases:
 
 ## Refresh the checked-in documentation screenshots
 
-The documentation plans write directly to `apps/docs/src/assets` and use dark
-mode, a 1624 by 1060 CSS-pixel viewport, DPR 2, and lossless WebP:
+Capture to a temporary directory, inspect the output, then publish reviewed
+images. The checked-in documentation plans default to `apps/docs/src/assets`,
+so always pass `--output-dir` during review. Most plans start in dark mode with
+a 1624 by 1060 CSS-pixel viewport, DPR 2, and lossless WebP. Scenarios can
+override those defaults or crop an element to show a specific control.
+
+For example, capture the Start guide images with their checked-in fixtures:
 
 ```sh
-bun apps/desktop/scripts/generate-doc-screenshot-fixtures.ts
-bun apps/desktop/scripts/generate-doc-studio-screenshot-fixture.ts
+bun run docs:screenshot -- \
+  --plan apps/desktop/lib/doc-screenshot/examples/docs-start.plan.json \
+  --output-dir tmp/doc-screenshots/start \
+  --json
+```
 
-bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-start.plan.json
-bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json
-bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-ontology.plan.json
-bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-sharing.plan.json
-bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-roles.plan.json
-bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json
-bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-reference.plan.json
-bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-developer-mode.plan.json
+Plans for `apps`, `ontology`, `ontology-sharing`, `sharing`, `roles`, `studio`,
+`reference`, `developer-mode`, `models`, `quickstart`, `setup`, `chat`, `runs`,
+and `versions` live in the same directory. Substitute their names and use a
+different output directory for each batch. Each completed run writes
+`capture-result.json` beside its images. Each completed scenario also writes
+`<scenario-name>.result.json`, so its evidence survives a later batch failure.
+
+To rerun one named scenario while fixing a recipe:
+
+```sh
+bun run docs:screenshot -- \
+  --plan apps/desktop/lib/doc-screenshot/examples/docs-start.plan.json \
+  --scenario home-and-profile-menu \
+  --output-dir tmp/doc-screenshots/start-review
 ```
 
 Each plan starts from application routes and performs the navigation and UI
 interactions needed to expose the documented state. A failed wait or action
-fails that scenario instead of silently writing a loading or error screen.
+fails that scenario. Unexpected browser errors also fail it. A passing result
+still needs visual review: inspect every image for the intended heading,
+populated fixture content, active panel, legible controls, and loading or error
+overlays. Compare each image with the procedure on its documentation page.
+
+### Publish reviewed images
+
+After inspecting the batch, publish it with:
+
+```sh
+bun apps/desktop/scripts/publish-doc-screenshots.ts \
+  --reviewed tmp/doc-screenshots/start/capture-result.json
+
+bun apps/desktop/scripts/publish-doc-screenshots.ts --check
+```
+
+The publisher requires passing scenarios with provenance and checks each
+image's captured hash. It copies images to `apps/docs/src/assets` and records
+them in `docs-screenshots.manifest.json`. The manifest includes the plan,
+scenario, fixture hashes, source commit, dirty-working-tree flag, route,
+capture and review dates, browser, render settings, dimensions, and image hash.
+`--check` verifies the image, fixture hashes, and the fingerprint of the
+scenario with its inherited defaults and app settings. The full plan hash is
+retained as history; changing an unrelated scenario does not invalidate every
+image from that plan.
+
+You can publish a reviewed passing scenario's `.result.json` checkpoint with
+the same command. To select one passing scenario from a failed batch result,
+use `--reviewed <capture-result.json> --scenario <name>`. A failed scenario
+itself is never eligible for publication.
+
+The `--reviewed` flag records that the caller inspected the images; the script
+cannot judge whether a screenshot teaches the intended task. A commit plus a
+dirty flag also cannot reconstruct uncommitted source edits. Keep the reviewed
+source change with the published capture.
+
+When navigation, the editor shell, a plan, or its fixture changes, review the
+affected screenshots again. Reuse the existing asset names when their purpose
+is unchanged, and use focused captures when one overview no longer serves the
+procedure.
+
+### Scheduled review captures
+
+The [Documentation screenshots workflow](https://github.com/Rheosoph/flow-like/blob/dev/.github/workflows/docs-screenshots.yml)
+runs the documentation plans when relevant UI or capture files change, on a
+weekly schedule, and when started manually in GitHub Actions. It runs the screenshot-runner tests and uploads the
+capture outputs and results for review, including available diagnostics from
+failed jobs. It does not publish images automatically.
+
+Use those artifacts to identify stale or failed captures. Reproduce the
+affected plan locally for publication; result files refer to the image paths
+on the machine that captured them.
+
+### Maintain fixtures
+
+Ordinary captures use the checked-in fixtures. If the fixture data itself
+needs rebuilding, the repository provides these generators:
+
+```sh
+bun apps/desktop/scripts/generate-doc-screenshot-fixtures.ts
+bun apps/desktop/scripts/generate-doc-studio-screenshot-fixture.ts
+```
+
+The first generator writes the Apps, Sharing, Roles, Ontology, and Setup
+fixtures. The second writes Studio, Quickstart, Runs, and Versions fixtures.
+The Models fixture is maintained separately. The Ontology sharing plan uses
+the Ontology fixture with its own strict browser HTTP responses.
+
+Review their changes before capturing. Some fixtures also contain maintained
+HTTP responses and scenario-specific state; regenerating data is a source
+change, not a prerequisite for every screenshot run.
 
 ## Direct capture
 
@@ -85,6 +170,13 @@ The CLI starts the selected Next app automatically. Use
 `--port <number>` to change the automatically started server's port, or
 `--keep-server` to leave a server started by the CLI running.
 
+If the development server stalls while serving compiled assets, set
+`DOC_SCREENSHOT_STATIC_DIR=apps/desktop/.next/dev/static` for Desktop captures
+(or `apps/web/.next/dev/static` for Web). The runner can serve those assets
+from disk. Use the directory from the same running server and current source;
+stale compiled assets can produce a misleading screenshot. Results record the
+chosen directory as `staticAssetsFromDisk`.
+
 ## Plan format
 
 Plans use the `flow-like.doc-screenshot-plan/v1` schema. A plan declares its
@@ -107,6 +199,7 @@ The supported steps are:
 | `hover` | `selector`, optional `index` | Moves the pointer over an element. |
 | `scroll` | optional `selector`, `index`, `x`, `y` | Scrolls the page or a matching element. |
 | `goto` | `path`, optional `query` | Navigates to another same-app route and waits for it to settle. |
+| `seedIndexedDB` | `database`, `stores` | Writes JSON fixture records to existing object stores in the scenario's browser context. Each store accepts at most 1,000 records. |
 | `delay` | `ms` | Waits for an explicitly bounded interval. Prefer a semantic `waitFor` when possible. |
 | `capture` | `name`, optional `mode`, `selector`, `index`, `padding`, `output`, `format`, `quality`, `hideSelectors` | Writes a named `viewport`, `fullPage`, or `element` screenshot. Element mode requires a selector and scrolls the target into view before measuring it. |
 
@@ -114,6 +207,36 @@ One complete working example is in
 [`examples/onboarding.plan.json`](https://github.com/Rheosoph/flow-like/blob/dev/apps/desktop/lib/doc-screenshot/examples/onboarding.plan.json). Prefer a plan
 when documentation needs multiple states: it is easier to review and rerun
 than a sequence of shell commands.
+
+Before each `capture`, use semantic `waitFor` steps for the expected heading,
+fixture content, and selected panel. Wait for loading indicators and error
+overlays to be hidden. A fixed delay can help rendering settle, but it does not
+prove that the intended screen loaded.
+
+Use `seedIndexedDB` for client-owned state that backend fixtures cannot provide,
+such as the synthetic conversation in `docs-chat.plan.json`. Wait for the app
+to create the database first, then seed its existing stores and reload the
+route. The step accepts data only. Label synthetic examples in the captured
+content so readers can distinguish them from a live execution.
+
+### Browser diagnostics
+
+Unexpected console errors, page errors, and failed requests make a scenario
+fail even when it produced an image. Inspect the diagnostic entries in
+`capture-result.json` and fix the application or fixture before publishing.
+
+A scenario may declare `diagnosticAllowlist` for a known, bounded diagnostic:
+
+| Field | Required value |
+| --- | --- |
+| `kind` | `console`, `page`, or `request` |
+| `message` | The exact diagnostic message recorded by the runner |
+| `reason` | Why this diagnostic is expected for this scenario |
+| `maxCount` | The allowed number of matching entries, from 1 to 100 |
+
+Messages are exact matches, with no wildcard or regular-expression option.
+An entry beyond `maxCount` fails the scenario. Keep allowances narrow and
+remove them when their cause is fixed.
 
 ## Image quality and determinism
 
@@ -127,6 +250,10 @@ PNG and WebP output are encoded losslessly. JPEG alone uses the optional
 numeric `quality` setting. The tool waits for the requested selector and the
 page render boundary before capture; it does not upscale screenshots after
 capture. Keep fonts, thumbnails, and icons local when repeatability matters.
+
+The capture runtime suppresses page-reload messages from the Next development
+server's HMR socket so a background rebuild cannot refresh a scenario midway
+through its actions. Application WebSockets retain their normal behavior.
 
 ## Desktop Tauri fixtures
 
@@ -149,12 +276,16 @@ Fixtures use this shape:
 }
 ```
 
-`responses` is keyed by the exact Tauri command name. Every call to that
-command receives the same JSON response, independent of its arguments. Values
-must therefore be immutable fixture data, not stateful behavior. With
-`strict: true`, an unlisted command fails the scenario. With `strict: false`,
-an unlisted command resolves to `null`; list important calls explicitly even
-when their response is only a no-op.
+Ordinary `responses` entries are keyed by the exact Tauri command name. Every
+call to that command receives the same JSON response, independent of its
+arguments. Values must therefore be immutable fixture data. To return a field
+from the command's JSON arguments, use a response such as
+`{ "$argument": "bit.size" }`. The Models fixture uses this to return each
+model's size, including zero for hosted models. The field path reads data;
+it does not evaluate code. Apart from the built-in SQL, event, and HTTP bridges
+described below, `strict: true` rejects
+unlisted commands. With `strict: false`, an unlisted command resolves to `null`;
+list important calls explicitly even when their response is only a no-op.
 
 A response may model a bounded asynchronous command and emit Tauri events while
 it is pending. This is useful for real progress UI such as model downloads:
@@ -179,10 +310,32 @@ it is pending. This is useful for real progress UI such as model downloads:
 Event delays and the command delay are capped at 120 seconds, and at most 100
 events are scheduled for one invocation.
 
-Tauri HTTP uses two IPC commands. `plugin:http|fetch` returns a request resource
-ID, and `plugin:http|fetch_send` returns response metadata such as status,
-headers, URL, and a response resource ID. A `204 No Content` response avoids a
-body-read command and is useful for deterministic background requests.
+The browser fixture supplies disposable in-memory SQLite databases for the
+desktop persistence bridge. They let the frontend save state during a scenario
+without reading or changing the user's desktop stores. Databases are discarded
+when the scenario closes. Browser application storage and cookies are cleared
+between scenarios, while the plan reuses a browser context and its static HTTP
+cache to avoid downloading the same frontend modules repeatedly.
+
+Tauri HTTP uses a request resource, response metadata, and streamed body reads.
+The fixture bridge implements `plugin:http|fetch`, `plugin:http|fetch_send`,
+and `plugin:http|fetch_read_body`. Declare JSON bodies under `responses.$http`,
+keyed by request pathname:
+
+```json
+{
+  "$http": {
+    "/api/v1/info/features": {},
+    "/api/v1/info/home-defaults": { "main": null, "profile": null }
+  }
+}
+```
+
+This excerpt belongs inside `responses`. The bridge returns status 200 and a
+JSON body for the selected pathname; it does not distinguish HTTP methods,
+query strings, or authentication. Unmatched paths can fall back to legacy
+body fixture data or `null`. Use the browser HTTP fixture below when an exact
+browser request/response contract is part of the capture.
 
 See
 [`fixtures/onboarding.tauri.json`](https://github.com/Rheosoph/flow-like/blob/dev/apps/desktop/lib/doc-screenshot/fixtures/onboarding.tauri.json) for realistic
@@ -239,8 +392,8 @@ declares one.
 
 Same-origin frontend requests always continue so Next.js pages, chunks, and
 local assets can load. `blockedOrigins` lists exact HTTP origins whose requests
-are intentionally aborted without failing the scenario; use it for product
-telemetry that must never leave a documentation capture. `blockedEndpoints`
+are intentionally aborted without adding a failed-request diagnostic; use it
+for product telemetry that must never leave a documentation capture. `blockedEndpoints`
 does the same for one exact origin and path while ignoring its query string,
 which is useful for non-essential preview endpoints with dynamic URL
 parameters. With `strict: true`, any other unmatched cross-origin HTTP request
@@ -259,11 +412,17 @@ falling back to an unauthenticated render.
 
 ## Results and fixture boundaries
 
-Pass `--json` for a `flow-like.doc-screenshot-result/v1` result for scripts or CI. It reports scenario and step status, final URL,
-output files, dimensions, byte counts, SHA-256 hashes, timings, and bounded
-page error counts. Exit code `0` means every scenario passed, `1` means a
-scenario, action, or capture failed, and `2` means the CLI, server, browser, or
-input contract failed.
+Pass `--json` for a `flow-like.doc-screenshot-result/v1` result on stdout for
+scripts or CI. The same result is saved as `capture-result.json`. It reports
+scenario and step status, final URL, output files, dimensions, byte counts,
+SHA-256 hashes, timings, diagnostics, and capture provenance. Exit code `0`
+means every scenario passed, `1` means a scenario, diagnostic, action, or
+capture failed, and `2` means the CLI, server, browser, or input contract failed.
+
+Fixture captures verify frontend rendering against declared data. They do not
+verify native workflow execution, real authentication, model responses, or
+deployed server behavior. Test those paths separately before describing a
+capture as evidence that a workflow or integration works.
 
 All input formats are versioned and validated before the browser starts:
 

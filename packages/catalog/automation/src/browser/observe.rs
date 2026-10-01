@@ -311,7 +311,7 @@ impl NodeLogic for BrowserStartNetworkObserverNode {
         node.add_input_pin(
             "debugger_address",
             "Debugger Address",
-            "Optional Chrome or Edge debugger address; defaults to the attached browser",
+            "Ignored (legacy); the session's own browser connection is used",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
@@ -334,14 +334,13 @@ impl NodeLogic for BrowserStartNetworkObserverNode {
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let url_pattern: String = context.evaluate_pin("url_pattern").await?;
+        context.evaluate_pin::<String>("debugger_address").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-
-        let debugger_address: String = context.evaluate_pin("debugger_address").await?;
-        super::protocol::start_listener(context, &session, &driver, &debugger_address, None)
-            .await?;
+        let page = session.browser_page(context).await?;
+        super::protocol::start_observer(context, &session, &page).await?;
         let state = super::protocol::network_state(context, &session).await?;
         state.lock().await.url_pattern = url_pattern;
+        drop(page);
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;

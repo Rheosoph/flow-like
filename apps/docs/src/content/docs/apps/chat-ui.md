@@ -7,7 +7,10 @@ sidebar:
 
 Add a **Chat UI** event to an app to expose its flow as a chat interface. See [Events](/apps/events/) for event setup.
 
-![A screenshot of Flow-Like Desktop showing a customizable chat interface linked to a workflow via a chat event](../../../assets/ChatUI.webp)
+![Chat UI showing a support queue conversation with a table of three synthetic tickets and suggested next steps](../../../assets/ChatUI.webp)
+
+This capture uses a synthetic conversation to show the message layout, table,
+response controls, and composer. It does not show a live model run.
 
 ## Appearance
 
@@ -16,7 +19,7 @@ The event configuration provides:
 - **Background image** selected from app storage or provided as an external URL.
 - **20 theme presets** ranging from professional layouts to Cyberpunk, Typewriter, Neon Grid, and animated Aurora Glass styles. Presets follow the app's current light or dark mode.
 - **Custom CSS**, edited with the built-in Monaco editor.
-- **AI disclosure text** that is always visible so people know they are chatting with AI. Keep it direct, or give it some personality—for example, “AI on duty: clever, quick, and occasionally confidently weird.”
+- **AI disclosure text** that is always visible so people know they are chatting with AI. State that the responses come from AI and explain any limits relevant to the task.
 
 Selecting a theme copies its complete CSS into the editor. Change any part of
 that CSS and the theme selector immediately changes to **Custom**. Selecting a

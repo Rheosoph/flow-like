@@ -9,6 +9,8 @@ Select the Profile name in the upper-left navigation to switch Profiles, add a
 Profile, or edit the active one. Profiles can be used without signing in;
 signed-in Profiles can also carry account-backed settings.
 
+![Switching Profiles and opening Profile settings from the navigation](../../../assets/SwitchAndEditProfiles.webp)
+
 A **Profile** groups preferences that should change together, including model
 assignments, interests, theme, and FlowPilot model settings:
 

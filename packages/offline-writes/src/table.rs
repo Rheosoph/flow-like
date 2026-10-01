@@ -3,6 +3,7 @@ use crate::{
     fs::unix_time,
     limits::validate_request,
     manager::{RefreshOutcome, TableActivation, TableSetup, WriteManager},
+    mirror::{Order, mirror_failure},
     outbox::CLOSED,
 };
 use anyhow::{Context, Result, ensure};
@@ -15,7 +16,9 @@ use flow_like_storage::{
     databases::{
         df_provider::zero_column_safe,
         vector::{
-            lancedb::{LocalWriteReceipt, LogicalTableMutation, LogicalTableMutationAdapter},
+            lancedb::{
+                LocalWriteReceipt, LogicalTableMutation, LogicalTableMutationAdapter, ReadRecovery,
+            },
             offline_replay::{self, ReplayMarker, ReplayMutation, ReplayOutcome},
         },
     },
@@ -282,15 +285,19 @@ impl TableOverlay {
             downloaded_bytes: 0,
         })
     }
-    fn confirm_remote(&self, manager: &WriteManager, now: i64) -> Result<()> {
+    pub(crate) fn confirm_remote(&self, manager: &WriteManager, now: i64) -> Result<()> {
         manager.queue.mirror_error(&self.key, None)?;
+        self.record_confirmed(manager, now)
+    }
+    /// `confirm_remote` without clearing the mirror error.
+    pub(crate) fn record_confirmed(&self, manager: &WriteManager, now: i64) -> Result<()> {
         manager.queue.record_refresh(&self.key, now)?;
         if self.remote_missing.swap(false, Ordering::AcqRel) {
             manager.queue.set_remote_missing(&self.key, false)?;
         }
         Ok(())
     }
-    async fn remote_absent(
+    pub(crate) async fn remote_absent(
         &self,
         manager: &WriteManager,
         previous: &Value,
@@ -314,6 +321,7 @@ impl TableOverlay {
             fingerprint: None,
         })?;
         let (old_name, _, _) = self.local_view(manager)?;
+        let rows = manager.hold_snapshot_rows();
         if *previous != absent
             && manager.queue.checkpoint(
                 &self.key,
@@ -326,6 +334,7 @@ impl TableOverlay {
             manager.retire(&old_name)?;
             self.generation.fetch_add(1, Ordering::Release);
         }
+        drop(rows);
         manager.queue.mirror_error(&self.key, None)?;
         manager.queue.record_refresh(&self.key, unix_time()?)?;
         Ok(RefreshOutcome::RemoteMissing)
@@ -361,22 +370,37 @@ impl TableOverlay {
                 return Ok::<_, anyhow::Error>(None);
             };
             let (version, fingerprint) = offline_replay::revision(&remote).await?;
-            Ok(Some(serde_json::to_value(OfflineExpected::TableVersion {
+            let revision = serde_json::to_value(OfflineExpected::TableVersion {
                 version,
                 fingerprint: Some(fingerprint),
-            })?))
+            })?;
+            Ok(Some((remote, revision)))
         };
         let changed = match tokio::time::timeout(fast_forward.probe_timeout, probe).await {
-            Ok(Ok(Some(revision))) => {
-                manager.queue.resource_revision(&self.key).ok().flatten() != Some(revision)
+            Ok(Ok(Some((remote, revision))))
+                if manager.queue.resource_revision(&self.key).ok().flatten()
+                    != Some(revision.clone()) =>
+            {
+                Some(remote)
             }
-            _ => false,
+            _ => None,
         };
-        if changed && let Err(error) = self.refresh(manager).await {
+        let Some(remote) = changed else { return };
+        let refreshed = match manager.lazy() {
+            Some(_) => self
+                .refresh_lazy(manager, Order::MetadataFirst, Some(remote))
+                .await
+                .map(|_| ()),
+            None => self.refresh(manager).await.map(|_| ()),
+        };
+        if let Err(error) = refreshed {
             tracing::debug!(%error, "Fast-forward refresh failed; freezing against the current base");
         }
     }
-    fn local_view(&self, manager: &WriteManager) -> Result<(String, String, Option<u64>)> {
+    pub(crate) fn local_view(
+        &self,
+        manager: &WriteManager,
+    ) -> Result<(String, String, Option<u64>)> {
         let (name, branch, base) = manager.queue.local_view(&self.key)?;
         Ok((
             name.unwrap_or_else(|| self.local_name.clone()),
@@ -425,8 +449,9 @@ impl TableOverlay {
         self.generation.fetch_add(1, Ordering::Release);
         self.recover_local(manager).await
     }
-    /// An existing baseline needs no network. An absent one is materialized from the cloud
-    /// and checked before anything is recorded; a failure drops the snapshot.
+    /// An existing baseline needs no network. An absent one is snapshotted from the cloud
+    /// and checked before anything is recorded; a failure drops the snapshot. The resource
+    /// row records the Download everything flag of `setup` with the baseline.
     pub(crate) async fn initialize(&self, manager: &WriteManager, setup: TableSetup) -> Result<()> {
         if manager.queue.resource_revision(&self.key)?.is_some() {
             self.remote_missing
@@ -450,6 +475,9 @@ impl TableOverlay {
         }
         let remote = manager.host.remote_table(&self.selection).await?;
         match remote {
+            Some(remote) if manager.lazy().is_some() => {
+                self.initialize_lazy(manager, remote, setup).await?
+            }
             Some(remote) => {
                 let name = format!("snapshot_{}", uuid::Uuid::new_v4().simple());
                 let local = manager.local()?;
@@ -481,8 +509,9 @@ impl TableOverlay {
                     manager.queue.initialize_table(
                         &self.key,
                         &serde_json::to_value(expected)?,
-                        local_version,
-                        &name,
+                        Some(local_version),
+                        Some(&name),
+                        false,
                     )
                 }
                 .await;
@@ -493,13 +522,15 @@ impl TableOverlay {
                     return Err(error);
                 }
             }
-            None if manager.recreate_dropped_tables => manager.queue.initialize_resource(
+            None if manager.recreate_dropped_tables => manager.queue.initialize_table(
                 &self.key,
                 &serde_json::to_value(OfflineExpected::TableVersion {
                     version: 0,
                     fingerprint: None,
                 })?,
                 None,
+                None,
+                setup.prefetch,
             )?,
             None => anyhow::bail!(
                 "Table '{}' does not exist in the cloud",
@@ -518,7 +549,18 @@ impl TableOverlay {
         manager: &WriteManager,
         sequence: u64,
     ) -> Result<()> {
+        let scope = manager.write_scope(self)?;
         let result = self.recover_local_inner(manager, sequence).await;
+        drop(scope);
+        let result = match result {
+            // Missing or reorganized cloud data never blocks the operation: the next read,
+            // write or drain step retries.
+            Err(error) => match self.lazy_recovery_error(manager, error) {
+                Ok(unavailable) => return Err(unavailable),
+                Err(error) => Err(error),
+            },
+            Ok(()) => Ok(()),
+        };
         if result.is_err()
             && let Ok(Some(operation)) = manager.queue.next_unmaterialized(&self.key)
             && operation.sequence <= sequence
@@ -609,7 +651,7 @@ impl TableOverlay {
         }
         Ok(())
     }
-    async fn freeze(
+    pub(crate) async fn freeze(
         &self,
         manager: &WriteManager,
         table: Option<&Table>,
@@ -848,12 +890,27 @@ impl LogicalTableMutationAdapter for TableOverlay {
         )
         .context("Offline mutation is too large")?;
         self.fast_forward(&manager).await;
+        manager.check_recorded(self)?;
+        let scope = manager.write_scope(self)?;
+        let lazy = scope.is_some();
+        if lazy {
+            self.warm_up(&manager, &mutation).await?;
+        }
         let _guard = manager.gate.lock().await;
         self.usable()?;
         manager.authorize()?;
         self.recover_local(&manager).await?;
         let table = self.local_table(&manager).await?;
-        let (mutation, key) = self.freeze(&manager, table.as_ref(), mutation).await?;
+        let (mutation, key) = self
+            .freeze(&manager, table.as_ref(), mutation)
+            .await
+            .map_err(|error| {
+                if lazy {
+                    mirror_failure(&self.selection.table, error)
+                } else {
+                    error
+                }
+            })?;
         if matches!(&mutation,OfflineMutation::TableInsert {rows} | OfflineMutation::TableUpsert {rows,..} if rows.is_empty())
             || matches!(&mutation,OfflineMutation::TableDelete {filter} if filter == "false")
         {
@@ -883,13 +940,20 @@ impl LogicalTableMutationAdapter for TableOverlay {
             mutation,
         };
         validate_request(&request, &manager.replay_limits.get())?;
+        let lane_was_empty = lazy && !manager.queue.has_pending(&self.key)?;
         let operation = manager.queue.enqueue(
             &self.key,
             serde_json::to_value(request)?,
             key.as_deref(),
             unix_time()?,
         )?;
-        self.recover_local(&manager).await.with_context(||format!("Offline write {} was retained in the queue but its local table view could not be updated; inspect the queue before retrying",operation.operation_id))?;
+        if lane_was_empty && let Err(error) = manager.push_retention() {
+            tracing::warn!(%error, operation = %operation.operation_id, "Could not pin the offline table files of a queued write");
+        }
+        drop(scope);
+        self.recover_local(&manager).await.map_err(|error| {
+            error.context(format!("Offline write {} was retained in the queue but its local table view could not be updated; inspect the queue before retrying",operation.operation_id))
+        })?;
         manager.wake.notify_one();
         manager.host.queue_changed();
         Ok(LocalWriteReceipt {
@@ -901,6 +965,7 @@ impl LogicalTableMutationAdapter for TableOverlay {
     async fn read_table(&self) -> Result<Option<Table>> {
         let manager = self.upgrade()?;
         self.usable()?;
+        manager.check_recorded(self)?;
         let _guard = manager.gate.lock().await;
         manager.authorize()?;
         self.recover_local(&manager).await?;
@@ -908,5 +973,13 @@ impl LogicalTableMutationAdapter for TableOverlay {
     }
     fn generation(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
+    }
+    async fn read_failed(&self, error: anyhow::Error, retried: bool) -> ReadRecovery {
+        match self.upgrade() {
+            Ok(manager) if manager.lazy().is_some() => {
+                self.recover_read(&manager, error, retried).await
+            }
+            _ => ReadRecovery::Fail(error),
+        }
     }
 }

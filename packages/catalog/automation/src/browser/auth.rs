@@ -144,7 +144,7 @@ impl NodeLogic for BrowserSetBasicAuthNode {
         node.add_input_pin(
             "debugger_address",
             "Debugger Address",
-            "Optional Chrome or Edge debugger address; defaults to the attached browser",
+            "Ignored (legacy); the session's own browser connection is used",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
@@ -168,20 +168,14 @@ impl NodeLogic for BrowserSetBasicAuthNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let username: String = context.evaluate_pin("username").await?;
         let password: String = context.evaluate_pin("password").await?;
-
-        let driver = session.get_browser_driver_and_switch(context).await?;
-
         let origin: String = context.evaluate_pin("origin").await?;
-        let debugger_address: String = context.evaluate_pin("debugger_address").await?;
+        context.evaluate_pin::<String>("debugger_address").await?;
         let origin = super::protocol::normalized_origin(&origin)?;
-        super::protocol::start_listener(
-            context,
-            &session,
-            &driver,
-            &debugger_address,
-            Some((origin, username, password)),
-        )
-        .await?;
+
+        let page = session.browser_page(context).await?;
+        super::protocol::start_basic_auth(context, &session, &page, origin, username, password)
+            .await?;
+        drop(page);
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -213,7 +207,7 @@ impl NodeLogic for BrowserSaveCookiesNode {
         let mut node = Node::new(
             "browser_save_cookies",
             "Save Cookies",
-            "Saves browser cookies to a file for later restoration: every domain including HttpOnly cookies on Chrome and Edge, the current document's cookies on other browsers",
+            "Saves every browser cookie (all domains, including HttpOnly) to a file for later restoration",
             "Automation/Browser/Auth",
         );
         node.set_version(2);
@@ -277,9 +271,9 @@ impl NodeLogic for BrowserSaveCookiesNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let file_path: FlowPath = context.evaluate_pin("file_path").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let cookies = super::persist::read_cookies(&session, &driver).await?;
-        drop(driver);
+        let page = session.browser_page(context).await?;
+        let cookies = super::persist::read_cookies(&page).await?;
+        drop(page);
         let cookie_data: Vec<CookieData> = cookies.into_iter().map(CookieData::from).collect();
 
         let cookie_json = flow_like_types::json::to_string_pretty(&cookie_data)
@@ -291,7 +285,9 @@ impl NodeLogic for BrowserSaveCookiesNode {
         store
             .put(&runtime.path, cookie_json.into())
             .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to save cookies to {}: {}", runtime.path, e))?;
+            .map_err(|e| {
+                flow_like_types::anyhow!("Failed to save cookies to {}: {}", runtime.path, e)
+            })?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context
@@ -326,7 +322,7 @@ impl NodeLogic for BrowserLoadCookiesNode {
         let mut node = Node::new(
             "browser_load_cookies",
             "Load Cookies",
-            "Loads cookies from a file into the browser session. Chrome and Edge accept cookies for every domain with their HttpOnly, Secure and SameSite flags; other browsers only accept cookies for the current page's domain.",
+            "Loads cookies from a file into the browser for every domain, keeping their HttpOnly, Secure and SameSite flags; cookies without a domain are bound to the current page.",
             "Automation/Browser/Auth",
         );
         node.set_version(2);
@@ -425,9 +421,9 @@ impl NodeLogic for BrowserLoadCookiesNode {
         let cookies: Vec<super::persist::StorageCookie> =
             cookie_data.into_iter().map(Into::into).collect();
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let report = super::persist::write_cookies(context, &session, &driver, &cookies).await?;
-        drop(driver);
+        let page = session.browser_page(context).await?;
+        let report = super::persist::write_cookies(context, &page, &cookies).await?;
+        drop(page);
 
         context.set_pin_value("session_out", json!(session)).await?;
         context
@@ -463,7 +459,7 @@ impl NodeLogic for BrowserClearCookiesNode {
         let mut node = Node::new(
             "browser_clear_cookies",
             "Clear Cookies",
-            "Clears cookies: every domain on Chrome and Edge, the current document's cookies on other browsers",
+            "Clears every cookie of the browser (all domains)",
             "Automation/Browser/Auth",
         );
         node.set_version(2);
@@ -510,9 +506,9 @@ impl NodeLogic for BrowserClearCookiesNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        super::persist::clear_cookies(&session, &driver).await?;
-        drop(driver);
+        let page = session.browser_page(context).await?;
+        super::persist::clear_cookies(&page).await?;
+        drop(page);
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -741,9 +737,12 @@ impl NodeLogic for TotpCodeNode {
         let period = u64::try_from(period)
             .ok()
             .filter(|period| *period > 0)
-            .ok_or_else(|| flow_like_types::anyhow!("TOTP period must be positive (got {period})"))?;
-        let digits = u32::try_from(digits)
-            .map_err(|_| flow_like_types::anyhow!("TOTP digits must be 6, 7 or 8 (got {digits})"))?;
+            .ok_or_else(|| {
+                flow_like_types::anyhow!("TOTP period must be positive (got {period})")
+            })?;
+        let digits = u32::try_from(digits).map_err(|_| {
+            flow_like_types::anyhow!("TOTP digits must be 6, 7 or 8 (got {digits})")
+        })?;
         let unix_time = match u64::try_from(unix_time) {
             Ok(time) => time,
             Err(_) => std::time::SystemTime::now()
@@ -751,8 +750,13 @@ impl NodeLogic for TotpCodeNode {
                 .as_secs(),
         };
         let key = decode_base32(&secret)?;
-        let (code, remaining) =
-            totp(&key, unix_time, period, digits, TotpAlgorithm::parse(&algorithm)?)?;
+        let (code, remaining) = totp(
+            &key,
+            unix_time,
+            period,
+            digits,
+            TotpAlgorithm::parse(&algorithm)?,
+        )?;
         context.set_pin_value("code", json!(code)).await?;
         context
             .set_pin_value("seconds_remaining", json!(remaining))
@@ -772,7 +776,14 @@ impl NodeLogic for TotpCodeNode {
 mod tests {
     use super::*;
 
-    const TIMES: [u64; 6] = [59, 1_111_111_109, 1_111_111_111, 1_234_567_890, 2_000_000_000, 20_000_000_000];
+    const TIMES: [u64; 6] = [
+        59,
+        1_111_111_109,
+        1_111_111_111,
+        1_234_567_890,
+        2_000_000_000,
+        20_000_000_000,
+    ];
 
     fn codes(key: &[u8], algorithm: TotpAlgorithm) -> Vec<String> {
         TIMES
@@ -785,18 +796,24 @@ mod tests {
     fn rfc6238_vectors() {
         assert_eq!(
             codes(b"12345678901234567890", TotpAlgorithm::Sha1),
-            ["94287082", "07081804", "14050471", "89005924", "69279037", "65353130"]
+            [
+                "94287082", "07081804", "14050471", "89005924", "69279037", "65353130"
+            ]
         );
         assert_eq!(
             codes(b"12345678901234567890123456789012", TotpAlgorithm::Sha256),
-            ["46119246", "68084774", "67062674", "91819424", "90698825", "77737706"]
+            [
+                "46119246", "68084774", "67062674", "91819424", "90698825", "77737706"
+            ]
         );
         assert_eq!(
             codes(
                 b"1234567890123456789012345678901234567890123456789012345678901234",
                 TotpAlgorithm::Sha512
             ),
-            ["90693936", "25091201", "99943326", "93441116", "38618901", "47863826"]
+            [
+                "90693936", "25091201", "99943326", "93441116", "38618901", "47863826"
+            ]
         );
     }
 
@@ -819,7 +836,10 @@ mod tests {
         let error = decode_base32("ABC1").unwrap_err().to_string();
         assert!(error.contains("position 4"));
         assert!(!error.contains('1'));
-        assert_eq!(TotpAlgorithm::parse("sha-256").unwrap(), TotpAlgorithm::Sha256);
+        assert_eq!(
+            TotpAlgorithm::parse("sha-256").unwrap(),
+            TotpAlgorithm::Sha256
+        );
         assert!(TotpAlgorithm::parse("md5").is_err());
     }
 

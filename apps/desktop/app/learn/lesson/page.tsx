@@ -27,6 +27,7 @@ import type {
 } from "@flow-like/flow-like-ui";
 import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { BOARD_BRIDGE_NATIVE_EVENT } from "@flow-like/flow-like-ui/lib/learn/board-bridge";
+import { lessonNeighbors } from "@flow-like/flow-like-ui/lib/learn/lesson-navigation";
 import {
 	type UserLessonProgress,
 	translateId,
@@ -107,20 +108,15 @@ function LessonContentPage() {
 					id: l.id,
 					title: l.title,
 					moduleId: m.id,
+					is_optional: l.is_optional,
 				})),
 			),
 		[structureQuery.data],
 	);
-	const lessonIndex = useMemo(
-		() => courseLessons.findIndex((l) => l.id === lessonId),
+	const { previous: previousLesson, next: nextLesson } = useMemo(
+		() => lessonNeighbors(courseLessons, lessonId),
 		[courseLessons, lessonId],
 	);
-	const previousLesson =
-		lessonIndex > 0 ? courseLessons[lessonIndex - 1] : null;
-	const nextLesson =
-		lessonIndex >= 0 && lessonIndex < courseLessons.length - 1
-			? courseLessons[lessonIndex + 1]
-			: null;
 	const lessonHref = useCallback(
 		(targetModuleId: string, targetLessonId: string) =>
 			`/learn/lesson?learnCourseId=${encodeURIComponent(courseId)}&learnModuleId=${encodeURIComponent(targetModuleId)}&learnLessonId=${encodeURIComponent(targetLessonId)}`,

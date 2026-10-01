@@ -304,7 +304,13 @@ impl Mouse for DesktopInput {
         self.ready()?;
         let tracked = track_press(&mut self.buttons, button, direction);
         let result = self.call(move |i| i.button(button, direction));
-        untrack_release(&mut self.buttons, button, direction, tracked, result.is_ok());
+        untrack_release(
+            &mut self.buttons,
+            button,
+            direction,
+            tracked,
+            result.is_ok(),
+        );
         result
     }
     fn move_mouse(&mut self, x: i32, y: i32, coordinate: Coordinate) -> InputResult<()> {

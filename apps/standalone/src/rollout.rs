@@ -842,7 +842,11 @@ mod tests {
             "source":"offline","project_path":directory.path(),"max_replicas":1,
             "events":[{"event_id":"http","event_version":[1,0,0],"board_version":[1,0,0]}]
         }))?;
-        store.upsert_placement("other", &serde_json::to_value(&other)?, DesiredState::Running)?;
+        store.upsert_placement(
+            "other",
+            &serde_json::to_value(&other)?,
+            DesiredState::Running,
+        )?;
         other.revision = "two".into();
         store.stage_rollout("other-update", &other, 1, 2, 30, 50)?;
         store.cancel_rollout("other", 51)?;

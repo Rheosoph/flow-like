@@ -167,6 +167,9 @@ REST, MCP and daemon placements currently support one replica."#)]
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Transitive deps enable both ring and aws-lc-rs, so rustls cannot infer a default for
+    // libraries that call ClientConfig::builder() (tokio-tungstenite wss://).
+    let _ = flow_like_standalone::crypto::tls_provider().install_default();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),

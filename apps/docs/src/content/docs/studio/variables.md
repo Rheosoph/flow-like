@@ -9,7 +9,7 @@ Variables are typed values shared by the nodes in one Flow. Each run receives
 its own in-memory variable state.
 
 Use a variable when several parts of a Flow need the same value or when a value
-changes during execution—for example, an environment-specific table name, an
+changes during execution, for example, an environment-specific table name, an
 array accumulated in a loop, or a Boolean loop condition.
 
 Nodes read and write variables through generated **Get _variable_** and
@@ -26,10 +26,10 @@ and choose its type:
 
 ![A screenshot showing how to set the type of a variable](../../../assets/SetVariableType.webp)
 
-Choose a value shape—**Single**, **Array**, **Set**, or **Map**—and provide a
-default when the variable is neither exposed nor configured at runtime:
+Choose a value shape in **Variable Type**: **Single**, **Array**, **Set**, or
+**Map**. Use **Default Value** to set its initial value.
 
-![A screenshot showing how to set the value of a variable](../../../assets/SetVariableValue.webp)
+![The Variable Type tab with Single, Array, Set, and Map choices](../../../assets/SetVariableValue.webp)
 
 A **Date** variable holds an instant in UTC, not a calendar day. See
 [Dates & Times](/reference/dates/) for its wire format, the inputs it parses,

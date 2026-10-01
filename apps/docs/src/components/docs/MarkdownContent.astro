@@ -1,0 +1,35 @@
+---
+import DefaultMarkdownContent from "@astrojs/starlight/components/MarkdownContent.astro";
+
+const section = Astro.locals.starlightRoute.id.startsWith("nodes/")
+	? "Nodes"
+	: "Guides";
+---
+
+<div data-pagefind-filter={`Section:${section}`}>
+	<DefaultMarkdownContent><slot /></DefaultMarkdownContent>
+</div>
+
+<script>
+	// The fallback src retains the full-size image while srcset serves the
+	// appropriate derivative in the article.
+	for (const img of document.querySelectorAll<HTMLImageElement>(
+		".sl-markdown-content img",
+	)) {
+		if (img.closest("a, .node-doc") || !img.alt || img.width < 300) continue;
+		const link = document.createElement("a");
+		link.href = img.src;
+		link.target = "_blank";
+		link.rel = "noopener";
+		link.className = "docs-image-link";
+		link.setAttribute("aria-label", `View full-size image in a new tab: ${img.alt}`);
+		link.title = "View full-size image";
+		img.before(link);
+		link.append(img);
+	}
+</script>
+
+<style is:global>
+	.docs-image-link { display: block; cursor: zoom-in; }
+	.docs-image-link:focus-visible { outline: 2px solid var(--sl-color-accent); outline-offset: 4px; }
+</style>

@@ -227,6 +227,7 @@ impl<'a> ScriptedAgent<'a> {
             replace_existing,
             mode: FlowIrDraftMode::Additive,
             source,
+            edits: Vec::new(),
             allow_scope_reduction: false,
         };
         let response = match &self.binding {
@@ -1021,6 +1022,7 @@ fn concurrent_same_draft() {
             replace_existing: false,
             mode: FlowIrDraftMode::Additive,
             source: source.clone(),
+            edits: Vec::new(),
             allow_scope_reduction: false,
         },
     );

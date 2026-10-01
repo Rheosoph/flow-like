@@ -1,15 +1,15 @@
 ---
-title: Pages
-description: Build app Pages and connect them to events, routes, and flows
+title: Page runtime and state API
+description: Integrate Page lifecycle, persisted state, and route resolution.
 sidebar:
   order: 1
 ---
 
-A Page is an app-specific A2UI surface. Its component graph defines the interface; Page settings define presentation, lifecycle behavior, and metadata.
+This guide describes Page lifecycle and the `IPageState` integration API.
+For the visual authoring procedure, use [Create Pages](/apps/pages/); for shared
+ownership and route concepts, use the [interface guide](/apps/a2ui/).
 
-Pages are created from a Flow and retain that Flow's `boardId`. They appear across the app in the **Events → Pages** workspace.
-
-![The Pages workspace in Flow-Like Desktop](../../../../assets/PagesOverview.webp)
+Pages are created from a Flow and retain that Flow's `boardId`. Open them from **Explorer → UI** in their owning Flow.
 
 ## Page, Event, and Route
 
@@ -28,19 +28,19 @@ A navigable Page is resolved in two steps:
 
 The Page does not need a separate route object pointing directly to it. See [Routes](/dev/a2ui/routes/) for the current mapping API.
 
+Flow snapshots include the Pages listed by that Flow. For a pinned Event,
+runtime Page resolution loads the Page from the Event's `board_version`.
+An unpinned Event loads the latest Page. The Page Builder loads the latest Page
+independently of Studio's selected graph version; see
+[snapshot boundaries](/studio/versioning/#what-the-snapshot-includes).
+
 ## Create a Page
 
-1. Open the Flow that will provide the Page's behavior.
-2. Open its **Pages** panel and create a Page.
-3. Flow-Like opens `/page-builder` with the Page, app, and board IDs in the query string.
-4. Build the surface and configure Page settings.
-5. Create or edit a UI Event, select the Page as its target, and assign the Event a route path.
-
-The app-level Pages workspace lets you reopen a Page, jump to its connected Flow, or delete it.
+Follow [Create Pages](/apps/pages/#create-a-page) to add a Page from its Flow.
+Studio opens it in an editor tab. The standalone Page Builder URL remains
+available for links and integrations; it is described below.
 
 ## Page Builder
-
-![The Page Builder editing an A2UI surface in dark mode](../../../../assets/PageBuilder.webp)
 
 The Page Builder hosts the shared `WidgetBuilder` component and adds Page-specific behavior around it:
 
@@ -167,6 +167,6 @@ Use **Preview** to test the surface at Desktop, Laptop, Tablet, Mobile, or Mobil
 
 ## Continue
 
-- [Visual Builder](/dev/a2ui/visual-builder/) — learn every part of the shared editor
-- [Widgets](/dev/a2ui/widgets/) — create reusable blocks for Pages
-- [Routes](/dev/a2ui/routes/) — expose a Page through an Event
+- [Visual Builder](/dev/a2ui/visual-builder/): learn every part of the shared editor
+- [Widgets](/dev/a2ui/widgets/): create reusable blocks for Pages
+- [Routes](/dev/a2ui/routes/): expose a Page through an Event

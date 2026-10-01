@@ -1,0 +1,19 @@
+{
+  "attachments": [
+    {
+      "contentType": "image/*",
+      "contentUrl": "https://smba.trafficmanager.net/amer/v3/attachments/0-cus-d17-c53459922d66463fb94af32a61057191/views/original"
+    },
+    {
+      "contentType": "text/html",
+      "content": "<p>&nbsp;</p>\r\n<p><img itemtype=\"http://schema.skype.com/AMSImage\" alt=\"image\" src=\"https://us-api.asm.skype.com/v1/objects/0-cus-d17-c53459922d66463fb94af32a61057191/views/imgo\" itemscope=\"jpeg\" width=\"444.44444444444446\" height=\"250\" aria-label=\"has context menu\" id=\"x_0-cus-d17-c53459922d66463fb94af32a61057191\" itemid=\"0-cus-d17-c53459922d66463fb94af32a61057191\" style=\"vertical-align:bottom\"></p>\r\n<p>&nbsp;</p>"
+    }
+  ],
+  "type": "message",
+  "channelId": "msteams",
+  "serviceUrl": "https://smba.trafficmanager.net/amer/",
+  "conversation": {
+    "conversationType": "personal",
+    "id": "a:dummy-conversation-id"
+  }
+}

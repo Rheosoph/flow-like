@@ -251,7 +251,7 @@ pub enum PlatformSurface {
 }
 
 impl PlatformSurface {
-    fn tool_specs(self, memory_enabled: bool) -> Vec<PlatformToolSpec> {
+    pub(super) fn tool_specs(self, memory_enabled: bool) -> Vec<PlatformToolSpec> {
         match self {
             Self::Orchestrator => platform_loop_tool_specs(memory_enabled),
             Self::Scout => scout_specialist_tool_specs(),
@@ -480,7 +480,14 @@ fn platform_tool_serialization_lane(name: &str, arguments: &Value) -> Option<Str
         "call_app_chat" | "call_app_event" | "interact_app_page" => {
             return Some(format!("app-runtime:{}", app()));
         }
-        "flowpilot_board" if is_editing_flowpilot_board_call(name, arguments) => {
+        "flowpilot_board" | "flowpilot_board_review"
+            if is_editing_flowpilot_board_call(name, arguments)
+                || (name == "flowpilot_board_review"
+                    && matches!(
+                        spec_arg_str(arguments, "action", "action"),
+                        "apply" | "dismiss"
+                    )) =>
+        {
             // An unresolved board target may create or adopt the app's first board, so it shares
             // the app's board lane; a named target only contends with edits of that same board.
             return Some(match arg("board_id", "boardId") {
@@ -2832,6 +2839,33 @@ mod tests {
             platform_tool_serialization_lane("flowpilot_board", &unresolved_a),
             platform_tool_serialization_lane("flowpilot_board", &other_app)
         );
+    }
+
+    #[test]
+    fn retained_review_mutations_share_the_target_boards_authoring_lane() {
+        let edit = json!({ "app_id": "app", "board_id": "board", "mode": "edit" });
+        let mut review = json!({
+            "app_id": "app",
+            "board_id": "board",
+            "job_id": "job",
+        });
+        for action in ["apply", "dismiss"] {
+            review["action"] = json!(action);
+            assert_eq!(
+                platform_tool_serialization_lane("flowpilot_board_review", &review),
+                platform_tool_serialization_lane("flowpilot_board", &edit)
+            );
+            let mut other_board = review.clone();
+            other_board["board_id"] = json!("other-board");
+            assert_ne!(
+                platform_tool_serialization_lane("flowpilot_board_review", &other_board),
+                platform_tool_serialization_lane("flowpilot_board", &edit)
+            );
+        }
+        for action in ["list", "status"] {
+            review["action"] = json!(action);
+            assert!(platform_tool_serialization_lane("flowpilot_board_review", &review).is_none());
+        }
     }
 
     #[test]

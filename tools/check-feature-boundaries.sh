@@ -102,6 +102,7 @@ a2ui-schema
 editor-contracts
 types-data-url
 model-provider
+browser-core
 catalog-std
 catalog-std-execute
 catalog-std-ui
@@ -232,6 +233,7 @@ if [ "${#BOUNDARIES[@]}" -eq 0 ]; then
         editor-contracts
         types-data-url
         model-provider
+        browser-core
         catalog-std
         catalog-std-execute
         catalog-std-ui
@@ -313,6 +315,11 @@ configure_boundary() {
         model-provider)
             CHECK_ARGS=(--package flow-like-model-provider --no-default-features --features remote-ml)
             FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-types flow-like-storage "${CATALOG_NODE_PACKAGES[@]}")
+            ;;
+        browser-core)
+            # The CDP engine is a leaf: automation nodes depend on it, never the reverse.
+            CHECK_ARGS=(--package flow-like-browser)
+            FORBIDDEN=(flow-like flow-like-runtime flow-like-editor flow-like-types flow-like-storage flow-like-model-provider flow-like-catalog-core "${CATALOG_NODE_PACKAGES[@]}" thirtyfour tauri lancedb lance datafusion wasmtime ort)
             ;;
         catalog-std|catalog-std-execute)
             # Children have isolated execution checks below; these assertions
@@ -699,7 +706,7 @@ configure_boundary() {
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package flow-like-catalog --no-default-features --features executor)
             FORBIDDEN=(flow-like-catalog-onnx ort ort-sys fastembed face_id tract-tflite)
-            REQUIRED=(flow-like-catalog-automation)
+            REQUIRED=(flow-like-catalog-automation flow-like-browser)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(executor remote-metadata package-automation portable-execute remote runtime-catalog)
             FORBIDDEN_FEATURES=(package-onnx local-ml portable-metadata)
@@ -710,7 +717,7 @@ configure_boundary() {
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package flow-like-catalog --no-default-features --features local-runtime)
             FORBIDDEN=(flow-like-catalog-onnx ort ort-sys fastembed face_id tract-tflite)
-            REQUIRED=(flow-like-catalog-automation)
+            REQUIRED=(flow-like-catalog-automation flow-like-browser)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(local-runtime remote-metadata package-automation portable-execute remote runtime-catalog)
             FORBIDDEN_FEATURES=(package-onnx local-ml portable-metadata)
@@ -805,7 +812,7 @@ configure_boundary() {
             # local ONNX and automation without linking either implementation.
             DEPENDENCY_ONLY=1
             CHECK_ARGS=(--package local-api --package k8s-api --package docker-compose-api)
-            FORBIDDEN=(ort ort-sys fastembed face_id tract-tflite enigo rdev xcap)
+            FORBIDDEN=(ort ort-sys fastembed face_id tract-tflite enigo rdev xcap flow-like-browser)
             REQUIRED=(flow-like-catalog-onnx flow-like-catalog-automation)
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(executor-local-metadata server-local-metadata remote-metadata package-onnx package-automation runtime-catalog)

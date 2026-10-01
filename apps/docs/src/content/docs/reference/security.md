@@ -172,7 +172,15 @@ their app membership.
 ### API keys and PATs
 
 - Technical users authenticate with `X-API-Key: <key>`.
-- Personal Access Tokens use `Authorization: PAT <token>`.
+- Personal Access Tokens use `Authorization: pat_<id>.<secret>`. The API also
+  accepts `Authorization: Bearer pat_<id>.<secret>`.
+
+For example, with a token stored in `FLOW_LIKE_PAT`:
+
+```sh
+curl --fail https://api.flow-like.com/api/v1/apps \
+  -H "Authorization: $FLOW_LIKE_PAT"
+```
 
 Authentication identifies the caller; route and app permission checks still
 decide what that caller may do. Treat both values as secrets, use narrow roles,

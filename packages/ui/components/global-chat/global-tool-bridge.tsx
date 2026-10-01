@@ -192,6 +192,7 @@ import {
 	verifyAtomicBoardReadback,
 } from "./flowpilot-atomic-readback";
 import { inspectFlowPilotBoard } from "./flowpilot-board-inspection";
+import { executeFlowPilotBoardReview } from "./flowpilot-board-review";
 import { inspectFlowPilotWidgetPage } from "./flowpilot-widget-inspection";
 import {
 	persistFlowPilotWidgetPage,
@@ -1849,6 +1850,107 @@ export function GlobalToolBridge() {
 		},
 		[backend.boardState],
 	);
+	const boardReviewApprovalPromisesRef = useRef(
+		new Map<string, Promise<GlobalToolPromptResolution>>(),
+	);
+	const approveBoardEditJob = useCallback(
+		(job: BoardEditJob, action: "apply" | "dismiss" = "apply") => {
+			const key = `${job.jobId}:${action}`;
+			const existing = boardReviewApprovalPromisesRef.current.get(key);
+			if (existing) return existing;
+			const promise = (async () => {
+				const destructive =
+					job.review.replacementMode ||
+					job.review.destructiveEffects.length > 0;
+				const commandBreakdown = Object.entries(job.review.commandCounts)
+					.sort(([left], [right]) => left.localeCompare(right))
+					.map(([kind, count]) => `${count} ${kind}`)
+					.join(", ");
+				const retainedSummaries = job.review.commandSummaries.slice(0, 8);
+				const commandSummary = retainedSummaries.length
+					? ` Reviewed changes: ${retainedSummaries.join("; ")}${
+							job.review.commandSummaries.length > retainedSummaries.length
+								? "; …"
+								: ""
+						}`
+					: "";
+				const syntheticRequest: FrontendToolRequest = {
+					requestId:
+						action === "apply"
+							? `board-edit-job:${job.jobId}`
+							: `board-edit-dismiss:${job.jobId}`,
+					toolName:
+						action === "apply"
+							? "flowpilot_board_apply"
+							: "flowpilot_board_review",
+					arguments: { app_id: job.appId, board_id: job.boardId },
+					approval: {
+						kind: job.approval.kind,
+						title: job.approval.title,
+						description: job.approval.description,
+						sessionKey: job.approval.sessionKey,
+					},
+				};
+				const approvalSessionKey =
+					action === "apply"
+						? job.approval.sessionKey ||
+							`${syntheticRequest.toolName}:${job.approval.kind}`
+						: `board-review-dismiss:${job.jobId}`;
+				const exactApprovalKey = `board-review:${job.jobId}:${action}`;
+				// Auto mode and the session allowlist waive destructive reviews too: both are an
+				// explicit standing decision by the user, and a gate they cannot turn off is just a
+				// prompt. The card still spells out every destructive effect whenever it is shown.
+				const needsApproval =
+					(job.approval.kind === "mutating" ||
+						job.approval.kind === "execute" ||
+						destructive) &&
+					!useGlobalChatStore.getState().autoMode &&
+					!approvedKeysRef.current.has(exactApprovalKey) &&
+					!approvedKeysRef.current.has(approvalSessionKey);
+				const resolution = !needsApproval
+					? { approved: true, remember: false }
+					: await openDialog({
+							type: "approval",
+							request: syntheticRequest,
+							override: {
+								title:
+									(action === "dismiss"
+										? "Dismiss compiled workflow"
+										: job.approval.title) ||
+									(destructive
+										? "Approve destructive workflow change"
+										: "Apply compiled workflow"),
+								description: `${action === "dismiss" ? "Discard this retained review without changing the board. " : ""}${job.approval.description ? `${job.approval.description} ` : ""}${
+									job.error
+										? `The previous apply attempt failed: ${job.error} `
+										: ""
+								}${job.review.commandCount} exact compiled board command(s) are ready${
+									commandBreakdown ? `: ${commandBreakdown}` : "."
+								}${commandSummary}${
+									job.review.destructiveEffects.length > 0
+										? ` Destructive effects: ${job.review.destructiveEffects.join("; ")}`
+										: " The live board will be checked again before the atomic apply."
+								}`,
+								destructive,
+							},
+						});
+				if (resolution && "approved" in resolution && resolution.approved) {
+					approvedKeysRef.current.add(exactApprovalKey);
+					if (resolution.remember)
+						approvedKeysRef.current.add(approvalSessionKey);
+				}
+				return resolution;
+			})();
+			boardReviewApprovalPromisesRef.current.set(key, promise);
+			void promise.finally(() => {
+				if (boardReviewApprovalPromisesRef.current.get(key) === promise) {
+					boardReviewApprovalPromisesRef.current.delete(key);
+				}
+			});
+			return promise;
+		},
+		[openDialog],
+	);
 	const presentBoardEditJob = useCallback(
 		async (job: BoardEditJob) => {
 			// Direct FlowPilot owns its inline approval card. Global polling may recover its
@@ -1925,79 +2027,13 @@ export function GlobalToolBridge() {
 					return;
 				}
 
-				const destructive =
-					job.review.replacementMode ||
-					job.review.destructiveEffects.length > 0;
-				const commandBreakdown = Object.entries(job.review.commandCounts)
-					.sort(([left], [right]) => left.localeCompare(right))
-					.map(([kind, count]) => `${count} ${kind}`)
-					.join(", ");
-				const retainedSummaries = job.review.commandSummaries.slice(0, 8);
-				const commandSummary = retainedSummaries.length
-					? ` Reviewed changes: ${retainedSummaries.join("; ")}${
-							job.review.commandSummaries.length > retainedSummaries.length
-								? "; …"
-								: ""
-						}`
-					: "";
-				const syntheticRequest: FrontendToolRequest = {
-					requestId: `board-edit-job:${job.jobId}`,
-					toolName: "flowpilot_board_apply",
-					arguments: { app_id: job.appId, board_id: job.boardId },
-					approval: {
-						kind: job.approval.kind,
-						title: job.approval.title,
-						description: job.approval.description,
-						sessionKey: job.approval.sessionKey,
-					},
-				};
-				const approvalSessionKey =
-					job.approval.sessionKey ||
-					`${syntheticRequest.toolName}:${job.approval.kind}`;
-				// Auto mode and the session allowlist waive destructive reviews too: both are an
-				// explicit standing decision by the user, and a gate they cannot turn off is just a
-				// prompt. The card still spells out every destructive effect whenever it is shown.
-				const needsApproval =
-					(job.approval.kind === "mutating" ||
-						job.approval.kind === "execute" ||
-						destructive) &&
-					!useGlobalChatStore.getState().autoMode &&
-					!approvedKeysRef.current.has(approvalSessionKey);
-				const resolution = !needsApproval
-					? { approved: true, remember: false }
-					: await openDialog({
-							type: "approval",
-							request: syntheticRequest,
-							override: {
-								title:
-									job.approval.title ||
-									(destructive
-										? "Approve destructive workflow change"
-										: "Apply compiled workflow"),
-								description: `${job.approval.description ? `${job.approval.description} ` : ""}${
-									job.error
-										? `The previous apply attempt failed: ${job.error} `
-										: ""
-								}${job.review.commandCount} exact compiled board command(s) are ready${
-									commandBreakdown ? `: ${commandBreakdown}` : "."
-								}${commandSummary}${
-									job.review.destructiveEffects.length > 0
-										? ` Destructive effects: ${job.review.destructiveEffects.join("; ")}`
-										: " The live board will be checked again before the atomic apply."
-								}`,
-								destructive,
-							},
-						});
+				const resolution = await approveBoardEditJob(job);
 				if (!resolution || !("approved" in resolution)) {
-					// Keep the durable review, but allow this presenter to offer it again later.
 					presentedBoardEditJobsRef.current.set(job.jobId, {
 						updatedAtMs: job.updatedAtMs,
 						retryAfterMs: Date.now() + BOARD_EDIT_JOB_REPRESENT_DELAY_MS,
 					});
 					return;
-				}
-				if (resolution.approved && resolution.remember) {
-					approvedKeysRef.current.add(approvalSessionKey);
 				}
 				const resolveJob = backend.boardState.resolveBoardEditJob;
 				if (!resolveJob) {
@@ -2063,7 +2099,7 @@ export function GlobalToolBridge() {
 		[
 			backend.boardState,
 			deliverNativeBoardEditJob,
-			openDialog,
+			approveBoardEditJob,
 			queryClient,
 			recordSettledGenerationReceipt,
 		],
@@ -4543,6 +4579,70 @@ export function GlobalToolBridge() {
 						});
 					}
 				}
+				case "flowpilot_board_review": {
+					const appId = argString(args, "app_id");
+					const boardId = argString(args, "board_id");
+					const targetError = evaluationTargetError(appId);
+					if (targetError) return targetError;
+					return await executeFlowPilotBoardReview({
+						boardState: backend.boardState,
+						appId,
+						boardId,
+						jobId: argString(args, "job_id"),
+						action: argString(args, "action"),
+						getVisibleAppIds: getProfileAppIds,
+						assertActive: () =>
+							assertRequestActive(request, "native review resolution"),
+						approve: async (job, action) => {
+							const answer = await approveBoardEditJob(job, action);
+							return answer && "approved" in answer ? answer.approved : null;
+						},
+						onJob: (job) => {
+							scope.referenceApp(appId);
+							if (job.flowscriptSource) {
+								scope.setFlowscriptWorkspace({
+									source: job.flowscriptSource,
+									status:
+										job.phase === "applied" ||
+										job.phase === "applied_pending_delivery"
+											? "applied"
+											: job.phase === "denied" || job.phase === "cancelled"
+												? "dismissed"
+												: job.phase === "stale"
+													? "stale"
+													: "queued",
+								});
+							}
+						},
+						onApplied: async (resolution) => {
+							const delivery = await deliverNativeBoardEditJob(
+								resolution.job,
+								boardEditJobResolutionHistoryMode(resolution),
+							);
+							const verification = await verifyAtomicBoardDeliveryReadback({
+								boardState: backend.boardState,
+								appId,
+								boardId,
+								delivery,
+							});
+							await recordSettledGenerationReceipt(delivery.job);
+							await queryClient.invalidateQueries({
+								predicate: (query) => query.queryKey.includes(appId),
+							});
+							return {
+								phase: delivery.job.phase,
+								delivery_status: delivery.status,
+								persisted_readback_verified: verification.verified,
+								diagnostics: verification.verified
+									? []
+									: [verification.diagnostic],
+								next_action: verification.verified
+									? "The saved repair is confirmed. Continue runtime verification against this board."
+									: "The native apply completed. Inspect the saved board before retrying or verifying runtime behavior.",
+							};
+						},
+					});
+				}
 				case "flowpilot_board": {
 					if (argString(args, "mode") === "inspect") {
 						const appId = argString(args, "app_id") || argString(args, "appId");
@@ -5331,6 +5431,14 @@ Completion contract: build complete helper logic first and add the Event entry l
 								}
 							}
 							source = selectedWorkspace?.source;
+							// Persist the candidate before the native review branch can return early.
+							if (
+								selectedWorkspace &&
+								runIsLive() &&
+								!isRequestExpired(request)
+							) {
+								scope.setFlowscriptWorkspace(selectedWorkspace);
+							}
 							workspaceStatus = selectedWorkspace?.status;
 							partialWorkingSlice =
 								isPartialFlowScriptWorkspace(selectedWorkspace);
@@ -5352,6 +5460,16 @@ Completion contract: build complete helper logic first and add the Event entry l
 									request.requestId,
 									token,
 								);
+								if (
+									job.flowscriptSource &&
+									runIsLive() &&
+									!isRequestExpired(request)
+								) {
+									scope.setFlowscriptWorkspace({
+										source: job.flowscriptSource,
+										status: "queued",
+									});
+								}
 								// Ownership has moved from this ephemeral tool request to the native job.
 								flowIrCommit = undefined;
 								// Reported to the agent so it can describe the pending review; it no
@@ -6116,7 +6234,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							...(noFlowScript
 								? {
 										flowscript_status: "no_flowscript",
-										note: "IMPORTANT: the board copilot ended WITHOUT submitting a FlowScript — the board was NOT modified and contains no new nodes. Do not tell the user the workflow was built. Retry flowpilot_board at most twice for this repair_scope, and only with a materially different bounded pre-draft strategy: use one focused declaration batch, no more than six ancillary inspections, call plan_board_scope exactly once unless a plan is already retained, then immediately retain its active segment and repair it from diagnostics. Moving to a genuinely different part of the build means passing that repair_scope, which carries its own budget; merely rewording or shortening the same instruction is not a different scope or a different strategy. Once the scope's budget is spent, stop and tell the user honestly that the edit failed.",
+										note: "IMPORTANT: the board copilot ended WITHOUT submitting a FlowScript — the board was NOT modified and contains no new nodes. Do not tell the user the workflow was built. Retry flowpilot_board at most once for this repair_scope, and only with a materially different bounded pre-draft strategy: use one focused declaration batch, no more than six ancillary inspections, call plan_board_scope exactly once unless a plan is already retained, then immediately retain its active segment and repair it from diagnostics. Moving to a genuinely different part of the build means passing that repair_scope, which carries its own budget; merely rewording or shortening the same instruction is not a different scope or a different strategy. Once the scope's budget is spent, stop and tell the user honestly that the edit failed.",
 									}
 								: {}),
 							...(workspaceStatus === "validation_errors"
@@ -7426,6 +7544,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 			queryClient,
 			showConversation,
 			addInlineAppChat,
+			approveBoardEditJob,
 			deliverNativeBoardEditJob,
 			openDialog,
 			presentBoardEditJob,
@@ -7497,7 +7616,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 						requestedAppId,
 						toolName: request.toolName,
 						mode: argString(request.arguments, "mode"),
-						operation: argString(request.arguments, "operation"),
+						operation:
+							argString(request.arguments, "operation") ||
+							(request.toolName === "flowpilot_board_review"
+								? argString(request.arguments, "action")
+								: ""),
 					})
 				) {
 					return {

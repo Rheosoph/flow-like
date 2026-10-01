@@ -199,16 +199,9 @@ pub(super) async fn run_external_agent_invocation(
                         fatal_error.get_or_insert(safe_error);
                     }
 
-                    // Claude's init and result frames both carry the session id; keep the latest
-                    // (resumed print runs mint a new id per run) so continuation phases can
-                    // `--resume` the transcript instead of replaying the whole platform prompt.
-                    if invocation.backend == FlowPilotAgentBackendKind::ClaudeCode
-                        && let Some(session_id) =
-                            value.get("session_id").and_then(serde_json::Value::as_str)
-                        && !session_id.is_empty()
-                    {
-                        stream_state.session_id = Some(session_id.to_string());
-                    }
+                    // Capture Codex's thread id and Claude's latest session id even when the
+                    // phase fails before producing answer text, so continuation can resume it.
+                    stream_state.observe_session(invocation.backend, &value);
 
                     // A failed FlowPilot MCP connection leaves the agent tool-less: it will answer
                     // in plain text and "succeed" without editing. Treat that as a terminal failure.
@@ -311,11 +304,14 @@ pub(super) async fn run_external_agent_invocation(
     let mut forced_stop = stream_result.as_ref().err().cloned();
     let status = if forced_stop.is_none() {
         tokio::select! {
-            result = child.wait() => Some(result.map_err(|error| {
-                phase_observer.failure(ExternalPhaseFailure::ChildWait);
-                phase.finish(false);
-                format!("Failed to wait for {}: {error}", invocation.backend.label())
-            })?),
+            result = child.wait() => match result {
+                Ok(status) => Some(status),
+                Err(error) => {
+                    phase_observer.failure(ExternalPhaseFailure::ChildWait);
+                    forced_stop = Some(format!("Failed to wait for {}: {error}", invocation.backend.label()));
+                    None
+                }
+            },
             _ = cancellation.cancelled() => {
                 phase_observer.cancelled();
                 forced_stop = Some("FlowPilot external agent run was cancelled".to_string());
@@ -402,7 +398,7 @@ pub(super) async fn run_external_agent_invocation(
     phase_usage.finish(error.is_none() && status.is_some_and(|status| status.success()));
     phase.finish(error.is_none() && status.is_some_and(|status| status.success()));
     match (text.is_empty(), error) {
-        (true, Some(error)) => Err(error),
+        (true, Some(error)) if stream_state.session_id.is_none() => Err(error),
         (_, error) => Ok(ExternalAgentRunOutput {
             text,
             error,

@@ -7,6 +7,7 @@ import {
 	NodeCategoryOverview,
 	NodeReference,
 } from "./NodeReference";
+import { DIRECTORY_PAGE_SIZE, toCatalogSummary } from "./catalog-summary";
 
 function node(scores?: CatalogScores): CatalogNode {
 	return {
@@ -30,6 +31,41 @@ function node(scores?: CatalogScores): CatalogNode {
 }
 
 describe("NodeReference catalog scores", () => {
+	test("keeps schema and permission payloads out of directory hydration", () => {
+		const full = {
+			...node(),
+			docs: "Long reference",
+			permissions: ["filesystem"],
+			pins: [{ schema: "large-schema" }],
+		} as CatalogNode;
+		const summary = toCatalogSummary(full);
+		expect(JSON.stringify(summary)).not.toContain("large-schema");
+		expect(summary).not.toHaveProperty("permissions");
+		expect(summary).not.toHaveProperty("docs");
+		expect(
+			renderToStaticMarkup(
+				<NodeCatalogOverview nodes={[summary]} categories={[]} />,
+			),
+		).toContain("Example node");
+	});
+
+	test("bounds initial cards while keeping all links available without JavaScript", () => {
+		const nodes = Array.from({ length: DIRECTORY_PAGE_SIZE + 2 }, (_, i) => ({
+			...toCatalogSummary(node()),
+			name: `node-${i}`,
+			slug: `nodes/testing/node-${i}`,
+		}));
+		const html = renderToStaticMarkup(
+			<NodeCatalogOverview nodes={nodes} categories={[]} />,
+		);
+		expect(html.match(/class="node-card"/g)).toHaveLength(DIRECTORY_PAGE_SIZE);
+		expect(html).toContain("Show 2 more nodes");
+		expect(html).toContain(
+			`<a href="/nodes/testing/node-${DIRECTORY_PAGE_SIZE + 1}/">`,
+		);
+		expect(html).toContain("<noscript>");
+	});
+
 	test("renders raw high-impact scores consistently", () => {
 		const markup = renderToStaticMarkup(
 			<NodeReference

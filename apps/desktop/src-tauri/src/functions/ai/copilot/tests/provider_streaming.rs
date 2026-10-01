@@ -1,6 +1,81 @@
 use super::*;
 
 #[test]
+fn external_agent_stream_captures_only_provider_session_frames() {
+    let mut state = ExternalAgentStreamState::default();
+    state.observe_session(
+        FlowPilotAgentBackendKind::Codex,
+        &serde_json::json!({ "type": "thread.started", "thread_id": "thread-1234" }),
+    );
+    assert_eq!(state.session_id.as_deref(), Some("thread-1234"));
+
+    for event in [
+        serde_json::json!({ "type": "thread.started", "thread_id": " " }),
+        serde_json::json!({ "type": "item.completed", "thread_id": "tool-thread" }),
+        serde_json::json!({ "type": "result", "session_id": "claude-session" }),
+    ] {
+        state.observe_session(FlowPilotAgentBackendKind::Codex, &event);
+        assert_eq!(state.session_id.as_deref(), Some("thread-1234"));
+    }
+
+    for session in ["claude-initial", "claude-latest"] {
+        state.observe_session(
+            FlowPilotAgentBackendKind::ClaudeCode,
+            &serde_json::json!({ "type": "result", "session_id": session }),
+        );
+        assert_eq!(state.session_id.as_deref(), Some(session));
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn external_agent_failure_preserves_session_before_any_answer_text() {
+    use super::super::external_process::run_external_agent_invocation;
+    use flow_like_types::tokio_util::sync::CancellationToken;
+
+    for session in [Some("thread-1234"), None] {
+        let script = match session {
+            Some(session) => format!(
+                "printf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"{session}\"}}'; exit 1"
+            ),
+            None => "exit 1".to_string(),
+        };
+        let invocation = ExternalAgentInvocation {
+            backend: FlowPilotAgentBackendKind::Codex,
+            executable: "/bin/sh".into(),
+            path_dirs: vec![],
+            args: vec!["-c".to_string(), script],
+            prompt: String::new(),
+            final_output_path: None,
+            envs: vec![],
+            env_removals: vec![],
+            continues_streamed_text: false,
+        };
+        let result = run_external_agent_invocation(
+            invocation,
+            tauri::ipc::Channel::new(|_| Ok(())),
+            None,
+            CancellationToken::new(),
+            None,
+        )
+        .await;
+        if let Some(session) = session {
+            let output = result.expect("the captured session must survive a failed empty run");
+            assert!(output.text.is_empty());
+            assert_eq!(output.session_id.as_deref(), Some(session));
+            assert!(
+                output
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("exited with status"))
+            );
+        } else {
+            assert!(matches!(result, Err(error) if error.contains("exited with status")));
+        }
+    }
+}
+
+#[test]
 fn external_agent_text_extractor_handles_result_events() {
     let event = serde_json::json!({
         "type": "result",

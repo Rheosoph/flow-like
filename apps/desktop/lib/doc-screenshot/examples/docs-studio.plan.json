@@ -11,7 +11,7 @@
 		},
 		"theme": "dark",
 		"format": "webp",
-		"timeoutMs": 120000,
+		"timeoutMs": 300000,
 		"settleMs": 600,
 		"disableAnimations": true,
 		"hideScrollbars": true
@@ -25,20 +25,21 @@
 				"id": "docs-board"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__pane",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__node",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -54,6 +55,20 @@
 					"output": "FlowLikeStudio.webp",
 					"mode": "viewport"
 				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
@@ -64,20 +79,21 @@
 				"id": "docs-board"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__pane",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__node",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -89,6 +105,20 @@
 					"output": "FlowLikeNodes.webp",
 					"mode": "viewport"
 				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
@@ -99,20 +129,21 @@
 				"id": "docs-board"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__pane",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__node",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -149,6 +180,20 @@
 					"output": "NodeCatalog.webp",
 					"mode": "viewport"
 				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
@@ -156,41 +201,45 @@
 			"path": "/flow",
 			"query": {
 				"app": "docs-app",
-				"id": "docs-board"
+				"id": "docs-board",
+				"node": "docs-layer"
 			},
 			"viewport": {
-				"width": 1240,
-				"height": 800
+				"width": 1100,
+				"height": 580
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
-					"selector": ".react-flow__pane",
-					"state": "visible",
-					"timeoutMs": 120000
-				},
-				{
-					"type": "waitFor",
 					"selector": ".react-flow__node",
-					"state": "visible",
-					"timeoutMs": 120000
-				},
-				{
-					"type": "click",
-					"selector": ".react-flow__controls-fitview"
+					"state": "visible"
 				},
 				{
 					"type": "delay",
-					"ms": 500
+					"ms": 900
 				},
 				{
 					"type": "capture",
 					"name": "ConnectionsWires",
-					"output": "ConnectionsWires.webp",
 					"mode": "viewport"
+				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		},
@@ -199,35 +248,55 @@
 			"path": "/flow",
 			"query": {
 				"app": "docs-app",
-				"id": "docs-board"
+				"id": "docs-board",
+				"node": "docs-generic-target"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
-					"selector": ".react-flow__pane",
-					"state": "visible",
-					"timeoutMs": 120000
+					"selector": ".react-flow__node",
+					"state": "visible"
 				},
 				{
-					"type": "waitFor",
-					"selector": ".react-flow__node",
-					"state": "visible",
-					"timeoutMs": 120000
+					"type": "delay",
+					"ms": 900
 				},
 				{
 					"type": "click",
-					"selector": ".react-flow__node[data-id=\"docs-generic-target\"]"
+					"selector": ".react-flow__controls-zoomout"
+				},
+				{
+					"type": "delay",
+					"ms": 350
 				},
 				{
 					"type": "capture",
 					"name": "GenericPinTypes",
-					"output": "GenericPinTypes.webp",
 					"mode": "viewport"
 				}
-			]
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
+			],
+			"viewport": {
+				"width": 1100,
+				"height": 500
+			}
 		},
 		{
 			"name": "draw-pin",
@@ -237,20 +306,21 @@
 				"id": "docs-board"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__pane",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__node",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -274,6 +344,20 @@
 					"output": "DrawPin.webp",
 					"mode": "viewport"
 				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
@@ -284,20 +368,21 @@
 				"id": "docs-board"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__pane",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__node",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -345,6 +430,20 @@
 					"output": "TypedCatalogSuggestions.webp",
 					"mode": "viewport"
 				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
@@ -355,20 +454,21 @@
 				"id": "docs-board"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__pane",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__node",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -409,6 +509,20 @@
 					"output": "CollapsingNodes.webp",
 					"mode": "viewport"
 				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
@@ -419,20 +533,21 @@
 				"id": "docs-board"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__pane",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__node",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -460,6 +575,20 @@
 					"output": "SetLayerName.webp",
 					"mode": "viewport"
 				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
@@ -470,20 +599,21 @@
 				"id": "docs-board"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__pane",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__node",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -516,6 +646,20 @@
 					"output": "EditingLayerPins.webp",
 					"mode": "viewport"
 				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
@@ -526,20 +670,21 @@
 				"id": "docs-board"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__pane",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__node",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -562,6 +707,20 @@
 					"output": "InsideLayers.webp",
 					"mode": "viewport"
 				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
@@ -572,20 +731,21 @@
 				"id": "docs-board"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__pane",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__node",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -599,7 +759,26 @@
 					"type": "capture",
 					"name": "FlowWithLayers",
 					"output": "FlowWithLayers.webp",
-					"mode": "viewport"
+					"mode": "element",
+					"selector": ".react-flow__node[data-id=\"docs-layer\"]",
+					"padding": 14,
+					"hideSelectors": [
+						".react-flow__node[data-id=\"docs-layer\"] .absolute.top-0:has(> small)"
+					]
+				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		},
@@ -611,20 +790,21 @@
 				"id": "docs-board"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__pane",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__node",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -650,131 +830,19 @@
 					"output": "PlaceholdersForPrototyping.webp",
 					"mode": "viewport"
 				}
-			]
-		},
-		{
-			"name": "runs-and-logs",
-			"path": "/flow",
-			"query": {
-				"app": "docs-app",
-				"id": "docs-board"
-			},
-			"localStorage": {
-				"tutorial-finished-new": "true"
-			},
-			"steps": [
+			],
+			"diagnosticAllowlist": [
 				{
-					"type": "waitFor",
-					"selector": ".react-flow__pane",
-					"state": "visible",
-					"timeoutMs": 120000
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
 				},
 				{
-					"type": "waitFor",
-					"selector": ".react-flow__node",
-					"state": "visible",
-					"timeoutMs": 120000
-				},
-				{
-					"type": "click",
-					"selector": "nav[aria-label=\"Board surfaces\"] button[aria-label=\"Run History\"]"
-				},
-				{
-					"type": "waitFor",
-					"selector": "nav[aria-label=\"Board surfaces\"] button[aria-label=\"Run History\"][aria-pressed=\"true\"]",
-					"state": "visible",
-					"timeoutMs": 15000
-				},
-				{
-					"type": "waitFor",
-					"selector": "#board-panel span[title=\"Local execution\"]",
-					"state": "visible",
-					"timeoutMs": 15000
-				},
-				{
-					"type": "click",
-					"selector": "#board-panel span[title=\"Local execution\"]"
-				},
-				{
-					"type": "waitFor",
-					"selector": "nav[aria-label=\"Board surfaces\"] button[aria-label=\"Logs\"][aria-pressed=\"true\"]",
-					"state": "visible",
-					"timeoutMs": 15000
-				},
-				{
-					"type": "waitFor",
-					"selector": "#board-panel .log-container",
-					"state": "visible",
-					"timeoutMs": 20000
-				},
-				{
-					"type": "waitFor",
-					"text": "Received onboarding request",
-					"timeoutMs": 20000
-				},
-				{
-					"type": "capture",
-					"name": "RunsAndLogs",
-					"output": "RunsAndLogs.webp",
-					"mode": "viewport",
-					"hideSelectors": ["[data-slot=\"tooltip-content\"]"]
-				}
-			]
-		},
-		{
-			"name": "board-versions",
-			"path": "/flow",
-			"query": {
-				"app": "docs-app",
-				"id": "docs-board"
-			},
-			"localStorage": {
-				"tutorial-finished-new": "true"
-			},
-			"steps": [
-				{
-					"type": "waitFor",
-					"selector": ".react-flow__pane",
-					"state": "visible",
-					"timeoutMs": 120000
-				},
-				{
-					"type": "waitFor",
-					"selector": ".react-flow__node",
-					"state": "visible",
-					"timeoutMs": 120000
-				},
-				{
-					"type": "click",
-					"selector": "footer [data-slot=\"popover-trigger\"][title=\"Version\"]"
-				},
-				{
-					"type": "waitFor",
-					"selector": "[data-slot=\"popover-content\"][data-state=\"open\"] [data-slot=\"select-trigger\"]",
-					"state": "visible",
-					"timeoutMs": 10000
-				},
-				{
-					"type": "click",
-					"selector": "[data-slot=\"popover-content\"][data-state=\"open\"] [data-slot=\"select-trigger\"]",
-					"index": 0
-				},
-				{
-					"type": "waitFor",
-					"selector": "[data-slot=\"select-content\"][data-state=\"open\"] [role=\"option\"]:nth-child(5)",
-					"state": "visible",
-					"timeoutMs": 10000
-				},
-				{
-					"type": "waitFor",
-					"text": "1.2.1",
-					"timeoutMs": 10000
-				},
-				{
-					"type": "capture",
-					"name": "BoardVersions",
-					"output": "BoardVersions.webp",
-					"mode": "viewport"
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		},
@@ -786,20 +854,21 @@
 				"id": "docs-board"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__pane",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__node",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -822,6 +891,20 @@
 					"output": "WorkingWithVariables.webp",
 					"mode": "viewport"
 				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
@@ -832,20 +915,21 @@
 				"id": "docs-board"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__pane",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__node",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -898,6 +982,20 @@
 					"output": "SetVariableType.webp",
 					"mode": "viewport"
 				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
@@ -908,20 +1006,21 @@
 				"id": "docs-board"
 			},
 			"localStorage": {
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__pane",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "waitFor",
 					"selector": ".react-flow__node",
 					"state": "visible",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -973,6 +1072,20 @@
 					"name": "SetVariableValue",
 					"output": "SetVariableValue.webp",
 					"mode": "viewport"
+				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		}

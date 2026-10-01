@@ -438,8 +438,11 @@ fn claude_invocation_resumes_sessions_and_appends_the_role_prompt() {
         invocation.prompt, "continuation payload",
         "a resumed continuation sends only its compact payload on stdin"
     );
+}
 
-    let codex = ExternalAgentInvocation::new(
+#[test]
+fn codex_invocation_resumes_with_scoped_config_and_stdin_prompt() {
+    let invocation = ExternalAgentInvocation::new(
         FlowPilotAgentBackendKind::Codex,
         CliResolution::new(
             std::path::PathBuf::from("/usr/bin/codex"),
@@ -448,19 +451,52 @@ fn claude_invocation_resumes_sessions_and_appends_the_role_prompt() {
         "default",
         None,
         "http://127.0.0.1:12345/mcp",
-        "hello".to_string(),
+        "continuation payload".to_string(),
         vec!["edit_flowscript".to_string()],
         false,
         &[],
-        Some("session-1234"),
+        Some(" session-1234 "),
         Some("ROLE APPENDIX"),
     )
     .expect("codex invocation should build");
+    let resume_index = invocation
+        .args
+        .iter()
+        .position(|arg| arg == "resume")
+        .expect("Codex must resume the captured thread");
+    assert_eq!(
+        &invocation.args[resume_index..],
+        ["resume", "session-1234", "-"]
+    );
+    let exec_args = &invocation.args[..resume_index];
+    assert_eq!(exec_args[0], "exec");
     assert!(
-        !codex.args.iter().any(|arg| arg == "--resume"
-            || arg == "--append-system-prompt"
-            || arg.contains("session-1234")),
-        "codex has no resume/append surface; both options must be ignored"
+        exec_args
+            .windows(2)
+            .any(|args| args == ["--sandbox", "read-only"])
+    );
+    assert!(exec_args.iter().any(|arg| arg == "--ignore-user-config"));
+    assert!(exec_args.windows(2).any(|args| args
+        == [
+            "--cd".to_string(),
+            std::env::temp_dir().display().to_string(),
+        ]));
+    assert!(
+        exec_args
+            .iter()
+            .any(|arg| arg == "mcp_servers.flowpilot.url=\"http://127.0.0.1:12345/mcp\"")
+    );
+    assert!(exec_args.iter().any(|arg| arg == "web_search=\"disabled\""));
+    assert!(
+        !invocation
+            .args
+            .iter()
+            .any(|arg| arg == "--append-system-prompt"),
+        "Codex has no system-prompt append flag"
+    );
+    assert_eq!(
+        invocation.prompt, "continuation payload",
+        "the resumed prompt stays on stdin"
     );
 }
 

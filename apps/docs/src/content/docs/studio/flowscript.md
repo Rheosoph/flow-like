@@ -10,6 +10,12 @@ FlowScript, edited as text, and applied back onto the graph; it is also the lang
 reads and writes when it changes a workflow. This language reference combines examples from
 rendered boards with authoring patterns that map back to the graph.
 
+For a guided introduction, read [FlowBook's anatomy of a FlowScript
+document](https://book.flow-like.com/part-2/06-anatomy-of-a-flowscript-document/)
+and its [first Flow chapter](https://book.flow-like.com/part-1/04-first-flow-incident-triage/).
+FlowBook teaches the language through connected examples; this page is the
+current syntax and authoring reference. Check each chapter's Draft status.
+
 ## File layout
 
 A FlowScript document has five parts, always in this order:

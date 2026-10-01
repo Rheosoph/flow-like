@@ -1008,3 +1008,148 @@ await writeFile(outputPath, `${JSON.stringify(fixture, null, "\t")}\n`, "utf8");
 await formatGeneratedJson(outputPath);
 
 console.log(`Generated ${outputPath}`);
+
+// These two nodes mirror events/simple and log/info. The fixture illustrates
+// the tutorial's editor state; it does not simulate a successful execution.
+const quickEvent = makeNode({
+	id: "quick-event",
+	name: "events_simple",
+	friendlyName: "Simple Event",
+	description: "A simple event without input or output",
+	category: "Events",
+	coordinates: [0, 0, 0],
+	start: true,
+	icon: "/flow/icons/event.svg",
+	hash: 60_001,
+	pins: {
+		"quick-out": makePin({
+			id: "quick-out",
+			name: "exec_out",
+			friendlyName: "Output",
+			pinType: "Output",
+			dataType: "Execution",
+			index: 1,
+			connectedTo: ["quick-in"],
+		}),
+	},
+});
+const quickInfo = makeNode({
+	id: "quick-info",
+	name: "log_info",
+	friendlyName: "Print Info",
+	description: "Print Debugging Information",
+	category: "Logging",
+	coordinates: [400, 0, 0],
+	icon: "/flow/icons/log-info.svg",
+	hash: 60_002,
+	pins: {
+		"quick-in": makePin({
+			id: "quick-in",
+			name: "exec_in",
+			friendlyName: "Input",
+			pinType: "Input",
+			dataType: "Execution",
+			index: 1,
+			dependsOn: ["quick-out"],
+		}),
+		"quick-message": makePin({
+			id: "quick-message",
+			name: "message",
+			friendlyName: "Message",
+			pinType: "Input",
+			dataType: "String",
+			index: 2,
+			defaultValue: encodeJson("Hello Flow"),
+		}),
+		"quick-toast": makePin({
+			id: "quick-toast",
+			name: "toast",
+			friendlyName: "On Screen?",
+			pinType: "Input",
+			dataType: "Boolean",
+			index: 3,
+			defaultValue: encodeJson(true),
+		}),
+		"quick-next": makePin({
+			id: "quick-next",
+			name: "exec_out",
+			friendlyName: "Output",
+			pinType: "Output",
+			dataType: "Execution",
+			index: 1,
+		}),
+	},
+});
+const quickBoard = {
+	...board,
+	name: "Hello Flow",
+	description: "The first-flow tutorial",
+	nodes: { "quick-event": quickEvent, "quick-info": quickInfo },
+	layers: {},
+	comments: {},
+	variables: {},
+	version: [0, 0, 1],
+};
+const quickFixture = {
+	...fixture,
+	responses: {
+		...fixture.responses,
+		get_app_meta: { ...metadata, name: "Hello Flow" },
+		get_app_boards: [quickBoard],
+		get_board: quickBoard,
+		sync_board: workflowBoardSyncResponse(quickBoard as unknown as IBoard),
+		get_catalog: [quickEvent, quickInfo],
+		list_runs: [],
+		query_run: [],
+		get_board_versions: [],
+	},
+};
+const quickPath = resolve(fixturesDirectory, "docs-quickstart.tauri.json");
+await writeFile(
+	quickPath,
+	`${JSON.stringify(quickFixture, null, "\t")}\n`,
+	"utf8",
+);
+await formatGeneratedJson(quickPath);
+console.log(`Generated ${quickPath}`);
+
+const runsFixture = {
+	...fixture,
+	responses: {
+		...fixture.responses,
+		query_run_logs: logs,
+		count_run_logs: logs.length,
+		get_run_log_summary: {
+			version: 1,
+			fingerprinted: false,
+			partial: false,
+			total: logs.length,
+			levels: [0, logs.length, 0, 0, 0],
+			nodes: {
+				"docs-event-node": [0, 1, 0, 0, 0],
+				"docs-transform-node": [0, 1, 0, 0, 0],
+			},
+			visited: ["docs-event-node", "docs-transform-node"],
+			groups: [],
+			groups_truncated: false,
+		},
+	},
+};
+const versionsBoard = { ...board, version: [2, 1, 0] };
+const versionsFixture = {
+	...fixture,
+	responses: {
+		...fixture.responses,
+		get_board: versionsBoard,
+		get_app_boards: [versionsBoard],
+		sync_board: workflowBoardSyncResponse(versionsBoard as unknown as IBoard),
+	},
+};
+for (const [name, value] of Object.entries({
+	"docs-runs.tauri.json": runsFixture,
+	"docs-versions.tauri.json": versionsFixture,
+})) {
+	const path = resolve(fixturesDirectory, name);
+	await writeFile(path, `${JSON.stringify(value, null, "\t")}\n`, "utf8");
+	await formatGeneratedJson(path);
+}

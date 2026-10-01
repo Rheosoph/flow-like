@@ -1,0 +1,62 @@
+---
+title: "The EU AI Act in September 2026: begin with the app you operate"
+description: "A dated look at the EU AI Act timeline and a practical way to organize an AI app's purpose, model inventory, review decisions, and supporting evidence."
+date: 2026-09-30
+tags: ["governance", "eu-ai-act", "ai", "operations"]
+cover: "/images/community-G2.png"
+draft: true
+---
+
+An AI app's governance record can become outdated before its next formal review. A builder changes the model. A department starts using the result to make a different decision. A prototype gains a wider audience. The application still has the same name, but the facts behind its assessment have changed.
+
+For an owner or administrator, the useful starting point is a description of the system actually in use: its purpose, the people affected, the models involved, and the person responsible for reviewing changes.
+
+This article summarizes official EU AI Act timing checked on **30 September 2026**, then shows how Flow-Like's assessment and inventory tools can support that work. Applicability depends on your system and role; use qualified legal advice for a specific classification or obligation.
+
+## Use the current timeline
+
+The Commission's implementation timeline now reflects amendments introduced through the Digital Omnibus on AI. Its milestones include:
+
+| Date | Milestone identified by the Commission |
+| --- | --- |
+| 2 February 2025 | General provisions, AI literacy, and initial prohibitions apply. |
+| 2 August 2025 | General-purpose AI model rules and governance provisions apply. |
+| 2 August 2026 | Transparency rules apply, with enforcement for applicable provisions. |
+| 2 December 2026 | Certain pre-existing systems reach the Article 50(2) transition deadline; specified additional prohibitions apply. |
+| 2 December 2027 | Annex III high-risk system rules apply. |
+| 2 August 2028 | High-risk rules for AI embedded in regulated products under Annex I apply. |
+
+Read the [Commission implementation timeline](https://ai-act-service-desk.ec.europa.eu/en/ai-act/eu-ai-act-implementation-timeline) with its scope notes. A later milestone is not a blanket postponement of requirements already applicable to your system. The [enforcement FAQ](https://ai-act-service-desk.ec.europa.eu/en/ai-act/faq/when-does-enforcement-start) separates those application dates and transition cases.
+
+<figure>
+  <img src="/posts/community/G2/implementation-timeline.svg" alt="Selected EU AI Act milestones from the Commission timeline checked on 30 September 2026, with distinct transparency and high-risk dates." width="1600" height="1000" loading="lazy" />
+  <figcaption>A dated overview of selected milestones. Check the official source and the provisions relevant to your system.</figcaption>
+</figure>
+
+## Describe the decision the app supports
+
+An internal documentation assistant and an app used in an employment decision can both call a language model. That technical similarity does not establish the same intended use or governance needs.
+
+Write the purpose in terms someone outside the implementation team can understand. Who uses the app? What information enters it? What does its output influence? Where does a person review the result, and what can that person change?
+
+Record the operating boundary too. A recommendation that stays with a trained reviewer differs in practice from an output passed automatically into another system. The description should follow the actual process, including the parts outside Flow-Like.
+
+The platform's [assessment questionnaire](https://github.com/Rheosoph/flow-like/blob/dev/packages/api/src/routes/app/ai_act/questionnaire.rs) helps structure this information and produces classification signals and a rationale. Incomplete or unknown information needs review; the questionnaire cannot establish facts that the owner has not supplied accurately.
+
+## Keep the model inventory tied to use
+
+A model named in a design document may no longer be the model handling requests. A dynamic selector or fallback can also introduce a provider the original reviewer did not consider.
+
+Flow-Like's [model reconciliation](https://github.com/Rheosoph/flow-like/blob/dev/packages/api/src/routes/admin/ai_act/reconcile.rs) combines models found in Board analysis with those observed through language-model and embedding usage tracking. It retains information about where the observation came from and whether selection is dynamic.
+
+Use that inventory as a prompt for investigation. A newly observed model may be an intentional change, an approved fallback, or something the owner needs to explain. An observation is evidence of what the platform can see, with the coverage of the configured monitoring and static analysis. It is not proof that every external component has been inventoried.
+
+## Give changes an owner and an outcome
+
+A review becomes useful when it leads to a decision. For each material change, record what changed, which evidence was examined, who reviewed it, and what action follows. That might be an updated user notice, a revised workflow boundary, more testing, or a decision to stop a particular use.
+
+Keep supporting records close enough to retrieve later: relevant model information, evaluation results, instructions for human review, and the version of the app assessed. Logs can help reconstruct execution, but their presence alone does not explain whether the system was suitable for its intended purpose.
+
+Flow-Like's conformity score is an internal review signal. It does not certify compliance, replace a conformity assessment, or decide the legal responsibilities of a provider or deployer. Treat a score as a way to direct attention to the evidence and unanswered questions behind it.
+
+A useful next step is to pick one app already in use. Update its purpose, reconcile its models, and assign the open review decisions. That gives the next assessment a current factual record to work from.

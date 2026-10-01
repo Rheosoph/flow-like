@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { DIRECTORY_PAGE_SIZE, type CatalogSummary } from "./catalog-summary";
 
 export interface CatalogScores {
 	privacy: number;
@@ -577,7 +578,9 @@ function SchemaPreview({
 	);
 }
 
-function NodeIcon({ node }: { node: CatalogNode }) {
+function NodeIcon({
+	node,
+}: { node: Pick<CatalogNode, "friendlyName" | "icon"> }) {
 	const [iconFailed, setIconFailed] = useState(false);
 	const fallback = node.friendlyName.trim().charAt(0).toUpperCase() || "N";
 	const showIcon = Boolean(node.icon && !iconFailed);
@@ -735,7 +738,7 @@ function PinList({
 	);
 }
 
-function NodeCard({ node }: { node: CatalogNode }) {
+function NodeCard({ node }: { node: CatalogSummary }) {
 	const security = node.scores?.security;
 	return (
 		<a className="node-card" href={slugHref(node.slug)}>
@@ -766,12 +769,13 @@ function NodeDirectory({
 	nodes,
 	title,
 }: {
-	nodes: CatalogNode[];
+	nodes: CatalogSummary[];
 	title: string;
 }) {
 	const [query, setQuery] = useState("");
 	const [category, setCategory] = useState("all");
 	const [security, setSecurity] = useState("all");
+	const [visibleCount, setVisibleCount] = useState(DIRECTORY_PAGE_SIZE);
 
 	const categories = useMemo(
 		() =>
@@ -807,8 +811,11 @@ function NodeDirectory({
 			<div className="node-section-heading">
 				<div>
 					<h2 id="node-directory-title">{title}</h2>
-					<p>
-						Showing {filtered.length} of {nodes.length} generated node docs.
+					<p role="status" aria-live="polite">
+						Showing {Math.min(visibleCount, filtered.length)} of{" "}
+						{filtered.length} matching nodes
+						{filtered.length !== nodes.length ? ` (${nodes.length} total)` : ""}
+						.
 					</p>
 				</div>
 			</div>
@@ -818,7 +825,10 @@ function NodeDirectory({
 					<input
 						type="search"
 						value={query}
-						onChange={(event) => setQuery(event.target.value)}
+						onChange={(event) => {
+							setQuery(event.target.value);
+							setVisibleCount(DIRECTORY_PAGE_SIZE);
+						}}
 						placeholder="Node name, internal name, category, or description"
 					/>
 				</label>
@@ -826,7 +836,10 @@ function NodeDirectory({
 					<span>Category</span>
 					<select
 						value={category}
-						onChange={(event) => setCategory(event.target.value)}
+						onChange={(event) => {
+							setCategory(event.target.value);
+							setVisibleCount(DIRECTORY_PAGE_SIZE);
+						}}
 					>
 						<option value="all">All categories</option>
 						{categories.map((name) => (
@@ -840,7 +853,10 @@ function NodeDirectory({
 					<span>Security</span>
 					<select
 						value={security}
-						onChange={(event) => setSecurity(event.target.value)}
+						onChange={(event) => {
+							setSecurity(event.target.value);
+							setVisibleCount(DIRECTORY_PAGE_SIZE);
+						}}
 					>
 						<option value="all">All ratings</option>
 						<option value="low">Low exposure</option>
@@ -850,11 +866,39 @@ function NodeDirectory({
 					</select>
 				</label>
 			</search>
-			<div className="node-card-grid">
-				{filtered.map((node) => (
+			<div className="node-card-grid" data-pagefind-ignore="all">
+				{filtered.slice(0, visibleCount).map((node) => (
 					<NodeCard node={node} key={node.name} />
 				))}
 			</div>
+			{filtered.length === 0 && (
+				<p>No nodes match these filters. Try another name or category.</p>
+			)}
+			{visibleCount < filtered.length && (
+				<button
+					className="node-load-more"
+					type="button"
+					onClick={() =>
+						setVisibleCount((count) => count + DIRECTORY_PAGE_SIZE)
+					}
+				>
+					Show {Math.min(DIRECTORY_PAGE_SIZE, filtered.length - visibleCount)}{" "}
+					more nodes
+				</button>
+			)}
+			<noscript>
+				<p>
+					Enable JavaScript to filter the catalog. All node references are also
+					listed here:
+				</p>
+				<ul data-pagefind-ignore="all">
+					{nodes.map((node) => (
+						<li key={node.slug}>
+							<a href={slugHref(node.slug)}>{node.friendlyName}</a>
+						</li>
+					))}
+				</ul>
+			</noscript>
 		</section>
 	);
 }
@@ -974,7 +1018,7 @@ export function NodeCategoryOverview({
 }: {
 	category: string;
 	label?: string;
-	nodes: CatalogNode[];
+	nodes: CatalogSummary[];
 }) {
 	const displayCategory = displayCategoryPath(category);
 	const categoryLabel =
@@ -997,12 +1041,16 @@ export function NodeCategoryOverview({
 			</header>
 			{subcategories.length > 0 ? (
 				<section className="node-subcategory-list" aria-label="Subcategories">
-					{subcategories.slice(0, 18).map((name) => (
-						<span key={name}>{displayCategoryPath(name)}</span>
+					{subcategories.map((name) => (
+						<a
+							key={name}
+							href={slugHref(
+								nodes.find((node) => node.category === name)!.categorySlug,
+							)}
+						>
+							{displayCategoryPath(name)}
+						</a>
 					))}
-					{subcategories.length > 18 ? (
-						<span>+{subcategories.length - 18} more</span>
-					) : null}
 				</section>
 			) : null}
 			<NodeDirectory nodes={nodes} title="Nodes in this category" />
@@ -1014,7 +1062,7 @@ export function NodeCatalogOverview({
 	nodes,
 	categories,
 }: {
-	nodes: CatalogNode[];
+	nodes: CatalogSummary[];
 	categories: CatalogCategory[];
 }) {
 	const topCategories = categories

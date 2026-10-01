@@ -1,0 +1,26 @@
+{
+  "attachments": [
+    {
+      "contentType": "application/vnd.microsoft.teams.file.download.info",
+      "content": {
+        "downloadUrl": "https://m365x9462XXXX-my.sharepoint.com/personal/admin_m365x9462XXXX_onmicrosoft_com/_layouts/15/download.aspx?UniqueId=2392290d-ff20-4520-9862-f5bf588688e0&Translate=false&tempauth=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9lNA&ApiVersion=2.0",
+        "uniqueId": "2392290d-ff20-4520-9862-f5bf588XXXXX",
+        "fileType": "png"
+      },
+      "contentUrl": "https://m365x9462XXXX-my.sharepoint.com/personal/admin_m365x9462XXXX_onmicrosoft_com/Documents/Microsoft Teams Chat Files/outline.png",
+      "name": "outline.png"
+    },
+    {
+      "contentType": "text/html",
+      "content": ""
+    }
+  ],
+  "type": "message",
+  "channelId": "msteams",
+  "serviceUrl": "https://smba.trafficmanager.net/amer/",
+  "conversation": {
+    "conversationType": "personal",
+    "tenantId": "dummy-tenant-id",
+    "id": "a:dummy-conversation-id"
+  }
+}

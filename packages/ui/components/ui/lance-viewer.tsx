@@ -670,6 +670,49 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 		useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
 	);
 
+	const handleDragEnd = (e: DragEndEvent) => {
+		const { active, over } = e;
+		if (!over || active.id === over.id) return;
+
+		const headers = table
+			.getHeaderGroups()
+			.find((group) =>
+				group.headers.some((header) => header.id === String(active.id)),
+			)
+			?.headers.filter((header) => header.column.getIsVisible?.() !== false);
+		if (!headers) return;
+
+		const visibleDraggable = headers
+			.map((h) => h.id)
+			.filter((id) => id !== "select");
+
+		if (
+			!visibleDraggable.includes(String(active.id)) ||
+			!visibleDraggable.includes(String(over.id))
+		)
+			return;
+
+		const from = visibleDraggable.indexOf(String(active.id));
+		const to = visibleDraggable.indexOf(String(over.id));
+		const newVisible = arrayMove(visibleDraggable, from, to);
+
+		const allIds = table.getAllLeafColumns().map((column) => column.id);
+		const prevOrder = [
+			...table.getState().columnOrder,
+			...allIds.filter(
+				(id: string) => !table.getState().columnOrder.includes(id),
+			),
+		];
+
+		const setToReorder = new Set(visibleDraggable);
+		const pool = [...newVisible];
+		const nextOrder = prevOrder.map((id) =>
+			setToReorder.has(id) ? pool.shift()! : id,
+		);
+
+		table.setColumnOrder(nextOrder);
+	};
+
 	const contextValue = useMemo<LanceDBContextValue>(
 		() => ({ appId, fields: schema?.fields, onUpdateItem }),
 		[appId, schema?.fields, onUpdateItem],
@@ -776,62 +819,24 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 
 				<div className="flex flex-col flex-1 min-h-0 min-w-0 rounded-xl border bg-card">
 					<div className="flex-1 w-full overflow-auto min-h-0">
-						<DataTable className="w-full">
-							<TableHeader className="sticky top-0 bg-card z-10">
-								{table.getHeaderGroups().map((headerGroup) => {
-									const headers = headerGroup.headers.filter(
-										(h) => h.column.getIsVisible?.() !== false,
-									);
-									const draggableItems = headers
-										.map((h) => h.id)
-										.filter((id) => id !== "select"); // keep 'select' anchored
-
-									const handleDragEnd = (e: DragEndEvent) => {
-										const { active, over } = e;
-										if (!over || active.id === over.id) return;
-
-										const visibleDraggable = headers
-											.map((h) => h.id)
-											.filter((id) => id !== "select");
-
-										if (
-											!visibleDraggable.includes(String(active.id)) ||
-											!visibleDraggable.includes(String(over.id))
-										)
-											return;
-
-										const from = visibleDraggable.indexOf(String(active.id));
-										const to = visibleDraggable.indexOf(String(over.id));
-										const newVisible = arrayMove(visibleDraggable, from, to);
-
-										const allIds = table
-											.getAllLeafColumns()
-											.map((c: any) => c.id);
-										const prevOrder = [
-											...table.getState().columnOrder,
-											...allIds.filter(
-												(id: string) =>
-													!table.getState().columnOrder.includes(id),
-											),
-										];
-
-										const setToReorder = new Set(visibleDraggable);
-										const pool = [...newVisible];
-										const nextOrder = prevOrder.map((id) =>
-											setToReorder.has(id) ? pool.shift()! : id,
+						<DndContext
+							sensors={sensors}
+							collisionDetection={closestCenter}
+							onDragEnd={handleDragEnd}
+						>
+							<DataTable className="w-full">
+								<TableHeader className="sticky top-0 bg-card z-10">
+									{table.getHeaderGroups().map((headerGroup) => {
+										const headers = headerGroup.headers.filter(
+											(h) => h.column.getIsVisible?.() !== false,
 										);
+										const draggableItems = headers
+											.map((h) => h.id)
+											.filter((id) => id !== "select"); // keep 'select' anchored
 
-										table.setColumnOrder(nextOrder);
-									};
-
-									return (
-										<DndContext
-											key={headerGroup.id}
-											sensors={sensors}
-											collisionDetection={closestCenter}
-											onDragEnd={handleDragEnd}
-										>
+										return (
 											<SortableContext
+												key={headerGroup.id}
 												items={draggableItems}
 												strategy={horizontalListSortingStrategy}
 											>
@@ -846,70 +851,70 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 													))}
 												</TableRow>
 											</SortableContext>
-										</DndContext>
-									);
-								})}
-							</TableHeader>
-							<TableBody>
-								{loading ? (
-									<TableRow>
-										<TableCell
-											colSpan={columns.length}
-											className="h-24 text-center text-muted-foreground"
-										>
-											{t("loading", "Loading…")}
-										</TableCell>
-									</TableRow>
-								) : table.getRowModel().rows?.length ? (
-									table.getRowModel().rows.map((row) => (
-										<TableRow
-											key={row.id}
-											className={cn(
-												"hover:bg-muted/30",
-												"odd:bg-muted/10",
-												density === "compact"
-													? "h-8"
-													: density === "spacious"
-														? "h-14"
-														: "h-10",
-											)}
-										>
-											{row.getVisibleCells().map((cell) => (
-												<TableCell
-													key={cell.id}
-													className={cn(
-														density === "compact"
-															? "py-1"
-															: density === "spacious"
-																? "py-3"
-																: "py-2",
-													)}
-												>
-													{flexRender(
-														cell.column.columnDef.cell,
-														cell.getContext(),
-													)}
-												</TableCell>
-											))}
+										);
+									})}
+								</TableHeader>
+								<TableBody>
+									{loading ? (
+										<TableRow>
+											<TableCell
+												colSpan={columns.length}
+												className="h-24 text-center text-muted-foreground"
+											>
+												{t("loading", "Loading…")}
+											</TableCell>
 										</TableRow>
-									))
-								) : (
-									<TableRow>
-										<TableCell
-											colSpan={columns.length}
-											className="h-24 text-center text-muted-foreground"
-										>
-											<div className="flex w-full h-full items-center justify-center">
-												<div className="flex items-center gap-2">
-													<Info className="h-4 w-4" />{" "}
-													{t("noResults", "No results.")}
+									) : table.getRowModel().rows?.length ? (
+										table.getRowModel().rows.map((row) => (
+											<TableRow
+												key={row.id}
+												className={cn(
+													"hover:bg-muted/30",
+													"odd:bg-muted/10",
+													density === "compact"
+														? "h-8"
+														: density === "spacious"
+															? "h-14"
+															: "h-10",
+												)}
+											>
+												{row.getVisibleCells().map((cell) => (
+													<TableCell
+														key={cell.id}
+														className={cn(
+															density === "compact"
+																? "py-1"
+																: density === "spacious"
+																	? "py-3"
+																	: "py-2",
+														)}
+													>
+														{flexRender(
+															cell.column.columnDef.cell,
+															cell.getContext(),
+														)}
+													</TableCell>
+												))}
+											</TableRow>
+										))
+									) : (
+										<TableRow>
+											<TableCell
+												colSpan={columns.length}
+												className="h-24 text-center text-muted-foreground"
+											>
+												<div className="flex w-full h-full items-center justify-center">
+													<div className="flex items-center gap-2">
+														<Info className="h-4 w-4" />{" "}
+														{t("noResults", "No results.")}
+													</div>
 												</div>
-											</div>
-										</TableCell>
-									</TableRow>
-								)}
-							</TableBody>
-						</DataTable>
+											</TableCell>
+										</TableRow>
+									)}
+								</TableBody>
+							</DataTable>
+						</DndContext>
 					</div>
 
 					<div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t px-3 py-2 text-xs text-muted-foreground">

@@ -25,7 +25,14 @@ const securityHeaders: Record<string, string> = {
 };
 
 export const onRequest = defineMiddleware(async (context, next) => {
-	const response = await next();
+	let response = await next();
+	if (import.meta.env.DEV && response.status === 404) {
+		// Worker-first routing also catches Vite modules during development.
+		// Let the asset binding serve them after Astro finds no page.
+		const { env } = await import("cloudflare:workers");
+		const asset = await env.ASSETS.fetch(context.request);
+		if (asset.status !== 404) response = asset;
+	}
 	const headers = new Headers(response.headers);
 
 	if (!import.meta.env.DEV) {

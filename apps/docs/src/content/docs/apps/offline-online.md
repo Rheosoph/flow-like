@@ -24,6 +24,14 @@ Offline is a good default for personal experiments, local automation, and
 work that must stay on one machine. Online apps are the right choice when the
 app needs web access, collaboration, server-side events, or publication.
 
+## Use an online App without a connection
+
+Supported Desktop clients can cache selected tables from an online App and
+queue writes and uploads for the hub. This is separate from creating a local-only
+App. Before disconnecting, configure **Data → Offline access**, download the
+required data, and check its status. See [Offline access to online Apps](/apps/offline-access/)
+for prerequisites, account scope, and conflict recovery.
+
 ## Create an online copy later
 
 An offline app is not mutated in place. From its configuration, select
@@ -76,7 +84,7 @@ execution instead. Configure exact capabilities on the app's
 
 ## Local-only capabilities
 
-Some nodes depend on the current device—for example desktop input, a local
+Some nodes depend on the current device, for example desktop input, a local
 path, locally installed software, or attached hardware. When a Flow requires
 those capabilities, run it from Desktop and keep the app available on that
 machine.

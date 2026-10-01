@@ -104,13 +104,14 @@ export function FileOrFolder({
 					highlight ? "border-primary bg-primary/5 shadow-sm" : ""
 				}`}
 			>
-				<button
-					className="w-full flex flex-row justify-between items-center"
-					onClick={() => {
-						changePrefix?.(file.location.split("/").pop() ?? file.location);
-					}}
-				>
-					<div className="flex flex-row items-center gap-3">
+				<div className="w-full flex flex-row justify-between items-center">
+					<button
+						type="button"
+						className="flex flex-row items-center gap-3 flex-1 min-w-0"
+						onClick={() => {
+							changePrefix?.(file.location.split("/").pop() ?? file.location);
+						}}
+					>
 						<div className="p-2 rounded-md bg-primary/10 group-hover:bg-primary/20 transition-colors">
 							<FolderIcon className="w-5 h-5 text-primary" />
 						</div>
@@ -125,11 +126,13 @@ export function FileOrFolder({
 								Folder
 							</Badge>
 						</div>
-					</div>
+					</button>
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
 							<Button
-								className="opacity-0 group-hover:opacity-100 transition-opacity"
+								type="button"
+								aria-label={`Folder actions for ${storageDisplayName(file.location)}`}
+								className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
 								variant="ghost"
 								size="sm"
 								onClick={(e) => {
@@ -181,7 +184,7 @@ export function FileOrFolder({
 							)}
 						</DropdownMenuContent>
 					</DropdownMenu>
-				</button>
+				</div>
 			</div>
 		);
 	}
@@ -196,13 +199,14 @@ export function FileOrFolder({
 					: "cursor-not-allowed opacity-75"
 			}`}
 		>
-			<button
-				className="w-full flex flex-row justify-between items-center"
-				onClick={() => {
-					if (canPreview(file.location)) loadFile?.(file.location);
-				}}
-			>
-				<div className="flex flex-row items-center gap-3 flex-1 min-w-0">
+			<div className="w-full flex flex-row justify-between items-center">
+				<button
+					type="button"
+					className="flex flex-row items-center gap-3 flex-1 min-w-0"
+					onClick={() => {
+						if (canPreview(file.location)) loadFile?.(file.location);
+					}}
+				>
 					<div
 						className={`p-2 rounded-md transition-colors ${
 							canPreview(file.location)
@@ -232,11 +236,13 @@ export function FileOrFolder({
 							/>
 						</div>
 					</div>
-				</div>
+				</button>
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
 						<Button
-							className="opacity-0 group-hover:opacity-100 transition-opacity"
+							type="button"
+							aria-label={`File actions for ${storageDisplayName(file.location)}`}
+							className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
 							variant="ghost"
 							size="sm"
 							onClick={(e) => {
@@ -318,7 +324,7 @@ export function FileOrFolder({
 						)}
 					</DropdownMenuContent>
 				</DropdownMenu>
-			</button>
+			</div>
 		</div>
 	);
 }

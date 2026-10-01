@@ -90,6 +90,7 @@ jobs:
           editor-contracts
           types-data-url
           model-provider
+          browser-core
           catalog-std-execute
           catalog-std-ui
           catalog-std-values
@@ -132,6 +133,7 @@ jobs:
           a2ui-schema
           editor-contracts
           types-data-url
+          browser-core
           dev-default
           core-flow-metadata
           core-flow

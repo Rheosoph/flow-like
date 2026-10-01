@@ -1,0 +1,14 @@
+{
+  "source_id": "agreement-practice-001",
+  "agreement_id": "PRACTICE-001",
+  "renewal_days": 30,
+  "monthly_fee_eur": 125,
+  "signer": "Avery Practice",
+  "email": "avery@example.invalid",
+  "mixed_page_2_fact": "Support response target: 4 hours",
+  "expected_page_counts": {
+    "digital-agreement.pdf": 1,
+    "scanned-agreement.pdf": 1,
+    "mixed-agreement.pdf": 2
+  }
+}

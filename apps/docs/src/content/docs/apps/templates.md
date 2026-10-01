@@ -5,6 +5,8 @@ sidebar:
   order: 90
 ---
 
+Enable [Developer Mode](/start/developer-mode/) to see this workspace in the App navigation.
+
 **Flow Templates** are reusable, versioned snapshots of individual Flows. Use
 them to share a proven graph, create another Flow from the same blueprint, or
 preserve a reusable starting point without publishing an entire App.

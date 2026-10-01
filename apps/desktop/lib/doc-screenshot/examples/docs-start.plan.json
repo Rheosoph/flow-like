@@ -11,7 +11,7 @@
 		},
 		"theme": "dark",
 		"format": "webp",
-		"timeoutMs": 120000,
+		"timeoutMs": 300000,
 		"settleMs": 350,
 		"disableAnimations": true,
 		"hideScrollbars": true
@@ -24,7 +24,8 @@
 				"capture": "docs"
 			},
 			"localStorage": {
-				"sidebar_state": "true"
+				"sidebar_state": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
@@ -71,22 +72,46 @@
 					"mode": "viewport",
 					"hideSelectors": ["[data-sonner-toaster]"]
 				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 8
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
-			"name": "home-profiles-and-models",
+			"name": "home-and-profile-menu",
 			"path": "/",
 			"query": {
 				"capture": "docs"
 			},
 			"localStorage": {
 				"sidebar_state": "true",
-				"tutorial-finished-new": "true"
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
-					"text": "What do you want to"
+					"selector": "button[aria-label=\"Customize\"]:not(:disabled)",
+					"state": "visible"
+				},
+				{
+					"type": "hover",
+					"selector": "[data-home-controls]"
+				},
+				{
+					"type": "delay",
+					"ms": 350
 				},
 				{
 					"type": "capture",
@@ -110,65 +135,131 @@
 					"mode": "element",
 					"selector": "[data-slot=\"dropdown-menu-content\"][data-state=\"open\"]",
 					"padding": 12
+				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 12
 				},
 				{
-					"type": "goto",
-					"path": "/settings/profiles",
-					"query": {
-						"capture": "docs"
-					}
-				},
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
+			]
+		},
+		{
+			"name": "profile-settings",
+			"path": "/settings/profiles",
+			"query": {
+				"capture": "docs"
+			},
+			"localStorage": {
+				"sidebar_state": "true",
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"steps": [
 				{
 					"type": "waitFor",
-					"selector": "#name",
+					"selector": "#workspace-profile-name",
 					"state": "visible"
 				},
 				{
 					"type": "capture",
-					"name": "profile-settings",
-					"output": "ProfileSettings.webp",
+					"name": "ProfileSettings",
 					"mode": "viewport"
+				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 12
 				},
 				{
-					"type": "goto",
-					"path": "/settings/ai",
-					"query": {
-						"capture": "docs"
-					}
-				},
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
+			]
+		},
+		{
+			"name": "customize-home",
+			"path": "/",
+			"query": {
+				"capture": "docs"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true",
+				"sidebar_state": "true"
+			},
+			"steps": [
 				{
 					"type": "waitFor",
-					"selector": "article",
+					"selector": "button[aria-label=\"Customize\"]:not(:disabled)",
 					"state": "visible"
 				},
 				{
+					"type": "hover",
+					"selector": "[data-home-controls]"
+				},
+				{
+					"type": "delay",
+					"ms": 350
+				},
+				{
+					"type": "click",
+					"selector": "button[aria-label=\"Customize\"]"
+				},
+				{
 					"type": "waitFor",
-					"text": "9 available"
+					"selector": "input[aria-label=\"Search widgets\"]",
+					"state": "visible"
 				},
 				{
 					"type": "capture",
-					"name": "model-catalog",
-					"output": "ModelCatalog.webp",
+					"name": "HomeWidgets",
+					"output": "HomeWidgets.webp",
 					"mode": "viewport"
 				},
 				{
 					"type": "click",
-					"selector": "article:has([title=\"Gemma 4B Local\"]) button[aria-label=\"Model actions\"]"
+					"selector": "button[aria-label=\"Close widget panel\"]"
 				},
 				{
 					"type": "waitFor",
-					"selector": "[data-slot=\"dropdown-menu-content\"][data-state=\"open\"]",
+					"selector": "button[aria-label=\"Add widget\"]",
 					"state": "visible"
 				},
 				{
 					"type": "capture",
-					"name": "adding-model-to-profile",
-					"output": "AddingModelToProfile.webp",
-					"mode": "element",
-					"selector": "article:has([title=\"Gemma 4B Local\"])",
-					"padding": 12
+					"name": "HomeCustomize",
+					"output": "HomeCustomize.webp",
+					"mode": "viewport"
+				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 8
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		}
-	]
+	],
+	"httpFixture": "../fixtures/docs-account.http.json"
 }

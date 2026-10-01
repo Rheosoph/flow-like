@@ -1,4 +1,5 @@
 import { chatDb } from "../components/interfaces/chat-default/chat-db";
+import { boardLastSeenDb } from "../db/board-last-seen-db";
 import { temporaryFilesDb } from "../db/temporary-files-db";
 import { viewportDb } from "../db/viewport-db";
 import { flowpilotDB } from "./flowpilot-db";
@@ -13,6 +14,7 @@ interface CleanupOptions {
 	viewportMaxAgeDays?: number;
 	offlineSyncMaxAgeDays?: number;
 	offlineSyncArchiveMaxAgeDays?: number;
+	boardLastSeenMaxAgeDays?: number;
 }
 
 const DEFAULTS: Required<CleanupOptions> = {
@@ -22,6 +24,7 @@ const DEFAULTS: Required<CleanupOptions> = {
 	viewportMaxAgeDays: 30,
 	offlineSyncMaxAgeDays: 7,
 	offlineSyncArchiveMaxAgeDays: 30,
+	boardLastSeenMaxAgeDays: 90,
 };
 
 async function pruneOldChatMessages(maxAgeDays: number): Promise<number> {
@@ -95,6 +98,17 @@ async function pruneOldViewports(maxAgeDays: number): Promise<number> {
 	return old.length;
 }
 
+/** Rows hold whole boards, so prune through the index instead of decoding each one. */
+async function pruneOldBoardLastSeen(maxAgeDays: number): Promise<number> {
+	const cutoff = Date.now() - maxAgeDays * DAY_MS;
+	const old = await boardLastSeenDb.seen
+		.where("updatedAt")
+		.below(cutoff)
+		.primaryKeys();
+	if (old.length > 0) await boardLastSeenDb.seen.bulkDelete(old);
+	return old.length;
+}
+
 async function pruneOldOfflineSync(maxAgeDays: number): Promise<number> {
 	const cutoff = new Date(Date.now() - maxAgeDays * DAY_MS);
 	const old = await offlineSyncDB.commands
@@ -140,6 +154,7 @@ export async function runIDBCleanup(
 		pruneOldViewports(opts.viewportMaxAgeDays),
 		pruneOldOfflineSync(opts.offlineSyncMaxAgeDays),
 		pruneOldOfflineSyncArchive(opts.offlineSyncArchiveMaxAgeDays),
+		pruneOldBoardLastSeen(opts.boardLastSeenMaxAgeDays),
 	]);
 
 	for (const result of results) {

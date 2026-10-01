@@ -1,0 +1,33 @@
+---
+title: "What carries forward when a widget changes"
+description: "How widget reloads migrate configured inputs, and how chat snapshots give a model context about the interface a person sees."
+date: 2026-07-29
+tags: ["widgets", "chat", "frontend"]
+cover: "/images/community-U1.png"
+draft: true
+---
+
+A widget update should not require rebuilding the page around it. If a developer fixes a chart or adds an input, the person maintaining the app needs to understand which existing settings can carry forward and which need attention.
+
+Flow-Like lets you reload a placed package widget against its installed build, carrying compatible settings into the new contract. Chat widgets also contribute snapshots of supported rendered state to model context. Reloading keeps the page configuration connected to its package; snapshots help the model follow what the conversation displays.
+
+## Review the settings that need to move
+
+The reload notice detects a different installed build using the package version and, where available, its bundle hash. The hash also helps identify a local rebuild that kept the same version number.
+
+Reloading points the placed instance at that build and brings across inputs according to the new widget contract. A compatible custom value stays. A value still on its old default follows the new default. Values can be converted when the new input accepts the conversion; incompatible values may reset, and inputs removed from the contract disappear.
+
+The migration produces a report of converted, defaulted, reset, and removed inputs. It also reports configured events that the new contract no longer declares. The instance retains its identity, styles, and configured action routes, but a retained route still needs an event the widget actually emits. Review that report before assuming an old interaction still works. The [reload implementation](https://github.com/Rheosoph/flow-like/blob/dev/packages/ui/components/a2ui/micro-widget-reload.ts) defines these rules.
+
+<figure>
+  <img src="/posts/community/U1/overview.svg" alt="Package widget reload migrates configured inputs; enabled chat snapshots capture rendered state for model context." loading="lazy" width="1600" height="1000" />
+  <figcaption>Configured widget inputs and rendered chat context have different preservation rules.</figcaption>
+</figure>
+
+## Give the model the current visual context
+
+A widget action can return A2UI feedback that changes the interface after its original chat message arrived. A rendered snapshot can show that resulting state to the model on a later turn. The capture code uses tracked widget updates and feedback to identify when a cached snapshot can be reused, then prepares a fresh capture after the view settles. A change kept entirely inside an iframe does not necessarily change that signature.
+
+This is a model-context feature. It does not turn an arbitrary iframe into a durable backup or guarantee that every private runtime variable can be restored. Capture can be disabled or fail, so workflows should not make a screenshot their only record of an important decision. See the [snapshot implementation](https://github.com/Rheosoph/flow-like/blob/dev/packages/ui/lib/widget-snapshot.ts).
+
+For a chart used across an app, reloading lets the maintainer adopt a revised package without replacing every placed instance. The report identifies inputs or event routes that need attention. In a chat, an action that returns A2UI feedback can update the displayed chart and contribute that supported state to the next model turn. The page stays connected to its component, and the conversation can refer to the result the person is working with.

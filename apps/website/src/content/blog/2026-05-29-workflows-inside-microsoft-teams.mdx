@@ -1,0 +1,56 @@
+---
+title: "Your workflow inside Microsoft Teams"
+description: "Start a workflow from a Teams message, use permitted conversation context, return an approval card, and continue from an authorized response."
+date: 2026-05-29
+tags: ["teams", "integrations", "approvals", "workflows"]
+cover: "/images/community-A2.png"
+draft: true
+---
+
+An internal request often starts where the team is already talking. Someone asks for access to a resource, a colleague supplies the missing detail, and a manager approves it. Moving that exchange into a separate form can lose the context that made the request understandable.
+
+Flow-Like's Teams integration connects a message to a workflow and lets that workflow return a result or collect input through a card. Conversation type and permissions determine which messages and files the workflow can use as context.
+
+A useful starting example is a request for a test environment. The workflow reads the request, asks the permitted person to approve it, and continues with the response. Keep the actual provisioning step disabled until the conversation and approval behavior are verified in the intended tenant.
+
+<figure>
+  <img src="/posts/community/A2/overview.svg" width="1600" height="1000" loading="lazy" alt="A Teams message starts a workflow, permitted context informs an approval card, and an authorized response allows the workflow to continue." />
+  <figcaption>Conversation access and authority to answer the card are explicit parts of the workflow.</figcaption>
+</figure>
+
+## Install the bot for the conversation you need
+
+The bot connects the Teams conversation to the app's Event. Set it up for the intended conversation type and confirm that a test message reaches the right workflow.
+
+Before requesting broader access, decide which context the workflow actually needs. The latest request may be sufficient for a structured command. A discussion spread across several messages may require a history lookup.
+
+The [message lookup implementation](https://github.com/Rheosoph/flow-like/blob/dev/packages/api/src/teams/lookup.rs) distinguishes the sources. Personal chats use the history Flow-Like retains. Channel and group-chat lookups use Microsoft Graph with the bot's resource-specific consent. The bot setup exposes the relevant read permission; Microsoft must grant it for the lookup to succeed.
+
+A bot's ability to receive a message does not grant it Microsoft user single sign-on or general access to Microsoft 365 data. Those need their own identity and provider permissions. Keep that separation visible when the workflow later connects to a document library or another service.
+
+## Extract the request, then ask for the missing decision
+
+For the environment request, define the values the workflow needs: the project, the requested duration, and the purpose. Read those from the triggering message and permitted context. If one is missing, ask for it instead of guessing.
+
+A card can present a choice or a form. The [card renderer](https://github.com/Rheosoph/flow-like/blob/dev/packages/api/src/teams/cards.rs) maps supported interaction types into Teams inputs, including required fields and selectable options. Keep the first card short enough that the reviewer can understand the action it will permit.
+
+An approval should describe the actual next step. “Create a test environment for this project until Friday” gives the reviewer something concrete to assess. A generic confirmation detached from the resource or requested duration leaves too much interpretation to the workflow.
+
+The example should collect a response only from an authorized person. Test that behavior with two synthetic users, including one who should not be able to make the decision.
+
+## A waiting workflow still has a lifetime
+
+While an approval card waits for a response, the executor stays alive. The response window is bounded by that execution's lifetime.
+
+Choose a response window appropriate to the runtime. Handle expiration explicitly, for example by reporting that this request needs to be started again or routed to a separate review process. A card left in an old conversation should not suggest that its original run will wait forever.
+
+After an accepted response, return a result the requester can use. If provisioning is part of the example, verify the created resource and include its identifier. A clicked approval button proves that a response was submitted; the downstream operation still needs its own success check.
+
+## Add files only after the message path works
+
+The workflow can use attachments from the triggering message and retained personal-chat history. Files still need to be fetched and prepared for the model or processor that will read them. Access, file type, size limits, and retention determine what is available.
+
+Start with text and one approval, then add a request with a small test document. Inspect the retrieved content before using it to decide what to provision. If the file has expired, is inaccessible, or cannot be read, ask the requester to attach it again. A link visible in message history does not establish that the workflow has the file's contents.
+
+The complete example is easy to recognize: a person sends a request, the workflow uses only permitted context, the right person answers a specific card, and the requester receives the verified result. That is enough to make the conversation operational without obscuring who supplied the authority.
+

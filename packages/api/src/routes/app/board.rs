@@ -7,6 +7,7 @@ pub mod flow_ir_commit;
 pub mod format_flowscript;
 pub mod get_board;
 pub mod get_board_variables;
+pub mod get_board_version_infos;
 pub mod get_board_versions;
 pub mod get_boards;
 pub mod get_execution_elements;
@@ -18,6 +19,7 @@ pub mod invoke_board_async;
 pub mod prerun_board;
 pub mod query_logs;
 pub mod realtime;
+pub mod render_flowscript;
 pub mod report_run;
 pub mod run_logs;
 pub mod scoring;
@@ -82,8 +84,17 @@ pub fn routes() -> Router<AppState> {
             get(get_board_versions::get_board_versions),
         )
         .route(
+            "/{board_id}/version/info",
+            get(get_board_version_infos::get_board_version_infos),
+        )
+        .route(
             "/{board_id}/flowscript",
             get(get_flowscript::get_flowscript),
+        )
+        .route(
+            "/{board_id}/flowscript/render",
+            post(render_flowscript::render_flowscript)
+                .layer(DefaultBodyLimit::max(BOARD_COMMAND_BODY_LIMIT_BYTES)),
         )
         .route(
             "/{board_id}/flowscript/apply",

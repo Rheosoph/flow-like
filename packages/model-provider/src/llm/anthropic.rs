@@ -2,7 +2,9 @@ use std::any::Any;
 
 use super::{
     ModelLogic, OPENROUTER_ONLY, ParamDialect, body_params, drop_body_param, drop_temperature,
-    extract_headers, unforce_tool_choice,
+    extract_headers,
+    media::{self, MediaDialect},
+    unforce_tool_choice,
 };
 use crate::history::{History, HistoryThinking};
 use crate::provider::random_provider;
@@ -345,7 +347,8 @@ fn thinking_type(request: &CompletionRequest) -> Option<&str> {
 
 /// Applies Anthropic's per-model limits to the final request, including the fields agents set
 /// on the builder (`tool_choice`, `temperature`) that the History mapping cannot see.
-fn enforce_model_constraints(model: &str, mut request: CompletionRequest) -> CompletionRequest {
+fn enforce_model_constraints(model: &str, request: CompletionRequest) -> CompletionRequest {
+    let mut request = media::retain_supported(MediaDialect::Anthropic, model, request);
     let Some(claude) = Claude::parse(model) else {
         return request;
     };
@@ -630,6 +633,32 @@ mod tests {
             assert!(
                 matches!(forced(model).tool_choice, Some(ToolChoice::Specific { .. })),
                 "{model} still accepts forced tool use"
+            );
+        }
+    }
+
+    #[test]
+    fn unreadable_attachments_are_replaced_for_unrecognised_model_ids_too() {
+        let mut attached = request(json!({}));
+        attached.chat_history = rig::OneOrMany::one(rig::completion::Message::User {
+            content: rig::OneOrMany::one(rig::message::UserContent::document_url(
+                "https://bucket.s3.amazonaws.com/report.docx?X-Amz-Signature=secret",
+                None,
+            )),
+        });
+
+        for model in ["claude-sonnet-4-6", "hosted-assistant-bit"] {
+            let fixed = enforce_model_constraints(model, attached.clone());
+            let rig::completion::Message::User { content } = fixed.chat_history.first() else {
+                panic!("{model}: the user message changed role");
+            };
+            assert!(
+                matches!(
+                    content.first(),
+                    rig::message::UserContent::Text(text)
+                        if text.text.starts_with("[attachment omitted: ")
+                ),
+                "{model}"
             );
         }
     }

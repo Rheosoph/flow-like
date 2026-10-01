@@ -607,11 +607,11 @@ declare namespace browser {
     // === Automation/Browser ===
 
     /**
-     * Attaches ChromeDriver or EdgeDriver to an existing debugging-enabled browser.
+     * Attaches to a running Chrome or Edge over the DevTools protocol: a dedicated debugging browser (host:port or ws:// URL), or your everyday browser after you allow remote debugging (leave Debugger Address empty).
      * @node browser_attach @alias browserAttach
      * @param session — Automation session
-     * @param webdriverUrl (optional) — Running ChromeDriver or EdgeDriver URL
-     * @param debuggerAddress (optional) — Existing browser debugging host:port
+     * @param webdriverUrl (optional) — Legacy WebDriver URL; ignored for loopback addresses
+     * @param debuggerAddress (optional) — DevTools address of a browser started with --remote-debugging-port (host:port, http:// or ws:// URL). Leave empty to attach to your everyday Chrome or Edge via chrome://inspect/#remote-debugging
      * @param browserType (optional) — Chrome or Edge
      * @returns sessionOut — Updated automation session
      * @impure has side effects / drives control flow
@@ -659,7 +659,7 @@ declare namespace browser {
     function enterFrame({ session: Struct, locator?: Struct, selector?: string }): Struct;
 
     /**
-     * Executes a validated LLM browser plan in order, stopping on the first failed action. Navigate actions follow the session navigation policy (HTTP and HTTPS only when none is set), including the final URL after redirects.
+     * Executes a validated LLM browser plan in order, stopping on the first failed action. Navigate actions follow the session navigation policy (HTTP and HTTPS only when none is set), including the final URL after redirects. A 'select' action fails when no option has the value.
      * @node browser_execute_plan @alias browserExecutePlan
      * @param session — Automation session
      * @param plan — Plan from LLM Plan Actions with CSS or typed selectors
@@ -724,23 +724,23 @@ declare namespace browser {
     function newPage({ session: Struct }): Struct;
 
     /**
-     * Connects to a WebDriver server and opens a new browser session, optionally with a persistent profile, proxy, locale and relaxed certificate checks
+     * Launches a local Chrome or Edge (or Chrome for Testing) with its own profile and connects over the DevTools protocol, optionally with a persistent profile, proxy, locale and relaxed certificate checks
      * @node browser_open @alias browserOpen
      * @param session — Automation session to attach browser to
-     * @param webdriverUrl (optional) — URL of the WebDriver server (e.g., http://localhost:9515 for ChromeDriver)
-     * @param browserType (optional) — Browser to use (Chrome, Firefox, Edge, Safari)
+     * @param webdriverUrl (optional) — Legacy WebDriver URL. Loopback addresses are ignored (the browser is launched locally); remote WebDriver hosts are not supported
+     * @param browserType (optional) — Chrome or Edge. Firefox and Safari are not supported yet
      * @param headless (optional) — Run browser in headless mode (no visible window)
      * @param viewportWidth (optional) — Page viewport width in CSS pixels; the window grows by the browser frame so the page gets this size (the screen may cap it)
      * @param viewportHeight (optional) — Page viewport height in CSS pixels; the window grows by the browser frame so the page gets this size (the screen may cap it)
      * @param userAgent (optional) — Custom user agent string (optional)
      * @param pageLoadTimeout (optional) — Timeout for page loads in seconds (at least 1)
-     * @param userDataDir (optional) — Local directory for a persistent browser profile (cookies, storage, logins survive between runs). Chrome and Edge allow one browser per profile at a time. Requires WebDriver on this machine.
-     * @param userDataPath (optional) — Absolute profile directory on the WebDriver host; used when Profile Directory is not connected
+     * @param userDataDir (optional) — Local directory for a persistent browser profile (cookies, storage, logins survive between runs). Chrome and Edge allow one browser per profile at a time.
+     * @param userDataPath (optional) — Absolute profile directory on this machine; used when Profile Directory is not connected
      * @param proxyServer (optional) — Proxy such as http://host:8080 or socks5://host:1080 (proxy credentials are not supported)
      * @param proxyBypass (optional) — Comma-separated hosts that skip the proxy, such as localhost,*.internal
      * @param locale (optional) — Browser language and Accept-Language such as de-DE (empty keeps the default)
      * @param ignoreHttpsErrors (optional) — Accept invalid or self-signed TLS certificates
-     * @returns debuggerAddress — Chrome or Edge debugger endpoint, when available
+     * @returns debuggerAddress — DevTools endpoint of the launched browser (localhost:port)
      * @returns sessionOut — Automation session with browser attached
      * @impure has side effects / drives control flow
      */
@@ -773,26 +773,26 @@ declare namespace browser {
      * Captures browser console messages before navigation or actions.
      * @node browser_start_console_observer @alias browserStartConsoleObserver
      * @param session — Automation session
-     * @param debuggerAddress (optional) — Chrome or Edge debugging address (host:port)
+     * @param debuggerAddress (optional) — Ignored (legacy); the observer uses the session's own browser connection
      * @returns sessionOut — Updated automation session
      * @impure has side effects / drives control flow
      */
     function startConsoleObserver({ session: Struct, debuggerAddress?: string }): Struct;
 
     /**
-     * Starts an installed WebDriver executable and waits until it is ready.
+     * Legacy node kept for existing boards: browsers are now launched directly, so no WebDriver is started. Outputs a local URL for compatibility.
      * @node browser_start_driver @alias browserStartDriver
      * @param session — Automation session
-     * @param executable (optional) — Path to chromedriver, geckodriver, or msedgedriver
+     * @param executable (optional) — Ignored (legacy)
      * @param port (optional) — Local WebDriver port
      * @returns sessionOut — Updated automation session
-     * @returns webdriverUrl — Ready local WebDriver endpoint
+     * @returns webdriverUrl — Local compatibility URL (ignored by Open Browser)
      * @impure has side effects / drives control flow
      */
     function startDriver({ session: Struct, executable?: string, port?: int }): { sessionOut: Struct, webdriverUrl: string };
 
     /**
-     * Stops the WebDriver process started for this automation session.
+     * Legacy node kept for existing boards: closes the session's browser like Close Browser.
      * @node browser_stop_driver @alias browserStopDriver
      * @param session — Automation session
      * @returns sessionOut — Updated automation session
@@ -815,7 +815,7 @@ declare namespace browser {
     // === Automation/Browser/Auth ===
 
     /**
-     * Clears cookies: every domain on Chrome and Edge, the current document's cookies on other browsers
+     * Clears every cookie of the browser (all domains)
      * @node browser_clear_cookies @alias browserClearCookies
      * @param session — Automation session
      * @returns sessionOut — Automation session (pass-through)
@@ -824,7 +824,7 @@ declare namespace browser {
     function clearCookies({ session: Struct }): Struct;
 
     /**
-     * Loads cookies from a file into the browser session. Chrome and Edge accept cookies for every domain with their HttpOnly, Secure and SameSite flags; other browsers only accept cookies for the current page's domain.
+     * Loads cookies from a file into the browser for every domain, keeping their HttpOnly, Secure and SameSite flags; cookies without a domain are bound to the current page.
      * @node browser_load_cookies @alias browserLoadCookies
      * @param session — Automation session
      * @param filePath — Path to cookies JSON file
@@ -836,7 +836,7 @@ declare namespace browser {
     function loadCookies({ session: Struct, filePath: Struct }): { sessionOut: Struct, cookieCount: int, failedCount: int };
 
     /**
-     * Restores cookies and web storage from a Playwright-compatible storageState JSON file. Cookies for every domain are restored on Chrome and Edge (only the current domain elsewhere). Storage is applied only to the origin the page is on, without navigating; other origins are reported as skipped.
+     * Restores cookies and web storage from a Playwright-compatible storageState JSON file. Cookies for every domain are restored. Storage is applied only to the origin the page is on, without navigating; other origins are reported as skipped.
      * @node browser_load_storage_state @alias browserLoadStorageState
      * @param session — Automation session
      * @param filePath — Storage state JSON written by Save Storage State or Playwright
@@ -850,7 +850,7 @@ declare namespace browser {
     function loadStorageState({ session: Struct, filePath: Struct }): { sessionOut: Struct, cookiesApplied: int, cookiesFailed: int, originsApplied: int, skippedOrigins: string[] };
 
     /**
-     * Saves browser cookies to a file for later restoration: every domain including HttpOnly cookies on Chrome and Edge, the current document's cookies on other browsers
+     * Saves every browser cookie (all domains, including HttpOnly) to a file for later restoration
      * @node browser_save_cookies @alias browserSaveCookies
      * @param session — Automation session
      * @param filePath — Path to save cookies JSON file
@@ -861,7 +861,7 @@ declare namespace browser {
     function saveCookies({ session: Struct, filePath: Struct }): { sessionOut: Struct, cookieCount: int };
 
     /**
-     * Saves all cookies (every domain, including HttpOnly, on Chrome and Edge) and the current origin's localStorage to a Playwright-compatible storageState JSON file. The file holds login sessions; store it like a password.
+     * Saves all cookies (every domain, including HttpOnly) and the current origin's localStorage to a Playwright-compatible storageState JSON file. The file holds login sessions; store it like a password.
      * @node browser_save_storage_state @alias browserSaveStorageState
      * @param session — Automation session
      * @param filePath — Where to write the storage state JSON
@@ -880,7 +880,7 @@ declare namespace browser {
      * @param username (optional) — HTTP Basic Auth username
      * @param password (optional) — HTTP Basic Auth password
      * @param origin — HTTP(S) origin allowed to receive credentials
-     * @param debuggerAddress (optional) — Optional Chrome or Edge debugger address; defaults to the attached browser
+     * @param debuggerAddress (optional) — Ignored (legacy); the session's own browser connection is used
      * @returns sessionOut — Automation session (pass-through)
      * @impure has side effects / drives control flow
      */
@@ -902,7 +902,7 @@ declare namespace browser {
     // === Automation/Browser/Capture ===
 
     /**
-     * Prints the current page to a PDF file, the way the browser's print dialog would. Chrome and Edge print through DevTools (headless Chrome is the most reliable); other browsers use WebDriver printing.
+     * Prints the current page to a PDF file, the way the browser's print dialog would, through the DevTools protocol (Chrome and Edge).
      * @node browser_print_pdf @alias browserPrintPdf
      * @param session — Automation session
      * @param filePath — Where to write the PDF; an existing file is replaced
@@ -1099,7 +1099,7 @@ declare namespace browser {
     function getText({ session: Struct, selector?: string, locator?: Struct }): { sessionOut: Struct, text: string };
 
     /**
-     * Lists elements matching a selector with their text, chosen attributes, box and visibility. When a browser snapshot exists for the page, each main-frame element also gets a ref usable as a Ref selector.
+     * Lists elements matching a selector with their text, chosen attributes, box and visibility. When a browser snapshot exists for the page, each element, including elements inside frames, also gets a ref usable as a Ref selector.
      * @node browser_list_elements @alias browserListElements
      * @param session — Automation session
      * @param selector (optional) — CSS selector, or a snapshot ref such as e12
@@ -1116,7 +1116,7 @@ declare namespace browser {
     // === Automation/Browser/Files ===
 
     /**
-     * Sets the default download directory for the browser (must be called before downloads)
+     * Sets the default download directory for the browser (must be called before downloads). When attached to a debugging Chrome, this changes that Chrome's download handling until it restarts. Fails when attached to your everyday Chrome, whose downloads stay in its own download folder; there, use Trigger Download and point Wait For Download at that folder.
      * @node browser_set_download_dir @alias browserSetDownloadDir
      * @param session — Automation session
      * @param downloadPath — Absolute path to the download directory
@@ -1162,7 +1162,7 @@ declare namespace browser {
     function uploadMultipleFiles({ session: Struct, selector?: string, filePaths: string[], locator?: Struct }): { sessionOut: Struct, uploadedCount: int };
 
     /**
-     * Waits for a file to appear in the download directory
+     * Waits for the next download started after Set Download Directory or Trigger Download to finish, using browser download events. Downloads from popup windows count, except when attached to your everyday Chrome.
      * @node browser_wait_for_download @alias browserWaitForDownload
      * @param session — Automation session
      * @param downloadDir — Directory to watch for downloads
@@ -1202,7 +1202,7 @@ declare namespace browser {
     function pressKey({ session: Struct, selector?: string, key?: string, modifiers?: string[], locator?: Struct }): Struct;
 
     /**
-     * Selects an option in a dropdown/select element
+     * Selects an option in a dropdown/select element. Fails when no option has this value.
      * @node browser_select_option @alias browserSelectOption
      * @param session — Automation session
      * @param selector (optional) — CSS selector of select element
@@ -1257,7 +1257,7 @@ declare namespace browser {
     function click({ session: Struct, selector?: string, button?: string, modifiers?: string[], locator?: Struct }): Struct;
 
     /**
-     * Clicks at viewport CSS coordinates instead of an element, for canvas apps and coordinates read off a screenshot by a vision model. Works in every WebDriver browser.
+     * Clicks at viewport CSS coordinates instead of an element, for canvas apps and coordinates read off a screenshot by a vision model. Requires Chrome or Edge.
      * @node browser_click_at_point @alias browserClickAtPoint
      * @param session — Automation session
      * @param x (optional) — Horizontal position in viewport CSS pixels
@@ -1418,7 +1418,7 @@ declare namespace browser {
      * @node browser_start_network_observer @alias browserStartNetworkObserver
      * @param session — Automation session
      * @param urlPattern (optional) — Filter requests by URL pattern (empty for all)
-     * @param debuggerAddress (optional) — Optional Chrome or Edge debugger address; defaults to the attached browser
+     * @param debuggerAddress (optional) — Ignored (legacy); the session's own browser connection is used
      * @returns sessionOut — Automation session (pass-through)
      * @impure has side effects / drives control flow
      */
@@ -1503,7 +1503,7 @@ declare namespace browser {
     function getElementSnapshot({ session: Struct, selector?: string, locator?: Struct }): { sessionOut: Struct, html: string, text: string, tag: string, x: int, y: int, width: int, height: int, visible: bool };
 
     /**
-     * Captures the page accessibility tree as compact text with element refs (e1, e2, …) that any selector pin accepts as a Ref selector. Refs stay valid until the page navigates or the element is removed; a stale ref fails with a request to take a new snapshot. Covers the current tab including same-process iframes; out-of-process (cross-site) iframes are omitted. Requires Chrome or Edge.
+     * Captures the page accessibility tree as compact text with element refs (e1, e2, …) that any selector pin accepts as a Ref selector. Refs stay valid until the page navigates or the element is removed; a stale ref fails with a request to take a new snapshot. Covers the current tab including same-site and cross-site iframes (up to 20 frames). Requires Chrome or Edge.
      * @node browser_snapshot @alias browserSnapshot
      * @param session — Automation session
      * @param interactiveOnly (optional) — List only interactive elements (buttons, links, inputs, clickable elements) as a flat list; disable for the full page structure with text

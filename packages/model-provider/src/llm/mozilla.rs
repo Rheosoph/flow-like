@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use super::ModelLogic;
+use super::{ModelLogic, responses_tools::NonStrictToolsClient};
 use crate::provider::random_provider;
 use crate::{
     llm::ModelConstructor,
@@ -84,11 +84,60 @@ impl ModelLogic for MozillaModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
         Ok(ModelConstructor {
-            inner: Box::new(self.client.clone()),
+            inner: Box::new(NonStrictToolsClient(self.client.clone())),
         })
     }
 
     async fn default_model(&self) -> Option<String> {
         self.default_model.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::test_support::{
+        assert_sends_tool_as_written, json_response, responses_completion, serve_once,
+        typeless_tool,
+    };
+    use rig::completion::{Completion, Message};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn sends_tool_schemas_as_written() {
+        let (endpoint, server) = serve_once(json_response(responses_completion("llamafile"))).await;
+        let model = MozillaModel::from_provider(&ModelProvider {
+            provider_name: "custom:mozilla".to_string(),
+            model_id: None,
+            version: None,
+            api_surface: None,
+            params: Some(HashMap::from([
+                ("api_key".to_string(), json!("test-key")),
+                ("model_id".to_string(), json!("llamafile")),
+                ("endpoint".to_string(), json!(endpoint)),
+            ])),
+        })
+        .await
+        .unwrap();
+        let agent = model
+            .provider()
+            .await
+            .unwrap()
+            .into_client()
+            .agent("llamafile")
+            .build();
+
+        agent
+            .completion("Fill in the form.", Vec::<Message>::new())
+            .await
+            .unwrap()
+            .tools(vec![typeless_tool()])
+            .send()
+            .await
+            .unwrap();
+
+        let body: serde_json::Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+        assert_sends_tool_as_written(&body, &typeless_tool());
     }
 }

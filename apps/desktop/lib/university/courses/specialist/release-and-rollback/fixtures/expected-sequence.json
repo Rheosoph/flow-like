@@ -1,0 +1,26 @@
+[
+  {
+    "step": "initial Latest",
+    "message": "release A"
+  },
+  {
+    "step": "pinned A after draft edit",
+    "message": "release A"
+  },
+  {
+    "step": "draft B",
+    "message": "release B"
+  },
+  {
+    "step": "candidate Event B",
+    "message": "release B"
+  },
+  {
+    "step": "promoted Event B",
+    "message": "release B"
+  },
+  {
+    "step": "restored Event A",
+    "message": "release A"
+  }
+]

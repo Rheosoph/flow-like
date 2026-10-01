@@ -5,6 +5,8 @@ sidebar:
   order: 31
 ---
 
+Enable [Developer Mode](/start/developer-mode/) to see this workspace in the App navigation.
+
 **Data Studio** is an app's home for structured data: native tables created directly or by flows, and the [ontology](/topics/ontology/overview/) — a semantic layer of object types, relationships, and governed actions — you build on top of them. Open it from an app's **Data → Data Studio** view.
 
 ![Flow-Like Data Studio showing one customer-operations ontology, six object types, two governed actions, one shared contract, and one installed remote ontology](../../../assets/DataStudioOverview.webp)
@@ -53,7 +55,8 @@ The **Sources** tab lists project and personal relational tables. Tables may be 
 
 ![A screenshot of Flow-Like Desktop showing a preview of a custom database populated with data from flow executions](../../../assets/AppDatabases.webp)
 
-Use [Choosing a Lance index](/topics/datascience/lance-indexes/) before adding an index. It maps the repeated query to the appropriate index and identifies options that require the planned Lance update.
+Use [Choosing a Lance index](/topics/datascience/lance-indexes/) before adding an index. It maps the repeated query to the appropriate index and explains which algorithms work on native Lance tables and which are supported
+by a remote LanceDB connection.
 
 ## The ontology layer
 

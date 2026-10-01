@@ -1,0 +1,110 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "desktop",
+	"outputDir": "apps/docs/src/assets",
+	"tauriFixture": "../fixtures/docs-apps.tauri.json",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 2
+		},
+		"theme": "dark",
+		"format": "webp",
+		"timeoutMs": 300000,
+		"settleMs": 500,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "chat-ui",
+			"path": "/use",
+			"query": {
+				"id": "docs-app",
+				"eventId": "support-assistant",
+				"capture": "docs",
+				"sessionId": "docs-support-conversation"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "[data-fl-chat-welcome]",
+					"state": "visible"
+				},
+				{
+					"type": "seedIndexedDB",
+					"database": "Chat-History",
+					"stores": {
+						"sessions": [
+							{
+								"id": "docs-support-conversation",
+								"appId": "docs-app",
+								"summarization": "Sample support queue",
+								"createdAt": 1790755200000,
+								"updatedAt": 1790755201000
+							}
+						],
+						"messages": [
+							{
+								"id": "docs-chat-1",
+								"sessionId": "docs-support-conversation",
+								"timestamp": 1790755200000,
+								"rev": 1,
+								"payload": "{\"id\": \"docs-chat-1\", \"appId\": \"docs-app\", \"sessionId\": \"docs-support-conversation\", \"inner\": {\"role\": \"user\", \"content\": \"Show the sample support queue and next steps.\"}, \"files\": [], \"timestamp\": 1790755200000, \"rev\": 1}"
+							},
+							{
+								"id": "docs-chat-2",
+								"sessionId": "docs-support-conversation",
+								"timestamp": 1790755201000,
+								"rev": 1,
+								"payload": "{\"id\": \"docs-chat-2\", \"appId\": \"docs-app\", \"sessionId\": \"docs-support-conversation\", \"inner\": {\"role\": \"assistant\", \"content\": \"## Sample support queue\\n\\nThree requests need attention:\\n\\n| Request | Category | Next step |\\n| --- | --- | --- |\\n| #1042 | Account access | Check the identity verification status |\\n| #1043 | Billing question | Review the invoice line items |\\n| #1044 | Export failed | Inspect the latest run log |\\n\\nStart with **#1042**, then ask the billing owner to review **#1043**.\\n\\nThis example uses synthetic ticket data.\"}, \"files\": [], \"timestamp\": 1790755201000, \"rev\": 1, \"explicit_name\": \"Support assistant\"}"
+							}
+						]
+					}
+				},
+				{
+					"type": "goto",
+					"path": "/use",
+					"query": {
+						"id": "docs-app",
+						"eventId": "support-assistant",
+						"capture": "docs",
+						"sessionId": "docs-support-conversation"
+					}
+				},
+				{
+					"type": "waitFor",
+					"text": "This example uses synthetic ticket data."
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-fl-chat-welcome]",
+					"state": "hidden"
+				},
+				{
+					"type": "capture",
+					"name": "ChatUI",
+					"mode": "viewport"
+				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
+			]
+		}
+	]
+}

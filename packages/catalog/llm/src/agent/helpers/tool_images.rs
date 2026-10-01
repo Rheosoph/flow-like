@@ -199,7 +199,9 @@ fn walk_value(
     match value {
         Value::String(text) => {
             if let Some(source) = parse_image_data_url(text)
-                && !candidates.iter().any(|candidate| candidate.pointer == *pointer)
+                && !candidates
+                    .iter()
+                    .any(|candidate| candidate.pointer == *pointer)
             {
                 candidates.push(ImageCandidate {
                     pointer: pointer.clone(),
@@ -264,8 +266,7 @@ fn collect_node_image(
 /// Parses a base64 raster `data:image/...` URL. SVG is text and stays in the tool result.
 pub fn parse_image_data_url(text: &str) -> Option<ToolImageSource> {
     const PREFIX: &[u8] = b"data:image/";
-    if text.len() <= PREFIX.len() || !text.as_bytes()[..PREFIX.len()].eq_ignore_ascii_case(PREFIX)
-    {
+    if text.len() <= PREFIX.len() || !text.as_bytes()[..PREFIX.len()].eq_ignore_ascii_case(PREFIX) {
         return None;
     }
     let (metadata, payload) = text["data:".len()..].split_once(',')?;
@@ -410,7 +411,11 @@ async fn node_image_exists(context: &ExecutionContext, image_ref: &str) -> bool 
 
 pub fn decode_base64_image(mime_type: &str, data: &str) -> Result<DynamicImage> {
     let compact: Cow<str> = if data.bytes().any(|byte| byte.is_ascii_whitespace()) {
-        Cow::Owned(data.chars().filter(|ch| !ch.is_ascii_whitespace()).collect())
+        Cow::Owned(
+            data.chars()
+                .filter(|ch| !ch.is_ascii_whitespace())
+                .collect(),
+        )
     } else {
         Cow::Borrowed(data)
     };
@@ -645,7 +650,9 @@ mod tests {
                 UserContent::Text(text) => text.text.clone(),
                 UserContent::Image(image) => format!("<image {:?}>", image.data),
                 UserContent::ToolResult(result) => match result.content.first_ref() {
-                    ToolResultContent::Text(text) => format!("<result {}: {}>", result.id, text.text),
+                    ToolResultContent::Text(text) => {
+                        format!("<result {}: {}>", result.id, text.text)
+                    }
                     ToolResultContent::Image(_) => "<result image>".to_string(),
                 },
                 _ => "<other>".to_string(),
@@ -816,7 +823,10 @@ mod tests {
         assert_eq!(images.len(), 1);
         assert_eq!(value["content"][0]["text"], "Captured the page");
         assert_eq!(value["content"][1]["data"], "[image 1]");
-        assert_eq!(value["content"][2]["resource"]["blob"], "[image omitted: bad]");
+        assert_eq!(
+            value["content"][2]["resource"]["blob"],
+            "[image omitted: bad]"
+        );
         assert_eq!(value["content"][3]["resource"]["blob"], "JVBERi0=");
         assert!(json::to_string(&value).unwrap().len() < 1024);
     }
@@ -845,7 +855,10 @@ mod tests {
         assert!(prepared.width <= 1568);
         assert!(prepared.width as u64 * prepared.height as u64 <= 1_150_000);
         let decoded = image::load_from_memory(&BASE64.decode(&prepared.data).unwrap()).unwrap();
-        assert_eq!((decoded.width(), decoded.height()), (prepared.width, prepared.height));
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            (prepared.width, prepared.height)
+        );
         assert!(!decoded.color().has_alpha());
 
         let transparent =
@@ -1005,16 +1018,13 @@ mod tests {
         for _ in 0..TOOL_IMAGE_KEEP_RECENT + TOOL_IMAGE_PRUNE_SLACK {
             history.push(image_message(1));
             assert_eq!(
-                prune_tool_images(
-                    &mut history,
-                    TOOL_IMAGE_KEEP_RECENT,
-                    TOOL_IMAGE_PRUNE_SLACK
-                ),
+                prune_tool_images(&mut history, TOOL_IMAGE_KEEP_RECENT, TOOL_IMAGE_PRUNE_SLACK),
                 0
             );
         }
         history.push(image_message(1));
-        let pruned = prune_tool_images(&mut history, TOOL_IMAGE_KEEP_RECENT, TOOL_IMAGE_PRUNE_SLACK);
+        let pruned =
+            prune_tool_images(&mut history, TOOL_IMAGE_KEEP_RECENT, TOOL_IMAGE_PRUNE_SLACK);
         assert_eq!(pruned, 3);
         assert_eq!(count_images(&history), 1 + TOOL_IMAGE_KEEP_RECENT);
         assert!(matches!(
@@ -1022,13 +1032,18 @@ mod tests {
             Message::User { content } if matches!(content.first_ref(), UserContent::Image(_))
         ));
         assert!(user_text(&history[1]).contains(&PRUNED_TOOL_IMAGE_STUB.to_string()));
-        assert!(user_text(&history[6]).iter().all(|part| part != PRUNED_TOOL_IMAGE_STUB));
+        assert!(
+            user_text(&history[6])
+                .iter()
+                .all(|part| part != PRUNED_TOOL_IMAGE_STUB)
+        );
     }
 
     #[test]
     fn pruning_never_drops_images_the_model_has_not_seen() {
         let mut history = vec![image_message(1), image_message(7)];
-        let pruned = prune_tool_images(&mut history, TOOL_IMAGE_KEEP_RECENT, TOOL_IMAGE_PRUNE_SLACK);
+        let pruned =
+            prune_tool_images(&mut history, TOOL_IMAGE_KEEP_RECENT, TOOL_IMAGE_PRUNE_SLACK);
         assert_eq!(pruned, 1);
         assert_eq!(count_images(&history), 7);
     }

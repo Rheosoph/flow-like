@@ -5,9 +5,11 @@ sidebar:
   order: 40
 ---
 
-With **Events**, you can connect your **Flows** to app interfaces and external
-systems. The Events workspace also includes a **Pages** tab for managing visual
-interfaces and their navigation paths.
+Enable [Developer Mode](/start/developer-mode/) to see this workspace in the App navigation.
+
+With **Events**, you can connect your **Flows** to App interfaces and external
+systems. Create Pages in their owning Flow's **Explorer**, then use an Event to
+expose each interface. See [Create Pages](/apps/pages/).
 
 Creating a workflow-backed **Event** requires at least one existing **Flow** in
 your app that includes an *event node*. You can create and manage them in your
@@ -18,27 +20,28 @@ Flow. You can create multiple Events that reference the same event node and
 differentiate them by their payloads and configurations. Page-target Events can
 instead open a visual page directly.
 
-![The Events workspace in Flow-Like Desktop, showing configured UI Events](../../../assets/AppEvents.webp)
+![The Events workspace in Flow-Like Desktop, showing configured entry points and triggers](../../../assets/AppEvents.webp)
 
 ## Event Types
 
-The list groups Events into **UI Events**, which expose an app interface and a
-route path, and **Backend-only Events**, which run without a built-in app
-interface.
+The list groups Events into **Entry points**, which people open as an App
+interface, and **Triggers**, which receive requests, schedules, messages, or
+other background input. UI-capable Events can have a route path.
 
 Which Event types are available depends on the event node in the selected
 Flow:
 
 | Flow event node | Available Event types |
 | --- | --- |
-| **Chat Event** | Chat UI, Discord, Telegram |
+| **Chat Event** | Chat UI, Discord, Telegram, Teams Bot |
+| **Inbound Email Event** | Inbound Email |
 | **Mail Event** | Email |
 | **Location Event** | Location Region |
 | **Generic Event** | Generic Form, API, Deeplink |
 | **Simple Event** | Quick Action, API, Cron, Daemon, Deeplink, REST, MCP |
 
 The built-in UI types are **Chat UI**, **Generic Form**, and **Quick Action**.
-A Page-target Event is also listed under UI Events because it opens a visual
+A Page-target Event is also listed under Entry points because it opens a visual
 page directly.
 
 ### Quick Action
@@ -72,7 +75,10 @@ variables. Submitting the form invokes the selected Generic Event node.
   configured circular region.
 - **Deeplink** invokes a Flow through a Desktop deep link.
 - **Discord**, **Telegram**, and **Email** connect their respective services to
-  the compatible event node.
+  the compatible event node. Email here reads a mailbox through IMAP.
+- **Teams Bot** connects a Chat Event to [Microsoft Teams](/topics/api-integrations/teams/).
+- **Inbound Email** receives messages at a generated server address. Use an
+  Inbound Email Event node and a server with [mail ingress configured](/self-hosting/docker-compose/mail/).
 
 ## Local and Remote availability
 
@@ -82,7 +88,7 @@ Event types are constrained by where their sink can run:
 | --- | --- |
 | API, Cron | Local or Remote |
 | Daemon, Deeplink, Discord, Telegram, Email | Local |
-| REST, MCP | Remote |
+| REST, MCP, Teams Bot, Inbound Email | Remote |
 | Location Region | iOS or macOS sensor; Local or Remote workflow |
 | Quick Action, Chat UI, Generic Form, Page target | App interface; Remote for hosted frontends |
 
@@ -175,7 +181,9 @@ An Event targets an event node in a Flow and can use:
 - a numbered, immutable Flow version.
 
 Pin externally consumed or production-facing Events when draft changes should
-not alter live behavior. See [Versioning](/studio/versioning/).
+not alter live behavior. See [Versioning](/studio/versioning/) and
+[Release and roll back an Event](/apps/event-releases/) for Quality, Canary,
+and Event History.
 
 ## Configure and test
 
@@ -190,156 +198,7 @@ For online and server-side behavior, see
 
 ## Siri, Shortcuts, and native widgets
 
-In the iOS and macOS apps, open an Event's **Identity** settings and enable
-**Native integrations**. Choose its system surfaces, then save and activate the
-Event. Page and Chat launchers open their existing interface. Quick Actions,
-forms, and API Events can run with their configured input defaults. Your current
-access and the saved Event settings are checked again each time.
-The Shortcuts **Input** accepts a JSON object keyed by Event input names and
-overrides those defaults. For an Event with one String input, plain text also
-works. Unknown inputs or values with the wrong type stop the run.
-Siri and Shortcuts share one action catalog and are enabled together.
-
-### Use an answer in another Shortcut action
-
-- **Ask FlowPilot** takes a question and returns its final answer as Text.
-- **Ask App Chat** takes a Chat Event and question and returns the chat reply as Text.
-- **Run Event** returns an Event Result with **Text** and **JSON** properties.
-  Chat replies populate Text. The **Return Generic Result** node supplies JSON,
-  preserving objects, arrays, numbers, booleans, and null. String results also
-  populate Text. Execution logs and intermediate reasoning are excluded.
-
-For example, add **Ask FlowPilot**, enter a question, then add **Create Note**
-and select the Ask FlowPilot output as the note's content. The same chain works
-with **Ask App Chat**. For an object result, select its **JSON** property
-and use **Get Dictionary from Input** before reading its fields.
-
-These actions bring Flow-Like to the foreground and wait for execution. A
-question that needs more interaction can continue in the app. Supply required
-Event inputs in the Shortcut; a missing input or a page-only Event reports that
-interaction is needed. The response wait ends after 90 seconds, and the system
-may cancel it sooner. A run that already started can continue in Flow-Like.
-Responses are limited to 256 KiB in total, with at most 192 KiB each for Text
-and JSON. Larger responses report an error rather than returning truncated data.
-
-For a hosted **MCP** Event, select one registered tool in its native settings.
-**Run Event** calls that selected tool with a JSON object in **Input** and
-returns its JSON result. Widget launchers open an arguments dialog for review.
-Changing or removing the selected tool invalidates an old shortcut. REST and
-background trigger Events need a supported app interface before they can
-become native entry points.
-
-**Open App**, **Open Notifications**, and **Open Workspace** open their named
-surfaces. The FlowPilot widget also has a voice entry point: start dictation in
-the app, review the transcript, and press **Send**. If speech recognition is
-unavailable, use keyboard dictation or type instead. Microphone capture stops
-when the screen is hidden.
-
-Add native widgets for Open App, FlowPilot, Inbox, Needs attention, Recent runs, Recently
-used apps, Usage, Workspace, or Favorite Events. To include an Event in
-**Favorite Events**, select **Widgets** and enable its favorite setting. On
-iOS 18 and macOS 26 or later, system controls also open FlowPilot,
-Notifications, or a selected Event. Widgets display cached app data; the
-operating system controls their refresh schedule. Open the app to refresh a
-stale widget. **Data Chart** and **App Page** widgets let you choose content
-in **Settings → Native widgets**. App pages use a supported set of native
-elements; widgets cannot display a live camera.
-
-### Create a Data Chart or App Page widget
-
-Open **Settings → Native widgets** in Flow-Like on the device where you want
-the widget. Choose **Data chart** or **App page**, give it a name, and select
-its app. Preview the content, choose a color, and save. Then add Flow-Like's
-**Data Chart** or **App Page** from the iOS Home Screen widget gallery. Edit
-the widget to select the configuration you saved. Both types support small,
-medium, and large sizes.
-
-A Data Chart reads a table, ontology object type, or saved query. Configure
-measures, grouping, filters, and number formatting before choosing a chart.
-Supported types are single metric, progress, gauge, columns, horizontal bars,
-stacked columns, line, area, donut, and pie. Progress and gauge require a
-positive target. Aggregations run over the selected source before limiting
-the result. Each widget displays up to 120 points and six series.
-
-An App Page displays a published page, or one container within it. Choose
-its internal path and enter query values as plain text; Flow-Like handles
-link encoding. The native renderer supports text, images, icons, cards,
-badges, progress, compact tables, common charts, and basic layouts. Buttons
-and links open the app. Inputs, camera and audio elements, and other
-interactive components need the full app. The preview lists content that
-cannot appear in the widget.
-
-Open the selected app page to capture content populated by workflows or
-user input. Widget refreshes do not run page lifecycle workflows. Charts
-refresh at the configured interval while Flow-Like is open and visible.
-When the app is closed, widgets display the last cached content and its
-update time. iOS controls when that content appears on the Home Screen;
-the configured interval is not a background execution schedule. Content
-expires after seven days without an update.
-
-Saved configurations and cached content belong to the selected account,
-profile, and hub on this device. Switching accounts clears the active
-native content. Open the intended workspace before choosing a saved widget
-in the gallery. You can save up to 12 configurations per workspace.
-
-### Open an app at a chosen path
-
-In Shortcuts, add Flow-Like's **Open App** action and choose an **App**. Leave
-**Path** empty to open the app normally, or enter a path saved on one of its
-active UI Events, such as `/orders/123?tab=details`. The path stays inside the
-chosen app. A missing or inactive route shows an error instead of opening a
-different page.
-
-For a Home Screen or desktop launcher, add the **Open App** widget and edit it.
-Choose the app, optional **Internal path**, and optional **Widget title**.
-The widget opens that destination when tapped; it does not render the page
-inside the widget. Open Flow-Like in the desired account and profile first
-to refresh the app picker.
-
-Both the Shortcut and widget have separate lists of query names and values.
-Pair them by position, keeping the lists the same length. Enter values as
-plain text, including spaces, Unicode, `+`, `%`, `&`, and `#`. Flow-Like encodes
-them for the link. For example, the value `A+B & 東京 50%` reaches the Event
-unchanged. Do not percent-encode values in these lists yourself.
-
-A query already written in **Path** uses normal URL syntax: `+` means a space,
-and `%2B` means a literal plus. Structured pairs are appended after that query,
-so names can repeat. With `/orders?tag=first` and another pair `tag: second`,
-**Get Query Params** returns `second` for `tag`. The Event payload also includes
-`_query_param_values.tag` as `["first", "second"]`, preserving every value in
-order. Names such as `id`, `eventId`, and `route` remain app data and cannot
-change the selected app. Literal names such as `_id` remain distinct from `id`.
-
-Use at most 32 pairs in total. Paths are limited to 4,096 UTF-8 bytes, names to
-256 bytes, values to 4,096 bytes, and the combined path and structured pairs to
-8,192 bytes. External URLs, traversal segments, control characters, and raw
-fragments in **Path** are rejected. A `#` in a structured value is supported.
-
-### Widget data and Handoff
-
-**Recently used apps** records actual app openings on this device, separately
-for each account and profile. It does not use the app's last edit date.
-**Needs attention** lists Error and Fatal execution records from the last seven
-UTC calendar days, including today. **Usage** shows account-wide execution and
-model totals across profiles, covering all recorded usage. Recorded AI cost
-includes model and embedding costs in USD. **Workspace** counts apps in the
-selected profile; its execution count covers the whole account across profiles
-over the last seven UTC calendar days, including today.
-Available live execution metadata also feeds Recent runs and iOS Live
-Activities while the app receives run updates.
-
-App and Event pickers in Shortcuts show cached app artwork when available.
-The Open App widget, recent app rows, and workspace app tiles use the same
-artwork, with initials as a fallback. Apple controls the icons on top-level
-Shortcut action tiles.
-
-The device's system cache contains display names, status, navigation targets,
-and small copies of app artwork, without Event configuration, input defaults,
-or access tokens. Answer requests and results are stored briefly in the shared
-app container so Shortcuts can receive the response. Account
-or workspace changes clear the native cache and invalidate queued actions.
-Spotlight can open FlowPilot, usable apps, and Events selected for Spotlight.
-Handoff can continue an exposed page or chat on another device signed into the
-same account and profile when the hub supplies an HTTPS app address. For a
-configured app path, Handoff includes that path and its app-owned query values.
-Unrelated outer URL fields are excluded.
+Use [Siri, Shortcuts, and Handoff](/apps/native-integrations/) to launch an
+Event, return its result to another Shortcut action, or open a chosen App path.
+Use [Native widgets](/apps/native-widgets/) for system launchers, charts, and
+cached App Pages on iOS and macOS.

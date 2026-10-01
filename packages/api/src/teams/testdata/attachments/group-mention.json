@@ -1,0 +1,18 @@
+{
+  "attachments": [
+    {
+      "contentType": "text/html",
+      "contentUrl": null,
+      "content": "<p><span itemtype=\"http://schema.skype.com/Mention\" itemscope=\"\" itemid=\"0\">Bot</span>&nbsp;Can you check this code?</p>",
+      "name": null,
+      "thumbnailUrl": null
+    }
+  ],
+  "type": "message",
+  "channelId": "msteams",
+  "serviceUrl": "https://smba.trafficmanager.net/amer/",
+  "conversation": {
+    "conversationType": "groupChat",
+    "id": "19:dummy@thread.v2"
+  }
+}

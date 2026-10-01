@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { arch, platform } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	type DocScreenshotCliOptions,
@@ -14,11 +16,16 @@ import {
 	loadDocScreenshotPlan,
 	loadDocScreenshotTauriFixture,
 } from "../lib/doc-screenshot/plan";
-import { runDocScreenshotPlan } from "../lib/doc-screenshot/runner";
+import {
+	buildScreenshotUrl,
+	redactScreenshotUrl,
+	runDocScreenshotPlan,
+} from "../lib/doc-screenshot/runner";
 import type {
 	DocScreenshotApp,
 	DocScreenshotPlan,
 	DocScreenshotResult,
+	DocScreenshotScenario,
 } from "../lib/doc-screenshot/types";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -54,6 +61,7 @@ Direct capture:
 
 Interaction plan:
   --plan <path>           Run a validated JSON plan with navigation and interaction steps
+  --scenario <name>       Run one named scenario from the plan
 
 Server and output:
   --frontend-url <url>    Reuse an existing loopback frontend instead of starting one
@@ -97,10 +105,12 @@ function serverProcessIsRunning(child: ChildProcess): boolean {
 	return child.exitCode === null && child.signalCode === null;
 }
 
-async function waitForServer(
+export async function waitForServer(
 	server: SpawnedServer,
+	scenario: DocScreenshotScenario,
 	timeoutMs: number,
 ): Promise<void> {
+	const target = buildScreenshotUrl(server.url, scenario.path, scenario.query);
 	const deadline = Date.now() + timeoutMs;
 	let lastError = "not ready";
 	while (Date.now() < deadline) {
@@ -110,7 +120,7 @@ async function waitForServer(
 			);
 		}
 		try {
-			const response = await fetch(server.url, {
+			const response = await fetch(target, {
 				redirect: "manual",
 				signal: AbortSignal.timeout(2_000),
 			});
@@ -121,7 +131,7 @@ async function waitForServer(
 		await new Promise<void>((resolveWait) => setTimeout(resolveWait, 250));
 	}
 	throw new Error(
-		`Frontend did not become ready at ${server.url.origin}: ${lastError}`,
+		`Frontend did not become ready at ${redactScreenshotUrl(target.href)}: ${lastError}`,
 	);
 }
 
@@ -235,6 +245,16 @@ async function resolvePlan(options: DocScreenshotCliOptions): Promise<{
 
 async function run(options: DocScreenshotCliOptions): Promise<number> {
 	const { plan, planPath } = await resolvePlan(options);
+	if (options.scenario) {
+		const selected = new Set(options.scenario.split(","));
+		for (const name of selected) {
+			if (!plan.scenarios.some((scenario) => scenario.name === name))
+				throw new Error(`Unknown scenario: ${name}`);
+		}
+		plan.scenarios = plan.scenarios.filter((scenario) =>
+			selected.has(scenario.name),
+		);
+	}
 	const app = plan.app;
 	const explicitFrontend = options.frontendUrl ?? plan.baseUrl;
 	let spawned: SpawnedServer | undefined;
@@ -280,17 +300,54 @@ async function run(options: DocScreenshotCliOptions): Promise<number> {
 	process.once("SIGTERM", onSigterm);
 	try {
 		if (spawned) {
-			await waitForServer(spawned, Math.max(plan.defaults.timeoutMs, 60_000));
+			const firstScenario = plan.scenarios[0];
+			if (!firstScenario) throw new Error("Capture plan has no scenarios.");
+			await waitForServer(
+				spawned,
+				firstScenario,
+				Math.max(plan.defaults.timeoutMs, 60_000),
+			);
 		}
 		console.error(
 			`Capturing ${plan.scenarios.length} documentation scenario(s)...`,
 		);
+		const digest = (value: string | Buffer) =>
+			createHash("sha256").update(value).digest("hex");
+		const git = (args: string[]) =>
+			spawnSync("git", args, { cwd: repoDir, encoding: "utf8" }).stdout.trim();
+		const provenance = {
+			plan: options.plan ? relative(repoDir, options.plan) : "direct",
+			appCommit: git(["rev-parse", "HEAD"]),
+			workingTreeDirty: git(["status", "--porcelain"]).length > 0,
+			staticAssetsFromDisk: process.env.DOC_SCREENSHOT_STATIC_DIR
+				? relative(repoDir, resolve(process.env.DOC_SCREENSHOT_STATIC_DIR))
+				: undefined,
+			tauriFixture: fixturePath ? relative(repoDir, fixturePath) : undefined,
+			httpFixture: httpFixturePath
+				? relative(repoDir, httpFixturePath)
+				: undefined,
+			planSha256: digest(
+				options.plan ? await readFile(options.plan) : JSON.stringify(plan),
+			),
+			fixtureSha256: fixturePath
+				? digest(await readFile(fixturePath))
+				: undefined,
+			httpFixtureSha256: httpFixturePath
+				? digest(await readFile(httpFixturePath))
+				: undefined,
+		};
 		const result = await runDocScreenshotPlan(plan, {
 			baseUrl: frontendUrl.origin,
 			outputDir,
 			tauriFixture: fixture,
 			httpFixture,
+			provenance,
 		});
+		await mkdir(outputDir, { recursive: true });
+		await writeFile(
+			resolve(outputDir, "capture-result.json"),
+			`${JSON.stringify(result, null, 2)}\n`,
+		);
 		printResult(result, options.json);
 		return result.passed ? 0 : 1;
 	} finally {

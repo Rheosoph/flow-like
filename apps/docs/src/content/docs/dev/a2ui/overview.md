@@ -1,11 +1,13 @@
 ---
-title: A2UI in Flow-Like
-description: Build and render declarative interfaces for Pages and Widgets
+title: A2UI runtime and messages
+description: Integrate the renderer, surface messages, and workflow action contracts.
 sidebar:
   order: 0
 ---
 
-Flow-Like uses an **Agent-to-UI (A2UI)** component model for interfaces that can be authored visually, generated with FlowPilot, rendered safely, and updated by a running workflow.
+Use this guide when integrating Flow-Like's A2UI renderer or producing surface
+messages from a workflow. For authoring tasks and the shared Page, Widget, and
+route definitions, start with [Build interfaces with A2UI](/apps/a2ui/).
 
 An A2UI surface is data, not executable frontend code. It contains allowlisted component types, a data model, styling, and actions. The Flow-Like renderer turns that description into native React components.
 
@@ -100,7 +102,7 @@ Pages and Widgets both store A2UI components, but they have different lifecycles
 
 | Concept | Scope | Runtime role |
 | --- | --- | --- |
-| **Page** | An app experience, usually connected to a flow | Rendered when an app event targets the page |
+| **Page** | A full interface owned by a Flow | Rendered when an app event targets the page |
 | **Widget** | A reusable UI block | Inserted into a Page or another surface as a widget instance |
 
 A Page can also define load, unload, and interval events. A Widget can define
@@ -140,7 +142,7 @@ This keeps the boundary explicit:
 
 ## Continue
 
-- [Pages](/dev/a2ui/pages/) — create and configure app Pages
-- [Widgets](/dev/a2ui/widgets/) — build reusable UI blocks
-- [Visual Builder](/dev/a2ui/visual-builder/) — use the current builder interface
-- [Routes](/dev/a2ui/routes/) — map URL paths to app events
+- [Page runtime and state API](/dev/a2ui/pages/): integrate Page lifecycle and storage
+- [Widget runtime and bindings](/dev/a2ui/widgets/): configure reuse, overrides, and actions
+- [Visual Builder controls](/dev/a2ui/visual-builder/): look up editor behavior
+- [Route-state API and resolution](/dev/a2ui/routes/): map paths to App Events

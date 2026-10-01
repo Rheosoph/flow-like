@@ -3,6 +3,7 @@ import base64
 import hashlib
 import subprocess
 from unittest.mock import patch
+from urllib.error import HTTPError
 import json
 from pathlib import Path
 import tempfile
@@ -103,6 +104,26 @@ class StandalonePublisherTests(unittest.TestCase):
 
     def publish(self, store, verify=lambda *_: None, verify_container=lambda *_: None):
         return release.publish_bundle(self.directory, "https://cdn.example/standalone", "standalone", [self.key], store, verify, verify_container)
+
+    def test_preflight_refuses_published_or_partly_uploaded_sequences(self):
+        base = "https://cdn.example/standalone"
+        stable = self.signed(5)
+        requests = []
+        def cdn(objects):
+            def published(url, method="GET", limit=16384):
+                requests.append((method, url))
+                return objects.get(url)
+            return patch.object(release, "published_object", side_effect=published)
+        keys = json.dumps([self.key])
+        with cdn({f"{base}/release.jws": stable}):
+            with self.assertRaisesRegex(ValueError, "sequence 5 must be greater than the published sequence 5"):
+                release.preflight(base, 5, keys)
+            release.preflight(base, 6, keys)
+        self.assertEqual(requests[-1], ("HEAD", f"{base}/releases/6/release.jws"))
+        self.assertEqual(len(requests), 1 + 1 + len(release.TARGETS) + 1)
+        partial = f"{base}/releases/1/flow-like-standalone-x86_64-unknown-linux-gnu"
+        with cdn({partial: b""}), self.assertRaisesRegex(ValueError, "already uploaded flow-like-standalone-x86_64-unknown-linux-gnu for sequence 1"):
+            release.preflight(base, 1, keys)
 
     def test_anonymous_container_failure_never_uploads_or_promotes_release(self):
         signed = self.signed(10)
@@ -263,6 +284,43 @@ class StandalonePublisherTests(unittest.TestCase):
                 release.public_readback("https://cdn.example/file", 8, "0"*64)
         with self.assertRaises(ValueError):
             release.NoRedirect().redirect_request(None, None, 302, "", {}, "https://other.example")
+
+    def test_public_readback_identifies_itself_and_waits_out_cached_not_found(self):
+        class Response:
+            status = 200
+            headers = {"Access-Control-Allow-Origin": "*"}
+            body = b"artifact"
+            def __enter__(self): return self
+            def __exit__(self, *_): pass
+            def read(self, _):
+                value, self.body = self.body, b""
+                return value
+        requests = []
+        def respond(*outcomes):
+            pending = list(outcomes)
+            def open_response(request, **_):
+                requests.append(request)
+                outcome = pending.pop(0)
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+            return open_response
+        def status(code):
+            return HTTPError("https://cdn.example/file", code, "", {}, None)
+        digest = hashlib.sha256(b"artifact").hexdigest()
+        with patch.object(release, "build_opener") as opener, patch.object(release.time, "sleep") as sleep:
+            opener.return_value.open.side_effect = respond(status(404), status(404), Response())
+            release.public_readback("https://cdn.example/file", 8, digest)
+            self.assertEqual(sleep.call_count, 2)
+            self.assertEqual({request.get_header("User-agent") for request in requests}, {"flow-like-standalone-release-verifier/1"})
+            opener.return_value.open.side_effect = respond(*[status(404)] * release.CDN_NOT_FOUND_ATTEMPTS)
+            with self.assertRaisesRegex(ValueError, "HTTP 404 for https://cdn.example/file"):
+                release.public_readback("https://cdn.example/file", 8, digest)
+            sleep.reset_mock()
+            opener.return_value.open.side_effect = respond(status(403))
+            with self.assertRaisesRegex(ValueError, "HTTP 403 for https://cdn.example/file"):
+                release.public_readback("https://cdn.example/file", 8, digest)
+            sleep.assert_not_called()
 
 
 if __name__ == "__main__":

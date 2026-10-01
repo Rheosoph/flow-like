@@ -36,9 +36,9 @@ use super::workflow_sdk::{InitialSourceCheckpointPhase, workflow_initial_source_
 use super::workflow_state::{
     EXTERNAL_CIRCUIT_OPEN_PHASE_END_GRACE, EXTERNAL_PREDRAFT_SOURCE_CHECKPOINT_BUDGET,
     EXTERNAL_STAGED_COMMIT_PREFIX_RATIO, EXTERNAL_TRANSIENT_RESTART_BACKOFF,
-    MAX_EXTERNAL_TRANSPORT_RESTARTS, MAX_EXTERNAL_WORKFLOW_CONTINUATIONS,
-    MAX_EXTERNAL_ZERO_ACTIVITY_RESTARTS, NESTED_RUN_WALL_CLOCK_BUDGET, TimeExtensionDecision,
-    WorkflowProgressMark, WorkflowToolLoopState,
+    MAX_EXTERNAL_TRANSPORT_RESTARTS, MAX_EXTERNAL_ZERO_ACTIVITY_RESTARTS,
+    NESTED_RUN_WALL_CLOCK_BUDGET, TimeExtensionDecision, WorkflowProgressMark,
+    WorkflowToolLoopState,
 };
 use crate::functions::ai::frontend_tool_bridge::FrontendToolContext;
 use flow_like::{
@@ -239,10 +239,9 @@ pub(super) async fn external_code_agent_chat_internal(
                 prompt_mode,
             )
         });
-    // The latest Claude session id observed on a finished phase; every later phase in this run
-    // (continuation or transport restart) resumes it so the model keeps its own transcript
-    // instead of a lossy host reconstruction. Phases with no captured id fall back to the full
-    // re-wrapped prompt in a fresh session.
+    // Resume the latest provider session so a source checkpoint timeout does not make the model
+    // reread the entire board and repeat its preparation. Without a captured session, reconstruct
+    // the context from the host's retained state.
     let mut resume_session_id: Option<String> = None;
     let mut next_phase_resume: Option<String> = None;
     let mut prompt = if claude_role_appendix.is_some() {
@@ -481,16 +480,18 @@ pub(super) async fn external_code_agent_chat_internal(
             watchdog.abort();
         }
         if predraft_checkpoint_fired.load(AtomicOrdering::Relaxed) {
+            let checkpoint_error = format!(
+                "FlowPilot pre-draft source checkpoint timed out after {} seconds with usable declarations but no source operation. Reuse the accepted scope plan and write its active segment now. For an existing board, write_flowscript accepts exact edits without repeating the complete source.",
+                EXTERNAL_PREDRAFT_SOURCE_CHECKPOINT_BUDGET.as_secs()
+            );
             if let Some(state) = workflow_state.as_ref()
                 && let Ok(mut state) = state.lock()
                 && !state.flowscript_draft_retained
             {
                 state.last_status = Some("declarations_ready_no_source".to_string());
+                state.last_errors = vec![checkpoint_error.clone()];
             }
-            run_result = Err(format!(
-                "FlowPilot pre-draft source checkpoint timed out after {} seconds with usable declarations but no source operation; continue in a fresh bounded phase, reuse the accepted scope plan or call plan_board_scope exactly once, then call write_flowscript for its active segment",
-                EXTERNAL_PREDRAFT_SOURCE_CHECKPOINT_BUDGET.as_secs()
-            ));
+            run_result = Err(checkpoint_error);
         } else if circuit_open_fired.load(AtomicOrdering::Relaxed) {
             run_result = Err(
                 "FlowPilot shared zero-progress circuit opened mid-phase; the host ended the provider phase so a bounded continuation with a reset circuit can retry a materially different strategy"
@@ -662,8 +663,8 @@ pub(super) async fn external_code_agent_chat_internal(
             resume_session_id.as_deref(),
         ) {
             // Resumed continuation: the session already holds the platform prompt and the
-            // model's own transcript — send only the compact continuation payload.
-            (Some(_), Some(session)) => {
+            // model's own transcript. Send only the compact continuation payload.
+            (_, Some(session)) => {
                 next_phase_resume = Some(session.to_string());
                 repair_request
             }
@@ -684,8 +685,9 @@ pub(super) async fn external_code_agent_chat_internal(
             &channel,
             EXTERNAL_AGENT_TOOL_CALL_ID,
             &format!(
-                "{} ended before queueing changes; continuing the bounded workflow run ({continuation}/{MAX_EXTERNAL_WORKFLOW_CONTINUATIONS})",
-                backend.label()
+                "{} ended before queueing changes; continuing the bounded workflow run ({continuation}/{})",
+                backend.label(),
+                workflow_continuation_budget(workflow_state.as_ref())
             ),
             parent_request_id.as_deref(),
         );
@@ -725,24 +727,12 @@ pub(super) async fn external_code_agent_chat_internal(
         .as_ref()
         .and_then(|snapshot| snapshot.last_flowscript.as_ref())
         .is_some();
-    let agent_output = match agent_result {
-        Ok(output) => output,
-        Err(error) if last_successful_mutation.is_some() => ExternalAgentRunOutput {
-            text: render_recovered_mutation_message(
-                last_successful_mutation
-                    .as_ref()
-                    .expect("guarded by is_some"),
-            ),
-            error: Some(error),
-            session_id: None,
-        },
-        Err(error) if workflow_edit_request && has_retained_candidate => ExternalAgentRunOutput {
-            text: String::new(),
-            error: Some(error),
-            session_id: None,
-        },
-        Err(error) => return Err(actionable_external_agent_failure(backend, &error)),
-    };
+    let agent_output = recover_terminal_agent_output(
+        agent_result,
+        last_successful_mutation.as_ref(),
+        workflow_edit_request && has_retained_candidate,
+    )
+    .map_err(|error| actionable_external_agent_failure(backend, &error))?;
     let text = agent_output.text.trim().to_string();
     let display_error = agent_output
         .error
@@ -845,4 +835,111 @@ pub(super) async fn external_code_agent_chat_internal(
         flow_ir_commit,
         active_scope: scope,
     })
+}
+
+fn recover_terminal_agent_output(
+    result: Result<ExternalAgentRunOutput, String>,
+    last_successful_mutation: Option<&super::mcp::McpToolCompletion>,
+    has_retained_workflow: bool,
+) -> Result<ExternalAgentRunOutput, String> {
+    let mut output = match result {
+        Ok(output) => output,
+        Err(error) if last_successful_mutation.is_some() || has_retained_workflow => {
+            ExternalAgentRunOutput {
+                text: String::new(),
+                error: Some(error),
+                session_id: None,
+            }
+        }
+        Err(error) => return Err(error),
+    };
+    // A captured session keeps failed empty phases in Ok so they can resume. At the terminal
+    // boundary, recover completed tools just as we do for failures without a captured session.
+    if output.error.is_some()
+        && output.text.trim().is_empty()
+        && let Some(completion) = last_successful_mutation
+    {
+        output.text = render_recovered_mutation_message(completion);
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+mod terminal_recovery_tests {
+    use super::super::mcp::McpToolCompletion;
+    use super::*;
+
+    fn failed_output(text: &str) -> ExternalAgentRunOutput {
+        ExternalAgentRunOutput {
+            text: text.to_string(),
+            error: Some("connection reset".to_string()),
+            session_id: Some("retained-session".to_string()),
+        }
+    }
+
+    fn completed_mutation() -> McpToolCompletion {
+        McpToolCompletion {
+            tool_name: "create_app".to_string(),
+            result_text: r#"{"status":"success","app_id":"created-app"}"#.to_string(),
+        }
+    }
+
+    #[test]
+    fn failed_empty_session_recovers_completed_mutation_and_preserves_failure() {
+        let completion = completed_mutation();
+        let output =
+            recover_terminal_agent_output(Ok(failed_output(" \n")), Some(&completion), false)
+                .unwrap_or_else(|error| panic!("known mutation should be recoverable: {error}"));
+        assert_eq!(output.text, render_recovered_mutation_message(&completion));
+        assert_eq!(output.error.as_deref(), Some("connection reset"));
+        assert_eq!(output.session_id.as_deref(), Some("retained-session"));
+    }
+
+    #[test]
+    fn failed_empty_session_without_completed_mutation_keeps_its_error() {
+        let output = recover_terminal_agent_output(Ok(failed_output("")), None, false)
+            .unwrap_or_else(|error| panic!("the captured session should be preserved: {error}"));
+        assert!(output.text.is_empty());
+        assert_eq!(output.error.as_deref(), Some("connection reset"));
+        assert_eq!(output.session_id.as_deref(), Some("retained-session"));
+    }
+
+    #[test]
+    fn terminal_recovery_preserves_errors_without_sessions_and_partial_text() {
+        let completion = completed_mutation();
+        let recovered = recover_terminal_agent_output(
+            Err("connection reset".to_string()),
+            Some(&completion),
+            false,
+        )
+        .unwrap_or_else(|error| panic!("existing mutation recovery should remain: {error}"));
+        assert_eq!(
+            recovered.text,
+            render_recovered_mutation_message(&completion)
+        );
+        assert_eq!(recovered.error.as_deref(), Some("connection reset"));
+        assert!(recovered.session_id.is_none());
+
+        let retained =
+            recover_terminal_agent_output(Err("connection reset".to_string()), None, true)
+                .unwrap_or_else(|error| {
+                    panic!("retained workflow should remain recoverable: {error}")
+                });
+        assert!(retained.text.is_empty());
+        assert_eq!(retained.error.as_deref(), Some("connection reset"));
+        assert!(matches!(
+            recover_terminal_agent_output(Err("connection reset".to_string()), None, false),
+            Err(error) if error == "connection reset"
+        ));
+
+        let partial = recover_terminal_agent_output(
+            Ok(failed_output("Existing partial answer")),
+            Some(&completion),
+            false,
+        )
+        .unwrap_or_else(|error| panic!("partial answer should remain: {error}"));
+        assert_eq!(partial.text, "Existing partial answer");
+        assert_eq!(partial.error.as_deref(), Some("connection reset"));
+        assert_eq!(partial.session_id.as_deref(), Some("retained-session"));
+    }
 }

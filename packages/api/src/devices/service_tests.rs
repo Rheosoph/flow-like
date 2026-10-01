@@ -323,8 +323,6 @@ async fn signed_enrollment_session_presence_and_revocation() {
         DeviceRegistrationStatus::Revoked
     );
 
-    drop(state);
-    drop(disabled);
     db.close().await.unwrap();
     admin
         .execute_unprepared(&format!("DROP SCHEMA {schema} CASCADE"))

@@ -51,6 +51,21 @@ app uploads, or an administrator must install the app for you.
    a team or group chat where it is installed. Check the Event's execution
    history and its reply.
 
+### Update the Teams app
+
+Teams keeps using the app package it was given until someone installs a newer
+one. Download the Teams app again and update it in Teams, or send the new ZIP to
+your Teams administrator, when:
+
+- you change what the bot can read, or
+- a Flow-Like update changes the app. File support is such a change: apps
+  installed from a package older than version 1.1 may show no attach option for
+  the bot, so uploaded files never reach it.
+
+The package version increases with every saved setup change and every change
+to the app itself, so Teams recognizes the new ZIP as an update. Flow-Like
+cannot see which version is installed.
+
 ### Connect your own registration
 
 For **Your bot in Teams**, open [Teams Developer Portal](https://dev.teams.microsoft.com/)
@@ -96,8 +111,9 @@ For explicit replies, search the node catalog under **Events / Chat / Teams**:
 | **Send Teams Card** | The same **Session**, plus an Adaptive Card JSON object |
 | **Update Teams Message** | The same **Session**, the **Message ID** from a send node, and replacement text |
 
-These nodes reply within the originating execution and conversation. The
-current bot processes text messages; attachments are not passed into the flow.
+These nodes reply within the originating execution and conversation. Files and
+images people send are passed into the flow; see
+[Files and images](#files-and-images).
 
 Use [Single Choice](/nodes/events/chat/interaction/interaction-single-choice/),
 [Multiple Choice](/nodes/events/chat/interaction/interaction-multiple-choice/), or
@@ -129,6 +145,79 @@ that the next message receives, like the final **Push Response** text.
 within the executor's remaining lifetime and connect its **Timeout** output.
 On Lambda, the invocation remains active and its execution limit still applies.
 Saved card state does not support durable approval waits across worker exits.
+
+## Files and images
+
+Flow-Like downloads the files in a message when it arrives and passes them to
+the flow. What Teams delivers to bots depends on the conversation:
+
+| Conversation | Uploaded files | Pasted images and photos |
+|--------------|----------------|--------------------------|
+| 1:1 chat with the bot | Yes | Yes |
+| Group chat, channel, meeting chat | No. Teams does not send them to bots. With **Read channel and chat messages**, the flow gets each file's name and SharePoint link, but not its content. | Yes |
+
+- Teams mobile sends files picked from OneDrive, SharePoint, or recent cloud
+  files without a download link. Send them from Teams desktop or web, or attach
+  a local copy.
+- Bots cannot download inline videos or stickers. They appear as `video-N` or
+  `sticker-N` entries with an error.
+- Microsoft does not deliver files to bots in GCC High, DoD, or Teams operated
+  by 21Vianet.
+- A message delivers at most 10 files, 25 MB each and 50 MB in total. Each
+  download must finish within about 8 seconds, because Microsoft expects the
+  bot to answer quickly.
+- Apps installed from an older package may not accept file uploads; see
+  [Update the Teams app](#update-the-teams-app).
+
+### Use files in the flow
+
+- The Chat Event's **Attachments** output lists every downloaded file with its
+  `url`, `name`, `type`, and `size`. The last **History** message carries the
+  files as media parts, and its text names every file as `[image: …]` or
+  `[file: …]`.
+- `local_session.teams.message.files` lists every file, including those that
+  were not downloaded. `error` says why, and `link` opens the file in SharePoint
+  or OneDrive when Teams provided one. The **Teams Context** node's **Files**
+  output returns the downloaded files as paths.
+- `url` is a convenience link for the current run. It stops working when the
+  server's signing credentials expire, which on AWS Lambda is usually well
+  before the 48 hours it asks for. For later access, use the file's `path`:
+  pass it to file nodes, or to [Sign URL](/nodes/data/files/operations/sign-url/)
+  for a fresh link. The files are temporary, so copy them to app storage to
+  keep them.
+- In 1:1 chats, the model also receives the files of the three most recent
+  earlier messages with files from the last 47 hours, but only once the flow
+  has answered those messages with its final response. Replies sent only with **Send Teams
+  Message** do not count. A follow-up sent before that answer sees just the
+  file name, so send a file together with the question about it.
+
+### Which models read which files
+
+Most providers do not fetch document links, so for direct model calls
+Flow-Like downloads PDFs, text files, and audio and embeds them in the request.
+When a model cannot read a file, the file is replaced by a short
+`[attachment omitted: …]` note instead of failing the run.
+
+| File | OpenAI, Azure, Bedrock | Anthropic | OpenRouter | Gemini, Vertex |
+|------|------------------------|-----------|------------|----------------|
+| PNG, JPEG, GIF, WebP | Yes | Yes | Yes | Yes |
+| PDF | Yes | Yes | Yes | Yes |
+| Text, CSV, Markdown, HTML, XML | Yes | Yes | Yes | Yes |
+| Audio | WAV and MP3, audio models only | No | Yes | Yes |
+| Video | No | No | Yes | Yes |
+| Word, Excel, JSON, ZIP, and other files | Name only | Name only | Name only | Name only |
+
+- OpenAI and Anthropic models also replace HEIC, SVG, BMP, TIFF, and AVIF
+  images with a note.
+- Each model call embeds at most 20 MiB of PDFs and audio and 256 KiB of text,
+  newest files first. Only files whose storage link uses HTTPS are embedded.
+- **Invoke Agent** and **Stream Invoke Agent** pass files as links. OpenAI Chat
+  Completions, Azure, Bedrock, and Anthropic models then see a note instead of
+  PDFs, text files, and audio.
+- Other providers receive text files; check their documentation for other
+  media.
+- To process a Word, Excel, or JSON file, read it through its `path` with a
+  file node.
 
 ## Operate the integration
 
@@ -231,6 +320,12 @@ recovery tag, so an administrator can remove the registration.
   Inspect the Event run for workflow or credential errors.
 - **A card rejects a response:** check the assigned user IDs and conversation,
   then confirm that the Interaction and execution are still waiting.
+- **Files never arrive in 1:1 chats:** download the Teams app again and update
+  it in Teams. Older packages may not let people attach files for the bot.
+- **The bot ignores a file:** check the run's
+  `local_session.teams.message.files[].error`, and whether the model can read
+  that file type. The API logs why a file was not downloaded at warning level,
+  with hosts but never download links.
 - **Delivery is uncertain:** inspect Teams before sending again. A network
   timeout can happen after Microsoft accepted a message, so Flow-Like sends
   each message at most once and reports the attempt as failed.

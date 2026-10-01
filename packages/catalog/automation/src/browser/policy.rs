@@ -79,10 +79,12 @@ impl NavigationPolicy {
             ))
         };
         let scheme = url.scheme().to_ascii_lowercase();
-        let listed = self
-            .allowed_schemes
-            .iter()
-            .any(|allowed| allowed.trim().trim_end_matches(':').eq_ignore_ascii_case(&scheme));
+        let listed = self.allowed_schemes.iter().any(|allowed| {
+            allowed
+                .trim()
+                .trim_end_matches(':')
+                .eq_ignore_ascii_case(&scheme)
+        });
         if self.allowed_schemes.is_empty() {
             if PRIVILEGED_SCHEMES.contains(&scheme.as_str()) {
                 return blocked(format!(
@@ -119,7 +121,10 @@ impl NavigationPolicy {
             {
                 return blocked(format!("'{ip}' is a private or local network address"));
             }
-            if host == "localhost" || host.ends_with(".localhost") || METADATA_HOSTS.contains(&host.as_str()) {
+            if host == "localhost"
+                || host.ends_with(".localhost")
+                || METADATA_HOSTS.contains(&host.as_str())
+            {
                 return blocked(format!("'{host}' is a local or metadata host"));
             }
         }
@@ -151,7 +156,10 @@ impl NavigationPolicy {
                 "Navigation to '{url}' blocked by the navigation policy: host '{domain}' could not be resolved to verify it is not a private address"
             ));
         };
-        if let Some(address) = addresses.map(|address| address.ip()).find(|ip| is_private_ip(*ip)) {
+        if let Some(address) = addresses
+            .map(|address| address.ip())
+            .find(|ip| is_private_ip(*ip))
+        {
             return Err(flow_like_types::anyhow!(
                 "Navigation to '{url}' blocked by the navigation policy: host '{domain}' resolves to private address {address}"
             ));
@@ -162,7 +170,10 @@ impl NavigationPolicy {
 
 #[cfg(any(feature = "execute", test))]
 fn policy_host(url: &Url) -> Option<String> {
-    let host = url.host_str()?.trim_start_matches('[').trim_end_matches(']');
+    let host = url
+        .host_str()?
+        .trim_start_matches('[')
+        .trim_end_matches(']');
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     (!host.is_empty()).then_some(host)
 }
@@ -173,7 +184,11 @@ fn normalize_pattern(pattern: &str) -> String {
     let pattern = pattern.split_once("://").map_or(pattern, |(_, rest)| rest);
     let pattern = pattern.split('/').next().unwrap_or_default();
     let pattern = if pattern.starts_with('[') {
-        pattern.split(']').next().unwrap_or_default().trim_start_matches('[')
+        pattern
+            .split(']')
+            .next()
+            .unwrap_or_default()
+            .trim_start_matches('[')
     } else if pattern.matches(':').count() == 1 {
         pattern.split(':').next().unwrap_or_default()
     } else {
@@ -240,7 +255,8 @@ fn private_v6(ip: Ipv6Addr) -> bool {
     }
     let segments = ip.segments();
     let ipv4_compatible = segments[..6].iter().all(|segment| *segment == 0);
-    let nat64 = segments[0] == 0x64 && segments[1] == 0xff9b && segments[2..6].iter().all(|s| *s == 0);
+    let nat64 =
+        segments[0] == 0x64 && segments[1] == 0xff9b && segments[2..6].iter().all(|s| *s == 0);
     ip.is_loopback()
         || ip.is_unspecified()
         || ip.is_multicast()
@@ -299,17 +315,17 @@ pub(crate) async fn session_policy(
 /// Checks where a navigation ended (after redirects) and leaves the page when it is blocked.
 #[cfg(feature = "execute")]
 pub(crate) async fn verify_landing(
-    driver: &thirtyfour::WebDriver,
+    ctx: &super::driver::PageContext,
     policy: &NavigationPolicy,
     requested: &str,
 ) -> flow_like_types::Result<String> {
-    let landed = driver
-        .current_url()
-        .await
-        .map_err(|error| flow_like_types::anyhow!("Failed to read the URL after navigating to '{requested}': {error}"))?
-        .to_string();
+    let landed = ctx.page.url().await.map_err(|error| {
+        flow_like_types::anyhow!(
+            "Failed to read the URL after navigating to '{requested}': {error}"
+        )
+    })?;
     if let Err(error) = policy.check(&landed).await {
-        let _ = driver.goto("about:blank").await;
+        let _ = ctx.page.goto("about:blank").await;
         return Err(flow_like_types::anyhow!(
             "Navigation to '{requested}' ended on a blocked page and was left: {error}"
         ));
@@ -433,11 +449,10 @@ impl NodeLogic for BrowserSetNavigationPolicyNode {
         };
         let effective = if enabled {
             validate_policy(&policy)?;
-            context
-                .cache
-                .write()
-                .await
-                .insert(policy_key(&session), std::sync::Arc::new(PolicyEntry(policy.clone())));
+            context.cache.write().await.insert(
+                policy_key(&session),
+                std::sync::Arc::new(PolicyEntry(policy.clone())),
+            );
             policy
         } else {
             context.cache.write().await.remove(&policy_key(&session));
@@ -560,7 +575,13 @@ mod tests {
         ] {
             assert!(is_private_ip(ip.parse().unwrap()), "{ip} should be private");
         }
-        for ip in ["8.8.8.8", "172.32.0.1", "100.63.255.255", "2606:4700:4700::1111", "::ffff:8.8.8.8"] {
+        for ip in [
+            "8.8.8.8",
+            "172.32.0.1",
+            "100.63.255.255",
+            "2606:4700:4700::1111",
+            "::ffff:8.8.8.8",
+        ] {
             assert!(!is_private_ip(ip.parse().unwrap()), "{ip} should be public");
         }
     }

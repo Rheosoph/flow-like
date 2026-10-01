@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import {
 	CloudIcon,
+	GitCompareArrowsIcon,
 	MonitorIcon,
 	ShieldAlertIcon,
 	ShieldCheckIcon,
@@ -327,12 +328,14 @@ export const BoardReleaseForm = memo(function BoardReleaseForm({
 	board,
 	version,
 	selectVersion,
+	onCompare,
 }: Readonly<{
 	appId: string;
 	boardId: string;
 	board: IBoard;
 	version?: [number, number, number];
 	selectVersion: (version?: [number, number, number]) => void;
+	onCompare?: () => void;
 }>) {
 	const { t } = useTranslation("flow");
 	const backend = useBackend();
@@ -413,6 +416,17 @@ export const BoardReleaseForm = memo(function BoardReleaseForm({
 						))}
 					</SelectContent>
 				</Select>
+				{onCompare && (
+					<Button
+						variant="outline"
+						size="sm"
+						className="h-7 justify-start gap-1.5 text-xs"
+						onClick={onCompare}
+					>
+						<GitCompareArrowsIcon className="h-3.5 w-3.5" />
+						{t("boardDiffCompareTitle", "Compare versions")}
+					</Button>
+				)}
 				{gate.data && (
 					<p
 						className="flex items-center gap-1.5 text-[11px] text-muted-foreground"

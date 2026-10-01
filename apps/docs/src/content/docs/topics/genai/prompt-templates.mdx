@@ -5,6 +5,8 @@ sidebar:
   order: 6
 ---
 
+import ChartPreview from "../../../../components/docs/ChartPreview";
+
 Flow-Like's markdown renderer can do more than plain text. In the markdown preview used by the internal debug page and markdown surfaces, fenced code blocks with the languages `nivo` and `plotly` are rendered as interactive charts instead of plain code.
 
 This page is for prompts that make an LLM return content that is immediately previewable inside Flow-Like.
@@ -78,7 +80,7 @@ Tell the model to return:
 
 Use this when you want the model to return a Flow-Like-renderable `nivo` block with minimal formatting overhead.
 
-```text
+`````text
 Return only a single fenced markdown code block with the language `nivo`.
 Do not include any explanation before or after the code block.
 
@@ -106,7 +108,7 @@ Q2,150,42
 Q3,170,55
 Q4,210,70
 ```
-```
+`````
 
 ### Example output
 
@@ -122,6 +124,8 @@ Q3,170,55
 Q4,210,70
 ````
 
+<ChartPreview language="nivo" source={"type: bar\ntitle: Quarterly revenue\nshowLegend: true\n---\nquarter,revenue,profit\nQ1,120,30\nQ2,150,42\nQ3,170,55\nQ4,210,70"} client:visible />
+
 ### Good uses
 
 - category comparisons
@@ -132,7 +136,7 @@ Q4,210,70
 
 Use this when the first column is time-like or ordered and you want a line chart.
 
-```text
+`````text
 Return only one fenced code block with the language `nivo`.
 Do not wrap it in prose.
 
@@ -154,7 +158,7 @@ Rules:
 - Keep the first column as the shared X axis.
 - Every remaining column must be numeric.
 - Do not output JSON.
-```
+`````
 
 ### Example output
 
@@ -170,11 +174,13 @@ Mar,155,61
 Apr,172,66
 ````
 
+<ChartPreview language="nivo" source={"type: line\ntitle: Monthly signups\nshowLegend: true\n---\nmonth,organic,paid\nJan,120,45\nFeb,140,52\nMar,155,61\nApr,172,66"} client:visible />
+
 ## Template: Nivo JSON mode for advanced chart types
 
 Use this when you need chart types that are easier to express as JSON, such as `sankey`, `chord`, `sunburst`, `treemap`, or `calendar`.
 
-```text
+`````text
 Return only one fenced markdown code block with the language `nivo`.
 Inside the code block, return valid JSON only.
 Do not include comments.
@@ -203,7 +209,7 @@ Example shape:
   }
 }
 ```
-```
+`````
 
 ### Example output
 
@@ -224,11 +230,13 @@ Example shape:
 }
 ````
 
+<ChartPreview language="nivo" source={"{\n  \"chartType\": \"sankey\",\n  \"data\": {\n    \"nodes\": [\n      { \"id\": \"Visitors\" },\n      { \"id\": \"Trials\" },\n      { \"id\": \"Customers\" }\n    ],\n    \"links\": [\n      { \"source\": \"Visitors\", \"target\": \"Trials\", \"value\": 320 },\n      { \"source\": \"Trials\", \"target\": \"Customers\", \"value\": 96 }\n    ]\n  }\n}"} client:visible />
+
 ## Template: Plotly chart in CSV mode
 
 Use this when you want the renderer to build a Plotly chart from compact CSV input.
 
-```text
+`````text
 Return only a single fenced markdown code block with the language `plotly`.
 Do not include any explanation.
 
@@ -252,7 +260,7 @@ Rules:
 - The first column is the X axis.
 - Remaining columns are numeric series.
 - Use `type: bar`, `line`, `scatter`, `pie`, `area`, `histogram`, `heatmap`, `box`, or `violin` as needed.
-```
+`````
 
 ### Example output
 
@@ -270,11 +278,13 @@ Mar,1490,44
 Apr,1710,57
 ````
 
+<ChartPreview language="plotly" source={"type: line\ntitle: Website traffic\nxLabel: Month\nyLabel: Visits\nshowLegend: true\n---\nmonth,visits,signups\nJan,1200,30\nFeb,1360,41\nMar,1490,44\nApr,1710,57"} client:visible />
+
 ## Template: Plotly JSON mode
 
 Use this when you want full control over traces, layout, and config.
 
-```text
+`````text
 Return only one fenced markdown code block with the language `plotly`.
 Inside the code block, return valid JSON only.
 No prose. No markdown outside the code block.
@@ -305,7 +315,7 @@ Example format:
   }
 }
 ```
-```
+`````
 
 ### Example output
 
@@ -329,11 +339,13 @@ Example format:
 }
 ````
 
+<ChartPreview language="plotly" source={"{\n  \"data\": [\n    {\n      \"x\": [\"Jan\", \"Feb\", \"Mar\", \"Apr\"],\n      \"y\": [1200, 1360, 1490, 1710],\n      \"type\": \"scatter\",\n      \"mode\": \"lines+markers\",\n      \"name\": \"Visits\"\n    }\n  ],\n  \"layout\": {\n    \"title\": \"Website traffic\"\n  },\n  \"config\": {\n    \"responsive\": true\n  }\n}"} client:visible />
+
 ## Template: Embed code block
 
 Use this when you want the model to embed an external link (video, social post, repository) using the `embed` fenced code block.
 
-```text
+`````text
 Return only a single fenced markdown code block with the language `embed`.
 Do not include any explanation.
 
@@ -350,7 +362,7 @@ start: 45
 
 Supported platforms with rich rendering: YouTube, Vimeo, X/Twitter, Reddit, GitHub, Stack Overflow, Hacker News, LinkedIn, Spotify.
 Any other URL renders as a generic link preview card.
-```
+`````
 
 ### Example output
 
@@ -362,7 +374,7 @@ https://github.com/Rheosoph/flow-like
 
 Use this when you want the model to display locations on a map using the `map` fenced code block.
 
-```text
+`````text
 Return only a single fenced markdown code block with the language `map`.
 Do not include any explanation.
 
@@ -408,7 +420,7 @@ lat,lng,label
 \`\`\`
 
 Always provide lat and lng as decimal degrees. Label and color are optional.
-```
+`````
 
 ### Example output
 
@@ -423,7 +435,7 @@ zoom: 14
 
 Use this when you want the model to highlight important information using `:::type` directive blocks.
 
-```text
+`````text
 Use callout blocks to highlight important information:
 
 :::info
@@ -452,7 +464,7 @@ Content crosses EU boundary. Review settings.
 :::
 
 Callouts support full markdown inside: **bold**, `code`, [links](url), and nested code blocks.
-```
+`````
 
 ### Supported types
 
@@ -468,7 +480,7 @@ Callouts support full markdown inside: **bold**, `code`, [links](url), and neste
 
 Use this when the model should include hidden or sensitive content that the user reveals on click.
 
-```text
+`````text
 Inline spoiler (for sensitive values):
 The password is ||hunter2|| and should be changed.
 
@@ -481,7 +493,7 @@ Block spoiler (for collapsible verbose content):
 
 Use inline spoilers for: API keys, passwords, PII, short sensitive values.
 Use block spoilers for: verbose logs, large JSON payloads, debug output, stack traces.
-```
+`````
 
 ## Recommended prompt endings
 
@@ -489,23 +501,23 @@ These work well as suffixes on your system prompt or instruction node:
 
 ### Return markdown only
 
-```text
+`````text
 Return only the final markdown output. Do not explain your reasoning.
-```
+`````
 
 ### Force a single preview block
 
-```text
+`````text
 Return exactly one fenced chart block and nothing else.
-```
+`````
 
 ### Keep it parser-safe
 
-```text
+`````text
 Do not add bullet points, notes, or commentary outside the fenced code block.
 Do not use tabs.
 Do not add trailing commas inside JSON.
-```
+`````
 
 ## Supported render targets
 

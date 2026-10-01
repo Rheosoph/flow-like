@@ -1,0 +1,8 @@
+{
+  "id": "review-001",
+  "revision": 1,
+  "state": "pending",
+  "destination": "test-inbox@example.invalid",
+  "proposed_message": "Your practice request is ready.",
+  "expires_at": "Set a future test time before running this exercise."
+}

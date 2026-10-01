@@ -119,6 +119,7 @@ fn desktop_source_recovery_resumes_exact_request_and_hides_mismatches() {
             replace_existing: false,
             mode: flow_like::flow::copilot::FlowIrDraftMode::Additive,
             source: source.to_string(),
+            edits: Vec::new(),
             allow_scope_reduction: false,
         },
         &binding,

@@ -5,7 +5,7 @@ sidebar:
     order: 06
 ---
 
-Open the **Library** in the desktop app and select **Create Flow**. If your
+Open **My Apps** in the desktop app and select **Create Flow**. If your
 library is empty, select **Create Your First App** instead; both actions open
 the same dialog:
 
@@ -30,5 +30,5 @@ profile. You can manage profile models in the [Model Catalog](/start/models/)
 and work with reusable [templates](/apps/templates/) after creating the
 project.
 
-Select **Create Project** to add the app to your Library and open its initial
+Select **Create Project** to add the App to My Apps and open its initial
 Flow.

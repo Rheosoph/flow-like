@@ -346,6 +346,29 @@ pub struct FlowIrObjectField {
     pub value: FlowIrValue,
 }
 
+const ANY_JSON_TYPES: [&str; 6] = ["object", "array", "string", "number", "boolean", "null"];
+const ANY_JSON_ARRAY_DEPTH: usize = 3;
+const ANY_JSON_DESCRIPTION: &str =
+    "Any JSON value: object, array, string, number, boolean or null.";
+
+/// Typed stand-in for an arbitrary JSON tool argument. schemars renders `serde_json::Value` as a
+/// typeless schema, which OpenAI's strict tool schemas reject and rig's Gemini conversion turns
+/// into `"type": ""`. Array nesting is unrolled to a fixed depth because rig's Gemini
+/// `flatten_schema` inlines `$ref`s recursively and never terminates on a self-reference. Gemini
+/// keeps only the first listed type, so the description names every type for that route.
+pub(crate) fn any_json_value_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let mut items =
+        serde_json::json!({ "type": ["object", "string", "number", "boolean", "null"] });
+    for _ in 1..ANY_JSON_ARRAY_DEPTH {
+        items = serde_json::json!({ "type": ANY_JSON_TYPES, "items": items });
+    }
+    schemars::json_schema!({
+        "type": ANY_JSON_TYPES,
+        "description": ANY_JSON_DESCRIPTION,
+        "items": items
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum FlowIrLiteral {
@@ -354,7 +377,7 @@ pub enum FlowIrLiteral {
     Float(f64),
     Boolean(bool),
     Null,
-    Json(serde_json::Value),
+    Json(#[schemars(schema_with = "any_json_value_schema")] serde_json::Value),
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq, Hash)]

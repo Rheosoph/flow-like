@@ -2194,6 +2194,7 @@ fn create_write_flowscript_tool(
             Ok(args) => args,
             Err(error) => return error,
         };
+        let source_is_host_computed = !args.edits.is_empty();
         let catalog = block_on_tool(provider.get_all_metadata());
         let result = with_current_board(&board, live_board.as_ref(), |board| {
             store.observe_board(board);
@@ -2206,7 +2207,13 @@ fn create_write_flowscript_tool(
         });
         super::copilot::workflow_benchmark::observe_source(&board_key, &result);
         schedule_flow_ir_draft_snapshot(&board_key, &store);
-        ToolResultObject::text(result.model_envelope())
+        // Initial edits produce a merged document absent from the submitted arguments. Keep that
+        // source available to workflow retention, continuation, and workspace previews.
+        ToolResultObject::text(if source_is_host_computed {
+            serde_json::to_string_pretty(&result).unwrap_or_default()
+        } else {
+            result.model_envelope()
+        })
     });
     (tool, handler)
 }
@@ -2252,11 +2259,8 @@ fn create_patch_flowscript_tool(
         });
         schedule_flow_ir_draft_snapshot(&board_key, &store);
         super::copilot::workflow_benchmark::observe_source(&board_key, &result);
-        // Patch is the one lifecycle result that must keep the full `source`: the merged document
-        // is host-computed, and both the workflow loop state (`workflow_tool_record_with_outcome`
-        // reads it into `last_flowscript`/continuation snapshots) and the workspace panel's
-        // `flowscript_workspace` frames have no other way to observe it. Write/check/commit return
-        // the model envelope because their retained source is exactly what the model submitted.
+        // Host-computed source must reach workflow retention and workspace previews. Like an
+        // initial edits-only write, a patch has no complete document in its submitted arguments.
         ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
     });
     (tool, handler)
@@ -5615,6 +5619,96 @@ mod tests {
     }
 
     #[test]
+    fn initial_source_edits_return_the_merged_document_for_observation_and_repair() {
+        use flow_like::flow::node::Node;
+
+        let board_key = format!("source-tool-edits-{:?}", std::thread::current().id());
+        let mut board = empty_board(&board_key);
+        let mut event = Node::new("events_simple", "events_simple", "", "");
+        event.id = "kept-event".to_string();
+        event.start = Some(true);
+        let event_pin = event
+            .add_output_pin("exec_out", "exec_out", "", VariableType::Execution)
+            .id
+            .clone();
+        let mut log = Node::new("log_info", "log_info", "", "");
+        log.id = "kept-log".to_string();
+        let log_pin = log.add_input_pin("exec_in", "exec_in", "", VariableType::Execution);
+        log_pin.depends_on.insert(event_pin.clone());
+        event
+            .pins
+            .get_mut(&event_pin)
+            .unwrap()
+            .connected_to
+            .insert(log_pin.id.clone());
+        log.add_output_pin("exec_out", "exec_out", "", VariableType::Execution);
+        log.add_input_pin("message", "message", "", VariableType::String)
+            .set_default_value(Some(json!("before")));
+        board.nodes.insert(event.id.clone(), event);
+        board.nodes.insert(log.id.clone(), log);
+        let board = Arc::new(board);
+        let original = board_to_flowscript(
+            &board,
+            &RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+        let tools = create_board_tools(
+            None,
+            Some(board.clone()),
+            None,
+            Some("Change the logged message to after."),
+            Some(Arc::new(StaticCatalogProvider {
+                catalog: typed_catalog(),
+            })),
+            Some(Arc::new(Mutex::new(SideEffectCommandQueue::default()))),
+            Some(Arc::new(Mutex::new(None))),
+        );
+        let call = |name: &str, args: Value| {
+            let handler = &tools.iter().find(|(tool, _)| tool.name == name).unwrap().1;
+            let result = handler(name, &args);
+            serde_json::from_str::<Value>(&result.text_result_for_llm).unwrap()
+        };
+        let written = call(
+            "write_flowscript",
+            json!({
+                "draft_id": "source-edits-sdk",
+                "edits": [{ "old_text": "\"before\"", "new_text": "\"after\"" }],
+            }),
+        );
+        let expected = original.replacen("\"before\"", "\"after\"", 1);
+        assert_ne!(expected, original);
+        assert_eq!(written["source"], expected, "{written:#}");
+        assert_eq!(written["revision"], 0);
+        assert!(
+            written["source"]
+                .as_str()
+                .unwrap()
+                .contains("//@n:kept-log")
+        );
+
+        let patched = call(
+            "patch_flowscript",
+            json!({
+                "draft_id": "source-edits-sdk",
+                "expected_revision": 0,
+                "old_text": "\"after\"",
+                "new_text": "\"repaired\"",
+            }),
+        );
+        assert_eq!(patched["revision"], 1, "{patched:#}");
+        assert_eq!(
+            patched["source"],
+            expected.replacen("\"after\"", "\"repaired\"", 1)
+        );
+
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.remove(&board_key);
+        }
+    }
+
+    #[test]
     fn source_commit_queues_only_the_exact_retained_host_batch() {
         let board_key = format!("source-tool-commit-{:?}", std::thread::current().id());
         if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
@@ -6544,6 +6638,7 @@ mod tests {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: "eventsSimple() {\n    logInfo({ message: \"hello\" })\n}\n".to_string(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );

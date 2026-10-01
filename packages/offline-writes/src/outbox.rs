@@ -1,6 +1,8 @@
 use crate::fs::{private_directory, relative_path, validate_namespace};
 use anyhow::{Context, Result, ensure};
 use flow_like_device_protocol::StoragePurpose;
+#[cfg(feature = "runtime")]
+use flow_like_storage::databases::vector::offline_mirror::{MirrorFile, MirrorRoot};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -206,6 +208,25 @@ pub struct OperationLookup {
     pub error_code: Option<String>,
 }
 
+/// A lazy snapshot's cloud root, the local version it was taken at and its cloud files.
+#[cfg(feature = "runtime")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedSnapshot {
+    pub root: MirrorRoot,
+    pub version: u64,
+    pub files: Vec<MirrorFile>,
+}
+
+/// A table resource as the lazy mirror's retention sees it.
+#[cfg(feature = "runtime")]
+pub(crate) struct MirrorTable {
+    pub(crate) resource: String,
+    pub(crate) local_name: String,
+    pub(crate) prefetch: bool,
+    /// The lane has non-terminal operations.
+    pub(crate) pending: bool,
+}
+
 pub struct Outbox {
     db: Mutex<Option<Connection>>,
     root: PathBuf,
@@ -297,6 +318,18 @@ fn status_of(db: &Connection, scope: String) -> Result<OutboxStatus> {
     })
 }
 
+/// Row-returning PRAGMAs go through `query_row`: `execute_batch` rejects them when rusqlite's
+/// `extra_check` feature is enabled anywhere in the host's build graph.
+fn configure(db: &Connection) -> Result<()> {
+    db.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
+    db.pragma_update(None, "synchronous", "FULL")?;
+    db.pragma_update_and_check(None, "secure_delete", "ON", |_| Ok(()))?;
+    db.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
+    db.pragma_update_and_check(None, "journal_size_limit", 16_777_216, |_| Ok(()))?;
+    db.pragma_update_and_check(None, "wal_autocheckpoint", 64, |_| Ok(()))?;
+    Ok(())
+}
+
 fn add_column(db: &Connection, table: &str, column: &str, declaration: &str) -> Result<()> {
     let exists: bool = db.query_row(
         &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name=?1)"),
@@ -339,6 +372,10 @@ fn sqlite_uri(path: &Path, immutable: bool) -> Result<String> {
 
 fn setting_key(prefix: &str, resource: &str) -> String {
     format!("{prefix}:{resource}")
+}
+
+fn utc_day(at: i64) -> i64 {
+    at.div_euclid(86_400)
 }
 
 impl Outbox {
@@ -404,12 +441,14 @@ impl Outbox {
         drop(file_options.open(&path)?);
         let db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_secs(10))?;
-        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON; PRAGMA auto_vacuum=INCREMENTAL; PRAGMA journal_size_limit=16777216; PRAGMA wal_autocheckpoint=64;
-            CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+        configure(&db)?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS resources(resource TEXT PRIMARY KEY,revision BLOB NOT NULL,local_base INTEGER,local_head INTEGER,branch TEXT,local_name TEXT);
             CREATE TABLE IF NOT EXISTS operations(sequence INTEGER PRIMARY KEY AUTOINCREMENT,operation_id TEXT NOT NULL UNIQUE,resource TEXT NOT NULL,payload BLOB NOT NULL,bytes INTEGER NOT NULL,state TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,first_queued_at INTEGER NOT NULL,error TEXT,coalesce_key TEXT,local_version INTEGER,local_expected BLOB,superseded_by TEXT,receipt BLOB);
-            CREATE INDEX IF NOT EXISTS operations_pending ON operations(state,sequence);")?;
+            CREATE INDEX IF NOT EXISTS operations_pending ON operations(state,sequence);
+            CREATE TABLE IF NOT EXISTS snapshots(local_name TEXT PRIMARY KEY,root TEXT NOT NULL,version INTEGER NOT NULL,files BLOB NOT NULL);")?;
         add_column(&db, "operations", "error_code", "TEXT")?;
+        add_column(&db, "resources", "prefetch", "INTEGER NOT NULL DEFAULT 0")?;
         if options.lanes == QueueLanes::PerResource {
             db.execute_batch(
                 "CREATE INDEX IF NOT EXISTS operations_lane ON operations(resource,sequence);",
@@ -472,7 +511,7 @@ impl Outbox {
         // A lower configuration still permits draining an existing larger queue.
         let pages =
             ((limits.max_queue_bytes + 16 * 1024 * 1024).div_ceil(page_size)).max(existing_pages);
-        db.execute_batch(&format!("PRAGMA max_page_count={pages}"))?;
+        db.pragma_update_and_check(None, "max_page_count", i64::try_from(pages)?, |_| Ok(()))?;
         Ok(())
     }
 
@@ -647,6 +686,53 @@ impl Outbox {
             .map(|value| value.parse::<i64>().map_err(Into::into))
             .transpose()
     }
+    /// Adds bytes the lazy mirror transferred to "download_bytes:{utc day}", the only charge
+    /// of the daily download allowance.
+    pub fn record_download(&self, at: i64, bytes: u64) -> Result<()> {
+        if bytes == 0 {
+            return Ok(());
+        }
+        let key = setting_key("download_bytes", &utc_day(at).to_string());
+        let mut db = self.lock()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM settings WHERE substr(key,1,15)='download_bytes:' AND key<>?1",
+            [&key],
+        )?;
+        tx.execute(
+            "INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+CAST(excluded.value AS INTEGER) AS TEXT)",
+            params![key, bytes.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn downloaded_today(&self, now: i64) -> Result<u64> {
+        Ok(self
+            .setting(&setting_key("download_bytes", &utc_day(now).to_string()))?
+            .map(|value| value.parse::<u64>())
+            .transpose()?
+            .unwrap_or(0))
+    }
+    /// Download everything flag of a table resource. Authoritative for registered tables.
+    pub fn set_prefetch(&self, resource: &str, prefetch: bool) -> Result<()> {
+        let changed = self.lock()?.execute(
+            "UPDATE resources SET prefetch=?2 WHERE resource=?1",
+            params![resource, prefetch],
+        )?;
+        ensure!(changed == 1, "Offline table resource is not initialized");
+        Ok(())
+    }
+    pub fn prefetch(&self, resource: &str) -> Result<bool> {
+        Ok(self
+            .lock()?
+            .query_row(
+                "SELECT prefetch FROM resources WHERE resource=?1",
+                [resource],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()?
+            .unwrap_or(false))
+    }
     pub fn set_remote_missing(&self, resource: &str, missing: bool) -> Result<()> {
         self.set_setting(
             &setting_key("remote_missing", resource),
@@ -721,17 +807,18 @@ impl Outbox {
         revision: &Value,
         local_base: Option<u64>,
     ) -> Result<()> {
-        self.lock()?.execute("INSERT OR IGNORE INTO resources(resource,revision,local_base,local_head) VALUES(?1,?2,?3,?3)", params![resource, serde_json::to_vec(revision)?, local_base])?;
-        Ok(())
+        self.initialize_table(resource, revision, local_base, None, false)
     }
+    /// The resource row with its local table and Download everything flag in one insert.
     pub fn initialize_table(
         &self,
         resource: &str,
         revision: &Value,
-        local_base: u64,
-        name: &str,
+        local_base: Option<u64>,
+        name: Option<&str>,
+        prefetch: bool,
     ) -> Result<()> {
-        self.lock()?.execute("INSERT OR IGNORE INTO resources(resource,revision,local_base,local_head,local_name) VALUES(?1,?2,?3,?3,?4)",params![resource,serde_json::to_vec(revision)?,local_base,name])?;
+        self.lock()?.execute("INSERT OR IGNORE INTO resources(resource,revision,local_base,local_head,local_name,prefetch) VALUES(?1,?2,?3,?3,?4,?5)",params![resource,serde_json::to_vec(revision)?,local_base,name,prefetch])?;
         Ok(())
     }
     pub fn retained_table_names(&self) -> Result<std::collections::HashSet<String>> {
@@ -1349,6 +1436,108 @@ impl Outbox {
     }
     pub fn status(&self) -> Result<OutboxStatus> {
         status_of(&*self.lock()?, self.scope.clone())
+    }
+}
+
+#[cfg(feature = "runtime")]
+impl Outbox {
+    /// The distinct roots of the recorded snapshots.
+    pub fn mirror_roots(&self) -> Result<Vec<MirrorRoot>> {
+        let roots = {
+            let db = self.lock()?;
+            let mut statement = db.prepare("SELECT DISTINCT root FROM snapshots ORDER BY root")?;
+            statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        roots
+            .iter()
+            .map(|root| {
+                serde_json::from_str(root)
+                    .with_context(|| format!("Invalid recorded offline mirror root '{root}'"))
+            })
+            .collect()
+    }
+
+    /// The cloud root, local version and zstd-compressed file list of a snapshot, in one
+    /// row, written before the snapshot is checkpointed.
+    pub fn record_snapshot(
+        &self,
+        local_name: &str,
+        root: &MirrorRoot,
+        version: u64,
+        files: &[MirrorFile],
+    ) -> Result<()> {
+        let files = zstd::encode_all(serde_json::to_vec(files)?.as_slice(), 3)?;
+        self.lock()?.execute(
+            "INSERT OR REPLACE INTO snapshots(local_name,root,version,files) VALUES(?1,?2,?3,?4)",
+            params![local_name, serde_json::to_string(root)?, version, files],
+        )?;
+        Ok(())
+    }
+
+    pub fn snapshot(&self, local_name: &str) -> Result<Option<RecordedSnapshot>> {
+        let row: Option<(String, u64, Vec<u8>)> = self
+            .lock()?
+            .query_row(
+                "SELECT root,version,files FROM snapshots WHERE local_name=?1",
+                [local_name],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        row.map(|(root, version, files)| {
+            Ok(RecordedSnapshot {
+                root: serde_json::from_str(&root)?,
+                version,
+                files: serde_json::from_slice(&zstd::decode_all(files.as_slice())?).with_context(
+                    || format!("Invalid file list of offline snapshot '{local_name}'"),
+                )?,
+            })
+        })
+        .transpose()
+    }
+
+    /// Deletes the rows of snapshots that are neither current, retired within their grace,
+    /// nor named in `preparing`.
+    pub fn prune_snapshots(&self, preparing: &[String]) -> Result<()> {
+        let mut db = self.lock()?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let unused = {
+            let mut statement = tx.prepare("SELECT local_name FROM snapshots WHERE local_name NOT IN (SELECT local_name FROM resources WHERE local_name IS NOT NULL) AND local_name NOT IN (SELECT substr(key,9) FROM settings WHERE substr(key,1,8)='retired:')")?;
+            statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for name in unused.iter().filter(|name| !preparing.contains(name)) {
+            tx.execute("DELETE FROM snapshots WHERE local_name=?1", [name])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn mirror_tables(&self) -> Result<Vec<MirrorTable>> {
+        let db = self.lock()?;
+        let mut statement = db.prepare(&format!("SELECT resource,local_name,prefetch,EXISTS(SELECT 1 FROM operations WHERE operations.resource=resources.resource AND {NON_TERMINAL}) FROM resources WHERE json_extract(resource,'$.kind')='table' ORDER BY resource"))?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, bool>(2)?,
+                row.get::<_, bool>(3)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (resource, local_name, prefetch, pending) = row?;
+            Ok(MirrorTable {
+                local_name: local_name.unwrap_or_else(|| {
+                    format!("table_{}", blake3::hash(resource.as_bytes()).to_hex())
+                }),
+                resource,
+                prefetch,
+                pending,
+            })
+        })
+        .collect()
     }
 }
 

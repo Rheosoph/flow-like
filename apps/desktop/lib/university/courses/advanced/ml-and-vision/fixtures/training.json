@@ -1,0 +1,194 @@
+[
+  {
+    "id": "train-00",
+    "features": [
+      1.0,
+      1.0
+    ],
+    "label": "small"
+  },
+  {
+    "id": "train-01",
+    "features": [
+      2.0,
+      2.0
+    ],
+    "label": "small"
+  },
+  {
+    "id": "train-02",
+    "features": [
+      3.0,
+      3.0
+    ],
+    "label": "small"
+  },
+  {
+    "id": "train-03",
+    "features": [
+      4.0,
+      4.0
+    ],
+    "label": "small"
+  },
+  {
+    "id": "train-04",
+    "features": [
+      5.0,
+      1.0
+    ],
+    "label": "small"
+  },
+  {
+    "id": "train-05",
+    "features": [
+      6.0,
+      2.0
+    ],
+    "label": "small"
+  },
+  {
+    "id": "train-06",
+    "features": [
+      1.0,
+      3.0
+    ],
+    "label": "small"
+  },
+  {
+    "id": "train-07",
+    "features": [
+      2.0,
+      4.0
+    ],
+    "label": "small"
+  },
+  {
+    "id": "train-08",
+    "features": [
+      3.0,
+      1.0
+    ],
+    "label": "small"
+  },
+  {
+    "id": "train-09",
+    "features": [
+      4.0,
+      2.0
+    ],
+    "label": "small"
+  },
+  {
+    "id": "train-10",
+    "features": [
+      5.0,
+      3.0
+    ],
+    "label": "small"
+  },
+  {
+    "id": "train-11",
+    "features": [
+      6.0,
+      4.0
+    ],
+    "label": "small"
+  },
+  {
+    "id": "train-12",
+    "features": [
+      20.0,
+      15.0
+    ],
+    "label": "large"
+  },
+  {
+    "id": "train-13",
+    "features": [
+      21.0,
+      16.0
+    ],
+    "label": "large"
+  },
+  {
+    "id": "train-14",
+    "features": [
+      22.0,
+      17.0
+    ],
+    "label": "large"
+  },
+  {
+    "id": "train-15",
+    "features": [
+      23.0,
+      18.0
+    ],
+    "label": "large"
+  },
+  {
+    "id": "train-16",
+    "features": [
+      24.0,
+      15.0
+    ],
+    "label": "large"
+  },
+  {
+    "id": "train-17",
+    "features": [
+      25.0,
+      16.0
+    ],
+    "label": "large"
+  },
+  {
+    "id": "train-18",
+    "features": [
+      20.0,
+      17.0
+    ],
+    "label": "large"
+  },
+  {
+    "id": "train-19",
+    "features": [
+      21.0,
+      18.0
+    ],
+    "label": "large"
+  },
+  {
+    "id": "train-20",
+    "features": [
+      22.0,
+      15.0
+    ],
+    "label": "large"
+  },
+  {
+    "id": "train-21",
+    "features": [
+      23.0,
+      16.0
+    ],
+    "label": "large"
+  },
+  {
+    "id": "train-22",
+    "features": [
+      24.0,
+      17.0
+    ],
+    "label": "large"
+  },
+  {
+    "id": "train-23",
+    "features": [
+      25.0,
+      18.0
+    ],
+    "label": "large"
+  }
+]

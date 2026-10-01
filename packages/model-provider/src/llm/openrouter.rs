@@ -1,6 +1,10 @@
 use std::{any::Any, sync::Arc};
 
-use super::{ModelLogic, UsageReportingMode, extract_headers, merge_additional_params};
+use super::{
+    ModelLogic, UsageReportingMode, extract_headers,
+    media::{self, MediaDialect},
+    merge_additional_params, output_budget_as_body_param,
+};
 use crate::authorization::AuthorizedHttpClient;
 use crate::provider::random_provider;
 use crate::{
@@ -109,8 +113,15 @@ impl Cacheable for OpenRouterModel {
 impl ModelLogic for OpenRouterModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
-        Ok(ModelConstructor::with_max_tokens_body_param(
+        Ok(ModelConstructor::with_request_fixup(
             self.client.clone(),
+            |model, request| {
+                media::retain_supported(
+                    MediaDialect::OpenRouter,
+                    model,
+                    output_budget_as_body_param(request, "max_tokens"),
+                )
+            },
         ))
     }
 
@@ -140,7 +151,7 @@ impl ModelLogic for OpenRouterModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history::{HistoryMessage, Role};
+    use crate::history::{Content, ContentType, HistoryMessage, MessageContent, Role};
     use crate::llm::LLMCallback;
     use crate::llm::test_support::{chat_completion, json_response, serve_once, sse_response};
     use crate::response_chunk::ResponseChunk;
@@ -364,5 +375,38 @@ mod tests {
         assert_eq!(body["usage"]["include"], true);
         assert_eq!(body["temperature"], 0.25);
         assert_eq!(response.raw_response.finish_reason.as_deref(), Some("stop"));
+    }
+
+    #[tokio::test]
+    async fn linked_audio_becomes_a_note_and_keeps_the_budget() {
+        let (endpoint, server) = serve_once(json_response(chat_completion(MODEL, "stop", 1))).await;
+        let mut history = budgeted_history();
+        history.stream = Some(false);
+        history.messages.push(HistoryMessage {
+            role: Role::User,
+            content: MessageContent::Contents(vec![Content::Audio {
+                content_type: ContentType::AudioUrl,
+                audio_url: "https://bucket.s3.amazonaws.com/voice.mp3?X-Amz-Signature=secret"
+                    .to_string(),
+                media_type: Some("audio/mpeg".to_string()),
+                additional_params: None,
+            }]),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            annotations: None,
+        });
+
+        model(&endpoint).await.invoke(&history, None).await.unwrap();
+
+        let body = wire_body(&server.await.unwrap());
+        let body = body.to_string();
+        assert!(!body.contains("X-Amz-Signature"), "{body}");
+        assert!(
+            body.contains(
+                "[attachment omitted: this model cannot read audio (audio/mp3) sent as a link]"
+            ),
+            "{body}"
+        );
     }
 }

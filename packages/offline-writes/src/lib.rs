@@ -14,6 +14,8 @@ mod limits;
 #[cfg(feature = "runtime")]
 pub mod manager;
 #[cfg(feature = "runtime")]
+mod mirror;
+#[cfg(feature = "runtime")]
 mod table;
 
 #[cfg(feature = "test-support")]
@@ -27,9 +29,11 @@ pub use files::{
 pub use host::{Connectivity, Observation, OfflineHost, ReplayError, ReplayErrorKind};
 #[cfg(feature = "runtime")]
 pub use manager::{
-    FastForward, RefreshOutcome, TableActivation, TableSetup, TableState, WriteManager,
-    WriteManagerOptions,
+    FastForward, LazyMirrorOptions, MirrorMode, MirrorUsage, RefreshOutcome, TableActivation,
+    TableSetup, TableState, WriteManager, WriteManagerOptions,
 };
+#[cfg(feature = "runtime")]
+pub use outbox::RecordedSnapshot;
 #[cfg(feature = "runtime")]
 pub use table::optional_table;
 
@@ -37,4 +41,5 @@ pub use table::optional_table;
 mod tests {
     mod files;
     mod manager;
+    mod mirror;
 }

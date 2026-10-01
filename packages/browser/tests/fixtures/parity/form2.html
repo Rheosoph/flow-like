@@ -1,0 +1,6 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Form2</title></head>
+<body>
+<form id="f2" onsubmit="event.preventDefault(); window.__log.push({t:'submit'});"><input id="q" name="q"><button type="submit">Go</button></form>
+<script>window.__log = []; for (const t of ['focus','blur','change','input']) document.getElementById('q').addEventListener(t, (e) => window.__log.push({ t, isTrusted: e.isTrusted }));</script>
+</body></html>

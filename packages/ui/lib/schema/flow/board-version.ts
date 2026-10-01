@@ -1,5 +1,13 @@
 export type BoardVersion = [number, number, number];
 
+export interface IBoardVersionInfo {
+	version: BoardVersion;
+	/** Unix milliseconds the version was published. */
+	published_at?: number | null;
+	/** Account id (`sub`) of the publisher when recorded. */
+	published_by?: string | null;
+}
+
 /**
  * Event payloads expose board versions as a loose number array. Keep version
  * pinning opt-in by accepting only a complete semantic-version tuple.

@@ -9,6 +9,7 @@ use crate::{
     cache::Reservation,
     entity::{app as app_entity, event_sink, sea_orm_active_enums::Status, sink_token},
     error::ApiError,
+    execution::state::RunStatus,
     routes::sink::trigger::{
         SinkTriggerClaims, TriggerEventInput, trigger_event_with_run_id, validate_sink_trigger_jwt,
     },
@@ -976,11 +977,11 @@ async fn dispatch_pending(state: &AppState, claims: &SinkTriggerClaims) -> Resul
             }
             Ok(false) => ("disabled", settled, row.expires_at),
             Err(error) if payload::is_too_large(&error) => {
-                tracing::warn!(delivery_id=%row.id,"Inbound email exceeds the size limit and will not be dispatched");
+                tracing::warn!(delivery_id=%row.id,app_id=%row.app_id,event_id=%row.event_id,max_bytes=max_bytes(state),"Inbound email exceeds the size limit and will not be dispatched");
                 ("too_large", settled, row.expires_at.min(settled))
             }
             Err(error) => {
-                tracing::warn!(delivery_id=%row.id,error=%error,"Inbound email dispatch will retry");
+                tracing::warn!(delivery_id=%row.id,app_id=%row.app_id,event_id=%row.event_id,error=%error,"Inbound email dispatch will retry");
                 let delay = (30_000_i64 * (1_i64 << row.attempts.saturating_sub(1).clamp(0, 7)))
                     .min(3_600_000);
                 ("pending", settled + delay, row.expires_at)
@@ -992,13 +993,25 @@ async fn dispatch_pending(state: &AppState, claims: &SinkTriggerClaims) -> Resul
     Ok(dispatched)
 }
 
+/// An attempt that timed out or lost its lease may have started a run without recording it.
+fn may_hold_run(row: &Delivery, timestamp: i64) -> bool {
+    timestamp < row.expires_at + RUN_RETENTION_CAP_MS
+        && (row.status == "dispatched"
+            || (row.attempts > 0
+                && matches!(row.status.as_str(), "pending" | "sending" | "disabled")))
+}
+
+/// Every attempt creates a pending run before handing it to the executor, so an unrecorded
+/// dispatch only protects a run that has actually started.
+fn run_keeps_files(dispatched: bool, status: &RunStatus, started_at: Option<i64>) -> bool {
+    !status.is_terminal() && (dispatched || started_at.is_some() || *status == RunStatus::Running)
+}
+
 /// Deliveries whose execution is still running keep their files, up to a hard cap.
 async fn running(state: &AppState, rows: &[Delivery], timestamp: i64) -> HashSet<String> {
     let candidates = rows
         .iter()
-        .filter(|row| {
-            row.status == "dispatched" && timestamp < row.expires_at + RUN_RETENTION_CAP_MS
-        })
+        .filter(|row| may_hold_run(row, timestamp))
         .collect::<Vec<_>>();
     if candidates.is_empty() {
         return HashSet::new();
@@ -1018,7 +1031,11 @@ async fn running(state: &AppState, rows: &[Delivery], timestamp: i64) -> HashSet
         .await
         .into_iter()
         .filter_map(|(row, run)| match run {
-            Ok(Some(run)) if !run.status.is_terminal() => Some(row.id.clone()),
+            Ok(Some(run))
+                if run_keeps_files(row.status == "dispatched", &run.status, run.started_at) =>
+            {
+                Some(row.id.clone())
+            }
             Ok(_) => None,
             Err(error) => {
                 tracing::warn!(delivery_id = %row.id, %error, "Cannot check an inbound email execution; its files are kept");
@@ -1302,6 +1319,63 @@ mod tests {
         assert!(purge.contains(r#""envelope" IS NULL"#));
         for status in ["'dispatched'", "'pending'", "'sending'", "'receiving'"] {
             assert!(!purge.contains(status), "{status}");
+        }
+    }
+
+    fn expired_row(status: &str, attempts: i32) -> Delivery {
+        Delivery {
+            id: "delivery-1".into(),
+            message_id: "message-1".into(),
+            status: status.into(),
+            app_id: "app-1".into(),
+            event_id: "event-1".into(),
+            envelope: Some("sealed".into()),
+            objects: None,
+            attempts,
+            received_at: 0,
+            expires_at: 1_000,
+            run_id: "mail_delivery-1".into(),
+        }
+    }
+
+    #[test]
+    fn cleanup_checks_runs_of_attempts_that_never_recorded_their_dispatch() {
+        let timestamp = 2_000;
+        for status in ["dispatched", "sending", "pending", "disabled"] {
+            assert!(may_hold_run(&expired_row(status, 1), timestamp), "{status}");
+        }
+        for status in ["sending", "pending", "disabled", "receiving"] {
+            assert!(
+                !may_hold_run(&expired_row(status, 0), timestamp),
+                "{status}"
+            );
+        }
+        for status in ["rejected", "too_large", "receiving"] {
+            assert!(
+                !may_hold_run(&expired_row(status, 3), timestamp),
+                "{status}"
+            );
+        }
+        assert!(!may_hold_run(
+            &expired_row("sending", 1),
+            1_000 + RUN_RETENTION_CAP_MS
+        ));
+    }
+
+    #[test]
+    fn unrecorded_dispatches_only_keep_files_for_runs_that_started() {
+        assert!(run_keeps_files(false, &RunStatus::Running, None));
+        assert!(run_keeps_files(false, &RunStatus::Pending, Some(1)));
+        assert!(!run_keeps_files(false, &RunStatus::Pending, None));
+        assert!(run_keeps_files(true, &RunStatus::Pending, None));
+        for status in [
+            RunStatus::Completed,
+            RunStatus::Failed,
+            RunStatus::Cancelled,
+            RunStatus::Timeout,
+        ] {
+            assert!(!run_keeps_files(false, &status, Some(1)), "{status:?}");
+            assert!(!run_keeps_files(true, &status, Some(1)), "{status:?}");
         }
     }
 

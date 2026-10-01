@@ -29,6 +29,7 @@ pub(crate) async fn graph_connection(
     app_id: &str,
     user_scoped: bool,
 ) -> flow_like_types::Result<Connection> {
+    crate::offline_writes::data_studio::ensure_device_app(app_handle, app_id).await?;
     let flow_like_state = TauriFlowLikeState::construct(app_handle).await?;
     let project_db_dir = Path::from("apps").join(app_id).join("storage").join("db");
 

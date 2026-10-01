@@ -1467,6 +1467,8 @@ mod tests {
             false
         )?);
         store.reconcile_rollouts(130)?;
+        assert_eq!(store.rollout("update")?.unwrap().state, "activating");
+        store.reconcile_rollouts(131)?;
         assert_eq!(store.rollout("update")?.unwrap().state, "rolling_back");
         assert!(wait_for_serving_retirements(
             &store,

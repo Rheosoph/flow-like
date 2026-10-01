@@ -1,0 +1,15 @@
+{
+  "attachments": [
+    {
+      "contentType": "text/html",
+      "content": "<p><video src=\"https://eu-api.asm.skype.com/v1/objects/xxxxxxxxxxxxxxxxxxxxxxxxxxxx/views/video\" itemscope=\"\" itemtype=\"http://schema.skype.com/AMSVideo\" width=\"256\" height=\"144\" data-duration=\"PT10S\" alt=\"Media\"></video></p>"
+    }
+  ],
+  "type": "message",
+  "channelId": "msteams",
+  "serviceUrl": "https://smba.trafficmanager.net/emea/",
+  "conversation": {
+    "conversationType": "personal",
+    "id": "a:dummy-conversation-id"
+  }
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "part_id": "P-101",
+    "name": "Blue bracket",
+    "stock": 12
+  },
+  {
+    "part_id": "P-102",
+    "name": "Small plate",
+    "stock": 0
+  }
+]

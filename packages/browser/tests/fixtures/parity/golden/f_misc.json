@@ -1,0 +1,232 @@
+{
+  "finds": [
+    {
+      "using": "css selector",
+      "value": "#t_plain",
+      "wd": {
+        "found": "p#t_plain"
+      },
+      "cdp": {
+        "found": "p#t_plain"
+      }
+    },
+    {
+      "using": "css selector",
+      "value": "P",
+      "wd": {
+        "found": "p#t_plain"
+      },
+      "cdp": {
+        "found": "p#t_plain"
+      }
+    },
+    {
+      "using": "css selector",
+      "value": "div > span:nth-child(2)",
+      "wd": {
+        "found": "span#"
+      },
+      "cdp": {
+        "found": "span#"
+      }
+    },
+    {
+      "using": "css selector",
+      "value": "[invalid",
+      "wd": {
+        "error": "no such element",
+        "message": "no such element: Unable to locate element: {\"method\":\"css selector\",\"selector\":\"[invalid\"}"
+      },
+      "cdp": {
+        "none": true
+      }
+    },
+    {
+      "using": "css selector",
+      "value": "#nope",
+      "wd": {
+        "error": "no such element",
+        "message": "no such element: Unable to locate element: {\"method\":\"css selector\",\"selector\":\"#nope\"}"
+      },
+      "cdp": {
+        "none": true
+      }
+    },
+    {
+      "using": "css selector",
+      "value": "#in_shadow",
+      "wd": {
+        "error": "no such element",
+        "message": "no such element: Unable to locate element: {\"method\":\"css selector\",\"selector\":\"#in_shadow\"}"
+      },
+      "cdp": {
+        "none": true
+      }
+    },
+    {
+      "using": "xpath",
+      "value": "//p[@id='t_plain']",
+      "wd": {
+        "found": "p#t_plain"
+      },
+      "cdp": {
+        "found": "p#t_plain",
+        "nodeType": 1
+      }
+    },
+    {
+      "using": "xpath",
+      "value": "//p[@id='t_plain']/text()",
+      "wd": {
+        "error": "invalid selector",
+        "message": "invalid selector: The result of the xpath expression \"//p[@id='t_plain']/text()\" is: [object Text]. It should be an element."
+      },
+      "cdp": {
+        "found": "#text#",
+        "nodeType": 3
+      }
+    },
+    {
+      "using": "xpath",
+      "value": "//a/@href",
+      "wd": {
+        "error": "invalid selector",
+        "message": "invalid selector: The result of the xpath expression \"//a/@href\" is: [object Attr]. It should be an element."
+      },
+      "cdp": {
+        "found": "href#",
+        "nodeType": 2
+      }
+    },
+    {
+      "using": "xpath",
+      "value": "count(//p)",
+      "wd": {
+        "error": "invalid selector",
+        "message": "invalid selector: Unable to locate an element with the xpath expression count(//p) because of the following error:"
+      },
+      "cdp": {
+        "error": "TypeError: Failed to execute 'evaluate' on 'Document': The result is not a node set, and therefore cannot be converted to the desir"
+      }
+    },
+    {
+      "using": "xpath",
+      "value": "//*[local-name()='text']",
+      "wd": {
+        "found": "text#t_svg_text"
+      },
+      "cdp": {
+        "found": "text#t_svg_text",
+        "nodeType": 1
+      }
+    },
+    {
+      "using": "xpath",
+      "value": "//P",
+      "wd": {
+        "found": "p#t_plain"
+      },
+      "cdp": {
+        "found": "p#t_plain",
+        "nodeType": 1
+      }
+    },
+    {
+      "using": "xpath",
+      "value": "(//li)[2]",
+      "wd": {
+        "found": "li#"
+      },
+      "cdp": {
+        "found": "li#",
+        "nodeType": 1
+      }
+    },
+    {
+      "using": "xpath",
+      "value": "//p[",
+      "wd": {
+        "error": "invalid selector",
+        "message": "invalid selector: Unable to locate an element with the xpath expression //p[ because of the following error:"
+      },
+      "cdp": {
+        "error": "SyntaxError: Failed to execute 'evaluate' on 'Document': The string '//p[' is not a valid XPath expression."
+      }
+    },
+    {
+      "using": "xpath",
+      "value": "//*[contains(text(),'Visible')]",
+      "wd": {
+        "found": "div#t_hidden_child"
+      },
+      "cdp": {
+        "found": "div#t_hidden_child",
+        "nodeType": 1
+      }
+    },
+    {
+      "using": "xpath",
+      "value": "//svg",
+      "wd": {
+        "error": "no such element",
+        "message": "no such element: Unable to locate element: {\"method\":\"xpath\",\"selector\":\"//svg\"}"
+      },
+      "cdp": {
+        "none": true
+      }
+    }
+  ],
+  "selected": [
+    {
+      "id": "t_checkbox",
+      "wd": true,
+      "cdp_checked_or_selected": true
+    },
+    {
+      "id": "cb_off",
+      "wd": false,
+      "cdp_checked_or_selected": false
+    },
+    {
+      "id": "r1",
+      "wd": true,
+      "cdp_checked_or_selected": true
+    },
+    {
+      "id": "r2",
+      "wd": false,
+      "cdp_checked_or_selected": false
+    },
+    {
+      "id": "o2",
+      "wd": true,
+      "cdp_checked_or_selected": true
+    },
+    {
+      "id": "o1",
+      "wd": false,
+      "cdp_checked_or_selected": false
+    },
+    {
+      "id": "aria_cb",
+      "wd": false,
+      "cdp_checked_or_selected": null
+    },
+    {
+      "id": "t_input",
+      "wd": false,
+      "cdp_checked_or_selected": false
+    },
+    {
+      "id": "t_plain",
+      "wd": false,
+      "cdp_checked_or_selected": null
+    }
+  ],
+  "source": {
+    "wd_len": 5014,
+    "equals_outerHTML": true,
+    "equals_XMLSerializer": false,
+    "starts": "<html lang=\"en\"><head>\n<meta charset=\"ut"
+  }
+}
