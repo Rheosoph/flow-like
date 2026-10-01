@@ -32,5 +32,12 @@
 		".next/dev/types/**/*.ts",
 		"../../packages/ui/types/lucide-react-icons.d.ts"
 	],
-	"exclude": ["flow-like", "node_modules", "out", "src-tauri", "src"]
+	"exclude": [
+		"flow-like",
+		"node_modules",
+		"out",
+		"src-tauri",
+		"src",
+		"lib/university/courses/**/fixtures"
+	]
 }
