@@ -45,7 +45,7 @@ the job's metadata-server identity.
 
 The job rejects ambient Google credentials, metadata endpoint overrides, and
 proxy settings from the
-[shared credential guard](https://github.com/Rheosoph/flow-like/blob/main/packages/gcp-data/src/metadata.rs).
+[shared credential guard](https://github.com/Rheosoph/flow-like/blob/dev/packages/gcp-data/src/metadata.rs).
 It also rejects Firestore/Datastore emulator variables, endpoint-override
 families `CLOUDSDK_API_ENDPOINT_OVERRIDES_*` and `GOOGLE_*_CUSTOM_ENDPOINT`,
 and `SINK_SECRET`, even if empty. Give the job the scoped token only.
@@ -63,7 +63,7 @@ revocation. The HS256 token has `sub=sink-trigger`, `iss=flow-like`, and
 `sink_types=["cron"]`. It is long-lived and registered for revocation; manage
 rotation through the admin sink-token endpoints. Inject the compact token
 without a `Bearer ` prefix or surrounding whitespace. The
-[registration handler](https://github.com/Rheosoph/flow-like/blob/main/packages/api/src/routes/admin/sinks/register_sink.rs)
+[registration handler](https://github.com/Rheosoph/flow-like/blob/dev/packages/api/src/routes/admin/sinks/register_sink.rs)
 defines this interface.
 
 ### Claims and missed occurrences
@@ -135,7 +135,7 @@ configured execution state backends unchanged.
 When payment servicing is enabled, schedule a separate `MAINTENANCE_JOB=payments`
 execution at least once per minute. A daily `all` job does not provide timely
 payment recovery when the API has no continuous CPU. See
-[Payments rollout and recovery](/dev/platform-administration/#payments-rollout-and-recovery)
+[Payments rollout and recovery](/self-hosting/administration/payments/)
 for configuration and alert requirements. Provider sandbox validation remains a
 rollout prerequisite.
 

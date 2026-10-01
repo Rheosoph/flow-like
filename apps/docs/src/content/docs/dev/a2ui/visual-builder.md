@@ -1,23 +1,24 @@
 ---
-title: Visual Builder
+title: Visual Builder controls
 description: Use the current editor for A2UI Pages and Widgets
 sidebar:
   order: 3
 ---
 
-The Visual Builder is the shared editor for Flow-Like Pages and Widgets. It edits the same declarative component graph that the renderer and FlowPilot use.
+Use this control reference while editing a Page or reusable A2UI Widget. For
+the complete creation tasks, use [Create Pages](/apps/pages/) or
+[Create Widgets](/apps/widgets/). The builder edits the same declarative model
+defined in [Build interfaces with A2UI](/apps/a2ui/).
 
-The builder follows the active Flow-Like theme. The captures below show its dark-mode appearance.
+The builder follows the active Flow-Like theme. See the illustrated
+[Page Builder workspace](/apps/pages/#page-builder) and
+[Widget creation guide](/apps/widgets/) for the editor layout.
 
 ## Page Builder
-
-![The Page Builder in dark mode](../../../../assets/PageBuilder.webp)
 
 The Page host adds app and Flow context around the shared editor: Page switching, **Open Flow**, Page settings, lifecycle events, canvas settings, and autosave status.
 
 ## Widget Builder
-
-![The Widget Builder in dark mode](../../../../assets/WidgetBuilder.webp)
 
 The Widget host adds Widget metadata, named events, version snapshots, autosave status, and a manual **Save Now** action.
 
@@ -168,6 +169,6 @@ When the builder is embedded in a host without the global assistant, it can moun
 
 ## Related Guides
 
-- [Pages](/dev/a2ui/pages/) — Page settings and lifecycle
-- [Widgets](/dev/a2ui/widgets/) — Widget metadata, events, and versions
-- [A2UI overview](/dev/a2ui/overview/) — surface and message model
+- [Pages](/dev/a2ui/pages/): Page settings and lifecycle
+- [Widgets](/dev/a2ui/widgets/): Widget metadata, events, and versions
+- [A2UI overview](/dev/a2ui/overview/): surface and message model

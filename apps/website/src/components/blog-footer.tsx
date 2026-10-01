@@ -155,16 +155,16 @@ export function BlogFooter() {
 
 					{/* Blog */}
 					<FooterSection title={t("footer.section.blog")}>
-						<FooterLink href="/blog/2026-01-01-alpha-0-0-7">
+						<FooterLink href="/tags/release/">
 							{t("footer.link.latestRelease")}
 						</FooterLink>
-						<FooterLink href="/blog/2025-08-09-agents-vs-automation">
+						<FooterLink href="/blog/agents-vs-automation/">
 							{t("footer.link.agentsVsAutomation")}
 						</FooterLink>
-						<FooterLink href="/blog/2025-09-13-n8n-flow-like">
+						<FooterLink href="/blog/n8n-flow-like/">
 							{t("footer.link.n8nComparison")}
 						</FooterLink>
-						<FooterLink href="/blog">{t("footer.link.allPosts")}</FooterLink>
+						<FooterLink href="/blog/">{t("footer.link.allPosts")}</FooterLink>
 					</FooterSection>
 
 					{/* Company */}

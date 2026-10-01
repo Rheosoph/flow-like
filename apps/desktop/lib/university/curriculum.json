@@ -1,0 +1,112 @@
+{
+	"schema": "flow-like.university-curriculum/v1",
+	"paths": [
+		{
+			"id": "path-first-workflow",
+			"slug": "first-workflow",
+			"name": "Build your first workflow",
+			"description": "Create and verify your first deterministic workflow. Choose Control Flow next when you need decisions or collections, or FlowPilot when you want help editing.",
+			"courses": [
+				"courses/foundations/welcome-to-flow-like/course.plan.json",
+				"courses/foundations/thinking-in-flows/course.plan.json"
+			],
+			"electives": [
+				"courses/foundations/control-flow/course.plan.json",
+				"courses/foundations/building-with-flowpilot/course.plan.json",
+				"courses/foundations/templates-and-store/course.plan.json"
+			]
+		},
+		{
+			"id": "path-ai-assistant",
+			"slug": "ai-assistant",
+			"name": "Build an AI workflow",
+			"description": "Configure a model and validate its structured output. For grounded answers, take Storage and Tables before RAG. Choose Agentic in Flow-Like when the assistant needs bounded tools; document and vision work are separate options.",
+			"courses": [
+				"courses/foundations/welcome-to-flow-like/course.plan.json",
+				"courses/foundations/thinking-in-flows/course.plan.json",
+				"courses/foundations/models-and-profiles/course.plan.json",
+				"courses/specialist/structured-ai-output/course.plan.json"
+			],
+			"electives": [
+				"courses/specialist/data-in-flow-like/course.plan.json",
+				"courses/specialist/rag/course.plan.json",
+				"courses/advanced/agentic-in-flow-like/course.plan.json",
+				"courses/specialist/document-processing/course.plan.json",
+				"courses/advanced/ml-and-vision/course.plan.json"
+			]
+		},
+		{
+			"id": "path-team-app",
+			"slug": "team-app",
+			"name": "Build a team data app",
+			"description": "Give a workflow a usable interface, durable records, and configured entry points.",
+			"courses": [
+				"courses/foundations/welcome-to-flow-like/course.plan.json",
+				"courses/foundations/thinking-in-flows/course.plan.json",
+				"courses/foundations/apps-for-builders/course.plan.json",
+				"courses/specialist/events/course.plan.json",
+				"courses/specialist/data-in-flow-like/course.plan.json",
+				"courses/specialist/interfaces-and-pages/course.plan.json"
+			],
+			"electives": [
+				"courses/advanced/app-governance/course.plan.json",
+				"courses/advanced/connected-apps/course.plan.json"
+			]
+		},
+		{
+			"id": "path-integrate-automate",
+			"slug": "integrate-automate",
+			"name": "Connect systems and automate work",
+			"description": "Connect an existing App to an external API. This path assumes you can configure an Event and choose its execution host; take Apps for Builders and Events first if those skills are new. Recipes and desktop automation are optional applications.",
+			"courses": [
+				"courses/foundations/welcome-to-flow-like/course.plan.json",
+				"courses/foundations/thinking-in-flows/course.plan.json",
+				"courses/specialist/api-integrations/course.plan.json"
+			],
+			"electives": [
+				"courses/foundations/apps-for-builders/course.plan.json",
+				"courses/specialist/events/course.plan.json",
+				"courses/foundations/control-flow/course.plan.json",
+				"courses/specialist/automation-recipes/course.plan.json",
+				"courses/specialist/rpa-automation/course.plan.json",
+				"courses/specialist/document-processing/course.plan.json"
+			]
+		},
+		{
+			"id": "path-extend-platform",
+			"slug": "extend-platform",
+			"name": "Extend Flow-Like",
+			"description": "Read and edit a graph through FlowScript. Choose Custom Nodes to extend the node catalog, or Platform SDKs to call Flow-Like from application code. Complete each elective’s stated prerequisites before starting.",
+			"courses": [
+				"courses/foundations/welcome-to-flow-like/course.plan.json",
+				"courses/foundations/thinking-in-flows/course.plan.json",
+				"courses/specialist/flowscript/course.plan.json"
+			],
+			"electives": [
+				"courses/specialist/custom-nodes/course.plan.json",
+				"courses/specialist/platform-sdks/course.plan.json",
+				"courses/specialist/api-integrations/course.plan.json",
+				"courses/advanced/connected-apps/course.plan.json"
+			]
+		},
+		{
+			"id": "path-ship-operate",
+			"slug": "ship-operate",
+			"name": "Release and operate a team app",
+			"description": "Diagnose runs, release tested versions, assign access, and operate the deployment.",
+			"courses": [
+				"courses/foundations/welcome-to-flow-like/course.plan.json",
+				"courses/foundations/thinking-in-flows/course.plan.json",
+				"courses/foundations/apps-for-builders/course.plan.json",
+				"courses/specialist/debugging-and-observability/course.plan.json",
+				"courses/specialist/release-and-rollback/course.plan.json",
+				"courses/advanced/app-governance/course.plan.json"
+			],
+			"electives": [
+				"courses/advanced/self-hosting/course.plan.json",
+				"courses/foundations/templates-and-store/course.plan.json",
+				"courses/advanced/connected-apps/course.plan.json"
+			]
+		}
+	]
+}

@@ -10,6 +10,7 @@
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as cheerio from "cheerio";
 import {
 	DEFAULT_NOISE_SELECTORS,
 	extractContentHtml,
@@ -34,6 +35,8 @@ const NOISE_SELECTORS = [
 	"footer",
 	".sl-anchor-link",
 	".pagination-links",
+	// Chart datasets remain in code blocks and tables; omit hydration placeholders.
+	".docs-chart-preview",
 ];
 
 async function* walk(dir) {
@@ -64,7 +67,22 @@ async function convert(htmlFile) {
 	const html = await readFile(htmlFile, "utf8");
 	const meta = extractPageMeta(html);
 	const url = meta.canonical || pageUrl(htmlFile);
-	const body = htmlToMarkdown(extractContentHtml(html), {
+	let content = extractContentHtml(html);
+	if (content.includes('class="node-directory"')) {
+		// Markdown readers need every reference link, including the links beyond
+		// the first interactive page. Promote the complete no-JavaScript list.
+		const $ = cheerio.load(content, { scriptingEnabled: false }, false);
+		const directory = $(".node-directory");
+		directory
+			.find(".node-card-grid, .node-toolbar, .node-load-more, [role='status']")
+			.remove();
+		const fallback = directory.find("noscript");
+		fallback.find("p").remove();
+		fallback.find("[data-pagefind-ignore]").removeAttr("data-pagefind-ignore");
+		fallback.replaceWith(fallback.html() ?? "");
+		content = $.html();
+	}
+	const body = htmlToMarkdown(content, {
 		baseUrl: url,
 		noiseSelectors: NOISE_SELECTORS,
 	});

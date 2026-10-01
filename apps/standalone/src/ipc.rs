@@ -1758,6 +1758,7 @@ mod tests {
         let saved = directory.path().join("telemetry.key.saved");
         std::fs::rename(&key, &saved)?;
         crate::vault::write_new_private(&key, &[0; 16])?;
+        tokio::time::sleep(Duration::from_millis(1100)).await;
         assert!(child.report_usage(usage(2)).await.is_err());
         assert!(
             !server.is_finished() && !child.is_closed(),

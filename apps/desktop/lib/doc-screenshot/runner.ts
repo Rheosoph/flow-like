@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve, sep } from "node:path";
 import puppeteer, {
-	type Browser,
+	type BrowserContext,
 	type ElementHandle,
 	type HTTPRequest,
 	type HTTPResponse,
@@ -10,10 +10,16 @@ import puppeteer, {
 	type Page,
 } from "puppeteer";
 import sharp from "sharp";
-import { outputFormatForCapture, safeCaptureOutputPath } from "./plan";
+import {
+	outputFormatForCapture,
+	safeCaptureOutputPath,
+	screenshotScenarioFingerprint,
+} from "./plan";
 import {
 	DOC_SCREENSHOT_RESULT_SCHEMA,
 	type DocScreenshotArtifact,
+	type DocScreenshotDiagnostic,
+	type DocScreenshotDiagnosticAllowance,
 	type DocScreenshotCaptureStep,
 	type DocScreenshotFormat,
 	type DocScreenshotHttpFixture,
@@ -31,6 +37,7 @@ import {
 	type DocScreenshotViewport,
 } from "./types";
 
+type StaticAsset = { body: Uint8Array; headers: Record<string, string> };
 const LOCALE = "en-US";
 const TIMEZONE = "UTC";
 const SENSITIVE_QUERY_KEY =
@@ -41,6 +48,7 @@ export interface RunDocScreenshotOptions {
 	outputDir: string;
 	tauriFixture?: DocScreenshotTauriFixture;
 	httpFixture?: DocScreenshotHttpFixture;
+	provenance?: DocScreenshotResult["provenance"];
 }
 
 interface ScenarioDiagnostics {
@@ -48,6 +56,8 @@ interface ScenarioDiagnostics {
 	pageErrors: number;
 	requestFailures: number;
 	warnings: number;
+	entries: DocScreenshotDiagnostic[];
+	unexpected: number;
 }
 
 interface ScenarioRuntime {
@@ -93,6 +103,24 @@ export function redactScreenshotUrl(value: string): string {
 	} catch {
 		return value;
 	}
+}
+
+export function classifyScreenshotDiagnostic(
+	entry: DocScreenshotDiagnostic,
+	previous: DocScreenshotDiagnostic[],
+	allowlist: DocScreenshotDiagnosticAllowance[],
+): DocScreenshotDiagnostic {
+	const allowance = allowlist.find(
+		(candidate) =>
+			candidate.kind === entry.kind && candidate.message === entry.message,
+	);
+	const count = previous.filter(
+		(candidate) =>
+			candidate.kind === entry.kind && candidate.message === entry.message,
+	).length;
+	return allowance && count < allowance.maxCount
+		? { ...entry, allowance: allowance.reason }
+		: entry;
 }
 
 export function buildScreenshotUrl(
@@ -194,6 +222,7 @@ async function installHttpFixture(
 	fixture: DocScreenshotHttpFixture,
 	allowedOrigin: string,
 	onViolation: (message: string) => void,
+	intentionalBlocks: WeakSet<HTTPRequest>,
 ): Promise<void> {
 	await page.setRequestInterception(true);
 	page.on("request", async (request: HTTPRequest) => {
@@ -219,6 +248,7 @@ async function installHttpFixture(
 					await request.continue();
 					return;
 				case "block":
+					intentionalBlocks.add(request);
 					await request.abort("blockedbyclient");
 					return;
 				case "abort":
@@ -265,7 +295,59 @@ async function injectTauriFixture(
 	page: Page,
 	fixture: DocScreenshotTauriFixture,
 ): Promise<void> {
+	// Browser fixtures need the same SQL contract as the desktop IndexedDB adapter.
+	// Each scenario owns disposable in-memory databases, never user data.
+	const { Database } = await import("bun:sqlite");
+	const databases = new Map<string, InstanceType<typeof Database>>();
+	const connections = new Map<number, InstanceType<typeof Database>>();
+	let connectionId = 0;
+	await page.exposeFunction(
+		"__docScreenshotSql",
+		(command: string, args: Record<string, any>) => {
+			if (command.endsWith("sql_open")) {
+				const name = String(args.name);
+				let database = databases.get(name);
+				if (!database) {
+					database = new Database(":memory:");
+					databases.set(name, database);
+				}
+				connections.set(++connectionId, database);
+				return connectionId;
+			}
+			if (command.endsWith("sql_close")) {
+				connections.delete(args.connId);
+				return null;
+			}
+			const database = connections.get(args.connId);
+			if (!database) throw new Error("Unknown screenshot SQL connection");
+			return args.queries.map((query: { sql: string; args: any[] }) => {
+				try {
+					const statement = database.query(query.sql);
+					if (statement.columnNames.length > 0)
+						return { rows: statement.all(...query.args), rows_affected: 0 };
+					const result = statement.run(...query.args);
+					return {
+						rows: [],
+						rows_affected: result.changes,
+						insert_id: Number(result.lastInsertRowid),
+					};
+				} catch (error) {
+					return { rows: [], rows_affected: 0, error: String(error) };
+				}
+			});
+		},
+	);
+	page.once("close", () => {
+		for (const database of databases.values()) database.close();
+	});
 	await page.evaluateOnNewDocument((fixtureValue) => {
+		// A new fixture profile has no legacy browser databases to migrate.
+		localStorage.setItem("__fl_idb_sqlite_migrated__", "1");
+		const httpRequests = new Map<
+			number,
+			{ url: string; body: unknown; sent: boolean }
+		>();
+		let httpId = 100;
 		const callbacks = new Map<number, (...args: unknown[]) => unknown>();
 		const eventListeners = new Map<string, number[]>();
 		let callbackId = 0;
@@ -297,6 +379,53 @@ async function injectTauriFixture(
 			command: string,
 			args: Record<string, unknown> = {},
 		): Promise<unknown> => {
+			if (command === "plugin:http|fetch") {
+				const config = args.clientConfig as { url: string };
+				const url = new URL(config.url);
+				const declared = fixtureValue.responses.$http as
+					| Record<string, unknown>
+					| undefined;
+				let body: unknown = declared?.[url.pathname];
+				if (body === undefined && url.pathname.endsWith("/info/features"))
+					body = {};
+				if (body === undefined && url.pathname.endsWith("/auth/openid"))
+					body = null;
+				if (body === undefined) {
+					const bytes = fixtureValue.responses["plugin:http|fetch_read_body"];
+					try {
+						body = Array.isArray(bytes)
+							? JSON.parse(
+									new TextDecoder().decode(
+										new Uint8Array(bytes.slice(0, -1) as number[]),
+									),
+								)
+							: null;
+					} catch {
+						body = null;
+					}
+				}
+				httpRequests.set(++httpId, { url: config.url, body, sent: false });
+				return httpId;
+			}
+			if (command === "plugin:http|fetch_send") {
+				const request = httpRequests.get(Number(args.rid));
+				return {
+					status: 200,
+					statusText: "OK",
+					url: request?.url,
+					headers: [["content-type", "application/json"]],
+					rid: args.rid,
+				};
+			}
+			if (command === "plugin:http|fetch_read_body") {
+				const request = httpRequests.get(Number(args.rid));
+				if (!request || request.sent) return [1];
+				request.sent = true;
+				return [...new TextEncoder().encode(JSON.stringify(request.body)), 0];
+			}
+			if (command.startsWith("plugin:flow-like-dexie-blob-offload|sql_")) {
+				return (window as any).__docScreenshotSql(command, args);
+			}
 			if (command === "plugin:event|listen") {
 				const event = String(args.event ?? "");
 				const handler = Number(args.handler);
@@ -383,6 +512,29 @@ async function injectTauriFixture(
 					]);
 					return clone(descriptor.$value ?? null);
 				}
+				if (
+					response &&
+					typeof response === "object" &&
+					!Array.isArray(response) &&
+					"$argument" in response
+				) {
+					const path = response.$argument;
+					if (
+						typeof path !== "string" ||
+						!/^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$/.test(path)
+					)
+						throw new Error("Invalid screenshot fixture argument path");
+					let value: unknown = args;
+					for (const key of path.split(".")) {
+						value =
+							value && typeof value === "object" && Object.hasOwn(value, key)
+								? (value as Record<string, unknown>)[key]
+								: undefined;
+					}
+					if (value === undefined)
+						throw new Error(`Missing screenshot fixture argument: ${path}`);
+					return clone(value);
+				}
 				return clone(response);
 			}
 			if (fixtureValue.strict) {
@@ -433,6 +585,38 @@ async function injectDeterministicPresentation(
 ): Promise<void> {
 	await page.evaluateOnNewDocument(
 		(settings) => {
+			// Keep the browser factory available when a desktop storage adapter
+			// replaces the global after some client databases have already opened.
+			(window as any).__docScreenshotBrowserIndexedDB = window.indexedDB;
+			// A capture must stay on one compiled page. Next's development refresh
+			// can otherwise race first hydration while another route is compiling.
+			const NativeWebSocket = window.WebSocket;
+			window.WebSocket = new Proxy(NativeWebSocket, {
+				construct(Target, args) {
+					const socket = Reflect.construct(Target, args) as WebSocket;
+					if (/\/_next\/(?:webpack-hmr|hmr)(?:\?|$)/.test(String(args[0]))) {
+						socket.addEventListener("message", (event) => {
+							if (typeof event.data !== "string") return;
+							try {
+								const message = JSON.parse(event.data);
+								if (
+									[
+										"serverComponentChanges",
+										"reloadPage",
+										"staticParamsChanged",
+										"addedPage",
+										"removedPage",
+									].includes(message.type)
+								)
+									event.stopImmediatePropagation();
+							} catch {
+								/* Binary module messages are handled by Next. */
+							}
+						});
+					}
+					return socket;
+				},
+			});
 			const applyStorage = (): void => {
 				try {
 					localStorage.clear();
@@ -835,6 +1019,7 @@ async function captureScreenshot(
 			mode,
 			selector: step.selector,
 			capturedAt: new Date().toISOString(),
+			url: redactScreenshotUrl(runtime.page.url()),
 			css: {
 				width: Number(cssWidth.toFixed(2)),
 				height: Number(cssHeight.toFixed(2)),
@@ -972,12 +1157,33 @@ async function runStep(
 			);
 			try {
 				await handle.focus();
-				await withKeyboardModifiers(runtime, ["Control"], () =>
-					runtime.page.keyboard.press("A"),
-				);
+				await handle.evaluate((element) => {
+					if (
+						element instanceof HTMLInputElement ||
+						element instanceof HTMLTextAreaElement
+					) {
+						element.select();
+					} else {
+						const range = document.createRange();
+						range.selectNodeContents(element);
+						const selection = window.getSelection();
+						selection?.removeAllRanges();
+						selection?.addRange(range);
+					}
+				});
 				await runtime.page.keyboard.press("Backspace");
 				const value = resolveSecretValue(step);
 				if (value) await handle.type(value);
+				const filled = await handle.evaluate((element) =>
+					element instanceof HTMLInputElement ||
+					element instanceof HTMLTextAreaElement
+						? element.value
+						: null,
+				);
+				if (filled !== null && filled !== value)
+					throw new Error(
+						`Could not replace the value of screenshot field: ${step.selector}`,
+					);
 			} finally {
 				await handle.dispose();
 			}
@@ -1115,6 +1321,63 @@ async function runStep(
 				);
 			}
 			break;
+		case "seedIndexedDB":
+			await runtime.page.waitForFunction(
+				async (database) => {
+					const factories = new Set<IDBFactory>([
+						indexedDB,
+						(window as any).__docScreenshotBrowserIndexedDB,
+					]);
+					for (const factory of factories) {
+						if (
+							(await factory.databases()).some(
+								(entry) => entry.name === database,
+							)
+						)
+							return true;
+					}
+					return false;
+				},
+				{ timeout: timeoutMs, polling: 250 },
+				step.database,
+			);
+			await runtime.page.evaluate(async ({ database, stores }) => {
+				let factory = indexedDB;
+				if (
+					!(await factory.databases()).some((entry) => entry.name === database)
+				)
+					factory = (window as any).__docScreenshotBrowserIndexedDB;
+				const db = await new Promise<IDBDatabase>((resolve, reject) => {
+					const request = factory.open(database);
+					request.onerror = () => reject(request.error);
+					request.onupgradeneeded = () => {
+						request.transaction?.abort();
+						reject(
+							new Error(`Open the application before seeding ${database}.`),
+						);
+					};
+					request.onsuccess = () => resolve(request.result);
+				});
+				try {
+					await new Promise<void>((resolve, reject) => {
+						const transaction = db.transaction(
+							Object.keys(stores),
+							"readwrite",
+						);
+						transaction.oncomplete = () => resolve();
+						transaction.onerror = () => reject(transaction.error);
+						transaction.onabort = () =>
+							reject(transaction.error ?? new Error("Fixture seed aborted."));
+						for (const [name, rows] of Object.entries(stores)) {
+							const store = transaction.objectStore(name);
+							for (const row of rows) store.put(row);
+						}
+					});
+				} finally {
+					db.close();
+				}
+			}, step);
+			break;
 		case "delay":
 			await delay(step.ms);
 			break;
@@ -1129,10 +1392,11 @@ async function runStep(
 }
 
 async function runScenario(
-	browser: Browser,
+	context: BrowserContext,
 	plan: DocScreenshotPlan,
 	scenario: DocScreenshotScenario,
 	options: RunDocScreenshotOptions,
+	staticAssets: Map<string, StaticAsset>,
 ): Promise<DocScreenshotScenarioResult> {
 	const started = Date.now();
 	const baseUrl = new URL(options.baseUrl);
@@ -1146,19 +1410,37 @@ async function runScenario(
 		scenario.path,
 		scenario.query,
 	);
+	const intentionalBlocks = new WeakSet<HTTPRequest>();
 	const diagnostics: ScenarioDiagnostics = {
 		consoleErrors: 0,
 		pageErrors: 0,
 		requestFailures: 0,
 		warnings: 0,
+		entries: [],
+		unexpected: 0,
+	};
+	const recordDiagnostic = (entry: DocScreenshotDiagnostic) => {
+		const assessed = classifyScreenshotDiagnostic(
+			entry,
+			diagnostics.entries,
+			scenario.diagnosticAllowlist ?? [],
+		);
+		diagnostics.entries.push(assessed);
+		if (!assessed.allowance) diagnostics.unexpected += 1;
 	};
 	const stepResults: DocScreenshotStepResult[] = [];
 	const artifacts: DocScreenshotArtifact[] = [];
 	let title = "";
 	let finalUrl = requestedUrl.toString();
 	let scenarioError: string | undefined;
-	const context = await browser.createBrowserContext();
 	const page = await context.newPage();
+	const storageSession = await page.createCDPSession();
+	await storageSession.send("Storage.clearDataForOrigin", {
+		origin: baseUrl.origin,
+		storageTypes:
+			"cookies,local_storage,indexeddb,websql,service_workers,cache_storage",
+	});
+	await storageSession.detach();
 	const runtime: ScenarioRuntime = {
 		page,
 		baseUrl,
@@ -1187,6 +1469,74 @@ async function runScenario(
 		if (options.tauriFixture) {
 			await injectTauriFixture(page, options.tauriFixture);
 		}
+		// Next dev sends no-store even for content-named module chunks. Keep one
+		// compiled asset snapshot while resetting application state per scenario.
+		await page.setRequestInterception(true);
+		page.on("request", async (request) => {
+			if (request.isInterceptResolutionHandled()) return;
+			const requestUrl = new URL(request.url());
+			const staticDirectory = process.env.DOC_SCREENSHOT_STATIC_DIR;
+			if (
+				staticDirectory &&
+				requestUrl.origin === baseUrl.origin &&
+				requestUrl.pathname.startsWith("/_next/static/") &&
+				!staticAssets.has(request.url())
+			) {
+				const root = resolve(staticDirectory);
+				const assetPath = resolve(
+					root,
+					decodeURIComponent(
+						requestUrl.pathname.slice("/_next/static/".length),
+					),
+				);
+				if (assetPath.startsWith(`${root}${sep}`)) {
+					try {
+						const body = await readFile(assetPath);
+						const contentType = assetPath.endsWith(".js")
+							? "application/javascript"
+							: assetPath.endsWith(".css")
+								? "text/css"
+								: "application/octet-stream";
+						staticAssets.set(request.url(), {
+							body,
+							headers: { "content-type": contentType },
+						});
+					} catch {
+						/* Let Next serve assets it has not written yet. */
+					}
+				}
+			}
+			if (request.isInterceptResolutionHandled()) return;
+			const cached = staticAssets.get(request.url());
+			if (cached)
+				await request.respond({
+					status: 200,
+					body: Buffer.from(cached.body),
+					headers: cached.headers,
+				});
+			else if (!options.httpFixture) await request.continue();
+		});
+		page.on("response", async (response) => {
+			const url = new URL(response.url());
+			if (
+				url.origin !== baseUrl.origin ||
+				!url.pathname.startsWith("/_next/static/") ||
+				response.status() !== 200 ||
+				staticAssets.has(response.url())
+			)
+				return;
+			try {
+				const headers = response.headers();
+				delete headers["content-encoding"];
+				delete headers["content-length"];
+				staticAssets.set(response.url(), {
+					body: await response.buffer(),
+					headers,
+				});
+			} catch {
+				/* Navigation may cancel a speculative chunk response. */
+			}
+		});
 		if (options.httpFixture) {
 			await installHttpFixture(
 				page,
@@ -1195,6 +1545,7 @@ async function runScenario(
 				(message) => {
 					runtime.httpFixtureViolation ??= message;
 				},
+				intentionalBlocks,
 			);
 		}
 		page.on("console", (message) => {
@@ -1203,10 +1554,15 @@ async function runScenario(
 			}
 			if (message.type() === "error") {
 				diagnostics.consoleErrors += 1;
+				recordDiagnostic({
+					kind: "console",
+					message: errorMessage(message.text()),
+				});
 			}
 		});
 		page.on("pageerror", (error) => {
 			diagnostics.pageErrors += 1;
+			recordDiagnostic({ kind: "page", message: errorMessage(error) });
 			if (process.env.DOC_SCREENSHOT_DEBUG === "1") {
 				console.error(
 					`[browser pageerror] ${
@@ -1218,7 +1574,17 @@ async function runScenario(
 			}
 		});
 		page.on("requestfailed", (request) => {
+			if (intentionalBlocks.has(request)) return;
 			diagnostics.requestFailures += 1;
+			const requestUrl = new URL(request.url());
+			const location =
+				requestUrl.origin === baseUrl.origin
+					? `${requestUrl.pathname}${requestUrl.search}`
+					: redactScreenshotUrl(request.url());
+			recordDiagnostic({
+				kind: "request",
+				message: `${request.method()} ${errorMessage(location)}: ${request.failure()?.errorText ?? "unknown error"}`,
+			});
 			if (process.env.DOC_SCREENSHOT_DEBUG === "1") {
 				console.error(
 					`[browser requestfailed] ${request.method()} ${redactScreenshotUrl(request.url())}: ${request.failure()?.errorText ?? "unknown error"}`,
@@ -1248,6 +1614,11 @@ async function runScenario(
 		runtime.httpStatus = response?.status();
 		assertScenarioIntegrity(runtime);
 		for (const [index, step] of scenario.steps.entries()) {
+			if (process.env.DOC_SCREENSHOT_DEBUG === "1") {
+				console.error(
+					`Step ${scenario.name} ${index + 1}/${scenario.steps.length}: ${step.type}${"selector" in step && step.selector ? ` ${step.selector}` : "text" in step && step.text ? ` ${step.text}` : ""}`,
+				);
+			}
 			const stepStarted = Date.now();
 			try {
 				const artifact = await runStep(runtime, step);
@@ -1282,10 +1653,32 @@ async function runScenario(
 		finalUrl = page.url();
 	} finally {
 		await releaseHeldInput(runtime);
-		await context.close();
+		if (scenarioError && process.env.DOC_SCREENSHOT_DEBUG === "1") {
+			await mkdir(options.outputDir, { recursive: true });
+			await page
+				.screenshot({
+					path: resolve(options.outputDir, `${scenario.name}.failed.png`),
+				})
+				.catch(() => undefined);
+			await writeFile(
+				resolve(options.outputDir, `${scenario.name}.failed.html`),
+				await page.content().catch(() => ""),
+			).catch(() => undefined);
+		}
+		await page.close();
+	}
+	if (diagnostics.unexpected > 0) {
+		const unexpected = diagnostics.entries.filter((entry) => !entry.allowance);
+		scenarioError = [
+			scenarioError,
+			`Unexpected browser diagnostics (${diagnostics.unexpected}): ${unexpected.map((entry) => `${entry.kind}: ${entry.message}`).join("; ")}`,
+		]
+			.filter(Boolean)
+			.join("\n");
 	}
 	return {
 		name: scenario.name,
+		sourceSha256: screenshotScenarioFingerprint(plan, scenario),
 		passed: !scenarioError && artifacts.length > 0,
 		requestedUrl: redactScreenshotUrl(requestedUrl.toString()),
 		finalUrl: redactScreenshotUrl(finalUrl),
@@ -1327,12 +1720,50 @@ export async function runDocScreenshotPlan(
 			"--disable-setuid-sandbox",
 		],
 	});
+	const context = await browser.createBrowserContext();
+	const staticAssets = new Map<string, StaticAsset>();
 	const scenarios: DocScreenshotScenarioResult[] = [];
 	let version = "";
 	try {
 		version = await browser.version();
 		for (const scenario of plan.scenarios) {
-			scenarios.push(await runScenario(browser, plan, scenario, options));
+			console.error(`Scenario: ${scenario.name}`);
+			const result = await runScenario(
+				context,
+				plan,
+				scenario,
+				options,
+				staticAssets,
+			);
+			scenarios.push(result);
+			await mkdir(options.outputDir, { recursive: true });
+			await writeFile(
+				resolve(options.outputDir, `${scenario.name}.result.json`),
+				JSON.stringify(
+					{
+						schema: DOC_SCREENSHOT_RESULT_SCHEMA,
+						runId,
+						passed: result.passed,
+						startedAt: startedAt.toISOString(),
+						finishedAt: new Date().toISOString(),
+						durationMs: result.durationMs,
+						baseUrl: redactScreenshotUrl(options.baseUrl),
+						provenance: options.provenance,
+						browser: { product: "Chromium", version, headless: true },
+						scenarios: [result],
+						summary: {
+							scenarios: 1,
+							scenariosPassed: result.passed ? 1 : 0,
+							screenshots: result.artifacts.length,
+						},
+					},
+					null,
+					2,
+				),
+			);
+			console.error(
+				`${result.passed ? "PASS" : "FAIL"} ${scenario.name}: ${result.artifacts.length} capture(s), ${result.diagnostics.unexpected} unexpected diagnostic(s)${result.error ? `; ${result.error.slice(0, 300)}` : ""}`,
+			);
 		}
 	} finally {
 		await browser.close();
@@ -1353,6 +1784,7 @@ export async function runDocScreenshotPlan(
 		finishedAt: finishedAt.toISOString(),
 		durationMs: finishedAt.getTime() - startedAt.getTime(),
 		baseUrl: redactScreenshotUrl(options.baseUrl),
+		provenance: options.provenance,
 		browser: {
 			product: "Chromium",
 			version,

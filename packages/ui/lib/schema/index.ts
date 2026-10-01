@@ -79,6 +79,7 @@ export {
 	type IBoardVariables,
 	boardListing,
 } from "./flow/board-summary";
+export type { BoardVersion, IBoardVersionInfo } from "./flow/board-version";
 export type {
 	IEvent,
 	IEventInput,

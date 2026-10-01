@@ -419,7 +419,7 @@ declare namespace bool {
      * Boolean And operation
      * @node bool_and @receiver boolean @alias boolAnd
      * @param boolean (optional) — Input Pin for AND Operation (receiver: `this` in `x.and(...)`)
-     * @param boolean (optional) — Input Pin for AND Operation (receiver: `this` in `x.and(...)`)
+     * @param boolean (optional) — Input Pin for AND Operation
      * @returns result — AND operation between all boolean inputs
      */
     function and(this: bool, { boolean?: bool, boolean?: bool }): bool;
@@ -437,7 +437,7 @@ declare namespace bool {
      * Boolean Equal
      * @node bool_equal @receiver boolean @alias boolEqual
      * @param boolean (optional) — Boolean value to compare (receiver: `this` in `x.equal(...)`)
-     * @param boolean (optional) — Boolean value to compare (receiver: `this` in `x.equal(...)`)
+     * @param boolean (optional) — Boolean value to compare
      * @returns result — == operation between all boolean inputs
      */
     function equal(this: bool, { boolean?: bool, boolean?: bool }): bool;
@@ -463,7 +463,7 @@ declare namespace bool {
      * True unless every input is true
      * @node bool_nand @receiver boolean @alias boolNand
      * @param boolean (optional) — Input Boolean (receiver: `this` in `x.nand(...)`)
-     * @param boolean (optional) — Input Boolean (receiver: `this` in `x.nand(...)`)
+     * @param boolean (optional) — Input Boolean
      * @returns result — True unless every input is true
      */
     function nand(this: bool, { boolean?: bool, boolean?: bool }): bool;
@@ -472,7 +472,7 @@ declare namespace bool {
      * True only when every input is false
      * @node bool_nor @receiver boolean @alias boolNor
      * @param boolean (optional) — Input Boolean (receiver: `this` in `x.nor(...)`)
-     * @param boolean (optional) — Input Boolean (receiver: `this` in `x.nor(...)`)
+     * @param boolean (optional) — Input Boolean
      * @returns result — True only when every input is false
      */
     function nor(this: bool, { boolean?: bool, boolean?: bool }): bool;
@@ -489,7 +489,7 @@ declare namespace bool {
      * Boolean Or operation
      * @node bool_or @receiver boolean @alias boolOr
      * @param boolean (optional) — Input Pin for OR Operation (receiver: `this` in `x.or(...)`)
-     * @param boolean (optional) — Input Pin for OR Operation (receiver: `this` in `x.or(...)`)
+     * @param boolean (optional) — Input Pin for OR Operation
      * @returns result — OR operation between all boolean inputs
      */
     function or(this: bool, { boolean?: bool, boolean?: bool }): bool;
@@ -542,7 +542,7 @@ declare namespace bool {
      * Boolean XOR
      * @node bool_xor @receiver boolean @alias boolXor
      * @param boolean (optional) — Input Boolean (receiver: `this` in `x.xor(...)`)
-     * @param boolean (optional) — Input Boolean (receiver: `this` in `x.xor(...)`)
+     * @param boolean (optional) — Input Boolean
      * @returns result — XOR operation between all boolean inputs
      */
     function xor(this: bool, { boolean?: bool, boolean?: bool }): bool;
@@ -555,7 +555,7 @@ declare namespace bytes {
      * Appends byte buffers to each other
      * @node bytes_concat @receiver bytes @alias bytesConcat
      * @param bytes — Part to append (receiver: `this` in `x.concat(...)`)
-     * @param bytes — Part to append (receiver: `this` in `x.concat(...)`)
+     * @param bytes — Part to append
      * @returns result — All parts appended in order
      */
     function concat(this: bytes[], { bytes: bytes[], bytes: bytes[] }): bytes[];
@@ -2192,7 +2192,7 @@ declare namespace string {
      * Appends strings to each other without a separator
      * @node string_concat @receiver string @alias stringConcat
      * @param string (optional) — Part to append (receiver: `this` in `x.concat(...)`)
-     * @param string (optional) — Part to append (receiver: `this` in `x.concat(...)`)
+     * @param string (optional) — Part to append
      * @returns concatenated — All parts appended in order
      */
     function concat(this: string, { string?: string, string?: string }): string;
@@ -2252,7 +2252,7 @@ declare namespace string {
      * Compares two Strings
      * @node equal_string @receiver string @alias equalString
      * @param string — Input (receiver: `this` in `x.equal(...)`)
-     * @param string — Input (receiver: `this` in `x.equal(...)`)
+     * @param string — Input
      * @param ignoreCase (optional) — Compare without regard to upper/lower case
      * @returns equal — Are the strings equal?
      */
@@ -2697,7 +2697,7 @@ declare namespace string {
      * Compares two Strings
      * @node not_equal_string @receiver string @alias notEqualString
      * @param string — Input (receiver: `this` in `x.unequal(...)`)
-     * @param string — Input (receiver: `this` in `x.unequal(...)`)
+     * @param string — Input
      * @param ignoreCase (optional) — Compare without regard to upper/lower case
      * @returns unequal — Are the strings equal?
      */

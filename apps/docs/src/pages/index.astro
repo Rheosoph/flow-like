@@ -78,10 +78,10 @@ const footerLinks = [
 
 <StarlightPage
 	frontmatter={{
-		title: "Open Source Workflow Engine Documentation | Flow-Like",
+		title: "Workflow Engine Documentation | Flow-Like",
 		template: "splash",
 		description:
-			"Learn Flow-Like, the open source, local-first workflow engine. Build type-safe visual flows, extend with WASM nodes, and self-host on Docker or Kubernetes.",
+			"Learn Flow-Like, the source-available, local-first workflow engine. Build type-safe visual flows, extend with WASM nodes, and self-host on Docker or Kubernetes.",
 	}}
 >
 	<div class="docs-home-v3 not-content">
@@ -92,7 +92,7 @@ const footerLinks = [
 			<div class="hero-copy">
 				<a class="hero-badge" href="/start/getting-started/">
 					<span class="hero-badge-dot"></span>
-					Open source workflow engine
+					Source-available workflow engine
 					<svg viewBox="0 0 12 12" aria-hidden="true">
 						<path d="M4.5 2.5 8 6l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
 					</svg>
@@ -154,6 +154,22 @@ const footerLinks = [
 				</div>
 			</section>
 
+			<section class="reference-section" aria-labelledby="learning-title">
+				<div class="section-copy">
+					<p>Learn the model</p>
+					<h2 id="learning-title">Docs for tasks. FlowBook for the language.</h2>
+					<span>
+						Start in Docs to run your first Flow, configure a feature, or look up an API.
+						Continue in FlowBook for guided chapters on the application model and FlowScript,
+						with worked examples. Return to Docs for current controls and contracts.
+					</span>
+				</div>
+				<nav class="reference-grid" aria-label="Learning routes">
+					<a href="/start/getting-started/" class="reference-link">Run your first Flow in Docs</a>
+					<a href="https://book.flow-like.com/introduction/" class="reference-link">Read FlowBook from the beginning</a>
+				</nav>
+			</section>
+
 			<section class="reference-section" aria-labelledby="reference-title">
 				<div class="section-copy">
 					<p>Reference shelf</p>
@@ -178,7 +194,7 @@ const footerLinks = [
 		<footer class="docs-footer">
 			<div>
 				<strong>Flow Like</strong>
-				<span>Open source, local-first workflow engine documentation.</span>
+				<span>Source-available, local-first workflow engine documentation.</span>
 			</div>
 			<nav aria-label="Website and legal links">
 				{footerLinks.map((link) => (

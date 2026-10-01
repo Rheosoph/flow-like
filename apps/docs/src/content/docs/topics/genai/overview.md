@@ -74,6 +74,7 @@ Add a system message, retrieval, tools, or structured validation only when the u
 | Extract fields from text or documents | [Extraction and structured output](/topics/genai/extraction/) |
 | Let a model choose among approved operations | [AI agents](/topics/genai/agents/) |
 | Select a hosted or local model | [AI models and setup](/topics/genai/models/) |
+| Generate images with local diffusion models | [Local diffusion](/topics/genai/local-diffusion/) |
 | Render model-produced charts in markdown | [Prompt templates for rendering](/topics/genai/prompt-templates/) |
 
 ## Before you build

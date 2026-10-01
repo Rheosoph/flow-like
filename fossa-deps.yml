@@ -1,0 +1,33 @@
+# Source code copied into the repository that no package manifest declares.
+# packages/browser/NOTICE lists every derived file.
+custom-dependencies:
+  - name: agent-browser
+    version: d01253d9db28d75080e36da3c1c31ef89454731e
+    license: Apache-2.0
+    metadata:
+      homepage: https://github.com/vercel-labs/agent-browser
+      description: CDP client, WebSocket dial, tab tracking, attach and Chrome process handling ported into packages/browser
+  - name: rustwright
+    version: fca14389e99726bca3210190b905e32663395b5c
+    license: MIT
+    metadata:
+      homepage: https://github.com/Skyvern-AI/rustwright
+      description: CDP event log, frame state, in-memory transport, test harness and browser discovery tables ported into packages/browser
+  - name: chromium-chromedriver
+    version: 154.0.8037.92
+    license: BSD-3-Clause
+    metadata:
+      homepage: https://chromium.googlesource.com/chromium/src/+/refs/tags/154.0.8037.92/chrome/test/chromedriver/
+      description: ChromeDriver launch flags, profile templates, window fit, navigation tracking, script wrappers, key conversion and dispatch, click paths and the net error list table ported into packages/browser
+  - name: selenium-atoms
+    version: 154.0.8037.92-selenium-c0b8ff6
+    license: Apache-2.0
+    metadata:
+      homepage: https://chromium.googlesource.com/chromium/src/+/refs/tags/154.0.8037.92/third_party/selenium-atoms/
+      description: Nine compiled WebDriver atoms from Chromium third_party/selenium-atoms (Selenium c0b8ff6451419542dcecc53c922e1a79e4dc3940) vendored in packages/browser/src/js/atoms
+  - name: playwright-us-keyboard-layout
+    version: 5f47e4fb551fa486aec567b05ee11dc7ea6bbeda
+    license: Apache-2.0
+    metadata:
+      homepage: https://github.com/microsoft/playwright
+      description: US keyboard layout table from packages/playwright-core/src/server/usKeyboardLayout.ts ported into packages/browser/src/input/us_layout.rs

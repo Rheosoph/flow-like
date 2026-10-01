@@ -1,0 +1,51 @@
+---
+title: "Reuse the work of preparing a workflow run"
+description: "How compiled artifacts and shared templates reuse board preparation while keeping compatibility and per-run state explicit."
+date: 2026-09-16
+tags: ["runtime", "performance", "architecture", "engineering"]
+cover: "/images/community-P4.png"
+draft: true
+---
+
+Before a workflow can run, the runtime must understand its nodes, pins, defaults, and connections. Repeating that preparation for the same board version is separate from the work the workflow actually performs. A request to an external service still has to happen even if the runtime already knows how its node is wired.
+
+Flow-Like uses compiled board artifacts and shared run templates to reuse the parts of preparation that are stable. In this context, compiled means a prepared execution representation. It does not mean that an arbitrary board is translated into native machine code.
+
+## Separate the plan from a particular execution
+
+A run template holds resolved node and pin topology, node logic references, parsed defaults, and a board view suitable for execution. Those values can be shared for the same board version and compatible node registry. A particular run still needs its own mutable state.
+
+The separation matters beyond speed. A template shared across requests and users must not carry one person's request-specific app state. The [template implementation](https://github.com/Rheosoph/flow-like/blob/dev/packages/core/runtime/src/flow/compiled/template.rs) explicitly leaves that state out and creates per-run values from the shared definition.
+
+Think of the template as the reusable route through the workflow. The current inputs, variables, and results belong to the journey being made now. Reusing the route does not mean reusing the previous person's data or returning a cached business result.
+
+<figure>
+  <img src="/posts/community/P4/overview.svg" alt="Resolve a board artifact, reuse a compatible prepared plan, prepare a replacement when needed, and execute the selected workflow." loading="lazy" width="1600" height="1000" />
+  <figcaption>Prepared plans reuse startup work while execution and request-specific state remain distinct.</figcaption>
+</figure>
+
+## Check compatibility before reuse
+
+A stored artifact is useful only if it still describes the intended board and the available node definitions. The cache key includes board identity, content or version identity, a registry fingerprint, and a further salt used to distinguish relevant runtime inputs such as a WASM bundle signature.
+
+Pinned board versions are immutable. A floating latest board can change, so the desktop resolver revalidates its storage identity. When an ETag is available, it provides an exact storage identity check; otherwise the resolver can use the modification metadata it recorded.
+
+This is why “the file exists” is not a sufficient reuse rule. A changed node registry or updated board can invalidate preparation even when the app name and entry point remain the same. Compatibility checks keep the prepared representation aligned with what will execute.
+
+## Desktop and server resolve artifacts differently
+
+On Desktop, the resolver first considers its in-process template cache. On a cold path, it can load a persisted artifact. If that is missing or incompatible, the fallback loads the source board, applies preparation, compiles the representation, and writes an artifact back in the background.
+
+The server path has a different division of responsibility. The API prepares the artifact before dispatch and gives the executor a presigned address for the selected compiled file. The executor decodes those bytes and uses its template cache; it does not independently load the source board from the metadata store or write an artifact back there.
+
+The [resolver source](https://github.com/Rheosoph/flow-like/blob/dev/packages/core/runtime/src/flow/compiled/resolver.rs) explains both paths. Keep them separate when diagnosing a missing artifact: the right place to investigate depends on which component is responsible for producing it.
+
+## What changes in a repeated run
+
+A frequently used endpoint may execute the same board version for many different requests. Its first execution establishes a compatible prepared representation. Later requests can reuse that work while supplying their own inputs and execution state. Updating the board or its node definitions changes the compatibility question, so the resolver prepares or selects the corresponding representation.
+
+Preparation remains separate from node execution, remote model latency, network requests, and result rendering. A board dominated by a long external request can still spend most of its time waiting for that service. Plan reuse removes repeated preparation; it does not reuse a previous business result or shorten the external service's response time.
+
+Per-run state preserves that separation. Two people invoking the same prepared board bring different inputs, credentials, and results to their executions. The shared template supplies the board structure, while the execution owns the data that changes from request to request.
+
+When investigating a slow start, first establish whether the run reused a compatible plan. If it did, look at execution itself. If it did not, inspect the resolver's preparation path and the compatibility check that prevented reuse. That narrows the investigation to the work the runtime actually performed.

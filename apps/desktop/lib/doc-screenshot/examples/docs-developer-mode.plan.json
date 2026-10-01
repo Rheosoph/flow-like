@@ -11,7 +11,7 @@
 		},
 		"theme": "dark",
 		"format": "webp",
-		"timeoutMs": 120000,
+		"timeoutMs": 300000,
 		"settleMs": 350,
 		"disableAnimations": true,
 		"hideScrollbars": true
@@ -32,6 +32,10 @@
 					"text": "Welcome to"
 				},
 				{
+					"type": "delay",
+					"ms": 2000
+				},
+				{
 					"type": "click",
 					"selector": "button[aria-label=\"Step 4: Community\"]"
 				},
@@ -44,6 +48,20 @@
 					"name": "welcome-tour-developer-mode",
 					"output": "DeveloperModeTour.webp",
 					"mode": "viewport"
+				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		},
@@ -77,7 +95,22 @@
 					"output": "DeveloperModeSettings.webp",
 					"mode": "viewport"
 				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		}
-	]
+	],
+	"httpFixture": "../fixtures/docs-account.http.json"
 }

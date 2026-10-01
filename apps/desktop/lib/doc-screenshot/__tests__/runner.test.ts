@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { validateDocScreenshotHttpFixture } from "../plan";
 import {
 	buildScreenshotUrl,
+	classifyScreenshotDiagnostic,
 	redactScreenshotUrl,
 	resolveElementCaptureClip,
 	resolveHttpFixtureRequest,
@@ -235,5 +236,39 @@ describe("document screenshot HTTP fixture routing", () => {
 				url: "https://unlisted.example.test/image.png",
 			}),
 		).toEqual({ action: "continue" });
+	});
+});
+
+describe("screenshot diagnostic policy", () => {
+	test("unexpected browser errors stay blocking", () => {
+		const error = { kind: "page" as const, message: "Broken render" };
+		expect(classifyScreenshotDiagnostic(error, [], [])).toEqual(error);
+	});
+	test("allowances require the exact kind and message and stop at their count", () => {
+		const error = {
+			kind: "console" as const,
+			message: "Offline fixture has no account",
+		};
+		const allowance = {
+			...error,
+			reason: "This capture uses a local anonymous profile.",
+			maxCount: 1,
+		};
+		const allowed = classifyScreenshotDiagnostic(error, [], [allowance]);
+		expect(allowed.allowance).toBe(allowance.reason);
+		expect(
+			classifyScreenshotDiagnostic(error, [allowed], [allowance]).allowance,
+		).toBeUndefined();
+		expect(
+			classifyScreenshotDiagnostic({ ...error, kind: "page" }, [], [allowance])
+				.allowance,
+		).toBeUndefined();
+		expect(
+			classifyScreenshotDiagnostic(
+				{ ...error, message: `${error.message}: another failure` },
+				[],
+				[allowance],
+			).allowance,
+		).toBeUndefined();
 	});
 });

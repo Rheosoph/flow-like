@@ -28,10 +28,7 @@ import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import { firstEventAction } from "../event-handlers";
 import type { BoundValue, FileInputComponent } from "../types";
-import {
-	limitUploadBatch,
-	mergeSuccessfulUploadBatch,
-} from "./upload-input-state";
+import { limitUploadBatch, settleUploadBatch } from "./upload-input-state";
 
 /** Rows rendered for a selection; the rest is summarised. Folder picks can be huge. */
 const MAX_VISIBLE_FILES = 50;
@@ -349,17 +346,14 @@ export function A2UIFileInput({
 		setUploadProgress(null);
 
 		const successfulUploads = uploadResults.filter((file) => file.backendUrl);
-		const failedUploads = uploadResults.filter((file) => file.uploadError);
-		const committedFiles = mergeSuccessfulUploadBatch(
+		const { committed: committedFiles, display } = settleUploadBatch(
 			currentFiles,
 			uploadResults,
 			Boolean(multiple),
 			maxFiles,
 			(file) => Boolean(file.backendUrl),
 		);
-		setLocalFiles(
-			multiple ? [...committedFiles, ...failedUploads] : committedFiles,
-		);
+		setLocalFiles(display);
 
 		if (successfulUploads.length > 0) {
 			const newValue = multiple ? committedFiles : committedFiles[0];
@@ -394,12 +388,13 @@ export function A2UIFileInput({
 
 	const handleRemove = (index: number) => {
 		const newFiles = displayFiles.filter((_, i) => i !== index);
+		setLocalFiles(newFiles);
+		if (displayFiles[index]?.uploadError) return;
+
 		const committedFiles = newFiles.filter(
 			(file) => !file.uploading && !file.uploadError,
 		);
 		const newValue = multiple ? committedFiles : null;
-
-		setLocalFiles(newFiles);
 
 		if (component.value && "path" in component.value) {
 			setByPath(component.value.path, newValue);

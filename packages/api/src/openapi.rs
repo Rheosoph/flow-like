@@ -25,12 +25,12 @@ impl Modify for SecurityAddon {
             SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::new("X-API-Key"))),
         );
 
-        // Personal Access Token (Authorization: PAT <token>)
+        // Personal Access Token (Authorization: pat_<id>.<secret>)
         components.add_security_scheme(
             "pat",
             SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::with_description(
                 "Authorization",
-                "Personal Access Token. Format: 'PAT <token>'",
+                "Personal Access Token. Format: 'pat_<id>.<secret>' (an optional 'Bearer ' prefix is also accepted)",
             ))),
         );
 
@@ -84,7 +84,7 @@ impl Modify for SecurityAddon {
     info(
         title = "Flow-Like API",
         version = "1.0.0",
-        description = "Flow-Like platform API for building and executing workflows.\n\n## Authentication\n\nThis API supports multiple authentication methods:\n\n- **Bearer Token (OAuth2)**: Standard JWT token from OAuth2 flow. Use `Authorization: Bearer <token>`\n- **API Key**: For technical/service users. Use `X-API-Key: <key>` header\n- **Personal Access Token (PAT)**: For programmatic access. Use `Authorization: PAT <token>`\n- **Executor JWT**: Internal JWT for execution services",
+        description = "Flow-Like platform API for building and executing workflows.\n\n## Authentication\n\nThis API supports multiple authentication methods:\n\n- **Bearer Token (OAuth2)**: Standard JWT token from OAuth2 flow. Use `Authorization: Bearer <token>`\n- **API Key**: For technical/service users. Use `X-API-Key: <key>` header\n- **Personal Access Token (PAT)**: For programmatic access. Use `Authorization: pat_<id>.<secret>`\n- **Executor JWT**: Internal JWT for execution services",
         license(name = "MIT")
     ),
     servers(
@@ -278,6 +278,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::summaries::board_summaries,
         crate::routes::app::board::get_board_variables::get_board_variables,
         crate::routes::app::board::get_board_versions::get_board_versions,
+        crate::routes::app::board::get_board_version_infos::get_board_version_infos,
+        crate::routes::app::board::render_flowscript::render_flowscript,
         crate::routes::app::board::upsert_board::upsert_board,
         crate::routes::app::board::delete_board::delete_board,
         crate::routes::app::board::version_board::version_board,
@@ -952,6 +954,9 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::scoring::FlaggedPattern,
         crate::routes::app::board::summaries::BoardSummary,
         crate::routes::app::board::get_board_variables::BoardVariables,
+        flow_like::flow::board::BoardVersionInfo,
+        crate::routes::app::board::render_flowscript::RenderFlowScriptRequest,
+        crate::routes::app::board::get_flowscript::FlowScriptResponse,
         crate::routes::app::page::get_pages::PageInfo,
 		crate::routes::app::page::bootstrap::BootstrapResponse,
         crate::routes::app::publication::get_publication::AppPublicationActor,

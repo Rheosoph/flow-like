@@ -1,0 +1,36 @@
+{
+	"schema": "flow-like.doc-screenshot-http-fixture/v1",
+	"strict": true,
+	"routes": [
+		{
+			"request": {
+				"method": "OPTIONS",
+				"url": "https://api.flow-like.com/api/v1"
+			},
+			"response": {
+				"status": 200,
+				"headers": {
+					"access-control-allow-origin": "*",
+					"access-control-allow-headers": "*",
+					"access-control-allow-methods": "GET, OPTIONS"
+				},
+				"json": {}
+			}
+		},
+		{
+			"request": {
+				"method": "GET",
+				"url": "https://api.flow-like.com/api/v1"
+			},
+			"response": {
+				"status": 200,
+				"headers": {
+					"access-control-allow-origin": "*",
+					"access-control-allow-headers": "*",
+					"access-control-allow-methods": "GET, OPTIONS"
+				},
+				"json": {}
+			}
+		}
+	]
+}

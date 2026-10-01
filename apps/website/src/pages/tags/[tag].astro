@@ -16,8 +16,10 @@ const posts = (await getCollection('blog', ({ data }) => import.meta.env.PROD ? 
   .sort((a,b) => b.data.date.getTime() - a.data.date.getTime());
 const first = posts[0];
 const rest = posts.slice(1);
+const title = `${tag} Articles | Flow-Like Blog`;
+const description = `Explore ${posts.length} ${posts.length === 1 ? "article" : "articles"} about ${tag}, including relevant Flow-Like product updates and guides.`;
 ---
-<BlogLayout data={{ title: "Blog", description: "Latest blog posts", slug: "blog" }}>
+<BlogLayout data={{ title, description }}>
   <div class="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 pb-12 sm:pb-14 lg:pb-16">
     <a
       href="/tags/"

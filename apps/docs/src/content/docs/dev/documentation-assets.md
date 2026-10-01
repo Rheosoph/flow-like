@@ -24,9 +24,59 @@ writes its static assets to `apps/website/dist/client`; the docs write to
 
 Documentation pages belong in `apps/docs/src/content/docs/`. Add a title and
 description in frontmatter, link related pages, and add new topics to the
-sidebar in `apps/docs/astro.config.mjs`. Use the
+sidebar in `apps/docs/src/sidebar.mjs`. Use the
 [screenshot tools](/dev/documentation-screenshots/) when a procedure needs a
 capture of the actual application.
+
+## Check a documentation change
+
+Run these commands from the repository root before opening a pull request:
+
+```sh
+bun run --cwd apps/docs check:source
+bun apps/docs/scripts/generate-flowpilot-corpus.ts
+bun run --cwd apps/docs build
+bun run --cwd apps/docs check
+bun test apps/docs/src/components/node-docs/NodeReference.test.tsx
+bun apps/docs/scripts/check-sdk-examples.ts
+uv run --with httpx python apps/docs/scripts/check-sdk-examples.py
+```
+
+The source check validates frontmatter, code fences, and sidebar coverage. The
+built check follows internal links and headings, verifies screenshot files and
+search scopes, and checks HTML and image budgets. The FlowPilot corpus check
+requires its generated JSON to match the selected source guides. Commit that
+JSON when those guides change.
+
+For browser checks, serve `apps/docs/dist` on port 4339 and run
+`bun run --cwd apps/docs check:browser` in another terminal. Set
+`DOCS_BROWSER_EXECUTABLE` to your Chrome executable if Puppeteer has no browser
+installed. The checks cover search, the catalog directory, mobile layout,
+image expansion, chart examples, and the 404 page. They save previews under
+`/tmp/flow-like-docs-preview`. The Documentation workflow runs these checks
+on relevant pull requests and uploads its previews for review.
+
+Keep node reference changes in their Rust node definitions or
+`packages/catalog/src/bin/generate_node_docs.rs`. Run `bun run docs:nodes`
+to regenerate the catalog; do not patch individual generated pages. Use
+`bun run docs:nodes -- --check` to compare the generated output without
+writing files. CI runs that comparison against the metadata-only Rust catalog.
+
+## Screenshot size and readability
+
+Use a screenshot to show the controls a reader needs for that step. Prefer a
+focused panel or populated workspace over several copies of the same overview.
+Keep the source image large enough to inspect labels when opened separately.
+Markdown images get responsive WebP derivatives at 480, 800, 1200, and 1600
+pixels, plus their source width. Readers can open large article images at full
+size by selecting them.
+
+The built check limits each derivative up to 1600 pixels to 450 KB and each
+page's unique images at the 800-pixel article size to 1.5 MB. It also limits
+Quick Start HTML to 200 KB and the catalog overview to 2 MB. These budgets use
+uncompressed build artifacts; they do not represent a production network
+measurement. Check phone and desktop previews before raising a budget or
+reducing image quality.
 
 ## Markdown responses
 

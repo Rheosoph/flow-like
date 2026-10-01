@@ -89,6 +89,8 @@ vi.mock("../../lib/platform", () => ({
 import { UpdateProvider } from "../update-provider";
 
 const DISMISSED_VERSION_KEY = "updater:dismissed-version";
+const REQUEST_ERROR =
+	"error sending request for url (https://cdn.flow-like.com/latest.json)";
 
 const browserGlobalKeys = [
 	"window",
@@ -186,6 +188,38 @@ async function mountProvider() {
 	await act(async () => {
 		root?.render(createElement(UpdateProvider));
 	});
+}
+
+function controlRetryTimers() {
+	type Timer = ReturnType<Window["setTimeout"]>;
+	const pending = new Map<Timer, { callback: () => void; delay?: number }>();
+	const scheduled = vi
+		.spyOn(browserWindow, "setTimeout")
+		.mockImplementation((handler, delay, ...args) => {
+			const timer = {} as Timer;
+			pending.set(timer, { callback: () => handler(...args), delay });
+			return timer;
+		});
+	const cleared = vi
+		.spyOn(browserWindow, "clearTimeout")
+		.mockImplementation((timer) => {
+			pending.delete(timer as Timer);
+		});
+
+	return {
+		pending,
+		scheduled,
+		cleared,
+		async runNext(expectedDelay: number) {
+			expect(pending.size).toBe(1);
+			const next = pending.entries().next().value;
+			if (!next) throw new Error("No retry timer is pending");
+			const [timer, retry] = next;
+			expect(retry.delay).toBe(expectedDelay);
+			pending.delete(timer);
+			await act(async () => retry.callback());
+		},
+	};
 }
 
 beforeEach(() => {
@@ -548,6 +582,187 @@ describe("UpdateProvider", () => {
 		});
 	});
 
+	test.each([
+		["request string", REQUEST_ERROR],
+		["request Error", new Error(REQUEST_ERROR)],
+	])(
+		"recovers from a transient %s without reporting an error",
+		async (_, error) => {
+			const timers = controlRetryTimers();
+			mocks.check.mockRejectedValueOnce(error).mockResolvedValueOnce(null);
+
+			await mountProvider();
+
+			expect(mocks.check).toHaveBeenCalledTimes(1);
+			expect(mocks.captureTelemetryError).not.toHaveBeenCalled();
+			expect(mocks.toastError).not.toHaveBeenCalled();
+			expect(mocks.addTelemetryBreadcrumb).toHaveBeenCalledWith(
+				expect.objectContaining({
+					category: "desktop.updater",
+					message: expect.stringContaining("check_retry_scheduled"),
+					level: "warning",
+				}),
+			);
+
+			await timers.runNext(1_000);
+
+			expect(mocks.check).toHaveBeenCalledTimes(2);
+			expect(mocks.check.mock.calls).toEqual([
+				[{ timeout: 30_000 }],
+				[{ timeout: 30_000 }],
+			]);
+			expect(timers.pending.size).toBe(0);
+			expect(mocks.captureTelemetryError).not.toHaveBeenCalled();
+			expect(mocks.toastError).not.toHaveBeenCalled();
+			expect(mocks.addTelemetryBreadcrumb).toHaveBeenCalledWith(
+				expect.objectContaining({ message: "check_retry_recovered" }),
+			);
+			expect(mocks.endTelemetrySpan).toHaveBeenCalledWith(
+				"ok",
+				expect.objectContaining({ check_attempts: 2, update_available: false }),
+			);
+		},
+	);
+
+	test.each(["automatic", "tray"])(
+		"reports an exhausted transport failure once with the %s trigger",
+		async (trigger) => {
+			vi.spyOn(console, "error").mockImplementation(() => undefined);
+			const timers = controlRetryTimers();
+			mocks.check.mockRejectedValue(REQUEST_ERROR);
+
+			await mountProvider();
+			if (trigger === "tray") {
+				mocks.listeners.get("tray:update-requested")?.({});
+			}
+			expect(mocks.check).toHaveBeenCalledTimes(1);
+
+			await timers.runNext(1_000);
+			expect(mocks.check).toHaveBeenCalledTimes(2);
+			expect(mocks.captureTelemetryError).not.toHaveBeenCalled();
+			expect(mocks.toastError).not.toHaveBeenCalled();
+
+			await timers.runNext(3_000);
+
+			expect(mocks.check).toHaveBeenCalledTimes(3);
+			expect(timers.scheduled).toHaveBeenCalledTimes(2);
+			expect(timers.pending.size).toBe(0);
+			expect(mocks.toastError).toHaveBeenCalledTimes(1);
+			expect(mocks.captureTelemetryError).toHaveBeenCalledTimes(1);
+			expect(mocks.captureTelemetryError).toHaveBeenCalledWith(
+				REQUEST_ERROR,
+				expect.objectContaining({
+					culprit: "desktop/updater/check",
+					context: expect.objectContaining({
+						check_attempts: 3,
+						check_source: trigger === "automatic" ? "automatic" : "manual",
+						check_trigger: trigger,
+					}),
+				}),
+			);
+		},
+	);
+
+	test.each([
+		"Could not fetch a valid release JSON from remote",
+		"error decoding response body",
+	])("does not retry a manifest failure: %s", async (message) => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const timers = controlRetryTimers();
+		const error = new Error(message);
+		mocks.check.mockRejectedValue(error);
+
+		await mountProvider();
+
+		expect(mocks.check).toHaveBeenCalledTimes(1);
+		expect(timers.scheduled).not.toHaveBeenCalled();
+		expect(mocks.captureTelemetryError).toHaveBeenCalledWith(
+			error,
+			expect.objectContaining({
+				context: expect.objectContaining({ check_attempts: 1 }),
+			}),
+		);
+		expect(mocks.toastError).toHaveBeenCalledTimes(1);
+	});
+
+	test("does not schedule a transport retry while offline", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const timers = controlRetryTimers();
+		Object.defineProperty(globalThis.navigator, "onLine", {
+			configurable: true,
+			value: false,
+		});
+		mocks.check.mockRejectedValue(REQUEST_ERROR);
+
+		await mountProvider();
+
+		expect(mocks.check).toHaveBeenCalledTimes(1);
+		expect(timers.scheduled).not.toHaveBeenCalled();
+		expect(mocks.captureTelemetryError).not.toHaveBeenCalled();
+		expect(mocks.toastError).toHaveBeenCalledTimes(1);
+	});
+
+	test("stops retrying when the network goes offline during the delay", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const timers = controlRetryTimers();
+		mocks.check.mockRejectedValue(REQUEST_ERROR);
+
+		await mountProvider();
+		Object.defineProperty(globalThis.navigator, "onLine", {
+			configurable: true,
+			value: false,
+		});
+		await timers.runNext(1_000);
+
+		expect(mocks.check).toHaveBeenCalledTimes(1);
+		expect(timers.pending.size).toBe(0);
+		expect(mocks.captureTelemetryError).not.toHaveBeenCalled();
+		expect(mocks.toastError).toHaveBeenCalledTimes(1);
+	});
+
+	test("cancels a pending retry when the provider unmounts", async () => {
+		const timers = controlRetryTimers();
+		mocks.check.mockRejectedValue(REQUEST_ERROR);
+
+		await mountProvider();
+		expect(timers.pending.size).toBe(1);
+		const timer = [...timers.pending.keys()][0];
+
+		await act(async () => root?.unmount());
+		root = undefined;
+
+		expect(timers.cleared).toHaveBeenCalledWith(timer);
+		expect(timers.pending.size).toBe(0);
+		expect(mocks.check).toHaveBeenCalledTimes(1);
+		expect(mocks.captureTelemetryError).not.toHaveBeenCalled();
+		expect(mocks.toastError).not.toHaveBeenCalled();
+	});
+
+	test("closes an update returned by an in-flight retry after unmount", async () => {
+		const timers = controlRetryTimers();
+		const update = fakeUpdate();
+		let resolveRetry: ((update: FakeUpdate) => void) | undefined;
+		mocks.check.mockRejectedValueOnce(REQUEST_ERROR).mockImplementationOnce(
+			() =>
+				new Promise<FakeUpdate>((resolve) => {
+					resolveRetry = resolve;
+				}),
+		);
+
+		await mountProvider();
+		await timers.runNext(1_000);
+		expect(mocks.check).toHaveBeenCalledTimes(2);
+		await act(async () => root?.unmount());
+		root = undefined;
+		await act(async () => resolveRetry?.(update));
+
+		expect(update.close).toHaveBeenCalledTimes(1);
+		expect(update.downloadAndInstall).not.toHaveBeenCalled();
+		expect(mocks.confirm).not.toHaveBeenCalled();
+		expect(mocks.captureTelemetryError).not.toHaveBeenCalled();
+		expect(mocks.toastError).not.toHaveBeenCalled();
+	});
+
 	test("shows a persistent check error whose Retry action performs a fresh manual check", async () => {
 		vi.spyOn(console, "error").mockImplementation(() => undefined);
 		mocks.check
@@ -808,6 +1023,43 @@ describe("UpdateProvider", () => {
 		expect(
 			mocks.invoke.mock.calls.some(([command]) => command === "update"),
 		).toBe(false);
+	});
+
+	test("preserves a tray install request during retry without starting another check", async () => {
+		const timers = controlRetryTimers();
+		let intervalCallback: (() => void) | undefined;
+		vi.spyOn(browserWindow, "setInterval").mockImplementation((handler) => {
+			intervalCallback = () => handler();
+			return {} as ReturnType<typeof browserWindow.setInterval>;
+		});
+		const declinedUpdate = fakeUpdate("0.1.8");
+		const refreshedUpdate = fakeUpdate("0.1.9");
+		mocks.confirm.mockResolvedValueOnce(false);
+		mocks.check
+			.mockResolvedValueOnce(declinedUpdate)
+			.mockRejectedValueOnce(REQUEST_ERROR)
+			.mockResolvedValueOnce(refreshedUpdate);
+
+		await mountProvider();
+		expect(declinedUpdate.close).toHaveBeenCalledTimes(1);
+		mocks.confirm.mockClear();
+		await act(async () => intervalCallback?.());
+		expect(timers.pending.size).toBe(1);
+
+		mocks.listeners.get("tray:update-requested")?.({});
+		intervalCallback?.();
+		expect(mocks.check).toHaveBeenCalledTimes(2);
+		expect(refreshedUpdate.downloadAndInstall).not.toHaveBeenCalled();
+		await timers.runNext(1_000);
+
+		expect(mocks.check).toHaveBeenCalledTimes(3);
+		expect(refreshedUpdate.downloadAndInstall).toHaveBeenCalledTimes(1);
+		expect(mocks.confirm).not.toHaveBeenCalled();
+		expect(mocks.captureTelemetryError).not.toHaveBeenCalled();
+		expect(mocks.toastError).not.toHaveBeenCalled();
+		expect(
+			JSON.parse(localStorage.getItem("updater:install-attempt") ?? "{}"),
+		).toMatchObject({ trigger: "tray", target_version: "0.1.9" });
 	});
 
 	test("preserves a tray install request while an automatic check is in flight", async () => {

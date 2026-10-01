@@ -78,6 +78,39 @@ export function isLivePageValueBearingComponent(
 	return VALUE_BEARING_COMPONENT_TYPES.has(component.type);
 }
 
+/**
+ * Providers that collapse `set_value`'s type union to one type (rig's Gemini conversion keeps
+ * only `string`) send "true" or "50" to boolean and numeric controls; convert those spellings.
+ */
+export function coerceLivePageValue(
+	component: A2UIComponent,
+	value: unknown,
+): unknown {
+	const parse = SPELLED_VALUE_PARSERS.get(component.type);
+	if (typeof value !== "string" || !parse) return value;
+	return parse(value.trim()) ?? value;
+}
+
+const BOOLEAN_SPELLINGS = new Map([
+	["true", true],
+	["false", false],
+]);
+
+const spelledBoolean = (text: string) =>
+	BOOLEAN_SPELLINGS.get(text.toLowerCase());
+
+const spelledNumber = (text: string) =>
+	text !== "" && Number.isFinite(Number(text)) ? Number(text) : undefined;
+
+const SPELLED_VALUE_PARSERS = new Map<
+	A2UIComponent["type"],
+	(text: string) => boolean | number | undefined
+>([
+	["checkbox", spelledBoolean],
+	["switch", spelledBoolean],
+	["slider", spelledNumber],
+]);
+
 /** Component ids rendered below this component in the A2UI tree. */
 export function livePageComponentChildIds(component: A2UIComponent): string[] {
 	const children: string[] = [];

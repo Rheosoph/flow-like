@@ -1,0 +1,57 @@
+---
+title: "Use the same image in two environments"
+description: "Flow-Like reads installation configuration at startup, so operators can change identity and endpoints without rebuilding the application image."
+date: 2026-06-05
+tags: ["self-hosting", "configuration", "operations"]
+cover: "/images/community-H2.png"
+draft: true
+---
+
+A staging host and a production host can run the same application build while pointing at different identity providers and public endpoints. Those settings belong to the environment. Recompiling the application to change them makes it harder to tell a configuration change from a code change.
+
+Flow-Like's API can read a complete installation configuration at startup. Supply the document through a mounted file, an injected environment value, or a supported secret reference. The selected image stays the same.
+
+That gives an operator two separate things to review: the release digest and the environment's configuration. It also makes a configuration-only rollback possible, provided you retain the previous document and restart the affected services.
+
+<figure>
+  <img src="/posts/community/H2/overview.svg" alt="One image digest is used in two environments with different startup configuration documents." width="1600" height="1000" loading="lazy" />
+  <figcaption>Configuration is read at startup. A changed document takes effect after the relevant process restarts.</figcaption>
+</figure>
+
+## Choose one source for the API document
+
+The [runtime configuration contract](https://docs.flow-like.com/self-hosting/containers/#runtime-api-configuration) offers these selectors:
+
+| Selector | What it supplies |
+| --- | --- |
+| `FLOW_LIKE_CONFIG_FILE` | The path to a readable JSON file inside the container |
+| `FLOW_LIKE_CONFIG_JSON` | The complete JSON document as an environment value |
+| `FLOW_LIKE_CONFIG_SECRET_REF` | A reference resolved through the API's configured secret store |
+
+Set one nonempty source. Setting two is an error, rather than a precedence rule that silently chooses one. Empty environment values count as unset, which is useful when Compose interpolates an optional selector. Whitespace-only values fail validation.
+
+With no override, the process uses its embedded default. Once you supply an override, it replaces the entire document. A partial JSON object is not merged into that default. Start from the configuration shape for your deployment and keep the whole intended document under your configuration-management process.
+
+## Know which settings are public
+
+The document configures Hub metadata, identity validation, and third-party OAuth endpoints. Some Hub fields are meant to be returned to clients. Loading a document from a secret store does not make every field inside it confidential.
+
+OAuth client secrets use `client_secret_env` references. Literal `oauth_providers.*.client_secret` values are rejected. Keep the secret itself in the supported secret configuration and put the reference where the schema expects it.
+
+The [source loader](https://github.com/Rheosoph/flow-like/blob/dev/packages/api/src/runtime_config/source.rs) bounds the document to 4 MiB and requires UTF-8. It reports source and validation failures without including the document contents. A deployment platform may impose a smaller environment-variable limit, so a mounted file can be a better fit for a larger document.
+
+## Apply the change as a rollout
+
+For Compose, `FLOW_LIKE_RUNTIME_CONFIG_FILE` is the host-side setting used to mount the selected configuration into the API and sink services. The process inside the container reads its startup source. Change the maintained file, validate the configuration, then recreate the services that consume it.
+
+The web container has its own public runtime URL settings. Recreate it after changing the relevant `NEXT_PUBLIC_*` values. Updating the API document alone does not repair an incorrect browser callback URL.
+
+Keep the previous configuration and image references available while you verify the new rollout. Test login, the callback path, an app invocation, and any integration affected by the change. A process starting successfully establishes that its configuration was accepted; it does not prove that an external identity provider accepts the configured redirect.
+
+## Keep build decisions in the build
+
+Runtime configuration changes installation settings. It does not add provider features omitted from the compiled binary or turn an image for one architecture into another.
+
+There are also components with a different contract. For example, the audit worker's policy is compiled into its image. Consult the [Compose configuration guide](https://docs.flow-like.com/self-hosting/docker-compose/configuration/) when deciding which services need a restart and which need a new image.
+
+For a routine endpoint or identity change, the deployment record can now stay concise: same application digest, a reviewed configuration revision, and a verified restart. That is enough information for the next operator to understand what changed.

@@ -13,7 +13,7 @@ import {
 	SelectValue,
 	formatEventTypeLabel,
 } from "@flow-like/flow-like-ui";
-import { IEventExecutionMode } from "@flow-like/flow-like-ui/lib/schema/flow/event";
+import type { IEventExecutionMode } from "@flow-like/flow-like-ui/lib/schema/flow/event";
 import type {
 	IHub,
 	ISupportedSinks,
@@ -147,28 +147,27 @@ export function EventTypeConfiguration({
 	const foundConfig = eventConfig[node?.name];
 
 	useEffect(() => {
-		const eventTypes = eventConfig[node?.name];
-		if (!eventTypes) {
+		if (!foundConfig) {
 			console.warn(`No event types configured for node: ${node?.name}`);
 			return;
 		}
 
-		if (!eventTypes.eventTypes.includes(event.event_type)) {
+		if (!foundConfig.eventTypes.includes(event.event_type)) {
 			onUpdate(
-				eventTypes.defaultEventType,
-				eventTypes.configs[eventTypes.defaultEventType] ?? {},
+				foundConfig.defaultEventType,
+				foundConfig.configs[foundConfig.defaultEventType] ?? {},
 			);
 		}
-	}, [node?.name, event.event_type]);
+	}, [foundConfig, node?.name, event.event_type, onUpdate]);
 
-	if (foundConfig?.eventTypes.length <= 1) return null;
+	if (!foundConfig || foundConfig.eventTypes.length <= 1) return null;
 
 	// Filter event types to only those that have at least one available sink
 	// AND match the event's execution mode (a Remote event must not offer
 	// local-only types like IMAP/Discord).
-	const availableEventTypes = foundConfig?.eventTypes.filter((type) => {
-		if (foundConfig?.withSink?.includes(type)) {
-			const staticCfg = foundConfig?.sinkAvailability?.[type] ?? null;
+	const availableEventTypes = foundConfig.eventTypes.filter((type) => {
+		if (foundConfig.withSink?.includes(type)) {
+			const staticCfg = foundConfig.sinkAvailability?.[type] ?? null;
 			const sinkConfig = computeSinkAvailability(
 				type,
 				hub,
@@ -219,7 +218,7 @@ export function EventTypeConfiguration({
 					/>
 				</SelectTrigger>
 				<SelectContent>
-					{availableEventTypes?.map((type) => (
+					{availableEventTypes.map((type) => (
 						<SelectItem key={type} value={type}>
 							{formatEventTypeLabel(type)}
 						</SelectItem>
@@ -272,9 +271,7 @@ export function EventTranslation({
 	// form kept showing edits the event no longer had.
 	const node: INode | undefined = board.nodes[nodeId ?? ""];
 
-	const foundEventConfig = useMemo(() => {
-		return eventConfig[node?.name];
-	}, [node?.name]);
+	const foundEventConfig = eventConfig[node?.name];
 
 	const ConfigInterface = useMemo(() => {
 		if (!foundEventConfig) return null;

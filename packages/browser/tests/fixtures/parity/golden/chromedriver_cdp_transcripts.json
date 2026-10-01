@@ -1,0 +1,7384 @@
+{
+ "A:t_nbsp": [
+  {
+   "dir": ">",
+   "id": 50,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 50,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 51,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 51,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "C766BEDCC131B4AC0F6298703874531A",
+      "loaderId": "ED7C683A09FCA2653294025875118F2D",
+      "url": "http://127.0.0.1:57117/text.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 52,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 52,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "C766BEDCC131B4AC0F6298703874531A",
+      "loaderId": "ED7C683A09FCA2653294025875118F2D",
+      "url": "http://127.0.0.1:57117/text.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 53,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[43883 chars]… Y[Z]={}:Y[Z]=fb;; return this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"css selector\":\"#t_nbsp\"}], true, arguments]); }",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "3881944956663923311.-4093190156281460302"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 53,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(2)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"element-6066-11e4-a52e-4f735466cecf\":0}}"
+       },
+       {
+        "type": "node",
+        "value": {
+         "nodeType": 1,
+         "childNodeCount": 1,
+         "backendNodeId": 150,
+         "loaderId": "ED7C683A09FCA2653294025875118F2D",
+         "shadowRoot": null,
+         "localName": "p",
+         "namespaceURI": "http://www.w3.org/1999/xhtml",
+         "attributes": {
+          "id": "t_nbsp"
+         }
+        }
+       }
+      ]
+     },
+     "objectId": "-2402948600840613456.3.10"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 54,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 54,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 55,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 55,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 56,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 56,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "C766BEDCC131B4AC0F6298703874531A",
+      "loaderId": "ED7C683A09FCA2653294025875118F2D",
+      "url": "http://127.0.0.1:57117/text.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 57,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 150,
+    "objectGroup": "dfce1ed7-ae57-4df9-ac4d-9a1bae7098a9"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 57,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLParagraphElement",
+     "description": "p#t_nbsp",
+     "objectId": "-2402948600840613456.3.11"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 58,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 58,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "C766BEDCC131B4AC0F6298703874531A",
+      "loaderId": "ED7C683A09FCA2653294025875118F2D",
+      "url": "http://127.0.0.1:57117/text.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 59,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "-2402948600840613456.3.11"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[43030 chars]… ;; return this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0}], true, arguments]); }",
+    "objectGroup": "dfce1ed7-ae57-4df9-ac4d-9a1bae7098a9",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "3881944956663923311.-4093190156281460302"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 59,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":\"a  b c \"}"
+       }
+      ]
+     },
+     "objectId": "-2402948600840613456.3.12"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 60,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "dfce1ed7-ae57-4df9-ac4d-9a1bae7098a9"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 61,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 60,
+   "result": {},
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 61,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 62,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 62,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 63,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 63,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "C766BEDCC131B4AC0F6298703874531A",
+      "loaderId": "ED7C683A09FCA2653294025875118F2D",
+      "url": "http://127.0.0.1:57117/text.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 64,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 150,
+    "objectGroup": "c200e3ba-3b48-4284-8712-80dc67f81114"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 64,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLParagraphElement",
+     "description": "p#t_nbsp",
+     "objectId": "-2402948600840613456.3.13"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 65,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 65,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "C766BEDCC131B4AC0F6298703874531A",
+      "loaderId": "ED7C683A09FCA2653294025875118F2D",
+      "url": "http://127.0.0.1:57117/text.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 66,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "-2402948600840613456.3.13"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[32206 chars]… ;; return this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0}], true, arguments]); }",
+    "objectGroup": "c200e3ba-3b48-4284-8712-80dc67f81114",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "3881944956663923311.-4093190156281460302"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 66,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":true}"
+       }
+      ]
+     },
+     "objectId": "-2402948600840613456.3.14"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 67,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "c200e3ba-3b48-4284-8712-80dc67f81114"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 68,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 67,
+   "result": {},
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 68,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 69,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 69,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 70,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 70,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "C766BEDCC131B4AC0F6298703874531A",
+      "loaderId": "ED7C683A09FCA2653294025875118F2D",
+      "url": "http://127.0.0.1:57117/text.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 71,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 150,
+    "objectGroup": "cf371bf8-21db-47f6-b250-063d87b21786"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 71,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLParagraphElement",
+     "description": "p#t_nbsp",
+     "objectId": "-2402948600840613456.3.15"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 72,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 72,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "C766BEDCC131B4AC0F6298703874531A",
+      "loaderId": "ED7C683A09FCA2653294025875118F2D",
+      "url": "http://127.0.0.1:57117/text.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 73,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "-2402948600840613456.3.15"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[17319 chars]… ;; return this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0}], true, arguments]); }",
+    "objectGroup": "cf371bf8-21db-47f6-b250-063d87b21786",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "3881944956663923311.-4093190156281460302"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 73,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"x\":8,\"y\":52.796875,\"clone\":{},\"equals\":{},\"ceil\":{},\"floor\":{},\"round\":{},\"translate\":{},\"scale\":{}}}"
+       }
+      ]
+     },
+     "objectId": "-2402948600840613456.3.16"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 74,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "cf371bf8-21db-47f6-b250-063d87b21786"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 75,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 74,
+   "result": {},
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 75,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "C766BEDCC131B4AC0F6298703874531A",
+      "loaderId": "ED7C683A09FCA2653294025875118F2D",
+      "url": "http://127.0.0.1:57117/text.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 76,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 150,
+    "objectGroup": "6a3d77a1-dee6-4b98-a2ac-fed2ce64a012"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 76,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLParagraphElement",
+     "description": "p#t_nbsp",
+     "objectId": "-2402948600840613456.3.17"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 77,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 77,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "C766BEDCC131B4AC0F6298703874531A",
+      "loaderId": "ED7C683A09FCA2653294025875118F2D",
+      "url": "http://127.0.0.1:57117/text.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 78,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "-2402948600840613456.3.17"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[14979 chars]… ;; return this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0}], true, arguments]); }",
+    "objectGroup": "6a3d77a1-dee6-4b98-a2ac-fed2ce64a012",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "3881944956663923311.-4093190156281460302"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 78,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"width\":1169,\"height\":21,\"clone\":{},\"aspectRatio\":{},\"ceil\":{},\"floor\":{},\"round\":{},\"scale\":{}}}"
+       }
+      ]
+     },
+     "objectId": "-2402948600840613456.3.18"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 79,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "6a3d77a1-dee6-4b98-a2ac-fed2ce64a012"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": ">",
+   "id": 80,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 79,
+   "result": {},
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  },
+  {
+   "dir": "<",
+   "id": 80,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "C406C2BD7C8929770DEE7C26D963CC3A"
+  }
+ ],
+ "B:element": [
+  {
+   "dir": ">",
+   "id": 15,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": "<",
+   "id": 15,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": ">",
+   "id": 16,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": "<",
+   "id": 16,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6BACDECB6E84083DDA7CB8C5EF8F740C",
+      "loaderId": "09C6369A07C7643BCFA530CB2B22AEE6",
+      "url": "http://127.0.0.1:57117/csp.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": ">",
+   "id": 17,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": "<",
+   "id": 17,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6BACDECB6E84083DDA7CB8C5EF8F740C",
+      "loaderId": "09C6369A07C7643BCFA530CB2B22AEE6",
+      "url": "http://127.0.0.1:57117/csp.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": ">",
+   "id": 18,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[13939 chars]…  args));\n  } catch (e) {\n    return Promise.reject(e);\n  }\n}\n; return executeScript.apply(null, arguments) }\n, [\"return document.body\",[]], true, arguments]); }",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-5130187895093094343.3003181231800559086"
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": "<",
+   "id": 18,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(2)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"element-6066-11e4-a52e-4f735466cecf\":0}}"
+       },
+       {
+        "type": "node",
+        "value": {
+         "nodeType": 1,
+         "childNodeCount": 105,
+         "backendNodeId": 8,
+         "loaderId": "09C6369A07C7643BCFA530CB2B22AEE6",
+         "shadowRoot": null,
+         "localName": "body",
+         "namespaceURI": "http://www.w3.org/1999/xhtml",
+         "attributes": {}
+        }
+       }
+      ]
+     },
+     "objectId": "6485295403782451704.2.1"
+    }
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": ">",
+   "id": 19,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": "<",
+   "id": 19,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  }
+ ],
+ "B:cyclic": [
+  {
+   "dir": ">",
+   "id": 75,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": "<",
+   "id": 75,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": ">",
+   "id": 76,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": "<",
+   "id": 76,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6BACDECB6E84083DDA7CB8C5EF8F740C",
+      "loaderId": "09C6369A07C7643BCFA530CB2B22AEE6",
+      "url": "http://127.0.0.1:57117/csp.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": ">",
+   "id": 77,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": "<",
+   "id": 77,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6BACDECB6E84083DDA7CB8C5EF8F740C",
+      "loaderId": "09C6369A07C7643BCFA530CB2B22AEE6",
+      "url": "http://127.0.0.1:57117/csp.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": ">",
+   "id": 78,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[13957 chars]…  (e) {\n    return Promise.reject(e);\n  }\n}\n; return executeScript.apply(null, arguments) }\n, [\"const o = {a: 1}; o.self = o; return o\",[]], true, arguments]); }",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-5130187895093094343.3003181231800559086"
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": "<",
+   "id": 78,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":17,\"value\":\"circular reference\"}"
+       }
+      ]
+     },
+     "objectId": "6485295403782451704.2.13"
+    }
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": ">",
+   "id": 79,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": "<",
+   "id": 79,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": ">",
+   "id": 80,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  },
+  {
+   "dir": "<",
+   "id": 80,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "F5D09461A3492AC6BF87BB64916256D0"
+  }
+ ],
+ "CD:T01_mixed_unicode": [
+  {
+   "dir": ">",
+   "id": 20,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 20,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 21,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 21,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 22,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 3,
+    "objectGroup": "700b232d-c63b-4c7d-a828-be2d635e4b46"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 22,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLInputElement",
+     "description": "input#i_text",
+     "objectId": "6763829655009090484.2.3"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 23,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 23,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 24,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "6763829655009090484.2.3"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[17201 chars]… this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0},\"tagName\"], true, arguments]); }",
+    "objectGroup": "700b232d-c63b-4c7d-a828-be2d635e4b46",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-4786503779652363972.4252991897143811122"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 24,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":\"INPUT\"}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.2.4"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 25,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "700b232d-c63b-4c7d-a828-be2d635e4b46"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 26,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 25,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 26,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 27,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 3,
+    "objectGroup": "92fa5b61-e5e4-4805-846a-6a018b876ed9"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 27,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLInputElement",
+     "description": "input#i_text",
+     "objectId": "6763829655009090484.2.5"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 28,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 28,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 29,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "6763829655009090484.2.5"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[17198 chars]… rn this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0},\"type\"], true, arguments]); }",
+    "objectGroup": "92fa5b61-e5e4-4805-846a-6a018b876ed9",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-4786503779652363972.4252991897143811122"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 29,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":\"text\"}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.2.6"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 30,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "92fa5b61-e5e4-4805-846a-6a018b876ed9"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 31,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 30,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 31,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 32,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 3,
+    "objectGroup": "ce9ea504-42f9-437f-b705-d6359b98bb7e"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 32,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLInputElement",
+     "description": "input#i_text",
+     "objectId": "6763829655009090484.2.7"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 33,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 33,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 34,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "6763829655009090484.2.7"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[13103 chars]… urn callFunction.apply(null, arguments) }\n).apply(null, [element => element.isContentEditable, [{\"element-6066-11e4-a52e-4f735466cecf\":0}], true, arguments]); }",
+    "objectGroup": "ce9ea504-42f9-437f-b705-d6359b98bb7e",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-4786503779652363972.4252991897143811122"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 34,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":false}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.2.8"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 35,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "ce9ea504-42f9-437f-b705-d6359b98bb7e"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 36,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 35,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 36,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 37,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 3,
+    "objectGroup": "e5393ed0-0d42-4efa-affb-cbbbbce772f2"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 37,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLInputElement",
+     "description": "input#i_text",
+     "objectId": "6763829655009090484.2.9"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 38,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 38,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 39,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "6763829655009090484.2.9"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[17201 chars]… this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0},\"tagName\"], true, arguments]); }",
+    "objectGroup": "e5393ed0-0d42-4efa-affb-cbbbbce772f2",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-4786503779652363972.4252991897143811122"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 39,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":\"INPUT\"}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.2.10"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 40,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "e5393ed0-0d42-4efa-affb-cbbbbce772f2"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 41,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.hasFocus()",
+    "returnByValue": true
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 40,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 41,
+   "result": {
+    "result": {
+     "type": "boolean",
+     "value": true
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 42,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 42,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 43,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 43,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 44,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[13087 chars]… r));\n  }\n}\n; return callFunction.apply(null, arguments) }\n).apply(null, [function() { return document.activeElement || document.body }, [], true, arguments]); }",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-4786503779652363972.4252991897143811122"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 44,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(2)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"element-6066-11e4-a52e-4f735466cecf\":0}}"
+       },
+       {
+        "type": "node",
+        "value": {
+         "nodeType": 1,
+         "childNodeCount": 17,
+         "backendNodeId": 23,
+         "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+         "shadowRoot": null,
+         "localName": "body",
+         "namespaceURI": "http://www.w3.org/1999/xhtml",
+         "attributes": {}
+        }
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.2.11"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 45,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 45,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 46,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 3,
+    "objectGroup": "60f7928e-5d09-4aa5-979f-cc52d128a7ac"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 46,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLInputElement",
+     "description": "input#i_text",
+     "objectId": "6763829655009090484.2.12"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 47,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 47,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 48,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "6763829655009090484.2.12"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[32211 chars]… turn this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0},true], true, arguments]); }",
+    "objectGroup": "60f7928e-5d09-4aa5-979f-cc52d128a7ac",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-4786503779652363972.4252991897143811122"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 48,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":true}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.2.13"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 49,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "60f7928e-5d09-4aa5-979f-cc52d128a7ac"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 50,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 49,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 50,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 51,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 51,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 52,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[13087 chars]… r));\n  }\n}\n; return callFunction.apply(null, arguments) }\n).apply(null, [function() { return document.activeElement || document.body }, [], true, arguments]); }",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-4786503779652363972.4252991897143811122"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 52,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(2)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"element-6066-11e4-a52e-4f735466cecf\":0}}"
+       },
+       {
+        "type": "node",
+        "value": {
+         "nodeType": 1,
+         "childNodeCount": 17,
+         "backendNodeId": 23,
+         "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+         "shadowRoot": null,
+         "localName": "body",
+         "namespaceURI": "http://www.w3.org/1999/xhtml",
+         "attributes": {}
+        }
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.2.14"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 53,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 53,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 54,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 3,
+    "objectGroup": "e1dc57e8-6c36-4026-a2bf-144af18215a0"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 54,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLInputElement",
+     "description": "input#i_text",
+     "objectId": "6763829655009090484.2.15"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 55,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 55,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 56,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "6763829655009090484.2.15"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[14823 chars]… ;; return this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0}], true, arguments]); }",
+    "objectGroup": "e1dc57e8-6c36-4026-a2bf-144af18215a0",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-4786503779652363972.4252991897143811122"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 56,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":true}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.2.16"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 57,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "e1dc57e8-6c36-4026-a2bf-144af18215a0"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 58,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 57,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 58,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 59,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 3,
+    "objectGroup": "61bef3a3-1fc4-4f20-a36c-fdcb8fb33d8c"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 59,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLInputElement",
+     "description": "input#i_text",
+     "objectId": "6763829655009090484.2.17"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 60,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 60,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 61,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "6763829655009090484.2.17"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[16362 chars]… throw new Error('cannot focus element');\n  }\n}\n; return focus.apply(null, arguments) }\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0},false], true, arguments]); }",
+    "objectGroup": "61bef3a3-1fc4-4f20-a36c-fdcb8fb33d8c",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-4786503779652363972.4252991897143811122"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 61,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":null}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.2.18"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 62,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "61bef3a3-1fc4-4f20-a36c-fdcb8fb33d8c"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 63,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 62,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 63,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 64,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 3,
+    "objectGroup": "8b327f1c-f1e3-4853-939f-05b0ef616200"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 64,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLInputElement",
+     "description": "input#i_text",
+     "objectId": "6763829655009090484.2.19"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 65,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 65,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 66,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "6763829655009090484.2.19"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[13135 chars]… uments) }\n).apply(null, [elem => elem.setSelectionRange(elem.value.length, elem.value.length), [{\"element-6066-11e4-a52e-4f735466cecf\":0}], true, arguments]); }",
+    "objectGroup": "8b327f1c-f1e3-4853-939f-05b0ef616200",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-4786503779652363972.4252991897143811122"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 66,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":null}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.2.20"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 67,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "8b327f1c-f1e3-4853-939f-05b0ef616200"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 67,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 68,
+   "method": "Input.dispatchKeyEvent",
+   "params": {
+    "code": "KeyA",
+    "key": "a",
+    "modifiers": 0,
+    "text": "a",
+    "type": "rawKeyDown",
+    "unmodifiedText": "a",
+    "windowsVirtualKeyCode": 65
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 69,
+   "method": "Input.dispatchKeyEvent",
+   "params": {
+    "code": "KeyA",
+    "key": "a",
+    "modifiers": 0,
+    "text": "a",
+    "type": "char",
+    "unmodifiedText": "a",
+    "windowsVirtualKeyCode": 65
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 70,
+   "method": "Input.dispatchKeyEvent",
+   "params": {
+    "code": "KeyA",
+    "key": "a",
+    "modifiers": 0,
+    "text": "a",
+    "type": "keyUp",
+    "unmodifiedText": "a",
+    "windowsVirtualKeyCode": 65
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 71,
+   "method": "Input.dispatchKeyEvent",
+   "params": {
+    "code": "Quote",
+    "key": "'",
+    "modifiers": 0,
+    "text": "ä",
+    "type": "rawKeyDown",
+    "unmodifiedText": "ä",
+    "windowsVirtualKeyCode": 222
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 72,
+   "method": "Input.dispatchKeyEvent",
+   "params": {
+    "code": "Quote",
+    "key": "'",
+    "modifiers": 0,
+    "text": "ä",
+    "type": "char",
+    "unmodifiedText": "ä",
+    "windowsVirtualKeyCode": 222
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 73,
+   "method": "Input.dispatchKeyEvent",
+   "params": {
+    "code": "Quote",
+    "key": "'",
+    "modifiers": 0,
+    "text": "ä",
+    "type": "keyUp",
+    "unmodifiedText": "ä",
+    "windowsVirtualKeyCode": 222
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 74,
+   "method": "Input.dispatchKeyEvent",
+   "params": {
+    "modifiers": 0,
+    "text": "😀",
+    "type": "rawKeyDown",
+    "unmodifiedText": "😀",
+    "windowsVirtualKeyCode": 0
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 75,
+   "method": "Input.dispatchKeyEvent",
+   "params": {
+    "modifiers": 0,
+    "text": "😀",
+    "type": "char",
+    "unmodifiedText": "😀",
+    "windowsVirtualKeyCode": 0
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 76,
+   "method": "Input.dispatchKeyEvent",
+   "params": {
+    "modifiers": 0,
+    "text": "😀",
+    "type": "keyUp",
+    "unmodifiedText": "😀",
+    "windowsVirtualKeyCode": 0
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 68,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 69,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 70,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 71,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 72,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 73,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 74,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 75,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 76,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 77,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 77,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 78,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 78,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 79,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 79,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 80,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 80,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "63AD953058D101BF2E7A18376C2C1EE0",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 81,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[13972 chars]… rn Promise.reject(e);\n  }\n}\n; return executeScript.apply(null, arguments) }\n, [\"return { log: window.__log, state: window.__state() }\",[]], true, arguments]); }",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-4786503779652363972.4252991897143811122"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 81,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"log\":[{\"t\":\"focus\",\"id\":\"i_text\",\"trusted\":true},{\"t\":\"keydown\",\"id\":\"i_text\",\"trusted\":true,\"key\":\"a\",\"code\":\"KeyA\",\"keyCode\":65,\"which\":65,\"charCode\":0,\"shift\":false,\"repeat\":false,\"composing\":false,\"location\":0},{\"t\":\"keypress\",\"id\":\"i_text\",\"trusted\":true,\"key\":\"a\",\"code\":\"KeyA\",\"keyCode\":97,\"which\":97,\"charCode\":97,\"shift\":false,\"repeat\":false,\"composing\":false,\"location\":0},{\"t\":\"beforeinput\",\"id\":\"i_text\",\"trusted\":true,\"inputType\":\"insertText\",\"data\":\"a\",\"composing\":false},{\"t\":\"textInput\",\"id\":\"i_text\",\"trusted\":true,\"data\":\"a\"},{\"t\":\"input\",\"id\":\"i_text\",\"trusted\":true,\"inputType\":\"insertText\",\"data\":\"a\",\"composing\":false,\"value\":\"a\"},{\"t\":\"keyup\",\"id\":\"i_text\",\"trusted\":true,\"key\":\"a\",\"code\":\"KeyA\",\"keyCode\":65,\"which\":65,\"charCode\":0,\"shift\":false,\"repeat\":false,\"composing\":false,\"location\":0,\"value\":\"a\"},{\"t\":\"keydown\",\"id\":\"i_text\",\"trusted\":true,\"key\":\"'\",\"code\":\"Quote\",\"keyCode\":222,\"which\":222,\"charCode\":0,\"shift\":false,\"repeat\":false,\"composing\":false,\"location\":0},{\"t\":\"keypress\",\"id\":\"i_text\",\"trusted\":true,\"key\":\"'\",\"code\":\"Quote\",\"keyCode\":228,\"which\":228,\"charCode\":228,\"shift\":false,\"repeat\":false,\"composing\":false,\"location\":0},{\"t\":\"beforeinput\",\"id\":\"i_text\",\"trusted\":true,\"inputType\":\"insertText\",\"data\":\"ä\",\"composing\":false},{\"t\":\"textInput\",\"id\":\"i_text\",\"trusted\":true,\"data\":\"ä\"},{\"t\":\"input\",\"id\":\"i_text\",\"trusted\":true,\"inputType\":\"insertText\",\"data\":\"ä\",\"composing\":false,\"value\":\"aä\"},{\"t\":\"keyup\",\"id\":\"i_text\",\"trusted\":true,\"key\":\"'\",\"code\":\"Quote\",\"keyCode\":222,\"which\":222,\"charCode\":0,\"shift\":false,\"repeat\":false,\"composing\":false,\"location\":0,\"value\":\"aä\"},{\"t\":\"keydown\",\"id\":\"i_text\",\"trusted\":true,\"key\":\"\",\"code\":\"\",\"keyCode\":0,\"which\":0,\"charCode\":0,\"shift\":false,\"repeat\":false,\"composing\":false,\"location\":0},{\"t\":\"keypress\",\"id\":\"i_text\",\"trusted\":true,\"key\":\"\",\"code\":\"\",\"keyCode\":55357,\"which\":55357,\"charCode\":55357,\"shift\":false,\"repeat\":false,\"composing\":false,\"location\":0},{\"t\":\"beforeinput\",\"id\":\"i_text\",\"trusted\":true,\"inputType\":\"insertText\",\"data\":\"😀\",\"composing\":false},{\"t\":\"textInput\",\"id\":\"i_text\",\"trusted\":true,\"data\":\"😀\"},{\"t\":\"input\",\"id\":\"i_text\",\"trusted\":true,\"inputType\":\"insertText\",\"data\":\"😀\",\"composing\":false,\"value\":\"aä😀\"},{\"t\":\"keyup\",\"id\":\"i_text\",\"trusted\":true,\"key\":\"\",\"code\":\"\",\"keyCode\":0,\"which\":0,\"charCode\":0,\"shift\":false,\"repeat\":false,\"composing\":false,\"location\":0,\"value\":\"aä😀\"}],\"state\":{\"i_text\":\"aä😀\",\"i_prefilled\":\"abc\",\"i_email\":\"x@\",\"i_number\":\"\",\"i_password\":\"\",\"i_date\":\"\",\"i_color\":\"#000000\",\"i_max\":\"\",\"i_mask\":\"\",\"i_readonly\":\"ro\",\"i_disabled\":\"dis\",\"i_react\":\"react\",\"i_next\":\"\",\"i_textarea\":\"line\",\"i_ce\":\"Hello <b>ce</b>\",\"i_ce_empty\":\"\",\"i_hidden_display\":\"hid\",\"i_opacity0\":\"op\",\"i_offscreen\":\"off\",\"__active\":\"i_text\",\"__selection\":{\"anchor\":\"f1\",\"offset\":1},\"__caret\":[4,4]}}}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.2.21"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 82,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 82,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedNavigating",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F",
+    "url": "http://127.0.0.1:57117/input.html",
+    "loaderId": "A32D2C126FC6CFC76DCA84F3FDBAEFA0",
+    "navigationType": "differentDocument"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameNavigated",
+   "params": {
+    "frame": {
+     "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+     "loaderId": "A32D2C126FC6CFC76DCA84F3FDBAEFA0",
+     "url": "http://127.0.0.1:57117/input.html",
+     "domainAndRegistry": "",
+     "securityOrigin": "http://127.0.0.1:57117",
+     "securityOriginDetails": {
+      "isLocalhost": true
+     },
+     "mimeType": "text/html",
+     "adFrameStatus": {
+      "adFrameType": "none"
+     },
+     "secureContextType": "SecureLocalhost",
+     "crossOriginIsolatedContextType": "NotIsolated",
+     "gatedAPIFeatures": []
+    },
+    "type": "Navigation"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextCreated",
+   "params": {
+    "context": {
+     "id": 3,
+     "origin": "http://127.0.0.1:57117",
+     "name": "",
+     "uniqueId": "8125981763540236211.-7039468254779634291",
+     "auxData": {
+      "isDefault": true,
+      "type": "default",
+      "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.domContentEventFired",
+   "params": {
+    "timestamp": 80542.008308
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Log.entryAdded",
+   "params": {
+    "entry": {
+     "source": "recommendation",
+     "level": "verbose",
+     "text": "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://goo.gl/9p2vKq) %o",
+     "timestamp": 1790713561650.57,
+     "url": "http://127.0.0.1:57117/input.html",
+     "args": [
+      {
+       "type": "object",
+       "subtype": "node",
+       "className": "HTMLInputElement",
+       "description": "input#i_password",
+       "objectId": "6763829655009090484.3.1"
+      }
+     ]
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.loadEventFired",
+   "params": {
+    "timestamp": 80542.00918
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStoppedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedNavigating",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F",
+    "url": "http://127.0.0.1:57117/input.html",
+    "loaderId": "5076427736461BF8A978C0BE142B6F91",
+    "navigationType": "differentDocument"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameNavigated",
+   "params": {
+    "frame": {
+     "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+     "loaderId": "5076427736461BF8A978C0BE142B6F91",
+     "url": "http://127.0.0.1:57117/input.html",
+     "domainAndRegistry": "",
+     "securityOrigin": "http://127.0.0.1:57117",
+     "securityOriginDetails": {
+      "isLocalhost": true
+     },
+     "mimeType": "text/html",
+     "adFrameStatus": {
+      "adFrameType": "none"
+     },
+     "secureContextType": "SecureLocalhost",
+     "crossOriginIsolatedContextType": "NotIsolated",
+     "gatedAPIFeatures": []
+    },
+    "type": "Navigation"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextCreated",
+   "params": {
+    "context": {
+     "id": 4,
+     "origin": "http://127.0.0.1:57117",
+     "name": "",
+     "uniqueId": "4355431484276585995.-4777657520028375098",
+     "auxData": {
+      "isDefault": true,
+      "type": "default",
+      "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.domContentEventFired",
+   "params": {
+    "timestamp": 80542.01968
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Log.entryAdded",
+   "params": {
+    "entry": {
+     "source": "recommendation",
+     "level": "verbose",
+     "text": "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://goo.gl/9p2vKq) %o",
+     "timestamp": 1790713561661.881,
+     "url": "http://127.0.0.1:57117/input.html",
+     "args": [
+      {
+       "type": "object",
+       "subtype": "node",
+       "className": "HTMLInputElement",
+       "description": "input#i_password",
+       "objectId": "6763829655009090484.4.1"
+      }
+     ]
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.loadEventFired",
+   "params": {
+    "timestamp": 80542.020483
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStoppedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedNavigating",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F",
+    "url": "http://127.0.0.1:57117/input.html",
+    "loaderId": "167D03B7A84DAB16970018A98AEFA721",
+    "navigationType": "differentDocument"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameNavigated",
+   "params": {
+    "frame": {
+     "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+     "loaderId": "167D03B7A84DAB16970018A98AEFA721",
+     "url": "http://127.0.0.1:57117/input.html",
+     "domainAndRegistry": "",
+     "securityOrigin": "http://127.0.0.1:57117",
+     "securityOriginDetails": {
+      "isLocalhost": true
+     },
+     "mimeType": "text/html",
+     "adFrameStatus": {
+      "adFrameType": "none"
+     },
+     "secureContextType": "SecureLocalhost",
+     "crossOriginIsolatedContextType": "NotIsolated",
+     "gatedAPIFeatures": []
+    },
+    "type": "Navigation"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextCreated",
+   "params": {
+    "context": {
+     "id": 5,
+     "origin": "http://127.0.0.1:57117",
+     "name": "",
+     "uniqueId": "-3419212217242009599.-7504967759896551106",
+     "auxData": {
+      "isDefault": true,
+      "type": "default",
+      "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.domContentEventFired",
+   "params": {
+    "timestamp": 80542.031566
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Log.entryAdded",
+   "params": {
+    "entry": {
+     "source": "recommendation",
+     "level": "verbose",
+     "text": "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://goo.gl/9p2vKq) %o",
+     "timestamp": 1790713561673.781,
+     "url": "http://127.0.0.1:57117/input.html",
+     "args": [
+      {
+       "type": "object",
+       "subtype": "node",
+       "className": "HTMLInputElement",
+       "description": "input#i_password",
+       "objectId": "6763829655009090484.5.1"
+      }
+     ]
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.loadEventFired",
+   "params": {
+    "timestamp": 80542.032379
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStoppedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedNavigating",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F",
+    "url": "http://127.0.0.1:57117/input.html",
+    "loaderId": "4C2EDA886A27CB668D7AD948562EDF71",
+    "navigationType": "differentDocument"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameNavigated",
+   "params": {
+    "frame": {
+     "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+     "loaderId": "4C2EDA886A27CB668D7AD948562EDF71",
+     "url": "http://127.0.0.1:57117/input.html",
+     "domainAndRegistry": "",
+     "securityOrigin": "http://127.0.0.1:57117",
+     "securityOriginDetails": {
+      "isLocalhost": true
+     },
+     "mimeType": "text/html",
+     "adFrameStatus": {
+      "adFrameType": "none"
+     },
+     "secureContextType": "SecureLocalhost",
+     "crossOriginIsolatedContextType": "NotIsolated",
+     "gatedAPIFeatures": []
+    },
+    "type": "Navigation"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextCreated",
+   "params": {
+    "context": {
+     "id": 6,
+     "origin": "http://127.0.0.1:57117",
+     "name": "",
+     "uniqueId": "4566907773133309912.948710836308554453",
+     "auxData": {
+      "isDefault": true,
+      "type": "default",
+      "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.domContentEventFired",
+   "params": {
+    "timestamp": 80542.043866
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Log.entryAdded",
+   "params": {
+    "entry": {
+     "source": "recommendation",
+     "level": "verbose",
+     "text": "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://goo.gl/9p2vKq) %o",
+     "timestamp": 1790713561686.082,
+     "url": "http://127.0.0.1:57117/input.html",
+     "args": [
+      {
+       "type": "object",
+       "subtype": "node",
+       "className": "HTMLInputElement",
+       "description": "input#i_password",
+       "objectId": "6763829655009090484.6.1"
+      }
+     ]
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.loadEventFired",
+   "params": {
+    "timestamp": 80542.044695
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStoppedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 83,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.readyState",
+    "returnByValue": true,
+    "uniqueContextId": "8125981763540236211.-7039468254779634291"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 84,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.readyState",
+    "returnByValue": true,
+    "uniqueContextId": "4355431484276585995.-4777657520028375098"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 85,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.readyState",
+    "returnByValue": true,
+    "uniqueContextId": "-3419212217242009599.-7504967759896551106"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 83,
+   "error": {
+    "code": -32602,
+    "message": "uniqueContextId not found"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 84,
+   "error": {
+    "code": -32602,
+    "message": "uniqueContextId not found"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 86,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.readyState",
+    "returnByValue": true,
+    "uniqueContextId": "4566907773133309912.948710836308554453"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 85,
+   "error": {
+    "code": -32602,
+    "message": "uniqueContextId not found"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 86,
+   "result": {
+    "result": {
+     "type": "string",
+     "value": "complete"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 87,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 87,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 88,
+   "method": "Page.navigate",
+   "params": {
+    "url": "http://127.0.0.1:57117/input.html"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedNavigating",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F",
+    "url": "http://127.0.0.1:57117/input.html",
+    "loaderId": "B83F0D0D1295CB51F1D68B58A3384146",
+    "navigationType": "differentDocument"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 88,
+   "result": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F",
+    "loaderId": "B83F0D0D1295CB51F1D68B58A3384146",
+    "isDownload": false
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 89,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameNavigated",
+   "params": {
+    "frame": {
+     "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+     "loaderId": "B83F0D0D1295CB51F1D68B58A3384146",
+     "url": "http://127.0.0.1:57117/input.html",
+     "domainAndRegistry": "",
+     "securityOrigin": "http://127.0.0.1:57117",
+     "securityOriginDetails": {
+      "isLocalhost": true
+     },
+     "mimeType": "text/html",
+     "adFrameStatus": {
+      "adFrameType": "none"
+     },
+     "secureContextType": "SecureLocalhost",
+     "crossOriginIsolatedContextType": "NotIsolated",
+     "gatedAPIFeatures": []
+    },
+    "type": "Navigation"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextCreated",
+   "params": {
+    "context": {
+     "id": 7,
+     "origin": "http://127.0.0.1:57117",
+     "name": "",
+     "uniqueId": "-8784956476498171368.2759074779569944738",
+     "auxData": {
+      "isDefault": true,
+      "type": "default",
+      "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.domContentEventFired",
+   "params": {
+    "timestamp": 80542.059069
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Log.entryAdded",
+   "params": {
+    "entry": {
+     "source": "recommendation",
+     "level": "verbose",
+     "text": "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://goo.gl/9p2vKq) %o",
+     "timestamp": 1790713561701.309,
+     "url": "http://127.0.0.1:57117/input.html",
+     "args": [
+      {
+       "type": "object",
+       "subtype": "node",
+       "className": "HTMLInputElement",
+       "description": "input#i_password",
+       "objectId": "6763829655009090484.7.1"
+      }
+     ]
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.loadEventFired",
+   "params": {
+    "timestamp": 80542.05992
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStoppedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 89,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 90,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.readyState",
+    "returnByValue": true,
+    "uniqueContextId": "-8784956476498171368.2759074779569944738"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 90,
+   "result": {
+    "result": {
+     "type": "string",
+     "value": "complete"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 91,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 91,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 92,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 92,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "B83F0D0D1295CB51F1D68B58A3384146",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 93,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 93,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "B83F0D0D1295CB51F1D68B58A3384146",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 94,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[43888 chars]… {}:Y[Z]=fb;; return this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"css selector\":\"#i_prefilled\"}], true, arguments]); }",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-8784956476498171368.2759074779569944738"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 94,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(2)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"element-6066-11e4-a52e-4f735466cecf\":0}}"
+       },
+       {
+        "type": "node",
+        "value": {
+         "nodeType": 1,
+         "childNodeCount": 0,
+         "backendNodeId": 105,
+         "loaderId": "B83F0D0D1295CB51F1D68B58A3384146",
+         "shadowRoot": {
+          "type": "node",
+          "value": {
+           "nodeType": 11,
+           "childNodeCount": 1,
+           "backendNodeId": 122,
+           "loaderId": "B83F0D0D1295CB51F1D68B58A3384146",
+           "mode": "closed"
+          }
+         },
+         "localName": "input",
+         "namespaceURI": "http://www.w3.org/1999/xhtml",
+         "attributes": {
+          "id": "i_prefilled",
+          "type": "text",
+          "value": "abc"
+         }
+        }
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.7.2"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 95,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 95,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  }
+ ],
+ "CD:C01_clear_prefilled": [
+  {
+   "dir": ">",
+   "id": 2028,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2028,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2029,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2029,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "E26B804C00CA33BEF636212C5C9EB98A",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2030,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 2597,
+    "objectGroup": "cfeafc91-661e-47ed-b923-aaf4f35389bb"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2030,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLInputElement",
+     "description": "input#i_prefilled",
+     "objectId": "6763829655009090484.134.3"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2031,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2031,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "E26B804C00CA33BEF636212C5C9EB98A",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2032,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "6763829655009090484.134.3"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[13106 chars]…  callFunction.apply(null, arguments) }\n).apply(null, [function(elem) { return elem.tagName; }, [{\"element-6066-11e4-a52e-4f735466cecf\":0}], true, arguments]); }",
+    "objectGroup": "cfeafc91-661e-47ed-b923-aaf4f35389bb",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "8813210936297564510.-3439785092786053556"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2032,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":\"INPUT\"}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.134.4"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2033,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "cfeafc91-661e-47ed-b923-aaf4f35389bb"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2034,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2033,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2034,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "E26B804C00CA33BEF636212C5C9EB98A",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2035,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 2597,
+    "objectGroup": "100f3b7f-b55e-441f-a2ff-0e98ece345a9"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2035,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLInputElement",
+     "description": "input#i_prefilled",
+     "objectId": "6763829655009090484.134.5"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2036,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2036,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "E26B804C00CA33BEF636212C5C9EB98A",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2037,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "6763829655009090484.134.5"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[17198 chars]… rn this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0},\"type\"], true, arguments]); }",
+    "objectGroup": "100f3b7f-b55e-441f-a2ff-0e98ece345a9",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "8813210936297564510.-3439785092786053556"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2037,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":\"text\"}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.134.6"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2038,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "100f3b7f-b55e-441f-a2ff-0e98ece345a9"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2039,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2038,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2039,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "E26B804C00CA33BEF636212C5C9EB98A",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2040,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 2597,
+    "objectGroup": "3355b32c-03b1-4052-8dfd-ce960b4691da"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2040,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLInputElement",
+     "description": "input#i_prefilled",
+     "objectId": "6763829655009090484.134.7"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2041,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2041,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "E26B804C00CA33BEF636212C5C9EB98A",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2042,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "6763829655009090484.134.7"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[13120 chars]… apply(null, arguments) }\n).apply(null, [function(elem, name) { return elem[name] }, [{\"element-6066-11e4-a52e-4f735466cecf\":0},\"readOnly\"], true, arguments]); }",
+    "objectGroup": "3355b32c-03b1-4052-8dfd-ce960b4691da",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "8813210936297564510.-3439785092786053556"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2042,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":false}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.134.8"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2043,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "3355b32c-03b1-4052-8dfd-ce960b4691da"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2044,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2043,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2044,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "E26B804C00CA33BEF636212C5C9EB98A",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2045,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 2597,
+    "objectGroup": "8530a1bb-ab0a-431e-9c33-001ece9dc615"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2045,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLInputElement",
+     "description": "input#i_prefilled",
+     "objectId": "6763829655009090484.134.9"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2046,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2046,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "E26B804C00CA33BEF636212C5C9EB98A",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2047,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "6763829655009090484.134.9"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[32211 chars]… turn this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0},true], true, arguments]); }",
+    "objectGroup": "8530a1bb-ab0a-431e-9c33-001ece9dc615",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "8813210936297564510.-3439785092786053556"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2047,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":true}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.134.10"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2048,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "8530a1bb-ab0a-431e-9c33-001ece9dc615"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2049,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2048,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2049,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "E26B804C00CA33BEF636212C5C9EB98A",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2050,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 2597,
+    "objectGroup": "9d31e5e5-5cdc-4898-a58e-41b1fbcc3346"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2050,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLInputElement",
+     "description": "input#i_prefilled",
+     "objectId": "6763829655009090484.134.11"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2051,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2051,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "E26B804C00CA33BEF636212C5C9EB98A",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2052,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "6763829655009090484.134.11"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[43064 chars]… ;; return this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0}], true, arguments]); }",
+    "objectGroup": "9d31e5e5-5cdc-4898-a58e-41b1fbcc3346",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "8813210936297564510.-3439785092786053556"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2052,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":null}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.134.12"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2053,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "9d31e5e5-5cdc-4898-a58e-41b1fbcc3346"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2054,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2053,
+   "result": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2054,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2055,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2055,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2056,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2056,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "E26B804C00CA33BEF636212C5C9EB98A",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2057,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2057,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "E26B804C00CA33BEF636212C5C9EB98A",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2058,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[13972 chars]… rn Promise.reject(e);\n  }\n}\n; return executeScript.apply(null, arguments) }\n, [\"return { log: window.__log, state: window.__state() }\",[]], true, arguments]); }",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "8813210936297564510.-3439785092786053556"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2058,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"log\":[{\"t\":\"focus\",\"id\":\"i_prefilled\",\"trusted\":true},{\"t\":\"change\",\"id\":\"i_prefilled\",\"trusted\":false,\"value\":\"\"},{\"t\":\"blur\",\"id\":\"i_prefilled\",\"trusted\":true}],\"state\":{\"i_text\":\"\",\"i_prefilled\":\"\",\"i_email\":\"x@\",\"i_number\":\"\",\"i_password\":\"\",\"i_date\":\"\",\"i_color\":\"#000000\",\"i_max\":\"\",\"i_mask\":\"\",\"i_readonly\":\"ro\",\"i_disabled\":\"dis\",\"i_react\":\"react\",\"i_next\":\"\",\"i_textarea\":\"line\",\"i_ce\":\"Hello <b>ce</b>\",\"i_ce_empty\":\"\",\"i_hidden_display\":\"hid\",\"i_opacity0\":\"op\",\"i_offscreen\":\"off\",\"__active\":\"body\",\"__selection\":{\"anchor\":\"f1\",\"offset\":3}}}}"
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.134.13"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2059,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2059,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedNavigating",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F",
+    "url": "http://127.0.0.1:57117/input.html",
+    "loaderId": "A3F65A9576E74E52049DC1D5BE723F9C",
+    "navigationType": "differentDocument"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameNavigated",
+   "params": {
+    "frame": {
+     "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+     "loaderId": "A3F65A9576E74E52049DC1D5BE723F9C",
+     "url": "http://127.0.0.1:57117/input.html",
+     "domainAndRegistry": "",
+     "securityOrigin": "http://127.0.0.1:57117",
+     "securityOriginDetails": {
+      "isLocalhost": true
+     },
+     "mimeType": "text/html",
+     "adFrameStatus": {
+      "adFrameType": "none"
+     },
+     "secureContextType": "SecureLocalhost",
+     "crossOriginIsolatedContextType": "NotIsolated",
+     "gatedAPIFeatures": []
+    },
+    "type": "Navigation"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextCreated",
+   "params": {
+    "context": {
+     "id": 135,
+     "origin": "http://127.0.0.1:57117",
+     "name": "",
+     "uniqueId": "-6859778160254991259.3311916248567708931",
+     "auxData": {
+      "isDefault": true,
+      "type": "default",
+      "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.domContentEventFired",
+   "params": {
+    "timestamp": 80545.623816
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Log.entryAdded",
+   "params": {
+    "entry": {
+     "source": "recommendation",
+     "level": "verbose",
+     "text": "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://goo.gl/9p2vKq) %o",
+     "timestamp": 1790713565266.13,
+     "url": "http://127.0.0.1:57117/input.html",
+     "args": [
+      {
+       "type": "object",
+       "subtype": "node",
+       "className": "HTMLInputElement",
+       "description": "input#i_password",
+       "objectId": "6763829655009090484.135.1"
+      }
+     ]
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.loadEventFired",
+   "params": {
+    "timestamp": 80545.624694
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStoppedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedNavigating",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F",
+    "url": "http://127.0.0.1:57117/input.html",
+    "loaderId": "5A6676129AB7185DA6A57530B5697C87",
+    "navigationType": "differentDocument"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameNavigated",
+   "params": {
+    "frame": {
+     "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+     "loaderId": "5A6676129AB7185DA6A57530B5697C87",
+     "url": "http://127.0.0.1:57117/input.html",
+     "domainAndRegistry": "",
+     "securityOrigin": "http://127.0.0.1:57117",
+     "securityOriginDetails": {
+      "isLocalhost": true
+     },
+     "mimeType": "text/html",
+     "adFrameStatus": {
+      "adFrameType": "none"
+     },
+     "secureContextType": "SecureLocalhost",
+     "crossOriginIsolatedContextType": "NotIsolated",
+     "gatedAPIFeatures": []
+    },
+    "type": "Navigation"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextCreated",
+   "params": {
+    "context": {
+     "id": 136,
+     "origin": "http://127.0.0.1:57117",
+     "name": "",
+     "uniqueId": "-8381983033585472665.-2897927700950166938",
+     "auxData": {
+      "isDefault": true,
+      "type": "default",
+      "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.domContentEventFired",
+   "params": {
+    "timestamp": 80545.637157
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Log.entryAdded",
+   "params": {
+    "entry": {
+     "source": "recommendation",
+     "level": "verbose",
+     "text": "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://goo.gl/9p2vKq) %o",
+     "timestamp": 1790713565279.409,
+     "url": "http://127.0.0.1:57117/input.html",
+     "args": [
+      {
+       "type": "object",
+       "subtype": "node",
+       "className": "HTMLInputElement",
+       "description": "input#i_password",
+       "objectId": "6763829655009090484.136.1"
+      }
+     ]
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.loadEventFired",
+   "params": {
+    "timestamp": 80545.637965
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStoppedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedNavigating",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F",
+    "url": "http://127.0.0.1:57117/input.html",
+    "loaderId": "C2D4D7CBA20D9B8E2158005A4AC48D09",
+    "navigationType": "differentDocument"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameNavigated",
+   "params": {
+    "frame": {
+     "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+     "loaderId": "C2D4D7CBA20D9B8E2158005A4AC48D09",
+     "url": "http://127.0.0.1:57117/input.html",
+     "domainAndRegistry": "",
+     "securityOrigin": "http://127.0.0.1:57117",
+     "securityOriginDetails": {
+      "isLocalhost": true
+     },
+     "mimeType": "text/html",
+     "adFrameStatus": {
+      "adFrameType": "none"
+     },
+     "secureContextType": "SecureLocalhost",
+     "crossOriginIsolatedContextType": "NotIsolated",
+     "gatedAPIFeatures": []
+    },
+    "type": "Navigation"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextCreated",
+   "params": {
+    "context": {
+     "id": 137,
+     "origin": "http://127.0.0.1:57117",
+     "name": "",
+     "uniqueId": "4372220492429416571.1695803002809146302",
+     "auxData": {
+      "isDefault": true,
+      "type": "default",
+      "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.domContentEventFired",
+   "params": {
+    "timestamp": 80545.647243
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Log.entryAdded",
+   "params": {
+    "entry": {
+     "source": "recommendation",
+     "level": "verbose",
+     "text": "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://goo.gl/9p2vKq) %o",
+     "timestamp": 1790713565289.528,
+     "url": "http://127.0.0.1:57117/input.html",
+     "args": [
+      {
+       "type": "object",
+       "subtype": "node",
+       "className": "HTMLInputElement",
+       "description": "input#i_password",
+       "objectId": "6763829655009090484.137.1"
+      }
+     ]
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.loadEventFired",
+   "params": {
+    "timestamp": 80545.648093
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStoppedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2060,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.readyState",
+    "returnByValue": true,
+    "uniqueContextId": "-6859778160254991259.3311916248567708931"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2061,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.readyState",
+    "returnByValue": true,
+    "uniqueContextId": "-8381983033585472665.-2897927700950166938"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2060,
+   "error": {
+    "code": -32602,
+    "message": "uniqueContextId not found"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2062,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.readyState",
+    "returnByValue": true,
+    "uniqueContextId": "4372220492429416571.1695803002809146302"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2061,
+   "error": {
+    "code": -32602,
+    "message": "uniqueContextId not found"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2062,
+   "result": {
+    "result": {
+     "type": "string",
+     "value": "complete"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2063,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2063,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2064,
+   "method": "Page.navigate",
+   "params": {
+    "url": "http://127.0.0.1:57117/input.html"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedNavigating",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F",
+    "url": "http://127.0.0.1:57117/input.html",
+    "loaderId": "91263A6EC73C0EB213034CFD87F0CC60",
+    "navigationType": "differentDocument"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2064,
+   "result": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F",
+    "loaderId": "91263A6EC73C0EB213034CFD87F0CC60",
+    "isDownload": false
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2065,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameNavigated",
+   "params": {
+    "frame": {
+     "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+     "loaderId": "91263A6EC73C0EB213034CFD87F0CC60",
+     "url": "http://127.0.0.1:57117/input.html",
+     "domainAndRegistry": "",
+     "securityOrigin": "http://127.0.0.1:57117",
+     "securityOriginDetails": {
+      "isLocalhost": true
+     },
+     "mimeType": "text/html",
+     "adFrameStatus": {
+      "adFrameType": "none"
+     },
+     "secureContextType": "SecureLocalhost",
+     "crossOriginIsolatedContextType": "NotIsolated",
+     "gatedAPIFeatures": []
+    },
+    "type": "Navigation"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextCreated",
+   "params": {
+    "context": {
+     "id": 138,
+     "origin": "http://127.0.0.1:57117",
+     "name": "",
+     "uniqueId": "-1032995993763421829.4663631350054258671",
+     "auxData": {
+      "isDefault": true,
+      "type": "default",
+      "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.domContentEventFired",
+   "params": {
+    "timestamp": 80545.659534
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Log.entryAdded",
+   "params": {
+    "entry": {
+     "source": "recommendation",
+     "level": "verbose",
+     "text": "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://goo.gl/9p2vKq) %o",
+     "timestamp": 1790713565301.818,
+     "url": "http://127.0.0.1:57117/input.html",
+     "args": [
+      {
+       "type": "object",
+       "subtype": "node",
+       "className": "HTMLInputElement",
+       "description": "input#i_password",
+       "objectId": "6763829655009090484.138.1"
+      }
+     ]
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.loadEventFired",
+   "params": {
+    "timestamp": 80545.660428
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStoppedLoading",
+   "params": {
+    "frameId": "6DE92AA19DCCA954A606825BBAF2A77F"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2065,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2066,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.readyState",
+    "returnByValue": true,
+    "uniqueContextId": "-1032995993763421829.4663631350054258671"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2066,
+   "result": {
+    "result": {
+     "type": "string",
+     "value": "complete"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2067,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2067,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2068,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2068,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "91263A6EC73C0EB213034CFD87F0CC60",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2069,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2069,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6DE92AA19DCCA954A606825BBAF2A77F",
+      "loaderId": "91263A6EC73C0EB213034CFD87F0CC60",
+      "url": "http://127.0.0.1:57117/input.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2070,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[43887 chars]… ={}:Y[Z]=fb;; return this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"css selector\":\"#i_textarea\"}], true, arguments]); }",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-1032995993763421829.4663631350054258671"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2070,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(2)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"element-6066-11e4-a52e-4f735466cecf\":0}}"
+       },
+       {
+        "type": "node",
+        "value": {
+         "nodeType": 1,
+         "childNodeCount": 1,
+         "backendNodeId": 2687,
+         "loaderId": "91263A6EC73C0EB213034CFD87F0CC60",
+         "shadowRoot": {
+          "type": "node",
+          "value": {
+           "nodeType": 11,
+           "childNodeCount": 1,
+           "backendNodeId": 2693,
+           "loaderId": "91263A6EC73C0EB213034CFD87F0CC60",
+           "mode": "closed"
+          }
+         },
+         "localName": "textarea",
+         "namespaceURI": "http://www.w3.org/1999/xhtml",
+         "attributes": {
+          "id": "i_textarea"
+         }
+        }
+       }
+      ]
+     },
+     "objectId": "6763829655009090484.138.2"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": ">",
+   "id": 2071,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  },
+  {
+   "dir": "<",
+   "id": 2071,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "414ABFBD81970BC6058AFDD28516AD23"
+  }
+ ],
+ "E:s_below": [
+  {
+   "dir": ">",
+   "id": 192,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 192,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 193,
+   "method": "Target.activateTarget",
+   "params": {
+    "targetId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+   }
+  },
+  {
+   "dir": "<",
+   "id": 193,
+   "result": {}
+  },
+  {
+   "dir": ">",
+   "id": 194,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 194,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+      "loaderId": "A464C05927A7F8D507E1FA6672E4C497",
+      "url": "http://127.0.0.1:57117/shot.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 195,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 27,
+    "objectGroup": "7ce03d28-99fc-42e6-890b-31431a55e0e4"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 195,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLDivElement",
+     "description": "div#s_below.box",
+     "objectId": "-397348415860336030.22.2"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 196,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 196,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+      "loaderId": "A464C05927A7F8D507E1FA6672E4C497",
+      "url": "http://127.0.0.1:57117/shot.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 197,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "-397348415860336030.22.2"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[19481 chars]… ortion.right - visiblePortion.left\n  };\n}\n; return getElementRegion.apply(null, arguments) }\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0}], true, arguments]); }",
+    "objectGroup": "7ce03d28-99fc-42e6-890b-31431a55e0e4",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-869014191747825073.-6284812855035863238"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 197,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"left\":0,\"top\":0,\"height\":40,\"width\":90}}"
+       }
+      ]
+     },
+     "objectId": "-397348415860336030.22.3"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 198,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "7ce03d28-99fc-42e6-890b-31431a55e0e4"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 199,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 198,
+   "result": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 199,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+      "loaderId": "A464C05927A7F8D507E1FA6672E4C497",
+      "url": "http://127.0.0.1:57117/shot.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 200,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 27,
+    "objectGroup": "d750a446-0726-4788-aaee-dd2e9145830b"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 200,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLDivElement",
+     "description": "div#s_below.box",
+     "objectId": "-397348415860336030.22.4"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 201,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 201,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+      "loaderId": "A464C05927A7F8D507E1FA6672E4C497",
+      "url": "http://127.0.0.1:57117/shot.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 202,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "-397348415860336030.22.4"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[23309 chars]… ull,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0},false,{\"height\":40,\"left\":0,\"top\":0,\"width\":90}], true, arguments]); }",
+    "objectGroup": "d750a446-0726-4788-aaee-dd2e9145830b",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-869014191747825073.-6284812855035863238"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 202,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"x\":20,\"y\":658,\"clone\":{},\"equals\":{},\"ceil\":{},\"floor\":{},\"round\":{},\"translate\":{},\"scale\":{}}}"
+       }
+      ]
+     },
+     "objectId": "-397348415860336030.22.5"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 203,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "d750a446-0726-4788-aaee-dd2e9145830b"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 204,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 203,
+   "result": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 204,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+      "loaderId": "A464C05927A7F8D507E1FA6672E4C497",
+      "url": "http://127.0.0.1:57117/shot.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 205,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 27,
+    "objectGroup": "c058f066-0b85-4136-a3c1-48a064efabbd"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 205,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLDivElement",
+     "description": "div#s_below.box",
+     "objectId": "-397348415860336030.22.6"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 206,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 206,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+      "loaderId": "A464C05927A7F8D507E1FA6672E4C497",
+      "url": "http://127.0.0.1:57117/shot.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 207,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "-397348415860336030.22.6"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[17319 chars]… ;; return this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0}], true, arguments]); }",
+    "objectGroup": "c058f066-0b85-4136-a3c1-48a064efabbd",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-869014191747825073.-6284812855035863238"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 207,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"x\":20,\"y\":3000,\"clone\":{},\"equals\":{},\"ceil\":{},\"floor\":{},\"round\":{},\"translate\":{},\"scale\":{}}}"
+       }
+      ]
+     },
+     "objectId": "-397348415860336030.22.7"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 208,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "c058f066-0b85-4136-a3c1-48a064efabbd"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 209,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 208,
+   "result": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 209,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+      "loaderId": "A464C05927A7F8D507E1FA6672E4C497",
+      "url": "http://127.0.0.1:57117/shot.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 210,
+   "method": "DOM.resolveNode",
+   "params": {
+    "backendNodeId": 27,
+    "objectGroup": "f33a5ad6-9493-4253-b007-3d3e948b53ee"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 210,
+   "result": {
+    "object": {
+     "type": "object",
+     "subtype": "node",
+     "className": "HTMLDivElement",
+     "description": "div#s_below.box",
+     "objectId": "-397348415860336030.22.8"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 211,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 211,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+      "loaderId": "A464C05927A7F8D507E1FA6672E4C497",
+      "url": "http://127.0.0.1:57117/shot.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 212,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [
+     {
+      "objectId": "-397348415860336030.22.8"
+     }
+    ],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[14979 chars]… ;; return this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"element-6066-11e4-a52e-4f735466cecf\":0}], true, arguments]); }",
+    "objectGroup": "f33a5ad6-9493-4253-b007-3d3e948b53ee",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-869014191747825073.-6284812855035863238"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 212,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"width\":90,\"height\":40,\"clone\":{},\"aspectRatio\":{},\"ceil\":{},\"floor\":{},\"round\":{},\"scale\":{}}}"
+       }
+      ]
+     },
+     "objectId": "-397348415860336030.22.9"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 213,
+   "method": "Runtime.releaseObjectGroup",
+   "params": {
+    "objectGroup": "f33a5ad6-9493-4253-b007-3d3e948b53ee"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 214,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "({x: window.pageXOffset,  y: window.pageYOffset,  height: document.documentElement.clientHeight,  width: document.documentElement.clientWidth})",
+    "returnByValue": true
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 213,
+   "result": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 214,
+   "result": {
+    "result": {
+     "type": "object",
+     "value": {
+      "x": 0,
+      "y": 2342,
+      "height": 698,
+      "width": 1185
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 215,
+   "method": "Page.captureScreenshot",
+   "params": {
+    "clip": {
+     "height": 40,
+     "scale": 1,
+     "width": 90,
+     "x": 20,
+     "y": 3000
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 215,
+   "result": {
+    "data": "iVBORw0KGgoAAAANSUhEUgAAAFoAAAAoCAIAAADxIHqfAAAAYElEQVR4nOzQQQkAIAAAMREbmda2vgSvwxZha+8zeObgoyN0hI7QETpCR+gIHaEjdISO0BE6QkfoCB2hI3SEjtAROkJH6AgdoSN0hI7QETpCR+gIHaEjdISO0BE6QkdcAAAA///hp9WMAAAABklEQVQDAHVDAVIEIQnAAAAAAElFTkSuQmCC"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 216,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 216,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 217,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 217,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 218,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 218,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+      "loaderId": "A464C05927A7F8D507E1FA6672E4C497",
+      "url": "http://127.0.0.1:57117/shot.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 219,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 219,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+      "loaderId": "A464C05927A7F8D507E1FA6672E4C497",
+      "url": "http://127.0.0.1:57117/shot.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 220,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[13944 chars]… ));\n  } catch (e) {\n    return Promise.reject(e);\n  }\n}\n; return executeScript.apply(null, arguments) }\n, [\"return [scrollX, scrollY]\",[]], true, arguments]); }",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-869014191747825073.-6284812855035863238"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 220,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(1)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":[0,2342]}"
+       }
+      ]
+     },
+     "objectId": "-397348415860336030.22.10"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 221,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 221,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedNavigating",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+    "url": "http://127.0.0.1:57117/shot.html",
+    "loaderId": "6A8EBCCF9F897F3DA971FFBC9F104B93",
+    "navigationType": "differentDocument"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedLoading",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameNavigated",
+   "params": {
+    "frame": {
+     "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+     "loaderId": "6A8EBCCF9F897F3DA971FFBC9F104B93",
+     "url": "http://127.0.0.1:57117/shot.html",
+     "domainAndRegistry": "",
+     "securityOrigin": "http://127.0.0.1:57117",
+     "securityOriginDetails": {
+      "isLocalhost": true
+     },
+     "mimeType": "text/html",
+     "adFrameStatus": {
+      "adFrameType": "none"
+     },
+     "secureContextType": "SecureLocalhost",
+     "crossOriginIsolatedContextType": "NotIsolated",
+     "gatedAPIFeatures": []
+    },
+    "type": "Navigation"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextCreated",
+   "params": {
+    "context": {
+     "id": 23,
+     "origin": "http://127.0.0.1:57117",
+     "name": "",
+     "uniqueId": "2785791184872060533.-104214666750665213",
+     "auxData": {
+      "isDefault": true,
+      "type": "default",
+      "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.domContentEventFired",
+   "params": {
+    "timestamp": 80763.808917
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.loadEventFired",
+   "params": {
+    "timestamp": 80763.809075
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStoppedLoading",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedNavigating",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+    "url": "http://127.0.0.1:57117/shot.html",
+    "loaderId": "CC176F74E849B56C64CE334D71BFC90E",
+    "navigationType": "differentDocument"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedLoading",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameNavigated",
+   "params": {
+    "frame": {
+     "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+     "loaderId": "CC176F74E849B56C64CE334D71BFC90E",
+     "url": "http://127.0.0.1:57117/shot.html",
+     "domainAndRegistry": "",
+     "securityOrigin": "http://127.0.0.1:57117",
+     "securityOriginDetails": {
+      "isLocalhost": true
+     },
+     "mimeType": "text/html",
+     "adFrameStatus": {
+      "adFrameType": "none"
+     },
+     "secureContextType": "SecureLocalhost",
+     "crossOriginIsolatedContextType": "NotIsolated",
+     "gatedAPIFeatures": []
+    },
+    "type": "Navigation"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextCreated",
+   "params": {
+    "context": {
+     "id": 24,
+     "origin": "http://127.0.0.1:57117",
+     "name": "",
+     "uniqueId": "-2541088346253367326.-2946799613724215848",
+     "auxData": {
+      "isDefault": true,
+      "type": "default",
+      "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.domContentEventFired",
+   "params": {
+    "timestamp": 80763.880235
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.loadEventFired",
+   "params": {
+    "timestamp": 80763.880388
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStoppedLoading",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameResized",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameResized",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedNavigating",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+    "url": "http://127.0.0.1:57117/shot.html",
+    "loaderId": "C52C591F463EA6ACEAFC9059E77CCD19",
+    "navigationType": "differentDocument"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedLoading",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameNavigated",
+   "params": {
+    "frame": {
+     "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+     "loaderId": "C52C591F463EA6ACEAFC9059E77CCD19",
+     "url": "http://127.0.0.1:57117/shot.html",
+     "domainAndRegistry": "",
+     "securityOrigin": "http://127.0.0.1:57117",
+     "securityOriginDetails": {
+      "isLocalhost": true
+     },
+     "mimeType": "text/html",
+     "adFrameStatus": {
+      "adFrameType": "none"
+     },
+     "secureContextType": "SecureLocalhost",
+     "crossOriginIsolatedContextType": "NotIsolated",
+     "gatedAPIFeatures": []
+    },
+    "type": "Navigation"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextCreated",
+   "params": {
+    "context": {
+     "id": 25,
+     "origin": "http://127.0.0.1:57117",
+     "name": "",
+     "uniqueId": "4811584925479777110.7030590433508249727",
+     "auxData": {
+      "isDefault": true,
+      "type": "default",
+      "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.domContentEventFired",
+   "params": {
+    "timestamp": 80763.946641
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.loadEventFired",
+   "params": {
+    "timestamp": 80763.946795
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStoppedLoading",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedNavigating",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+    "url": "http://127.0.0.1:57117/shot.html",
+    "loaderId": "EB87A503BEDB9384E21443140AF67D4C",
+    "navigationType": "differentDocument"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedLoading",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameNavigated",
+   "params": {
+    "frame": {
+     "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+     "loaderId": "EB87A503BEDB9384E21443140AF67D4C",
+     "url": "http://127.0.0.1:57117/shot.html",
+     "domainAndRegistry": "",
+     "securityOrigin": "http://127.0.0.1:57117",
+     "securityOriginDetails": {
+      "isLocalhost": true
+     },
+     "mimeType": "text/html",
+     "adFrameStatus": {
+      "adFrameType": "none"
+     },
+     "secureContextType": "SecureLocalhost",
+     "crossOriginIsolatedContextType": "NotIsolated",
+     "gatedAPIFeatures": []
+    },
+    "type": "Navigation"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextCreated",
+   "params": {
+    "context": {
+     "id": 26,
+     "origin": "http://127.0.0.1:57117",
+     "name": "",
+     "uniqueId": "1711121550699400064.4231025212457977923",
+     "auxData": {
+      "isDefault": true,
+      "type": "default",
+      "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.domContentEventFired",
+   "params": {
+    "timestamp": 80764.013926
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.loadEventFired",
+   "params": {
+    "timestamp": 80764.014084
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStoppedLoading",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 222,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.readyState",
+    "returnByValue": true,
+    "uniqueContextId": "2785791184872060533.-104214666750665213"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 223,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.readyState",
+    "returnByValue": true,
+    "uniqueContextId": "-2541088346253367326.-2946799613724215848"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 224,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.readyState",
+    "returnByValue": true,
+    "uniqueContextId": "4811584925479777110.7030590433508249727"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 225,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.readyState",
+    "returnByValue": true,
+    "uniqueContextId": "1711121550699400064.4231025212457977923"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 222,
+   "error": {
+    "code": -32602,
+    "message": "uniqueContextId not found"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 223,
+   "error": {
+    "code": -32602,
+    "message": "uniqueContextId not found"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 224,
+   "error": {
+    "code": -32602,
+    "message": "uniqueContextId not found"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 225,
+   "result": {
+    "result": {
+     "type": "string",
+     "value": "complete"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 226,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 226,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 227,
+   "method": "Page.navigate",
+   "params": {
+    "url": "http://127.0.0.1:57117/shot.html"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedNavigating",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+    "url": "http://127.0.0.1:57117/shot.html",
+    "loaderId": "6DAEC2E41528819D742D6DC549B78746",
+    "navigationType": "differentDocument"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStartedLoading",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 227,
+   "result": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+    "loaderId": "6DAEC2E41528819D742D6DC549B78746",
+    "isDownload": false
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 228,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextsCleared",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameNavigated",
+   "params": {
+    "frame": {
+     "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+     "loaderId": "6DAEC2E41528819D742D6DC549B78746",
+     "url": "http://127.0.0.1:57117/shot.html",
+     "domainAndRegistry": "",
+     "securityOrigin": "http://127.0.0.1:57117",
+     "securityOriginDetails": {
+      "isLocalhost": true
+     },
+     "mimeType": "text/html",
+     "adFrameStatus": {
+      "adFrameType": "none"
+     },
+     "secureContextType": "SecureLocalhost",
+     "crossOriginIsolatedContextType": "NotIsolated",
+     "gatedAPIFeatures": []
+    },
+    "type": "Navigation"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Runtime.executionContextCreated",
+   "params": {
+    "context": {
+     "id": 27,
+     "origin": "http://127.0.0.1:57117",
+     "name": "",
+     "uniqueId": "-7017003214067232127.-1311596093582284011",
+     "auxData": {
+      "isDefault": true,
+      "type": "default",
+      "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.domContentEventFired",
+   "params": {
+    "timestamp": 80764.081458
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.loadEventFired",
+   "params": {
+    "timestamp": 80764.081616
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "method": "Page.frameStoppedLoading",
+   "params": {
+    "frameId": "6EFE1670657F81A7C9FADCE9D96FA1A7"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 229,
+   "method": "Runtime.evaluate",
+   "params": {
+    "awaitPromise": false,
+    "expression": "document.readyState",
+    "returnByValue": true,
+    "uniqueContextId": "-7017003214067232127.-1311596093582284011"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 228,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 229,
+   "result": {
+    "result": {
+     "type": "string",
+     "value": "complete"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 230,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 230,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 231,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 231,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+      "loaderId": "6DAEC2E41528819D742D6DC549B78746",
+      "url": "http://127.0.0.1:57117/shot.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 232,
+   "method": "Page.getFrameTree",
+   "params": {},
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 232,
+   "result": {
+    "frameTree": {
+     "frame": {
+      "id": "6EFE1670657F81A7C9FADCE9D96FA1A7",
+      "loaderId": "6DAEC2E41528819D742D6DC549B78746",
+      "url": "http://127.0.0.1:57117/shot.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:57117",
+      "securityOriginDetails": {
+       "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+       "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+     }
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 233,
+   "method": "Runtime.callFunctionOn",
+   "params": {
+    "arguments": [],
+    "awaitPromise": true,
+    "functionDeclaration": "function(){ return (function() { // Copyright 2012 The Chromium Authors\n// Use of this source code is governed by a BSD-style license that can be\n// found in the LICENSE file.\n\n/**\n * Enum for WebDriv …[43884 chars]… [Z]={}:Y[Z]=fb;; return this.se_exportedFunctionSymbol.apply(null,arguments);}).apply(window, arguments);}\n, [{\"css selector\":\"#s_inner\"}], true, arguments]); }",
+    "serializationOptions": {
+     "serialization": "deep"
+    },
+    "uniqueContextId": "-7017003214067232127.-1311596093582284011"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 233,
+   "result": {
+    "result": {
+     "type": "object",
+     "subtype": "array",
+     "className": "Array",
+     "description": "Array(2)",
+     "deepSerializedValue": {
+      "type": "array",
+      "value": [
+       {
+        "type": "string",
+        "value": "{\"status\":0,\"value\":{\"element-6066-11e4-a52e-4f735466cecf\":0}}"
+       },
+       {
+        "type": "node",
+        "value": {
+         "nodeType": 1,
+         "childNodeCount": 0,
+         "backendNodeId": 33,
+         "loaderId": "6DAEC2E41528819D742D6DC549B78746",
+         "shadowRoot": null,
+         "localName": "div",
+         "namespaceURI": "http://www.w3.org/1999/xhtml",
+         "attributes": {
+          "id": "s_inner"
+         }
+        }
+       }
+      ]
+     },
+     "objectId": "-397348415860336030.27.1"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": ">",
+   "id": 234,
+   "method": "Runtime.evaluate",
+   "params": {
+    "expression": "1"
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  },
+  {
+   "dir": "<",
+   "id": 234,
+   "result": {
+    "result": {
+     "type": "number",
+     "value": 1,
+     "description": "1"
+    }
+   },
+   "sessionId": "E3D4083DEC5F00146F33CACE432E88CE"
+  }
+ ]
+}

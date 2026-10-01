@@ -1,0 +1,219 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-structured-ai-output",
+		"name": "Extract Typed Data with AI",
+		"language": "en",
+		"slug": "structured-ai-output",
+		"difficulty": "INTERMEDIATE",
+		"category": "AI",
+		"isPublished": true,
+		"tags": [
+			"structured-ai-output"
+		],
+		"position": 19,
+		"media": {
+			"icon": "../../advanced/agentic-in-flow-like/assets/course-icon.webp",
+			"banner": "assets/course-banner-v2.webp"
+		},
+		"modules": [
+			{
+				"id": "module-structured-core",
+				"title": "Extract and validate",
+				"description": null,
+				"position": 0,
+				"lessons": [
+					{
+						"id": "lesson-structured-contract",
+						"title": "Define fields and missing values",
+						"language": "en",
+						"contentFile": "content/define-the-contract.md",
+						"videoUrl": null,
+						"estimatedMinutes": 5,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-structured-null",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A required amount is absent from source. What should the schema permit?",
+								"explanation": "Required keys and nullable values are separate constraints.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "b",
+											"label": "An invented number"
+										},
+										{
+											"id": "a",
+											"label": "A present key with null value"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-structured-extract",
+						"title": "Run the schema extractor",
+						"language": "en",
+						"contentFile": "content/extract-a-request.md",
+						"videoUrl": null,
+						"estimatedMinutes": 10,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-structured-truth",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A response passes schema validation. What remains to check?",
+								"explanation": "Schema checks shape, not factual support.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "b",
+											"label": "Nothing, its content is proven correct"
+										},
+										{
+											"id": "a",
+											"label": "Whether values are supported by the source"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-structured-validation",
+						"title": "Route invalid and incomplete results",
+						"language": "en",
+						"contentFile": "content/validate-before-writing.md",
+						"videoUrl": null,
+						"estimatedMinutes": 5,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-structured-negative",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A negative amount passes the schema. Where does this lab route it?",
+								"explanation": "The business rule is a separate deterministic check.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "b",
+											"label": "Ready for an external action"
+										},
+										{
+											"id": "a",
+											"label": "Review"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-structured-final",
+						"title": "Verify a new missing-field request",
+						"language": "en",
+						"contentFile": "content/final-assessment.md",
+						"videoUrl": null,
+						"estimatedMinutes": 5,
+						"position": 3,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-structured-transfer",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "R-105 has no stated amount. Which result fits?",
+								"explanation": "Zero is a real amount and must not stand in for absence.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "b",
+											"label": "amount_eur 0 and ready"
+										},
+										{
+											"id": "a",
+											"label": "amount_eur null and review"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							},
+							{
+								"id": "challenge-structured-error",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "An extraction call fails. What should downstream processing use?",
+								"explanation": "A prior response is unrelated to the failed request.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "a",
+											"label": "A separate error path with no reused output"
+										},
+										{
+											"id": "b",
+											"label": "The last successful JSON"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		],
+		"description": "Extract schema-validated fields and check their meaning before a write. Core: 25 min.",
+		"longDescription": "Prerequisites: basic branching and a configured model that supports required tool calls. A 25-minute lab uses four synthetic requests, an explicit JSON Schema, field checks and a new transfer case. Setup and provider access are separate. The completed artifact is a manually reviewed input/output and routing table.",
+		"assets": [
+			{
+				"name": "RequestSchema",
+				"file": "fixtures/request.schema.json",
+				"kind": "DOCUMENT",
+				"replace": true
+			},
+			{
+				"name": "ExtractionCases",
+				"file": "fixtures/extraction-cases.json",
+				"kind": "DOCUMENT",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"estimatedMinutes": 25
+	}
+}

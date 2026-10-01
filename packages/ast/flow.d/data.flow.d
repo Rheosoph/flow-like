@@ -882,7 +882,7 @@ declare namespace db {
      * @node index_local_db @receiver database @alias indexLocalDb
      * @param database — Database Connection Reference (receiver: `this` in `x.buildIndex(...)`)
      * @param column (optional) — Column to Index
-     * @param type (optional) — Index type to build. Vector indexes use cosine distance; VECTOR and vector AUTO retain IVF-PQ.
+     * @param type (optional) — Index type to build. Vector indexes use cosine distance. VECTOR and vector AUTO build IVF-PQ, or exact IVF-FLAT while the table has fewer than 256 rows, too few to train PQ; explicit PQ types fail on such tables.
      * @impure has side effects / drives control flow
      */
     function buildIndex(this: NodeDBConnection, { database: Struct, column?: string, type?: string }): void;

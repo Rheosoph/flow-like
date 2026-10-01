@@ -279,7 +279,9 @@ pub fn sync_node_with_catalog(placed_node: &mut Node, catalog_node: &Node) {
     // Removing a wired pin takes its half of the edge with it, and `fix_pin_connections` then
     // prunes the surviving half on the peer, so the connection disappears from both ends with no
     // error anywhere. `mints_pins_on_update` above spares the dynamic nodes we know about; this
-    // is the backstop for the ones nobody has listed yet.
+    // is the backstop for the ones nobody has listed yet. A previous error is cleared first so
+    // the one this reports survives the sync.
+    placed_node.error = None;
     remove_unwired_pins(placed_node, &pins_to_remove);
 
     // Phase 2: Add new pins from catalog that don't exist in placed node
@@ -315,9 +317,6 @@ pub fn sync_node_with_catalog(placed_node: &mut Node, catalog_node: &Node) {
 
     // Sync WASM permissions from catalog so placed nodes reflect current declarations
     sync_wasm_permissions(placed_node, catalog_node);
-
-    // Clear any previous error since we've updated the node
-    placed_node.error = None;
 }
 
 /// Synchronizes versioned node shapes and repairs unresolved schemas across the board.

@@ -1,8 +1,8 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rig::completion::{CompletionRequest, Message};
 use rig::message::{
-    Audio, Document, DocumentMediaType, DocumentSourceKind, Image, ImageMediaType, MimeType,
-    UserContent, Video,
+    Audio, AudioMediaType, Document, DocumentMediaType, DocumentSourceKind, Image, ImageMediaType,
+    MimeType, UserContent, Video,
 };
 
 /// The user-content conversion a Rig 0.38.2 client runs before it sends a request.
@@ -82,33 +82,48 @@ fn fit(dialect: MediaDialect, model: &str, part: &UserContent) -> Fit {
     };
     match part {
         _ if readable => Fit::Native,
-        UserContent::Document(document) => {
-            inline_text(&document.data).map_or(Fit::Unreadable, |text| {
-                Fit::Text(format!(
-                    "[document: {}]\n{text}",
-                    mime(document.media_type.as_ref())
-                ))
-            })
-        }
+        UserContent::Document(document) => inline_text(document).map_or(Fit::Unreadable, |text| {
+            Fit::Text(format!(
+                "[document: {}]\n{text}",
+                mime(document.media_type.as_ref())
+            ))
+        }),
         _ => Fit::Unreadable,
     }
 }
 
+/// Image link extensions of formats OpenAI and Anthropic reject, for links without a media type.
+const UNREADABLE_IMAGE_EXTENSIONS: [&str; 8] =
+    ["avif", "bmp", "heic", "heif", "ico", "svg", "tif", "tiff"];
+
 fn image_fits(dialect: MediaDialect, image: &Image) -> bool {
-    match &image.data {
-        DocumentSourceKind::Url(_) => true,
-        DocumentSourceKind::Base64(_) if dialect == MediaDialect::Anthropic => matches!(
-            image.media_type,
-            Some(
-                ImageMediaType::JPEG
-                    | ImageMediaType::PNG
-                    | ImageMediaType::GIF
-                    | ImageMediaType::WEBP
-            )
-        ),
-        DocumentSourceKind::Base64(_) => image.media_type.is_some(),
+    let media_type = image.media_type.as_ref();
+    match (dialect, &image.data) {
+        (MediaDialect::OpenRouter, DocumentSourceKind::Url(_)) => true,
+        (MediaDialect::OpenRouter, DocumentSourceKind::Base64(_)) => media_type.is_some(),
+        (_, DocumentSourceKind::Url(url)) => {
+            media_type.map_or_else(|| !has_unreadable_image_extension(url), web_image)
+        }
+        (_, DocumentSourceKind::Base64(_)) => media_type.is_some_and(web_image),
         _ => false,
     }
+}
+
+fn web_image(media_type: &ImageMediaType) -> bool {
+    matches!(
+        media_type,
+        ImageMediaType::JPEG | ImageMediaType::PNG | ImageMediaType::GIF | ImageMediaType::WEBP
+    )
+}
+
+fn has_unreadable_image_extension(url: &str) -> bool {
+    url.split(['?', '#'])
+        .next()
+        .and_then(|path| path.rsplit('/').next())
+        .and_then(|name| name.rsplit_once('.'))
+        .is_some_and(|(_, extension)| {
+            UNREADABLE_IMAGE_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+        })
 }
 
 fn audio_fits(dialect: MediaDialect, model: &str, audio: &Audio) -> bool {
@@ -116,7 +131,12 @@ fn audio_fits(dialect: MediaDialect, model: &str, audio: &Audio) -> bool {
         return false;
     }
     match dialect {
-        MediaDialect::OpenAIChat => model.to_ascii_lowercase().contains("audio"),
+        MediaDialect::OpenAIChat => {
+            matches!(
+                audio.media_type,
+                Some(AudioMediaType::WAV | AudioMediaType::MP3)
+            ) && model.to_ascii_lowercase().contains("audio")
+        }
         MediaDialect::OpenRouter => audio.media_type.is_some(),
         MediaDialect::OpenAIResponses | MediaDialect::Anthropic => false,
     }
@@ -131,34 +151,42 @@ fn video_fits(dialect: MediaDialect, video: &Video) -> bool {
         }
 }
 
+/// Rig hands OpenAI and Anthropic the base64 payload of any non-PDF document as literal text, so
+/// only PDFs stay base64 there.
 fn document_fits(dialect: MediaDialect, document: &Document) -> bool {
     use MediaDialect::{Anthropic, OpenAIChat, OpenAIResponses, OpenRouter};
     let typed = document.media_type.is_some();
     let pdf = document.media_type == Some(DocumentMediaType::PDF);
     match (dialect, &document.data) {
-        (OpenAIChat | OpenAIResponses, DocumentSourceKind::FileId(_)) => true,
+        (OpenAIChat | OpenAIResponses | Anthropic, DocumentSourceKind::FileId(_)) => true,
         (OpenAIResponses, DocumentSourceKind::Url(_)) => pdf,
-        (OpenAIChat | OpenAIResponses, DocumentSourceKind::Base64(_)) => typed,
+        (OpenAIChat | OpenAIResponses | Anthropic, DocumentSourceKind::Base64(_)) => pdf,
         (OpenAIChat | OpenAIResponses, DocumentSourceKind::String(_)) => typed && !pdf,
+        (Anthropic, DocumentSourceKind::String(_)) => {
+            document.media_type == Some(DocumentMediaType::TXT)
+        }
         (OpenRouter, DocumentSourceKind::Url(_)) => true,
         (OpenRouter, DocumentSourceKind::Base64(_) | DocumentSourceKind::String(_)) => typed,
-        (Anthropic, DocumentSourceKind::Base64(_) | DocumentSourceKind::String(_)) => matches!(
-            document.media_type,
-            Some(DocumentMediaType::PDF | DocumentMediaType::TXT)
-        ),
         _ => false,
     }
 }
 
-fn inline_text(source: &DocumentSourceKind) -> Option<String> {
-    match source {
-        DocumentSourceKind::String(text) => Some(text.clone()),
-        DocumentSourceKind::Base64(data) => STANDARD
-            .decode(data)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok()),
-        DocumentSourceKind::Raw(bytes) => String::from_utf8(bytes.clone()).ok(),
-        _ => None,
+/// Typed documents other than PDFs are text, so invalid UTF-8 there is a legacy encoding and is
+/// decoded lossily; untyped bytes must be valid UTF-8 to count as text.
+fn inline_text(document: &Document) -> Option<String> {
+    let decoded;
+    let bytes = match &document.data {
+        DocumentSourceKind::String(text) => return Some(text.clone()),
+        DocumentSourceKind::Base64(data) => {
+            decoded = STANDARD.decode(data).ok()?;
+            &decoded
+        }
+        DocumentSourceKind::Raw(bytes) => bytes,
+        _ => return None,
+    };
+    match document.media_type {
+        None | Some(DocumentMediaType::PDF) => std::str::from_utf8(bytes).ok().map(str::to_owned),
+        Some(_) => Some(String::from_utf8_lossy(bytes).into_owned()),
     }
 }
 
@@ -195,18 +223,26 @@ fn source_label(source: &DocumentSourceKind) -> &'static str {
 mod tests {
     use super::*;
     use rig::OneOrMany;
-    use rig::message::{AudioMediaType, VideoMediaType};
+    use rig::message::VideoMediaType;
 
     const PRESIGNED: &str = "https://flow-like-content.s3.eu-central-1.amazonaws.com/tmp/user/u/apps/a/runs/r/request/teams/files/0/report.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=ASIAEXAMPLE%2F20260929%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Security-Token=secret-token&X-Amz-Signature=deadbeef";
     const PDF_BASE64: &str = "JVBERi0xLjQK";
+    const TXT_BASE64: &str = "SGVsbG8K";
     const CSV_BASE64: &str = "YSxiCjEsMgo=";
+    /// `Straße;München` saved as Windows-1252, which is not valid UTF-8.
+    const WINDOWS_1252_CSV_BASE64: &str = "U3RyYd9lO038bmNoZW4K";
     const DOCX_BASE64: &str = "UEsDBBQABgAIAAAAIQD/";
 
     #[derive(Debug, Clone, Copy)]
     enum Kind {
         Image,
+        Heic,
+        Svg,
+        UntypedBmp,
         Pdf,
+        Txt,
         Csv,
+        Windows1252Csv,
         Untyped,
         Audio,
         Video,
@@ -228,10 +264,15 @@ mod tests {
     }
     use Expect::{AsText, Keep, Omit};
 
-    const KINDS: [Kind; 6] = [
+    const KINDS: [Kind; 11] = [
         Kind::Image,
+        Kind::Heic,
+        Kind::Svg,
+        Kind::UntypedBmp,
         Kind::Pdf,
+        Kind::Txt,
         Kind::Csv,
+        Kind::Windows1252Csv,
         Kind::Untyped,
         Kind::Audio,
         Kind::Video,
@@ -241,12 +282,19 @@ mod tests {
     fn source(kind: Kind, source: Source) -> DocumentSourceKind {
         let inline = match kind {
             Kind::Pdf => PDF_BASE64,
+            Kind::Txt => TXT_BASE64,
             Kind::Csv => CSV_BASE64,
+            Kind::Windows1252Csv => WINDOWS_1252_CSV_BASE64,
             Kind::Untyped => DOCX_BASE64,
-            Kind::Image | Kind::Audio | Kind::Video => "AAAA",
+            Kind::Image | Kind::Heic | Kind::Svg | Kind::UntypedBmp | Kind::Audio | Kind::Video => {
+                "AAAA"
+            }
         };
         match source {
-            Source::Url => DocumentSourceKind::Url(PRESIGNED.to_string()),
+            Source::Url => DocumentSourceKind::Url(match kind {
+                Kind::UntypedBmp => PRESIGNED.replace("report.pdf", "scan.bmp"),
+                _ => PRESIGNED.to_string(),
+            }),
             Source::Base64 => DocumentSourceKind::Base64(inline.to_string()),
             Source::String => DocumentSourceKind::String("a,b\n1,2\n".to_string()),
             Source::FileId => DocumentSourceKind::FileId("file-abc".to_string()),
@@ -262,15 +310,22 @@ mod tests {
                 additional_params: None,
             })
         };
-        match kind {
-            Kind::Image => UserContent::Image(Image {
-                data,
-                media_type: Some(ImageMediaType::PNG),
+        let image = |media_type| {
+            UserContent::Image(Image {
+                data: data.clone(),
+                media_type,
                 detail: None,
                 additional_params: None,
-            }),
+            })
+        };
+        match kind {
+            Kind::Image => image(Some(ImageMediaType::PNG)),
+            Kind::Heic => image(Some(ImageMediaType::HEIC)),
+            Kind::Svg => image(Some(ImageMediaType::SVG)),
+            Kind::UntypedBmp => image(None),
             Kind::Pdf => document(Some(DocumentMediaType::PDF)),
-            Kind::Csv => document(Some(DocumentMediaType::CSV)),
+            Kind::Txt => document(Some(DocumentMediaType::TXT)),
+            Kind::Csv | Kind::Windows1252Csv => document(Some(DocumentMediaType::CSV)),
             Kind::Untyped => document(None),
             Kind::Audio => UserContent::Audio(Audio {
                 data,
@@ -348,7 +403,7 @@ mod tests {
         }
     }
 
-    fn assert_table(dialect: MediaDialect, model: &str, table: [[Expect; 4]; 6]) {
+    fn assert_table(dialect: MediaDialect, model: &str, table: [[Expect; 4]; KINDS.len()]) {
         for (kind, row) in KINDS.into_iter().zip(table) {
             for (from, expected) in SOURCES.into_iter().zip(row) {
                 let original = attachment(kind, from);
@@ -388,8 +443,13 @@ mod tests {
             "gpt-4o",
             [
                 [Keep, Keep, Omit, Omit],
+                [Omit, Omit, Omit, Omit],
+                [Omit, Omit, Omit, Omit],
+                [Omit, Omit, Omit, Omit],
                 [Omit, Keep, AsText, Keep],
-                [Omit, Keep, Keep, Keep],
+                [Omit, AsText, Keep, Keep],
+                [Omit, AsText, Keep, Keep],
+                [Omit, AsText, Keep, Keep],
                 [Omit, Omit, AsText, Keep],
                 [Omit, Omit, Omit, Omit],
                 [Omit, Omit, Omit, Omit],
@@ -408,6 +468,19 @@ mod tests {
             );
             assert_eq!(user_parts(&filtered)[0] == original, kept, "{model}");
         }
+        for media_type in [Some(AudioMediaType::OGG), Some(AudioMediaType::FLAC), None] {
+            let original = UserContent::Audio(Audio {
+                data: DocumentSourceKind::Base64("AAAA".into()),
+                media_type: media_type.clone(),
+                additional_params: None,
+            });
+            let filtered = retain_supported(
+                MediaDialect::OpenAIChat,
+                "gpt-4o-audio-preview",
+                request(vec![original.clone()]),
+            );
+            assert_ne!(user_parts(&filtered)[0], original, "{media_type:?}");
+        }
     }
 
     #[test]
@@ -417,8 +490,13 @@ mod tests {
             "gpt-5.4",
             [
                 [Keep, Keep, Omit, Omit],
+                [Omit, Omit, Omit, Omit],
+                [Omit, Omit, Omit, Omit],
+                [Omit, Omit, Omit, Omit],
                 [Keep, Keep, AsText, Keep],
-                [Omit, Keep, Keep, Keep],
+                [Omit, AsText, Keep, Keep],
+                [Omit, AsText, Keep, Keep],
+                [Omit, AsText, Keep, Keep],
                 [Omit, Omit, AsText, Keep],
                 [Omit, Omit, Omit, Omit],
                 [Omit, Omit, Omit, Omit],
@@ -433,9 +511,14 @@ mod tests {
             "claude-sonnet-4-6",
             [
                 [Keep, Keep, Omit, Omit],
-                [Omit, Keep, Keep, Omit],
-                [Omit, AsText, AsText, Omit],
-                [Omit, Omit, AsText, Omit],
+                [Omit, Omit, Omit, Omit],
+                [Omit, Omit, Omit, Omit],
+                [Omit, Omit, Omit, Omit],
+                [Omit, Keep, AsText, Keep],
+                [Omit, AsText, Keep, Keep],
+                [Omit, AsText, AsText, Keep],
+                [Omit, AsText, AsText, Keep],
+                [Omit, Omit, AsText, Keep],
                 [Omit, Omit, Omit, Omit],
                 [Omit, Omit, Omit, Omit],
             ],
@@ -449,6 +532,11 @@ mod tests {
             "anthropic/claude-sonnet-4.5",
             [
                 [Keep, Keep, Omit, Omit],
+                [Keep, Keep, Omit, Omit],
+                [Keep, Keep, Omit, Omit],
+                [Keep, Omit, Omit, Omit],
+                [Keep, Keep, Keep, Omit],
+                [Keep, Keep, Keep, Omit],
                 [Keep, Keep, Keep, Omit],
                 [Keep, Keep, Keep, Omit],
                 [Keep, Omit, AsText, Omit],
@@ -459,16 +547,54 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_reads_textual_documents_as_text() {
-        let filtered = retain_supported(
+    fn base64_text_documents_reach_the_model_decoded() {
+        for dialect in [
+            MediaDialect::OpenAIChat,
+            MediaDialect::OpenAIResponses,
             MediaDialect::Anthropic,
-            "claude-sonnet-4-6",
-            request(vec![attachment(Kind::Csv, Source::Base64)]),
-        );
-        assert_eq!(
-            text_of(&user_parts(&filtered)[0]),
-            Some("[document: text/csv]\na,b\n1,2\n")
-        );
+        ] {
+            for (kind, expected) in [
+                (Kind::Txt, "[document: text/plain]\nHello\n"),
+                (Kind::Csv, "[document: text/csv]\na,b\n1,2\n"),
+                (
+                    Kind::Windows1252Csv,
+                    "[document: text/csv]\nStra\u{FFFD}e;M\u{FFFD}nchen\n",
+                ),
+            ] {
+                let filtered = retain_supported(
+                    dialect,
+                    "model",
+                    request(vec![attachment(kind, Source::Base64)]),
+                );
+                assert_eq!(
+                    text_of(&user_parts(&filtered)[0]),
+                    Some(expected),
+                    "{dialect:?} {kind:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unreadable_image_formats_are_named_in_the_note() {
+        for dialect in [
+            MediaDialect::OpenAIChat,
+            MediaDialect::OpenAIResponses,
+            MediaDialect::Anthropic,
+        ] {
+            let filtered = retain_supported(
+                dialect,
+                "model",
+                request(vec![attachment(Kind::Heic, Source::Url)]),
+            );
+            assert_eq!(
+                text_of(&user_parts(&filtered)[0]),
+                Some(
+                    "[attachment omitted: this model cannot read images (image/heic) sent as a link]"
+                ),
+                "{dialect:?}"
+            );
+        }
     }
 
     #[test]

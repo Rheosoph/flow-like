@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Practice order portal</title>
+<style>body{font:18px system-ui;max-width:720px;margin:3rem auto;padding:1rem}th,td{padding:1rem;border:1px solid #aab}button{font:inherit;padding:.5rem 1rem}#banner{padding:3rem;background:#ffd}</style>
+<h1>Practice order portal</h1><p>Synthetic data. Refresh changes only this page.</p><div id="banner" hidden>Maintenance notice: layout moved</div><button id="refresh">Refresh status</button><table><thead><tr><th>Order</th><th>Status</th></tr></thead><tbody><tr><td>PO-001</td><td id="status">Loading</td></tr></tbody></table>
+<script>
+const params=new URLSearchParams(location.search);document.querySelector('#banner').hidden=params.get('banner')!=='1';
+function refresh(){const target=document.querySelector('#status');target.removeAttribute('data-ready');target.textContent='Loading';if(params.get('missing')==='1')return;setTimeout(()=>{target.textContent='Ready to ship';target.dataset.ready='true'},Number(params.get('delay')||300))}
+document.querySelector('#refresh').addEventListener('click',refresh);refresh();
+</script></html>

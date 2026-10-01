@@ -5,7 +5,7 @@ sidebar:
   order: 0
 ---
 
-Flow-Like provides official SDKs for **Node.js/TypeScript** and **Python** that wrap the REST API into ergonomic, type-safe clients. Use them to control workflows, manage files, query LanceDB databases, run chat completions, generate embeddings, and more — all from your application code.
+Flow-Like provides official SDKs for **Node.js/TypeScript** and **Python** that wrap the REST API into ergonomic, type-safe clients. Use them to control workflows, manage files, query LanceDB databases, run chat completions, generate embeddings, from your application code.
 
 ## Available SDKs
 
@@ -22,7 +22,8 @@ Flow-Like provides official SDKs for **Node.js/TypeScript** and **Python** that 
 | Trigger events | ✅ | ✅ |
 | File management (upload, download, list, delete) | ✅ | ✅ |
 | LanceDB integration (credentials, queries, connections) | ✅ | ✅ |
-| Chat completions (+ streaming) | ✅ | ✅ |
+| Chat Completions (+ streaming) | ✅ | ✅ |
+| Responses (+ streaming) | ✅ | ✅ |
 | Embeddings | ✅ | ✅ |
 | Model discovery (LLMs, embeddings) | ✅ | ✅ |
 | Board CRUD | ✅ | ✅ |
@@ -31,6 +32,21 @@ Flow-Like provides official SDKs for **Node.js/TypeScript** and **Python** that 
 | Execution monitoring / polling | ✅ | ✅ |
 | LangChain integration | ✅ | ✅ |
 | Async / await | ✅ native | ✅ `a`-prefixed methods |
+
+## Choose a model API
+
+Model discovery returns `api_surface` alongside `bit_id`. Use that field when
+choosing the client method:
+
+| `api_surface` | Node.js | Python | Request shape |
+| --- | --- | --- | --- |
+| `ChatCompletions` or absent | `chatCompletions()` | `chat_completions()` | `messages`, `max_tokens` |
+| `Responses` | `responses()` | `responses()` | `input`, `max_output_tokens` |
+
+These are separate request and response contracts. The server rejects a model
+sent to the wrong endpoint with HTTP 400 and names the required route. See the
+[Node.js examples](/dev/sdks/nodejs/#chat-completions) and
+[Python examples](/dev/sdks/python/#chat-completions) for discovery and calls.
 
 ## Authentication
 
@@ -41,7 +57,11 @@ Both SDKs support two authentication methods:
 | Personal Access Token | `pat_` | `Authorization: pat_{id}.{secret}` | `FLOW_LIKE_PAT` |
 | API Key | `flk_` | `X-API-Key: flk_{app}.{key}.{secret}` | `FLOW_LIKE_API_KEY` |
 
-The SDK auto-detects which header to use based on the token prefix.
+The SDK sends PATs in `Authorization` and App API keys in `X-API-Key`.
+Use the explicit `pat` / `apiKey` options in Node.js, or `pat` / `api_key` in
+Python. Python also accepts a `token` option and detects its prefix. Provide
+one credential type at a time; Python rejects simultaneous PAT and API-key
+configuration.
 
 ### Environment variables
 

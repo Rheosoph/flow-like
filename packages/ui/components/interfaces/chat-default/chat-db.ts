@@ -1,8 +1,9 @@
 import Dexie, { type EntityTable } from "dexie";
-import { finalizePlanSteps } from "./event-processor";
 import type { IHistoryMessage } from "../../../lib";
 import type { IChatMessageError } from "../../../lib/flowpilot/chat-error";
 import type { IAgentDebugReport } from "../../../state/global-chat/agent-debug-report";
+import type { FlowScriptWorkspaceCandidate } from "../../flowpilot/flowscript-workspace-candidates";
+import { finalizePlanSteps } from "./event-processor";
 
 export type IAttachment =
 	| string // Simple URL variant
@@ -196,6 +197,8 @@ export interface IMessage {
 	};
 	timestamp: number;
 	plan_steps?: IPlanStep[];
+	/** Generated source for the global FlowPilot workspace. Display only; approval uses the native job. */
+	flowscript_workspace?: FlowScriptWorkspaceCandidate;
 	current_step_id?: string;
 	usage_stats?: IChatUsageStat[];
 	/** Apps this message acted on/referenced — rendered as clickable chips under the message. */

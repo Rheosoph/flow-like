@@ -1,7 +1,9 @@
 //! WebP normalisation of uploaded media, the Azure port of
 //! `apps/backend/aws/media-transformer`.
 //!
-//! Every `BlobCreated` under `media/` in the released content container is
+//! Typed course assets under `media/courses/<id>/assets/<file>` are preserved;
+//! the course asset API manages their formats. Other `BlobCreated` uploads under
+//! `media/` in the released content container are
 //! decoded, resized (square 1024, landscape 1280x720 cover-crop, portrait fit
 //! 1280), encoded as lossy WebP quality 92 and written back next to the
 //! original as `<basename>.webp`; the original is then deleted. `.webp` inputs
@@ -22,6 +24,15 @@ use webp::Encoder;
 
 const WEBP_QUALITY: f32 = 92.0;
 const MEDIA_PREFIX: &str = "media/";
+
+fn is_course_asset(key: &str) -> bool {
+    let mut parts = key.split('/');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some("media"), Some("courses"), Some(course_id), Some("assets"), Some(file), None)
+            if !course_id.is_empty() && !file.is_empty()
+    )
+}
 
 pub struct MediaTransformationContext {
     pub store: Arc<dyn ObjectStore>,
@@ -92,6 +103,11 @@ pub async fn process(
         return Ok(());
     }
     if event.is_deletion() {
+        return Ok(());
+    }
+
+    // The course asset API owns these filenames and handles image optimization explicitly.
+    if is_course_asset(key) {
         return Ok(());
     }
 
@@ -220,6 +236,82 @@ fn encode_as_webp(img: image::DynamicImage) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn course_asset_keys_exclude_banners_and_other_prefixes() {
+        for file in ["training.csv", "cases.json", "practice.zip", "diagram.png"] {
+            assert!(is_course_asset(&format!(
+                "media/courses/course-1/assets/{file}"
+            )));
+        }
+        for key in [
+            "media/courses/course-1/banner.png",
+            "media/courses/course-1/icon.jpg",
+            "media/apps/app-1/assets/diagram.png",
+            "media/courses//assets/cases.json",
+            "media/courses/course-1/assets/",
+            "media/courses/course-1/assets/nested/cases.json",
+        ] {
+            assert!(!is_course_asset(key), "{key}");
+        }
+    }
+
+    fn created_event(key: &str) -> BlobEvent {
+        BlobEvent {
+            id: "practice-upload".into(),
+            event_type: crate::blob_events::BLOB_CREATED.into(),
+            subject: format!("/blobServices/default/containers/content/blobs/{key}"),
+            content_length: None,
+            etag: None,
+            sequencer: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn preserves_course_asset_bytes_and_still_transforms_banners() {
+        let ctx = MediaTransformationContext {
+            store: Arc::new(flow_like_storage::object_store::memory::InMemory::new()),
+            content_container: "content".into(),
+        };
+        for file in ["cases.json", "practice.zip", "diagram.png"] {
+            let key = format!("media/courses/course-1/assets/{file}");
+            let path = Path::from(key.as_str());
+            ctx.store.put(&path, "original bytes".into()).await.unwrap();
+            process(&ctx, &created_event(&key)).await.unwrap();
+            let bytes = ctx.store.get(&path).await.unwrap().bytes().await.unwrap();
+            assert_eq!(bytes.as_ref(), b"original bytes");
+            assert!(
+                ctx.store
+                    .head(&Path::from(generate_webp_key(&key).unwrap()))
+                    .await
+                    .is_err()
+            );
+        }
+
+        let key = "media/courses/course-1/banner.png";
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2, 1)
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        ctx.store
+            .put(&Path::from(key), encoded.into_inner().into())
+            .await
+            .unwrap();
+        process(&ctx, &created_event(key)).await.unwrap();
+        assert!(ctx.store.head(&Path::from(key)).await.is_err());
+        let output = ctx
+            .store
+            .get(&Path::from("media/courses/course-1/banner.webp"))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(
+            image::guess_format(&output).unwrap(),
+            image::ImageFormat::WebP
+        );
+    }
 
     #[test]
     fn webp_key_replaces_extension_inside_media_prefix() {

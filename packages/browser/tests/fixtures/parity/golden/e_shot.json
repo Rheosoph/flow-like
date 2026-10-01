@@ -1,0 +1,815 @@
+{
+  "url": "http://127.0.0.1:57117/shot.html",
+  "rows": [
+    {
+      "id": "s_small",
+      "wd": {
+        "error": null,
+        "shot": {
+          "width": 100,
+          "height": 50,
+          "pixelHash": "d9ff8ebeb617ae63",
+          "corners": {
+            "tl": "ff0000",
+            "tr": "ff0000",
+            "bl": "ff0000",
+            "br": "ff0000",
+            "center": "ff0000"
+          }
+        },
+        "captureScreenshotParams": {
+          "clip": {
+            "height": 50,
+            "scale": 1,
+            "width": 100,
+            "x": 20,
+            "y": 20
+          }
+        },
+        "scrollAfter": [
+          0,
+          0
+        ]
+      },
+      "cdp": {
+        "bcr_clip": {
+          "clip": {
+            "x": 20,
+            "y": 20,
+            "width": 100,
+            "height": 50,
+            "scale": 1
+          },
+          "shot": {
+            "width": 100,
+            "height": 50,
+            "pixelHash": "d9ff8ebeb617ae63",
+            "corners": {
+              "tl": "ff0000",
+              "tr": "ff0000",
+              "bl": "ff0000",
+              "br": "ff0000",
+              "center": "ff0000"
+            }
+          },
+          "pixelsDifferentFromWd": 0,
+          "error": null
+        },
+        "bcr_clip_beyond": {
+          "clip": {
+            "x": 20,
+            "y": 20,
+            "width": 100,
+            "height": 50,
+            "scale": 1
+          },
+          "shot": {
+            "width": 100,
+            "height": 50,
+            "pixelHash": "d9ff8ebeb617ae63",
+            "corners": {
+              "tl": "ff0000",
+              "tr": "ff0000",
+              "bl": "ff0000",
+              "br": "ff0000",
+              "center": "ff0000"
+            }
+          },
+          "pixelsDifferentFromWd": 0,
+          "error": null
+        },
+        "cd_emulation": {
+          "clip": {
+            "x": 20,
+            "y": 20,
+            "width": 100,
+            "height": 50,
+            "scale": 1
+          },
+          "shot": {
+            "width": 100,
+            "height": 50,
+            "pixelHash": "d9ff8ebeb617ae63",
+            "corners": {
+              "tl": "ff0000",
+              "tr": "ff0000",
+              "bl": "ff0000",
+              "br": "ff0000",
+              "center": "ff0000"
+            }
+          },
+          "pixelsDifferentFromWd": 0,
+          "error": null
+        },
+        "atom_port": {
+          "clip": {
+            "x": 20,
+            "y": 20,
+            "height": 50,
+            "width": 100,
+            "scale": 1
+          },
+          "region": {
+            "left": 0,
+            "top": 0,
+            "height": 50,
+            "width": 100
+          },
+          "loc": {
+            "x": 20,
+            "y": 20
+          },
+          "shot": {
+            "width": 100,
+            "height": 50,
+            "pixelHash": "d9ff8ebeb617ae63",
+            "corners": {
+              "tl": "ff0000",
+              "tr": "ff0000",
+              "bl": "ff0000",
+              "br": "ff0000",
+              "center": "ff0000"
+            }
+          },
+          "pixelsDifferentFromWd": 0,
+          "error": null
+        }
+      }
+    },
+    {
+      "id": "s_frac",
+      "wd": {
+        "error": null,
+        "shot": {
+          "width": 87,
+          "height": 47,
+          "pixelHash": "5d920612adad9599",
+          "corners": {
+            "tl": "0000ff",
+            "tr": "ffffff",
+            "bl": "0000ff",
+            "br": "ffffff",
+            "center": "00aa00"
+          }
+        },
+        "captureScreenshotParams": {
+          "clip": {
+            "height": 47,
+            "scale": 1,
+            "width": 87,
+            "x": 150.5,
+            "y": 20.25
+          }
+        },
+        "scrollAfter": [
+          0,
+          0
+        ]
+      },
+      "cdp": {
+        "bcr_clip": {
+          "clip": {
+            "x": 150.5,
+            "y": 20.25,
+            "width": 86.5,
+            "height": 46.75,
+            "scale": 1
+          },
+          "shot": {
+            "width": 86,
+            "height": 46,
+            "pixelHash": "f03ddd1456dcb82a",
+            "corners": {
+              "tl": "0000ff",
+              "tr": "0000ff",
+              "bl": "0000ff",
+              "br": "0000ff",
+              "center": "00aa00"
+            }
+          },
+          "pixelsDifferentFromWd": null,
+          "error": null
+        },
+        "bcr_clip_beyond": {
+          "clip": {
+            "x": 150.5,
+            "y": 20.25,
+            "width": 86.5,
+            "height": 46.75,
+            "scale": 1
+          },
+          "shot": {
+            "width": 86,
+            "height": 46,
+            "pixelHash": "f03ddd1456dcb82a",
+            "corners": {
+              "tl": "0000ff",
+              "tr": "0000ff",
+              "bl": "0000ff",
+              "br": "0000ff",
+              "center": "00aa00"
+            }
+          },
+          "pixelsDifferentFromWd": null,
+          "error": null
+        },
+        "cd_emulation": {
+          "clip": {
+            "x": 150.5,
+            "y": 20.25,
+            "width": 87,
+            "height": 47,
+            "scale": 1
+          },
+          "shot": {
+            "width": 87,
+            "height": 47,
+            "pixelHash": "5d920612adad9599",
+            "corners": {
+              "tl": "0000ff",
+              "tr": "ffffff",
+              "bl": "0000ff",
+              "br": "ffffff",
+              "center": "00aa00"
+            }
+          },
+          "pixelsDifferentFromWd": 0,
+          "error": null
+        },
+        "atom_port": {
+          "clip": {
+            "x": 150.5,
+            "y": 20.25,
+            "height": 47,
+            "width": 87,
+            "scale": 1
+          },
+          "region": {
+            "left": 0,
+            "top": 0,
+            "height": 46.75,
+            "width": 86.5
+          },
+          "loc": {
+            "x": 150.5,
+            "y": 20.25
+          },
+          "shot": {
+            "width": 87,
+            "height": 47,
+            "pixelHash": "5d920612adad9599",
+            "corners": {
+              "tl": "0000ff",
+              "tr": "ffffff",
+              "bl": "0000ff",
+              "br": "ffffff",
+              "center": "00aa00"
+            }
+          },
+          "pixelsDifferentFromWd": 0,
+          "error": null
+        }
+      }
+    },
+    {
+      "id": "s_tall",
+      "wd": {
+        "error": null,
+        "shot": {
+          "width": 120,
+          "height": 598,
+          "pixelHash": "e72851839aa10e24",
+          "corners": {
+            "tl": "fe00ff",
+            "tr": "ff00ff",
+            "bl": "b34cff",
+            "br": "b34dff",
+            "center": "d926ff"
+          }
+        },
+        "captureScreenshotParams": {
+          "clip": {
+            "height": 598,
+            "scale": 1,
+            "width": 120,
+            "x": 300,
+            "y": 100
+          }
+        },
+        "scrollAfter": [
+          0,
+          0
+        ]
+      },
+      "cdp": {
+        "bcr_clip": {
+          "clip": {
+            "x": 300,
+            "y": 100,
+            "width": 120,
+            "height": 2000,
+            "scale": 1
+          },
+          "shot": {
+            "width": 120,
+            "height": 2000,
+            "pixelHash": "dbe17266f365a62f",
+            "corners": {
+              "tl": "fe00ff",
+              "tr": "ff00ff",
+              "bl": "ffffff",
+              "br": "ffffff",
+              "center": "ffffff"
+            }
+          },
+          "pixelsDifferentFromWd": null,
+          "error": null
+        },
+        "bcr_clip_beyond": {
+          "clip": {
+            "x": 300,
+            "y": 100,
+            "width": 120,
+            "height": 2000,
+            "scale": 1
+          },
+          "shot": {
+            "width": 120,
+            "height": 2000,
+            "pixelHash": "6684a1b0756c2006",
+            "corners": {
+              "tl": "fe00ff",
+              "tr": "ff00ff",
+              "bl": "00ffff",
+              "br": "01ffff",
+              "center": "7f7fff"
+            }
+          },
+          "pixelsDifferentFromWd": null,
+          "error": null
+        },
+        "cd_emulation": {
+          "clip": {
+            "x": 300,
+            "y": 100,
+            "width": 120,
+            "height": 698,
+            "scale": 1
+          },
+          "shot": {
+            "width": 120,
+            "height": 698,
+            "pixelHash": "3df921e0f8c9728d",
+            "corners": {
+              "tl": "fe00ff",
+              "tr": "ff00ff",
+              "bl": "a659ff",
+              "br": "a759ff",
+              "center": "d32dff"
+            }
+          },
+          "pixelsDifferentFromWd": null,
+          "error": null
+        },
+        "atom_port": {
+          "clip": {
+            "x": 300,
+            "y": 100,
+            "height": 598,
+            "width": 120,
+            "scale": 1
+          },
+          "region": {
+            "left": 0,
+            "top": 0,
+            "height": 598,
+            "width": 120
+          },
+          "loc": {
+            "x": 300,
+            "y": 100
+          },
+          "shot": {
+            "width": 120,
+            "height": 598,
+            "pixelHash": "e72851839aa10e24",
+            "corners": {
+              "tl": "fe00ff",
+              "tr": "ff00ff",
+              "bl": "b34cff",
+              "br": "b34dff",
+              "center": "d926ff"
+            }
+          },
+          "pixelsDifferentFromWd": 0,
+          "error": null
+        }
+      }
+    },
+    {
+      "id": "s_wide",
+      "wd": {
+        "error": null,
+        "shot": {
+          "width": 185,
+          "height": 60,
+          "pixelHash": "2c2b5f097b5c7bf2",
+          "corners": {
+            "tl": "ffaa00",
+            "tr": "ffaa00",
+            "bl": "ffaa00",
+            "br": "ffaa00",
+            "center": "ffaa00"
+          }
+        },
+        "captureScreenshotParams": {
+          "clip": {
+            "height": 60,
+            "scale": 1,
+            "width": 185,
+            "x": 1000,
+            "y": 200
+          }
+        },
+        "scrollAfter": [
+          0,
+          0
+        ]
+      },
+      "cdp": {
+        "bcr_clip": {
+          "clip": {
+            "x": 1000,
+            "y": 200,
+            "width": 600,
+            "height": 60,
+            "scale": 1
+          },
+          "shot": {
+            "width": 600,
+            "height": 60,
+            "pixelHash": "034340c64d1ead63",
+            "corners": {
+              "tl": "ffaa00",
+              "tr": "ffffff",
+              "bl": "ffaa00",
+              "br": "ffffff",
+              "center": "ffffff"
+            }
+          },
+          "pixelsDifferentFromWd": null,
+          "error": null
+        },
+        "bcr_clip_beyond": {
+          "clip": {
+            "x": 1000,
+            "y": 200,
+            "width": 600,
+            "height": 60,
+            "scale": 1
+          },
+          "shot": {
+            "width": 600,
+            "height": 60,
+            "pixelHash": "65a2f61e9325df79",
+            "corners": {
+              "tl": "ffaa00",
+              "tr": "ffaa00",
+              "bl": "ffaa00",
+              "br": "ffaa00",
+              "center": "ffaa00"
+            }
+          },
+          "pixelsDifferentFromWd": null,
+          "error": null
+        },
+        "cd_emulation": {
+          "clip": {
+            "x": 1000,
+            "y": 200,
+            "width": 600,
+            "height": 60,
+            "scale": 1
+          },
+          "shot": {
+            "width": 600,
+            "height": 60,
+            "pixelHash": "65a2f61e9325df79",
+            "corners": {
+              "tl": "ffaa00",
+              "tr": "ffaa00",
+              "bl": "ffaa00",
+              "br": "ffaa00",
+              "center": "ffaa00"
+            }
+          },
+          "pixelsDifferentFromWd": null,
+          "error": null
+        },
+        "atom_port": {
+          "clip": {
+            "x": 1000,
+            "y": 200,
+            "height": 60,
+            "width": 185,
+            "scale": 1
+          },
+          "region": {
+            "left": 0,
+            "top": 0,
+            "height": 60,
+            "width": 185
+          },
+          "loc": {
+            "x": 1000,
+            "y": 200
+          },
+          "shot": {
+            "width": 185,
+            "height": 60,
+            "pixelHash": "2c2b5f097b5c7bf2",
+            "corners": {
+              "tl": "ffaa00",
+              "tr": "ffaa00",
+              "bl": "ffaa00",
+              "br": "ffaa00",
+              "center": "ffaa00"
+            }
+          },
+          "pixelsDifferentFromWd": 0,
+          "error": null
+        }
+      }
+    },
+    {
+      "id": "s_below",
+      "wd": {
+        "error": null,
+        "shot": {
+          "width": 90,
+          "height": 40,
+          "pixelHash": "6caa1165aa6605e2",
+          "corners": {
+            "tl": "333399",
+            "tr": "333399",
+            "bl": "333399",
+            "br": "333399",
+            "center": "333399"
+          }
+        },
+        "captureScreenshotParams": {
+          "clip": {
+            "height": 40,
+            "scale": 1,
+            "width": 90,
+            "x": 20,
+            "y": 3000
+          }
+        },
+        "scrollAfter": [
+          0,
+          2342
+        ]
+      },
+      "cdp": {
+        "bcr_clip": {
+          "clip": {
+            "x": 20,
+            "y": 3000,
+            "width": 90,
+            "height": 40,
+            "scale": 1
+          },
+          "shot": {
+            "width": 90,
+            "height": 40,
+            "pixelHash": "37bbd22ce30a6924",
+            "corners": {
+              "tl": "ffffff",
+              "tr": "ffffff",
+              "bl": "ffffff",
+              "br": "ffffff",
+              "center": "ffffff"
+            }
+          },
+          "pixelsDifferentFromWd": 3600,
+          "error": null
+        },
+        "bcr_clip_beyond": {
+          "clip": {
+            "x": 20,
+            "y": 3000,
+            "width": 90,
+            "height": 40,
+            "scale": 1
+          },
+          "shot": {
+            "width": 90,
+            "height": 40,
+            "pixelHash": "6caa1165aa6605e2",
+            "corners": {
+              "tl": "333399",
+              "tr": "333399",
+              "bl": "333399",
+              "br": "333399",
+              "center": "333399"
+            }
+          },
+          "pixelsDifferentFromWd": 0,
+          "error": null
+        },
+        "cd_emulation": {
+          "clip": {
+            "x": 20,
+            "y": 3000,
+            "width": 90,
+            "height": 40,
+            "scale": 1
+          },
+          "shot": {
+            "width": 90,
+            "height": 40,
+            "pixelHash": "6caa1165aa6605e2",
+            "corners": {
+              "tl": "333399",
+              "tr": "333399",
+              "bl": "333399",
+              "br": "333399",
+              "center": "333399"
+            }
+          },
+          "pixelsDifferentFromWd": 0,
+          "error": null
+        },
+        "atom_port": {
+          "clip": {
+            "x": 20,
+            "y": 3000,
+            "height": 40,
+            "width": 90,
+            "scale": 1
+          },
+          "region": {
+            "left": 0,
+            "top": 0,
+            "height": 40,
+            "width": 90
+          },
+          "loc": {
+            "x": 20,
+            "y": 658
+          },
+          "shot": {
+            "width": 90,
+            "height": 40,
+            "pixelHash": "6caa1165aa6605e2",
+            "corners": {
+              "tl": "333399",
+              "tr": "333399",
+              "bl": "333399",
+              "br": "333399",
+              "center": "333399"
+            }
+          },
+          "pixelsDifferentFromWd": 0,
+          "error": null
+        }
+      }
+    },
+    {
+      "id": "s_inner",
+      "wd": {
+        "error": null,
+        "shot": {
+          "width": 150,
+          "height": 30,
+          "pixelHash": "bcda3979a9284650",
+          "corners": {
+            "tl": "009999",
+            "tr": "009999",
+            "bl": "009999",
+            "br": "009999",
+            "center": "009999"
+          }
+        },
+        "captureScreenshotParams": {
+          "clip": {
+            "height": 30,
+            "scale": 1,
+            "width": 150,
+            "x": 21,
+            "y": 191
+          }
+        },
+        "scrollAfter": [
+          0,
+          0
+        ]
+      },
+      "cdp": {
+        "bcr_clip": {
+          "clip": {
+            "x": 21,
+            "y": 521,
+            "width": 150,
+            "height": 30,
+            "scale": 1
+          },
+          "shot": {
+            "width": 150,
+            "height": 30,
+            "pixelHash": "a105f951252a1fed",
+            "corners": {
+              "tl": "ffffff",
+              "tr": "ffffff",
+              "bl": "ffffff",
+              "br": "ffffff",
+              "center": "ffffff"
+            }
+          },
+          "pixelsDifferentFromWd": 4500,
+          "error": null
+        },
+        "bcr_clip_beyond": {
+          "clip": {
+            "x": 21,
+            "y": 521,
+            "width": 150,
+            "height": 30,
+            "scale": 1
+          },
+          "shot": {
+            "width": 150,
+            "height": 30,
+            "pixelHash": "a105f951252a1fed",
+            "corners": {
+              "tl": "ffffff",
+              "tr": "ffffff",
+              "bl": "ffffff",
+              "br": "ffffff",
+              "center": "ffffff"
+            }
+          },
+          "pixelsDifferentFromWd": 4500,
+          "error": null
+        },
+        "cd_emulation": {
+          "clip": {
+            "x": 21,
+            "y": 191,
+            "width": 150,
+            "height": 30,
+            "scale": 1
+          },
+          "shot": {
+            "width": 150,
+            "height": 30,
+            "pixelHash": "bcda3979a9284650",
+            "corners": {
+              "tl": "009999",
+              "tr": "009999",
+              "bl": "009999",
+              "br": "009999",
+              "center": "009999"
+            }
+          },
+          "pixelsDifferentFromWd": 0,
+          "error": null
+        },
+        "atom_port": {
+          "clip": {
+            "x": 21,
+            "y": 191,
+            "height": 30,
+            "width": 150,
+            "scale": 1
+          },
+          "region": {
+            "left": 0,
+            "top": 0,
+            "height": 30,
+            "width": 150
+          },
+          "loc": {
+            "x": 21,
+            "y": 191
+          },
+          "shot": {
+            "width": 150,
+            "height": 30,
+            "pixelHash": "bcda3979a9284650",
+            "corners": {
+              "tl": "009999",
+              "tr": "009999",
+              "bl": "009999",
+              "br": "009999",
+              "center": "009999"
+            }
+          },
+          "pixelsDifferentFromWd": 0,
+          "error": null
+        }
+      }
+    }
+  ]
+}

@@ -1,11 +1,15 @@
 ---
-title: Routes
+title: Route-state API and resolution
 description: Map app paths to Events with the current route-state API
 sidebar:
   order: 4
 ---
 
-A Flow-Like route is a small mapping from a URL path to an app Event:
+This guide specifies route storage and resolution for integrations. For the
+authoring procedure, use [Configure App routes](/apps/routes/). The shared
+[interface concepts](/apps/a2ui/) explain Page ownership and publication.
+
+The route-state API stores a mapping from a URL path to an App Event:
 
 ```typescript
 interface IRouteMapping {
@@ -92,7 +96,7 @@ const home = await backend.routeState.getDefaultRoute(appId);
 
 `getDefaultRoute` is a lookup for the path `/`; there is no separate `isDefault` flag.
 
-The browser-backed implementation sorts `getRoutes` results by path. Do not use that order as a navigation priority—the runtime resolves exact configured paths.
+The browser-backed implementation sorts `getRoutes` results by path. Do not use that order as a navigation priority; the runtime resolves exact configured paths.
 
 ### Set a Route
 
@@ -147,7 +151,7 @@ Use `/use/?id=<appId>` to explicitly select the `/` route. A direct Event link
 remains `/use?id=<appId>&eventId=<eventId>` when no route is specified.
 
 Both clients also accept legacy links such as
-`/use?id=<appId>&route=/reports` and replaces the current browser history entry
+`/use?id=<appId>&route=/reports` and replace the current browser history entry
 with the path form. Shared URL builders can still supply the query form; each
 client converts it when navigating. Desktop maps deep links to its bundled
 `use.html`, and its development server rewrites them to the `/use` page.
@@ -204,6 +208,6 @@ A2UI navigation can include parameters in the route string or in the message's `
 
 ## Related Guides
 
-- [Pages](/dev/a2ui/pages/) — connect a route Event to a Page
-- [Visual Builder](/dev/a2ui/visual-builder/) — author route-aware Page actions
-- [A2UI overview](/dev/a2ui/overview/) — understand navigation messages
+- [Pages](/dev/a2ui/pages/): connect a route Event to a Page
+- [Visual Builder](/dev/a2ui/visual-builder/): author route-aware Page actions
+- [A2UI overview](/dev/a2ui/overview/): understand navigation messages

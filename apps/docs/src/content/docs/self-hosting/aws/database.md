@@ -323,7 +323,7 @@ needs both `DSQL_MIGRATIONS_DIR` and `DSQL_SCHEMA_DIR` pointed at the checkout's
 committed migrations and generated mirror. The tracked schema still declares
 `cockroachdb`. Omitting the mirror path can let all statements succeed and then
 fail only the final status check. The
-[migration runner](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/aws/migration/migrate.ts)
+[migration runner](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/aws/migration/migrate.ts)
 is the reference for lease, checksum, and recovery handling.
 
 For local runner checks, run `bun install`, `bun test`, `bunx tsc --noEmit`,

@@ -1,4 +1,6 @@
 #[cfg(feature = "execute")]
+use super::driver::PageContext;
+#[cfg(feature = "execute")]
 use crate::types::handles::AutomationSession;
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -6,6 +8,8 @@ use flow_like::flow::{
     pin::ValueType,
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
+use flow_like_browser::{Element, script::ScriptArg};
 use flow_like_types::{async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -106,14 +110,38 @@ return Array.from(arguments).slice(1).map((el) => {{
 
 #[cfg(feature = "execute")]
 pub(crate) async fn element_state(
-    driver: &thirtyfour::WebDriver,
-    element: &thirtyfour::WebElement,
+    page: &PageContext,
+    element: &Element,
 ) -> flow_like_types::Result<ElementState> {
-    Ok(driver
-        .execute(state_script(), vec![element.to_json()?])
+    let state = page
+        .probe(&state_script(), vec![ScriptArg::Element(element.clone())])
         .await
         .map_err(|error| flow_like_types::anyhow!("Failed to read element state: {error}"))?
-        .convert()?)
+        .into_json();
+    flow_like_types::json::from_value(state).map_err(|error| {
+        flow_like_types::anyhow!("Element state probe returned an unexpected value: {error}")
+    })
+}
+
+#[cfg(feature = "execute")]
+async fn describe_elements(
+    page: &PageContext,
+    attributes: &[String],
+    elements: &[Element],
+) -> flow_like_types::Result<Vec<ListedElement>> {
+    if elements.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut arguments = vec![ScriptArg::Json(json!(attributes))];
+    arguments.extend(elements.iter().cloned().map(ScriptArg::Element));
+    let described = page
+        .probe(&list_script(), arguments)
+        .await
+        .map_err(|error| flow_like_types::anyhow!("Failed to describe elements: {error}"))?
+        .into_json();
+    flow_like_types::json::from_value(described).map_err(|error| {
+        flow_like_types::anyhow!("Element listing probe returned an unexpected value: {error}")
+    })
 }
 
 fn add_target_pins(node: &mut Node) {
@@ -203,8 +231,8 @@ impl NodeLogic for BrowserGetElementStateNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
         let locator = super::selector::evaluate_locator(context, &selector).await?;
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let element = super::selector::find(&driver, &locator)
+        let page = session.browser_page(context).await?;
+        let element = super::selector::find_element(&page, &locator)
             .await
             .map_err(|error| {
                 flow_like_types::anyhow!(
@@ -213,8 +241,8 @@ impl NodeLogic for BrowserGetElementStateNode {
                     locator.value
                 )
             })?;
-        let state = element_state(&driver, &element).await?;
-        drop(driver);
+        let state = element_state(&page, &element).await?;
+        drop(page);
         for (name, value) in [
             ("visible", state.visible),
             ("enabled", state.enabled),
@@ -276,9 +304,9 @@ impl NodeLogic for BrowserCountElementsNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
         let locator = super::selector::evaluate_locator(context, &selector).await?;
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let count = super::selector::find_all(&driver, &locator).await?.len();
-        drop(driver);
+        let page = session.browser_page(context).await?;
+        let count = super::selector::find_elements(&page, &locator).await?.len();
+        drop(page);
         context.set_pin_value("count", json!(count)).await?;
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -309,7 +337,7 @@ impl NodeLogic for BrowserListElementsNode {
         let mut node = state_node(
             "browser_list_elements",
             "List Elements",
-            "Lists elements matching a selector with their text, chosen attributes, box and visibility. When a browser snapshot exists for the page, each main-frame element also gets a ref usable as a Ref selector.",
+            "Lists elements matching a selector with their text, chosen attributes, box and visibility. When a browser snapshot exists for the page, each element, including elements inside frames, also gets a ref usable as a Ref selector.",
             "listElements",
         );
         node.add_input_pin(
@@ -365,32 +393,17 @@ impl NodeLogic for BrowserListElementsNode {
                 "List Elements limit must be 1 to 1000 (got {limit})"
             ));
         }
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let found = super::selector::find_all(&driver, &locator).await?;
+        let page = session.browser_page(context).await?;
+        let found = super::selector::find_elements(&page, &locator).await?;
         let count = found.len();
-        let elements: Vec<thirtyfour::WebElement> =
-            found.into_iter().take(limit as usize).collect();
-        let mut arguments = vec![json!(attributes)];
-        for element in &elements {
-            arguments.push(element.to_json()?);
-        }
-        let mut listed: Vec<ListedElement> = if elements.is_empty() {
-            Vec::new()
-        } else {
-            driver
-                .execute(list_script(), arguments)
-                .await
-                .map_err(|error| flow_like_types::anyhow!("Failed to describe elements: {error}"))?
-                .convert::<Vec<ListedElement>>()?
-        };
+        let elements: Vec<Element> = found.into_iter().take(limit as usize).collect();
+        let mut listed = describe_elements(&page, &attributes, &elements).await?;
         let refs = if locator.kind == crate::types::selectors::SelectorKind::Ref {
             vec![crate::types::selectors::normalize_ref(&locator.value)]
         } else {
-            super::refs::refs_for_elements(context, &session, &driver, &elements)
-                .await
-                .unwrap_or_else(|_| vec![None; elements.len()])
+            super::driver::refs_for_elements(&page, &elements)
         };
-        drop(driver);
+        drop(page);
         for (index, (element, reference)) in listed.iter_mut().zip(refs).enumerate() {
             element.index = index;
             element.element_ref = reference;

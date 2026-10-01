@@ -129,6 +129,12 @@ export interface DocScreenshotDelayStep {
 	ms: number;
 }
 
+export interface DocScreenshotIndexedDBSeedStep {
+	type: "seedIndexedDB";
+	database: string;
+	stores: Record<string, { [key: string]: JsonValue }[]>;
+}
+
 export interface DocScreenshotCaptureStep {
 	type: "capture";
 	name: string;
@@ -155,7 +161,23 @@ export type DocScreenshotStep =
 	| DocScreenshotScrollStep
 	| DocScreenshotWaitForStep
 	| DocScreenshotDelayStep
+	| DocScreenshotIndexedDBSeedStep
 	| DocScreenshotCaptureStep;
+
+export type DocScreenshotDiagnosticKind = "console" | "page" | "request";
+
+export interface DocScreenshotDiagnosticAllowance {
+	kind: DocScreenshotDiagnosticKind;
+	message: string;
+	reason: string;
+	maxCount: number;
+}
+
+export interface DocScreenshotDiagnostic {
+	kind: DocScreenshotDiagnosticKind;
+	message: string;
+	allowance?: string;
+}
 
 export interface DocScreenshotScenario {
 	name: string;
@@ -166,6 +188,7 @@ export interface DocScreenshotScenario {
 	localStorage?: Record<string, string>;
 	sessionStorage?: Record<string, string>;
 	steps: DocScreenshotStep[];
+	diagnosticAllowlist?: DocScreenshotDiagnosticAllowance[];
 }
 
 export interface DocScreenshotPlan {
@@ -229,6 +252,7 @@ export interface DocScreenshotArtifact {
 	mode: DocScreenshotCaptureMode;
 	selector?: string;
 	capturedAt: string;
+	url: string;
 	css: {
 		width: number;
 		height: number;
@@ -244,6 +268,7 @@ export interface DocScreenshotArtifact {
 }
 
 export interface DocScreenshotScenarioResult {
+	sourceSha256: string;
 	name: string;
 	passed: boolean;
 	requestedUrl: string;
@@ -269,6 +294,8 @@ export interface DocScreenshotScenarioResult {
 		pageErrors: number;
 		requestFailures: number;
 		warnings: number;
+		entries: DocScreenshotDiagnostic[];
+		unexpected: number;
 	};
 	error?: string;
 }
@@ -281,6 +308,17 @@ export interface DocScreenshotResult {
 	finishedAt: string;
 	durationMs: number;
 	baseUrl: string;
+	provenance?: {
+		plan: string;
+		appCommit: string;
+		workingTreeDirty: boolean;
+		staticAssetsFromDisk?: string;
+		tauriFixture?: string;
+		httpFixture?: string;
+		planSha256: string;
+		fixtureSha256?: string;
+		httpFixtureSha256?: string;
+	};
 	browser: {
 		product: "Chromium";
 		version: string;

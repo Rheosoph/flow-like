@@ -10,7 +10,7 @@ local-ml = ["flow-like-catalog-core/local-ml"]
 execute = [
     "flow-like-catalog-std-ui/local-clipboard",
     "flow-like-catalog-core/execute",
-    "dep:thirtyfour",
+    "dep:flow-like-browser",
     "dep:enigo",
     "dep:rdev",
     "dep:xcap",
@@ -19,12 +19,10 @@ execute = [
     "dep:jsonschema",
     "dep:arboard",
     "dep:imageproc",
-    "dep:tokio-tungstenite",
     "dep:atspi",
     "dep:ashpd",
     "dep:libwayshot-xcap",
     "dep:x11rb",
-    "dep:http",
     "dep:windows",
     "dep:htmd",
     "dep:hmac",
@@ -61,8 +59,6 @@ sha2 = { version = "0.10", optional = true }
 # LLM integration for self-healing automation
 rig = { workspace = true, optional = true }
 jsonschema = { workspace = true, optional = true }
-tokio-tungstenite = { workspace = true, optional = true }
-http = { version = "1", optional = true }
 htmd = { version = "0.5.0", optional = true }
 
 # Image encoding
@@ -71,7 +67,7 @@ imageproc = { workspace = true, optional = true }
 
 # Desktop-only deps — not available on iOS / Android
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
-thirtyfour = { version = "0.36.1", optional = true }
+flow-like-browser = { workspace = true, optional = true }
 enigo = { version = "0.6.1", optional = true }
 xcap = { version = "0.8.1", optional = true }
 arboard = { version = "3.5", optional = true }
@@ -102,6 +98,7 @@ rdev = { workspace = true, optional = true, features = ["x11", "wayland"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+flow-like-browser = { workspace = true, features = ["test-support"] }
 hmac = "0.12"
 sha1 = "0.10"
 sha2 = "0.10"

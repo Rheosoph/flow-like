@@ -56,7 +56,7 @@ declare namespace struct {
      * Lays structs over each other, later ones winning. Useful for defaults plus overrides
      * @node struct_merge @receiver struct @alias structMerge
      * @param struct — Base struct (receiver: `this` in `x.merge(...)`)
-     * @param struct — Laid over the base (receiver: `this` in `x.merge(...)`)
+     * @param struct — Laid over the base
      * @param deep (optional) — Merge nested structs field by field instead of replacing them
      * @param skipNull (optional) — Ignore fields that are null in a later struct
      * @returns merged — The combined struct

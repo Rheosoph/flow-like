@@ -215,6 +215,8 @@ export interface BoardEditJob {
 	token: FlowIrCommitToken;
 	approval: BoardEditJobApproval;
 	review: BoardEditJobReview;
+	/** Original authored source retained with this exact compiler claim. */
+	flowscriptSource?: string;
 	/** Compact native post-apply evidence retained after command receipt delivery. */
 	persistedBoardFingerprint?: string;
 	result?: {

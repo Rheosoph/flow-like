@@ -106,10 +106,14 @@ interface ActionMetadata {
 	monitor_index: number | null;
 }
 
+const RECORDING_BROWSER_TYPES = ["Chrome", "Edge"] as const;
+
+type RecordingBrowserType = (typeof RECORDING_BROWSER_TYPES)[number];
+
 interface RecordingSettings {
 	browser_debugger_address: string | null;
 	browser_webdriver_url: string;
-	browser_type: "Chrome" | "Edge";
+	browser_type: RecordingBrowserType;
 	capture_screenshots: boolean;
 	capture_fingerprints: boolean;
 	aggregate_keystrokes: boolean;
@@ -129,6 +133,24 @@ const STOP_SHORTCUT =
 	/Mac|iPod|iPhone|iPad/.test(navigator.platform)
 		? "⌘+Shift+S"
 		: "Ctrl+Shift+S";
+
+/** Mirrors `flow_like_browser::attach::is_loopback`: replay rejects any other WebDriver host. */
+function isLoopbackWebDriverUrl(url: string): boolean {
+	const address = url.trim();
+	if (!address) return true;
+	try {
+		const { hostname } = new URL(
+			address.includes("://") ? address : `http://${address}`,
+		);
+		return (
+			hostname.toLowerCase() === "localhost" ||
+			hostname === "[::1]" ||
+			/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)
+		);
+	} catch {
+		return false;
+	}
+}
 
 interface RecordingDockProps {
 	boardId: string;
@@ -174,6 +196,9 @@ export function RecordingDock({
 		bot_detection_evasion: false,
 		use_fingerprints: false,
 	});
+	const webDriverUrlIsLoopback = isLoopbackWebDriverUrl(
+		settings.browser_webdriver_url,
+	);
 	const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
 	useEffect(() => {
@@ -645,9 +670,10 @@ export function RecordingDock({
 					<div className="flex flex-col items-center gap-4">
 						{!settings.browser_debugger_address?.trim() && (
 							<p className="text-xs text-muted-foreground bg-muted/50 rounded-lg px-3 py-2">
-								Native recording cannot reliably identify secure fields. Typed
-								or pasted secrets can be saved. Pause before entering secrets,
-								then configure credentials explicitly in the Flow.
+								{t(
+									"nativeRecordingSecureFieldsWarning",
+									"Native recording cannot reliably identify secure fields. Typed or pasted secrets can be saved. Pause before entering secrets, then configure credentials explicitly in the Flow.",
+								)}
 							</p>
 						)}
 						{status === "Idle" && (
@@ -770,7 +796,7 @@ export function RecordingDock({
 							<div className="px-4 py-4 space-y-4">
 								<div className="space-y-2">
 									<Label htmlFor="browser-debugger-address">
-										Browser recording
+										{t("browserRecording", "Browser recording")}
 									</Label>
 									<Input
 										id="browser-debugger-address"
@@ -785,7 +811,9 @@ export function RecordingDock({
 									/>
 									{settings.browser_debugger_address && (
 										<>
-											<Label htmlFor="recording-browser-type">Browser</Label>
+											<Label htmlFor="recording-browser-type">
+												{t("browser", "Browser")}
+											</Label>
 											<select
 												id="recording-browser-type"
 												value={settings.browser_type}
@@ -793,21 +821,27 @@ export function RecordingDock({
 												onChange={(event) =>
 													setSettings((previous) => ({
 														...previous,
-														browser_type: event.target.value as
-															| "Chrome"
-															| "Edge",
+														browser_type: event.target
+															.value as RecordingBrowserType,
 													}))
 												}
 											>
-												<option value="Chrome">Chrome</option>
-												<option value="Edge">Edge</option>
+												{RECORDING_BROWSER_TYPES.map((browserType) => (
+													<option key={browserType} value={browserType}>
+														{browserType}
+													</option>
+												))}
 											</select>
 											<Label htmlFor="browser-webdriver-url">
-												Browser driver URL for replay
+												{t(
+													"legacyWebdriverUrlNotNeeded",
+													"Legacy WebDriver URL (not needed)",
+												)}
 											</Label>
 											<Input
 												id="browser-webdriver-url"
 												value={settings.browser_webdriver_url}
+												aria-invalid={!webDriverUrlIsLoopback}
 												onChange={(event) =>
 													setSettings((previous) => ({
 														...previous,
@@ -815,12 +849,20 @@ export function RecordingDock({
 													}))
 												}
 											/>
+											{!webDriverUrlIsLoopback && (
+												<p className="flex items-start gap-1.5 text-xs text-destructive">
+													<AlertCircle className="mt-px h-3.5 w-3.5 shrink-0" />
+													{t(
+														"remoteWebdriverHostsAreNoLongerSupported",
+														"Remote WebDriver hosts are no longer supported; replay will fail with this URL.",
+													)}
+												</p>
+											)}
 											<p className="text-xs text-muted-foreground">
-												Records elements in a debugging-enabled Chrome or Edge
-												browser. Use its matching WebDriver and keep the
-												recorded tabs open. Replay returns each tab to its first
-												recorded URL. Leave the address empty to record the
-												desktop.
+												{t(
+													"browserRecordingReplayHint",
+													"Records elements in a debugging-enabled Chrome or Edge browser. Replay launches or attaches to Chrome or Edge directly; no WebDriver is needed. Keep the recorded tabs open. Replay returns each tab to its first recorded URL. Leave the address empty to record the desktop.",
+												)}
 											</p>
 										</>
 									)}
@@ -913,10 +955,10 @@ export function RecordingDock({
 									/>
 								</div>
 								<p className="text-xs text-muted-foreground">
-									Pattern matching and element fingerprinting stop replay when
-									the target is missing or ambiguous. Disable both to use
-									recorded coordinates. Pattern matching takes priority when
-									both are enabled.
+									{t(
+										"recordingMatchingHint",
+										"Pattern matching and element fingerprinting stop replay when the target is missing or ambiguous. Disable both to use recorded coordinates. Pattern matching takes priority when both are enabled.",
+									)}
 								</p>
 								{settings.use_pattern_matching && (
 									<div className="space-y-3 pl-6">
@@ -1056,9 +1098,10 @@ export function RecordingDock({
 				{status === "Idle" && actions.length > 0 && (
 					<div className="border-t border-border/50 p-4">
 						<p className="mb-3 text-xs text-muted-foreground">
-							Insert or clear this recording before starting another on this
-							board. Recordings stay available across boards while Desktop is
-							open. Insert them before quitting.
+							{t(
+								"insertOrClearRecordingHint",
+								"Insert or clear this recording before starting another on this board. Recordings stay available across boards while Desktop is open. Insert them before quitting.",
+							)}
 						</p>
 						<Button
 							onClick={insertActions}

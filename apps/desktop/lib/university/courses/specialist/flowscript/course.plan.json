@@ -1,0 +1,269 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-flowscript",
+		"name": "FlowScript",
+		"slug": "flowscript",
+		"language": "en",
+		"difficulty": "INTERMEDIATE",
+		"category": "ADVANCED",
+		"isPublished": true,
+		"tags": [
+			"flowscript"
+		],
+		"media": {
+			"icon": "../../foundations/welcome-to-flow-like/media/app-logo.webp",
+			"banner": "assets/course-banner-v2.webp"
+		},
+		"description": "Read and edit a board as FlowScript, then verify its compiled graph and output.",
+		"longDescription": "Prerequisite: Thinking in Flows. Use Desktop or web with the FlowScript workspace and standard catalog. In 25 minutes, create a text normalizer from source, change one expression, and recover from a compiler diagnostic. Checks are manual; applying source and running the graph are separate steps.",
+		"assets": [
+			{
+				"name": "NormalizerSource",
+				"file": "fixtures/normalizer.flow",
+				"kind": "DOCUMENT",
+				"mimeType": "text/plain",
+				"filename": "normalizer.flow",
+				"replace": true
+			}
+		],
+		"position": 19,
+		"modules": [
+			{
+				"id": "course-flowscript-module-0",
+				"title": "Read and apply source",
+				"position": 0,
+				"lessons": [
+					{
+						"id": "course-flowscript-lesson-01-board-and-source",
+						"title": "Read the text form of a graph",
+						"contentFile": "content/01-board-and-source.md",
+						"position": 0,
+						"estimatedMinutes": 5,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-flowscript-pin-name",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A call requires message. Should you replace that key with the UI label Message?",
+								"explanation": "FlowScript arguments use catalog input pin names and their declared casing.",
+								"points": 10,
+								"payload": {
+									"options": [
+										{
+											"id": "answer-0",
+											"label": "No; use the exact declared input pin name"
+										},
+										{
+											"id": "answer-1",
+											"label": "Yes; display labels are always source identifiers"
+										},
+										{
+											"id": "answer-2",
+											"label": "Only if the node is on the left"
+										}
+									],
+									"correct": [
+										"answer-0"
+									]
+								},
+								"position": 0
+							}
+						]
+					},
+					{
+						"id": "course-flowscript-lesson-02-normalizer",
+						"title": "Apply a small complete document",
+						"contentFile": "content/02-normalizer.md",
+						"position": 1,
+						"estimatedMinutes": 7,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-flowscript-apply-vs-run",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Source compiled without diagnostics. What remains before calling the normalizer verified?",
+								"explanation": "Compilation checks the source and graph contract; execution checks the required outcome.",
+								"points": 10,
+								"payload": {
+									"options": [
+										{
+											"id": "answer-1",
+											"label": "Assume compilation proved the intended message"
+										},
+										{
+											"id": "answer-2",
+											"label": "Publish the App immediately"
+										},
+										{
+											"id": "answer-0",
+											"label": "Apply/review the graph and run its event against the expected output"
+										}
+									],
+									"correct": [
+										"answer-0"
+									]
+								},
+								"position": 0
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "course-flowscript-module-1",
+				"title": "Edit and recover",
+				"position": 1,
+				"lessons": [
+					{
+						"id": "course-flowscript-lesson-03-diagnostics",
+						"title": "Use declarations to repair an error",
+						"contentFile": "content/03-diagnostics.md",
+						"position": 0,
+						"estimatedMinutes": 6,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-flowscript-diagnostic",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Compilation reports that string::trim has no matching call shape for text. What is the targeted repair?",
+								"explanation": "The declaration specifies string as the input key. A compiler diagnostic should lead to a precise source correction.",
+								"points": 10,
+								"payload": {
+									"options": [
+										{
+											"id": "answer-2",
+											"label": "Rename the App"
+										},
+										{
+											"id": "answer-0",
+											"label": "Look up the declaration and restore the string argument key"
+										},
+										{
+											"id": "answer-1",
+											"label": "Delete all generated anchors"
+										}
+									],
+									"correct": [
+										"answer-0"
+									]
+								},
+								"position": 0
+							}
+						]
+					},
+					{
+						"id": "course-flowscript-lesson-04-functions",
+						"title": "Read a reusable function boundary",
+						"contentFile": "content/04-functions.md",
+						"position": 1,
+						"estimatedMinutes": 4,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-flowscript-return",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A reusable function needs branch-dependent output. What shape fits its return rules?",
+								"explanation": "Value-returning functions require a single final return outside control blocks.",
+								"points": 10,
+								"payload": {
+									"options": [
+										{
+											"id": "answer-0",
+											"label": "Assign a local result in the branches and return once afterward"
+										},
+										{
+											"id": "answer-1",
+											"label": "Return early from every branch"
+										},
+										{
+											"id": "answer-2",
+											"label": "Omit the declared output"
+										}
+									],
+									"correct": [
+										"answer-0"
+									]
+								},
+								"position": 0
+							}
+						]
+					}
+				]
+			},
+			{
+				"id": "course-flowscript-module-2",
+				"title": "Check your result",
+				"position": 2,
+				"lessons": [
+					{
+						"id": "course-flowscript-lesson-05-final-assessment",
+						"title": "Make a source change and verify it",
+						"contentFile": "content/05-final-assessment.md",
+						"position": 0,
+						"estimatedMinutes": 3,
+						"isOptional": false,
+						"challenges": [
+							{
+								"id": "challenge-flowscript-final-anchor",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "You are changing one existing logger’s Message. What should happen to its generated node anchor?",
+								"explanation": "Generated anchors connect source statements to existing graph identities.",
+								"points": 10,
+								"payload": {
+									"options": [
+										{
+											"id": "answer-1",
+											"label": "Remove it to force a fresh ID"
+										},
+										{
+											"id": "answer-2",
+											"label": "Copy another node’s anchor over it"
+										},
+										{
+											"id": "answer-0",
+											"label": "Keep it so the edit targets the existing node"
+										}
+									],
+									"correct": [
+										"answer-0"
+									]
+								},
+								"position": 0
+							},
+							{
+								"id": "challenge-flowscript-final-signature",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "A new node has two data outputs and an unfamiliar argument shape. Where should you establish the call contract?",
+								"explanation": "The current declaration supplies the actual input keys, types, and named outputs.",
+								"points": 10,
+								"payload": {
+									"options": [
+										{
+											"id": "answer-2",
+											"label": "A screenshot of another node"
+										},
+										{
+											"id": "answer-0",
+											"label": "Its current catalog declaration and compiler diagnostics"
+										},
+										{
+											"id": "answer-1",
+											"label": "A guessed JavaScript API with a similar name"
+										}
+									],
+									"correct": [
+										"answer-0"
+									]
+								},
+								"position": 1
+							}
+						],
+						"finalAssessment": true
+					}
+				]
+			}
+		],
+		"estimatedMinutes": 25
+	}
+}

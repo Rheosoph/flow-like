@@ -1,0 +1,17 @@
+{
+  "file": "restore-marker.txt",
+  "file_content": "restore-probe-v1",
+  "table": "restore_probe",
+  "rows": [
+    {
+      "id": "probe-1",
+      "value": "before-backup"
+    }
+  ],
+  "expected_after_restore": {
+    "file_content": "restore-probe-v1",
+    "row_count": 1,
+    "row_value": "before-backup",
+    "flow_result": "restore-probe-v1"
+  }
+}

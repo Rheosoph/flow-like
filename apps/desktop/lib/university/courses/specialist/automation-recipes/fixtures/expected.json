@@ -1,0 +1,8 @@
+{
+  "report_paths": 1,
+  "drop_initial_outputs": 2,
+  "drop_second_changes": 0,
+  "drop_updated_files": 1,
+  "api_note_count": 1,
+  "drafts_after_successful_sequential_sweeps": 1
+}

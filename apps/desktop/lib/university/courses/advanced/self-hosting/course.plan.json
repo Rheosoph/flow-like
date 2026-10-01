@@ -7,7 +7,7 @@
 		"slug": "self-hosting",
 		"difficulty": "ADVANCED",
 		"category": "DEPLOYMENT",
-		"estimatedMinutes": 65,
+		"estimatedMinutes": 40,
 		"isPublished": true,
 		"iconUrl": null,
 		"bannerUrl": null,
@@ -19,59 +19,17 @@
 			"enterprise"
 		],
 		"position": 18,
-		"description": "Run Flow-Like on your own terms — Docker Compose to Kubernetes, with execution backends, upgrades, and ops you can defend.",
-		"longDescription": "The pilot won everyone over — then security asked where the data goes. Take Flow-Like from a laptop Compose stack to a production Kubernetes cluster inside your own VPC: stand up the single-host stack and survive its .env traps, pin the published images behind the Helm chart's defaults, route interactive and background runs to the right execution backend, and rehearse the upgrades, backups, key rotations, and alert routing you'll be grilled on. The final assessment is the go-live review itself.",
+		"description": "Deploy and verify Compose. Core: 40 min; optional Kubernetes and restore labs: 50 min.",
+		"longDescription": "Prerequisites: a prepared Linux/gVisor host, Docker/Compose, OIDC and a repository checkout. Core practice takes 40 minutes after setup/downloads. Start Compose, trace a run, verify storage and record operational readiness. Kubernetes and full restore rehearsal add 25 minutes each plus environment and transfer time. Use synthetic apps and retain manually observed results.",
 		"media": {
 			"icon": "media/app-logo.webp",
-			"banner": "assets/course-banner.webp"
+			"banner": "assets/course-banner-v2.webp"
 		},
 		"assets": [
 			{
-				"name": "CourseBanner",
-				"file": "assets/course-banner.webp",
-				"kind": "IMAGE",
-				"mimeType": "image/webp",
-				"filename": "course-banner.webp",
-				"replace": true
-			},
-			{
-				"name": "DockerComposeArchitecture",
-				"file": "assets/docker-compose-architecture.webp",
-				"kind": "IMAGE",
-				"mimeType": "image/webp",
-				"filename": "docker-compose-architecture.webp",
-				"replace": true
-			},
-			{
-				"name": "KubernetesArchitecture",
-				"file": "assets/kubernetes-architecture.webp",
-				"kind": "IMAGE",
-				"mimeType": "image/webp",
-				"filename": "kubernetes-architecture.webp",
-				"replace": true
-			},
-			{
-				"name": "ExecutionBackends",
-				"file": "assets/execution-backends.webp",
-				"kind": "IMAGE",
-				"mimeType": "image/webp",
-				"filename": "execution-backends.webp",
-				"replace": true
-			},
-			{
-				"name": "RuntimeVariables",
-				"file": "assets/RuntimeVariables.webp",
-				"kind": "IMAGE",
-				"mimeType": "image/webp",
-				"filename": "RuntimeVariables.webp",
-				"replace": true
-			},
-			{
-				"name": "AppVisibilitySettings",
-				"file": "assets/AppVisibilitySettings.webp",
-				"kind": "IMAGE",
-				"mimeType": "image/webp",
-				"filename": "AppVisibilitySettings.webp",
+				"name": "RestoreProbe",
+				"file": "fixtures/restore-probe.json",
+				"kind": "DOCUMENT",
 				"replace": true
 			}
 		],
@@ -79,106 +37,42 @@
 		"modules": [
 			{
 				"id": "module-selfhost-pilot-to-vpc",
-				"title": "From Pilot to VPC",
-				"description": "Understand what self-hosting actually swaps, then stand up the complete single-host stack.",
+				"title": "Deploy a practice instance",
+				"description": null,
 				"position": 0,
 				"lessons": [
 					{
 						"id": "lesson-selfhost-why",
-						"title": "Where Does Your Data Actually Go?",
+						"title": "Prepare the execution host",
 						"language": "en",
 						"contentFile": "content/why-self-host.md",
 						"videoUrl": null,
-						"estimatedMinutes": 10,
+						"estimatedMinutes": 5,
 						"position": 0,
 						"isOptional": false,
 						"finalAssessment": false,
 						"challenges": [
 							{
-								"id": "challenge-selfhost-data-boundary",
+								"id": "challenge-selfhost-topology-isolation",
 								"kind": "SINGLE_CHOICE",
-								"prompt": "Priya asks: after self-hosting, where does a customer record live when a flow processes it?",
-								"explanation": "Self-hosting swaps the backend — API, database, object storage, and executors all run on infrastructure you configure inside the VPC. The tempting slip is \"metadata still syncs to Flow-Like's cloud\": nothing phones home once your backend serves the deployment, because even the store and visibility surfaces come from your own API. And self-hosting is not offline desktop mode — it's a full multi-user backend.",
+								"prompt": "What does default Compose allocate per execution?",
+								"explanation": "The default is per_run; warm reserve slots are unused.",
 								"points": 10,
 								"position": 0,
 								"payload": {
 									"options": [
 										{
-											"id": "your-infrastructure",
-											"label": "On the infrastructure you configured — your buckets, your database, your executors inside the VPC"
+											"id": "b",
+											"label": "A shared worker for repeated runs"
 										},
 										{
-											"id": "metadata-syncs-cloud",
-											"label": "Flow data stays local but app metadata still syncs to Flow-Like's cloud"
-										},
-										{
-											"id": "each-laptop",
-											"label": "Only on each agent's laptop — self-hosting means every user runs offline"
-										},
-										{
-											"id": "rewritten-flows",
-											"label": "Nowhere yet — flows must first be rewritten against a self-hosted node catalog"
+											"id": "a",
+											"label": "A single-use gVisor sandbox and gateway"
 										}
 									],
-									"correct": ["your-infrastructure"]
-								}
-							},
-							{
-								"id": "challenge-selfhost-desktop-switch",
-								"kind": "SINGLE_CHOICE",
-								"prompt": "The support team's desktop apps must talk to the new internal backend. What does that migration require?",
-								"explanation": "One environment variable: FLOW_LIKE_API_URL, set to the full URL of your API before launch — the desktop uses it exactly as provided. Setting it empty is the tempting trap: an explicitly empty value overrides the build-time and hosted defaults and is a configuration error, not a discovery mechanism. Build-time domain settings exist for custom builds but aren't required to repoint the stock app.",
-								"points": 10,
-								"position": 1,
-								"payload": {
-									"options": [
-										{
-											"id": "env-var-url",
-											"label": "Set FLOW_LIKE_API_URL to the internal API's full URL before launching the app"
-										},
-										{
-											"id": "empty-string-discovery",
-											"label": "Set FLOW_LIKE_API_URL to an empty string so the app discovers the internal backend"
-										},
-										{
-											"id": "rebuild-from-source",
-											"label": "Rebuild the desktop app from source — the backend URL is compile-time only"
-										},
-										{
-											"id": "special-edition",
-											"label": "Install the separate self-hosted edition of the desktop app"
-										}
-									],
-									"correct": ["env-var-url"]
-								}
-							},
-							{
-								"id": "challenge-selfhost-topology-isolation",
-								"kind": "SINGLE_CHOICE",
-								"prompt": "A teammate says: \"Pick Kubernetes over Compose — that way every run gets its own isolated pod.\" What's the correct read?",
-								"explanation": "Topology and execution isolation are separate choices: both Compose and Kubernetes default to warm HTTP executors — long-lived workers shared across runs. The tempting half-truth is the Job dispatcher: the API can create a per-run Kubernetes Job, but the checked-in executor's one-job runner is not implemented, so a fresh pod per run is not something the stock images deliver. Compose doesn't spawn a fresh container per run either.",
-								"points": 10,
-								"position": 2,
-								"payload": {
-									"options": [
-										{
-											"id": "separate-choices",
-											"label": "Topology and isolation are separate — both platforms default to warm shared executors, and the per-run Job path isn't operational with stock images"
-										},
-										{
-											"id": "k8s-fresh-pods",
-											"label": "Correct — Kubernetes always executes each run in a fresh pod"
-										},
-										{
-											"id": "compose-fresh-containers",
-											"label": "Backwards — Compose is the one that creates a fresh container per run"
-										},
-										{
-											"id": "desktop-setting",
-											"label": "Neither — isolation is chosen per flow in the desktop app's settings"
-										}
-									],
-									"correct": ["separate-choices"]
+									"correct": [
+										"a"
+									]
 								}
 							}
 						],
@@ -186,104 +80,36 @@
 					},
 					{
 						"id": "lesson-selfhost-compose",
-						"title": "Compose Up: The Whole Stack on One Host",
+						"title": "Start and verify Compose",
 						"language": "en",
 						"contentFile": "content/docker-compose-up.md",
 						"videoUrl": null,
-						"estimatedMinutes": 10,
+						"estimatedMinutes": 15,
 						"position": 1,
 						"isOptional": false,
 						"finalAssessment": false,
 						"challenges": [
 							{
-								"id": "challenge-selfhost-port-owner",
+								"id": "challenge-selfhost-storage-default",
 								"kind": "SINGLE_CHOICE",
-								"prompt": "Your reverse proxy needs the API entrypoint on staging-01. Which service owns published port 8080?",
-								"explanation": "The published API port belongs to api-gateway — an Nginx load balancer in front of the internal API replicas. The tempting answer is \"an API replica directly\", but the replicas only expose an internal 8080 behind the gateway; that's what lets you scale them without changing the public endpoint. Execution traffic stays internal behind the execution gateway, and the same proxy publishes the web app on 3001.",
+								"prompt": "Which script prepares published sandbox image pins?",
+								"explanation": "The helper resolves workload and sandbox references together.",
 								"points": 10,
 								"position": 0,
 								"payload": {
 									"options": [
 										{
-											"id": "api-gateway",
-											"label": "api-gateway — the Nginx load balancer in front of the internal API replicas"
+											"id": "a",
+											"label": "scripts/pull-images.py"
 										},
 										{
-											"id": "api-replica",
-											"label": "The api service — replicas publish 8080 directly to the host"
-										},
-										{
-											"id": "runtime-pool",
-											"label": "The execution-manager service — execution traffic enters there"
-										},
-										{
-											"id": "web-app",
-											"label": "The web service — it proxies API calls through 8080"
+											"id": "b",
+											"label": "A manually entered moving tag"
 										}
 									],
-									"correct": ["api-gateway"]
-								}
-							},
-							{
-								"id": "challenge-selfhost-storage-default",
-								"kind": "SINGLE_CHOICE",
-								"prompt": "Fresh clone, setup-env.py done, and up.py stops with 'SANDBOX_IMAGE must be an immutable image ID or repository@sha256 digest' — you never set that variable. What's the fix?",
-								"explanation": "Per-run isolation starts a fresh sandbox per execution from SANDBOX_IMAGE and SANDBOX_GATEWAY_IMAGE, and preflight only accepts an immutable reference there because a moving tag could change what runs between two executions. scripts/pull-images.py pins all nine *_IMAGE values and both sandbox pins to registry digests; prepare-images.py does the same with local builds. Writing the :dev tag by hand fails the same check, docker login is irrelevant — the self-hosted packages are public and nothing was pulled yet — and down -v just deletes state.",
-								"points": 10,
-								"position": 1,
-								"payload": {
-									"options": [
-										{
-											"id": "pull-images-pin",
-											"label": "Run scripts/pull-images.py — it pins the images and both sandbox references to digests, which per-run isolation requires"
-										},
-										{
-											"id": "sandbox-dev-tag",
-											"label": "Set SANDBOX_IMAGE to ghcr.io/rheosoph/flow-like-docker-compose-runtime:dev — the tag is public, so it pulls"
-										},
-										{
-											"id": "docker-login",
-											"label": "Run docker login ghcr.io — the pull failed because the packages need credentials"
-										},
-										{
-											"id": "down-v-reset",
-											"label": "Run docker compose down -v to reset state, then start again"
-										}
-									],
-									"correct": ["pull-images-pin"]
-								}
-							},
-							{
-								"id": "challenge-selfhost-env-contract",
-								"kind": "MULTIPLE_CHOICE",
-								"prompt": "Which statements about the Compose template's configuration contract are true?",
-								"explanation": "Two contracts matter: an empty *_IMAGE is a selector, not an error — it renders the published ghcr.io image at FLOW_LIKE_IMAGE_TAG — and the trust boundary keeps BACKEND_KEY on the API while runners and the compiler receive only the public key. The tempting distractor is --no-build: up.py still pulls images that are missing on the daemon; what it never does is silently compile when a pull fails. A digest pin cannot be rebuilt — up.py --build refuses while any *_IMAGE contains a digest — and db-init exiting after success is a completed job, not a crash.",
-								"points": 10,
-								"position": 2,
-								"payload": {
-									"options": [
-										{
-											"id": "empty-selects-published",
-											"label": "An empty API_IMAGE selects ghcr.io/rheosoph/flow-like-docker-compose-api at FLOW_LIKE_IMAGE_TAG"
-										},
-										{
-											"id": "pubkey-only",
-											"label": "Runtime and compiler receive only the public key; BACKEND_KEY stays with the API"
-										},
-										{
-											"id": "no-build-no-pull",
-											"label": "up.py's --no-build default means images are never pulled from the registry"
-										},
-										{
-											"id": "build-over-pins",
-											"label": "up.py --build rebuilds digest-pinned images from the checked-out sources"
-										},
-										{
-											"id": "db-init-crash",
-											"label": "db-init showing as exited means the stack crashed and needs a restart"
-										}
-									],
-									"correct": ["empty-selects-published", "pubkey-only"]
+									"correct": [
+										"a"
+									]
 								}
 							}
 						],
@@ -293,113 +119,41 @@
 			},
 			{
 				"id": "module-selfhost-cluster-dispatch",
-				"title": "Cluster and Dispatch",
-				"description": "Move to the Kubernetes chart and decide where every run actually executes.",
+				"title": "Execution and optional cluster deployment",
+				"description": null,
 				"position": 1,
 				"lessons": [
 					{
-						"id": "lesson-selfhost-kubernetes",
-						"title": "Kubernetes: Same Stack, Real Cluster",
+						"id": "lesson-selfhost-backends",
+						"title": "Trace a run to its sandbox",
 						"language": "en",
-						"contentFile": "content/kubernetes-for-scale.md",
+						"contentFile": "content/execution-backends.md",
 						"videoUrl": null,
-						"estimatedMinutes": 10,
+						"estimatedMinutes": 5,
 						"position": 0,
 						"isOptional": false,
 						"finalAssessment": false,
 						"challenges": [
 							{
-								"id": "challenge-selfhost-imagepull",
+								"id": "challenge-selfhost-interactive-run",
 								"kind": "SINGLE_CHOICE",
-								"prompt": "You install the chart with generated Secrets but otherwise default values on the company cluster, and Helm refuses to render: executionManager.image.digest must pin the manager and gateway image. Why?",
-								"explanation": "The defaults are the public ghcr.io/rheosoph images at the mutable dev tag, which every cluster can pull — but the default per_run isolation starts a sandbox pod per execution and requires the manager and sandbox images to be identified by digest, so a moving tag is rejected at render time. scripts/resolve-images.py resolves one tag to digests through the registry API and writes .generated/values-images.yaml; deploy.sh applies it last. A pull Secret is only needed for forks and private mirrors, the JWT Secret fails at pod startup rather than at render, and --create-namespace changes nothing about image identity.",
+								"prompt": "What executes a per-run request after authorization?",
+								"explanation": "The API dispatches; the manager owns execution.",
 								"points": 10,
 								"position": 0,
 								"payload": {
 									"options": [
 										{
-											"id": "digest-required",
-											"label": "per_run isolation pins the manager and sandbox images by digest — run scripts/resolve-images.py --tag <release> and deploy again"
+											"id": "b",
+											"label": "The API handler"
 										},
 										{
-											"id": "pull-secret-missing",
-											"label": "The public images need a pull Secret before Helm will render the manager"
-										},
-										{
-											"id": "missing-jwt-secret",
-											"label": "The backend-JWT Secret is missing, which blocks the render"
-										},
-										{
-											"id": "create-namespace",
-											"label": "Helm needs --create-namespace or the manager template fails"
-										}
-									],
-									"correct": ["digest-required"]
-								}
-							},
-							{
-								"id": "challenge-selfhost-database-choice",
-								"kind": "SINGLE_CHOICE",
-								"prompt": "For the production release, a teammate proposes keeping database.type: internal and setting internal.replicas: 3 \"for HA\". What's wrong with that?",
-								"explanation": "The internal database is one CockroachDB pod running start-single-node --insecure — an evaluation setup. Raising replicas makes it worse, not better: independent single-node pods never form a CockroachDB cluster. Production means database.type: external with a Secret carrying DATABASE_URL. Persistence size is irrelevant to the topology problem, and the migration Job doesn't turn an insecure single node into a production database.",
-								"points": 10,
-								"position": 1,
-								"payload": {
-									"options": [
-										{
-											"id": "no-cluster-forms",
-											"label": "Everything — independent single-node pods don't form a cluster; production needs database.type: external with a DATABASE_URL Secret"
-										},
-										{
-											"id": "just-bump-size",
-											"label": "Nothing, once persistence.size is raised to match production load"
-										},
-										{
-											"id": "replicas-fine",
-											"label": "Nothing — CockroachDB replicates automatically when replicas increase"
-										},
-										{
-											"id": "migration-fixes",
-											"label": "Only that the migration Job must run first; then internal is production-ready"
-										}
-									],
-									"correct": ["no-cluster-forms"]
-								}
-							},
-							{
-								"id": "challenge-selfhost-values-review",
-								"kind": "MULTIPLE_CHOICE",
-								"prompt": "Reviewing a draft production values file for a per_run deployment — which lines must change before go-live?",
-								"explanation": "Three blockers: the manager image at the mutable dev tag with an empty digest fails the render (per_run pins manager and sandbox by digest — resolve-images.py writes them), the internal single-node insecure database is evaluation-only, and networkPolicy.enabled: false is rejected because the sandbox boundary depends on enforced NetworkPolicy. The two keepers are the point: execution.backend: http with asyncBackend: redis is exactly the lane pair per_run requires — the queue bridge consumes that Redis queue — so 'switch redis to http' would break the render instead of fixing it.",
-								"points": 10,
-								"position": 2,
-								"payload": {
-									"options": [
-										{
-											"id": "mutable-manager-image",
-											"label": "executionManager.image at tag dev with digest: \"\""
-										},
-										{
-											"id": "internal-db",
-											"label": "database.type: internal"
-										},
-										{
-											"id": "networkpolicy-off",
-											"label": "networkPolicy.enabled: false"
-										},
-										{
-											"id": "http-backend",
-											"label": "execution.backend: http"
-										},
-										{
-											"id": "async-redis",
-											"label": "execution.asyncBackend: redis"
+											"id": "a",
+											"label": "The manager's assigned sandbox"
 										}
 									],
 									"correct": [
-										"mutable-manager-image",
-										"internal-db",
-										"networkpolicy-off"
+										"a"
 									]
 								}
 							}
@@ -407,108 +161,36 @@
 						"appRefs": []
 					},
 					{
-						"id": "lesson-selfhost-backends",
-						"title": "Where Does a Flow Actually Run?",
+						"id": "lesson-selfhost-kubernetes",
+						"title": "Optional: deploy Kubernetes",
 						"language": "en",
-						"contentFile": "content/execution-backends.md",
+						"contentFile": "content/kubernetes-for-scale.md",
 						"videoUrl": null,
-						"estimatedMinutes": 10,
+						"estimatedMinutes": 25,
 						"position": 1,
-						"isOptional": false,
+						"isOptional": true,
 						"finalAssessment": false,
 						"challenges": [
 							{
-								"id": "challenge-selfhost-interactive-run",
+								"id": "challenge-selfhost-database-choice",
 								"kind": "SINGLE_CHOICE",
-								"prompt": "On staging-01 with the Compose template, a support agent triggers an interactive run. Which process executes the flow?",
-								"explanation": "The template's interactive lane is EXECUTION_BACKEND=http with EXECUTOR_URL=http://runtime:9000, so one of the shared runtime replicas executes the board. The tempting answer is the API replica that received the request — but the API only builds the normalized run request and dispatches it. Nothing creates a fresh container per run, and server-side runs never execute on the agent's machine.",
+								"prompt": "Which database setting is intended for evaluation?",
+								"explanation": "Use an appropriately operated database for production.",
 								"points": 10,
 								"position": 0,
 								"payload": {
 									"options": [
 										{
-											"id": "runtime-replica",
-											"label": "A shared runtime replica, reached over HTTP at runtime:9000"
+											"id": "a",
+											"label": "Bundled single-node insecure CockroachDB"
 										},
 										{
-											"id": "api-pod-itself",
-											"label": "The API replica that received the request runs the board in-process"
-										},
-										{
-											"id": "fresh-container",
-											"label": "A fresh container Compose spins up for that single run"
-										},
-										{
-											"id": "agents-machine",
-											"label": "The agent's own machine — interactive runs are always local"
-										}
-									],
-									"correct": ["runtime-replica"]
-								}
-							},
-							{
-								"id": "challenge-selfhost-k8s-job-trap",
-								"kind": "SINGLE_CHOICE",
-								"prompt": "A teammate sets EXECUTION_BACKEND=kubernetes_job on the chart deployment \"for per-run isolation\". What actually happens to runs?",
-								"explanation": "The dispatcher genuinely creates a Kubernetes Job per run — but the checked-in executor's one-job entrypoint is a placeholder that logs unimplemented and exits with status 1, so runs fail. The tempting distractor is the http fallback: only UNKNOWN backend values fall back to http, and kubernetes_job is a known, selectable value — it dispatches for real to a runner that doesn't exist. Creating the kata RuntimeClass object doesn't change that; it installs nothing on the nodes.",
-								"points": 10,
-								"position": 1,
-								"payload": {
-									"options": [
-										{
-											"id": "jobs-fail",
-											"label": "Jobs get created, but each pod exits with status 1 — the one-job runner isn't implemented, so runs fail"
-										},
-										{
-											"id": "falls-back-http",
-											"label": "Nothing changes — unsupported backends silently fall back to http"
-										},
-										{
-											"id": "works-after-runtimeclass",
-											"label": "Runs succeed once runtimeClass.create: true adds the kata handler"
-										},
-										{
-											"id": "works-but-slow",
-											"label": "Runs succeed with cold-start latency from the per-run pods"
-										}
-									],
-									"correct": ["jobs-fail"]
-								}
-							},
-							{
-								"id": "challenge-selfhost-dispatch-truths",
-								"kind": "MULTIPLE_CHOICE",
-								"prompt": "Which statements about dispatch will survive Priya's review?",
-								"explanation": "Three survive: unknown backend values silently become http (typos don't fail closed — validate rendered config), a queue is only half a system until a consumer claims and executes jobs, and http describes a protocol — a Lambda Function URL is a legitimate EXECUTOR_URL. The trap options: the chart's executor pool has no Redis consumer, and the diagram's footer says it directly — backend names describe dispatch mechanisms, not automatic security guarantees.",
-								"points": 10,
-								"position": 2,
-								"payload": {
-									"options": [
-										{
-											"id": "typo-fallback",
-											"label": "A misspelled backend value silently falls back to http instead of failing at startup"
-										},
-										{
-											"id": "queue-needs-consumer",
-											"label": "Provisioning a Redis or SQS queue is only half the system — a compatible consumer must claim and execute the jobs"
-										},
-										{
-											"id": "lambda-url-ok",
-											"label": "EXECUTOR_URL may legitimately point at a Lambda Function URL through the plain http backend"
-										},
-										{
-											"id": "chart-consumes-redis",
-											"label": "The chart's executor pool consumes the Redis execution list out of the box"
-										},
-										{
-											"id": "heavier-more-secure",
-											"label": "Selecting a heavier-sounding backend adds execution isolation automatically"
+											"id": "b",
+											"label": "An externally operated reviewed database"
 										}
 									],
 									"correct": [
-										"typo-fallback",
-										"queue-needs-consumer",
-										"lambda-url-ok"
+										"a"
 									]
 								}
 							}
@@ -519,17 +201,17 @@
 			},
 			{
 				"id": "module-selfhost-go-live",
-				"title": "Go-Live",
-				"description": "Upgrades, backups, secrets, and alerting — then defend the whole deployment in review.",
+				"title": "Operate and verify",
+				"description": null,
 				"position": 2,
 				"lessons": [
 					{
 						"id": "lesson-selfhost-operations",
-						"title": "Operations You Can Defend",
+						"title": "Check recovery and alert readiness",
 						"language": "en",
 						"contentFile": "content/operations.md",
 						"videoUrl": null,
-						"estimatedMinutes": 10,
+						"estimatedMinutes": 8,
 						"position": 0,
 						"isOptional": false,
 						"finalAssessment": false,
@@ -537,92 +219,61 @@
 							{
 								"id": "challenge-selfhost-down-v",
 								"kind": "SINGLE_CHOICE",
-								"prompt": "On staging-01, what's the difference between docker compose down and docker compose down -v?",
-								"explanation": "down stops containers and keeps named volumes; down -v additionally deletes the Compose-managed PostgreSQL, Redis, bundled RustFS, execution-state, and observability volumes — so back up first. The tempting overreach is the buckets: external object storage is never touched by either command, which also means nothing in the stack backs it up for you. And -v is never part of a normal upgrade; rebuilds don't require deleting volumes.",
+								"prompt": "Why avoid down -v as routine recovery?",
+								"explanation": "Preserve state and recover deliberately.",
 								"points": 10,
 								"position": 0,
 								"payload": {
 									"options": [
 										{
-											"id": "v-deletes-volumes",
-											"label": "-v additionally deletes the managed database, Redis, bundled RustFS, and observability volumes — external buckets stay untouched"
+											"id": "a",
+											"label": "It deletes state volumes"
 										},
 										{
-											"id": "v-deletes-buckets",
-											"label": "-v also empties the external object-storage buckets"
-										},
-										{
-											"id": "both-delete",
-											"label": "Both delete volumes; -v just skips the confirmation"
-										},
-										{
-											"id": "v-for-upgrades",
-											"label": "-v is the required flag for picking up new images during upgrades"
+											"id": "b",
+											"label": "It only restarts workers"
 										}
 									],
-									"correct": ["v-deletes-volumes"]
+									"correct": [
+										"a"
+									]
 								}
-							},
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-selfhost-restore",
+						"title": "Optional: restore a practice instance",
+						"language": "en",
+						"contentFile": "content/restore-a-practice-instance.md",
+						"videoUrl": null,
+						"estimatedMinutes": 25,
+						"position": 1,
+						"isOptional": true,
+						"finalAssessment": false,
+						"challenges": [
 							{
-								"id": "challenge-selfhost-key-rotation",
+								"id": "challenge-selfhost-restore-proof",
 								"kind": "SINGLE_CHOICE",
-								"prompt": "You've generated a new BACKEND_KEY / BACKEND_PUB / BACKEND_KID trio and updated .env. What completes the rotation?",
-								"explanation": "Recreate the API, runtime, and compiler together — all three participate in the trust boundary, and every token signed by the old key becomes invalid the moment the new key loads, so plan the restart window. Restarting only the API leaves runtime and compiler verifying against a stale public key. Nothing watches .env for changes, and keys don't propagate on any TTL.",
+								"prompt": "What proves the restore exercise worked?",
+								"explanation": "Recovery needs observed restored behavior.",
 								"points": 10,
-								"position": 1,
+								"position": 0,
 								"payload": {
 									"options": [
 										{
-											"id": "recreate-three",
-											"label": "Recreate API, runtime, and compiler together — and expect tokens signed by the old key to be rejected"
+											"id": "a",
+											"label": "A restored instance with matching file, row and Flow output"
 										},
 										{
-											"id": "api-only",
-											"label": "Restart just the API — runtime and compiler fetch keys from it on demand"
-										},
-										{
-											"id": "env-watched",
-											"label": "Nothing — services watch .env and reload keys automatically"
-										},
-										{
-											"id": "ttl-propagation",
-											"label": "Wait for the old tokens' TTL; the new key propagates on its own"
+											"id": "b",
+											"label": "A recent backup filename"
 										}
 									],
-									"correct": ["recreate-three"]
-								}
-							},
-							{
-								"id": "challenge-selfhost-priya-checklist",
-								"kind": "MULTIPLE_CHOICE",
-								"prompt": "Which of these claims can you truthfully put in Thursday's go-live review deck?",
-								"explanation": "Two are true: the bundled Prometheus has an empty Alertmanager list (and the chart deploys none), so alert rules fire in the UI and page nobody until you deploy and route an Alertmanager — and the runtime-variable contract keeps Secret values on the device, never sending them to remote runs, which is why production credentials get provisioned server-side. The traps: no built-in pager exists, a populated dashboard proves provisioning rather than metric health, and docker compose config prints real secret values — it masks nothing.",
-								"points": 10,
-								"position": 2,
-								"payload": {
-									"options": [
-										{
-											"id": "alerts-nobody",
-											"label": "Alert rules evaluate in Prometheus, but nobody is paged until an Alertmanager is deployed and a test route validated"
-										},
-										{
-											"id": "secrets-stay-local",
-											"label": "Secret runtime variables never reach remote runs — production credentials are provisioned server-side"
-										},
-										{
-											"id": "builtin-pager",
-											"label": "The monitoring profile ships a configured email pager for on-call"
-										},
-										{
-											"id": "dashboard-proves",
-											"label": "Grafana dashboards rendering panels proves the metrics pipeline is healthy"
-										},
-										{
-											"id": "config-masked",
-											"label": "docker compose config output is safe to attach to tickets since secret values are masked"
-										}
-									],
-									"correct": ["alerts-nobody", "secrets-stay-local"]
+									"correct": [
+										"a"
+									]
 								}
 							}
 						],
@@ -630,203 +281,82 @@
 					},
 					{
 						"id": "lesson-selfhost-final",
-						"title": "The Go-Live Review",
+						"title": "Verify the deployment handoff",
 						"language": "en",
 						"contentFile": "content/final-assessment.md",
 						"videoUrl": null,
-						"estimatedMinutes": 15,
-						"position": 1,
+						"estimatedMinutes": 7,
+						"position": 2,
 						"isOptional": false,
 						"finalAssessment": true,
 						"challenges": [
 							{
 								"id": "challenge-selfhost-final-staging-env",
 								"kind": "SINGLE_CHOICE",
-								"prompt": "Artifact A: what unblocks up.py on staging-01?",
-								"explanation": "The colleague moved RUNTIME_IMAGE to a tag by hand while SANDBOX_IMAGE still carries the digest that pull-images.py wrote, so the queue bridge and the sandboxes would run different builds — preflight refuses that drift on purpose. Re-run scripts/pull-images.py --tag 1.4.0 so all nine *_IMAGE values and both sandbox pins move to the same digests together. Clearing the sandbox pins trades one preflight failure for another (per_run requires immutable references), up.py --build refuses digest-pinned images, and down -v deletes state without touching .env.",
+								"prompt": "Runtime and sandbox references differ. What should happen?",
+								"explanation": "Matched pins keep the reviewed runtime consistent.",
 								"points": 10,
 								"position": 0,
 								"payload": {
 									"options": [
 										{
-											"id": "rerun-pull-images",
-											"label": "Re-run scripts/pull-images.py --tag 1.4.0 — every *_IMAGE and both sandbox pins move to the same digests together"
+											"id": "b",
+											"label": "The manager chooses either build"
 										},
 										{
-											"id": "clear-sandbox-pins",
-											"label": "Empty SANDBOX_IMAGE and SANDBOX_GATEWAY_IMAGE so preflight stops comparing them"
-										},
-										{
-											"id": "build-through",
-											"label": "Run up.py --build — a local build replaces the mismatched pins"
-										},
-										{
-											"id": "reset-volumes",
-											"label": "docker compose down -v, then up — the state is corrupted"
+											"id": "a",
+											"label": "Validation refuses the mismatch"
 										}
 									],
-									"correct": ["rerun-pull-images"]
+									"correct": [
+										"a"
+									]
 								}
 							},
 							{
-								"id": "challenge-selfhost-final-values-gate",
-								"kind": "MULTIPLE_CHOICE",
-								"prompt": "Artifact B: which lines in the production values file block go-live for this per_run deployment?",
-								"explanation": "Three blockers: the manager image at the mutable dev tag with an empty digest fails the render — per_run pins manager and sandbox by digest, and resolve-images.py writes them; database.type: internal is a single-node insecure evaluation database; and networkPolicy.enabled: false is rejected because the sandbox boundary depends on enforced NetworkPolicy. The keepers are deliberate: execution.backend: http with asyncBackend: redis is the lane pair per_run requires, and the queue bridge consumes that queue.",
+								"id": "challenge-selfhost-final-runbook",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "An alert rule exists but no receiver test passed. What is established?",
+								"explanation": "Rule configuration alone does not establish delivery.",
 								"points": 10,
 								"position": 1,
 								"payload": {
 									"options": [
 										{
-											"id": "final-mutable-image",
-											"label": "executionManager.image at tag dev with digest: \"\""
+											"id": "a",
+											"label": "Alert delivery remains unverified"
 										},
 										{
-											"id": "final-internal-db",
-											"label": "database.type: internal"
-										},
-										{
-											"id": "final-networkpolicy",
-											"label": "networkPolicy.enabled: false"
-										},
-										{
-											"id": "final-http",
-											"label": "execution.backend: http"
-										},
-										{
-											"id": "final-async-redis",
-											"label": "execution.asyncBackend: redis"
+											"id": "b",
+											"label": "An operator will be paged"
 										}
 									],
 									"correct": [
-										"final-mutable-image",
-										"final-internal-db",
-										"final-networkpolicy"
+										"a"
 									]
 								}
 							},
 							{
-								"id": "challenge-selfhost-final-isolation-verdict",
+								"id": "challenge-selfhost-final-storage",
 								"kind": "SINGLE_CHOICE",
-								"prompt": "Artifact C: your verdict on switching execution.backend to kubernetes_job for per-tenant isolation?",
-								"explanation": "Reject it: the dispatcher creates real Jobs, but the checked-in executor's one-job entrypoint exits with status 1, so every run fails — it's neither working execution nor a security control. Revisit only with a compatible, validated one-job runner, and even then isolation depends on the container runtime and node configuration, not the backend name. The fallback distractor misapplies a real fact: only unknown values fall back to http, and kubernetes_job is a known value. A RuntimeClass object installs nothing.",
+								"prompt": "Does default Compose require an external object store?",
+								"explanation": "External storage is an explicit alternative.",
 								"points": 10,
 								"position": 2,
 								"payload": {
 									"options": [
 										{
-											"id": "reject-runner-pending",
-											"label": "Reject — Jobs get created but the stock runner exits 1; keep the warm pool and revisit only with a validated one-job runner"
+											"id": "b",
+											"label": "Yes, storage is always external"
 										},
 										{
-											"id": "approve-hardware",
-											"label": "Approve — a fresh pod per run is hardware-grade tenant isolation"
-										},
-										{
-											"id": "approve-with-kata",
-											"label": "Approve once runtimeClass.create: true registers the kata handler"
-										},
-										{
-											"id": "harmless-fallback",
-											"label": "Harmless — unsupported backends fall back to http, so nothing changes"
-										}
-									],
-									"correct": ["reject-runner-pending"]
-								}
-							},
-							{
-								"id": "challenge-selfhost-final-credential-gap",
-								"kind": "SINGLE_CHOICE",
-								"prompt": "Artifact D: why do the pilot team's remote runs fail CRM authentication, and what's the production fix?",
-								"explanation": "The runtime-variable contract: values are stored locally and never uploaded, and remote execution receives only non-secret values — so a Secret CRM_API_TOKEN on one laptop can't follow the flow into the cluster. Provision the credential server-side, where the run actually executes. Re-badging the token as non-secret \"to make it sync\" turns a credential into plainly-shipped run data — the opposite of the contract's point. It's not a clock or image-pin problem.",
-								"points": 10,
-								"position": 3,
-								"payload": {
-									"options": [
-										{
-											"id": "provision-server-side",
-											"label": "Secret runtime variables never leave the device — provision the CRM credential where the remote run executes"
-										},
-										{
-											"id": "unmark-secret",
-											"label": "Re-save the token as a non-secret Runtime value so it syncs to the cluster"
-										},
-										{
-											"id": "clock-skew",
-											"label": "Cluster clock skew is invalidating the execution JWT — sync NTP"
-										},
-										{
-											"id": "stale-digest-pin",
-											"label": "The digest-pinned executor image is stale — re-run pull-images.py so tokens can transfer"
-										}
-									],
-									"correct": ["provision-server-side"]
-								}
-							},
-							{
-								"id": "challenge-selfhost-final-runbook",
-								"kind": "MULTIPLE_CHOICE",
-								"prompt": "Artifact F: which items belong in the runbook you show Priya?",
-								"explanation": "Three belong: upgrades start by reading the .env.example and hub-config diffs, then pin the reviewed release with pull-images.py and let preflight gate the start; anything destructive to volumes is preceded by a database backup because down -v deletes them; and key rotation is a three-service event that invalidates old-signed tokens, so it gets a planned window. The rejects: down -v is state deletion rather than a routine upgrade step, and loaded alert rules page nobody — the review already established there's no Alertmanager yet.",
-								"points": 10,
-								"position": 4,
-								"payload": {
-									"options": [
-										{
-											"id": "review-diffs",
-											"label": "Before upgrading: review the .env.example diff, hub config template, and release notes, then pin the release with pull-images.py --tag and run preflight.py and up.py"
-										},
-										{
-											"id": "backup-before-v",
-											"label": "Back up PostgreSQL and needed monitoring state before any command that deletes volumes"
-										},
-										{
-											"id": "rotation-window",
-											"label": "Rotate signing keys in a planned window: replace the trio, recreate API, runtime, and compiler together"
-										},
-										{
-											"id": "down-v-standard",
-											"label": "Use docker compose down -v as the standard pre-upgrade cleanup"
-										},
-										{
-											"id": "alerts-already-page",
-											"label": "Skip alert-routing work — the bundled rules already page on-call"
+											"id": "a",
+											"label": "No, it bundles RustFS"
 										}
 									],
 									"correct": [
-										"review-diffs",
-										"backup-before-v",
-										"rotation-window"
+										"a"
 									]
-								}
-							},
-							{
-								"id": "challenge-selfhost-final-desktop-rollout",
-								"kind": "SINGLE_CHOICE",
-								"prompt": "Artifact E: laptops provisioned by this script can't connect. What does the empty FLOW_LIKE_API_URL actually do, and what's the fix?",
-								"explanation": "An explicitly empty FLOW_LIKE_API_URL overrides the build-time and hosted defaults — it's a configuration error, not a fallback to anything. Fix the templating so the variable carries the full URL of your public API entrypoint (the gateway or Ingress). The \"empty means default cloud\" reading is exactly what the desktop docs refute; runtime:9000 is the internal executor rather than the API; and FLOW_LIKE_CONFIG_DOMAIN is a compile-time option, useless in a launch script.",
-								"points": 10,
-								"position": 5,
-								"payload": {
-									"options": [
-										{
-											"id": "empty-config-error",
-											"label": "Empty overrides the defaults and breaks the app — template the full internal API URL (gateway or Ingress) into the variable"
-										},
-										{
-											"id": "empty-means-cloud",
-											"label": "Empty falls back to the hosted cloud — the laptops connect, just to the wrong backend"
-										},
-										{
-											"id": "point-at-runtime",
-											"label": "Point it at http://runtime:9000 — the desktop talks to executors directly"
-										},
-										{
-											"id": "config-domain-runtime",
-											"label": "Set FLOW_LIKE_CONFIG_DOMAIN in the script instead — it overrides at launch"
-										}
-									],
-									"correct": ["empty-config-error"]
 								}
 							}
 						],

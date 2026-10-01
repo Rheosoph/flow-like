@@ -64,7 +64,9 @@ pub trait OfflineHost: Send + Sync + 'static {
     /// The complete cloud table for snapshots, refreshes, probes and key validation.
     /// Ok(None) means confirmed absent.
     async fn remote_table(&self, table: &BufferedTable) -> anyhow::Result<Option<Table>>;
-    /// Lazy mirror only: the bucket-relative cloud content store with current credentials.
+    /// Lazy mirror only: the bucket-relative cloud content store with current credentials,
+    /// for cache misses and downloads. Never wrapped by the host's file buffering. Err when
+    /// no credentials can be obtained (offline, signed out).
     async fn remote_objects(&self) -> anyhow::Result<Arc<dyn ObjectStore>> {
         anyhow::bail!("This device keeps no lazy offline mirror")
     }
@@ -93,16 +95,11 @@ pub trait OfflineHost: Send + Sync + 'static {
     fn mirror_changed(&self) {}
 }
 
-/// Outcome of a direct cloud call, for the connectivity breaker.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Observation {
-    Succeeded,
-    ConnectFailed,
-    TimedOut,
-}
+/// Outcome of a direct file write or a mirror download, for the connectivity breaker.
+pub use flow_like_storage::databases::vector::offline_mirror::MirrorFetch as Observation;
 
-/// Connectivity breaker consulted by `FileBuffering::WhenOffline` and fast-forward. It
-/// follows the hub: hosts open it only after their own reachability check failed.
+/// Connectivity breaker consulted by `FileBuffering::WhenOffline`, fast-forward and the lazy
+/// mirror. It follows the hub: hosts open it only after their own reachability check failed.
 pub trait Connectivity: Send + Sync {
     fn is_offline(&self) -> bool;
     fn observe(&self, observation: Observation);

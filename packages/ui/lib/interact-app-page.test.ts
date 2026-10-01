@@ -481,6 +481,92 @@ describe("interactWithAppPage", () => {
 		}
 	});
 
+	test("accepts string spellings of booleans and numbers from single-type providers", async () => {
+		const surface: Surface = {
+			id: "surface",
+			rootComponentId: "root",
+			components: {
+				root: { id: "root", component: { id: "root", type: "column" } },
+				agree: {
+					id: "agree",
+					component: {
+						id: "agree",
+						type: "checkbox",
+						checked: { literalBool: false },
+					},
+				},
+				alerts: {
+					id: "alerts",
+					component: {
+						id: "alerts",
+						type: "switch",
+						checked: { literalBool: true },
+					},
+				},
+				volume: {
+					id: "volume",
+					component: {
+						id: "volume",
+						type: "slider",
+						value: { literalNumber: 10 },
+					},
+				},
+				name: {
+					id: "name",
+					component: {
+						id: "name",
+						type: "textField",
+						value: { literalString: "" },
+					},
+				},
+			},
+		};
+		const writes: Array<[string, unknown]> = [];
+		const unregister = registerLivePage(
+			liveHandle(surface, {
+				setElementValue: (componentId, value) => {
+					writes.push([componentId, value]);
+				},
+			}),
+		);
+		const setValue = (component_id: string, value: unknown) => ({
+			action: "set_value" as const,
+			component_id,
+			value,
+			hasValue: true,
+		});
+		try {
+			const result = await interactWithAppPage(
+				{} as Parameters<typeof interactWithAppPage>[0],
+				{
+					appId: "app",
+					eventId: "page-event",
+					captureScreenshots: false,
+					actions: [
+						setValue("agree", " TRUE "),
+						setValue("alerts", "false"),
+						setValue("volume", "42.5"),
+						setValue("name", "true"),
+						setValue("agree", "yes"),
+						setValue("volume", ""),
+					],
+				},
+			);
+
+			expect(writes).toEqual([
+				["agree", true],
+				["alerts", false],
+				["volume", 42.5],
+				["name", "true"],
+			]);
+			const applied = result.applied_actions as Array<Record<string, unknown>>;
+			expect(applied[4].detail).toContain("requires a boolean value");
+			expect(applied[5].detail).toContain("finite number");
+		} finally {
+			unregister();
+		}
+	});
+
 	test("reports navigation by the final action without inspecting the detached page", async () => {
 		const surface: Surface = {
 			id: "surface",

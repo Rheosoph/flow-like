@@ -1,0 +1,137 @@
+const PORT = Number(process.env.PORT ?? 0);
+
+const BTN = `style="position:absolute;left:40px;top:120px;width:300px;height:60px;display:block;font-size:24px"`;
+
+function page(title: string, body: string, head = "") {
+  return `<!doctype html><html><head><meta charset=utf-8><title>${title}</title>${head}</head><body><h1 id=t>${title}</h1>${body}</body></html>`;
+}
+
+function clickLog(expr: string) {
+  return `onclick="console.log('click-handler', Date.now()); ${expr}"`;
+}
+
+const cases: Record<string, (origin: string, alt: string) => string> = {
+  noop: () => page("START", `<button id=go ${BTN} ${clickLog("")}>go</button>`),
+  "dom-update-200": () =>
+    page("START", `<button id=go ${BTN} ${clickLog("setTimeout(()=>{t.textContent='UPDATED'},200)")}>go</button>`),
+  anchor: () => page("START", `<a id=go href="/next" ${BTN} ${clickLog("")}>go</a>`),
+  "anchor-xsite": (_o, alt) => page("START", `<a id=go href="${alt}/next" ${BTN} ${clickLog("")}>go</a>`),
+  "anchor-302": () => page("START", `<a id=go href="/r302" ${BTN} ${clickLog("")}>go</a>`),
+  "anchor-204": () => page("START", `<a id=go href="/204" ${BTN} ${clickLog("")}>go</a>`),
+  "anchor-hash": () =>
+    page("START", `<a id=go href="#sec" ${BTN} ${clickLog("")}>go</a><div style="height:3000px"></div><h2 id=sec>SEC</h2>`),
+  "anchor-slow3s": () => page("START", `<a id=go href="/slow?ms=3000" ${BTN} ${clickLog("")}>go</a>`),
+  "anchor-slowbody": () => page("START", `<a id=go href="/slowbody?ms=1500" ${BTN} ${clickLog("")}>go</a>`),
+  "anchor-slowimg": () => page("START", `<a id=go href="/next?img=1500" ${BTN} ${clickLog("")}>go</a>`),
+  "anchor-inline-redirect": () => page("START", `<a id=go href="/inline-redirect" ${BTN} ${clickLog("")}>go</a>`),
+  "form-get": () =>
+    page("START", `<form action="/next"><input name=q value=x><button id=go ${BTN} ${clickLog("")}>go</button></form>`),
+  "form-post": () =>
+    page("START", `<form method=post action="/next"><input name=q value=x><button id=go ${BTN} ${clickLog("")}>go</button></form>`),
+  "js-location": () => page("START", `<button id=go ${BTN} ${clickLog("location.href='/next'")}>go</button>`),
+  "timeout-0": () =>
+    page("START", `<button id=go ${BTN} ${clickLog("setTimeout(()=>{location.href='/next'},0)")}>go</button>`),
+  "timeout-50": () =>
+    page("START", `<button id=go ${BTN} ${clickLog("setTimeout(()=>{location.href='/next'},50)")}>go</button>`),
+  "timeout-300": () =>
+    page("START", `<button id=go ${BTN} ${clickLog("setTimeout(()=>{location.href='/next'},300)")}>go</button>`),
+  "timeout-1000": () =>
+    page("START", `<button id=go ${BTN} ${clickLog("setTimeout(()=>{location.href='/next'},1000)")}>go</button>`),
+  "fetch-then-nav": () =>
+    page("START", `<button id=go ${BTN} ${clickLog("fetch('/api?ms=200').then(r=>r.json()).then(()=>{location.href='/next'})")}>go</button>`),
+  pushstate: () =>
+    page("START", `<button id=go ${BTN} ${clickLog("history.pushState({},'','/pushed');t.textContent='PUSHED'")}>go</button>`),
+  download: () => page("START", `<a id=go href="/download" ${BTN} ${clickLog("")}>go</a>`),
+  "download-attr": () => page("START", `<a id=go href="/file.txt" download ${BTN} ${clickLog("")}>go</a>`),
+  "target-blank": () => page("START", `<a id=go href="/next" target=_blank ${BTN} ${clickLog("")}>go</a>`),
+  "window-open": () => page("START", `<button id=go ${BTN} ${clickLog("window.open('/next')")}>go</button>`),
+  beforeunload: () =>
+    page(
+      "START",
+      `<a id=go href="/next" ${BTN} ${clickLog("")}>go</a><script>addEventListener('beforeunload',e=>{e.preventDefault();e.returnValue='sure?';});</script>`,
+    ),
+  "beforeunload-dismiss": () =>
+    page(
+      "START",
+      `<a id=go href="/next" ${BTN} ${clickLog("")}>go</a><script>addEventListener('beforeunload',e=>{e.preventDefault();e.returnValue='sure?';});</script>`,
+    ),
+  "anchor-javascript": () => page("START", `<a id=go href="javascript:void(0)" ${BTN} ${clickLog("")}>go</a>`),
+  "anchor-prevented": () => page("START", `<a id=go href="/next" ${BTN} ${clickLog("event.preventDefault()")}>go</a>`),
+  "anchor-mailto": () => page("START", `<a id=go href="mailto:a@example.com" ${BTN} ${clickLog("")}>go</a>`),
+  "form-prevent": () =>
+    page("START", `<form action="/next" onsubmit="event.preventDefault();fetch('/api?ms=100').then(()=>{t.textContent='SAVED'})"><input name=q value=x><button id=go ${BTN} ${clickLog("")}>go</button></form>`),
+  "form-invalid": () =>
+    page("START", `<form action="/next"><input name=q required><button id=go ${BTN} ${clickLog("")}>go</button></form>`),
+  "form-blank": () =>
+    page("START", `<form action="/next" target=_blank><input name=q value=x><button id=go ${BTN} ${clickLog("")}>go</button></form>`),
+  "alert-click": () => page("START", `<a id=go href="/next" ${BTN} ${clickLog("alert('hi')")}>go</a>`),
+  "anchor-hang": () => page("START", `<a id=go href="/slow?ms=20000" ${BTN} ${clickLog("")}>go</a>`),
+  "iframe-nav": () =>
+    page(
+      "START",
+      `<button id=go ${BTN} ${clickLog("document.getElementById('f').src='/next?frame=1'")}>go</button><iframe id=f src="/frame" style="position:absolute;top:300px;width:400px;height:200px"></iframe>`,
+    ),
+};
+
+const server = Bun.serve({
+  hostname: "127.0.0.1",
+  port: PORT,
+  async fetch(req) {
+    const url = new URL(req.url);
+    const origin = `http://127.0.0.1:${server.port}`;
+    const alt = `http://localhost:${server.port}`;
+    const p = url.pathname;
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const html = (s: string, status = 200) =>
+      new Response(s, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    if (p.startsWith("/case/")) {
+      const name = p.slice(6);
+      const f = cases[name];
+      return f ? html(f(origin, alt)) : html("no such case", 404);
+    }
+    if (p === "/next") {
+      const img = url.searchParams.get("img");
+      return html(page("NEXT", img ? `<img src="/img?ms=${img}">` : ""));
+    }
+    if (p === "/frame") return html(page("FRAME", ""));
+    if (p === "/img") {
+      await sleep(Number(url.searchParams.get("ms") ?? 0));
+      const gif = Uint8Array.from(atob("R0lGODlhAQABAAAAACw="), (c) => c.charCodeAt(0));
+      return new Response(gif, { headers: { "content-type": "image/gif", "cache-control": "no-store" } });
+    }
+    if (p === "/slow") {
+      await sleep(Number(url.searchParams.get("ms") ?? 3000));
+      return html(page("NEXT", ""));
+    }
+    if (p === "/slowbody") {
+      const ms = Number(url.searchParams.get("ms") ?? 1500);
+      const enc = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(ctrl) {
+          ctrl.enqueue(enc.encode(`<!doctype html><html><head><meta charset=utf-8><title>NEXT</title></head><body>` + " ".repeat(2048)));
+          await sleep(ms);
+          ctrl.enqueue(enc.encode(`<h1 id=t>NEXT</h1></body></html>`));
+          ctrl.close();
+        },
+      });
+      return new Response(stream, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    }
+    if (p === "/r302") return new Response(null, { status: 302, headers: { location: "/next" } });
+    if (p === "/204") return new Response(null, { status: 204 });
+    if (p === "/inline-redirect")
+      return html(page("INTERMEDIATE", `<script>location.replace('/next')</script>`));
+    if (p === "/api") {
+      await sleep(Number(url.searchParams.get("ms") ?? 200));
+      return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } });
+    }
+    if (p === "/download")
+      return new Response("hello download\n", {
+        headers: { "content-type": "application/octet-stream", "content-disposition": 'attachment; filename="d.bin"' },
+      });
+    if (p === "/file.txt") return new Response("hello file\n", { headers: { "content-type": "text/plain" } });
+    if (p === "/favicon.ico") return new Response(null, { status: 404 });
+    return html("not found", 404);
+  },
+});
+
+console.log(`PORT ${server.port}`);

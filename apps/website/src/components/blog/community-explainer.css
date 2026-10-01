@@ -1,0 +1,159 @@
+.community-explainer {
+	margin: 2rem 0;
+	padding: clamp(1rem, 3vw, 2rem);
+	border: 1px solid #a8c9cf;
+	border-radius: 1rem;
+	background: #f2f8fa;
+	color: #163647;
+	font-family: system-ui, sans-serif;
+}
+.community-explainer h3 {
+	margin: .4rem 0 1rem;
+	color: #163647;
+	font-size: 1.5rem;
+	line-height: 1.25;
+}
+.community-explainer p {
+	color: inherit;
+	line-height: 1.6;
+}
+.community-explainer .ce-eyebrow {
+	font-size: .75rem;
+	font-weight: 700;
+	letter-spacing: .08em;
+	text-transform: uppercase;
+	color: #216577;
+	margin: 0;
+}
+.community-explainer .ce-controls {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+	gap: 1rem;
+}
+.community-explainer label {
+	display: block;
+	font-size: .875rem;
+	font-weight: 650;
+}
+.community-explainer input,
+.community-explainer select {
+	display: block;
+	width: 100%;
+	margin-top: .4rem;
+	padding: .7rem;
+	border: 1px solid #8eaeb8;
+	border-radius: .4rem;
+	background: #fff;
+	color: #163647;
+	font: inherit;
+	min-height: 44px;
+}
+.community-explainer select {
+	max-width: 24rem;
+}
+.community-explainer .ce-actions {
+	display: flex;
+	gap: .65rem;
+	flex-wrap: wrap;
+	margin: 1.25rem 0;
+}
+.community-explainer button {
+	padding: .7rem 1rem;
+	background: #116677;
+	border: 1px solid #116677;
+	color: white;
+	border-radius: .5rem;
+	font: inherit;
+	font-size: .9rem;
+	font-weight: 650;
+	min-height: 44px;
+	cursor: pointer;
+}
+.community-explainer button.ce-secondary {
+	background: #fff;
+	color: #195869;
+}
+.community-explainer button:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+.community-explainer :is(button, input, select, summary):focus-visible {
+	outline: 3px solid #d45932;
+	outline-offset: 3px;
+}
+.community-explainer .ce-output {
+	margin: 1rem 0;
+	padding: 1rem 1.2rem;
+	background: #fff;
+	border: 1px solid #d1e2e7;
+	border-radius: .75rem;
+}
+.community-explainer .ce-summary {
+	margin: 0 0 .5rem;
+	font-weight: 700;
+}
+.community-explainer ol,
+.community-explainer ul {
+	padding-left: 1.3rem;
+	margin: .75rem 0;
+}
+.community-explainer li {
+	padding: .3rem 0;
+	color: inherit;
+}
+.community-explainer li span {
+	display: block;
+	font-size: .8rem;
+	color: #4a6370;
+}
+.community-explainer .ce-counts {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+	gap: 1rem;
+	margin: 1rem 0 0;
+}
+.community-explainer dt {
+	font-size: .8rem;
+	color: #4a6370;
+}
+.community-explainer dd {
+	margin: 0;
+	font-size: 1.8rem;
+	font-weight: 750;
+	color: #116677;
+}
+.community-explainer .ce-note {
+	font-size: .8rem;
+	color: #4a6370;
+	margin: 1rem 0 0;
+}
+.community-explainer .ce-key {
+	overflow-wrap: anywhere;
+	font-size: .875rem;
+}
+.community-explainer code {
+	background: #e3eff3;
+	color: #163647;
+}
+.community-explainer details {
+	margin-top: 1rem;
+}
+.community-explainer summary {
+	cursor: pointer;
+	font-size: .875rem;
+	font-weight: 650;
+	min-height: 32px;
+}
+.community-explainer .ce-path {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 1rem;
+	font-weight: 650;
+}
+.community-explainer .ce-path span:not([aria-hidden]) {
+	border: 1px solid #b5d2d9;
+	padding: .75rem;
+	border-radius: .5rem;
+	background: white;
+}

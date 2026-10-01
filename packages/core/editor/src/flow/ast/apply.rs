@@ -32,7 +32,10 @@ use crate::{
                 },
             },
         },
-        copilot::{BoardCommand, NodeMetadata, NodePosition, PlaceholderPinDef, node_to_metadata},
+        copilot::{
+            BoardCommand, NodeMetadata, NodePosition, PlaceholderPinDef, node_to_metadata,
+            pin_to_metadata,
+        },
         node::{FnRefs, Node, NodeLogic},
         pin::{Pin, PinOptions, PinType, ValueType, resolve_schema},
         variable::{Variable, VariableType, default_value_for_type},
@@ -571,9 +574,33 @@ mod validate_module_apply_params_tests {
 /// This is the execution half of the typed-IR commit boundary. Callers must obtain the batch from
 /// the retained pending claim while holding the live board lock; arbitrary client commands must
 /// continue through reconciliation and deletion approval in [`apply_flowscript_to_board`]. The
-/// planner still performs its normal two-phase execution, rollback, and Function-layer
-/// postcondition validation.
+/// planner still resolves generated pins before wiring them and validates Function-layer
+/// postconditions. The original board is replaced only after the complete batch succeeds.
 pub async fn apply_board_commands_to_board(
+    board: &mut Board,
+    board_commands: Vec<BoardCommand>,
+    catalog_nodes: &[Node],
+    state: Arc<FlowLikeState>,
+    current_layer: Option<String>,
+) -> flow_like_types::Result<ApplyFlowScriptResult> {
+    // Connections can replace existing edges before a later dynamic pin fails validation.
+    // Publish the staged board only after every phase succeeds, including derived pin contracts.
+    let mut staged_board = board.clone();
+    let result = apply_board_commands_to_staged_board(
+        &mut staged_board,
+        board_commands,
+        catalog_nodes,
+        state,
+        current_layer,
+    )
+    .await?;
+    if result.diagnostics.is_empty() {
+        *board = staged_board;
+    }
+    Ok(result)
+}
+
+async fn apply_board_commands_to_staged_board(
     board: &mut Board,
     board_commands: Vec<BoardCommand>,
     catalog_nodes: &[Node],
@@ -591,6 +618,24 @@ pub async fn apply_board_commands_to_board(
         match board.execute_commands(setup_commands, state.clone()).await {
             Ok(mut executed) => applied_commands.append(&mut executed),
             Err(error) => return Err(error),
+        }
+    }
+
+    // Widget contracts travel with element references. Connect those references before resolving
+    // their generated input pins, including any authored data edges feeding a reference relay.
+    planner.staged_nodes.clear();
+    let mut prerequisites = planner.widget_reference_prerequisites(board, &board_commands)?;
+    while !prerequisites.is_empty() {
+        let ready =
+            planner.build_ready_prerequisites(board, &board_commands, &mut prerequisites)?;
+        if ready.is_empty() {
+            break;
+        }
+        match board.execute_commands(ready, state.clone()).await {
+            Ok(mut executed) => applied_commands.append(&mut executed),
+            Err(error) => {
+                rollback_applied(board, &applied_commands, state.clone(), error).await?;
+            }
         }
     }
 
@@ -617,6 +662,11 @@ pub async fn apply_board_commands_to_board(
                 rollback_applied(board, &applied_commands, state.clone(), error).await?;
             }
         }
+    }
+
+    // Generic sources can specialize only once the final data edges exist.
+    if let Err(error) = planner.validate_widget_bindings(board, &board_commands, true) {
+        rollback_applied(board, &applied_commands, state.clone(), error).await?;
     }
 
     if let Err(error) = planner.validate_new_function_layers(board, &board_commands) {
@@ -725,7 +775,7 @@ struct FlowScriptApplyPlanner {
     next_node_index: usize,
     /// `(resolved_node_id, pin_ref, value)` pin writes whose target pin does not exist yet in the
     /// setup phase because a node's `on_update` mints it (e.g. `string_format` placeholders). They
-    /// are applied in the remaining phase, after `execute_commands` has run `on_update`.
+    /// are applied after setup and widget reference connections have run `on_update`.
     deferred_pin_updates: Vec<(String, String, flow_like_types::Value)>,
 }
 
@@ -782,6 +832,194 @@ impl FlowScriptApplyPlanner {
         }
 
         planner
+    }
+
+    fn widget_reference_prerequisites(
+        &self,
+        board: &Board,
+        commands: &[BoardCommand],
+    ) -> flow_like_types::Result<BTreeSet<usize>> {
+        let mut selected = BTreeSet::new();
+        let mut upstream_nodes = HashSet::new();
+        loop {
+            let before = selected.len();
+            for (index, command) in commands.iter().enumerate() {
+                let BoardCommand::ConnectPins {
+                    from_node,
+                    to_node,
+                    to_pin,
+                    ..
+                } = command
+                else {
+                    continue;
+                };
+                let to_node_id = self.resolve_node_id(board, to_node)?;
+                let Ok(pin_id) =
+                    self.resolve_pin_id(board, &to_node_id, to_pin, Some(PinType::Input))
+                else {
+                    continue;
+                };
+                let Some(pin) = board.get_pin_by_id(&pin_id) else {
+                    continue;
+                };
+                if pin.data_type == VariableType::Execution {
+                    continue;
+                }
+                let widget_reference = pin.name == "element_ref"
+                    && board.nodes.get(&to_node_id).is_some_and(|target| {
+                        matches!(
+                            target.name.as_str(),
+                            "a2ui_widget_update_inputs" | "a2ui_widget_query"
+                        )
+                    });
+                if widget_reference || upstream_nodes.contains(&to_node_id) {
+                    selected.insert(index);
+                    upstream_nodes.insert(self.resolve_node_id(board, from_node)?);
+                }
+            }
+            if selected.len() == before {
+                return Ok(selected);
+            }
+        }
+    }
+
+    fn build_ready_prerequisites(
+        &self,
+        board: &Board,
+        commands: &[BoardCommand],
+        pending: &mut BTreeSet<usize>,
+    ) -> flow_like_types::Result<Vec<GenericCommand>> {
+        let mut ready = Vec::new();
+        let mut completed = Vec::new();
+        for &index in pending.iter() {
+            let BoardCommand::ConnectPins {
+                from_node,
+                from_pin,
+                to_node,
+                to_pin,
+                ..
+            } = &commands[index]
+            else {
+                unreachable!("widget prerequisites only contain connections");
+            };
+            let from_node = self.resolve_node_id(board, from_node)?;
+            let to_node = self.resolve_node_id(board, to_node)?;
+            let (Ok(from_pin), Ok(to_pin)) = (
+                self.resolve_pin_id(board, &from_node, from_pin, Some(PinType::Output)),
+                self.resolve_pin_id(board, &to_node, to_pin, Some(PinType::Input)),
+            ) else {
+                // Another reference in this phase may create the missing source pin.
+                continue;
+            };
+            ready.push(GenericCommand::ConnectPin(ConnectPinsCommand::new(
+                from_node, to_node, from_pin, to_pin,
+            )));
+            completed.push(index);
+        }
+        for index in completed {
+            pending.remove(&index);
+        }
+        Ok(ready)
+    }
+
+    fn validate_widget_bindings(
+        &self,
+        board: &Board,
+        commands: &[BoardCommand],
+        require_connected: bool,
+    ) -> flow_like_types::Result<()> {
+        for command in commands {
+            let (target_ref, pin_ref) = match command {
+                BoardCommand::UpdateNodePin {
+                    node_id, pin_id, ..
+                } => (node_id, pin_id),
+                BoardCommand::ConnectPins {
+                    to_node, to_pin, ..
+                } => (to_node, to_pin),
+                _ => continue,
+            };
+            let target_id = self.resolve_node_id(board, target_ref)?;
+            let Some(target) = board.nodes.get(&target_id) else {
+                continue;
+            };
+            if !super::reconcile::widget_dynamic_pin_node(&target.name) {
+                continue;
+            }
+            let pin_id = match resolve_pin_id_in_node(target, pin_ref, Some(PinType::Input)) {
+                Ok(pin_id) => pin_id,
+                Err(error) if super::reconcile::is_widget_dynamic_binding_arg(pin_ref) => {
+                    return Err(deferred_pin_error(target, pin_ref, error));
+                }
+                Err(_) => continue,
+            };
+            let input = &target.pins[&pin_id];
+            if !super::reconcile::is_widget_dynamic_binding_arg(&input.name) {
+                continue;
+            }
+            match command {
+                BoardCommand::UpdateNodePin { value, .. } => {
+                    validate_widget_literal(input, value, &board.refs).map_err(|error| {
+                        flow_like_types::anyhow!(
+                            "Widget input `{}.{}` has an incompatible literal: {error}",
+                            target.friendly_name,
+                            input.name
+                        )
+                    })?;
+                }
+                BoardCommand::ConnectPins {
+                    from_node,
+                    from_pin,
+                    ..
+                } => {
+                    let source_id = self.resolve_node_id(board, from_node)?;
+                    let source_pin_id =
+                        self.resolve_pin_id(board, &source_id, from_pin, Some(PinType::Output))?;
+                    let source = board.get_pin_by_id(&source_pin_id).ok_or_else(|| {
+                        flow_like_types::anyhow!("Source pin `{from_pin}` was not materialized")
+                    })?;
+                    if !super::reconcile::metadata_pins_are_compatible(
+                        &pin_to_metadata(input),
+                        &pin_to_metadata(source),
+                        &board.refs,
+                    ) {
+                        return Err(flow_like_types::anyhow!(
+                            "Widget input `{}.{}` requires `{:?}/{:?}` with its declared schema, but source `{from_node}.{from_pin}` provides `{:?}/{:?}` with an incompatible type or schema",
+                            target.friendly_name,
+                            input.name,
+                            input.data_type,
+                            input.value_type,
+                            source.data_type,
+                            source.value_type
+                        ));
+                    }
+                    if require_connected {
+                        let mut pending = input.depends_on.iter().cloned().collect::<Vec<_>>();
+                        let mut visited = HashSet::new();
+                        let mut connected = false;
+                        while let Some(pin_id) = pending.pop() {
+                            if pin_id == source_pin_id {
+                                connected = true;
+                                break;
+                            }
+                            if visited.insert(pin_id.clone())
+                                && let Some(pin) = board.get_pin_by_id(&pin_id)
+                            {
+                                pending.extend(pin.depends_on.iter().cloned());
+                            }
+                        }
+                        if !connected {
+                            return Err(flow_like_types::anyhow!(
+                                "Widget input `{}.{}` lost its authored connection while its contract was refreshed",
+                                target.friendly_name,
+                                input.name
+                            ));
+                        }
+                    }
+                }
+                _ => unreachable!("widget binding validation only visits values and connections"),
+            }
+        }
+        Ok(())
     }
 
     fn build_setup_commands(
@@ -1276,6 +1514,7 @@ impl FlowScriptApplyPlanner {
         commands: &[BoardCommand],
     ) -> flow_like_types::Result<Vec<GenericCommand>> {
         self.staged_nodes.clear();
+        self.validate_widget_bindings(board, commands, false)?;
         // Compose every whole-node mutation per node before creating UpdateNode commands. Both a
         // deferred dynamic-pin write and SetNodeFunctionRefs replace the entire persisted node; if
         // they are built independently from `board`, the later replacement silently erases the
@@ -1320,6 +1559,9 @@ impl FlowScriptApplyPlanner {
                     to_pin,
                     ..
                 } => {
+                    // Reference prerequisites are repeated here intentionally. Connection is
+                    // idempotent, and authored disconnects earlier in this final batch must not
+                    // remove the reference used to derive the widget's contract.
                     let from_node_id = self.resolve_node_id(board, from_node)?;
                     let to_node_id = self.resolve_node_id(board, to_node)?;
                     let from_pin_id =
@@ -2221,6 +2463,49 @@ fn invert_boundary_pin_direction(direction: PinType) -> PinType {
         PinType::Input => PinType::Output,
         PinType::Output => PinType::Input,
     }
+}
+
+fn validate_widget_literal(
+    pin: &Pin,
+    value: &flow_like_types::Value,
+    refs: &HashMap<String, String>,
+) -> flow_like_types::Result<()> {
+    // The widget runtime omits null inputs from its props patch.
+    if value.is_null() {
+        return Ok(());
+    }
+    let matches_scalar = |value: &flow_like_types::Value| match pin.data_type {
+        VariableType::String | VariableType::PathBuf | VariableType::Date => value.is_string(),
+        VariableType::Integer => value.is_i64() || value.is_u64(),
+        VariableType::Byte => value.as_u64().is_some_and(|value| value <= u8::MAX as u64),
+        VariableType::Float => value.is_number(),
+        VariableType::Boolean => value.is_boolean(),
+        VariableType::Struct => value.is_object(),
+        VariableType::Generic | VariableType::Geometry => true,
+        VariableType::Execution => false,
+    };
+    let compatible = match pin.value_type {
+        ValueType::Normal => matches_scalar(value),
+        ValueType::Array | ValueType::HashSet => value
+            .as_array()
+            .is_some_and(|values| values.iter().all(matches_scalar)),
+        ValueType::HashMap => value
+            .as_object()
+            .is_some_and(|values| values.values().all(matches_scalar)),
+    };
+    if !compatible {
+        return Err(flow_like_types::anyhow!(
+            "expected `{:?}/{:?}`",
+            pin.data_type,
+            pin.value_type
+        ));
+    }
+    let schema = pin
+        .schema
+        .as_deref()
+        .map(|schema| resolve_schema(schema, refs))
+        .transpose()?;
+    crate::flow::variable::validate_typed_value(&pin.data_type, &pin.value_type, schema, value)
 }
 
 /// Explains a deferred pin write whose target still does not exist after `on_update` ran.
@@ -4766,5 +5051,407 @@ eventsChat() {
                 .values()
                 .find(|pin| pin.name == "idx" && !pin.depends_on.is_empty())
         })
+    }
+
+    const TEST_WIDGET_SCHEMA: &str = r#"{"type":"object","x-test-widget-contract":true}"#;
+
+    struct TestWidgetSourceLogic;
+
+    #[flow_like_types::async_trait]
+    impl NodeLogic for TestWidgetSourceLogic {
+        fn get_node(&self) -> Node {
+            let mut node = Node::new("test_widget_source", "Widget Source", "", "test");
+            node.set_flowscript_name("test", "widgetSource");
+            node.add_output_pin("element_ref", "Element Ref", "", VariableType::Struct)
+                .schema = Some(TEST_WIDGET_SCHEMA.to_string());
+            node.add_output_pin("limit", "Limit", "", VariableType::Float);
+            node.add_output_pin("text", "Text", "", VariableType::String);
+            node
+        }
+
+        async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct TestWidgetRelayLogic;
+
+    #[flow_like_types::async_trait]
+    impl NodeLogic for TestWidgetRelayLogic {
+        fn get_node(&self) -> Node {
+            let mut node = Node::new("test_widget_relay", "Widget Relay", "", "test");
+            node.add_input_pin("element_ref", "Element Ref", "", VariableType::Struct);
+            node.add_output_pin("element_ref", "Element Ref", "", VariableType::Struct);
+            node
+        }
+
+        async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        async fn on_update(&self, node: &mut Node, board: &Board) {
+            let schema = node
+                .pins
+                .values()
+                .find(|pin| pin.pin_type == PinType::Input)
+                .and_then(|pin| pin.depends_on.first())
+                .and_then(|id| board.get_pin_by_id(id))
+                .and_then(|pin| pin.schema.clone());
+            node.pins
+                .values_mut()
+                .find(|pin| pin.pin_type == PinType::Output)
+                .unwrap()
+                .schema = schema;
+        }
+    }
+
+    struct TestConnectedWidgetLogic;
+
+    #[flow_like_types::async_trait]
+    impl NodeLogic for TestConnectedWidgetLogic {
+        fn get_node(&self) -> Node {
+            let mut node = Node::new("a2ui_widget_update_inputs", "Widget Inputs", "", "test");
+            node.set_flowscript_name("ui", "widgetUpdateInputs");
+            node.add_input_pin("element_ref", "Element Ref", "", VariableType::Struct);
+            node
+        }
+
+        async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        async fn on_update(&self, node: &mut Node, board: &Board) {
+            let has_contract = node
+                .get_pin_by_name("element_ref")
+                .and_then(|pin| pin.depends_on.first())
+                .and_then(|id| board.get_pin_by_id(id))
+                .and_then(|pin| pin.schema.as_deref())
+                .and_then(|schema| resolve_schema(schema, &board.refs).ok())
+                .is_some_and(|schema| schema == TEST_WIDGET_SCHEMA);
+            if !has_contract {
+                node.pins.retain(|_, pin| !pin.name.starts_with("dyn_in_"));
+                return;
+            }
+            for (name, data_type) in [
+                ("dyn_in_learningLimit", VariableType::Float),
+                ("dyn_in_title", VariableType::String),
+            ] {
+                if node.get_pin_by_name(name).is_none() {
+                    node.add_input_pin(name, name, "", data_type);
+                }
+            }
+        }
+    }
+
+    async fn widget_test_state() -> (Arc<FlowLikeState>, Vec<Node>) {
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let logic: Vec<Arc<dyn NodeLogic>> = vec![
+            Arc::new(TestWidgetSourceLogic),
+            Arc::new(TestWidgetRelayLogic),
+            Arc::new(TestConnectedWidgetLogic),
+        ];
+        let catalog = logic.iter().map(|logic| logic.get_node()).collect();
+        for logic in logic {
+            state.node_registry().write().await.push_node(logic);
+        }
+        (state, catalog)
+    }
+
+    fn widget_add(node_type: &str, reference: &str) -> BoardCommand {
+        BoardCommand::AddNode {
+            node_type: node_type.to_string(),
+            ref_id: Some(reference.to_string()),
+            position: None,
+            friendly_name: Some(reference.to_string()),
+            additional_pins: None,
+            target_layer: None,
+            summary: None,
+        }
+    }
+
+    fn widget_connect(from: &str, output: &str, to: &str, input: &str) -> BoardCommand {
+        BoardCommand::ConnectPins {
+            from_node: from.to_string(),
+            from_pin: output.to_string(),
+            to_node: to.to_string(),
+            to_pin: input.to_string(),
+            summary: None,
+        }
+    }
+
+    #[test]
+    fn widget_reference_prerequisites_include_function_boundary_sources() {
+        let mut board = empty_board();
+        let mut source = TestWidgetSourceLogic.get_node();
+        source.id = "source".into();
+        let mut widget = TestConnectedWidgetLogic.get_node();
+        widget.id = "widget".into();
+        let mut layer = Layer::new("helper".into(), "Helper".into(), LayerType::Function);
+        let mut boundary = Node::new("boundary", "Boundary", "", "test");
+        let parameter = boundary
+            .add_input_pin("reference", "Reference", "", VariableType::Struct)
+            .clone();
+        let returned = boundary
+            .add_output_pin("returned", "Returned", "", VariableType::Struct)
+            .clone();
+        layer.pins.insert(parameter.id.clone(), parameter);
+        layer.pins.insert(returned.id.clone(), returned);
+        board.nodes.insert(source.id.clone(), source);
+        board.nodes.insert(widget.id.clone(), widget);
+        board.layers.insert(layer.id.clone(), layer);
+        let planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let commands = vec![
+            widget_connect("helper", "reference", "widget", "element_ref"),
+            widget_connect("source", "element_ref", "helper", "returned"),
+        ];
+        let mut pending = planner
+            .widget_reference_prerequisites(&board, &commands)
+            .unwrap();
+        assert_eq!(pending, BTreeSet::from([0, 1]));
+        let ready = planner
+            .build_ready_prerequisites(&board, &commands, &mut pending)
+            .unwrap();
+        assert_eq!(ready.len(), 2);
+        assert!(pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn connected_widget_contract_materializes_literals_and_connections_and_replays() {
+        let (state, catalog) = widget_test_state().await;
+        let mut board = empty_board();
+        let commands = vec![
+            widget_add("test_widget_source", "source"),
+            widget_add("test_widget_relay", "relay"),
+            widget_add("a2ui_widget_update_inputs", "widget"),
+            // Put the dependent edge before the reference edges to exercise dependency discovery.
+            widget_connect("source", "limit", "widget", "dynInLearningLimit"),
+            BoardCommand::UpdateNodePin {
+                node_id: "widget".into(),
+                pin_id: "dynInTitle".into(),
+                value: json!("Ready"),
+                summary: None,
+            },
+            widget_connect("relay", "element_ref", "widget", "element_ref"),
+            widget_connect("source", "element_ref", "relay", "element_ref"),
+        ];
+        let applied =
+            apply_board_commands_to_board(&mut board, commands, &catalog, state.clone(), None)
+                .await
+                .unwrap();
+        let widget = board
+            .nodes
+            .values()
+            .find(|node| node.friendly_name == "widget")
+            .unwrap();
+        let limit = widget.get_pin_by_name("dyn_in_learningLimit").unwrap();
+        assert_eq!(limit.depends_on.len(), 1);
+        assert_eq!(
+            decode_default(widget.get_pin_by_name("dyn_in_title").unwrap()),
+            json!("Ready")
+        );
+        let mut replay = empty_board();
+        replay
+            .execute_commands(applied.commands, state)
+            .await
+            .unwrap();
+        assert_eq!(
+            flow_like_types::json::to_value(&replay.nodes).unwrap(),
+            flow_like_types::json::to_value(&board.nodes).unwrap(),
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_widget_bindings_preserve_the_original_reference_and_board() {
+        let (state, catalog) = widget_test_state().await;
+        let mut board = empty_board();
+        apply_board_commands_to_board(
+            &mut board,
+            vec![
+                widget_add("test_widget_source", "old_source"),
+                widget_add("test_widget_source", "new_source"),
+                widget_add("a2ui_widget_update_inputs", "widget"),
+                widget_connect("old_source", "element_ref", "widget", "element_ref"),
+            ],
+            &catalog,
+            state.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+        let original = flow_like_types::json::to_value(&board).unwrap();
+        let invalid = [
+            BoardCommand::UpdateNodePin {
+                node_id: "widget".into(),
+                pin_id: "dynInMissing".into(),
+                value: json!("invalid"),
+                summary: None,
+            },
+            BoardCommand::UpdateNodePin {
+                node_id: "widget".into(),
+                pin_id: "dynInLearningLimit".into(),
+                value: json!("invalid"),
+                summary: None,
+            },
+            widget_connect("new_source", "text", "widget", "dynInLearningLimit"),
+        ];
+        for binding in invalid {
+            let error = apply_board_commands_to_board(
+                &mut board,
+                vec![
+                    widget_connect("new_source", "element_ref", "widget", "element_ref"),
+                    binding,
+                ],
+                &catalog,
+                state.clone(),
+                None,
+            )
+            .await
+            .err()
+            .expect("unknown or incompatible widget binding must fail");
+            assert!(
+                error.to_string().contains("Widget") || error.to_string().contains("widget"),
+                "{error}"
+            );
+            assert_eq!(flow_like_types::json::to_value(&board).unwrap(), original);
+        }
+    }
+
+    #[tokio::test]
+    async fn flowscript_can_create_a_widget_update_and_its_reference_in_one_apply() {
+        let (state, catalog) = widget_test_state().await;
+        let mut board = empty_board();
+        let source = r#"detached {
+    ui::widgetUpdateInputs({ elementRef: test::widgetSource().elementRef, dynInLearningLimit: 5, dynInTitle: "Ready" })
+}"#;
+        let result = apply_flowscript_to_board(&mut board, source, &catalog, state, None, false)
+            .await
+            .unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let widget = board
+            .nodes
+            .values()
+            .find(|node| node.name == "a2ui_widget_update_inputs")
+            .unwrap();
+        assert_eq!(
+            decode_default(widget.get_pin_by_name("dyn_in_learningLimit").unwrap()),
+            json!(5)
+        );
+        assert_eq!(
+            decode_default(widget.get_pin_by_name("dyn_in_title").unwrap()),
+            json!("Ready")
+        );
+    }
+
+    struct TestNamedLiteralLogic(Node);
+
+    #[flow_like_types::async_trait]
+    impl NodeLogic for TestNamedLiteralLogic {
+        fn get_node(&self) -> Node {
+            self.0.clone()
+        }
+
+        async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn assignment_anchor_keeps_named_rhs_literals_on_the_value_producer() {
+        let mut page = Node::new("a2ui_get_page_state", "Get Page State", "", "test");
+        page.set_flowscript_name("ui", "getPageState");
+        page.add_input_pin("key", "Key", "", VariableType::String);
+        page.add_output_pin("value", "Value", "", VariableType::Generic);
+        let mut fallback = Node::new("utils_types_fallback", "Fallback", "", "test");
+        fallback.set_flowscript_name("types", "fallback");
+        fallback.add_input_pin("value", "Value", "", VariableType::Generic);
+        fallback.add_input_pin("default", "Default", "", VariableType::Generic);
+        fallback.add_output_pin("result", "Result", "", VariableType::Generic);
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let setter = TestVariableSetLogic.get_node();
+        let catalog = vec![page.clone(), fallback.clone(), setter];
+        for logic in [
+            Arc::new(TestNamedLiteralLogic(page)) as Arc<dyn NodeLogic>,
+            Arc::new(TestNamedLiteralLogic(fallback)),
+            Arc::new(TestVariableSetLogic),
+        ] {
+            state.node_registry().write().await.push_node(logic);
+        }
+        for (node_type, pin_name, expression) in [
+            (
+                "a2ui_get_page_state",
+                "key",
+                "ui::getPageState({ key: \"before\" }).value",
+            ),
+            (
+                "utils_types_fallback",
+                "default",
+                "types::fallback({ value: null, default: \"before\" }).result",
+            ),
+        ] {
+            let mut board = empty_board();
+            let initial =
+                format!("let output: string = \"\"\ndetached {{\n    output = {expression}\n}}\n");
+            let applied = apply_flowscript_to_board(
+                &mut board,
+                &initial,
+                &catalog,
+                state.clone(),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+            assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+            let variable = board
+                .variables
+                .values()
+                .find(|variable| variable.name == "output")
+                .unwrap();
+            let setter = board
+                .nodes
+                .values()
+                .find(|node| node.name == "variable_set")
+                .unwrap();
+            let edited = format!(
+                "let output: string = \"\" //@v:{}\ndetached {{\n    output = {} //@n:{}\n}}\n",
+                variable.id,
+                expression.replace("before", "after"),
+                setter.id,
+            );
+            let applied = apply_flowscript_to_board(
+                &mut board,
+                &edited,
+                &catalog,
+                state.clone(),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+            assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+            assert_eq!(
+                board
+                    .nodes
+                    .values()
+                    .filter(|node| node.name == "variable_set")
+                    .count(),
+                1
+            );
+            let producer = board
+                .nodes
+                .values()
+                .find(|node| node.name == node_type)
+                .unwrap();
+            assert_eq!(
+                decode_default(producer.get_pin_by_name(pin_name).unwrap()),
+                json!("after")
+            );
+        }
     }
 }

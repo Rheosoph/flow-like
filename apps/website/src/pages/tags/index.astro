@@ -9,7 +9,7 @@ for (const p of posts) for (const t of p.data.tags) tagCounts.set(t, (tagCounts.
 const tags = [...tagCounts.entries()].sort(([a],[b]) => a.localeCompare(b));
 ---
 
-<BlogLayout data={{ title: "Tags", description: "Explore blog posts by tags", slug: "tags" }}>
+<BlogLayout data={{ title: "Browse Topics | Flow-Like Blog", description: "Find Flow-Like articles by topic, from workflow automation and local AI to tutorials, integrations, and product releases." }}>
   <div class="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 pb-12 sm:pb-14 lg:pb-16">
     <header class="mb-10 rounded-2xl border border-border/50 bg-card/50 p-7 text-center backdrop-blur-sm sm:mb-12 sm:p-9 lg:p-11">
       <p class="mb-3 text-[11px] font-medium tracking-[0.3em] uppercase text-primary">Flow-Like Blog</p>

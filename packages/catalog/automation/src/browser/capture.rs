@@ -39,27 +39,40 @@ pub(crate) fn full_page_clip(metrics: &Value) -> flow_like_types::Result<Value> 
     }))
 }
 
+/// `Page.captureScreenshot` clip JSON (`x`, `y`, `width`, `height`, `scale`) as a typed clip.
+#[cfg(any(feature = "execute", test))]
+pub(crate) fn screenshot_clip(
+    clip: &Value,
+) -> flow_like_types::Result<flow_like_browser::output::Clip> {
+    let field = |name: &str| {
+        clip[name]
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| flow_like_types::anyhow!("Screenshot clip has no finite {name}: {clip}"))
+    };
+    Ok(flow_like_browser::output::Clip {
+        x: field("x")?,
+        y: field("y")?,
+        width: field("width")?,
+        height: field("height")?,
+        scale: field("scale")?,
+    })
+}
+
 #[cfg(feature = "execute")]
 pub(crate) async fn capture_png_via_cdp(
-    driver: &thirtyfour::WebDriver,
-    clip: Value,
+    ctx: &super::driver::PageContext,
+    clip: &Value,
     capture_beyond_viewport: bool,
 ) -> flow_like_types::Result<Vec<u8>> {
-    use flow_like_types::base64::Engine;
-    let shot = super::cdp::cdp(
-        driver,
-        "Page.captureScreenshot",
-        json!({
-            "format": "png",
-            "captureBeyondViewport": capture_beyond_viewport,
-            "clip": clip,
-        }),
-    )
-    .await?;
-    let data = shot["data"].as_str().ok_or_else(|| {
-        flow_like_types::anyhow!("Page.captureScreenshot returned no image data for clip {clip}")
-    })?;
-    Ok(flow_like_types::base64::engine::general_purpose::STANDARD.decode(data)?)
+    let options = flow_like_browser::output::ScreenshotOptions {
+        clip: Some(screenshot_clip(clip)?),
+        capture_beyond_viewport,
+    };
+    ctx.page
+        .screenshot(options)
+        .await
+        .map_err(|e| flow_like_types::anyhow!("Failed to capture screenshot of clip {clip}: {e}"))
 }
 
 /// Writes the `screenshot` (base64 PNG) and `image` (NodeImage) outputs.
@@ -102,6 +115,29 @@ mod tests {
         assert_eq!(legacy["width"], json!(800.0));
         assert!(full_page_clip(&json!({"cssContentSize": {"width": 0, "height": 10}})).is_err());
         assert!(full_page_clip(&json!({})).is_err());
+    }
+
+    #[test]
+    fn screenshot_clip_reads_every_field() {
+        let page = full_page_clip(&json!({"cssContentSize": {"width": 800, "height": 600}}))
+            .and_then(|clip| screenshot_clip(&clip))
+            .unwrap();
+        assert_eq!(
+            (page.x, page.y, page.width, page.height, page.scale),
+            (0.0, 0.0, 800.0, 600.0, 1.0)
+        );
+        let zoom = screenshot_clip(
+            &json!({"x": 15.0, "y": 1220.5, "width": 100.0, "height": 50.0, "scale": 3.0}),
+        )
+        .unwrap();
+        assert_eq!(
+            (zoom.x, zoom.y, zoom.width, zoom.height, zoom.scale),
+            (15.0, 1220.5, 100.0, 50.0, 3.0)
+        );
+        let missing = screenshot_clip(&json!({"x": 0, "y": 0, "width": 10, "height": 10}))
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("scale"), "{missing}");
     }
 }
 
@@ -195,18 +231,18 @@ impl NodeLogic for BrowserScreenshotNode {
             super::emulation::require_chromium(&session, "Full-page screenshots")?;
         }
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
         let screenshot_bytes = if full_page {
-            let metrics = super::cdp::cdp(&driver, "Page.getLayoutMetrics", json!({})).await?;
-            capture_png_via_cdp(&driver, full_page_clip(&metrics)?, true).await?
+            let metrics = super::cdp::send(&page, "Page.getLayoutMetrics", json!({})).await?;
+            capture_png_via_cdp(&page, &full_page_clip(&metrics)?, true).await?
         } else {
-            driver
-                .screenshot_as_png()
+            page.page
+                .screenshot(flow_like_browser::output::ScreenshotOptions::default())
                 .await
                 .map_err(|e| flow_like_types::anyhow!("Failed to take screenshot: {}", e))?
         };
-        drop(driver);
+        drop(page);
 
         set_screenshot_outputs(context, screenshot_bytes).await?;
         context.set_pin_value("session_out", json!(session)).await?;
@@ -312,19 +348,19 @@ impl NodeLogic for BrowserScreenshotElementNode {
         let selector: String = context.evaluate_pin("selector").await?;
         let locator = super::selector::evaluate_locator(context, &selector).await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        let element = super::selector::find(&driver, &locator)
+        let element = super::selector::find_element(&page, &locator)
             .await
             .map_err(|e| {
                 flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
             })?;
 
         let screenshot_bytes = element
-            .screenshot_as_png()
+            .screenshot_png()
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to take element screenshot: {}", e))?;
-        drop(driver);
+        drop(page);
 
         set_screenshot_outputs(context, screenshot_bytes).await?;
         context.set_pin_value("session_out", json!(session)).await?;

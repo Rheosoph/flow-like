@@ -1,0 +1,89 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "desktop",
+	"outputDir": "apps/docs/src/assets",
+	"tauriFixture": "../fixtures/docs-models.tauri.json",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 2
+		},
+		"theme": "dark",
+		"format": "webp",
+		"timeoutMs": 300000,
+		"settleMs": 350,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "model-catalog",
+			"path": "/settings/ai",
+			"query": {
+				"capture": "docs"
+			},
+			"localStorage": {
+				"sidebar_state": "true",
+				"tutorial-finished-new": "true",
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "article",
+					"state": "visible"
+				},
+				{
+					"type": "waitFor",
+					"selector": "article:has([title=\"Gemma 4B Local\"])",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "model-catalog",
+					"output": "ModelCatalog.webp",
+					"mode": "viewport"
+				},
+				{
+					"type": "click",
+					"selector": "article:has([title=\"Gemma 4B Local\"]) button[aria-label=\"Model actions\"]"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"dropdown-menu-content\"][data-state=\"open\"]",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "adding-model-to-profile",
+					"output": "AddingModelToProfile.webp",
+					"mode": "element",
+					"selector": "[data-slot=\"dropdown-menu-content\"][data-state=\"open\"]",
+					"padding": 12
+				}
+			],
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 12
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				},
+				{
+					"kind": "request",
+					"message": "GET https://api.flow-like.com/api/v1: net::ERR_ABORTED",
+					"reason": "Model cards mount separate useHub hooks that cancel prior availability probes when the local profile settles. Only cancellation of this exact fixture hub probe is allowed; the populated cards and menu are asserted separately.",
+					"maxCount": 10
+				}
+			]
+		}
+	],
+	"httpFixture": "../fixtures/docs-account.http.json"
+}

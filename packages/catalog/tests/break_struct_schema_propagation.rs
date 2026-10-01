@@ -194,7 +194,16 @@ async fn inbound_email_attachment_paths_reach_file_nodes_through_nested_structs(
     assert_eq!(board.nodes["attachment_fields"].error, None);
     assert_eq!(
         field_pins(&board, "attachment_fields"),
-        vec!["content_type", "filename", "path", "size"],
+        vec![
+            "charset",
+            "content_id",
+            "content_type",
+            "disposition",
+            "embedded",
+            "filename",
+            "path",
+            "size"
+        ],
     );
     let path_name = "__break_struct_field__path";
     let path = pin_named(&board, "attachment_fields", path_name);

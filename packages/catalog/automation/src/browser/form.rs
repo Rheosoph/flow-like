@@ -1,4 +1,6 @@
 #[cfg(feature = "execute")]
+use super::driver::PageContext;
+#[cfg(feature = "execute")]
 use crate::types::handles::AutomationSession;
 use crate::types::selectors::Selector;
 use flow_like::flow::{
@@ -7,6 +9,8 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
+use flow_like_browser::{BrowserError, Element, input::keys::NamedKey, script::ScriptArg};
 use flow_like_types::{async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -137,14 +141,14 @@ return {
 "#;
 
 #[cfg(feature = "execute")]
-async fn probe(
-    driver: &thirtyfour::WebDriver,
-    element: &thirtyfour::WebElement,
-) -> flow_like_types::Result<Probe> {
-    Ok(driver
-        .execute(PROBE, vec![element.to_json()?])
-        .await?
-        .convert()?)
+const VISIBLE_LABEL: &str = "return Array.from(arguments[0].labels).find((label) => { const rect = label.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; });";
+
+#[cfg(feature = "execute")]
+async fn probe(page: &PageContext, element: &Element) -> flow_like_types::Result<Probe> {
+    let state = page
+        .probe(PROBE, vec![ScriptArg::Element(element.clone())])
+        .await?;
+    Ok(flow_like_types::json::from_value(state.into_json())?)
 }
 
 /// Finds the target and waits until it can be used: enabled, and visible unless it is a
@@ -152,16 +156,16 @@ async fn probe(
 #[cfg(feature = "execute")]
 async fn actionable(
     context: &ExecutionContext,
-    driver: &thirtyfour::WebDriver,
+    page: &PageContext,
     target: &Selector,
     needs_visible: bool,
     timeout: std::time::Duration,
-) -> flow_like_types::Result<(thirtyfour::WebElement, Probe)> {
+) -> flow_like_types::Result<(Element, Probe)> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         context.check_cancelled()?;
-        let reason = match super::selector::find(driver, target).await {
-            Ok(element) => match probe(driver, &element).await {
+        let reason = match super::selector::find_element(page, target).await {
+            Ok(element) => match probe(page, &element).await {
                 Ok(state) if state.enabled && (state.visible || !needs_visible) => {
                     return Ok((element, state));
                 }
@@ -184,8 +188,8 @@ async fn actionable(
 
 #[cfg(feature = "execute")]
 async fn set_checked(
-    driver: &thirtyfour::WebDriver,
-    element: &thirtyfour::WebElement,
+    page: &PageContext,
+    element: &Element,
     state: &Probe,
     desired: bool,
 ) -> flow_like_types::Result<()> {
@@ -193,23 +197,21 @@ async fn set_checked(
         return Ok(());
     }
     if state.visible {
-        element.click().await?;
+        element.element_click().await?;
     } else if state.has_label {
-        driver
-            .execute(
-                "return Array.from(arguments[0].labels).find((label) => { const rect = label.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; });",
-                vec![element.to_json()?],
-            )
+        page.probe(VISIBLE_LABEL, vec![ScriptArg::Element(element.clone())])
             .await?
             .element()?
-            .click()
+            .element_click()
             .await?;
     } else {
-        driver
-            .execute("arguments[0].click();", vec![element.to_json()?])
-            .await?;
+        page.execute(
+            "arguments[0].click();",
+            vec![ScriptArg::Element(element.clone())],
+        )
+        .await?;
     }
-    if probe(driver, element).await?.checked != desired {
+    if probe(page, element).await?.checked != desired {
         return Err(flow_like_types::anyhow!(
             "clicking did not {} the element",
             if desired { "check" } else { "uncheck" }
@@ -219,19 +221,36 @@ async fn set_checked(
 }
 
 #[cfg(feature = "execute")]
+async fn select_option(element: &Element, value: &str) -> flow_like_types::Result<()> {
+    match element.select_by_value(value).await {
+        Err(BrowserError::NotFound { .. }) => {}
+        selected => return selected.map_err(Into::into),
+    }
+    element
+        .select_by_exact_text(value)
+        .await
+        .map_err(|error| match error {
+            BrowserError::NotFound { .. } => {
+                flow_like_types::anyhow!("no option has the value or label '{value}'")
+            }
+            other => other.into(),
+        })
+}
+
+#[cfg(feature = "execute")]
 async fn fill_field(
     context: &ExecutionContext,
-    driver: &thirtyfour::WebDriver,
+    page: &PageContext,
     field: &FormField,
     timeout: std::time::Duration,
 ) -> flow_like_types::Result<()> {
     let toggles = matches!(field.kind, FormFieldKind::Checkbox | FormFieldKind::Radio);
-    let (element, state) = actionable(context, driver, &field.target, !toggles, timeout).await?;
+    let (element, state) = actionable(context, page, &field.target, !toggles, timeout).await?;
     match field.kind {
         FormFieldKind::Text => {
             element.clear().await?;
             if !field.value.is_empty() {
-                element.send_keys(field.value.as_str()).await?;
+                element.send_keys(&field.value).await?;
             }
         }
         FormFieldKind::Select => {
@@ -241,21 +260,10 @@ async fn fill_field(
                     state.tag
                 ));
             }
-            let select = thirtyfour::components::SelectElement::new(&element).await?;
-            if select.select_by_value(&field.value).await.is_err() {
-                select
-                    .select_by_exact_text(&field.value)
-                    .await
-                    .map_err(|_| {
-                        flow_like_types::anyhow!(
-                            "no option has the value or label '{}'",
-                            field.value
-                        )
-                    })?;
-            }
+            select_option(&element, &field.value).await?;
         }
         FormFieldKind::Checkbox | FormFieldKind::Radio => {
-            set_checked(driver, &element, &state, desired_checked(field)?).await?;
+            set_checked(page, &element, &state, desired_checked(field)?).await?;
         }
     }
     Ok(())
@@ -331,9 +339,9 @@ impl NodeLogic for BrowserFillFormNode {
         validate_fields(&fields)?;
         let timeout = std::time::Duration::from_millis(timeout_ms as u64);
         context.set_pin_value("filled_count", json!(0)).await?;
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
         for (index, field) in fields.iter().enumerate() {
-            fill_field(context, &driver, field, timeout)
+            fill_field(context, &page, field, timeout)
                 .await
                 .map_err(|error| {
                     flow_like_types::anyhow!(
@@ -346,7 +354,7 @@ impl NodeLogic for BrowserFillFormNode {
                 .set_pin_value("filled_count", json!(index + 1))
                 .await?;
         }
-        drop(driver);
+        drop(page);
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
@@ -445,10 +453,10 @@ impl NodeLogic for BrowserTypeSecretNode {
                 "Timeout must be 0 to 300000 ms (got {timeout_ms})"
             ));
         }
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
         let (element, _) = actionable(
             context,
-            &driver,
+            &page,
             &locator,
             true,
             std::time::Duration::from_millis(timeout_ms as u64),
@@ -460,16 +468,18 @@ impl NodeLogic for BrowserTypeSecretNode {
         if clear {
             element.clear().await?;
         }
-        element.send_keys(secret.as_str()).await.map_err(|_| {
+        element.send_keys(&secret).await.map_err(|_| {
             flow_like_types::anyhow!(
                 "Type Secret could not type into {}; the field rejected keyboard input",
                 describe(&locator)
             )
         })?;
         if submit {
-            element.send_keys(thirtyfour::Key::Enter).await?;
+            element
+                .send_keys(&NamedKey::Enter.webdriver_char().to_string())
+                .await?;
         }
-        drop(driver);
+        drop(page);
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())

@@ -5,6 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
     fs,
+    io::ErrorKind,
     path::{Component, Path, PathBuf},
 };
 
@@ -137,14 +138,83 @@ struct SidebarNode {
     slug: String,
 }
 
+#[derive(Default)]
+struct GeneratedOutput {
+    check: bool,
+    expected: BTreeSet<PathBuf>,
+    differences: BTreeMap<PathBuf, &'static str>,
+}
+
+impl GeneratedOutput {
+    fn write(&mut self, path: PathBuf, content: String) -> Result<(), Box<dyn Error>> {
+        self.expected.insert(path.clone());
+        if self.check {
+            match fs::read(&path) {
+                Ok(actual) if actual == content.as_bytes() => {}
+                Ok(_) => {
+                    self.differences.insert(path, "changed");
+                }
+                Err(error) if error.kind() == ErrorKind::NotFound => {
+                    self.differences.insert(path, "missing");
+                }
+                Err(error) => return Err(error.into()),
+            }
+        } else {
+            fs::create_dir_all(path.parent().ok_or("generated file has no parent")?)?;
+            fs::write(path, content)?;
+        }
+        Ok(())
+    }
+
+    fn find_obsolete(&mut self, directory: &Path, nodes_root: &Path) -> Result<(), Box<dyn Error>> {
+        let entries = match fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if directory == nodes_root
+                && matches!(
+                    path.file_name().and_then(|name| name.to_str()),
+                    Some("overview.md" | "overview.mdx")
+                )
+            {
+                continue;
+            }
+            if entry.file_type()?.is_dir() {
+                self.find_obsolete(&path, nodes_root)?;
+            } else if !self.expected.contains(&path) {
+                self.differences.insert(path, "obsolete");
+            }
+        }
+        Ok(())
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
+    let mut output = GeneratedOutput::default();
+    for argument in std::env::args().skip(1) {
+        match argument.as_str() {
+            "--check" => output.check = true,
+            _ => {
+                return Err(format!(
+                    "Unknown argument: {argument}. Usage: generate_node_docs [--check]"
+                )
+                .into());
+            }
+        }
+    }
     let root = workspace_root()?;
     let docs_src = root.join("apps/docs/src");
     let docs_root = docs_src.join("content/docs");
     let nodes_dir = docs_root.join("nodes");
 
-    fs::create_dir_all(&nodes_dir)?;
-    clean_generated_node_docs(&nodes_dir)?;
+    if !output.check {
+        fs::create_dir_all(&nodes_dir)?;
+        clean_generated_node_docs(&nodes_dir)?;
+    }
 
     let mut nodes = build_doc_nodes()?;
     nodes.sort_by(|a, b| {
@@ -156,13 +226,30 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let categories = build_categories(&nodes);
 
-    write_catalog_data(&docs_src, &nodes, &categories)?;
-    write_sidebar(&docs_src, &categories, &nodes)?;
-    write_category_pages(&docs_src, &docs_root, &categories)?;
-    write_node_pages(&docs_src, &docs_root, &nodes)?;
+    write_catalog_data(&docs_src, &nodes, &categories, &mut output)?;
+    write_sidebar(&docs_src, &categories, &nodes, &mut output)?;
+    write_category_pages(&docs_src, &docs_root, &categories, &mut output)?;
+    write_node_pages(&docs_src, &docs_root, &nodes, &mut output)?;
+
+    if output.check {
+        output.find_obsolete(&nodes_dir, &nodes_dir)?;
+        if !output.differences.is_empty() {
+            for (path, kind) in &output.differences {
+                eprintln!(
+                    "{kind}: {}",
+                    path.strip_prefix(&root).unwrap_or(path).display()
+                );
+            }
+            return Err(format!(
+                "{} generated documentation files are out of date. Run `bun run docs:nodes` and review the changes.",
+                output.differences.len()
+            ).into());
+        }
+    }
 
     println!(
-        "Generated {} node pages and {} category pages in {}",
+        "{} {} node pages and {} category pages in {}",
+        if output.check { "Checked" } else { "Generated" },
         nodes.len(),
         categories.len(),
         nodes_dir.display()
@@ -297,9 +384,9 @@ fn write_catalog_data(
     docs_src: &Path,
     nodes: &[DocNode],
     categories: &[DocCategory],
+    output: &mut GeneratedOutput,
 ) -> Result<(), Box<dyn Error>> {
     let generated_dir = docs_src.join("generated");
-    fs::create_dir_all(&generated_dir)?;
 
     let nodes_json = serde_json::to_string_pretty(nodes)?;
     let categories_json = serde_json::to_string_pretty(categories)?;
@@ -309,23 +396,24 @@ fn write_catalog_data(
          export const nodesBySlug = Object.fromEntries(\n\
          \tcatalogNodes.map((node) => [node.slug, node]),\n\
          ) as Record<string, CatalogNode | undefined>;\n\n\
+         export const catalogSummaries = catalogNodes.map(toCatalogSummary);\n\n\
          export const nodesByCategory = Object.fromEntries(\n\
          \tcatalogCategories.map((category) => [\n\
          \t\tcategory.path,\n\
-         \t\tcatalogNodes.filter(\n\
+         \t\tcatalogSummaries.filter(\n\
          \t\t\t(node) =>\n\
          \t\t\t\tnode.category === category.path ||\n\
          \t\t\t\tnode.category.startsWith(`${{category.path}}/`),\n\
          \t\t),\n\
          \t]),\n\
-         ) as Record<string, CatalogNode[] | undefined>;\n",
+         ) as Record<string, CatalogSummary[] | undefined>;\n",
         generated_header(),
-        "import type {\n\tCatalogCategory,\n\tCatalogNode,\n} from \"../components/node-docs/NodeReference\";",
+        "import type {\n\tCatalogCategory,\n\tCatalogNode,\n} from \"../components/node-docs/NodeReference\";\nimport { toCatalogSummary, type CatalogSummary } from \"../components/node-docs/catalog-summary\";",
         nodes_json,
         categories_json
     );
 
-    fs::write(generated_dir.join("catalog-nodes.ts"), content)?;
+    output.write(generated_dir.join("catalog-nodes.ts"), content)?;
     Ok(())
 }
 
@@ -333,9 +421,9 @@ fn write_sidebar(
     docs_src: &Path,
     categories: &[DocCategory],
     nodes: &[DocNode],
+    output: &mut GeneratedOutput,
 ) -> Result<(), Box<dyn Error>> {
     let generated_dir = docs_src.join("generated");
-    fs::create_dir_all(&generated_dir)?;
 
     let mut root = SidebarCategory::default();
     for category in categories {
@@ -361,7 +449,7 @@ fn write_sidebar(
         generated_header(),
         serde_json::to_string_pretty(&items)?
     );
-    fs::write(generated_dir.join("node-sidebar.mjs"), content)?;
+    output.write(generated_dir.join("node-sidebar.mjs"), content)?;
     Ok(())
 }
 
@@ -439,10 +527,10 @@ fn write_category_pages(
     docs_src: &Path,
     docs_root: &Path,
     categories: &[DocCategory],
+    output: &mut GeneratedOutput,
 ) -> Result<(), Box<dyn Error>> {
     for category in categories {
         let file_path = docs_root.join(format!("{}.mdx", category.slug));
-        fs::create_dir_all(file_path.parent().ok_or("category page has no parent")?)?;
 
         let component_import = relative_import(
             file_path.parent().unwrap(),
@@ -486,7 +574,7 @@ fn write_category_pages(
             json_string(&category.path),
         );
 
-        fs::write(file_path, content)?;
+        output.write(file_path, content)?;
     }
 
     Ok(())
@@ -496,10 +584,10 @@ fn write_node_pages(
     docs_src: &Path,
     docs_root: &Path,
     nodes: &[DocNode],
+    output: &mut GeneratedOutput,
 ) -> Result<(), Box<dyn Error>> {
     for node in nodes {
         let file_path = docs_root.join(format!("{}.mdx", node.slug));
-        fs::create_dir_all(file_path.parent().ok_or("node page has no parent")?)?;
 
         let component_import = relative_import(
             file_path.parent().unwrap(),
@@ -536,7 +624,7 @@ fn write_node_pages(
             node_prop,
         );
 
-        fs::write(file_path, content)?;
+        output.write(file_path, content)?;
     }
 
     Ok(())
@@ -1210,7 +1298,100 @@ fn normalized_components(path: &Path) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{node_page_title, seo_detail};
+    use super::{GeneratedOutput, node_page_title, seo_detail};
+    use std::{fs, path::PathBuf, time::SystemTime};
+
+    struct OutputFixture(PathBuf);
+
+    impl OutputFixture {
+        fn new() -> Self {
+            Self(std::env::temp_dir().join(format!(
+                "flow-like-node-docs-{}-{}",
+                std::process::id(),
+                SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()
+            )))
+        }
+    }
+
+    impl Drop for OutputFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn check_reports_drift_without_changing_files() {
+        let fixture = OutputFixture::new();
+        let root = &fixture.0;
+        let mut writer = GeneratedOutput::default();
+        for (name, content) in [
+            ("same.mdx", "same"),
+            ("changed.mdx", "before"),
+            ("old/removed.mdx", "obsolete"),
+            ("overview.mdx", "authored overview"),
+        ] {
+            writer.write(root.join(name), content.to_string()).unwrap();
+        }
+
+        let mut check = GeneratedOutput {
+            check: true,
+            ..Default::default()
+        };
+        check
+            .write(root.join("same.mdx"), "same".to_string())
+            .unwrap();
+        check
+            .write(root.join("changed.mdx"), "after".to_string())
+            .unwrap();
+        check
+            .write(root.join("missing/new.mdx"), "new".to_string())
+            .unwrap();
+        check.find_obsolete(root, root).unwrap();
+        assert_eq!(check.differences.len(), 3);
+        assert_eq!(check.differences[&root.join("changed.mdx")], "changed");
+        assert_eq!(check.differences[&root.join("missing/new.mdx")], "missing");
+        assert_eq!(check.differences[&root.join("old/removed.mdx")], "obsolete");
+        assert_eq!(
+            fs::read_to_string(root.join("changed.mdx")).unwrap(),
+            "before"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("old/removed.mdx")).unwrap(),
+            "obsolete"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("overview.mdx")).unwrap(),
+            "authored overview"
+        );
+        assert!(!root.join("missing").exists());
+    }
+
+    #[test]
+    fn check_accepts_identical_output_and_never_creates_a_missing_root() {
+        let fixture = OutputFixture::new();
+        let mut check = GeneratedOutput {
+            check: true,
+            ..Default::default()
+        };
+        check
+            .write(fixture.0.join("new.mdx"), "new".to_string())
+            .unwrap();
+        check.find_obsolete(&fixture.0, &fixture.0).unwrap();
+        assert!(!fixture.0.exists());
+
+        GeneratedOutput::default()
+            .write(fixture.0.join("new.mdx"), "new".to_string())
+            .unwrap();
+        let mut check = GeneratedOutput {
+            check: true,
+            ..Default::default()
+        };
+        check
+            .write(fixture.0.join("new.mdx"), "new".to_string())
+            .unwrap();
+        check.find_obsolete(&fixture.0, &fixture.0).unwrap();
+        assert!(check.differences.is_empty());
+    }
 
     #[test]
     fn seo_detail_ignores_non_sentence_periods() {

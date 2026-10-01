@@ -11,7 +11,7 @@
 		},
 		"theme": "dark",
 		"format": "webp",
-		"timeoutMs": 120000,
+		"timeoutMs": 300000,
 		"settleMs": 500,
 		"disableAnimations": true,
 		"hideScrollbars": true
@@ -27,7 +27,7 @@
 				{
 					"type": "waitFor",
 					"text": "Create Your First App",
-					"timeoutMs": 120000
+					"timeoutMs": 300000
 				},
 				{
 					"type": "click",
@@ -49,6 +49,23 @@
 					"name": "CreateApp",
 					"mode": "viewport"
 				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
@@ -67,6 +84,23 @@
 					"type": "capture",
 					"name": "AppBoards",
 					"mode": "viewport"
+				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		},
@@ -88,56 +122,22 @@
 					"name": "AppStorage",
 					"mode": "viewport"
 				}
-			]
-		},
-		{
-			"name": "runtime-variables",
-			"path": "/library/config/setup",
-			"query": {
-				"id": "docs-app",
-				"capture": "docs"
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
-			"steps": [
+			"diagnosticAllowlist": [
 				{
-					"type": "waitFor",
-					"text": "CRM_API_TOKEN"
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
 				},
 				{
-					"type": "fill",
-					"selector": ".divide-y > div:nth-child(1) input[type=\"password\"]",
-					"value": "docs_crm_token_8fb2c1"
-				},
-				{
-					"type": "fill",
-					"selector": ".divide-y > div:nth-child(2) textarea",
-					"value": "https://support-api.eu.example"
-				},
-				{
-					"type": "delay",
-					"ms": 200
-				},
-				{
-					"type": "click",
-					"selector": ".divide-y > div:nth-child(1) > div:first-child > div:last-child button",
-					"index": 0
-				},
-				{
-					"type": "delay",
-					"ms": 200
-				},
-				{
-					"type": "click",
-					"selector": ".divide-y > div:nth-child(2) > div:first-child > div:last-child button",
-					"index": 0
-				},
-				{
-					"type": "waitFor",
-					"text": "All Configured"
-				},
-				{
-					"type": "capture",
-					"name": "RuntimeVariables",
-					"mode": "viewport"
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		},
@@ -160,6 +160,23 @@
 					"name": "AppDatabases",
 					"mode": "viewport"
 				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
@@ -172,7 +189,7 @@
 			"steps": [
 				{
 					"type": "waitFor",
-					"selector": "input[placeholder=\"Search events...\"]",
+					"selector": "input[placeholder=\"Search events\u2026\"]",
 					"state": "visible"
 				},
 				{
@@ -184,25 +201,42 @@
 					"name": "AppEvents",
 					"mode": "viewport"
 				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
 			"name": "pages-overview",
-			"path": "/library/config/pages",
+			"path": "/flow",
 			"query": {
-				"id": "docs-app",
+				"app": "docs-app",
+				"id": "docs-board",
 				"capture": "docs"
 			},
 			"steps": [
 				{
 					"type": "waitFor",
-					"selector": "[role=\"tab\"]",
+					"selector": "nav[aria-label=\"Board surfaces\"] button[aria-label=\"Explorer\"]",
 					"state": "visible"
 				},
 				{
 					"type": "click",
-					"selector": "[role=\"tab\"]",
-					"index": 1
+					"selector": "nav[aria-label=\"Board surfaces\"] button[aria-label=\"Explorer\"]"
 				},
 				{
 					"type": "waitFor",
@@ -212,6 +246,23 @@
 					"type": "capture",
 					"name": "PagesOverview",
 					"mode": "viewport"
+				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		},
@@ -251,6 +302,23 @@
 					"name": "PageBuilder",
 					"mode": "viewport"
 				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
@@ -263,7 +331,7 @@
 			"steps": [
 				{
 					"type": "waitFor",
-					"selector": "input[placeholder=\"Search events...\"]",
+					"selector": "input[placeholder=\"Search events\u2026\"]",
 					"state": "visible"
 				},
 				{
@@ -279,14 +347,28 @@
 					"name": "RoutesOverview",
 					"mode": "viewport"
 				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
 			"name": "route-configuration",
 			"path": "/library/config/pages",
-			"viewport": {
-				"height": 1280
-			},
 			"query": {
 				"id": "docs-app",
 				"eventId": "triage-selected-request",
@@ -295,15 +377,11 @@
 			"steps": [
 				{
 					"type": "waitFor",
-					"text": "Basic Information"
-				},
-				{
-					"type": "waitFor",
-					"text": "/triage"
+					"text": "Quick action"
 				},
 				{
 					"type": "click",
-					"selector": "button.font-mono"
+					"selector": "[data-section=\"identity\"] button"
 				},
 				{
 					"type": "waitFor",
@@ -314,6 +392,23 @@
 					"type": "capture",
 					"name": "RouteConfiguration",
 					"mode": "viewport"
+				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		},
@@ -332,12 +427,29 @@
 				},
 				{
 					"type": "waitFor",
-					"text": "Widget Preview"
+					"text": "Live \u00b7 sample data"
 				},
 				{
 					"type": "capture",
 					"name": "WidgetsOverview",
 					"mode": "viewport"
+				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		},
@@ -388,14 +500,28 @@
 					"name": "WidgetBuilder",
 					"mode": "viewport"
 				}
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
+			},
+			"diagnosticAllowlist": [
+				{
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
+				},
+				{
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
+				}
 			]
 		},
 		{
 			"name": "quick-action-event",
 			"path": "/library/config/pages",
-			"viewport": {
-				"height": 1280
-			},
 			"query": {
 				"id": "docs-app",
 				"eventId": "triage-selected-request",
@@ -404,33 +530,29 @@
 			"steps": [
 				{
 					"type": "waitFor",
-					"text": "Basic Information"
+					"text": "Navigate To"
 				},
 				{
 					"type": "capture",
 					"name": "QuickActionEvent",
 					"mode": "viewport"
 				}
-			]
-		},
-		{
-			"name": "chat-ui",
-			"path": "/use",
-			"query": {
-				"id": "docs-app",
-				"eventId": "support-assistant",
-				"capture": "docs"
+			],
+			"localStorage": {
+				"developer-mode": "{\"state\": {\"localValue\": true, \"pendingSync\": false}, \"version\": 0}"
 			},
-			"steps": [
+			"diagnosticAllowlist": [
 				{
-					"type": "waitFor",
-					"selector": "[data-fl-chat-welcome]",
-					"state": "visible"
+					"kind": "console",
+					"message": "Error invoking backend function: Error: Profile or auth context not available",
+					"reason": "The synthetic profile is signed out. The account information query is unavailable; the documented local workspace is asserted separately.",
+					"maxCount": 4
 				},
 				{
-					"type": "capture",
-					"name": "ChatUI",
-					"mode": "viewport"
+					"kind": "request",
+					"message": "GET /placeholder.webp: net::ERR_ABORTED",
+					"reason": "The local placeholder thumbnail is cancelled when the synthetic profile image replaces it. The capture waits for the populated screen.",
+					"maxCount": 2
 				}
 			]
 		}

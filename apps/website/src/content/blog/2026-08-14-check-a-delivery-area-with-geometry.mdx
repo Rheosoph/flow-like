@@ -1,0 +1,72 @@
+---
+title: "Build a Delivery-Area Check with Typed Geometry"
+description: "Represent a customer location and service polygon as Geometry values, test the boundary cases, and extend the decision to stored areas and spatial queries."
+date: 2026-08-14
+tags: ["geometry", "geospatial", "tutorial", "data"]
+cover: "/images/community-L3.png"
+draft: true
+---
+
+A delivery app needs a precise answer to a small question: is this location inside the area we serve? Keeping coordinates as arbitrary objects makes it easy to reverse their order or pass a shape that the next operation cannot interpret.
+
+Flow-Like's Geometry type gives locations and shapes an explicit contract. Geometry values use GeoJSON geometry objects, and the editor validates them and previews valid shapes on a map. We can use a Point for the customer and a Polygon for the service area, then turn the spatial result into a workflow branch.
+
+Use synthetic coordinates for this exercise. The rectangle below is an invented service area, not a claim about any real delivery service.
+
+<figure>
+  <img src="/posts/community/L3/overview.svg" alt="Conceptual delivery-area decision using a typed customer point and service polygon to choose an inside or outside path" loading="lazy" width="1600" height="1000" />
+  <figcaption>A typed point and polygon make the geographic inputs explicit. The workflow still defines what each result means for the customer.</figcaption>
+</figure>
+
+## Define the values before the decision
+
+Create a Geometry variable with the Polygon subtype and enter this GeoJSON:
+
+```json
+{
+  "type": "Polygon",
+  "coordinates": [
+    [
+      [13.39, 52.51],
+      [13.42, 52.51],
+      [13.42, 52.53],
+      [13.39, 52.53],
+      [13.39, 52.51]
+    ]
+  ]
+}
+```
+
+The first and last positions are equal because a polygon ring must be closed. Positions use **longitude, latitude**, in WGS 84 degrees. Every position has exactly two coordinates in the supported profile.
+
+Create the customer location as a Point:
+
+```json
+{"type": "Point", "coordinates": [13.405, 52.52]}
+```
+
+Inspect both on the map. A valid type does not prevent you from entering the wrong real-world location, so use the preview to check your interpretation. Reversed coordinates can describe a completely different place while still looking like a pair of reasonable numbers.
+
+A GeoJSON Feature includes properties and wraps a geometry. That wrapper is not itself a Geometry value. If your source provides Features or a FeatureCollection, extract the geometry with the appropriate adapter before connecting it to Geometry inputs.
+
+## Make the boundary rule explicit
+
+Add **Geometry Contains (Planar)**, connect the service polygon to A and the customer Point to B, and send its Boolean result to a Branch. Contains excludes a point exactly on the polygon boundary. If your service includes addresses on that boundary, use **Geometry Covers (Planar)** with the same input order. Let the supported path continue to the sample delivery response. Let the other path return a clear alternative, such as collection or a request for a different address.
+
+Test a point well inside and a point clearly outside first. Then test a point exactly on an edge and one at a corner. “Inside the service area” is business language; the treatment of the polygon boundary depends on the predicate you choose. Confirm that its behavior matches the rule you want, rather than leaving the edge case to chance.
+
+If an input accepts any Geometry but the next operation requires a Point, use the validating subtype conversion. In FlowScript, the distinction appears as `geometry` and `geometry<Point>`. The conversion is a useful place to reject an unexpected shape from an external source.
+
+Keep the result and the geographic inputs available in your test output. That lets you explain a rejected address without guessing which polygon or point the run actually used.
+
+## Store areas when the example grows
+
+For several delivery regions, create a Geometry column in Data Studio and store each area with a stable service identifier. The stored representation uses WKB with GeoArrow WGS 84 metadata, while reads return GeoJSON values.
+
+Application SQL exposes spatial predicates such as `ST_Contains` and `ST_Intersects`. You can bind a Geometry value as a query parameter rather than rebuilding it from an unvalidated string. The [Geometry reference](https://docs.flow-like.com/reference/geometry/) describes parameter binding and the supported write paths.
+
+Application SQL evaluates spatial predicates above the Lance scan. Direct Lance spatial filters can use an RTree index. The index's presence alone therefore does not tell you whether a query uses it. Check the query path when deciding how to retrieve a large set of service areas.
+
+Measurement units also need care. Planar operations on longitude and latitude use degrees and square degrees. Use explicitly named meter or square-meter operations when the question is a physical distance or area. For the delivery checker, a polygon decision may be sufficient; a promise about a five-kilometer radius needs the corresponding geodesic operation.
+
+Keep the service polygon version alongside the decision if your application needs to explain historical eligibility. A point that was outside yesterday can be inside after the business changes its area, even when the workflow code is unchanged.

@@ -247,7 +247,7 @@ fn idempotency_keys_reject_control_characters_and_more_than_200_bytes() {
         "é".repeat(101),
         "order\n123".into(),
         "order\t123".into(),
-        "order\0123".into(),
+        "order\x00123".into(),
     ] {
         input.idempotency_key = Some(key);
         assert!(validate(&input).is_err());

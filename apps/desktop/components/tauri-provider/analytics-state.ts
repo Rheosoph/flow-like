@@ -24,8 +24,8 @@ export class AnalyticsState implements IAnalyticsState {
 
 		const query = params.toString();
 		const url = query
-			? `apps/${appId}/analytics/?${query}`
-			: `apps/${appId}/analytics/`;
+			? `apps/${appId}/analytics?${query}`
+			: `apps/${appId}/analytics`;
 		const overview = await fetcher<IAnalyticsOverview>(
 			this.backend.profile,
 			url,

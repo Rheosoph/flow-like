@@ -166,6 +166,11 @@ fn tool_call_has_read_only_override(spec: &PlatformToolSpec, args: &Value) -> bo
     {
         return true;
     }
+    if spec.name == "flowpilot_board_review"
+        && matches!(spec_arg_str(args, "action", "action"), "list" | "status")
+    {
+        return true;
+    }
     if spec.name == "flowpilot_widget" && spec_arg_str(args, "mode", "mode") == "inspect" {
         return true;
     }
@@ -201,6 +206,15 @@ fn tool_call_has_read_only_override(spec: &PlatformToolSpec, args: &Value) -> bo
 /// destroys one irreplaceable target scopes its memory to that target: approving one table drop
 /// must never authorize dropping every other table for the rest of the session.
 fn approval_session_key(spec: &PlatformToolSpec, args: &Value) -> String {
+    if spec.name == "flowpilot_board_review" {
+        return format!(
+            "flowpilot_board_review:{}:{}:{}:{}",
+            spec_arg_str(args, "action", "action"),
+            spec_arg_str(args, "app_id", "appId"),
+            spec_arg_str(args, "board_id", "boardId"),
+            spec_arg_str(args, "job_id", "jobId")
+        );
+    }
     if spec.name == "app_build" {
         return format!(
             "app_build:{}:{}:{}",
@@ -330,17 +344,29 @@ fn snake_to_camel(snake: &str) -> String {
     out
 }
 
-/// Check `args` against the spec schema's top-level `required` list (accepting camelCase key
-/// variants). Returns an actionable error message when a required argument is missing or an
+/// Check `args` against the schema's required fields and action-specific requirements, accepting
+/// camelCase key variants. Returns an actionable error message when a required argument is missing or an
 /// empty string, so the model retries with complete arguments instead of the host executing a
 /// broken call (e.g. `create_app` without a name) or showing a pointless approval dialog.
 pub fn missing_required_args(spec: &PlatformToolSpec, args: &Value) -> Option<String> {
     let schema = (spec.schema)();
-    let required = schema.get("required")?.as_array()?;
-
-    let missing: Vec<&str> = required
+    let mut required = schema
+        .get("required")?
+        .as_array()?
         .iter()
         .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    if spec.name == "flowpilot_board_review"
+        && matches!(
+            spec_arg_str(args, "action", "action"),
+            "status" | "apply" | "dismiss"
+        )
+    {
+        required.push("job_id");
+    }
+
+    let missing: Vec<&str> = required
+        .into_iter()
         .filter(|key| {
             let value = args
                 .get(*key)
@@ -404,6 +430,17 @@ fn flowpilot_board_message(args: &Value) -> String {
     } else {
         format!("FlowPilot prepared this board edit and wants to apply it: {instruction}")
     }
+}
+
+fn flowpilot_board_review_message(args: &Value) -> String {
+    let action = if spec_arg_str(args, "action", "action") == "dismiss" {
+        "dismiss"
+    } else {
+        "apply"
+    };
+    let job_id = spec_arg_str(args, "job_id", "jobId");
+    let board_id = spec_arg_str(args, "board_id", "boardId");
+    format!("FlowPilot wants to {action} retained review '{job_id}' for board '{board_id}'.")
 }
 
 fn flowpilot_widget_message(args: &Value) -> String {
@@ -921,7 +958,7 @@ logs, semantic state, and screenshots."#,
                             "properties": {
                                 "action": { "type": "string", "enum": ["set_value", "trigger"], "description": "set_value writes an input's value; trigger fires a component event and awaits its workflows." },
                                 "component_id": { "type": "string", "description": "Component id or page-scoped element_ref from semantic page inspection or a prior result." },
-                                "value": { "description": "New value for set_value (string, number, boolean, or JSON)." },
+                                "value": { "type": ["string", "number", "boolean", "null"], "description": "set_value input: true/false for checkbox/switch, a number for slider and number inputs, a string for text, select, radio and date inputs, or null to clear those." },
                                 "event": { "type": "string", "description": "Event name for trigger (default \"click\")." }
                             },
                             "required": ["action", "component_id"]
@@ -1151,7 +1188,7 @@ approval dialog with a "don't ask again this session" option before it runs."#,
 
 `inspect` requires exact app_id/board_id: canonical source/entry IDs without a model or writes. Check coverage; anchors identify nodes; expressions may share nodes. Avoid style-only repairs. No compile/run. `explain` delegates; its prose is not authoritative source.
 
-`edit` takes one complete acceptance contract; can create the first board. Parallelize independent boards; never overlap edits. Results: persisted `event_nodes`, draft diagnostics and `segments_remaining`/`manual_steps`. A timeout is an unknown outcome. Resume the retained draft on the same conversation/request and revision; preserve full scope. Only `FLOWSCRIPT_BASE_REVISION_CONFLICT` permits a fresh draft. Report partial/manual work."#,
+`edit` takes one complete acceptance contract; can create the first board. Parallelize independent boards; never overlap edits. Results: persisted `event_nodes`, draft diagnostics and `segments_remaining`/`manual_steps`. A timeout is an unknown outcome. Resume the retained draft on the same conversation/request and revision; preserve full scope. Only `FLOWSCRIPT_BASE_REVISION_CONFLICT` permits a fresh draft. Report partial/manual work. Use `flowpilot_board_review` to inspect, apply, or dismiss an existing native review without generating another edit."#,
             schema: || {
                 json!({
                     "type": "object",
@@ -1179,6 +1216,29 @@ approval dialog with a "don't ask again this session" option before it runs."#,
             // cancellation and request-ownership fences still stop abandoned runs and reject late
             // mutations. Every other dispatch bound on this path derives from the same constant.
             timeout_secs: MAX_DELEGATED_RUN_DISPATCH_SECS,
+        },
+        PlatformToolSpec {
+            name: "flowpilot_board_review",
+            description: r#"Recover a retained native board review without another specialist run. Use exact app_id/board_id. `list` reads retained jobs; `status` reads one job. `apply` applies or retries that exact compiled batch; `dismiss` releases its pending review. All except list require a returned job_id. For "apply it" or a pending-review blocker, list first, match the requested review, then resolve that job. Do not regenerate the workflow. Apply/dismiss use the host's review approval. Report the returned phase; applied work still needs separate runtime verification."#,
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["list", "status", "apply", "dismiss"] },
+                        "app_id": { "type": "string", "description": "Exact app that owns the review." },
+                        "board_id": { "type": "string", "description": "Exact board that owns the review." },
+                        "job_id": { "type": "string", "description": "Returned native job id. Required for status, apply, and dismiss." }
+                    },
+                    "required": ["action", "app_id", "board_id"],
+                    "additionalProperties": false
+                })
+            },
+            approval: ToolApprovalSpec::Execute {
+                title: "Resolve board review",
+                message: flowpilot_board_review_message,
+                timing: ToolApprovalTiming::BeforeApply,
+            },
+            timeout_secs: 300,
         },
         PlatformToolSpec {
             name: "flowpilot_widget",
@@ -1266,13 +1326,13 @@ genuinely blocking choice, and never for anything a tool can inspect."#,
                                             "type": "object",
                                             "properties": {
                                                 "label": { "type": "string" },
-                                                "value": {},
+                                                "value": { "type": ["string", "number", "boolean"] },
                                                 "description": { "type": "string" }
                                             },
                                             "required": ["label"]
                                         }
                                     },
-                                    "default_value": { "description": "Recommended answer. Preselected, so accepting the card unchanged is a complete answer." },
+                                    "default_value": { "type": ["string", "number", "boolean"], "description": "Recommended answer. Preselected, so accepting the card unchanged is a complete answer." },
                                     "placeholder": { "type": "string" }
                                 },
                                 "required": ["id", "question"]
@@ -2087,7 +2147,10 @@ fn ontology_action_tool_schema() -> Value {
                     "type": "object",
                     "properties": {
                         "object_type": { "type": "string", "description": "Node label / object type." },
-                        "id": { "description": "Object id (string or number)." }
+                        "id": {
+                            "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }],
+                            "description": "Object id. Accepts the scalar type used by the mapped id column."
+                        }
                     },
                     "required": ["object_type", "id"]
                 },
@@ -3296,6 +3359,76 @@ mod tests {
     }
 
     #[test]
+    fn retained_board_reviews_are_available_without_a_specialist_run() {
+        let spec = find_global_tool_spec("flowpilot_board_review").expect("board review spec");
+        let schema = (spec.schema)();
+        assert_eq!(
+            schema["properties"]["action"]["enum"],
+            json!(["list", "status", "apply", "dismiss"])
+        );
+        assert_eq!(schema["required"], json!(["action", "app_id", "board_id"]));
+        assert_eq!(schema["additionalProperties"], json!(false));
+
+        let list = json!({ "action": "list", "app_id": "app", "board_id": "board" });
+        assert!(missing_required_args(&spec, &list).is_none());
+        for action in ["status", "apply", "dismiss"] {
+            let mut args = list.clone();
+            args["action"] = json!(action);
+            let error = missing_required_args(&spec, &args).expect("job is required");
+            assert!(error.contains("job_id"));
+            args["jobId"] = json!("job");
+            assert!(missing_required_args(&spec, &args).is_none());
+            args["jobId"] = json!("  ");
+            assert!(missing_required_args(&spec, &args).is_some());
+        }
+        for field in ["action", "app_id", "board_id"] {
+            let mut args = list.clone();
+            args.as_object_mut().unwrap().remove(field);
+            assert!(missing_required_args(&spec, &args).is_some());
+        }
+    }
+
+    #[test]
+    fn retained_board_review_approval_is_scoped_to_the_exact_job_and_action() {
+        let spec = find_global_tool_spec("flowpilot_board_review").expect("board review spec");
+        let mut args = json!({
+            "action": "list",
+            "app_id": "app",
+            "board_id": "board",
+            "job_id": "job",
+        });
+        for action in ["list", "status"] {
+            args["action"] = json!(action);
+            assert_eq!(resolve_tool_effect(&spec, &args), ToolEffect::ReadOnly);
+            assert_eq!(resolve_tool_approval_timing(&spec, &args), None);
+            assert_eq!(resolve_tool_approval(&spec, &args).kind, "none");
+            assert_eq!(resolve_tool_apply_approval(&spec, &args).kind, "none");
+        }
+        for action in ["apply", "dismiss"] {
+            args["action"] = json!(action);
+            assert_eq!(resolve_tool_effect(&spec, &args), ToolEffect::Execute);
+            assert_eq!(
+                resolve_tool_approval_timing(&spec, &args),
+                Some(ToolApprovalTiming::BeforeApply)
+            );
+            assert_eq!(resolve_tool_approval(&spec, &args).kind, "none");
+            let approval = resolve_tool_apply_approval(&spec, &args);
+            assert_eq!(approval.kind, "execute");
+            assert!(approval.description.contains(action));
+            assert_eq!(
+                approval.session_key,
+                format!("flowpilot_board_review:{action}:app:board:job")
+            );
+            let mut other = args.clone();
+            other["job_id"] = json!("another-job");
+            assert_ne!(
+                approval.session_key,
+                resolve_tool_apply_approval(&spec, &other).session_key
+            );
+        }
+    }
+
+    #[test]
     fn board_explain_remains_read_only_and_never_requires_approval() {
         let spec = find_global_tool_spec("flowpilot_board").expect("flowpilot_board spec");
         let explain_args = json!({
@@ -3646,9 +3779,10 @@ mod tests {
         // through `forward_files`, and without saying so the orchestrator never forwards them.
         // Reviewed 2026-09-28: +~0.1 KB on `flowpilot_home`: the Home specialist sees only the
         // delegated instruction, so a paraphrase loses the user's own classes, CSS, and colors.
+        // Reviewed 2026-09-30: +~0.7 KB for native board-review recovery and its routing hint.
         assert!(
-            total <= 15_700,
-            "global tool descriptions grew beyond the reviewed 15.7 KB budget: {total} bytes"
+            total <= 16_350,
+            "global tool descriptions grew beyond the reviewed 16.35 KB budget: {total} bytes"
         );
         for spec in specs {
             assert!(
@@ -3674,7 +3808,13 @@ mod tests {
         // +~0.2 KB the same day for `list_apps.query`, which makes its 250-item cap recoverable.
         // Reviewed 2026-09-26: +~0.3 KB for the optional `data_studio_agent.forward_files` and its
         // description clause, the only path from an attached GeoJSON file to `import_geojson`.
-        for (memory_enabled, budget) in [(false, 34_300usize), (true, 35_200usize)] {
+        // Reviewed 2026-09-30: +~0.1 KB for explicit `type` unions on `interact_app_page` and
+        // `ask_user` values. Typeless nodes fail OpenAI strict tool validation and become
+        // `"type": ""` in rig's Gemini conversion. +~0.1 KB the same day for the per-control
+        // `interact_app_page.value` types: Gemini keeps only the first type of a union, so the
+        // description is the only remaining signal that checkboxes take booleans.
+        // +~1.1 KB for `flowpilot_board_review`, which exposes retained jobs without regenerating.
+        for (memory_enabled, budget) in [(false, 35_700usize), (true, 36_450usize)] {
             let specs = global_assistant_tool_specs(memory_enabled);
             let total: usize = specs
                 .iter()
@@ -3763,5 +3903,42 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(types, vec!["string", "number", "boolean"]);
         }
+    }
+
+    /// Free-form values carry every JSON type their handler accepts: a checkbox needs a boolean
+    /// and null clears an input, ask_user preselects a default by strict equality with a choice
+    /// value, and ontology storage matches string, number, or boolean ids. The per-control types
+    /// stay in the description because Gemini keeps only the first type of a union.
+    #[test]
+    fn free_form_values_declare_every_type_their_handler_accepts() {
+        let interact = (interact_app_page_tool_spec().schema)();
+        let value = &interact["properties"]["actions"]["items"]["properties"]["value"];
+        assert_eq!(
+            value["type"],
+            json!(["string", "number", "boolean", "null"])
+        );
+        let description = value["description"].as_str().unwrap();
+        for control in [
+            "true/false for checkbox/switch",
+            "a number for slider",
+            "null",
+        ] {
+            assert!(description.contains(control), "{description}");
+        }
+
+        let ask = (find_global_tool_spec("ask_user").unwrap().schema)();
+        let question = &ask["properties"]["questions"]["items"]["properties"];
+        for value in [
+            &question["default_value"],
+            &question["choices"]["items"]["properties"]["value"],
+        ] {
+            assert_eq!(value["type"], json!(["string", "number", "boolean"]));
+        }
+
+        let ontology = ontology_action_tool_schema();
+        assert_eq!(
+            ontology["properties"]["object_refs"]["items"]["properties"]["id"]["oneOf"],
+            json!([{ "type": "string" }, { "type": "number" }, { "type": "boolean" }])
+        );
     }
 }

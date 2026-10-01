@@ -1,0 +1,22 @@
+[
+  {
+    "id": "mixed",
+    "input": "  Mixed CASE  ",
+    "expected": "mixed case"
+  },
+  {
+    "id": "clean",
+    "input": "already clean",
+    "expected": "already clean"
+  },
+  {
+    "id": "spaces",
+    "input": "   ",
+    "expected": ""
+  },
+  {
+    "id": "empty",
+    "input": "",
+    "expected": ""
+  }
+]

@@ -41,6 +41,7 @@ import type {
 	IBoardSummaryInclude,
 	IBoardVariables,
 } from "../../lib/schema/flow/board-summary";
+import type { IBoardVersionInfo } from "../../lib/schema/flow/board-version";
 import type { BoardCommand } from "../../lib/schema/flow/copilot";
 import type { IElementDemand } from "../../lib/schema/flow/element-demand";
 import type {
@@ -227,6 +228,14 @@ export interface IBoardState {
 		appId: string,
 		boardId: string,
 	): Promise<[number, number, number][]>;
+	/**
+	 * Published versions with when and by whom each was published, newest first. Publisher
+	 * and timestamp are best effort: older versions may only carry the storage timestamp.
+	 */
+	getBoardVersionInfos?(
+		appId: string,
+		boardId: string,
+	): Promise<IBoardVersionInfo[]>;
 	deleteBoard(appId: string, boardId: string): Promise<void>;
 	// [AppId, BoardId, BoardName]
 	getOpenBoards(): Promise<[string, string, string][]>;
@@ -412,6 +421,17 @@ export interface IBoardState {
 		appId: string,
 		boardId: string,
 		version?: [number, number, number],
+		anchors?: boolean,
+	): Promise<string>;
+
+	/**
+	 * Render an in-memory board, such as a stored version snapshot, as FlowScript. `board.id`
+	 * must equal `boardId`. Anchors default to on.
+	 */
+	renderFlowScript?(
+		appId: string,
+		boardId: string,
+		board: IBoard,
 		anchors?: boolean,
 	): Promise<string>;
 

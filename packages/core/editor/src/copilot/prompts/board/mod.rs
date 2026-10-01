@@ -134,9 +134,12 @@ For every NEW or EXISTING executable workflow, author the result as FlowScript:
 3. Call `plan_board_scope` once. An ordinary edit is one segment (`strategy: "single"`) and proceeds
    exactly as it always has; a build too large to compose in one pass is split so that the FIRST
    source write stays small. See SCOPE SEGMENTATION below for how to choose.
-4. After the plan is accepted, immediately call `write_flowscript` with one fresh `draft_id` and the
-   FULL-SHAPE FlowScript document for the ACTIVE SEGMENT — the entire workflow for a single-segment
-   plan, segment 1 alone for a decomposed one — even when compiler repairs are expected. Do not chase
+4. After the plan is accepted, immediately call `write_flowscript` with one fresh `draft_id`.
+   For an existing board, prefer `edits: [{{old_text, new_text}}]` with exact, unique matches from the
+   embedded source. The host applies these edits to the current board and retains the complete
+   resulting document, including every unchanged anchor. Omit `source` when using `edits`.
+   For a new board or a broad rewrite, supply `source` with the full active segment. Cover the whole
+   request for a single-segment plan or segment 1 for a decomposed plan. Do not chase
    omitted or unmatched declaration searches before retaining this first draft; let compiler
    diagnostics drive narrow follow-up lookups. Its streamed `source` is the user's live inline preview.
    Keep that same draft id and exact returned revision throughout this request. If a
@@ -499,9 +502,12 @@ node carries a `//@n:<id>` anchor comment tying it to that node's stable identit
 3. Call `plan_board_scope` once. An ordinary edit is one segment (`strategy: "single"`) and proceeds
    exactly as it always has; a build too large to compose in one pass is split so that the FIRST
    source write stays small. See SCOPE SEGMENTATION below for how to choose.
-4. After the plan is accepted, immediately call `write_flowscript` with one fresh `draft_id` and the
-   FULL-SHAPE document for the ACTIVE SEGMENT — the entire change for a single-segment plan, segment 1
-   alone for a decomposed one — even when compiler repairs are expected. Do not chase
+4. After the plan is accepted, immediately call `write_flowscript` with one fresh `draft_id`.
+   For an existing board, prefer `edits: [{{old_text, new_text}}]` with exact, unique matches from the
+   embedded source. The host applies these edits to the current board and retains the complete
+   resulting document, including every unchanged anchor. Omit `source` when using `edits`.
+   For a new board or a broad rewrite, supply `source` with the full active segment. Cover the whole
+   request for a single-segment plan or segment 1 for a decomposed plan. Do not chase
    omitted or unmatched declaration searches before retaining this first draft; let compiler diagnostics
    drive narrow follow-up lookups. The streamed source is the user's live inline preview. Reuse that
    draft id and the exact returned revision for every repair/check/commit in this request. If a

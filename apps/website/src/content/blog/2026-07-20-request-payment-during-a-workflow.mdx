@@ -1,0 +1,53 @@
+---
+title: "Pay for the result you need inside a Flow-Like app"
+description: "How checkout works during an app session, what happens after payment, and how this differs from buying access to an app."
+date: 2026-07-20
+tags: ["payments", "workflows", "tutorial", "customer-experience"]
+cover: "/images/community-M4.png"
+draft: true
+---
+
+A useful app can offer something you need only occasionally: a report prepared from your files, for example. Buying that report during the session gives the app a way to charge for the particular result you requested. The creator decides what the offer includes and when to ask for payment.
+
+Flow-Like's **Request Payment** step supports checkout while a signed-in person is using an app. The workflow receives a verified payment result and can continue with the work that person bought. Here is how to think about that journey, whether you are buying a result or creating an app that offers one.
+
+## Put the offer before the checkout
+
+The offer should explain what you will receive before you enter checkout. In the report example, that means identifying the files or information being used, the result being purchased, and its price. Access to the app and the purchase of a particular report are different things; the offer should make that distinction clear.
+
+App creators supply the product name, description, currency and amount. They also configure the relevant tax and delivery information. These details belong to the offer itself. A customer should be able to decide whether it is useful without understanding the workflow behind it.
+
+<figure>
+  <img src="/posts/community/M4/overview.svg" alt="A customer reviews a report offer, completes attended checkout, and the workflow follows a server-verified paid, canceled, expired, or failed result." loading="lazy" width="1600" height="1000" />
+  <figcaption>The workflow should explain every payment outcome, including the paths that do not produce the paid result.</figcaption>
+</figure>
+
+## What happens after checkout
+
+After payment is confirmed by the server, the workflow can deliver the purchased result. The app creator connects that confirmation to the appropriate next step, such as preparing the report or making it available to you. Payment confirmation and delivery are separate events: an app still needs to explain any processing time after checkout.
+
+The workflow also distinguishes three other outcomes:
+
+- **Canceled:** you chose not to complete the purchase.
+- **Expired:** the payment request is no longer active.
+- **Failed:** the payment could not be completed.
+
+Each outcome can have its own message and next step. A cancellation might return you to the offer. An expired request needs a fresh decision about whether to continue. A failure needs enough explanation to get help without guessing whether another payment attempt is necessary.
+
+The session cannot wait indefinitely. Its payment waiting period is limited by the time remaining for the workflow run. Creators need to account for that limit when designing an offer that takes additional time to fulfill.
+
+## A missing result needs a recovery path
+
+If you complete checkout and the final screen does not update, paying again should not be the first instruction you see. The app needs to check the existing purchase and help recover its result.
+
+Flow-Like supports identifying the same payment request across repeated attempts. When creators configure that correctly, a completed payment can return its previous confirmation. They also need to handle delivery retries: generating or sending a report a second time is a separate decision from confirming that it was paid for.
+
+Customers need a clear status and a way to get the purchased result. Those screens and recovery choices are part of the app the creator builds.
+
+## Use checkout during an app session
+
+This payment step runs while a signed-in person is using a remote app session. The owner completes seller onboarding and payment setup before offering a paid result. The offer shows the amount and currency before checkout, so the customer can make the purchase decision in the context of the work they requested.
+
+Local runs, scheduled jobs and background requests without a person present cannot collect real payments through this step. Creators can simulate each outcome in a local Board Test without charging anyone. Simulated results are labeled and stay separate from the verified payment confirmation used to deliver a real purchase.
+
+Buying access to an app or package uses the marketplace purchase journey. Request Payment suits an offer made during an app session, such as the report in this example. Creators can find the setup details and supported outcomes in the [payment reference](https://docs.flow-like.com/nodes/payments/).

@@ -114,6 +114,7 @@ Classify each work item as DIRECT (straightforward use of existing apps/evidence
 
 These ownership boundaries are strict:
 - `flowpilot_board`: all board/workflow logic, FlowScript, nodes, connections, entry points, debugging, and board explanations.
+- `flowpilot_board_review`: inspect, apply, retry, or dismiss an existing native board review directly. For "apply it" or a pending-review blocker, list the exact board's jobs and resolve the matching job without another specialist run.
 - `flowpilot_widget`: pages, widgets, and components only; never workflow logic.
 - `flowpilot_home`: the current profile's personal Home landing-page layout and Home widgets only.
 - `data_studio_agent`: app databases, ontologies, queries, analytics, actions, and data visualizations — reading AND changing them, on existing apps as much as during BUILD.
@@ -299,7 +300,7 @@ pub fn open_board_section(board: &GlobalOpenBoardContext) -> String {
         _ => String::new(),
     };
     lines.push(format!(
-        "To explain OR change this board, call flowpilot_board with app_id=\"{app_id}\"{board_arg} — use mode=\"explain\" to answer a question about it (read-only) and mode=\"edit\" to modify it. Do not answer board questions yourself."
+        "To explain or change this board, call flowpilot_board with app_id=\"{app_id}\"{board_arg}. Use mode=\"explain\" to answer a question about it and mode=\"edit\" to modify it. For an existing native review, use flowpilot_board_review with these same IDs to inspect or resolve the retained job directly."
     ));
     lines.join("\n")
 }
@@ -821,6 +822,7 @@ mod tests {
 
         for tool in [
             "flowpilot_board",
+            "flowpilot_board_review",
             "flowpilot_widget",
             "flowpilot_home",
             "data_studio_agent",
@@ -955,6 +957,20 @@ mod tests {
     }
 
     #[test]
+    fn pending_board_reviews_route_directly_with_the_open_board_identity() {
+        let prompt = global_assistant_system_prompt();
+        assert!(prompt.contains("For \"apply it\" or a pending-review blocker"));
+        assert!(prompt.contains("without another specialist run"));
+        let context = open_board_section(&GlobalOpenBoardContext {
+            app_id: "app".to_string(),
+            board_id: Some("board".to_string()),
+            ..Default::default()
+        });
+        assert!(context.contains("app_id=\"app\", board_id=\"board\""));
+        assert!(context.contains("use flowpilot_board_review with these same IDs"));
+    }
+
+    #[test]
     fn prompt_referenced_tools_exist_for_each_backend() {
         let shared: std::collections::HashSet<_> = global_assistant_tool_specs(false)
             .into_iter()
@@ -964,6 +980,7 @@ mod tests {
             "list_apps",
             "call_app_chat",
             "flowpilot_board",
+            "flowpilot_board_review",
             "flowpilot_widget",
             "flowpilot_home",
             "data_studio_agent",

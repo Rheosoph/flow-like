@@ -30,6 +30,30 @@ pub(super) struct ExternalAgentStreamState {
 }
 
 impl ExternalAgentStreamState {
+    pub(super) fn observe_session(
+        &mut self,
+        backend: FlowPilotAgentBackendKind,
+        value: &serde_json::Value,
+    ) {
+        let session = match backend {
+            FlowPilotAgentBackendKind::Codex
+                if value.get("type").and_then(serde_json::Value::as_str)
+                    == Some("thread.started") =>
+            {
+                value.get("thread_id")
+            }
+            FlowPilotAgentBackendKind::ClaudeCode => value.get("session_id"),
+            _ => None,
+        };
+        if let Some(session) = session
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|session| !session.is_empty())
+        {
+            self.session_id = Some(session.to_string());
+        }
+    }
+
     pub(super) fn decorate_agent_delta(&mut self, item_id: &str, delta: &str) -> String {
         if delta.is_empty() {
             return String::new();

@@ -517,9 +517,30 @@ async fn renew(state: &AppState, connection: &Connection) -> Result<Connection, 
             );
         }
         if let Err(error) = released {
-            return stored_after_conflict(state, &current.id, error).await;
+            return match rotated_after_failed_release(connection, current, error) {
+                Ok(rotated) => Ok(rotated),
+                Err(error) => stored_after_conflict(state, &connection.id, error).await,
+            };
         }
     }
+    Ok(current)
+}
+
+/// Rotation already persisted the new credential and may have revoked the caller's, so a
+/// lease release lost to a database fault keeps the new one; the lease lapses on its own.
+fn rotated_after_failed_release(
+    connection: &Connection,
+    current: Connection,
+    error: ApiError,
+) -> Result<Connection, ApiError> {
+    if error.status() == reqwest::StatusCode::CONFLICT || current.secret == connection.secret {
+        return Err(error);
+    }
+    tracing::warn!(
+        connection_id = %current.id,
+        %error,
+        "Teams credential lease release failed; using the rotated credential until the lease lapses"
+    );
     Ok(current)
 }
 
@@ -873,6 +894,28 @@ mod tests {
             panic!("an expired secret cannot stand in for a failed renewal");
         };
         assert_eq!(error.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn a_failed_lease_release_keeps_a_rotated_credential() {
+        let (c, ..) = fixture();
+        let mut rotated = c.clone();
+        rotated.secret = "rotated".into();
+        let lost = || ApiError::service_unavailable("Database unavailable");
+        let kept = rotated_after_failed_release(&c, rotated.clone(), lost()).unwrap();
+        assert_eq!(
+            (kept.id, kept.secret),
+            (c.id.clone(), "rotated".to_string())
+        );
+        let Err(error) = rotated_after_failed_release(&c, c.clone(), lost()) else {
+            panic!("an unrotated credential defers to the stored connection");
+        };
+        assert_eq!(error.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        let changed = ApiError::conflict("Teams setup changed. Refresh and try again.");
+        let Err(error) = rotated_after_failed_release(&c, rotated, changed) else {
+            panic!("a conflicting write defers to the stored connection");
+        };
+        assert_eq!(error.status(), reqwest::StatusCode::CONFLICT);
     }
 
     #[tokio::test]

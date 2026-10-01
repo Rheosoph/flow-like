@@ -101,15 +101,15 @@ impl NodeLogic for BrowserWaitForNode {
             return Err(flow_like_types::anyhow!("Wait timeout must be nonnegative"));
         }
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
         let token = context.get_cancellation_token();
         let operation = tokio::time::timeout(Duration::from_millis(timeout_ms as u64), async {
             loop {
                 context.check_cancelled()?;
-                match super::selector::find(&driver, &locator).await {
+                match super::selector::find_element(&page, &locator).await {
                     Ok(_) => return Ok::<(), flow_like_types::Error>(()),
-                    Err(error) if error.downcast_ref::<thirtyfour::error::WebDriverError>().is_some_and(|error| matches!(error.as_inner(), thirtyfour::error::WebDriverErrorInner::NoSuchElement(_) | thirtyfour::error::WebDriverErrorInner::StaleElementReference(_))) => {}
+                    Err(error) if super::driver::is_missing_element(&error) => {}
                     Err(error) => return Err(error),
                 }
                 crate::rpa::branch::delay(context, Duration::from_millis(100)).await?;

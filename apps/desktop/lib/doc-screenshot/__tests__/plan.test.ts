@@ -34,6 +34,29 @@ function planWithSteps(
 }
 
 describe("document screenshot plan validation", () => {
+	test("accepts structured database fixtures and rejects executable or malformed records", () => {
+		const seed = {
+			type: "seedIndexedDB",
+			database: "Chat-History",
+			stores: { messages: [{ id: "sample", payload: "synthetic data" }] },
+		};
+		expect(
+			validateDocScreenshotPlan(
+				planWithSteps([seed, { type: "capture", name: "chat" }]),
+			).scenarios[0].steps[0],
+		).toEqual(seed);
+		for (const invalid of [
+			{ ...seed, script: "arbitrary()" },
+			{ ...seed, stores: { messages: [() => "invalid"] } },
+			{ ...seed, stores: { messages: [null] } },
+		]) {
+			expect(() =>
+				validateDocScreenshotPlan(
+					planWithSteps([invalid, { type: "capture", name: "chat" }]),
+				),
+			).toThrow();
+		}
+	});
 	test("validates the checked-in onboarding example", async () => {
 		const examplePath = fileURLToPath(
 			new URL("../examples/onboarding.plan.json", import.meta.url),

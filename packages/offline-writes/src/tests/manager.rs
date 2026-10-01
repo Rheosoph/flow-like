@@ -23,7 +23,7 @@ use flow_like_storage::{
         offline_replay::{self, ReplayMarker, ReplayOutcome},
     },
     lancedb::{self, Connection, Table, query::Select},
-    object_store::{ObjectStoreExt, path::Path as ObjectPath},
+    object_store::{ObjectStore, ObjectStoreExt, path::Path as ObjectPath},
 };
 use flow_like_types::authorization::AuthorizationError;
 use serde_json::{Value, json};
@@ -60,8 +60,13 @@ pub(super) struct TestHost {
     pub(super) revoked: AtomicBool,
     /// Held by a test to pause `remote_table`.
     pub(super) hold: tokio::sync::Mutex<()>,
+    /// The next `remote_table` call panics.
+    pub(super) panic_remote: AtomicBool,
     pub(super) queue_changes: AtomicUsize,
     pub(super) discarded: Mutex<Vec<(String, String)>>,
+    /// The bucket-relative cloud store of the lazy mirror.
+    pub(super) objects: Mutex<Option<Arc<dyn ObjectStore>>>,
+    pub(super) mirror_changes: AtomicUsize,
 }
 
 impl TestHost {
@@ -71,8 +76,11 @@ impl TestHost {
             server,
             revoked: AtomicBool::new(false),
             hold: tokio::sync::Mutex::new(()),
+            panic_remote: AtomicBool::new(false),
             queue_changes: AtomicUsize::new(0),
             discarded: Mutex::new(Vec::new()),
+            objects: Mutex::new(None),
+            mirror_changes: AtomicUsize::new(0),
         })
     }
 }
@@ -133,12 +141,24 @@ impl OfflineHost for TestHost {
         match purpose {
             StoragePurpose::Storage => Some("apps/project/storage/".into()),
             StoragePurpose::Files => Some("apps/project/upload/".into()),
+            StoragePurpose::User => Some("users/auth0|123/apps/project/".into()),
             _ => None,
         }
     }
     async fn remote_table(&self, table: &BufferedTable) -> Result<Option<Table>> {
         let _held = self.hold.lock().await;
+        assert!(
+            !self.panic_remote.swap(false, Ordering::AcqRel),
+            "remote_table panicked"
+        );
         optional_table(&self.remote, &table.table).await
+    }
+    async fn remote_objects(&self) -> Result<Arc<dyn ObjectStore>> {
+        self.objects
+            .lock()
+            .unwrap()
+            .clone()
+            .context("Connect to the hub to download offline data")
     }
     async fn remote_table_names(&self, _database: &ObjectPath) -> Result<Vec<String>> {
         Ok(self.remote.table_names().execute().await?)
@@ -164,6 +184,9 @@ impl OfflineHost for TestHost {
     }
     fn queue_changed(&self) {
         self.queue_changes.fetch_add(1, Ordering::AcqRel);
+    }
+    fn mirror_changed(&self) {
+        self.mirror_changes.fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -209,6 +232,9 @@ async fn replay_endpoint(
     else {
         anyhow::bail!("Expected table mutation")
     };
+    let OfflineResource::Table { table: name, .. } = &request.resource else {
+        anyhow::bail!("Expected a table resource")
+    };
     let marker = ReplayMarker {
         operation_id: request.operation_id.clone(),
         digest: request.digest()?,
@@ -222,9 +248,9 @@ async fn replay_endpoint(
             }
             _ => anyhow::bail!("Absent tables require a schema-bearing create"),
         };
-        offline_replay::create(&state.cloud, "measurements", &marker, items).await?
+        offline_replay::create(&state.cloud, name, &marker, items).await?
     } else {
-        let table = state.cloud.open_table("measurements").execute().await?;
+        let table = state.cloud.open_table(name).execute().await?;
         offline_replay::replay(&table, &marker, replay_mutation(request.mutation.clone())?).await?
     };
     let (status, result) = match outcome {
@@ -838,9 +864,9 @@ async fn frozen_requests_use_validate_with_before_enqueue_and_dispatch() -> Resu
         max_request_bytes: Some(bytes),
         ..DESKTOP_OFFLINE_LIMITS
     };
-    writer.set_limits(limits(), at(wire)).await?;
+    writer.set_limits(limits(), at(wire), None).await?;
     insert(&table, 4, 40).await?;
-    writer.set_limits(limits(), at(wire - 1)).await?;
+    writer.set_limits(limits(), at(wire - 1), None).await?;
     assert_eq!(
         insert(&table, 5, 50).await.unwrap_err().to_string(),
         format!(
@@ -871,7 +897,7 @@ async fn lowered_limits_block_the_head_as_unclaimed_hub_limit() -> Result<()> {
         max_request_bytes: Some(100),
         ..DESKTOP_OFFLINE_LIMITS
     };
-    writer.set_limits(limits(), lowered).await?;
+    writer.set_limits(limits(), lowered, None).await?;
     assert!(!writer.drain_once().await?);
     let head = writer.queue.head()?.unwrap();
     assert_eq!((head.state.as_str(), head.attempts), ("blocked", 0));
@@ -885,7 +911,9 @@ async fn lowered_limits_block_the_head_as_unclaimed_hub_limit() -> Result<()> {
         )
     );
     writer.queue.retry(&id)?;
-    writer.set_limits(limits(), DESKTOP_OFFLINE_LIMITS).await?;
+    writer
+        .set_limits(limits(), DESKTOP_OFFLINE_LIMITS, None)
+        .await?;
     assert!(writer.drain_once().await?);
     assert_eq!(cloud_rows(&remote).await?.len(), 3);
     Ok(())
@@ -1033,16 +1061,16 @@ async fn refreshes_leave_the_queue_budget_for_accepted_writes() -> Result<()> {
         ..limits()
     };
     writer
-        .set_limits(queue_budget(4 * MIB), INSTANCE_OFFLINE_LIMITS)
+        .set_limits(queue_budget(4 * MIB), INSTANCE_OFFLINE_LIMITS, None)
         .await?;
     let budget = writer.refresh_snapshot_budget()?;
     assert!(budget < 28 * MIB);
     writer
-        .set_limits(queue_budget(8 * MIB), INSTANCE_OFFLINE_LIMITS)
+        .set_limits(queue_budget(8 * MIB), INSTANCE_OFFLINE_LIMITS, None)
         .await?;
     assert_eq!(writer.refresh_snapshot_budget()?, budget - 4 * MIB);
     writer
-        .set_limits(queue_budget(64 * MIB), INSTANCE_OFFLINE_LIMITS)
+        .set_limits(queue_budget(64 * MIB), INSTANCE_OFFLINE_LIMITS, None)
         .await?;
     assert_eq!(writer.refresh_snapshot_budget()?, budget - 12 * MIB);
 
@@ -1719,7 +1747,7 @@ async fn set_limits_applies_without_restart() -> Result<()> {
         max_operation_bytes: 64,
         ..DESKTOP_OFFLINE_LIMITS
     };
-    writer.set_limits(limits(), small).await?;
+    writer.set_limits(limits(), small, None).await?;
     let large = LogicalTableMutation::Insert {
         items: vec![json!({"id": 3, "value": 30, "note": "x".repeat(100)})],
     };
@@ -1735,6 +1763,7 @@ async fn set_limits_applies_without_restart() -> Result<()> {
                 ..limits()
             },
             DESKTOP_OFFLINE_LIMITS,
+            None,
         )
         .await?;
     insert(&table, 3, 30).await?;
@@ -1750,6 +1779,7 @@ async fn set_limits_applies_without_restart() -> Result<()> {
                     ..limits()
                 },
                 DESKTOP_OFFLINE_LIMITS,
+                None,
             )
             .await
             .is_err()

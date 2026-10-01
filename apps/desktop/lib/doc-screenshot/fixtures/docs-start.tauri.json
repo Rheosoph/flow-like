@@ -12,15 +12,24 @@
 							"description": "A thoughtful setup for conversation, writing, and everyday assistance.",
 							"icon": "/swimlanes/0-6.jpg",
 							"thumbnail": "/swimlanes/0-6.jpg",
-							"interests": ["conversation", "writing", "productivity"],
-							"tags": ["starter", "chat"],
+							"interests": [
+								"conversation",
+								"writing",
+								"productivity"
+							],
+							"tags": [
+								"starter",
+								"chat"
+							],
 							"hub": "api.flow-like.com",
 							"secure": true,
 							"hubs": [],
 							"apps": [],
 							"shortcuts": [],
 							"theme": null,
-							"bits": ["docs:gemma-local-4b"],
+							"bits": [
+								"docs:gemma-local-4b"
+							],
 							"settings": {
 								"connection_mode": "simplebezier"
 							},
@@ -45,7 +54,9 @@
 							"file_name": "gemma-local-4b.gguf",
 							"dependencies": [],
 							"dependency_tree_hash": "docs-gemma-local-tree-v1",
-							"authors": ["Flow-Like"],
+							"authors": [
+								"Flow-Like"
+							],
 							"license": "Apache-2.0",
 							"version": "1.0.0",
 							"created": "2026-07-15T09:00:00Z",
@@ -77,7 +88,11 @@
 									"long_description": "A compact local assistant for private conversations and everyday tasks.",
 									"icon": "/provider/gemini.webp",
 									"thumbnail": null,
-									"tags": ["local", "chat", "private"],
+									"tags": [
+										"local",
+										"chat",
+										"private"
+									],
 									"preview_media": [],
 									"use_case": "Everyday assistance",
 									"created_at": {
@@ -101,15 +116,24 @@
 							"description": "Build playful automations, game helpers, and interactive experiences.",
 							"icon": "/swimlanes/0-7.jpg",
 							"thumbnail": "/swimlanes/0-7.jpg",
-							"interests": ["games", "interactive", "creative"],
-							"tags": ["starter", "gaming"],
+							"interests": [
+								"games",
+								"interactive",
+								"creative"
+							],
+							"tags": [
+								"starter",
+								"gaming"
+							],
 							"hub": "api.flow-like.com",
 							"secure": true,
 							"hubs": [],
 							"apps": [],
 							"shortcuts": [],
 							"theme": null,
-							"bits": ["docs:game-workflows"],
+							"bits": [
+								"docs:game-workflows"
+							],
 							"settings": {
 								"connection_mode": "simplebezier"
 							},
@@ -134,7 +158,9 @@
 							"file_name": null,
 							"dependencies": [],
 							"dependency_tree_hash": "docs-game-workflows-tree-v1",
-							"authors": ["Flow-Like"],
+							"authors": [
+								"Flow-Like"
+							],
 							"created": "2026-07-15T09:00:00Z",
 							"updated": "2026-07-15T09:00:00Z",
 							"parameters": {},
@@ -143,7 +169,10 @@
 									"name": "Game Builder",
 									"description": "Reusable pieces for playful, interactive workflows.",
 									"icon": "/flow/icons/play.svg",
-									"tags": ["gaming", "interactive"],
+									"tags": [
+										"gaming",
+										"interactive"
+									],
 									"preview_media": [],
 									"created_at": {
 										"secs_since_epoch": 1784106000,
@@ -166,15 +195,24 @@
 							"description": "Explore guided projects, explainers, and reusable research workflows.",
 							"icon": "/swimlanes/0-8.jpg",
 							"thumbnail": "/swimlanes/0-8.jpg",
-							"interests": ["learning", "research", "education"],
-							"tags": ["starter", "learning"],
+							"interests": [
+								"learning",
+								"research",
+								"education"
+							],
+							"tags": [
+								"starter",
+								"learning"
+							],
 							"hub": "api.flow-like.com",
 							"secure": true,
 							"hubs": [],
 							"apps": [],
 							"shortcuts": [],
 							"theme": null,
-							"bits": ["docs:learning-guide"],
+							"bits": [
+								"docs:learning-guide"
+							],
 							"settings": {
 								"connection_mode": "simplebezier"
 							},
@@ -199,7 +237,9 @@
 							"file_name": null,
 							"dependencies": [],
 							"dependency_tree_hash": "docs-learning-guide-tree-v1",
-							"authors": ["Flow-Like"],
+							"authors": [
+								"Flow-Like"
+							],
 							"created": "2026-07-15T09:00:00Z",
 							"updated": "2026-07-15T09:00:00Z",
 							"parameters": {},
@@ -208,7 +248,10 @@
 									"name": "Learning Guide",
 									"description": "Guided tools for structured exploration and study.",
 									"icon": "/flow/icons/book-key.svg",
-									"tags": ["learning", "education"],
+									"tags": [
+										"learning",
+										"education"
+									],
 									"preview_media": [],
 									"created_at": {
 										"secs_since_epoch": 1784106000,
@@ -231,15 +274,24 @@
 							"description": "Prototype software, inspect data, and automate developer workflows.",
 							"icon": "/swimlanes/wasm-nodes.jpg",
 							"thumbnail": "/swimlanes/wasm-nodes.jpg",
-							"interests": ["coding", "automation", "developer tools"],
-							"tags": ["starter", "coding"],
+							"interests": [
+								"coding",
+								"automation",
+								"developer tools"
+							],
+							"tags": [
+								"starter",
+								"coding"
+							],
 							"hub": "api.flow-like.com",
 							"secure": true,
 							"hubs": [],
 							"apps": [],
 							"shortcuts": [],
 							"theme": null,
-							"bits": ["docs:code-workspace"],
+							"bits": [
+								"docs:code-workspace"
+							],
 							"settings": {
 								"connection_mode": "simplebezier"
 							},
@@ -264,7 +316,9 @@
 							"file_name": null,
 							"dependencies": [],
 							"dependency_tree_hash": "docs-code-workspace-tree-v1",
-							"authors": ["Flow-Like"],
+							"authors": [
+								"Flow-Like"
+							],
 							"created": "2026-07-15T09:00:00Z",
 							"updated": "2026-07-15T09:00:00Z",
 							"parameters": {},
@@ -273,7 +327,10 @@
 									"name": "Code Workspace",
 									"description": "Developer-focused workflow and prototyping tools.",
 									"icon": "/flow/icons/computer.svg",
-									"tags": ["coding", "automation"],
+									"tags": [
+										"coding",
+										"automation"
+									],
 									"preview_media": [],
 									"created_at": {
 										"secs_since_epoch": 1784106000,
@@ -313,15 +370,27 @@
 				"description": "My everyday space for conversations, writing, and lightweight research.",
 				"icon": "/swimlanes/0-6.jpg",
 				"thumbnail": "/swimlanes/0-6.jpg",
-				"interests": ["conversation", "writing", "research"],
-				"tags": ["personal", "assistant"],
+				"interests": [
+					"conversation",
+					"writing",
+					"research"
+				],
+				"tags": [
+					"personal",
+					"assistant"
+				],
 				"hub": "api.flow-like.com",
 				"secure": true,
-				"hubs": ["api.flow-like.com"],
+				"hubs": [
+					"api.flow-like.com"
+				],
 				"apps": [],
 				"shortcuts": [],
 				"theme": null,
-				"bits": ["docs:claude-sonnet-4", "docs:gemini-2-5-flash"],
+				"bits": [
+					"docs:claude-sonnet-4",
+					"docs:gemini-2-5-flash"
+				],
 				"settings": {
 					"connection_mode": "simplebezier"
 				},
@@ -344,15 +413,27 @@
 					"description": "My everyday space for conversations, writing, and lightweight research.",
 					"icon": "/swimlanes/0-6.jpg",
 					"thumbnail": "/swimlanes/0-6.jpg",
-					"interests": ["conversation", "writing", "research"],
-					"tags": ["personal", "assistant"],
+					"interests": [
+						"conversation",
+						"writing",
+						"research"
+					],
+					"tags": [
+						"personal",
+						"assistant"
+					],
 					"hub": "api.flow-like.com",
 					"secure": true,
-					"hubs": ["api.flow-like.com"],
+					"hubs": [
+						"api.flow-like.com"
+					],
 					"apps": [],
 					"shortcuts": [],
 					"theme": null,
-					"bits": ["docs:claude-sonnet-4", "docs:gemini-2-5-flash"],
+					"bits": [
+						"docs:claude-sonnet-4",
+						"docs:gemini-2-5-flash"
+					],
 					"settings": {
 						"connection_mode": "simplebezier"
 					},
@@ -373,15 +454,27 @@
 					"description": "Focused automations for product work and team operations.",
 					"icon": "/swimlanes/wasm-nodes.jpg",
 					"thumbnail": "/swimlanes/wasm-nodes.jpg",
-					"interests": ["automation", "productivity", "operations"],
-					"tags": ["work", "automation"],
+					"interests": [
+						"automation",
+						"productivity",
+						"operations"
+					],
+					"tags": [
+						"work",
+						"automation"
+					],
 					"hub": "api.flow-like.com",
 					"secure": true,
-					"hubs": ["api.flow-like.com"],
+					"hubs": [
+						"api.flow-like.com"
+					],
 					"apps": [],
 					"shortcuts": [],
 					"theme": null,
-					"bits": ["docs:gpt-4-1-mini", "docs:mistral-medium"],
+					"bits": [
+						"docs:gpt-4-1-mini",
+						"docs:mistral-medium"
+					],
 					"settings": {
 						"connection_mode": "simplebezier"
 					},
@@ -402,15 +495,27 @@
 					"description": "Long-context models and tools for analysis and synthesis.",
 					"icon": "/swimlanes/0-8.jpg",
 					"thumbnail": "/swimlanes/0-8.jpg",
-					"interests": ["research", "analysis", "learning"],
-					"tags": ["research", "reasoning"],
+					"interests": [
+						"research",
+						"analysis",
+						"learning"
+					],
+					"tags": [
+						"research",
+						"reasoning"
+					],
 					"hub": "api.flow-like.com",
 					"secure": true,
-					"hubs": ["api.flow-like.com"],
+					"hubs": [
+						"api.flow-like.com"
+					],
 					"apps": [],
 					"shortcuts": [],
 					"theme": null,
-					"bits": ["docs:deepseek-r1", "docs:nomic-embed-text"],
+					"bits": [
+						"docs:deepseek-r1",
+						"docs:nomic-embed-text"
+					],
 					"settings": {
 						"connection_mode": "simplebezier"
 					},
@@ -447,7 +552,9 @@
 				"file_name": "gemma-local-4b.gguf",
 				"dependencies": [],
 				"dependency_tree_hash": "docs-gemma-local-tree-v1",
-				"authors": ["Flow-Like"],
+				"authors": [
+					"Flow-Like"
+				],
 				"license": "Apache-2.0",
 				"version": "1.0.0",
 				"repository": null,
@@ -480,7 +587,11 @@
 						"long_description": "A compact local assistant for private conversations and everyday tasks.",
 						"icon": "/provider/gemini.webp",
 						"thumbnail": null,
-						"tags": ["local", "chat", "private"],
+						"tags": [
+							"local",
+							"chat",
+							"private"
+						],
 						"preview_media": [],
 						"use_case": "Everyday assistance",
 						"created_at": {
@@ -504,7 +615,9 @@
 				"file_name": null,
 				"dependencies": [],
 				"dependency_tree_hash": "docs-gemini-2-5-flash-tree-v1",
-				"authors": ["Google"],
+				"authors": [
+					"Google"
+				],
 				"license": "Hosted",
 				"version": "2.5",
 				"repository": null,
@@ -537,7 +650,11 @@
 						"long_description": "A responsive multimodal model for chat, images, code, and high-volume workflows.",
 						"icon": "/provider/gemini.webp",
 						"thumbnail": null,
-						"tags": ["multimodal", "fast", "reasoning"],
+						"tags": [
+							"multimodal",
+							"fast",
+							"reasoning"
+						],
 						"preview_media": [],
 						"use_case": "Fast multimodal work",
 						"created_at": {
@@ -561,7 +678,9 @@
 				"file_name": null,
 				"dependencies": [],
 				"dependency_tree_hash": "docs-claude-sonnet-4-tree-v1",
-				"authors": ["Anthropic"],
+				"authors": [
+					"Anthropic"
+				],
 				"license": "Hosted",
 				"version": "4",
 				"repository": null,
@@ -594,7 +713,11 @@
 						"long_description": "A balanced frontier model for complex analysis, software development, and agentic work.",
 						"icon": "/provider/anthropic.webp",
 						"thumbnail": null,
-						"tags": ["coding", "reasoning", "agents"],
+						"tags": [
+							"coding",
+							"reasoning",
+							"agents"
+						],
 						"preview_media": [],
 						"use_case": "Complex knowledge work",
 						"created_at": {
@@ -618,7 +741,9 @@
 				"file_name": null,
 				"dependencies": [],
 				"dependency_tree_hash": "docs-gpt-4-1-mini-tree-v1",
-				"authors": ["OpenAI"],
+				"authors": [
+					"OpenAI"
+				],
 				"license": "Hosted",
 				"version": "4.1",
 				"repository": null,
@@ -651,7 +776,11 @@
 						"long_description": "A compact hosted model with strong tool use and long-context performance.",
 						"icon": "/provider/gpt.webp",
 						"thumbnail": null,
-						"tags": ["tools", "coding", "long-context"],
+						"tags": [
+							"tools",
+							"coding",
+							"long-context"
+						],
 						"preview_media": [],
 						"use_case": "Efficient automation",
 						"created_at": {
@@ -675,7 +804,9 @@
 				"file_name": null,
 				"dependencies": [],
 				"dependency_tree_hash": "docs-deepseek-r1-tree-v1",
-				"authors": ["DeepSeek"],
+				"authors": [
+					"DeepSeek"
+				],
 				"license": "Hosted",
 				"version": "1",
 				"repository": null,
@@ -708,7 +839,11 @@
 						"long_description": "A reasoning-focused model for problems that benefit from careful decomposition.",
 						"icon": "/flow/icons/sparkles.svg",
 						"thumbnail": null,
-						"tags": ["reasoning", "math", "analysis"],
+						"tags": [
+							"reasoning",
+							"math",
+							"analysis"
+						],
 						"preview_media": [],
 						"use_case": "Deep reasoning",
 						"created_at": {
@@ -732,7 +867,9 @@
 				"file_name": null,
 				"dependencies": [],
 				"dependency_tree_hash": "docs-mistral-medium-tree-v1",
-				"authors": ["Mistral AI"],
+				"authors": [
+					"Mistral AI"
+				],
 				"license": "Hosted",
 				"version": "3",
 				"repository": null,
@@ -765,7 +902,11 @@
 						"long_description": "A versatile hosted model for multilingual business and technical workflows.",
 						"icon": "/flow/icons/cloud.svg",
 						"thumbnail": null,
-						"tags": ["multilingual", "tools", "business"],
+						"tags": [
+							"multilingual",
+							"tools",
+							"business"
+						],
 						"preview_media": [],
 						"use_case": "Multilingual workflows",
 						"created_at": {
@@ -789,7 +930,9 @@
 				"file_name": null,
 				"dependencies": [],
 				"dependency_tree_hash": "docs-whisper-large-v3-tree-v1",
-				"authors": ["Flow-Like"],
+				"authors": [
+					"Flow-Like"
+				],
 				"license": "Hosted",
 				"version": "3",
 				"repository": null,
@@ -809,7 +952,11 @@
 						"long_description": "High-quality transcription across languages and challenging audio.",
 						"icon": "/flow/icons/microphone.svg",
 						"thumbnail": null,
-						"tags": ["speech", "transcription", "multilingual"],
+						"tags": [
+							"speech",
+							"transcription",
+							"multilingual"
+						],
 						"preview_media": [],
 						"use_case": "Speech transcription",
 						"created_at": {
@@ -833,7 +980,9 @@
 				"file_name": null,
 				"dependencies": [],
 				"dependency_tree_hash": "docs-eleven-voice-tree-v1",
-				"authors": ["Flow-Like"],
+				"authors": [
+					"Flow-Like"
+				],
 				"license": "Hosted",
 				"version": "1",
 				"repository": null,
@@ -853,7 +1002,11 @@
 						"long_description": "Responsive hosted speech generation with clear, expressive voices.",
 						"icon": "/flow/icons/audio.svg",
 						"thumbnail": null,
-						"tags": ["speech", "voice", "audio"],
+						"tags": [
+							"speech",
+							"voice",
+							"audio"
+						],
 						"preview_media": [],
 						"use_case": "Voice generation",
 						"created_at": {
@@ -877,7 +1030,9 @@
 				"file_name": null,
 				"dependencies": [],
 				"dependency_tree_hash": "docs-nomic-embed-text-tree-v1",
-				"authors": ["Nomic AI"],
+				"authors": [
+					"Nomic AI"
+				],
 				"license": "Apache-2.0",
 				"version": "1.5",
 				"repository": null,
@@ -900,7 +1055,11 @@
 						"long_description": "A flexible embedding model for search, clustering, and retrieval workflows.",
 						"icon": "/flow/icons/text-search.svg",
 						"thumbnail": null,
-						"tags": ["embeddings", "search", "retrieval"],
+						"tags": [
+							"embeddings",
+							"search",
+							"retrieval"
+						],
 						"preview_media": [],
 						"use_case": "Semantic search",
 						"created_at": {
@@ -925,7 +1084,9 @@
 			"file_name": null,
 			"dependencies": [],
 			"dependency_tree_hash": "docs-gemini-2-5-flash-tree-v1",
-			"authors": ["Google"],
+			"authors": [
+				"Google"
+			],
 			"license": "Hosted",
 			"version": "2.5",
 			"repository": null,
@@ -958,7 +1119,11 @@
 					"long_description": "A responsive multimodal model for chat, images, code, and high-volume workflows.",
 					"icon": "/provider/gemini.webp",
 					"thumbnail": null,
-					"tags": ["multimodal", "fast", "reasoning"],
+					"tags": [
+						"multimodal",
+						"fast",
+						"reasoning"
+					],
 					"preview_media": [],
 					"use_case": "Fast multimodal work",
 					"created_at": {
@@ -990,7 +1155,9 @@
 					"file_name": "gemma-local-4b.gguf",
 					"dependencies": [],
 					"dependency_tree_hash": "docs-gemma-local-tree-v1",
-					"authors": ["Flow-Like"],
+					"authors": [
+						"Flow-Like"
+					],
 					"license": "Apache-2.0",
 					"version": "1.0.0",
 					"created": "2026-07-15T09:00:00Z",
@@ -1003,7 +1170,11 @@
 							"long_description": "A compact local assistant for private conversations and everyday tasks.",
 							"icon": "/provider/gemini.webp",
 							"thumbnail": null,
-							"tags": ["local", "chat", "private"],
+							"tags": [
+								"local",
+								"chat",
+								"private"
+							],
 							"preview_media": [],
 							"use_case": "Everyday assistance",
 							"created_at": {
@@ -1093,6 +1264,24 @@
 		"tray_update_state": null,
 		"set_current_profile": null,
 		"upsert_profile": null,
-		"update": null
+		"update": null,
+		"$http": {
+			"/api/v1/info/home-defaults": {
+				"main": null,
+				"profile": null
+			},
+			"/api/v1/auth/openid": {
+				"authority": "https://docs-auth.example",
+				"client_id": "docs-capture",
+				"redirect_uri": "http://127.0.0.1:3137/callback",
+				"response_type": "code",
+				"scope": "openid profile",
+				"metadata": {
+					"issuer": "https://docs-auth.example",
+					"authorization_endpoint": "https://docs-auth.example/authorize",
+					"token_endpoint": "https://docs-auth.example/token"
+				}
+			}
+		}
 	}
 }

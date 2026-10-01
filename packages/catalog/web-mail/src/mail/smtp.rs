@@ -22,6 +22,8 @@ use tokio::{self, io::BufStream, net::TcpStream, sync::Mutex};
 pub mod send_mail;
 
 #[cfg(feature = "execute")]
+use super::imap::rustls_connector;
+#[cfg(feature = "execute")]
 use async_smtp::{
     SmtpClient, SmtpTransport,
     authentication::{Credentials, DEFAULT_ENCRYPTED_MECHANISMS},
@@ -104,26 +106,6 @@ impl SmtpConnectNode {
     pub fn new() -> Self {
         SmtpConnectNode
     }
-}
-
-#[cfg(feature = "execute")]
-fn rustls_connector(accept_invalid: bool) -> tokio_rustls::TlsConnector {
-    use std::sync::Arc as StdArc;
-
-    let config = if accept_invalid {
-        tokio_rustls::rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(StdArc::new(super::imap::NoVerifier))
-            .with_no_client_auth()
-    } else {
-        let root_store = tokio_rustls::rustls::RootCertStore::from_iter(
-            webpki_roots::TLS_SERVER_ROOTS.iter().cloned(),
-        );
-        tokio_rustls::rustls::ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth()
-    };
-    tokio_rustls::TlsConnector::from(StdArc::new(config))
 }
 
 #[async_trait]
@@ -236,7 +218,7 @@ impl NodeLogic for SmtpConnectNode {
         let session: SmtpSession = match encryption.as_str() {
             "Tls" => {
                 let tcp = TcpStream::connect(addrs.as_slice()).await?;
-                let connector = rustls_connector(false);
+                let connector = rustls_connector(false)?;
                 let server_name = rustls_pki_types::ServerName::try_from(host.clone())?;
                 let tls_stream = connector.connect(server_name, tcp).await?;
                 let stream = BufStream::new(tls_stream);
@@ -269,7 +251,7 @@ impl NodeLogic for SmtpConnectNode {
                     .map_err(|e| anyhow!("SMTP STARTTLS failed: {}", e))?;
 
                 let tcp_stream = inner_plain.into_inner();
-                let connector = rustls_connector(true);
+                let connector = rustls_connector(true)?;
                 let server_name = rustls_pki_types::ServerName::try_from(host.clone())?;
                 let tls_stream = connector.connect(server_name, tcp_stream).await?;
                 let stream_tls = BufStream::new(tls_stream);

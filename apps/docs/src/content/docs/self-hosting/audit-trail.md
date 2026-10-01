@@ -8,7 +8,7 @@ change worker-owned database rows, or write the audit bucket. Docker Compose,
 Kubernetes, Azure and GCP use a dedicated audit worker for that boundary. The worker
 seals pending records, signs epochs, publishes checkpoints, archives and prunes.
 What the trail records is described in
-[Platform administration](/dev/platform-administration/#audit-trail).
+[Audit operations](/self-hosting/administration/audit/).
 
 ## Who holds what
 

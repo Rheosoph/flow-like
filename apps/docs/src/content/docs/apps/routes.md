@@ -1,5 +1,5 @@
 ---
-title: Routes
+title: Configure App routes
 description: Map URL paths to pages and events in your app
 sidebar:
   order: 42
@@ -33,7 +33,7 @@ You can edit a route in either place:
 
 1. On the Events list, select the route badge, edit the path, and press
    `Enter`. Press `Escape` to cancel.
-2. Open the Event, select its **Route Path** value under **Basic Information**,
+2. Open the Event, select its **Route Path** value under **Identity → Basic Information**,
    and edit it with the rest of the Event.
 
 ![The Route Path field while editing a UI Event in Flow-Like Desktop](../../../assets/RouteConfiguration.webp)

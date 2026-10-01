@@ -1,3 +1,5 @@
+#[cfg(feature = "execute")]
+use super::selector::optional_input;
 use crate::types::handles::AutomationSession;
 #[cfg(feature = "execute")]
 use crate::types::handles::{BrowserContextOptions, BrowserType, ProxySettings};
@@ -7,15 +9,18 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
+#[cfg(any(feature = "execute", test))]
+use flow_like_browser::{
+    attach::WebDriverProbe,
+    launch::{BrowserKind, LaunchOptions, ProxyConfig, default_cache_dir},
+};
 use flow_like_catalog_core::FlowPath;
 use flow_like_types::{async_trait, json::json};
-#[cfg(feature = "execute")]
+#[cfg(any(feature = "execute", test))]
 use std::time::Duration;
-#[cfg(feature = "execute")]
-use thirtyfour::{
-    Capabilities, CapabilitiesHelper, DesiredCapabilities,
-    common::capabilities::chromium::ChromiumLikeCapabilities,
-};
+
+#[cfg(any(feature = "execute", test))]
+const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[crate::register_node]
 #[derive(Default)]
@@ -33,7 +38,7 @@ impl NodeLogic for BrowserOpenNode {
         let mut node = Node::new(
             "browser_open",
             "Open Browser",
-            "Connects to a WebDriver server and opens a new browser session, optionally with a persistent profile, proxy, locale and relaxed certificate checks",
+            "Launches a local Chrome or Edge (or Chrome for Testing) with its own profile and connects over the DevTools protocol, optionally with a persistent profile, proxy, locale and relaxed certificate checks",
             "Automation/Browser",
         );
         node.set_version(2);
@@ -65,7 +70,7 @@ impl NodeLogic for BrowserOpenNode {
         node.add_input_pin(
             "webdriver_url",
             "WebDriver URL",
-            "URL of the WebDriver server (e.g., http://localhost:9515 for ChromeDriver)",
+            "Legacy WebDriver URL. Loopback addresses are ignored (the browser is launched locally); remote WebDriver hosts are not supported",
             VariableType::String,
         )
         .set_default_value(Some(json!("http://localhost:9515")));
@@ -73,7 +78,7 @@ impl NodeLogic for BrowserOpenNode {
         node.add_input_pin(
             "browser_type",
             "Browser Type",
-            "Browser to use (Chrome, Firefox, Edge, Safari)",
+            "Chrome or Edge. Firefox and Safari are not supported yet",
             VariableType::String,
         )
         .set_options(
@@ -131,7 +136,7 @@ impl NodeLogic for BrowserOpenNode {
         node.add_input_pin(
             "user_data_dir",
             "Profile Directory",
-            "Local directory for a persistent browser profile (cookies, storage, logins survive between runs). Chrome and Edge allow one browser per profile at a time. Requires WebDriver on this machine.",
+            "Local directory for a persistent browser profile (cookies, storage, logins survive between runs). Chrome and Edge allow one browser per profile at a time.",
             VariableType::Struct,
         )
         .set_schema::<FlowPath>()
@@ -140,7 +145,7 @@ impl NodeLogic for BrowserOpenNode {
         node.add_input_pin(
             "user_data_path",
             "Profile Path",
-            "Absolute profile directory on the WebDriver host; used when Profile Directory is not connected",
+            "Absolute profile directory on this machine; used when Profile Directory is not connected",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
@@ -181,7 +186,7 @@ impl NodeLogic for BrowserOpenNode {
         node.add_output_pin(
             "debugger_address",
             "Debugger Address",
-            "Chrome or Edge debugger endpoint, when available",
+            "DevTools endpoint of the launched browser (localhost:port)",
             VariableType::String,
         );
 
@@ -202,20 +207,19 @@ impl NodeLogic for BrowserOpenNode {
 
         let mut session: AutomationSession = context.evaluate_pin("session").await?;
         let webdriver_url: String = context.evaluate_pin("webdriver_url").await?;
-        let browser_type_str: String = context.evaluate_pin("browser_type").await?;
-        let headless: bool = context.evaluate_pin("headless").await?;
-        let viewport_width: i64 = context.evaluate_pin("viewport_width").await?;
-        let viewport_height: i64 = context.evaluate_pin("viewport_height").await?;
-        let user_agent: String = context.evaluate_pin("user_agent").await?;
-        let page_load_timeout: i64 = context.evaluate_pin("page_load_timeout").await?;
-        let proxy_server: String =
-            super::selector::optional_input(context, "proxy_server", String::new()).await?;
-        let proxy_bypass: String =
-            super::selector::optional_input(context, "proxy_bypass", String::new()).await?;
-        let locale: String =
-            super::selector::optional_input(context, "locale", String::new()).await?;
-        let ignore_https_errors: bool =
-            super::selector::optional_input(context, "ignore_https_errors", false).await?;
+        let pins = OpenPins {
+            browser_type: context.evaluate_pin("browser_type").await?,
+            headless: context.evaluate_pin("headless").await?,
+            viewport_width: context.evaluate_pin("viewport_width").await?,
+            viewport_height: context.evaluate_pin("viewport_height").await?,
+            user_agent: context.evaluate_pin("user_agent").await?,
+            page_load_timeout: context.evaluate_pin("page_load_timeout").await?,
+            user_data_dir: None,
+            proxy_server: optional_input(context, "proxy_server", String::new()).await?,
+            proxy_bypass: optional_input(context, "proxy_bypass", String::new()).await?,
+            locale: optional_input(context, "locale", String::new()).await?,
+            ignore_https_errors: optional_input(context, "ignore_https_errors", false).await?,
+        };
         session.ensure_active(context).await?;
         if session.has_browser() {
             return Err(flow_like_types::anyhow!(
@@ -223,104 +227,22 @@ impl NodeLogic for BrowserOpenNode {
             ));
         }
 
-        let browser_type = match browser_type_str.as_str() {
-            "Firefox" => BrowserType::Firefox,
-            "Edge" => BrowserType::Edge,
-            "Safari" => BrowserType::Safari,
-            "Chrome" => BrowserType::Chrome,
-            other => {
-                return Err(flow_like_types::anyhow!(
-                    "Unknown browser type '{other}' (use Chrome, Firefox, Edge or Safari)"
-                ));
-            }
-        };
-        let (Ok(width), Ok(height)) = (
-            u32::try_from(viewport_width),
-            u32::try_from(viewport_height),
-        ) else {
-            return Err(flow_like_types::anyhow!(
-                "Viewport must be positive (got {viewport_width}x{viewport_height})"
-            ));
-        };
-        if width == 0 || height == 0 {
-            return Err(flow_like_types::anyhow!(
-                "Viewport must be positive (got {viewport_width}x{viewport_height})"
-            ));
-        }
-        if page_load_timeout < 1 {
-            return Err(flow_like_types::anyhow!(
-                "Page load timeout must be at least 1 second (got {page_load_timeout})"
-            ));
-        }
+        let mut launch = launch_options_from_pins(&pins)?;
+        check_webdriver_url(&webdriver_url).await?;
+        launch.user_data_dir = profile_directory(context)
+            .await?
+            .map(std::path::PathBuf::from);
+        let options = session_options(&launch, webdriver_url);
 
-        let options = BrowserContextOptions {
-            browser_type,
-            headless,
-            user_data_dir: profile_directory(context).await?,
-            viewport_width: Some(width),
-            viewport_height: Some(height),
-            user_agent: Some(user_agent).filter(|agent| !agent.is_empty()),
-            locale: Some(locale.trim().to_string()).filter(|locale| !locale.is_empty()),
-            ignore_https_errors,
-            proxy: Some(proxy_server.trim().to_string())
-                .filter(|server| !server.is_empty())
-                .map(|server| ProxySettings {
-                    server,
-                    bypass: Some(proxy_bypass.trim().to_string())
-                        .filter(|bypass| !bypass.is_empty()),
-                    username: None,
-                    password: None,
-                }),
-            webdriver_url: Some(webdriver_url.clone()),
-            ..Default::default()
-        };
-        let caps = browser_capabilities(&options)?;
+        session.prepare_browser_slot(context).await?;
+        let browser = flow_like_browser::Browser::launch(launch).await?;
+        let debugger_address = browser.debugger_address().unwrap_or_default().to_owned();
+        session
+            .attach_cdp_browser(context, browser, &options)
+            .await?;
 
-        let (driver, debugger_address) = super::protocol::connect_webdriver(&webdriver_url, caps)
-            .await
-            .map_err(|e| {
-                flow_like_types::anyhow!(
-                    "Failed to connect to WebDriver at {}: {}",
-                    webdriver_url,
-                    e
-                )
-            })?;
-
-        let setup: flow_like_types::Result<thirtyfour::WindowHandle> = async {
-            driver
-                .set_page_load_timeout(Duration::from_secs(page_load_timeout as u64))
-                .await
-                .map_err(|e| flow_like_types::anyhow!("Failed to set page load timeout: {}", e))?;
-            match_viewport(&driver, width, height).await?;
-            Ok(driver.window().await?)
-        }
-        .await;
-        let initial_window = match setup {
-            Ok(handle) => handle,
-            Err(error) => {
-                let _ = driver.quit().await;
-                return Err(error);
-            }
-        };
-
-        if let Err(error) = session
-            .attach_browser(context, driver.clone(), &options)
-            .await
-        {
-            let _ = driver.quit().await;
-            return Err(error);
-        }
-        session.set_current_page(context, initial_window).await?;
-        if let Some(address) = &debugger_address {
-            super::protocol::remember_debugger_address(context, &session, address).await;
-        }
-        super::selector::optional_output(
-            context,
-            "debugger_address",
-            json!(debugger_address.unwrap_or_default()),
-        )
-        .await?;
-
+        super::selector::optional_output(context, "debugger_address", json!(debugger_address))
+            .await?;
         super::selector::optional_output(context, "session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
 
@@ -335,13 +257,157 @@ impl NodeLogic for BrowserOpenNode {
     }
 }
 
+#[cfg(any(feature = "execute", test))]
+struct OpenPins {
+    browser_type: String,
+    headless: bool,
+    viewport_width: i64,
+    viewport_height: i64,
+    user_agent: String,
+    page_load_timeout: i64,
+    user_data_dir: Option<String>,
+    proxy_server: String,
+    proxy_bypass: String,
+    locale: String,
+    ignore_https_errors: bool,
+}
+
+#[cfg(any(feature = "execute", test))]
+fn launch_options_from_pins(pins: &OpenPins) -> flow_like_types::Result<LaunchOptions> {
+    let kind = browser_kind(&pins.browser_type)?;
+    let window_size = viewport(pins.viewport_width, pins.viewport_height)?;
+    let page_load_timeout = u64::try_from(pins.page_load_timeout)
+        .ok()
+        .filter(|seconds| *seconds >= 1)
+        .ok_or_else(|| {
+            flow_like_types::anyhow!(
+                "Page load timeout must be at least 1 second (got {})",
+                pins.page_load_timeout
+            )
+        })?;
+    let proxy_server = pins.proxy_server.trim();
+    let proxy = if proxy_server.is_empty() {
+        None
+    } else {
+        flow_like_browser::launch::args::validate_proxy(proxy_server)?;
+        Some(ProxyConfig {
+            server: proxy_server.to_string(),
+            bypass: bypass_hosts(&pins.proxy_bypass),
+        })
+    };
+    Ok(LaunchOptions {
+        kind,
+        executable: None,
+        headless: pins.headless,
+        window_size,
+        user_agent: Some(pins.user_agent.clone()).filter(|agent| !agent.is_empty()),
+        user_data_dir: pins.user_data_dir.as_ref().map(std::path::PathBuf::from),
+        proxy,
+        locale: Some(pins.locale.trim().to_string()).filter(|locale| !locale.is_empty()),
+        ignore_https_errors: pins.ignore_https_errors,
+        cache_dir: default_cache_dir(),
+        page_load_timeout: Duration::from_secs(page_load_timeout),
+        launch_timeout: LAUNCH_TIMEOUT,
+    })
+}
+
+#[cfg(any(feature = "execute", test))]
+fn browser_kind(name: &str) -> flow_like_types::Result<BrowserKind> {
+    match name {
+        "Chrome" => Ok(BrowserKind::Chrome),
+        "Edge" => Ok(BrowserKind::Edge),
+        "Firefox" | "Safari" => Err(flow_like_types::anyhow!(
+            "Firefox and Safari are not supported by the new browser engine yet (WebDriver BiDi support is planned); use Chrome or Edge"
+        )),
+        other => Err(flow_like_types::anyhow!(
+            "Unknown browser type '{other}' (use Chrome, Firefox, Edge or Safari)"
+        )),
+    }
+}
+
+#[cfg(any(feature = "execute", test))]
+fn viewport(width: i64, height: i64) -> flow_like_types::Result<(u32, u32)> {
+    match (u32::try_from(width), u32::try_from(height)) {
+        (Ok(columns), Ok(rows)) if columns > 0 && rows > 0 => Ok((columns, rows)),
+        _ => Err(flow_like_types::anyhow!(
+            "Viewport must be positive (got {width}x{height})"
+        )),
+    }
+}
+
+#[cfg(feature = "execute")]
+fn session_options(launch: &LaunchOptions, webdriver_url: String) -> BrowserContextOptions {
+    BrowserContextOptions {
+        browser_type: match launch.kind {
+            BrowserKind::Chrome => BrowserType::Chrome,
+            BrowserKind::Edge => BrowserType::Edge,
+        },
+        headless: launch.headless,
+        user_data_dir: launch
+            .user_data_dir
+            .as_ref()
+            .map(|directory| directory.to_string_lossy().into_owned()),
+        viewport_width: Some(launch.window_size.0),
+        viewport_height: Some(launch.window_size.1),
+        user_agent: launch.user_agent.clone(),
+        locale: launch.locale.clone(),
+        ignore_https_errors: launch.ignore_https_errors,
+        proxy: launch.proxy.as_ref().map(|proxy| ProxySettings {
+            server: proxy.server.clone(),
+            bypass: Some(proxy.bypass.join(",")).filter(|bypass| !bypass.is_empty()),
+            username: None,
+            password: None,
+        }),
+        webdriver_url: Some(webdriver_url),
+        ..Default::default()
+    }
+}
+
+#[cfg(any(feature = "execute", test))]
+fn route_webdriver_url(url: &str, probe: Option<WebDriverProbe>) -> flow_like_types::Result<()> {
+    if !flow_like_browser::attach::is_loopback(url) {
+        return Err(flow_like_types::anyhow!(
+            "Remote WebDriver hosts are no longer supported; use Attach to Browser with a CDP endpoint"
+        ));
+    }
+    match probe {
+        Some(WebDriverProbe::Other { name }) => {
+            let name = webdriver_server_name(&name);
+            Err(flow_like_types::anyhow!(
+                "{url} is a {name} server; remote WebDriver hosts are no longer supported. Use Attach to Browser with a CDP endpoint"
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The probe names a server by its `/status` message, which for Selenium Grid is a readiness
+/// sentence such as "Selenium Grid ready." or "Selenium Grid not ready.".
+#[cfg(any(feature = "execute", test))]
+fn webdriver_server_name(status_message: &str) -> &str {
+    [" not ready.", " ready."]
+        .into_iter()
+        .find_map(|readiness| status_message.strip_suffix(readiness))
+        .filter(|name| !name.is_empty())
+        .unwrap_or(status_message)
+}
+
+#[cfg(feature = "execute")]
+pub(crate) async fn check_webdriver_url(url: &str) -> flow_like_types::Result<()> {
+    let url = url.trim();
+    let probe = if flow_like_browser::attach::is_loopback(url) {
+        Some(flow_like_browser::attach::probe_webdriver(url).await)
+    } else {
+        None
+    };
+    route_webdriver_url(url, probe)
+}
+
 #[cfg(feature = "execute")]
 async fn profile_directory(
     context: &mut ExecutionContext,
 ) -> flow_like_types::Result<Option<String>> {
-    let value =
-        super::selector::optional_input(context, "user_data_dir", flow_like_types::Value::Null)
-            .await?;
+    let value = optional_input(context, "user_data_dir", flow_like_types::Value::Null).await?;
     if !value.is_null() && !value.as_object().is_some_and(|object| object.is_empty()) {
         let path: FlowPath = flow_like_types::json::from_value(value)?;
         let runtime = path.to_runtime(context).await?;
@@ -351,7 +417,7 @@ async fn profile_directory(
             }
             _ => {
                 return Err(flow_like_types::anyhow!(
-                    "Profile Directory must be a local directory on the WebDriver host"
+                    "Profile Directory must be a local directory on this machine"
                 ));
             }
         };
@@ -363,8 +429,7 @@ async fn profile_directory(
         })?;
         return Ok(Some(directory.to_string_lossy().into_owned()));
     }
-    let native: String =
-        super::selector::optional_input(context, "user_data_path", String::new()).await?;
+    let native: String = optional_input(context, "user_data_path", String::new()).await?;
     let native = native.trim();
     if native.is_empty() {
         return Ok(None);
@@ -378,17 +443,6 @@ async fn profile_directory(
 }
 
 #[cfg(any(feature = "execute", test))]
-fn proxy_parts(server: &str) -> (String, String) {
-    match server.split_once("://") {
-        Some((scheme, rest)) => (
-            scheme.to_ascii_lowercase(),
-            rest.trim_end_matches('/').to_string(),
-        ),
-        None => ("http".to_string(), server.trim_end_matches('/').to_string()),
-    }
-}
-
-#[cfg(any(feature = "execute", test))]
 fn bypass_hosts(bypass: &str) -> Vec<String> {
     bypass
         .split([',', ';'])
@@ -396,177 +450,6 @@ fn bypass_hosts(bypass: &str) -> Vec<String> {
         .filter(|host| !host.is_empty())
         .map(str::to_string)
         .collect()
-}
-
-#[cfg(feature = "execute")]
-fn w3c_proxy(
-    proxy: &ProxySettings,
-) -> flow_like_types::Result<thirtyfour::common::capabilities::desiredcapabilities::Proxy> {
-    use thirtyfour::common::capabilities::desiredcapabilities::Proxy;
-    let (scheme, address) = proxy_parts(&proxy.server);
-    let no_proxy = proxy.bypass.as_deref().map(bypass_hosts);
-    let (http, socks, socks_version) = match scheme.as_str() {
-        "http" | "https" => (Some(address), None, None),
-        "socks5" | "socks5h" => (None, Some(address), Some(5)),
-        "socks4" | "socks4a" => (None, Some(address), Some(4)),
-        other => {
-            return Err(flow_like_types::anyhow!(
-                "Unsupported proxy scheme '{other}' in '{}' (use http, https, socks4 or socks5)",
-                proxy.server
-            ));
-        }
-    };
-    Ok(Proxy::Manual {
-        ftp_proxy: None,
-        ssl_proxy: http.clone(),
-        http_proxy: http,
-        socks_proxy: socks,
-        socks_version,
-        socks_username: None,
-        socks_password: None,
-        no_proxy,
-    })
-}
-
-#[cfg(feature = "execute")]
-fn chromium_options(
-    caps: &mut impl ChromiumLikeCapabilities,
-    options: &BrowserContextOptions,
-) -> flow_like_types::Result<()> {
-    let failed = |setting: &str, error: thirtyfour::error::WebDriverError| {
-        flow_like_types::anyhow!("Failed to set {setting}: {error}")
-    };
-    if options.headless {
-        caps.set_headless()
-            .map_err(|e| failed("headless mode", e))?;
-    }
-    if let (Some(width), Some(height)) = (options.viewport_width, options.viewport_height) {
-        caps.add_arg(&format!("--window-size={width},{height}"))
-            .map_err(|e| failed("window size", e))?;
-    }
-    if let Some(agent) = &options.user_agent {
-        caps.add_arg(&format!("--user-agent={agent}"))
-            .map_err(|e| failed("user agent", e))?;
-    }
-    if let Some(directory) = &options.user_data_dir {
-        caps.add_arg(&format!("--user-data-dir={directory}"))
-            .map_err(|e| failed("profile directory", e))?;
-    }
-    if let Some(proxy) = &options.proxy {
-        caps.add_arg(&format!("--proxy-server={}", proxy.server))
-            .map_err(|e| failed("proxy", e))?;
-        if let Some(bypass) = &proxy.bypass {
-            caps.add_arg(&format!(
-                "--proxy-bypass-list={}",
-                bypass_hosts(bypass).join(";")
-            ))
-            .map_err(|e| failed("proxy bypass", e))?;
-        }
-    }
-    if let Some(locale) = &options.locale {
-        caps.add_arg(&format!("--lang={locale}"))
-            .map_err(|e| failed("locale", e))?;
-        caps.add_experimental_option("prefs", json!({ "intl.accept_languages": locale }))
-            .map_err(|e| failed("locale", e))?;
-    }
-    if options.ignore_https_errors {
-        caps.accept_insecure_certs(true)
-            .map_err(|e| failed("certificate handling", e))?;
-    }
-    Ok(())
-}
-
-#[cfg(feature = "execute")]
-fn browser_capabilities(options: &BrowserContextOptions) -> flow_like_types::Result<Capabilities> {
-    match options.browser_type {
-        BrowserType::Chrome => {
-            let mut caps = DesiredCapabilities::chrome();
-            chromium_options(&mut caps, options)?;
-            Ok(Capabilities::from(caps))
-        }
-        BrowserType::Edge => {
-            let mut caps = DesiredCapabilities::edge();
-            chromium_options(&mut caps, options)?;
-            Ok(Capabilities::from(caps))
-        }
-        BrowserType::Firefox => {
-            let mut caps = DesiredCapabilities::firefox();
-            if options.headless {
-                caps.set_headless()
-                    .map_err(|e| flow_like_types::anyhow!("Failed to set headless: {}", e))?;
-            }
-            let mut prefs = thirtyfour::common::capabilities::firefox::FirefoxPreferences::new();
-            if let Some(agent) = &options.user_agent {
-                prefs.set("general.useragent.override", agent)?;
-            }
-            if let Some(locale) = &options.locale {
-                prefs.set("intl.accept_languages", locale)?;
-                prefs.set("intl.locale.requested", locale)?;
-            }
-            caps.set_preferences(prefs)?;
-            if let Some(directory) = &options.user_data_dir {
-                caps.add_arg("-profile")?;
-                caps.add_arg(directory)?;
-            }
-            if let Some(proxy) = &options.proxy {
-                caps.set_proxy(w3c_proxy(proxy)?)?;
-            }
-            if options.ignore_https_errors {
-                caps.accept_insecure_certs(true)?;
-            }
-            Ok(Capabilities::from(caps))
-        }
-        BrowserType::Safari => {
-            if options.headless || options.user_agent.is_some() {
-                return Err(flow_like_types::anyhow!(
-                    "Safari WebDriver does not support headless mode or a custom user agent"
-                ));
-            }
-            if options.user_data_dir.is_some()
-                || options.proxy.is_some()
-                || options.locale.is_some()
-                || options.ignore_https_errors
-            {
-                return Err(flow_like_types::anyhow!(
-                    "Safari WebDriver does not support a profile directory, proxy, locale or ignoring HTTPS errors"
-                ));
-            }
-            Ok(Capabilities::from(DesiredCapabilities::safari()))
-        }
-    }
-}
-
-/// Sizes the window so the page viewport (not the outer window) matches the request.
-#[cfg(feature = "execute")]
-async fn match_viewport(
-    driver: &thirtyfour::WebDriver,
-    width: u32,
-    height: u32,
-) -> flow_like_types::Result<()> {
-    driver
-        .set_window_rect(0, 0, width, height)
-        .await
-        .map_err(|e| flow_like_types::anyhow!("Failed to set window size: {}", e))?;
-    let Ok(inner) = driver
-        .execute("return [window.innerWidth, window.innerHeight];", vec![])
-        .await
-        .and_then(|result| result.convert::<[i64; 2]>())
-    else {
-        return Ok(());
-    };
-    let extra_width = (i64::from(width) - inner[0]).max(0);
-    let extra_height = (i64::from(height) - inner[1]).max(0);
-    if extra_width == 0 && extra_height == 0 {
-        return Ok(());
-    }
-    let grown = |size: u32, extra: i64| u32::try_from(i64::from(size) + extra).unwrap_or(size);
-    driver
-        .set_window_rect(0, 0, grown(width, extra_width), grown(height, extra_height))
-        .await
-        .map_err(|e| {
-            flow_like_types::anyhow!("Failed to fit the viewport to {width}x{height}: {e}")
-        })?;
-    Ok(())
 }
 
 #[crate::register_node]
@@ -633,11 +516,6 @@ impl NodeLogic for BrowserCloseNode {
         let mut session: AutomationSession = context.evaluate_pin("session").await?;
         let detached = session.detach_browser(context).await;
         super::protocol::clear_listeners(context, &session).await;
-        {
-            let mut cache = context.cache.write().await;
-            cache.remove(&format!("automation:debugger:{}", session.session_ref));
-            cache.remove(&super::refs::refs_key(&session));
-        }
         detached?;
         super::selector::optional_output(context, "session_out", json!(session)).await?;
 
@@ -657,19 +535,221 @@ impl NodeLogic for BrowserCloseNode {
 mod tests {
     use super::*;
 
+    const REMOTE_WEBDRIVER: &str =
+        "Remote WebDriver hosts are no longer supported; use Attach to Browser with a CDP endpoint";
+
+    fn default_pins() -> OpenPins {
+        OpenPins {
+            browser_type: "Chrome".to_string(),
+            headless: true,
+            viewport_width: 1920,
+            viewport_height: 1080,
+            user_agent: String::new(),
+            page_load_timeout: 30,
+            user_data_dir: None,
+            proxy_server: String::new(),
+            proxy_bypass: String::new(),
+            locale: String::new(),
+            ignore_https_errors: false,
+        }
+    }
+
+    fn open_error(pins: OpenPins) -> String {
+        launch_options_from_pins(&pins)
+            .expect_err("the pins must be rejected")
+            .to_string()
+    }
+
     #[test]
-    fn proxy_servers_split_into_scheme_and_address() {
-        assert_eq!(
-            proxy_parts("socks5://127.0.0.1:1080/"),
-            ("socks5".to_string(), "127.0.0.1:1080".to_string())
-        );
-        assert_eq!(
-            proxy_parts("proxy.local:3128"),
-            ("http".to_string(), "proxy.local:3128".to_string())
-        );
+    fn proxy_bypass_hosts_split_on_commas_and_semicolons() {
         assert_eq!(
             bypass_hosts("localhost, *.internal;;10.0.0.1"),
             vec!["localhost", "*.internal", "10.0.0.1"]
         );
+    }
+
+    #[test]
+    fn default_pins_launch_headless_chrome_with_a_temporary_profile() {
+        let options = launch_options_from_pins(&default_pins()).expect("default pins launch");
+        assert_eq!(options.kind, BrowserKind::Chrome);
+        assert!(options.executable.is_none());
+        assert!(options.headless);
+        assert_eq!(options.window_size, (1920, 1080));
+        assert_eq!(options.user_agent, None);
+        assert_eq!(options.user_data_dir, None);
+        assert!(options.proxy.is_none());
+        assert_eq!(options.locale, None);
+        assert!(!options.ignore_https_errors);
+        assert_eq!(options.cache_dir, default_cache_dir());
+        assert_eq!(options.page_load_timeout, Duration::from_secs(30));
+        assert_eq!(options.launch_timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn every_open_pin_maps_to_its_launch_option() {
+        let options = launch_options_from_pins(&OpenPins {
+            browser_type: "Edge".to_string(),
+            headless: false,
+            viewport_width: 800,
+            viewport_height: 600,
+            user_agent: "FlowLike/1.0".to_string(),
+            page_load_timeout: 5,
+            user_data_dir: Some("/profiles/crm".to_string()),
+            proxy_server: " socks5://127.0.0.1:1080 ".to_string(),
+            proxy_bypass: "localhost, *.internal".to_string(),
+            locale: " de-DE ".to_string(),
+            ignore_https_errors: true,
+        })
+        .expect("valid pins launch");
+        assert_eq!(options.kind, BrowserKind::Edge);
+        assert!(!options.headless);
+        assert_eq!(options.window_size, (800, 600));
+        assert_eq!(options.user_agent.as_deref(), Some("FlowLike/1.0"));
+        assert_eq!(
+            options.user_data_dir,
+            Some(std::path::PathBuf::from("/profiles/crm"))
+        );
+        let proxy = options.proxy.expect("proxy is configured");
+        assert_eq!(proxy.server, "socks5://127.0.0.1:1080");
+        assert_eq!(proxy.bypass, vec!["localhost", "*.internal"]);
+        assert_eq!(options.locale.as_deref(), Some("de-DE"));
+        assert!(options.ignore_https_errors);
+        assert_eq!(options.page_load_timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn proxy_bypass_without_a_proxy_server_is_ignored() {
+        let options = launch_options_from_pins(&OpenPins {
+            proxy_server: "  ".to_string(),
+            proxy_bypass: "localhost".to_string(),
+            ..default_pins()
+        })
+        .expect("pins launch");
+        assert!(options.proxy.is_none());
+    }
+
+    #[test]
+    fn proxy_credentials_are_rejected_without_echoing_them() {
+        let message = open_error(OpenPins {
+            proxy_server: "http://user:secret@proxy.local:3128".to_string(),
+            ..default_pins()
+        });
+        assert!(
+            message.contains("Proxy credentials are not supported"),
+            "{message}"
+        );
+        assert!(!message.contains("secret"), "{message}");
+    }
+
+    #[test]
+    fn firefox_and_safari_are_rejected_with_the_engine_error() {
+        for browser_type in ["Firefox", "Safari"] {
+            assert_eq!(
+                open_error(OpenPins {
+                    browser_type: browser_type.to_string(),
+                    ..default_pins()
+                }),
+                "Firefox and Safari are not supported by the new browser engine yet (WebDriver BiDi support is planned); use Chrome or Edge"
+            );
+        }
+        assert_eq!(
+            open_error(OpenPins {
+                browser_type: "Opera".to_string(),
+                ..default_pins()
+            }),
+            "Unknown browser type 'Opera' (use Chrome, Firefox, Edge or Safari)"
+        );
+    }
+
+    #[test]
+    fn viewport_and_page_load_timeout_keep_their_limits() {
+        for (width, height) in [(0, 1080), (1920, -1), (i64::from(u32::MAX) + 1, 1080)] {
+            assert_eq!(
+                open_error(OpenPins {
+                    viewport_width: width,
+                    viewport_height: height,
+                    ..default_pins()
+                }),
+                format!("Viewport must be positive (got {width}x{height})")
+            );
+        }
+        for timeout in [0, -5] {
+            assert_eq!(
+                open_error(OpenPins {
+                    page_load_timeout: timeout,
+                    ..default_pins()
+                }),
+                format!("Page load timeout must be at least 1 second (got {timeout})")
+            );
+        }
+    }
+
+    #[test]
+    fn remote_webdriver_hosts_are_rejected() {
+        for url in [
+            "http://grid.example.com:4444",
+            "http://10.0.0.5:9515",
+            "selenium:4444",
+        ] {
+            let error = route_webdriver_url(url, None).expect_err("remote host");
+            assert_eq!(error.to_string(), REMOTE_WEBDRIVER, "{url}");
+        }
+        let error = route_webdriver_url(
+            "http://grid.example.com:4444",
+            Some(WebDriverProbe::Chromedriver),
+        )
+        .expect_err("remote host even when a probe answered");
+        assert_eq!(error.to_string(), REMOTE_WEBDRIVER);
+    }
+
+    #[test]
+    fn loopback_webdriver_urls_launch_locally_unless_another_webdriver_answers() {
+        for url in [
+            "",
+            "http://localhost:9515",
+            "http://127.0.0.1:9515",
+            "http://[::1]:9515",
+            "localhost:9515",
+        ] {
+            for probe in [
+                None,
+                Some(WebDriverProbe::NotRunning),
+                Some(WebDriverProbe::Chromedriver),
+            ] {
+                assert!(
+                    route_webdriver_url(url, probe.clone()).is_ok(),
+                    "{url} {probe:?}"
+                );
+            }
+        }
+        let error = route_webdriver_url(
+            "http://127.0.0.1:4444",
+            Some(WebDriverProbe::Other {
+                name: "geckodriver".to_string(),
+            }),
+        )
+        .expect_err("another WebDriver server");
+        assert_eq!(
+            error.to_string(),
+            "http://127.0.0.1:4444 is a geckodriver server; remote WebDriver hosts are no longer supported. Use Attach to Browser with a CDP endpoint"
+        );
+    }
+
+    #[test]
+    fn selenium_grid_is_named_without_its_readiness_sentence() {
+        for status_message in ["Selenium Grid ready.", "Selenium Grid not ready."] {
+            let error = route_webdriver_url(
+                "http://localhost:4444/wd/hub",
+                Some(WebDriverProbe::Other {
+                    name: status_message.to_string(),
+                }),
+            )
+            .expect_err("Selenium Grid");
+            assert_eq!(
+                error.to_string(),
+                "http://localhost:4444/wd/hub is a Selenium Grid server; remote WebDriver hosts are no longer supported. Use Attach to Browser with a CDP endpoint",
+                "{status_message}"
+            );
+        }
     }
 }

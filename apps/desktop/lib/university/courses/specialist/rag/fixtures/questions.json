@@ -1,0 +1,25 @@
+[
+  {
+    "question": "What does REF-201 allow?",
+    "required_source": "refund",
+    "expected_fact_v1": "30 days"
+  },
+  {
+    "question": "Can I get money back on an annual plan?",
+    "required_source": "refund"
+  },
+  {
+    "question": "What is the weekend telephone number?",
+    "expected": "insufficient evidence"
+  },
+  {
+    "question": "What is the enterprise discount?",
+    "caller": "public",
+    "expected": "restricted text absent from prompt"
+  },
+  {
+    "question": "What is the support response target?",
+    "required_source": "support",
+    "expected_fact": "4 hours"
+  }
+]

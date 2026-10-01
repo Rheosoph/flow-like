@@ -1,6 +1,6 @@
 ---
 title: Node.js / TypeScript SDK
-description: Complete reference for the @flow-like/sdk package — authenticate, trigger workflows, manage files, query databases, and use LLMs from Node.js.
+description: Use the Node.js and TypeScript SDK for authentication, workflows, files, databases, and model calls.
 sidebar:
   order: 1
 ---
@@ -36,30 +36,41 @@ import { Aside, Steps, Tabs, TabItem } from "@astrojs/starlight/components";
 
 ## Creating a Client
 
-```typescript
+Choose one authentication method. The client adds `/api/v1` to the base URL,
+so use the API origin without that suffix.
+
+```typescript title="environment-client.ts"
 import { FlowLikeClient } from "@flow-like/sdk";
 
-// From environment variables (FLOW_LIKE_BASE_URL + FLOW_LIKE_PAT or FLOW_LIKE_API_KEY)
+// FLOW_LIKE_BASE_URL plus FLOW_LIKE_PAT or FLOW_LIKE_API_KEY
 const client = new FlowLikeClient();
+```
 
-// Explicit PAT
+For an explicit Personal Access Token:
+
+```typescript title="pat-client.ts"
+import { FlowLikeClient } from "@flow-like/sdk";
+
 const client = new FlowLikeClient({
   baseUrl: "https://api.flow-like.com",
   pat: "pat_myid.mysecret",
 });
+```
 
-// Explicit API key
+For an App API key:
+
+```typescript title="api-key-client.ts"
+import { FlowLikeClient } from "@flow-like/sdk";
+
 const client = new FlowLikeClient({
   baseUrl: "https://api.flow-like.com",
   apiKey: "flk_appid.keyid.secret",
 });
-
-// Auto-detect token type
-const client = new FlowLikeClient({
-  baseUrl: "https://api.flow-like.com",
-  token: "pat_myid.mysecret", // or "flk_..."
-});
 ```
+
+Replace the sample credentials with values from your secret configuration. The
+Node.js client accepts `pat` or `apiKey`; the `token` convenience parameter is
+available in the Python client and the standalone LangChain wrappers.
 
 ## Workflows
 
@@ -175,25 +186,32 @@ const db = await client.createLanceConnection("app-id", "write");
 
 // Now use it with the LanceDB API
 const table = await db.openTable("my-embeddings");
-const results = await table.search([0.1, 0.2, ...]).limit(10).toArray();
+const results = await table.search([0.1, 0.2, 0.3]).limit(10).toArray();
 ```
 
 The `accessMode` parameter controls whether you get read-only or read-write credentials:
-- `"read"` (default) — read-only access
-- `"write"` — full read-write access
+- `"read"` (default): read-only access
+- `"write"`: full read-write access
 
 ## Chat Completions
 
-Use `listLlms()` to discover available model `bit_id` values.
+Select a model whose `api_surface` is `ChatCompletions`. Models without that
+field use the same surface for compatibility. The API returns HTTP 400 if the
+selected model requires a different surface.
 
-```typescript
-// Non-streaming
+```typescript title="chat-completions.ts"
+const models = await client.listLlms();
+const model = models.find(
+  (item) => (item.api_surface ?? "ChatCompletions") === "ChatCompletions",
+);
+if (!model) throw new Error("This hub has no Chat Completions model.");
+
 const result = await client.chatCompletions(
   [{ role: "user", content: "Explain quantum computing in one sentence." }],
-  "bit-id-for-gpt4",
+  model.bit_id,
   { temperature: 0.7, max_tokens: 200 },
 );
-console.log(result.choices[0].message.content);
+console.log(result);
 ```
 
 ### Streaming
@@ -201,13 +219,37 @@ console.log(result.choices[0].message.content);
 ```typescript
 for await (const chunk of client.chatCompletionsStream(
   [{ role: "user", content: "Hello!" }],
-  "bit-id-for-gpt4",
+  model.bit_id,
 )) {
   process.stdout.write(chunk.data);
 }
 ```
 
-### Usage tracking
+## Responses
+
+Use `responses()` for a model whose `api_surface` is `Responses`. Its input
+and output follow the Responses schema, with `input` and `output` in place of
+Chat Completions messages and choices.
+
+```typescript title="responses.ts"
+const models = await client.listLlms();
+const model = models.find((item) => item.api_surface === "Responses");
+if (!model) throw new Error("This hub has no Responses model.");
+
+const result = await client.responses(
+  "Explain quantum computing in one sentence.",
+  model.bit_id,
+  { max_output_tokens: 200 },
+);
+console.log(result.output);
+```
+
+For streaming, iterate `client.responsesStream(input, model.bit_id)` as an
+async iterable. Each chunk contains the event name and its JSON `data` string.
+Keep the event type when handling progress and final output.
+
+
+## Usage tracking
 
 ```typescript
 const usage = await client.getUsage();
@@ -232,7 +274,7 @@ console.log(result.embeddings); // number[][]
 // List all remotely-available LLMs
 const llms = await client.listLlms();
 for (const m of llms) {
-  console.log(m.bit_id, m.name, m.provider_name, m.context_length);
+  console.log(m.bit_id, m.name, m.api_surface, m.context_length);
 }
 
 // List all remotely-available embedding models
@@ -256,6 +298,7 @@ interface ModelInfo {
   name: string;
   description: string;
   provider_name?: string;
+  api_surface?: "ChatCompletions" | "Responses";
   model_id?: string;
   context_length?: number;  // LLMs only
   vector_length?: number;    // Embeddings only
@@ -321,7 +364,7 @@ console.log(health.healthy); // true
 
 ### Factory methods (recommended)
 
-The easiest way — creates LangChain-compatible models from your existing client:
+Create LangChain-compatible models from your existing client:
 
 ```typescript
 // Chat model

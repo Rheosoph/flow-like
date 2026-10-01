@@ -1,6 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_CHAT_THEME_CSS } from "@flow-like/flow-like-ui";
+import { EVENT_DEFINITIONS } from "@flow-like/flow-like-ui/lib/event-definitions";
 import { EVENT_CONFIG } from "./event-config";
+
+describe("web event config", () => {
+	test("provides configuration for every declared event node and type", () => {
+		for (const [nodeName, definition] of Object.entries(EVENT_DEFINITIONS)) {
+			const config = EVENT_CONFIG[nodeName];
+			expect(config).toBeDefined();
+			expect(config.eventTypes).toEqual(definition.eventTypes);
+			for (const eventType of definition.eventTypes) {
+				expect(config.configInterfaces[eventType]).toBeTypeOf("function");
+			}
+		}
+	});
+});
 
 describe("daemon event config", () => {
 	test("is available as a local-only simple event sink", () => {

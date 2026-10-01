@@ -3,6 +3,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { IBoard } from "@flow-like/flow-like-ui/lib/schema/flow/board";
+import { workflowBoardSyncResponse } from "../lib/workflow-screenshot/fixture";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -1674,8 +1676,36 @@ const baseResponses: Record<string, unknown> = {
 	get_apps: [],
 	get_app: app,
 	get_app_meta: metadata,
+	$http: { "/api/v1/info/home-defaults": { main: null, profile: null } },
 	get_app_boards: [board],
+	get_app_board_summaries: [
+		{
+			id: board.id,
+			name: board.name,
+			description: board.description,
+			stage: board.stage,
+			executionMode: board.execution_mode,
+			logLevel: board.log_level,
+			version: board.version,
+			nodeCount: Object.keys(board.nodes as JsonRecord).length,
+			connectionCount: 9,
+			variableCount: Object.keys(board.variables as JsonRecord).length,
+			layerCount: 0,
+			commentCount: 0,
+			updatedAt: timestamp,
+			pages: pageList,
+			nodeTypes: Object.values(board.nodes as JsonRecord).map(
+				(node: any) => node.name,
+			),
+			entryNodes: [quickActionNode, chatNode].map((node) => ({
+				nodeId: node.id,
+				nodeType: node.name,
+				friendlyName: node.friendly_name,
+			})),
+		},
+	],
 	get_board: board,
+	sync_board: workflowBoardSyncResponse(board as unknown as IBoard),
 	get_catalog: Object.values(board.nodes as JsonRecord),
 	get_events: [quickActionEvent, chatEvent],
 	get_event: quickActionEvent,
@@ -2099,6 +2129,57 @@ const makeHttpFixture = (
 	strict: false,
 	responses: {
 		...responses,
+		$http: {
+			"/api/v1/info/home-defaults": { main: null, profile: null },
+			"/api/v1/auth/openid": {
+				authority: "https://docs-auth.example",
+				client_id: "docs-capture",
+				redirect_uri: "http://127.0.0.1:3137/callback",
+				response_type: "code",
+				scope: "openid profile",
+				metadata: {
+					issuer: "https://docs-auth.example",
+					authorization_endpoint: "https://docs-auth.example/authorize",
+					token_endpoint: "https://docs-auth.example/token",
+				},
+			},
+			"/api/v1/user/info": {
+				id: "docs-user",
+				name: "Documentation",
+				dev_mode: true,
+			},
+			"/api/v1/profile": [],
+			"/api/v1/profile/sync": {
+				synced: [],
+				created: [],
+				updated: [],
+				skipped: [],
+				deleted: [],
+			},
+			"/api/v1/user/notifications": [],
+			"/api/v1/user/usage/quotas": { resources: [], usage: [] },
+			"/api/v1/apps": [],
+			"/api/v1/apps/docs-app/meta": metadata,
+			"/api/v1/apps/docs-app/events": responses.get_events,
+			"/api/v1/apps/docs-app/routes": responses.get_app_routes,
+			"/api/v1/apps/docs-app/pages": responses.get_pages,
+			"/api/v1/apps/docs-app/board/summaries":
+				responses.get_app_board_summaries,
+			"/api/v1/apps/docs-app/board/docs-board/runs": [],
+			"/api/v1/apps/docs-app/settings/forking": { enabled: false },
+			"/api/v1/apps/docs-app": { ...app, visibility: "Prototype" },
+			"/api/v1/apps/docs-app/roles/me": {
+				role_id: "owner",
+				role_name: "Owner",
+				permissions: 1,
+				is_owner: true,
+				can_leave: false,
+			},
+			"/api/v1/apps/docs-app/roles": ["support", []],
+			"/api/v1/apps/docs-app/team": [],
+			"/api/v1/apps/docs-app/team/link": [],
+			"/api/v1/apps/docs-app/connections": { incoming: [], outgoing: [] },
+		},
 		"plugin:http|fetch": 1,
 		"plugin:http|fetch_send": {
 			status: 200,
@@ -2117,6 +2198,34 @@ const makeHttpFixture = (
 });
 
 const fixtures = {
+	"docs-ontology.tauri.json": {
+		schema: onboardingFixture.schema,
+		strict: false,
+		responses: JSON.parse(
+			JSON.stringify(baseResponses)
+				.replaceAll('"belongs to"', '"belongs_to"')
+				.replaceAll('"assigned to"', '"assigned_to"'),
+		),
+	},
+	"docs-setup.tauri.json": {
+		schema: onboardingFixture.schema,
+		strict: false,
+		responses: {
+			...baseResponses,
+			get_app_board_variables: [
+				{
+					board_id: board.id,
+					board_name: board.name,
+					variables: Object.fromEntries(
+						Object.values(board.variables as Record<string, JsonRecord>).map(
+							(variable) => [variable.id, variable],
+						),
+					),
+					refs: board.refs,
+				},
+			],
+		},
+	},
 	"docs-apps.tauri.json": {
 		schema: onboardingFixture.schema,
 		strict: false,

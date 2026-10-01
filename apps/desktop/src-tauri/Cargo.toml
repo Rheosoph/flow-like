@@ -41,6 +41,8 @@ local-stt-metal = ["flow-like/local-stt-metal", "flow-like-catalog/local-stt-met
 flow-like = { workspace = true, features = ["app-runtime", "tauri", "local-ml", "local-tts", "local-stt"] }
 flow-like-types.workspace = true
 flow-like-wasm = { workspace = true, features = ["model"] }
+flow-like-offline-writes = { workspace = true, features = ["runtime"] }
+flow-like-device-protocol.workspace = true
 
 tauri = { version = "2.11.1", features = [
     "protocol-asset",
@@ -102,6 +104,7 @@ rayon = "1.11.0"
 tauri-plugin-remote-push = { git = "https://github.com/Rheosoph/tauri-plugin-remote-push.git", branch = "main" }
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
+flow-like-browser.workspace = true
 tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2.10.1"

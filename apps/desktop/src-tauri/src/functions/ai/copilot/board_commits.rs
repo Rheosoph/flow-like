@@ -184,7 +184,7 @@ pub(super) fn flow_ir_durable_receipt_ref_key(app_id: &str, token: &FlowIrCommit
     )
 }
 
-fn replay_flow_ir_applied_receipt_from_board(
+pub(super) fn replay_flow_ir_applied_receipt_from_board(
     board: &Board,
     app_id: &str,
     token: &FlowIrCommitToken,

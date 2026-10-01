@@ -5,6 +5,8 @@ pub mod ai;
 pub mod app;
 pub mod automation_approval;
 pub mod bit;
+#[cfg(desktop)]
+pub mod browser_engine;
 pub mod channel;
 pub mod developer;
 pub mod device_id;

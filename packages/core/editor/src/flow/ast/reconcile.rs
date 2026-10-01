@@ -1476,6 +1476,12 @@ fn reconcile_inner(
                 continue;
             }
         }
+        // An assignment's anchor identifies its setter. Its RHS call can have literal
+        // arguments such as `key` or `default`, which belong to the value producer. The
+        // structural planner resolves that producer through the setter's incoming value edge.
+        if node.name == "variable_set" && !call_matches_node(call, node) {
+            continue;
+        }
         // A hand-written method receiver or positional literal on an anchored call binds to the
         // live node's pins exactly like the structural planner binds it.
         let folded;
@@ -3458,6 +3464,19 @@ fn canonical_binary_op(op: &str) -> &str {
     }
 }
 
+fn null_comparison_operand<'a>(op: &str, lhs: &'a Expr, rhs: &'a Expr) -> Option<&'a Expr> {
+    if !matches!(canonical_binary_op(op), "==" | "!=") {
+        return None;
+    }
+    if matches!(lhs, Expr::Literal(Literal::Null)) {
+        Some(rhs)
+    } else if matches!(rhs, Expr::Literal(Literal::Null)) {
+        Some(lhs)
+    } else {
+        None
+    }
+}
+
 fn binary_operator_op(node_type: &str) -> Option<&'static str> {
     BINARY_OPERATOR_NODES
         .iter()
@@ -4910,7 +4929,10 @@ fn synthesize_dynamic_input_pin(
     if let Some(pin) = synthesize_chart_mode_input_pin(meta, call, arg, entity, existing) {
         return Some(pin);
     }
-    if widget_dynamic_pin_node(&meta.name) && is_widget_dynamic_binding_arg(&arg.name) {
+    if widget_dynamic_pin_node(&meta.name)
+        && widget_binding_arg_fits_node(&meta.name, &arg.name)
+        && widget_binding_reference_available(meta, call, entity, existing)
+    {
         return Some(generic_input_pin_metadata(&arg.name));
     }
     let config_pin = dynamic_placeholder_config_pin(&meta.name)?;
@@ -5112,25 +5134,62 @@ pub(crate) fn is_widget_dynamic_binding_arg(name: &str) -> bool {
     })
 }
 
-/// Nodes whose dynamic input pins come from a persisted widget named by a **literal** on the
-/// same call.
+/// Nodes whose dynamic input pins come from a persisted widget contract.
 ///
 /// Reconcile has no handle to app storage, so unlike the placeholder nodes it cannot
 /// enumerate these pins to check a name against. It accepts a well-formed `dyn*` argument and
-/// lets apply resolve it after `on_update` has run — which is where the pin genuinely exists.
+/// lets apply resolve it after `on_update` has run, when the pin genuinely exists.
 /// Refusing to plan the command instead is what used to make a *correct* widget binding on a
 /// NEW node fail the whole batch.
 ///
-/// This is deliberately only `a2ui_instantiate_widget`. Its pins derive from the
-/// `widget_selector` literal, which apply writes in the setup phase — so `on_update` has
-/// minted the pins by the time the deferred writes and connections run. The sibling nodes
-/// (`a2ui_widget_update_inputs`, `a2ui_widget_query`) derive their pins from a *connected*
-/// `element_ref` instead, and connections are the last commands in the batch, so their pins
-/// cannot exist in time. Predicting for them would turn a recoverable check-time diagnostic
-/// into an apply-time rollback; they get [`is_widget_dynamic_binding_arg`]'s diagnostic
-/// naming the real cause instead.
+/// Apply sets selectors and connects widget references before resolving contract pins.
+/// Predicted pins still have to exist and accept the supplied values on the live node.
 pub(crate) fn widget_dynamic_pin_node(node_type: &str) -> bool {
-    matches!(node_type, "a2ui_instantiate_widget")
+    matches!(
+        node_type,
+        "a2ui_instantiate_widget" | "a2ui_widget_update_inputs" | "a2ui_widget_query"
+    )
+}
+
+fn widget_binding_arg_fits_node(node_type: &str, name: &str) -> bool {
+    let has_prefix =
+        |prefix: &str| name.starts_with(prefix) || name.starts_with(&to_camel_case(prefix));
+    match node_type {
+        "a2ui_instantiate_widget" => is_widget_dynamic_binding_arg(name),
+        "a2ui_widget_update_inputs" => has_prefix("dyn_in_"),
+        "a2ui_widget_query" => has_prefix("dyn_arg_"),
+        _ => false,
+    }
+}
+
+fn widget_binding_reference_available(
+    meta: &NodeMetadata,
+    call: &Call,
+    entity: &NodeEntity,
+    existing: &Board,
+) -> bool {
+    if meta.name == "a2ui_instantiate_widget" {
+        return true;
+    }
+    if call
+        .args
+        .iter()
+        .any(|arg| metadata_input_pin(meta, &arg.name).is_some_and(|pin| pin.name == "element_ref"))
+    {
+        return true;
+    }
+    let NodeEntity::Existing(node_id) = entity else {
+        return false;
+    };
+    find_board_node(existing, node_id)
+        .and_then(|node| find_input_pin(node, "element_ref"))
+        .is_some_and(|pin| {
+            !pin.depends_on.is_empty()
+                || pin.default_value.as_deref().is_some_and(|bytes| {
+                    flow_like_types::json::from_slice::<flow_like_types::Value>(bytes)
+                        .is_ok_and(|value| !value.is_null())
+                })
+        })
 }
 
 /// Whether `arg` targets a dynamic input pin the node's `on_update` will mint (one not yet live on
@@ -5473,7 +5532,7 @@ fn schema_constraints_are_compatible(
     true
 }
 
-fn metadata_pins_are_compatible(
+pub(crate) fn metadata_pins_are_compatible(
     input: &PinMetadata,
     output: &PinMetadata,
     refs: &HashMap<String, String>,
@@ -6600,6 +6659,9 @@ struct ResolvedCall {
     corrections: Vec<String>,
     /// `use` declarations this resolution relied on.
     used_uses: Vec<usize>,
+    /// An outer Some records that method dispatch already inferred the receiver. Reuse that
+    /// result when typing the output so chained field reads do not traverse each prefix twice.
+    receiver_hint: Option<Option<ReceiverHint>>,
 }
 
 #[derive(Debug, Clone)]
@@ -6702,6 +6764,15 @@ fn literal_receiver_hint(value: &flow_like_types::Value) -> ReceiverHint {
         data_type,
         value_type,
         schema: None,
+    }
+}
+
+fn specialize_struct_field_metadata(meta: &mut NodeMetadata, property: ReceiverHint) {
+    for pin in meta.outputs.iter_mut().filter(|pin| pin.name == "value") {
+        pin.data_type = property.data_type.clone();
+        pin.value_type = property.value_type.clone();
+        pin.schema = property.schema.clone();
+        pin.is_generic = property.data_type == "Generic";
     }
 }
 
@@ -11473,42 +11544,41 @@ impl<'a> StructuralPlanner<'a> {
         if !is_struct_get {
             return;
         }
-        let field = call
-            .args
-            .iter()
-            .find(|arg| pin_name_matches("field", &arg.name))
-            .and_then(|arg| literal_expr_to_value(&arg.value))
-            .and_then(|value| value.as_str().map(str::to_string));
+        let Some(property) = self.struct_field_call_hint(call) else {
+            return;
+        };
+        if let NodeEntity::New { meta, .. } = entity {
+            specialize_struct_field_metadata(meta, property);
+        }
+    }
+
+    fn struct_field_call_hint(&self, call: &Call) -> Option<ReceiverHint> {
         let schema = call
             .args
             .iter()
             .find(|arg| pin_name_matches("struct", &arg.name))
             .and_then(|arg| self.expr_receiver_hint(&arg.value))
-            .and_then(|hint| hint.schema);
-        let (Some(field), Some(schema)) = (field, schema) else {
-            return;
-        };
-        let Some(property) = schema_property_hint(&schema, &field) else {
-            return;
-        };
-        if let NodeEntity::New { meta, .. } = entity {
-            for pin in meta.outputs.iter_mut().filter(|pin| pin.name == "value") {
-                pin.data_type = property.data_type.clone();
-                pin.value_type = property.value_type.clone();
-                // Deliberately NOT the property's schema. Refining the type is what downstream
-                // contracts need; attaching a schema as well would turn a previously permissive
-                // "only one side declares a contract" connection into a strict two-contract
-                // comparison, and refuse edges that are fine (a struct field feeding a pin that
-                // enforces a different named shape).
-                pin.is_generic = property.data_type == "Generic";
-            }
-        }
+            .and_then(|hint| hint.schema)?;
+        self.struct_field_hint_from_schema(call, &schema)
+    }
+
+    fn struct_field_hint_from_schema(&self, call: &Call, schema: &str) -> Option<ReceiverHint> {
+        let field = call
+            .args
+            .iter()
+            .find(|arg| pin_name_matches("field", &arg.name))
+            .and_then(|arg| literal_expr_to_value(&arg.value))
+            .and_then(|value| value.as_str().map(str::to_string))?;
+        let schema = normalized_pin_schema(Some(schema), &self.existing.refs)?;
+        schema_property_hint(&schema, &field)
     }
 
     fn specialize_container_element_output(&mut self, entity: &mut NodeEntity, call: &Call) {
         const CONTAINER_ELEMENT_OUTPUTS: &[(&str, &str, &str)] = &[
             ("map_get", "map_in", "value"),
             ("array_get", "array_in", "element"),
+            ("control_for_each", "array", "value"),
+            ("control_par_for_each", "array", "value"),
         ];
         let node_type = match &entity {
             NodeEntity::New { meta, .. } => meta.name.clone(),
@@ -11926,7 +11996,7 @@ impl<'a> StructuralPlanner<'a> {
                                 // actual cause is that these pins only exist once the
                                 // widget is persisted and the instance is wired up.
                                 self.result.diagnostics.push(format!(
-                                        "node `{}` has no input pin named `{}`. Widget binding pins come from the persisted widget, and on this node they appear only once its `elementRef` input is connected to a live instance. Set the inputs on `a2uiInstantiateWidget` itself — every connection in a revision is applied after every pin write, so a later call in the same revision cannot see them either. `ui_inspect` with operation `widget` lists a widget's exact pin names. No part of this revision was applied.",
+                                        "node `{}` has no input pin named `{}`. Widget binding pins come from the persisted widget contract. Supply `elementRef` from Instantiate Widget or Get Element, or select a Page widget. Update Widget Inputs accepts `dynIn*` bindings and Query Widget accepts `dynArg*` bindings. `ui_inspect` with operation `widget` lists a widget's exact pin names. No part of this revision was applied.",
                                         call.display, arg.name
                                     ));
                                 continue;
@@ -12722,6 +12792,9 @@ impl<'a> StructuralPlanner<'a> {
         source: ValueSource,
         target_layer: Option<String>,
     ) -> Option<SymbolValue> {
+        if null_comparison_operand(op, lhs, rhs).is_some() {
+            return None;
+        }
         let NodeEntity::Existing(node_id) = &source.node else {
             return None;
         };
@@ -13824,7 +13897,18 @@ impl<'a> StructuralPlanner<'a> {
             args: Vec::new(),
             anchor: None,
         };
-        let meta = self.catalog.resolve_call(&probe).ok()?;
+        let mut meta = self.catalog.resolve_call(&probe).ok()?;
+        let schema = self
+            .source_output_shape(&base)
+            .and_then(|shape| normalized_pin_schema(shape.schema.as_deref(), &self.existing.refs));
+        if let Some(property) = schema
+            .as_deref()
+            .and_then(|schema| schema_property_hint(schema, field))
+        {
+            // A bound field keeps its own contract so later methods and nested reads resolve
+            // the same way as a direct read from the original struct.
+            specialize_struct_field_metadata(&mut meta, property);
+        }
         let entity = self.queue_add_node(meta.clone(), target_layer);
 
         // Member access accepts the camel spelling, but the runtime selects the JSON key verbatim,
@@ -14299,6 +14383,30 @@ impl<'a> StructuralPlanner<'a> {
         rhs: &Expr,
         target_layer: Option<String>,
     ) -> Option<SymbolValue> {
+        if let Some(value) = null_comparison_operand(op, lhs, rhs) {
+            let mut inspect = Call::placeholder();
+            inspect.node_type = "utils_types_type_of".to_string();
+            inspect.display = "typeOf".to_string();
+            inspect.args = vec![Arg {
+                name: "value".to_string(),
+                value: value.clone(),
+            }];
+            let mut comparison = Expr::Field {
+                base: Box::new(Expr::Call(inspect)),
+                pin: "is_null".to_string(),
+            };
+            if canonical_binary_op(op) == "!=" {
+                let mut negate = Call::placeholder();
+                negate.node_type = "bool_not".to_string();
+                negate.display = "not".to_string();
+                negate.args = vec![Arg {
+                    name: "boolean".to_string(),
+                    value: comparison,
+                }];
+                comparison = Expr::Call(negate);
+            }
+            return self.resolve_expr(&comparison, target_layer);
+        }
         let meta = self.resolve_binary_operator_meta(op, lhs, rhs)?;
         let inputs = binary_data_inputs(&meta)?;
         let call = binary_operator_call(&meta, &inputs, lhs, rhs);
@@ -14562,6 +14670,9 @@ impl<'a> StructuralPlanner<'a> {
                     .then_some(then_type)
             }
             Expr::Binary { op, lhs, rhs } => {
+                if null_comparison_operand(op, lhs, rhs).is_some() {
+                    return Some("Boolean".to_string());
+                }
                 let op = canonical_binary_op(op);
                 let operand_type = self.binary_operand_type(lhs, rhs).ok()?;
                 let mut result_types = BINARY_OPERATOR_NODES
@@ -16424,8 +16535,22 @@ impl<'a> StructuralPlanner<'a> {
     /// The metadata a call's outputs are typed by (no diagnostics): the catalog node, or a
     /// declared function's returns.
     fn call_output_metadata(&self, call: &Call) -> Option<NodeMetadata> {
-        match self.resolve_call_target(call).ok()?.target {
-            CallTarget::Catalog(meta) => Some(meta),
+        let resolved = self.resolve_call_target(call).ok()?;
+        match resolved.target {
+            CallTarget::Catalog(mut meta) => {
+                if meta.name == "struct_get" {
+                    let property = match resolved.receiver_hint {
+                        Some(hint) => hint.and_then(|hint| hint.schema).and_then(|schema| {
+                            self.struct_field_hint_from_schema(&resolved.call, &schema)
+                        }),
+                        None => self.struct_field_call_hint(&resolved.call),
+                    };
+                    if let Some(property) = property {
+                        specialize_struct_field_metadata(&mut meta, property);
+                    }
+                }
+                Some(meta)
+            }
             CallTarget::Function(key) => self
                 .function_sigs
                 .get(&key)
@@ -16447,6 +16572,7 @@ impl<'a> StructuralPlanner<'a> {
             call: folded,
             corrections,
             used_uses,
+            receiver_hint: None,
         })
     }
 
@@ -16474,6 +16600,7 @@ impl<'a> StructuralPlanner<'a> {
             call: folded,
             corrections,
             used_uses,
+            receiver_hint: None,
         })
     }
 
@@ -16694,7 +16821,9 @@ impl<'a> StructuralPlanner<'a> {
         let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
         for idx in self.catalog.method_matches(alias) {
             let names = &self.catalog.names[*idx];
-            if !kind.accepts(names.class.as_ref()) {
+            if !kind.accepts(names.class.as_ref())
+                && !self.catalog_receiver_schema_matches(hint.as_ref(), *idx)
+            {
                 continue;
             }
             let node_type = &self.catalog.entries[*idx].name;
@@ -16773,6 +16902,44 @@ impl<'a> StructuralPlanner<'a> {
             }
             candidates = fitting;
         }
+        // A struct receiver prefers the class it actually is: a titled one its own title
+        // (`FlowPath` -> `files::get`), an untitled one the plain `struct` table over interface
+        // classes it only admits as a wildcard (`row.get()` -> `struct::get`, never a file read).
+        if candidates.len() > 1
+            && let ReceiverKind::Struct(title) = &kind
+        {
+            let wanted = title.as_deref().unwrap_or("struct");
+            let schema_matches: Vec<CallCandidate> = candidates
+                .iter()
+                .filter(|candidate| match &candidate.kind {
+                    CandidateKind::Catalog(indices) => {
+                        self.catalog_receiver_schema_matches(hint.as_ref(), indices[0])
+                    }
+                    CandidateKind::Function(_) => false,
+                })
+                .cloned()
+                .collect();
+            let specific: Vec<CallCandidate> = if schema_matches.is_empty() {
+                candidates
+                    .iter()
+                    .filter(|candidate| match &candidate.kind {
+                        CandidateKind::Catalog(indices) => matches!(
+                            &self.catalog.names[indices[0]].class,
+                            Some(ReceiverClass::Named(class)) if class.eq_ignore_ascii_case(wanted)
+                        ),
+                        CandidateKind::Function(_) => false,
+                    })
+                    .cloned()
+                    .collect()
+            } else {
+                schema_matches
+            };
+            if !specific.is_empty() && specific.len() < candidates.len() {
+                candidates = specific;
+            }
+        }
+        // Imports break ties between methods of the same specificity. Opening `struct::*`
+        // must not replace a FlowPath's file read with the generic field accessor.
         if candidates.len() > 1 {
             let opened: Vec<CallCandidate> = candidates
                 .iter()
@@ -16783,30 +16950,12 @@ impl<'a> StructuralPlanner<'a> {
                 candidates = opened;
             }
         }
-        // A struct receiver prefers the class it actually is: a titled one its own title
-        // (`FlowPath` -> `files::get`), an untitled one the plain `struct` table over interface
-        // classes it only admits as a wildcard (`row.get()` -> `struct::get`, never a file read).
-        if candidates.len() > 1
-            && let ReceiverKind::Struct(title) = &kind
-        {
-            let wanted = title.as_deref().unwrap_or("struct");
-            let specific: Vec<CallCandidate> = candidates
-                .iter()
-                .filter(|candidate| match &candidate.kind {
-                    CandidateKind::Catalog(indices) => matches!(
-                        &self.catalog.names[indices[0]].class,
-                        Some(ReceiverClass::Named(class)) if class.eq_ignore_ascii_case(wanted)
-                    ),
-                    CandidateKind::Function(_) => false,
-                })
-                .cloned()
-                .collect();
-            if !specific.is_empty() && specific.len() < candidates.len() {
-                candidates = specific;
-            }
-        }
         match candidates.as_slice() {
-            [single] => self.finish_candidate(call, single.clone(), corrections),
+            [single] => {
+                let mut resolved = self.finish_candidate(call, single.clone(), corrections)?;
+                resolved.receiver_hint = Some(hint);
+                Ok(resolved)
+            }
             many => {
                 let first = &many[0];
                 let receiver_pin = first
@@ -16822,6 +16971,39 @@ impl<'a> StructuralPlanner<'a> {
                 ))
             }
         }
+    }
+
+    fn catalog_receiver_schema_matches(&self, hint: Option<&ReceiverHint>, index: usize) -> bool {
+        let Some(hint) =
+            hint.filter(|hint| hint.data_type == "Struct" && hint.value_type == "Normal")
+        else {
+            return false;
+        };
+        let names = &self.catalog.names[index];
+        let Some(receiver) = names
+            .receiver
+            .as_deref()
+            .and_then(|name| metadata_input_pin(&self.catalog.entries[index], name))
+        else {
+            return false;
+        };
+        let (Some(source), Some(target)) = (
+            normalized_pin_schema(hint.schema.as_deref(), &self.existing.refs),
+            normalized_pin_schema(receiver.schema.as_deref(), &self.existing.refs),
+        ) else {
+            return false;
+        };
+        if receiver.data_type != "Struct" || receiver.value_type != "Normal" {
+            return false;
+        }
+        // Rendering can rename an interface to avoid a collision. Method dispatch follows the
+        // declared shape, including the catalog's projection through that same text surface.
+        let same_shape = |target: &str| {
+            crate::flow::pin::schema_covers(&source, target)
+                && crate::flow::pin::schema_covers(target, &source)
+        };
+        same_shape(&target)
+            || text_projected_schema(&target).is_some_and(|projection| same_shape(&projection))
     }
 
     fn candidate_shape_fits(&self, call: &Call, candidate: &CallCandidate) -> bool {
@@ -21261,6 +21443,215 @@ function fnB() {   //@l:fn-b
             }
             _ => None,
         })
+    }
+
+    fn nested_struct_field_catalog() -> Vec<NodeMetadata> {
+        let mut catalog = flow_path_catalog();
+        let attachment = catalog
+            .iter_mut()
+            .find(|meta| meta.name == "path_from_upload_dir")
+            .unwrap();
+        attachment.outputs[1].schema = Some(format!(
+            r#"{{"title":"Attachment","type":"object","properties":{{"path":{FLOW_PATH_PIN_SCHEMA}}}}}"#
+        ));
+        let field = catalog
+            .iter_mut()
+            .find(|meta| meta.name == "struct_get")
+            .unwrap();
+        field.namespace = Some("struct".to_string());
+        field.alias = Some("get".to_string());
+        field.receiver = Some("struct".to_string());
+        let mut path = pin_meta("path", "Struct", PinType::Input);
+        path.schema = Some(FLOW_PATH_PIN_SCHEMA.to_string());
+        let mut get_file = catalog_meta(
+            "get_file",
+            "Get File",
+            vec![path],
+            vec![pin_meta("content", "String", PinType::Output)],
+        );
+        get_file.namespace = Some("files".to_string());
+        get_file.alias = Some("get".to_string());
+        get_file.receiver = Some("path".to_string());
+        catalog.push(get_file);
+        catalog
+    }
+
+    #[test]
+    fn nested_struct_field_binding_keeps_its_method_class() {
+        for expression in [
+            "attachment.path",
+            "struct::get({ struct: attachment, field: \"path\" })",
+        ] {
+            let result = reconcile_text_with_catalog(
+                &empty_board(),
+                &format!(
+                    "eventsSimple() {{\n    const attachment = pathFromUploadDir({{}})\n    const path = {expression}\n    const file = path.get()\n    log({{ text: file }})\n}}\n"
+                ),
+                &nested_struct_field_catalog(),
+            );
+            assert!(
+                result.diagnostics.is_empty(),
+                "{expression}: {:?}",
+                result.diagnostics
+            );
+            let field = added_node_ref(&result, "struct_get").expect("field accessor");
+            let file = added_node_ref(&result, "get_file").expect("FlowPath method");
+            assert!(connected(&result, field, "value", file, "path"));
+        }
+    }
+
+    #[test]
+    fn nested_struct_field_call_keeps_its_method_class_when_chained() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "eventsSimple() {\n    const attachment = pathFromUploadDir({})\n    const file = struct::get({ struct: attachment, field: \"path\" }).get()\n    log({ text: file })\n}\n",
+            &nested_struct_field_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let field = added_node_ref(&result, "struct_get").expect("field accessor");
+        let file = added_node_ref(&result, "get_file").expect("FlowPath method");
+        assert!(connected(&result, field, "value", file, "path"));
+    }
+
+    #[test]
+    fn nested_struct_field_binding_keeps_member_validation() {
+        for expression in [
+            "attachment.path",
+            "struct::get({ struct: attachment, field: \"path\" })",
+        ] {
+            let result = reconcile_text_with_catalog(
+                &empty_board(),
+                &format!(
+                    "eventsSimple() {{\n    const attachment = pathFromUploadDir({{}})\n    const path = {expression}\n    log({{ text: path.filename }})\n}}\n"
+                ),
+                &nested_struct_field_catalog(),
+            );
+            assert!(
+                result.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.contains("`FlowPath`")
+                        && diagnostic.contains("has no field `filename`")
+                }),
+                "{expression}: {:?}",
+                result.diagnostics
+            );
+        }
+    }
+
+    #[test]
+    fn renamed_flow_path_interface_keeps_catalog_methods() {
+        let mut catalog = nested_struct_field_catalog();
+        catalog.extend(
+            loop_sugar_catalog()
+                .into_iter()
+                .filter(|meta| meta.name == "control_for_each"),
+        );
+        let source = r#"interface AttachmentPaths {
+    path: string;
+    store_ref: string;
+    cache_store_ref?: string | null;
+}
+const paths: AttachmentPaths[] = []
+
+eventsSimple() {
+    for (const path of paths) {
+        log({ text: path.get() })
+    }
+}
+"#;
+        for interface_name in ["FlowPath", "AttachmentPaths"] {
+            for imports in ["", "use struct::*\n\n"] {
+                let result = reconcile_text_with_catalog(
+                    &empty_board(),
+                    &format!(
+                        "{imports}{}",
+                        source.replace("AttachmentPaths", interface_name)
+                    ),
+                    &catalog,
+                );
+                assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+                assert!(added_node_ref(&result, "get_file").is_some());
+                assert!(added_node_ref(&result, "struct_get").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn different_struct_shape_does_not_gain_flow_path_methods() {
+        let mut catalog = nested_struct_field_catalog();
+        let file = catalog
+            .iter_mut()
+            .find(|meta| meta.name == "get_file")
+            .unwrap();
+        file.alias = Some("readFile".to_string());
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"interface AttachmentPaths {
+    path: string;
+    store_ref: int;
+}
+const path: AttachmentPaths = {}
+
+eventsSimple() {
+    log({ text: path.readFile() })
+}
+"#,
+            &catalog,
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("no method `readFile` on `AttachmentPaths`")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(added_node_ref(&result, "get_file").is_none());
+    }
+
+    #[test]
+    fn equal_struct_shapes_do_not_choose_between_distinct_catalog_methods() {
+        let mut catalog = nested_struct_field_catalog();
+        let mut other = catalog
+            .iter()
+            .find(|meta| meta.name == "get_file")
+            .unwrap()
+            .clone();
+        other.name = "get_other_file".to_string();
+        other.namespace = Some("otherFiles".to_string());
+        catalog.push(other);
+        let source = r#"interface AttachmentPaths {
+    path: string;
+    store_ref: string;
+    cache_store_ref?: string | null;
+}
+const path: AttachmentPaths = {}
+
+eventsSimple() {
+    log({ text: path.get() })
+}
+"#;
+        let result = reconcile_text_with_catalog(&empty_board(), source, &catalog);
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("ambiguous between `files::get`, `otherFiles::get`")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(added_node_ref(&result, "get_file").is_none());
+        assert!(added_node_ref(&result, "get_other_file").is_none());
+
+        let imported = reconcile_text_with_catalog(
+            &empty_board(),
+            &format!("use files::*\n\n{source}"),
+            &catalog,
+        );
+        assert!(
+            imported.diagnostics.is_empty(),
+            "{:?}",
+            imported.diagnostics
+        );
+        assert!(added_node_ref(&imported, "get_file").is_some());
+        assert!(added_node_ref(&imported, "get_other_file").is_none());
     }
 
     #[test]
@@ -29611,6 +30002,59 @@ eventsSimple() {
     }
 
     #[test]
+    fn null_comparisons_use_null_inspection_for_unknown_and_typed_values() {
+        let mut catalog = namespaced_catalog();
+        catalog.push(catalog_meta(
+            "utils_types_type_of",
+            "Type Of",
+            vec![pin_meta("value", "Generic", PinType::Input)],
+            vec![
+                pin_meta("type", "String", PinType::Output),
+                pin_meta("is_null", "Boolean", PinType::Output),
+                pin_meta("size", "Integer", PinType::Output),
+            ],
+        ));
+        catalog.push(catalog_meta(
+            "bool_not",
+            "Not",
+            vec![pin_meta("boolean", "Boolean", PinType::Input)],
+            vec![pin_meta("result", "Boolean", PinType::Output)],
+        ));
+        for (expression, negated) in [
+            ("payload.field == null", false),
+            ("null === payload.field", false),
+            ("payload.field != null", true),
+            ("null !== payload.field", true),
+            ("text == null", false),
+            ("null != null", true),
+        ] {
+            let result = reconcile_text_with_catalog(
+                &empty_board(),
+                &format!(
+                    "const payload: Struct = {{}}\nconst text: string = \"\"\neventsSimple() {{\n    logBool({{ value: {expression} }})\n}}\n"
+                ),
+                &catalog,
+            );
+            assert!(
+                result.diagnostics.is_empty(),
+                "{expression}: {:?}",
+                result.diagnostics
+            );
+            let inspect = added_node_ref(&result, "utils_types_type_of").expect("null inspection");
+            let log = added_node_ref(&result, "log_bool").expect("Boolean consumer");
+            if negated {
+                let negate = added_node_ref(&result, "bool_not").expect("null inequality");
+                assert!(connected(&result, inspect, "is_null", negate, "boolean"));
+                assert!(connected(&result, negate, "result", log, "value"));
+            } else {
+                assert!(connected(&result, inspect, "is_null", log, "value"));
+            }
+            assert!(added_node_ref(&result, "equal_string").is_none());
+            assert!(added_node_ref(&result, "int_equal").is_none());
+        }
+    }
+
+    #[test]
     fn ternary_with_literal_arms_materializes_a_select_node() {
         let catalog = phase0_operator_catalog();
         let result = reconcile_text_with_catalog(
@@ -30389,10 +30833,7 @@ eventsSimple() {
 
     #[test]
     fn connection_derived_widget_bindings_diagnose_with_their_real_cause() {
-        // `a2ui_widget_update_inputs` derives its `dyn_in_*` pins from a connected
-        // `element_ref`, and connections are the last commands apply runs — so the pin cannot
-        // exist in time no matter what reconcile predicts. Failing here with the cause named
-        // beats planning a command that can only end in an apply-time rollback.
+        // A binding without any widget reference cannot discover a contract.
         let result = reconcile_text_with_catalog(
             &empty_board(),
             r#"function patch(title: string): (done: bool) {
@@ -30412,10 +30853,91 @@ eventsSimple() {
             result
                 .diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.contains("`elementRef` input is connected")),
+                .any(|diagnostic| diagnostic.contains("Supply `elementRef`")),
             "unexpected diagnostics: {:?}",
             result.diagnostics
         );
+    }
+
+    #[test]
+    fn connection_derived_widget_bindings_plan_with_their_reference() {
+        for (node_type, display, binding) in [
+            (
+                "a2ui_widget_update_inputs",
+                "a2uiWidgetUpdateInputs",
+                "dynInHeading",
+            ),
+            ("a2ui_widget_query", "a2uiWidgetQuery", "dynArgHeading"),
+        ] {
+            let mut catalog = instantiate_widget_catalog();
+            catalog.push(catalog_meta(
+                node_type,
+                display,
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("element_ref", "Struct", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ));
+            let result = reconcile_text_with_catalog(
+                &empty_board(),
+                &format!(
+                    r#"function patch(title: string) {{
+    const instance = a2uiInstantiateWidget({{ widgetSelector: "Article", instanceId: "a1" }})
+    {display}({{ {binding}: title, elementRef: instance.elementRef }})
+}}
+"#
+                ),
+                &catalog,
+            );
+            assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+            for input in ["element_ref", binding] {
+                assert!(
+                    result.commands.iter().any(|command| matches!(
+                        command,
+                        BoardCommand::ConnectPins { to_pin, .. } if to_pin == input
+                    )),
+                    "missing {input} connection: {:?}",
+                    result.commands
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn widget_dynamic_binding_prefix_must_match_its_operation() {
+        for (node_type, display, binding) in [
+            (
+                "a2ui_widget_update_inputs",
+                "a2uiWidgetUpdateInputs",
+                "dynArgHeading",
+            ),
+            ("a2ui_widget_query", "a2uiWidgetQuery", "dynInHeading"),
+        ] {
+            let result = reconcile_text_with_catalog(
+                &empty_board(),
+                &format!(
+                    r#"function patch(element: struct): (done: bool) {{
+    {display}({{ elementRef: element, {binding}: "hello" }})
+    return true
+}}
+"#
+                ),
+                &[catalog_meta(
+                    node_type,
+                    display,
+                    vec![pin_meta("element_ref", "Struct", PinType::Input)],
+                    vec![pin_meta("exec_out", "Execution", PinType::Output)],
+                )],
+            );
+            assert!(
+                result.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.contains(&format!("no input pin named `{binding}`"))
+                }),
+                "{:?}",
+                result.diagnostics
+            );
+        }
     }
 
     #[test]
@@ -32349,7 +32871,7 @@ eventsSimple() {
                 ],
                 vec![
                     pin_meta("exec_out", "Execution", PinType::Output),
-                    pin_meta("value", "Any", PinType::Output),
+                    pin_meta("value", "Generic", PinType::Output),
                     pin_meta("index", "Integer", PinType::Output),
                     pin_meta("done", "Execution", PinType::Output),
                 ],
@@ -32359,7 +32881,7 @@ eventsSimple() {
                 "Log",
                 vec![
                     pin_meta("exec_in", "Execution", PinType::Input),
-                    pin_meta("text", "Any", PinType::Input),
+                    pin_meta("text", "Generic", PinType::Input),
                 ],
                 vec![pin_meta("exec_out", "Execution", PinType::Output)],
             ),
@@ -32376,14 +32898,7 @@ eventsSimple() {
             &catalog,
         );
 
-        assert!(
-            result
-                .diagnostics
-                .iter()
-                .all(|diagnostic| !diagnostic.contains("skipped connection")),
-            "{:?}",
-            result.diagnostics
-        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         assert!(result.commands.iter().any(|command| {
             matches!(
                 command,

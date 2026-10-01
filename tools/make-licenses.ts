@@ -1,13 +1,22 @@
-// scripts/make-licenses.ts
-// Usage: bun scripts/make-licenses.ts
+// tools/make-licenses.ts
+// Usage: bun tools/make-licenses.ts
 // Creates ./thirdparty/* and a merged ./THIRD-PARTY-NOTICES.txt
+// Hand-written sections in ./thirdparty/manual-notices/*.md are kept and prepended.
 
-import { constants as FS } from "fs";
-import { dirname, resolve } from "path";
-import { access, mkdir, readFile, rm, writeFile } from "fs/promises";
+import { constants as FS } from "node:fs";
+import {
+	access,
+	mkdir,
+	readFile,
+	readdir,
+	rm,
+	writeFile,
+} from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 const ROOT = resolve(".");
 const OUT_DIR = resolve("./thirdparty");
+const MANUAL_NOTICES_DIR = resolve(OUT_DIR, "manual-notices");
 const FINAL = resolve(
 	"./apps/desktop/src-tauri/assets/THIRD-PARTY-NOTICES.txt",
 );
@@ -76,10 +85,15 @@ async function run(cmd: string[], cwd = ROOT) {
 	return { stdout, stderr, code };
 }
 
+const GENERATED_OUTPUTS = [
+	RUST_JSON,
+	RUST_MD,
+	...WEB_TARGETS.map((target) => target.out),
+];
+
 async function ensureOutDir() {
-	if (await exists(OUT_DIR))
-		await rm(OUT_DIR, { recursive: true, force: true });
 	await mkdir(OUT_DIR, { recursive: true });
+	await Promise.all(GENERATED_OUTPUTS.map((path) => rm(path, { force: true })));
 }
 
 async function ensureCargoLicense() {
@@ -117,7 +131,7 @@ This section lists Rust crates used by this application, with license identifier
 			return `## ${r.name} ${r.version} — ${lic}\n${repo}${desc}${textBlock}`;
 		})
 		.join("\n\n");
-	return header + body + "\n";
+	return `${header}${body}\n`;
 }
 
 function dedupeRust(rows: RustLicenseRow[]): RustLicenseRow[] {
@@ -226,12 +240,25 @@ async function gatherWeb() {
 	}
 }
 
-async function mergeAll() {
+async function readManualNotices() {
+	if (!(await exists(MANUAL_NOTICES_DIR))) return "";
+	const names = (await readdir(MANUAL_NOTICES_DIR))
+		.filter((name) => name.endsWith(".md"))
+		.sort();
+	const notices = await Promise.all(
+		names.map((name) => readFile(resolve(MANUAL_NOTICES_DIR, name), "utf8")),
+	);
+	return notices.join("");
+}
+
+export async function mergeAll(finalPath = FINAL) {
 	let out = `# THIRD-PARTY NOTICES
 
 _This file aggregates licenses for third-party software used by this application._
 
 `;
+
+	out += await readManualNotices();
 
 	if (await exists(RUST_MD)) {
 		out += await readFile(RUST_MD, "utf8");
@@ -246,10 +273,10 @@ _This file aggregates licenses for third-party software used by this application
 		}
 	}
 
-	await writeFile(FINAL, out, "utf8");
+	await writeFile(finalPath, out, "utf8");
 }
 
-(async () => {
+async function main() {
 	console.log("▶️  Preparing ./thirdparty …");
 	await ensureOutDir();
 
@@ -265,11 +292,15 @@ _This file aggregates licenses for third-party software used by this application
 	console.log("✅ Done.");
 	console.log(`• Intermediates: ${OUT_DIR}`);
 	console.log(`• Final:        ${FINAL}`);
-})().catch((err) => {
-	console.error(
-		"❌ License export failed:\n",
-		err?.stack || err?.message || String(err),
-	);
-	// Bun provides process.exit
-	process.exit(1);
-});
+}
+
+if (import.meta.main) {
+	main().catch((err) => {
+		console.error(
+			"❌ License export failed:\n",
+			err?.stack || err?.message || String(err),
+		);
+		// Bun provides process.exit
+		process.exit(1);
+	});
+}

@@ -194,6 +194,7 @@
       "name": "docs",
       "version": "0.0.1",
       "dependencies": {
+        "@astrojs/markdown-remark": "7.2.2",
         "@astrojs/react": "6.0.2",
         "@astrojs/starlight": "0.41.7",
         "@astrojs/starlight-tailwind": "^5.0.0",
@@ -209,6 +210,7 @@
       },
       "devDependencies": {
         "cheerio": "^1.0.0",
+        "puppeteer": "24.43.1",
       },
     },
     "apps/embedded": {

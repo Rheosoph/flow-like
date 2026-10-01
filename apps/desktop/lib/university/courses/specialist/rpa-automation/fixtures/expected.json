@@ -1,0 +1,8 @@
+{
+  "selector": "#status[data-ready=\"true\"]",
+  "normal": "Ready to ship",
+  "banner": "Ready to ship",
+  "delay_2500": "Ready to ship",
+  "missing": "practice status unavailable",
+  "cleanup": "No practice browser session remains open"
+}

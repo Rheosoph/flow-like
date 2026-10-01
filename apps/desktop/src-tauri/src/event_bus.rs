@@ -1,4 +1,5 @@
 use crate::{
+    offline_writes::run_storage::{RunStorage, RunStorageRequest},
     state::TauriSettingsState,
     utils::{UiEmitTarget, local_execution_environment},
 };
@@ -224,7 +225,6 @@ impl EventBusEvent {
             )
         };
 
-        let mut credentials = None;
         let request_authorizer = crate::execution_credentials::request_authorizer(
             &profile.hub_profile.hub,
             &self.app_id,
@@ -233,45 +233,36 @@ impl EventBusEvent {
             None,
         );
         if !matches!(app.visibility, flow_like::app::AppVisibility::Offline) {
-            let token = self.token.as_ref().ok_or_else(|| {
-                flow_like_types::anyhow!("No token registered, cannot run online event")
-            })?;
-            let hub_url = profile.hub_profile.hub.clone();
-            if hub_url.is_empty() {
+            if self.token.is_none() {
+                return Err(flow_like_types::anyhow!(
+                    "No token registered, cannot run online event"
+                ));
+            }
+            if profile.hub_profile.hub.is_empty() {
                 return Err(flow_like_types::anyhow!(
                     "No hub URL configured, cannot get event credentials"
                 ));
             }
-
-            match crate::execution_credentials::prepare(
-                &hub_url,
-                &self.app_id,
-                Some(token),
-                None,
-                None,
-            )
-            .await
-            {
-                Ok(shared_credentials) => credentials = Some(shared_credentials),
-                Err(error)
-                    if crate::execution_credentials::falls_back_to_device_storage(&error) =>
-                {
-                    tracing::warn!(
-                        app_id = %self.app_id,
-                        event_id = %self.event_id,
-                        %error,
-                        "Hub credentials unavailable; running the event against device storage"
-                    );
-                }
-                Err(error) => return Err(error),
-            }
         }
+        let storage = RunStorage::resolve(
+            app_handle,
+            RunStorageRequest {
+                visibility: &app.visibility,
+                app_id: &self.app_id,
+                hub: &profile.hub_profile.hub,
+                secure: profile.hub_profile.secure,
+                token: self.token.as_deref(),
+                session_id: None,
+                webview: None,
+                event_id: Some(&self.event_id),
+                device_credentials: None,
+            },
+        )
+        .await?;
 
         let mut renewable_state = (*execution_state).clone();
         renewable_state.request_authorizer = Some(request_authorizer);
-        if let Some(credentials) = &credentials {
-            crate::execution_credentials::install_registry(&mut renewable_state, credentials)?;
-        }
+        let credentials = storage.install(&mut renewable_state).await?;
         let execution_state = Arc::new(renewable_state);
 
         let event_name = loaded_event.name.clone();

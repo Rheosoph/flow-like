@@ -67,6 +67,22 @@ describe("parseAskUserArguments", () => {
 		});
 	});
 
+	it("prefills scalar freeform defaults so the card can be accepted unchanged", () => {
+		const form = parseAskUserArguments({
+			questions: [
+				{ id: "days", question: "How many days?", default_value: 30 },
+				{ id: "notify", question: "Notify?", default_value: false },
+				{ id: "shape", question: "Shape?", default_value: { a: 1 } },
+			],
+		});
+		const drafts = initialAskUserDrafts(form);
+
+		expect(drafts.map((draft) => draft.text)).toEqual(["30", "false", ""]);
+		expect(askUserAnswerPayload(form, drafts)).toEqual({
+			answers: { days: "30", notify: "false", shape: "" },
+		});
+	});
+
 	it("treats a question with choices but no mode as single choice", () => {
 		const form = parseAskUserArguments({
 			question: "Which one?",

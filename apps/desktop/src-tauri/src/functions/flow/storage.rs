@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use flow_like::{
+    app::{App, AppVisibility},
     flow_like_storage::{
         Path,
         files::store::{FlowLikeStore, StorageItem},
@@ -30,6 +31,20 @@ pub(crate) async fn current_user_sub(app_handle: &AppHandle) -> Result<String, T
     Ok("local".to_string())
 }
 
+/// Online projects keep their files in the hub; only Offline apps write device storage here.
+async fn ensure_device_files(
+    state: &std::sync::Arc<flow_like::state::FlowLikeState>,
+    app_id: &str,
+) -> Result<(), TauriFunctionError> {
+    let app = App::load(app_id.to_string(), state.clone()).await?;
+    if !matches!(app.visibility, AppVisibility::Offline) {
+        return Err(TauriFunctionError::new(
+            crate::offline_writes::texts::HUB_FILES,
+        ));
+    }
+    Ok(())
+}
+
 #[tauri::command(async)]
 pub async fn storage_add(
     app_handle: AppHandle,
@@ -37,6 +52,7 @@ pub async fn storage_add(
     prefix: String,
 ) -> Result<String, TauriFunctionError> {
     let state = TauriFlowLikeState::construct(&app_handle).await?;
+    ensure_device_files(&state, &app_id).await?;
     let (store, path) = construct_storage(&state, &app_id, &prefix).await?;
 
     let upload_url = store
@@ -54,6 +70,7 @@ pub async fn storage_user_add(
     prefix: String,
 ) -> Result<String, TauriFunctionError> {
     let state = TauriFlowLikeState::construct(&app_handle).await?;
+    ensure_device_files(&state, &app_id).await?;
     let sub = current_user_sub(&app_handle).await?;
     let (store, path) = construct_user_storage(&state, &sub, &app_id, &prefix).await?;
 
@@ -121,6 +138,7 @@ pub async fn storage_rename(
     prefix: String,
 ) -> Result<(), TauriFunctionError> {
     let state = TauriFlowLikeState::construct(&app_handle).await?;
+    ensure_device_files(&state, &app_id).await?;
     let (_store, _path) = construct_storage(&state, &app_id, &prefix).await?;
 
     Ok(())

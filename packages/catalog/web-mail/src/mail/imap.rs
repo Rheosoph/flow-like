@@ -130,24 +130,33 @@ impl ImapConnectNode {
     }
 }
 
+/// Explicit provider: the workspace links both `ring` and `aws-lc-rs` into rustls, so
+/// `ClientConfig::builder()` panics in binaries that never installed a process default.
 #[cfg(feature = "execute")]
-fn rustls_connector(accept_invalid: bool) -> tokio_rustls::TlsConnector {
-    use std::sync::Arc as StdArc;
+pub(crate) fn rustls_connector(
+    accept_invalid: bool,
+) -> flow_like_types::Result<tokio_rustls::TlsConnector> {
+    use tokio_rustls::rustls::{ClientConfig, RootCertStore, crypto};
 
+    let provider = crypto::CryptoProvider::get_default()
+        .cloned()
+        .unwrap_or_else(|| Arc::new(crypto::aws_lc_rs::default_provider()));
+    let builder = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| anyhow!("rustls provider supports no usable TLS version: {e}"))?;
     let config = if accept_invalid {
-        tokio_rustls::rustls::ClientConfig::builder()
+        builder
             .dangerous()
-            .with_custom_certificate_verifier(StdArc::new(NoVerifier))
+            .with_custom_certificate_verifier(Arc::new(NoVerifier))
             .with_no_client_auth()
     } else {
-        let root_store = tokio_rustls::rustls::RootCertStore::from_iter(
-            webpki_roots::TLS_SERVER_ROOTS.iter().cloned(),
-        );
-        tokio_rustls::rustls::ClientConfig::builder()
-            .with_root_certificates(root_store)
+        builder
+            .with_root_certificates(RootCertStore::from_iter(
+                webpki_roots::TLS_SERVER_ROOTS.iter().cloned(),
+            ))
             .with_no_client_auth()
     };
-    tokio_rustls::TlsConnector::from(StdArc::new(config))
+    Ok(tokio_rustls::TlsConnector::from(Arc::new(config)))
 }
 
 #[cfg(feature = "execute")]
@@ -193,7 +202,7 @@ impl tokio_rustls::rustls::client::danger::ServerCertVerifier for NoVerifier {
     }
 
     fn supported_verify_schemes(&self) -> Vec<tokio_rustls::rustls::SignatureScheme> {
-        tokio_rustls::rustls::crypto::ring::default_provider()
+        tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
             .signature_verification_algorithms
             .supported_schemes()
     }
@@ -301,7 +310,7 @@ impl NodeLogic for ImapConnectNode {
             "Tls" => {
                 // Implicit SSL/TLS from the start
                 let tcp: TcpStream = TcpStream::connect(imap_addrs.as_slice()).await?;
-                let connector = rustls_connector(false);
+                let connector = rustls_connector(false)?;
                 let server_name = rustls_pki_types::ServerName::try_from(host.clone())?;
                 let stream = connector.connect(server_name, tcp).await?;
                 async_imap::Client::new(stream)
@@ -310,7 +319,7 @@ impl NodeLogic for ImapConnectNode {
                 // Plain TCP first, then upgrade via STARTTLS
                 let tcp = TcpStream::connect(imap_addrs.as_slice()).await?;
                 let mut client = async_imap::Client::new(tcp);
-                let connector = rustls_connector(true);
+                let connector = rustls_connector(true)?;
                 client.run_command_and_check_ok("STARTTLS", None).await?;
                 let stream = client.into_inner();
                 let server_name = rustls_pki_types::ServerName::try_from(host.clone())?;

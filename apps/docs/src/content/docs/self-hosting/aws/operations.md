@@ -24,7 +24,7 @@ The API uses `lambda_http` with streaming responses. Configure `SECRET_PREFIX`
 for SSM secret lookup and `CDN_BUCKET_NAME` for the CDN store. External S3-compatible
 CDN stores can also use `CDN_BUCKET_ENDPOINT` and `CDN_BUCKET_ACCESS_KEY_ID`, with
 `CDN_BUCKET_SECRET_ACCESS_KEY` in the secret store. See the
-[API entrypoint](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/aws/api/src/main.rs)
+[API entrypoint](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/aws/api/src/main.rs)
 for how the store is constructed.
 
 `DSQL_CLUSTER_ENDPOINT` selects Aurora DSQL. The API and file tracker otherwise
@@ -61,7 +61,7 @@ that timeout and monitor its dead-letter queue.
 For local invocation, use `cargo lambda watch` and pass an SQS event fixture to
 `cargo lambda invoke --data-file <fixture.json>`. The message body must contain
 the actual execution request; an API Gateway fixture does not exercise this
-handler. The [SQS handler](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/aws/executor-async/src/main.rs)
+handler. The [SQS handler](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/aws/executor-async/src/main.rs)
 defines the batch response behavior.
 
 ## Email automation
@@ -106,7 +106,7 @@ asynchronous executor. Repeated receipt notifications use the same delivery ID.
    you pass a customer managed key, also pass its ARN as the stack's
    `SecretKmsKeyArn`.
 4. Build and deploy
-   [the SAM template](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/aws/mail-ingress/template.yaml)
+   [the SAM template](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/aws/mail-ingress/template.yaml)
    from the repository root. AWS SAM CLI and Docker are required.
 
    ```sh
@@ -143,7 +143,7 @@ asynchronous executor. Repeated receipt notifications use the same delivery ID.
    ```
 
    No additional API environment variables are required. The defaults are
-   `prefix: "raw/"`, `ttl_seconds: 3600`, `max_bytes: 10485760`,
+   `prefix: "raw/"`, `ttl_seconds: 3600`, `max_bytes: 26214400` (25 MiB),
    `sending_enabled: true`, and `min_send_interval_seconds: 5`. Add these
    fields only when the deployment needs a different limit. Without a
    configured mail document or legacy environment settings, automation is
@@ -172,23 +172,55 @@ asynchronous executor. Repeated receipt notifications use the same delivery ID.
 
 ### Use the event outputs
 
-The inbound event exposes concrete types that connect directly to mail and
-file nodes:
+The [Inbound Email Event](/nodes/events/events-inbound-email/) (version 4) has
+these outputs besides its execution pin:
 
-| Output | Type | Use |
+| Output | Type | Contents |
 | --- | --- | --- |
-| Session | `MailSession` | Identifies the app and event that own the sending address |
-| Message | `MailMessageRef` | Identifies the stored inbound delivery and its session for replies |
-| Email | `InboundEmail` | Sender and recipient metadata, subject, body previews, headers, authentication verdicts, and attachment metadata |
-| Attachments | `FlowPath[]` | Paths to decoded attachment files |
+| Message | `MailMessageRef` | The stored delivery, for Reply Platform Email |
+| Mail Session | `MailSession` | The app and event that own the address, for Send Platform Email |
+| Addresses | Struct | `sender`, `from`, `to`, `cc`, `reply_to`, the SMTP `envelope_from`, and the receiving `recipient` |
+| Content | Struct | `subject`, `text` and `html` previews, `text_truncated`, `html_truncated`, and the complete bodies as `text_path` and `html_path` files |
+| Attachments | `InboundEmailAttachment[]` | Per attachment: `filename`, `content_type`, `size`, `path` (FlowPath), `content_id`, `disposition`, `charset`, and `embedded` |
+| Delivery | Struct | `automated`, `expires_at`, `raw_path` (the original MIME message), `omitted_attachments`, `received_at`, `message_id`, `provider_delivery_id`, `headers`, and `authentication` |
 
-`Email.raw_path` points to the original MIME message. `text_path` and
-`html_path`, when present, point to complete bodies; the inline text and HTML
-fields contain bounded previews. Attachment metadata includes filenames,
-content types, sizes, and paths. The paths and mail references are serializable
-locators without credentials. Passing a reference does not grant access: the
-backend checks app, event, and execution ownership when sending or replying.
-Read or copy files needed later before their receipt expires.
+Attachments is an array of structs, so it does not connect to a file input
+directly. Connect it to **For Each**, or **Get Element** for one entry, then
+**Break Struct**, and pass `path` to a file node such as **Read to String** or
+**Copy**, or to [Sign URL](/nodes/data/files/operations/sign-url/) for a
+download link.
+
+`embedded` is true for parts the HTML body shows through `cid:<content_id>`,
+such as signature logos; skip them when you only want real attachments. Text
+attachments without a charset, or in UTF-8 or US-ASCII, keep their original
+bytes. Those in another declared `charset` are stored as UTF-8.
+
+Bodies, attachments, and the raw message are temporary request files. Flow-Like
+deletes them after `Delivery.expires_at`, which is at least
+`MAIL_CONFIG.ttl_seconds` after dispatch, so copy files you need later to app
+storage. The paths and mail references are serializable locators without
+credentials. Passing a reference does not grant access: the backend checks app,
+event, and execution ownership when sending or replying.
+
+### Size and content limits
+
+- The complete MIME message must fit `MAIL_CONFIG.max_bytes`: 25 MiB by
+  default, which leaves about 18 MiB for attachments after encoding. The
+  setting accepts up to 40 MiB; SES itself receives messages up to 40 MB. While
+  dispatching, the API holds about four times the message size in memory, so
+  size ECS tasks for the limit you choose.
+- On SES, larger mail is dropped: no run starts and the sender gets no bounce.
+  The API logs a warning with the app ID, event ID, and limit. Postfix
+  deployments reject such mail during SMTP with `552`, so the sender gets a
+  bounce; their limit is `MAIL_MAX_MESSAGE_BYTES` (10 MiB by default).
+- At most 100 attachments are extracted. `Delivery.omitted_attachments` counts
+  the rest, which remain in `raw_path`.
+- A message forwarded as an attachment arrives as one `.eml` file; its inner
+  attachments are not listed.
+- Outlook rich-text mail arrives as a single `winmail.dat` attachment.
+- Cloud share links from Outlook, OneDrive, or iCloud are links in the body,
+  not attachments.
+- Mail with a failed SES virus verdict is rejected and starts no run.
 
 ### Recovery and retention
 

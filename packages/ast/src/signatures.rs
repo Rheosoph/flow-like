@@ -236,8 +236,10 @@ impl Signature {
         out.push_str(" @alias ");
         out.push_str(&self.display);
         out.push('\n');
-        let receiver_name = self.receiver_param().map(|p| p.name.as_str());
-        for p in &self.inputs {
+        let receiver_index = self
+            .receiver_param()
+            .and_then(|receiver| self.inputs.iter().position(|p| p.name == receiver.name));
+        for (index, p) in self.inputs.iter().enumerate() {
             out.push_str(indent);
             out.push_str(" * @param ");
             out.push_str(&to_camel_case(&p.name));
@@ -245,7 +247,7 @@ impl Signature {
                 out.push_str(" (optional)");
             }
             let doc = p.doc.as_deref().map(str::trim).filter(|d| !d.is_empty());
-            let is_receiver = receiver_name == Some(p.name.as_str());
+            let is_receiver = receiver_index == Some(index);
             if doc.is_some() || is_receiver {
                 out.push_str(" — ");
             }
@@ -739,6 +741,16 @@ mod tests {
         assert!(impure.contains(" * Read Model\n * @node ai_ml_model_read @alias aiMlModelRead\n"));
         assert!(impure.contains(" * @impure has side effects / drives control flow\n"));
         assert!(impure.ends_with("function ai::ml::read({ path: string }): Struct;"));
+    }
+
+    #[test]
+    fn declaration_marks_only_the_first_repeated_pin_as_receiver() {
+        let mut signature = contains();
+        signature.inputs[1].name = "string".to_string();
+        let rendered = signature.render_declaration();
+        assert_eq!(rendered.matches("(receiver: `this`").count(), 1);
+        assert!(rendered.contains(" * @param string — substring doc\n"));
+        assert!(rendered.contains("{ string: string, string: string, ignoreCase?: bool }"));
     }
 
     #[test]

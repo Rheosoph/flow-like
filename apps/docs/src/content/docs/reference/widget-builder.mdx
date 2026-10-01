@@ -1,14 +1,14 @@
 ---
-title: Widget Builder Guide
+title: Build an A2UI status Widget
 description: Build and version reusable A2UI component trees with Flow-Like's visual Widget Builder
 ---
 
 import { Steps, Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
-A Widget is a reusable A2UI component tree owned by an app. Use one for a
-status card, navigation block, form, list item, or other interface pattern that
-should be inserted into one or more Pages without copying its internal
-components.
+This walkthrough applies the [A2UI Widget model](/apps/a2ui/#widgets) to a
+reusable status card. Enable [Developer Mode](/start/developer-mode/) first.
+For the general creation task, see [Create Widgets](/apps/widgets/); for exact
+editor controls, use [Visual Builder controls](/dev/a2ui/visual-builder/).
 
 ![The Widgets workspace with a rendered Widget preview and metadata](../../../assets/WidgetsOverview.webp)
 
@@ -23,8 +23,6 @@ components.
 
 New Widgets are blank. The current creation flow does not include a template
 picker or a separate package-publishing wizard.
-
-![The current visual Widget Builder in dark mode](../../../assets/WidgetBuilder.webp)
 
 ## Builder workspace
 
@@ -80,29 +78,9 @@ This example creates one focused, reusable surface.
 
 ## Current Widget model
 
-The persisted Widget contains:
-
-```typescript
-interface IWidget {
-  id: string;
-  name: string;
-  description?: string;
-  rootComponentId: string;
-  components: SurfaceComponent[];
-  dataModel: DataEntry[];
-  customizationOptions: CustomizationOption[];
-  exposedProps?: ExposedProp[];
-  actions?: WidgetAction[];
-  tags: string[];
-  version?: [number, number, number];
-  createdAt: string;
-  updatedAt: string;
-}
-```
-
-`rootComponentId`, `components`, and `dataModel` form the renderable surface.
-`actions` is the public interaction contract. `exposedProps` describes values
-that an instance may override without editing the Widget definition.
+The [Widget runtime and bindings reference](/dev/a2ui/widgets/) owns the
+persisted model and state API. The examples below show selected component
+properties; they are fragments to use inside a Widget's component tree.
 
 ## Data binding
 
@@ -214,7 +192,7 @@ interface ExposedProp {
 
 For example, expose the outer card's accent class, a heading's `content`, or a
 metric's bound value. Keep internal spacing and structure private unless a Page
-author genuinely needs to change them.
+author needs to change them.
 
 At present, these definitions are mainly populated through validated JSON or
 agent tooling and displayed by the Widget details experience; the visual

@@ -1,0 +1,6 @@
+{
+  "chars": 1000,
+  "chromedriver_send_keys_ms": 189,
+  "cdp_key_events_sequential_ms": 305,
+  "cdp_insertText_ms": 1
+}

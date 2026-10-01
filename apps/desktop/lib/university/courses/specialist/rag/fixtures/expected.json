@@ -1,0 +1,8 @@
+{
+  "initial_count": 3,
+  "repeat_count": 3,
+  "after_refund_update_count": 3,
+  "public_forbidden_source": "enterprise",
+  "refund_v1_days": 30,
+  "refund_v2_days": 14
+}

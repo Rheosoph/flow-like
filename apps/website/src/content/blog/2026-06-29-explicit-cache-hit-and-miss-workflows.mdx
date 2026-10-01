@@ -1,0 +1,55 @@
+---
+title: "Stop fetching the same data on every workflow run"
+description: "Build an explicit cache hit/miss branch with a stable key, deliberate scope, expiration, and an invalidation path."
+date: 2026-06-29
+tags: ["cache", "workflows", "performance", "tutorial"]
+cover: "/images/community-P2.png"
+draft: true
+---
+
+import { CommunityExplainer } from '../../components/blog/CommunityExplainer';
+
+An enrichment workflow may ask the same service for the same reference data many times. If the answer remains useful for a while, a cache can let later runs reuse it. The important design decision is where the workflow chooses between using the saved value and performing the expensive work.
+
+Flow-Like provides cache nodes for small values shared between runs. Build the hit and miss branches explicitly so you can see which work is skipped and when the data is refreshed.
+
+## Choose a key and a scope
+
+Use **Open Cache** to create the handle passed to the read and write nodes. **App** scope shares entries with people who can run the app. **User** scope keeps entries associated with the person who triggered the run. Choose User scope when the result depends on that person's access or preferences.
+
+A key identifies the question being answered. For a public product-reference lookup, include the product identifier and any locale or schema version that changes the result. Two requests that can produce different valid answers should not accidentally share a key.
+
+Use a namespace to group related entries. That gives you a way to invalidate the group when a source or result format changes. It also prevents unrelated flows from colliding merely because both use a short key such as `settings`.
+
+<figure>
+  <img src="/posts/community/P2/overview.svg" alt="Read a scoped cache key, branch on hit or miss, return the saved value on a hit, and fetch then write on a miss before continuing." loading="lazy" width="1600" height="1000" />
+  <figcaption>Put expensive work on the miss branch so a cache hit can actually bypass it.</figcaption>
+</figure>
+
+## Branch on the read result
+
+Connect **Read Cache** and inspect **Found**. If it is true, use **Value**. If it is false, fetch the reference data, validate the response, write it with a chosen lifetime, and continue with the newly obtained value.
+
+Branch on Found rather than testing whether Value is null. The node reports a miss when an entry is absent or expired, and a stored value has its own meaning. Keep the control signal separate from the data.
+
+The first lookup for a product takes the miss branch and saves its reference data. Another request for the same product and locale uses the saved value until it expires or is deleted. A different locale gets a different key and can fetch its own answer. The visible branch makes that behavior part of the workflow's structure.
+
+The [Read Cache implementation](https://github.com/Rheosoph/flow-like/blob/dev/packages/catalog/data/src/data/cache/read.rs) exposes that contract directly.
+
+## Understand Get or Write before using it
+
+**Get or Write Cache** returns an existing live value or stores its fallback. However, its implementation evaluates the fallback input before attempting the cache operation. Wiring an expensive computation into that input does not, by itself, prevent the computation on a hit.
+
+Use the explicit read-and-branch pattern when skipping that work is your objective. Get or Write can support a different pattern in which a cheap claim value is inserted and **Written** determines which caller proceeds. That requires careful handling of unfinished work and failures. The [node source](https://github.com/Rheosoph/flow-like/blob/dev/packages/catalog/data/src/data/cache/get_or_write.rs) makes the evaluation order visible.
+
+This interactive teaching simulation illustrates the hit/miss decision. It does not call a service or operate your app's cache.
+
+<CommunityExplainer client:load mode="cache" />
+
+## Decide when the answer becomes stale
+
+Expiration expresses how long you are willing to reuse an answer. It cannot know that the source changed early. Add deletion or namespace invalidation after a known change, such as replacing the reference dataset or modifying the shape of the cached result.
+
+Cache small, frequently reused values. Put large documents in app storage and cache an appropriate reference or compact result. Offline apps use their local cache path; server deployments use a configured store. The same workflow pattern keeps the hit/miss decision explicit across those environments. The [cache backend source](https://github.com/Rheosoph/flow-like/blob/dev/packages/api/src/cache/mod.rs) describes the store selection and its limits.
+
+Two runs can still both observe a miss before either writes. The basic pattern avoids repeated work on later hits; it does not promise that concurrent misses execute only once. If that matters, design coordination and recovery explicitly. Keep the cache replaceable, and keep the source of truth somewhere you can recover from when a cached value disappears.

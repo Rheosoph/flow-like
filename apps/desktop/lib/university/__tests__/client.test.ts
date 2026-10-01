@@ -265,6 +265,27 @@ describe("University API client", () => {
 		).rejects.toThrow("Sensitive header authorization");
 	});
 
+	test("stores document download disposition through Azure's blob property header", async () => {
+		let headers = new Headers();
+		stubFetch(async (_input, init) => {
+			headers = new Headers(init?.headers);
+			return new Response(null, { status: 201 });
+		});
+		const disposition =
+			"attachment; filename=cases.json; filename*=UTF-8''cases.json";
+		await uploadToSignedUrl(
+			"https://account.blob.core.windows.net/assets/file.webp",
+			new Uint8Array([1]),
+			{
+				contentType: "application/json",
+				headers: { "Content-Disposition": disposition },
+			},
+		);
+		expect(headers.get("x-ms-blob-content-disposition")).toBe(disposition);
+		expect(headers.has("Content-Disposition")).toBe(false);
+		expect(headers.get("Content-Type")).toBe("application/json");
+	});
+
 	test("rejects invalid successful response shapes", async () => {
 		stubFetch(async () => new Response(null, { status: 204 }));
 		const client = createUniversityClient({

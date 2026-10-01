@@ -127,7 +127,7 @@ pub enum ReplayOutcome {
     Unknown { reason: String },
 }
 
-async fn fingerprint(dataset: &Dataset) -> Result<String> {
+pub(super) async fn fingerprint(dataset: &Dataset) -> Result<String> {
     let store = dataset.object_store(None).await?;
     let object = store.inner.get(&dataset.manifest_location().path).await?;
     if let (Some(expected), Some(actual)) = (&dataset.manifest_location().e_tag, &object.meta.e_tag)
@@ -737,37 +737,91 @@ pub struct MaterializedTable {
 }
 
 #[derive(Debug)]
-struct WriteBudget {
-    maximum: u64,
+pub(super) struct WriteBudget {
+    maximum: std::sync::atomic::AtomicU64,
     used: std::sync::atomic::AtomicU64,
 }
 
 impl WriteBudget {
-    fn charge(&self, bytes: u64) -> object_store::Result<()> {
+    pub(super) fn new(maximum: u64, used: u64) -> Self {
+        Self {
+            maximum: std::sync::atomic::AtomicU64::new(maximum),
+            used: std::sync::atomic::AtomicU64::new(used),
+        }
+    }
+
+    pub(super) fn maximum(&self) -> u64 {
+        self.maximum.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(super) fn used(&self) -> u64 {
+        self.used.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(super) fn try_charge(&self, bytes: u64) -> bool {
+        let maximum = self.maximum();
         self.used
             .fetch_update(
                 std::sync::atomic::Ordering::AcqRel,
                 std::sync::atomic::Ordering::Acquire,
-                |used| used.checked_add(bytes).filter(|next| *next <= self.maximum),
+                |used| used.checked_add(bytes).filter(|next| *next <= maximum),
             )
-            .map(|_| ())
-            .map_err(|_| object_store::Error::Generic {
-                store: "offline-materialization",
-                source: "offline snapshot exceeds its disk write budget".into(),
-            })
+            .is_ok()
+    }
+
+    /// Charges without a limit: bytes that already exist on disk.
+    pub(super) fn add(&self, bytes: u64) {
+        self.used
+            .fetch_add(bytes, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    fn charge(&self, bytes: u64) -> object_store::Result<()> {
+        if self.try_charge(bytes) {
+            return Ok(());
+        }
+        Err(object_store::Error::Generic {
+            store: "offline-materialization",
+            source: "offline snapshot exceeds its disk write budget".into(),
+        })
+    }
+
+    pub(super) fn release(&self, bytes: u64) {
+        let _ = self.used.fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |used| Some(used.saturating_sub(bytes)),
+        );
     }
 }
 
-/// Shared disk budget of one `budgeted_local_connection`.
+/// Shared disk budget of one budgeted local connection: its local tables and, with a lazy
+/// mirror, the mirror's file cache. The maximum can change while the connection is open.
 #[derive(Clone, Debug)]
-pub struct LocalBudget(Arc<WriteBudget>);
+pub struct MirrorBudget(Arc<WriteBudget>);
 
-impl LocalBudget {
-    pub fn available(&self) -> u64 {
+impl MirrorBudget {
+    pub fn set_maximum(&self, maximum_bytes: u64) {
         self.0
             .maximum
-            .saturating_sub(self.0.used.load(std::sync::atomic::Ordering::Acquire))
+            .store(maximum_bytes, std::sync::atomic::Ordering::Release);
     }
+    pub fn used(&self) -> u64 {
+        self.0.used()
+    }
+    pub fn maximum(&self) -> u64 {
+        self.0.maximum()
+    }
+    pub fn available(&self) -> u64 {
+        self.0.maximum().saturating_sub(self.0.used())
+    }
+}
+
+/// Result of `budgeted_local_connection_with_budget`.
+pub struct LocalConnection {
+    pub connection: Connection,
+    pub budget: MirrorBudget,
+    /// Some iff the connection was opened with a lazy mirror.
+    pub mirror: Option<Arc<super::offline_mirror::LazyMirror>>,
 }
 
 #[derive(Debug)]
@@ -917,16 +971,34 @@ impl std::io::Write for ByteCounter {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct LocalBudgetStore {
     inner: Arc<dyn object_store::ObjectStore>,
     root: std::path::PathBuf,
     prefix: Path,
     budget: Arc<WriteBudget>,
     locks: Vec<Arc<futures::lock::Mutex<()>>>,
+    /// Lance opens v3 vector index files through the primary store with cloud keys; those
+    /// keys are served by the lazy mirror, read-only.
+    mirror: Option<Arc<super::offline_mirror::LazyMirror>>,
 }
 
-fn sync_directory(directory: &std::path::Path) -> std::io::Result<()> {
+/// Charges a local write, first asking the mirror to evict unpinned cache files.
+fn charge_local(
+    budget: &WriteBudget,
+    mirror: Option<&Arc<super::offline_mirror::LazyMirror>>,
+    bytes: u64,
+) -> object_store::Result<()> {
+    if budget.try_charge(bytes) {
+        return Ok(());
+    }
+    if let Some(mirror) = mirror {
+        mirror.make_room_for_local(bytes);
+    }
+    budget.charge(bytes)
+}
+
+pub(super) fn sync_directory(directory: &std::path::Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
@@ -1100,11 +1172,18 @@ impl LocalBudgetStore {
     }
 
     fn release(&self, bytes: u64) {
-        let _ = self.budget.used.fetch_update(
-            std::sync::atomic::Ordering::AcqRel,
-            std::sync::atomic::Ordering::Acquire,
-            |used| Some(used.saturating_sub(bytes)),
-        );
+        self.budget.release(bytes);
+    }
+
+    fn charge(&self, bytes: u64) -> object_store::Result<()> {
+        charge_local(&self.budget, self.mirror.as_ref(), bytes)
+    }
+
+    /// The mirror when `path` is a cloud key under one of its roots; the local prefix wins.
+    fn routed(&self, path: &Path) -> Option<&Arc<super::offline_mirror::LazyMirror>> {
+        self.mirror
+            .as_ref()
+            .filter(|mirror| path.prefix_match(&self.prefix).is_none() && mirror.routes(path))
     }
 }
 
@@ -1116,10 +1195,13 @@ impl object_store::ObjectStore for LocalBudgetStore {
         payload: object_store::PutPayload,
         options: object_store::PutOptions,
     ) -> object_store::Result<object_store::PutResult> {
+        if let Some(mirror) = self.routed(path) {
+            return Err(mirror.read_only(path));
+        }
         let _lock = self.locks[self.lock_index(path)].clone().lock_owned().await;
         self.check(path)?;
         let old = self.old_cost(path).await?;
-        self.budget.charge(payload.content_length() as u64 + 4096)?;
+        self.charge(payload.content_length() as u64 + 4096)?;
         let result = self.inner.put_opts(path, payload, options).await;
         if result.is_ok() {
             sync_local_object(self.root.clone(), self.local_path(path)?, true).await?;
@@ -1133,13 +1215,17 @@ impl object_store::ObjectStore for LocalBudgetStore {
         path: &Path,
         options: object_store::PutMultipartOptions,
     ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+        if let Some(mirror) = self.routed(path) {
+            return Err(mirror.read_only(path));
+        }
         let lock = self.locks[self.lock_index(path)].clone().lock_owned().await;
         self.check(path)?;
         let old = self.old_cost(path).await?;
-        self.budget.charge(4096)?;
+        self.charge(4096)?;
         Ok(Box::new(LocalBudgetUpload {
             inner: self.inner.put_multipart_opts(path, options).await?,
             budget: self.budget.clone(),
+            mirror: self.mirror.clone(),
             old,
             finished: false,
             root: self.root.clone(),
@@ -1153,6 +1239,9 @@ impl object_store::ObjectStore for LocalBudgetStore {
         path: &Path,
         options: object_store::GetOptions,
     ) -> object_store::Result<object_store::GetResult> {
+        if let Some(mirror) = self.routed(path) {
+            return mirror.get(path, options).await;
+        }
         self.check(path)?;
         self.inner.get_opts(path, options).await
     }
@@ -1162,22 +1251,15 @@ impl object_store::ObjectStore for LocalBudgetStore {
         locations: futures::stream::BoxStream<'static, object_store::Result<Path>>,
     ) -> futures::stream::BoxStream<'static, object_store::Result<Path>> {
         // Store-owned state is cloned because ObjectStore's deletion stream is static.
-        let inner = self.inner.clone();
-        let root = self.root.clone();
-        let prefix = self.prefix.clone();
-        let budget = self.budget.clone();
-        let locks = self.locks.clone();
+        let store = self.clone();
         locations
             .then(move |path| {
-                let store = Self {
-                    inner: inner.clone(),
-                    root: root.clone(),
-                    prefix: prefix.clone(),
-                    budget: budget.clone(),
-                    locks: locks.clone(),
-                };
+                let store = store.clone();
                 async move {
                     let path = path?;
+                    if let Some(mirror) = store.routed(&path) {
+                        return Err(mirror.read_only(&path));
+                    }
                     let _lock = store.locks[store.lock_index(&path)]
                         .clone()
                         .lock_owned()
@@ -1198,6 +1280,9 @@ impl object_store::ObjectStore for LocalBudgetStore {
         prefix: Option<&Path>,
     ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
         let prefix = prefix.unwrap_or(&self.prefix);
+        if let Some(mirror) = self.routed(prefix) {
+            return mirror.list(prefix);
+        }
         if let Err(error) = self.check(prefix) {
             return futures::stream::once(async move { Err(error) }).boxed();
         }
@@ -1209,6 +1294,9 @@ impl object_store::ObjectStore for LocalBudgetStore {
         prefix: Option<&Path>,
     ) -> object_store::Result<object_store::ListResult> {
         let prefix = prefix.unwrap_or(&self.prefix);
+        if let Some(mirror) = self.routed(prefix) {
+            return mirror.list_with_delimiter(prefix).await;
+        }
         self.check(prefix)?;
         self.inner.list_with_delimiter(Some(prefix)).await
     }
@@ -1219,6 +1307,9 @@ impl object_store::ObjectStore for LocalBudgetStore {
         to: &Path,
         options: object_store::CopyOptions,
     ) -> object_store::Result<()> {
+        if let Some(mirror) = self.routed(from).or_else(|| self.routed(to)) {
+            return Err(mirror.read_only(to));
+        }
         let from_index = self.lock_index(from);
         let to_index = self.lock_index(to);
         let _first = self.locks[from_index.min(to_index)]
@@ -1239,7 +1330,7 @@ impl object_store::ObjectStore for LocalBudgetStore {
         self.check(to)?;
         let source = self.inner.head(from).await?.size.saturating_add(4096);
         let old = self.old_cost(to).await?;
-        self.budget.charge(source)?;
+        self.charge(source)?;
         let result = self.inner.copy_opts(from, to, options).await;
         if result.is_ok() {
             sync_local_object(self.root.clone(), self.local_path(to)?, true).await?;
@@ -1253,6 +1344,7 @@ impl object_store::ObjectStore for LocalBudgetStore {
 struct LocalBudgetUpload {
     inner: Box<dyn object_store::MultipartUpload>,
     budget: Arc<WriteBudget>,
+    mirror: Option<Arc<super::offline_mirror::LazyMirror>>,
     old: u64,
     finished: bool,
     root: std::path::PathBuf,
@@ -1272,7 +1364,7 @@ impl object_store::MultipartUpload for LocalBudgetUpload {
             });
         }
         let bytes = payload.content_length() as u64;
-        if let Err(error) = self.budget.charge(bytes) {
+        if let Err(error) = charge_local(&self.budget, self.mirror.as_ref(), bytes) {
             return Box::pin(async move { Err(error) });
         }
         self.inner.put_part(payload)
@@ -1282,11 +1374,7 @@ impl object_store::MultipartUpload for LocalBudgetUpload {
         if result.is_ok() && !self.finished {
             sync_local_object(self.root.clone(), self.path.clone(), true).await?;
             self.finished = true;
-            let _ = self.budget.used.fetch_update(
-                std::sync::atomic::Ordering::AcqRel,
-                std::sync::atomic::Ordering::Acquire,
-                |used| Some(used.saturating_sub(self.old)),
-            );
+            self.budget.release(self.old);
             drop(self._lock.take());
         }
         result
@@ -1364,16 +1452,35 @@ pub async fn budgeted_local_connection(
     root: &std::path::Path,
     maximum_bytes: u64,
 ) -> Result<Connection> {
-    Ok(budgeted_local_connection_with_budget(root, maximum_bytes)
-        .await?
-        .0)
+    Ok(
+        budgeted_local_connection_with_budget(root, maximum_bytes, None)
+            .await?
+            .connection,
+    )
 }
 
-/// `budgeted_local_connection` and the budget every write through it is charged to.
+/// Lance session cache sizes of a budgeted local connection: Lance's defaults with a lazy
+/// mirror, like the cloud connection, so cloud indexes stay cached between queries.
+pub(super) fn local_cache_sizes(mirror: bool) -> (usize, usize) {
+    if mirror {
+        (
+            lance::dataset::DEFAULT_INDEX_CACHE_SIZE,
+            lance::dataset::DEFAULT_METADATA_CACHE_SIZE,
+        )
+    } else {
+        (16 * 1024 * 1024, 16 * 1024 * 1024)
+    }
+}
+
+/// Like `budgeted_local_connection`, but the budget can be changed while the connection is
+/// open. With `mirror` it also opens the lazy mirror: its cache is charged to the same budget
+/// (the open never evicts), the scheme of every bound root is served by the mirror, and cloud
+/// keys under bound roots reach the mirror through the local store, read-only.
 pub async fn budgeted_local_connection_with_budget(
     root: &std::path::Path,
     maximum_bytes: u64,
-) -> Result<(Connection, LocalBudget)> {
+    mirror: Option<super::offline_mirror::LazyMirrorSetup>,
+) -> Result<LocalConnection> {
     ensure!(
         maximum_bytes > 0,
         "offline local database budget must be positive"
@@ -1428,10 +1535,12 @@ pub async fn budgeted_local_connection_with_budget(
             }
         }
     }
-    let budget = Arc::new(WriteBudget {
-        maximum: maximum_bytes,
-        used: std::sync::atomic::AtomicU64::new(used),
-    });
+    let budget = Arc::new(WriteBudget::new(maximum_bytes, used));
+    let registry = Arc::new(lance_io::object_store::ObjectStoreRegistry::empty());
+    let (index_cache, metadata_cache) = local_cache_sizes(mirror.is_some());
+    let mirror = mirror
+        .map(|setup| super::offline_mirror::LazyMirror::open(setup, budget.clone(), &registry))
+        .transpose()?;
     let store = Arc::new(LocalBudgetStore {
         inner: Arc::new(object_store::local::LocalFileSystem::new()),
         prefix: Path::from_absolute_path(&root)?,
@@ -1440,12 +1549,12 @@ pub async fn budgeted_local_connection_with_budget(
         locks: (0..64)
             .map(|_| Arc::new(futures::lock::Mutex::new(())))
             .collect(),
+        mirror: mirror.clone(),
     });
-    let registry = Arc::new(lance_io::object_store::ObjectStoreRegistry::empty());
     registry.insert("file-object-store", Arc::new(LocalBudgetProvider(store)));
     let session = Arc::new(lance::session::Session::new(
-        16 * 1024 * 1024,
-        16 * 1024 * 1024,
+        index_cache,
+        metadata_cache,
         registry,
     ));
     let uri = uri_to_url(
@@ -1455,10 +1564,11 @@ pub async fn budgeted_local_connection_with_budget(
     // The native `file` scheme bypasses ObjectStore wrappers for reads, writes
     // and copies. This scheme routes every operation through the budget.
     let uri = uri.as_str().replacen("file:", "file-object-store:", 1);
-    Ok((
-        connect_lance(&uri).session(session).execute().await?,
-        LocalBudget(budget),
-    ))
+    Ok(LocalConnection {
+        connection: connect_lance(&uri).session(session).execute().await?,
+        budget: MirrorBudget(budget),
+        mirror,
+    })
 }
 
 /// Prune obsolete history without rewriting the current local table or changing
@@ -1573,10 +1683,7 @@ pub async fn materialize(
     });
     let stream: lancedb::arrow::SendableRecordBatchStream =
         Box::pin(lancedb::arrow::SimpleRecordBatchStream { schema, stream });
-    let budget = Arc::new(WriteBudget {
-        maximum: maximum_bytes,
-        used: std::sync::atomic::AtomicU64::new(0),
-    });
+    let budget = Arc::new(WriteBudget::new(maximum_bytes, 0));
     let params = WriteParams {
         mode: WriteMode::Create,
         max_rows_per_file: 64 * 1024,
@@ -1686,15 +1793,16 @@ mod tests {
         Ok(())
     }
 
-    async fn private_connection() -> Result<(Directory, Connection, LocalBudget)> {
+    async fn private_connection() -> Result<(Directory, Connection, MirrorBudget)> {
         let (directory, _) = connection().await?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&directory.0, std::fs::Permissions::from_mode(0o700))?;
         }
-        let (connection, budget) =
-            budgeted_local_connection_with_budget(&directory.0, 8 * 1024 * 1024).await?;
+        let LocalConnection {
+            connection, budget, ..
+        } = budgeted_local_connection_with_budget(&directory.0, 8 * 1024 * 1024, None).await?;
         Ok((directory, connection, budget))
     }
 
@@ -1765,6 +1873,24 @@ mod tests {
             .await?,
             ReplayOutcome::Conflict { actual_version: 4 }
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mirror_budget_can_change_while_open() -> Result<()> {
+        let (_directory, connection, budget) = private_connection().await?;
+        table(&connection).await?;
+        let used = budget.used();
+        budget.set_maximum(used);
+        assert_eq!(budget.maximum(), used);
+        assert!(
+            other_writer(&connection.open_table("records").execute().await?, 2)
+                .await
+                .is_err()
+        );
+        budget.set_maximum(8 * 1024 * 1024);
+        other_writer(&connection.open_table("records").execute().await?, 3).await?;
+        assert!(budget.used() > used);
         Ok(())
     }
 
@@ -2044,10 +2170,7 @@ mod tests {
         let memory = Arc::new(object_store::memory::InMemory::new());
         let store = BudgetedStore {
             inner: memory.clone(),
-            budget: Arc::new(WriteBudget {
-                maximum: 4098,
-                used: std::sync::atomic::AtomicU64::new(0),
-            }),
+            budget: Arc::new(WriteBudget::new(4098, 0)),
         };
         use object_store::ObjectStore;
         let mut upload = store
@@ -2066,10 +2189,7 @@ mod tests {
         use object_store::ObjectStore;
         let (directory, _) = connection().await?;
         let root = directory.0.canonicalize()?;
-        let budget = Arc::new(WriteBudget {
-            maximum: 8192,
-            used: std::sync::atomic::AtomicU64::new(0),
-        });
+        let budget = Arc::new(WriteBudget::new(8192, 0));
         let store = LocalBudgetStore {
             inner: Arc::new(object_store::local::LocalFileSystem::new()),
             prefix: Path::from_absolute_path(&root)?,
@@ -2078,6 +2198,7 @@ mod tests {
             locks: (0..64)
                 .map(|_| Arc::new(futures::lock::Mutex::new(())))
                 .collect(),
+            mirror: None,
         };
         let path = Path::from_absolute_path(root.join("aborted"))?;
         let mut upload = store.put_multipart_opts(&path, Default::default()).await?;

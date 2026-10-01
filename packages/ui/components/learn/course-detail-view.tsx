@@ -10,6 +10,7 @@ import {
 	Workflow,
 } from "lucide-react";
 import { useMemo } from "react";
+import { remainingLessonMinutes } from "../../lib/learn/lesson-navigation";
 import type {
 	CourseDetail,
 	LessonSummary,
@@ -99,18 +100,15 @@ export function CourseDetailView({
 			),
 		[completedLessonIds, modules],
 	);
-	const minutesLeft = useMemo(
+	const remainingMinutes = useMemo(
 		() =>
-			modules.reduce(
-				(sum, m) =>
-					sum +
-					m.lessons
-						.filter((l) => !completedLessonIds.has(l.id))
-						.reduce((acc, l) => acc + (l.estimated_minutes ?? 0), 0),
-				0,
+			remainingLessonMinutes(
+				modules.flatMap((m) => m.lessons),
+				completedLessonIds,
 			),
 		[completedLessonIds, modules],
 	);
+	const minutesLeft = remainingMinutes.required;
 
 	const progressPct =
 		lessonCounts.required === 0
@@ -119,11 +117,12 @@ export function CourseDetailView({
 				: 0
 			: Math.round((completedRequiredLessons / lessonCounts.required) * 100);
 
-	/** The lesson to open next — first incomplete, in course order. */
+	/** Continue the required path. Electives remain available in the outline. */
 	const nextLesson = useMemo(() => {
 		for (const m of modules) {
 			for (const l of m.lessons) {
-				if (!completedLessonIds.has(l.id)) return { module: m, lesson: l };
+				if (!l.is_optional && !completedLessonIds.has(l.id))
+					return { module: m, lesson: l };
 			}
 		}
 		return null;
@@ -346,9 +345,17 @@ export function CourseDetailView({
 									value={`${completedRequiredLessons} / ${lessonCounts.required}`}
 								/>
 								<TallyRow
-									label={t("timeRemaining", "Time remaining")}
+									label={t("requiredTimeRemaining", "Required time remaining")}
 									value={t("valMin", "{{val}} min", { val: minutesLeft })}
 								/>
+								{remainingMinutes.optional > 0 && (
+									<TallyRow
+										label={t("optionalPractice", "Optional practice")}
+										value={t("valMin", "{{val}} min", {
+											val: remainingMinutes.optional,
+										})}
+									/>
+								)}
 								<TallyRow
 									done={progressPct === 100}
 									label={t("certificate", "Certificate")}
@@ -382,14 +389,14 @@ export function CourseDetailView({
 						<div className="flex items-center gap-2.5 p-3.5">
 							<Workflow className="size-4 shrink-0 text-muted-foreground" />
 							<p className="min-w-0 flex-1 text-xs text-muted-foreground">
-								{isEnrolled
+								{workspaceAppId
 									? t(
 											"clonedIntoYourLibraryChallengesReadThisBoard",
 											"Cloned into your library. Challenges read this board.",
 										)
 									: t(
-											"aSandboxAppClonesWhenYouStart",
-											"A sandbox app clones into your library when you start.",
+											"openALessonForItsPracticeFilesAndSetup",
+											"Open a lesson for its practice files and setup instructions.",
 										)}
 							</p>
 							{workspaceAppId && onOpenWorkspace && (

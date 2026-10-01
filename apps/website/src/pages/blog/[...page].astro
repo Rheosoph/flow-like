@@ -16,8 +16,14 @@ export const getStaticPaths = (async ({ paginate }) => {
 const { page } = Astro.props;
 const first = page.data[0];
 const rest = page.data.slice(1);
+const title = page.currentPage === 1
+  ? "Workflow Automation & Local AI Blog | Flow-Like"
+  : `Flow-Like Blog | Page ${page.currentPage}`;
+const description = page.currentPage === 1
+  ? "Explore workflow automation tutorials, local AI guides, tool comparisons, and Flow-Like product updates."
+  : `Browse page ${page.currentPage} of Flow-Like tutorials, tool comparisons, and product updates on workflow automation and local AI.`;
 ---
-<BlogLayout data={{ title: "Blog", description: "Latest news, releases, and tutorials from the Flow-Like team.", slug: "blog" }}>
+<BlogLayout data={{ title, description }}>
   <div class="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8 pb-12 sm:pb-14 lg:pb-16">
     <header class="mb-10 rounded-2xl border border-border/50 bg-card/50 p-7 text-center backdrop-blur-sm sm:mb-12 sm:p-9 lg:p-11">
       <p class="mb-3 text-[11px] font-medium tracking-[0.3em] uppercase text-primary">Flow-Like Blog</p>
@@ -56,7 +62,7 @@ const rest = page.data.slice(1);
         <div class="flex items-center gap-1">
           {Array.from({ length: page.lastPage }, (_, i) => i + 1).map(i => (
             <a
-              href={i === 1 ? '/blog' : `/blog/${i}`}
+              href={i === 1 ? '/blog/' : `/blog/${i}/`}
               aria-current={i === page.currentPage ? 'page' : undefined}
               class={`flex h-9 w-9 items-center justify-center rounded-full text-sm font-medium transition-all ${
                 i === page.currentPage

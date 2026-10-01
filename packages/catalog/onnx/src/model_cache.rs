@@ -1050,10 +1050,8 @@ mod tests {
             files::store::{FlowLikeStore, local_store::LocalObjectStore},
             object_store::{self, ObjectStore, memory::InMemory},
         };
-        use flow_like_types::{
-            futures::{self, stream::BoxStream},
-            sync::{Mutex as AsyncMutex, RwLock},
-        };
+        use flow_like_types::sync::{Mutex as AsyncMutex, RwLock};
+        use futures::stream::BoxStream;
 
         const DEFAULT_FACE_CACHE_NAMES: [&str; 3] = [
             "face-id-detector-d5a05dd4dec91e85676fd1342db9b4e940439ffe9c18a1eadf48e9e1922d8ef3.onnx",

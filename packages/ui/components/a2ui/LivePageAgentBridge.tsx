@@ -8,6 +8,7 @@ import { resolveEventActions } from "./event-handlers";
 import {
 	type LivePageRunRecord,
 	type LivePageTriggerResult,
+	coerceLivePageValue,
 	isLivePageComponentEffectivelyHidden,
 	isLivePageValueBearingComponent,
 	registerLivePage,
@@ -127,7 +128,7 @@ export function LivePageAgentBridge({
 			getContainer: () => latest.current.getContainer?.() ?? null,
 			getElementValues: () => latest.current.getElementValues?.() ?? {},
 			resolveBoundValue: (value) => latest.current.resolve(value as BoundValue),
-			setElementValue: (requestedId, value) => {
+			setElementValue: (requestedId, requestedValue) => {
 				const surface = latest.current.getSurface();
 				if (!surface) {
 					throw new Error(`Page '${pageId}' has no rendered surface.`);
@@ -143,6 +144,7 @@ export function LivePageAgentBridge({
 						`Component '${componentId}' does not exist on page '${pageId}'.`,
 					);
 				}
+				const value = coerceLivePageValue(component, requestedValue);
 				if (
 					isLivePageComponentEffectivelyHidden(surface, componentId, (value) =>
 						latest.current.resolve(value as BoundValue),

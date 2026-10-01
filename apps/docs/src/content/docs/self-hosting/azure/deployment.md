@@ -40,7 +40,7 @@ referenced secret. OAuth client secrets belong in separate secret-store
 entries referenced by `client_secret_env`; literal client secrets are rejected.
 The public fallback does not configure an Azure installation.
 
-The [Entra External ID fragment](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/azure/api/entra-external-id.fragment.example.json)
+The [Entra External ID fragment](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/azure/api/entra-external-id.fragment.example.json)
 shows Azure-specific settings. Replace its example tenant, application, and
 URLs, check discovery, issuer, audience, and JWKS, then merge it into the complete
 configuration. The fragment alone fails schema validation. For shared source
@@ -276,8 +276,8 @@ Lowercase proxy names are also rejected. Unset an unwanted setting rather than
 assigning an empty value. The API additionally rejects storage keys, SAS tokens,
 client secrets, ACS connection strings, emulator switches, signature-skip flags,
 and custom storage endpoints. The exact names are maintained in the
-[API configuration guard](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/azure/api/src/config.rs)
-and [PostgreSQL client](https://github.com/Rheosoph/flow-like/blob/main/packages/azure-data/src/postgres.rs).
+[API configuration guard](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/azure/api/src/config.rs)
+and [PostgreSQL client](https://github.com/Rheosoph/flow-like/blob/dev/packages/azure-data/src/postgres.rs).
 
 ## Apply schema changes
 
@@ -313,7 +313,7 @@ Exit `2` indicates rejected configuration, and exit `1` can indicate token
 failure or a signaled child. Otherwise the job returns the failing pre-push
 exit code, or Prisma's exit code after pre-push succeeds. Cancellation forwards
 SIGTERM to the child. The
-[migration entrypoint](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/azure/migration/migrate.ts)
+[migration entrypoint](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/azure/migration/migrate.ts)
 defines this sequence. For local runner checks, use `bun install`, `bun test`,
 and `bunx tsc --noEmit` from `apps/backend/azure/migration`.
 
@@ -343,7 +343,7 @@ for the send operation to succeed before reporting success.
 require an accepting token lifecycle and a successful PostgreSQL ping.
 `/health` aliases readiness for deployments using the compatibility probe.
 
-The [native OTLP collector](https://github.com/Rheosoph/flow-like/blob/main/apps/backend/azure/otel-collector/collector.yaml)
+The [native OTLP collector](https://github.com/Rheosoph/flow-like/blob/dev/apps/backend/azure/otel-collector/collector.yaml)
 receives OTLP/gRPC on port 4317 and exports logs, traces, and metrics to Azure
 Monitor. Set `AZURE_CLIENT_ID`, `DEPLOYMENT_ENVIRONMENT`,
 `AZURE_MONITOR_TRACES_ENDPOINT`, `AZURE_MONITOR_METRICS_ENDPOINT`, and

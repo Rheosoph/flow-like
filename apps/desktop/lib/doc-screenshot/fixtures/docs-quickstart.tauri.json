@@ -1,0 +1,1123 @@
+{
+	"schema": "flow-like.doc-screenshot-tauri-fixture/v1",
+	"strict": false,
+	"responses": {
+		"get_default_profiles": [
+			[
+				[
+					{
+						"hub_profile": {
+							"id": "starter-chatting",
+							"name": "Chatting",
+							"description": "A friendly setup for conversations, brainstorming, and everyday assistance.",
+							"icon": "/flow/icons/message.svg",
+							"thumbnail": "/swimlanes/0-6.jpg",
+							"interests": ["conversation", "brainstorming", "productivity"],
+							"tags": ["starter", "chat"],
+							"hub": "api.flow-like.com",
+							"secure": true,
+							"hubs": [],
+							"apps": null,
+							"shortcuts": null,
+							"theme": null,
+							"bits": ["docs:starter-chat"],
+							"settings": {
+								"connection_mode": "simplebezier"
+							},
+							"created": "2026-01-15T12:00:00Z",
+							"updated": "2026-01-15T12:00:00Z"
+						},
+						"execution_settings": {
+							"gpu_mode": false,
+							"max_context_size": 8192
+						},
+						"created": "2026-01-15T12:00:00Z",
+						"updated": "2026-01-15T12:00:00Z"
+					},
+					[
+						{
+							"authors": ["Flow-Like"],
+							"created": "2026-01-15T12:00:00Z",
+							"dependencies": [],
+							"dependency_tree_hash": "docs-starter-chat-tree-v1",
+							"download_link": null,
+							"file_name": null,
+							"hash": "docs-starter-chat-v1",
+							"hub": "docs",
+							"id": "starter-chat",
+							"license": "MIT",
+							"meta": {
+								"en": {
+									"age_rating": null,
+									"created_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"description": "Conversation and brainstorming starter tools.",
+									"docs_url": null,
+									"icon": "/flow/icons/message.svg",
+									"long_description": "A deterministic documentation fixture for the Chatting starter profile.",
+									"name": "Chat Assistant",
+									"organization_specific_values": [],
+									"preview_media": [],
+									"release_notes": null,
+									"support_url": null,
+									"tags": ["chat", "assistant"],
+									"thumbnail": null,
+									"updated_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"use_case": "Conversation",
+									"website": null
+								}
+							},
+							"model_evaluation": null,
+							"model_slug": null,
+							"parameters": {},
+							"repository": null,
+							"size": 0,
+							"type": "Board",
+							"updated": "2026-01-15T12:00:00Z",
+							"version": "1.0.0"
+						}
+					]
+				],
+				[
+					{
+						"hub_profile": {
+							"id": "starter-gaming",
+							"name": "Gaming",
+							"description": "Build playful automations, game helpers, and interactive experiences.",
+							"icon": "/flow/icons/play.svg",
+							"thumbnail": "/swimlanes/0-7.jpg",
+							"interests": ["games", "interactive", "creative"],
+							"tags": ["starter", "gaming"],
+							"hub": "api.flow-like.com",
+							"secure": true,
+							"hubs": [],
+							"apps": null,
+							"shortcuts": null,
+							"theme": null,
+							"bits": ["docs:starter-gaming"],
+							"settings": {
+								"connection_mode": "simplebezier"
+							},
+							"created": "2026-01-15T12:00:00Z",
+							"updated": "2026-01-15T12:00:00Z"
+						},
+						"execution_settings": {
+							"gpu_mode": false,
+							"max_context_size": 8192
+						},
+						"created": "2026-01-15T12:00:00Z",
+						"updated": "2026-01-15T12:00:00Z"
+					},
+					[
+						{
+							"authors": ["Flow-Like"],
+							"created": "2026-01-15T12:00:00Z",
+							"dependencies": [],
+							"dependency_tree_hash": "docs-starter-gaming-tree-v1",
+							"download_link": null,
+							"file_name": null,
+							"hash": "docs-starter-gaming-v1",
+							"hub": "docs",
+							"id": "starter-gaming",
+							"license": "MIT",
+							"meta": {
+								"en": {
+									"age_rating": null,
+									"created_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"description": "Interactive building blocks for playful workflows.",
+									"docs_url": null,
+									"icon": "/flow/icons/play.svg",
+									"long_description": "A deterministic documentation fixture for the Gaming starter profile.",
+									"name": "Game Builder",
+									"organization_specific_values": [],
+									"preview_media": [],
+									"release_notes": null,
+									"support_url": null,
+									"tags": ["gaming", "interactive"],
+									"thumbnail": null,
+									"updated_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"use_case": "Interactive experiences",
+									"website": null
+								}
+							},
+							"model_evaluation": null,
+							"model_slug": null,
+							"parameters": {},
+							"repository": null,
+							"size": 0,
+							"type": "Media",
+							"updated": "2026-01-15T12:00:00Z",
+							"version": "1.0.0"
+						}
+					]
+				],
+				[
+					{
+						"hub_profile": {
+							"id": "starter-learning",
+							"name": "Learning",
+							"description": "Explore guided projects, explainers, and reusable learning workflows.",
+							"icon": "/flow/icons/book-key.svg",
+							"thumbnail": "/swimlanes/0-8.jpg",
+							"interests": ["learning", "research", "education"],
+							"tags": ["starter", "learning"],
+							"hub": "api.flow-like.com",
+							"secure": true,
+							"hubs": [],
+							"apps": null,
+							"shortcuts": null,
+							"theme": null,
+							"bits": ["docs:starter-learning"],
+							"settings": {
+								"connection_mode": "simplebezier"
+							},
+							"created": "2026-01-15T12:00:00Z",
+							"updated": "2026-01-15T12:00:00Z"
+						},
+						"execution_settings": {
+							"gpu_mode": false,
+							"max_context_size": 8192
+						},
+						"created": "2026-01-15T12:00:00Z",
+						"updated": "2026-01-15T12:00:00Z"
+					},
+					[
+						{
+							"authors": ["Flow-Like"],
+							"created": "2026-01-15T12:00:00Z",
+							"dependencies": [],
+							"dependency_tree_hash": "docs-starter-learning-tree-v1",
+							"download_link": null,
+							"file_name": null,
+							"hash": "docs-starter-learning-v1",
+							"hub": "docs",
+							"id": "starter-learning",
+							"license": "MIT",
+							"meta": {
+								"en": {
+									"age_rating": null,
+									"created_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"description": "Guided tools for structured exploration and study.",
+									"docs_url": null,
+									"icon": "/flow/icons/book-key.svg",
+									"long_description": "A deterministic documentation fixture for the Learning starter profile.",
+									"name": "Learning Guide",
+									"organization_specific_values": [],
+									"preview_media": [],
+									"release_notes": null,
+									"support_url": null,
+									"tags": ["learning", "education"],
+									"thumbnail": null,
+									"updated_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"use_case": "Guided learning",
+									"website": null
+								}
+							},
+							"model_evaluation": null,
+							"model_slug": null,
+							"parameters": {},
+							"repository": null,
+							"size": 0,
+							"type": "Course",
+							"updated": "2026-01-15T12:00:00Z",
+							"version": "1.0.0"
+						}
+					]
+				],
+				[
+					{
+						"hub_profile": {
+							"id": "starter-coding",
+							"name": "Coding",
+							"description": "Prototype software, inspect data, and automate developer workflows.",
+							"icon": "/flow/icons/computer.svg",
+							"thumbnail": "/swimlanes/wasm-nodes.jpg",
+							"interests": ["coding", "automation", "developer tools"],
+							"tags": ["starter", "coding"],
+							"hub": "api.flow-like.com",
+							"secure": true,
+							"hubs": [],
+							"apps": null,
+							"shortcuts": null,
+							"theme": null,
+							"bits": ["docs:starter-coding"],
+							"settings": {
+								"connection_mode": "simplebezier"
+							},
+							"created": "2026-01-15T12:00:00Z",
+							"updated": "2026-01-15T12:00:00Z"
+						},
+						"execution_settings": {
+							"gpu_mode": false,
+							"max_context_size": 8192
+						},
+						"created": "2026-01-15T12:00:00Z",
+						"updated": "2026-01-15T12:00:00Z"
+					},
+					[
+						{
+							"authors": ["Flow-Like"],
+							"created": "2026-01-15T12:00:00Z",
+							"dependencies": [],
+							"dependency_tree_hash": "docs-starter-coding-tree-v1",
+							"download_link": null,
+							"file_name": null,
+							"hash": "docs-starter-coding-v1",
+							"hub": "docs",
+							"id": "starter-coding",
+							"license": "MIT",
+							"meta": {
+								"en": {
+									"age_rating": null,
+									"created_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"description": "Developer-focused workflow and prototyping tools.",
+									"docs_url": null,
+									"icon": "/flow/icons/computer.svg",
+									"long_description": "A deterministic documentation fixture for the Coding starter profile.",
+									"name": "Code Workspace",
+									"organization_specific_values": [],
+									"preview_media": [],
+									"release_notes": null,
+									"support_url": null,
+									"tags": ["coding", "automation"],
+									"thumbnail": null,
+									"updated_at": {
+										"secs_since_epoch": 1768478400,
+										"nanos_since_epoch": 0
+									},
+									"use_case": "Software development",
+									"website": null
+								}
+							},
+							"model_evaluation": null,
+							"model_slug": null,
+							"parameters": {},
+							"repository": null,
+							"size": 0,
+							"type": "Project",
+							"updated": "2026-01-15T12:00:00Z",
+							"version": "1.0.0"
+						}
+					]
+				]
+			],
+			{
+				"name": "Flow-Like Documentation",
+				"description": "Deterministic local data for documentation screenshots.",
+				"thumbnail": "/swimlanes/studio.jpg",
+				"icon": "/app-logo.webp",
+				"features": {},
+				"hubs": [],
+				"domain": "api.flow-like.com",
+				"secure": true,
+				"terms_of_service": "https://flow-like.com/terms",
+				"legal_notice": "https://flow-like.com/legal",
+				"privacy_policy": "https://flow-like.com/privacy",
+				"contact": {},
+				"environment": {},
+				"tiers": {}
+			}
+		],
+		"get_current_profile": {
+			"hub_profile": {
+				"id": "docs-profile",
+				"name": "Documentation",
+				"description": "A deterministic workspace for product documentation.",
+				"icon": "/app-logo.webp",
+				"thumbnail": "/swimlanes/studio.jpg",
+				"interests": ["automation", "documentation", "AI"],
+				"tags": ["docs", "examples"],
+				"hub": "api.flow-like.com",
+				"secure": true,
+				"hubs": [],
+				"apps": [
+					{
+						"app_id": "docs-app",
+						"favorite": true,
+						"pinned": true,
+						"favorite_order": 0,
+						"pinned_order": 0
+					}
+				],
+				"shortcuts": [],
+				"theme": null,
+				"bits": [],
+				"custom_bits": [],
+				"settings": {
+					"connection_mode": "simplebezier"
+				},
+				"created": "2026-07-29T05:00:00Z",
+				"updated": "2026-07-29T05:20:00Z"
+			},
+			"execution_settings": {
+				"gpu_mode": false,
+				"max_context_size": 128000
+			},
+			"created": "2026-07-29T05:00:00Z",
+			"updated": "2026-07-29T05:20:00Z"
+		},
+		"get_current_profile_id": "docs-profile",
+		"get_profiles": {
+			"docs-profile": {
+				"hub_profile": {
+					"id": "docs-profile",
+					"name": "Documentation",
+					"description": "A deterministic workspace for product documentation.",
+					"icon": "/app-logo.webp",
+					"thumbnail": "/swimlanes/studio.jpg",
+					"interests": ["automation", "documentation", "AI"],
+					"tags": ["docs", "examples"],
+					"hub": "api.flow-like.com",
+					"secure": true,
+					"hubs": [],
+					"apps": [
+						{
+							"app_id": "docs-app",
+							"favorite": true,
+							"pinned": true,
+							"favorite_order": 0,
+							"pinned_order": 0
+						}
+					],
+					"shortcuts": [],
+					"theme": null,
+					"bits": [],
+					"custom_bits": [],
+					"settings": {
+						"connection_mode": "simplebezier"
+					},
+					"created": "2026-07-29T05:00:00Z",
+					"updated": "2026-07-29T05:20:00Z"
+				},
+				"execution_settings": {
+					"gpu_mode": false,
+					"max_context_size": 128000
+				},
+				"created": "2026-07-29T05:00:00Z",
+				"updated": "2026-07-29T05:20:00Z"
+			}
+		},
+		"get_profiles_raw": {
+			"docs-profile": {
+				"hub_profile": {
+					"id": "docs-profile",
+					"name": "Documentation",
+					"description": "A deterministic workspace for product documentation.",
+					"icon": "/app-logo.webp",
+					"thumbnail": "/swimlanes/studio.jpg",
+					"interests": ["automation", "documentation", "AI"],
+					"tags": ["docs", "examples"],
+					"hub": "api.flow-like.com",
+					"secure": true,
+					"hubs": [],
+					"apps": [
+						{
+							"app_id": "docs-app",
+							"favorite": true,
+							"pinned": true,
+							"favorite_order": 0,
+							"pinned_order": 0
+						}
+					],
+					"shortcuts": [],
+					"theme": null,
+					"bits": [],
+					"custom_bits": [],
+					"settings": {
+						"connection_mode": "simplebezier"
+					},
+					"created": "2026-07-29T05:00:00Z",
+					"updated": "2026-07-29T05:20:00Z"
+				},
+				"execution_settings": {
+					"gpu_mode": false,
+					"max_context_size": 128000
+				},
+				"created": "2026-07-29T05:00:00Z",
+				"updated": "2026-07-29T05:20:00Z"
+			}
+		},
+		"get_apps": [],
+		"get_open_boards": [],
+		"search_bits": [],
+		"flowpilot_list_board_edit_jobs": [],
+		"get_stable_device_id": null,
+		"get_pending_notification_tap": null,
+		"init_downloads": {},
+		"get_downloads": {},
+		"get_bit_size": 6291456,
+		"plugin:http|fetch": 1,
+		"plugin:http|fetch_send": {
+			"status": 204,
+			"statusText": "No Content",
+			"url": "https://api.flow-like.com/api/v1/auth/openid",
+			"headers": [],
+			"rid": 2
+		},
+		"plugin:event|listen": 1,
+		"plugin:event|unlisten": null,
+		"plugin:event|emit": null,
+		"plugin:updater|check": null,
+		"plugin:deep-link|get_current": null,
+		"plugin:notification|is_permission_granted": false,
+		"registry_init": null,
+		"registry_set_auth_token": null,
+		"tray_update_state": null,
+		"set_current_profile": null,
+		"upsert_profile": null,
+		"update": null,
+		"$http": {
+			"/api/v1/info/home-defaults": {}
+		},
+		"get_app": {
+			"id": "docs-app",
+			"status": "Active",
+			"visibility": "Offline",
+			"authors": ["Flow-Like Documentation"],
+			"bits": [],
+			"boards": ["docs-board"],
+			"events": [],
+			"templates": [],
+			"page_ids": [],
+			"widget_ids": [],
+			"packages": {},
+			"rating_sum": 0,
+			"rating_count": 0,
+			"avg_rating": 0,
+			"download_count": 0,
+			"interactions_count": 0,
+			"execution_mode": "Local",
+			"allow_forking": true,
+			"version": "1.0.0",
+			"changelog": "",
+			"primary_category": "CustomerSupport",
+			"secondary_category": "Productivity",
+			"price": null,
+			"created_at": {
+				"secs_since_epoch": 1785300000,
+				"nanos_since_epoch": 0
+			},
+			"updated_at": {
+				"secs_since_epoch": 1785301200,
+				"nanos_since_epoch": 0
+			}
+		},
+		"get_app_meta": {
+			"name": "Hello Flow",
+			"description": "Classify requests and prepare accurate, human-reviewed replies.",
+			"long_description": "A deterministic documentation app that demonstrates nodes, connections, layers, variables, versions, runs, and logs.",
+			"tags": ["support", "automation", "AI"],
+			"use_case": "Customer support",
+			"icon": "/app-logo.webp",
+			"thumbnail": "/swimlanes/studio.jpg",
+			"preview_media": [],
+			"age_rating": null,
+			"website": "https://flow-like.com",
+			"support_url": "https://docs.flow-like.com",
+			"docs_url": "https://docs.flow-like.com",
+			"release_notes": null,
+			"organization_specific_values": [],
+			"created_at": {
+				"secs_since_epoch": 1785300000,
+				"nanos_since_epoch": 0
+			},
+			"updated_at": {
+				"secs_since_epoch": 1785301200,
+				"nanos_since_epoch": 0
+			}
+		},
+		"get_app_boards": [
+			{
+				"id": "docs-board",
+				"name": "Hello Flow",
+				"description": "The first-flow tutorial",
+				"refs": {},
+				"nodes": {
+					"quick-event": {
+						"id": "quick-event",
+						"name": "events_simple",
+						"friendly_name": "Simple Event",
+						"description": "A simple event without input or output",
+						"coordinates": [0, 0, 0],
+						"category": "Events",
+						"scores": null,
+						"pins": {
+							"quick-out": {
+								"id": "quick-out",
+								"name": "exec_out",
+								"friendly_name": "Output",
+								"description": "",
+								"pin_type": "Output",
+								"data_type": "Execution",
+								"schema": null,
+								"value_type": "Normal",
+								"depends_on": [],
+								"connected_to": ["quick-in"],
+								"default_value": null,
+								"index": 1,
+								"options": null
+							}
+						},
+						"start": true,
+						"icon": "/flow/icons/event.svg",
+						"comment": null,
+						"long_running": null,
+						"error": null,
+						"docs": null,
+						"event_callback": null,
+						"layer": null,
+						"hash": 60001
+					},
+					"quick-info": {
+						"id": "quick-info",
+						"name": "log_info",
+						"friendly_name": "Print Info",
+						"description": "Print Debugging Information",
+						"coordinates": [400, 0, 0],
+						"category": "Logging",
+						"scores": null,
+						"pins": {
+							"quick-in": {
+								"id": "quick-in",
+								"name": "exec_in",
+								"friendly_name": "Input",
+								"description": "",
+								"pin_type": "Input",
+								"data_type": "Execution",
+								"schema": null,
+								"value_type": "Normal",
+								"depends_on": ["quick-out"],
+								"connected_to": [],
+								"default_value": null,
+								"index": 1,
+								"options": null
+							},
+							"quick-message": {
+								"id": "quick-message",
+								"name": "message",
+								"friendly_name": "Message",
+								"description": "",
+								"pin_type": "Input",
+								"data_type": "String",
+								"schema": null,
+								"value_type": "Normal",
+								"depends_on": [],
+								"connected_to": [],
+								"default_value": [
+									34, 72, 101, 108, 108, 111, 32, 70, 108, 111, 119, 34
+								],
+								"index": 2,
+								"options": null
+							},
+							"quick-toast": {
+								"id": "quick-toast",
+								"name": "toast",
+								"friendly_name": "On Screen?",
+								"description": "",
+								"pin_type": "Input",
+								"data_type": "Boolean",
+								"schema": null,
+								"value_type": "Normal",
+								"depends_on": [],
+								"connected_to": [],
+								"default_value": [116, 114, 117, 101],
+								"index": 3,
+								"options": null
+							},
+							"quick-next": {
+								"id": "quick-next",
+								"name": "exec_out",
+								"friendly_name": "Output",
+								"description": "",
+								"pin_type": "Output",
+								"data_type": "Execution",
+								"schema": null,
+								"value_type": "Normal",
+								"depends_on": [],
+								"connected_to": [],
+								"default_value": null,
+								"index": 1,
+								"options": null
+							}
+						},
+						"start": false,
+						"icon": "/flow/icons/log-info.svg",
+						"comment": null,
+						"long_running": null,
+						"error": null,
+						"docs": null,
+						"event_callback": null,
+						"layer": null,
+						"hash": 60002
+					}
+				},
+				"layers": {},
+				"comments": {},
+				"variables": {},
+				"version": [0, 0, 1],
+				"viewport": [0, 0, 1],
+				"execution_mode": "Local",
+				"stage": "Dev",
+				"log_level": "Debug",
+				"page_ids": [],
+				"created_at": {
+					"secs_since_epoch": 1785300000,
+					"nanos_since_epoch": 0
+				},
+				"updated_at": {
+					"secs_since_epoch": 1785301200,
+					"nanos_since_epoch": 0
+				}
+			}
+		],
+		"get_board": {
+			"id": "docs-board",
+			"name": "Hello Flow",
+			"description": "The first-flow tutorial",
+			"refs": {},
+			"nodes": {
+				"quick-event": {
+					"id": "quick-event",
+					"name": "events_simple",
+					"friendly_name": "Simple Event",
+					"description": "A simple event without input or output",
+					"coordinates": [0, 0, 0],
+					"category": "Events",
+					"scores": null,
+					"pins": {
+						"quick-out": {
+							"id": "quick-out",
+							"name": "exec_out",
+							"friendly_name": "Output",
+							"description": "",
+							"pin_type": "Output",
+							"data_type": "Execution",
+							"schema": null,
+							"value_type": "Normal",
+							"depends_on": [],
+							"connected_to": ["quick-in"],
+							"default_value": null,
+							"index": 1,
+							"options": null
+						}
+					},
+					"start": true,
+					"icon": "/flow/icons/event.svg",
+					"comment": null,
+					"long_running": null,
+					"error": null,
+					"docs": null,
+					"event_callback": null,
+					"layer": null,
+					"hash": 60001
+				},
+				"quick-info": {
+					"id": "quick-info",
+					"name": "log_info",
+					"friendly_name": "Print Info",
+					"description": "Print Debugging Information",
+					"coordinates": [400, 0, 0],
+					"category": "Logging",
+					"scores": null,
+					"pins": {
+						"quick-in": {
+							"id": "quick-in",
+							"name": "exec_in",
+							"friendly_name": "Input",
+							"description": "",
+							"pin_type": "Input",
+							"data_type": "Execution",
+							"schema": null,
+							"value_type": "Normal",
+							"depends_on": ["quick-out"],
+							"connected_to": [],
+							"default_value": null,
+							"index": 1,
+							"options": null
+						},
+						"quick-message": {
+							"id": "quick-message",
+							"name": "message",
+							"friendly_name": "Message",
+							"description": "",
+							"pin_type": "Input",
+							"data_type": "String",
+							"schema": null,
+							"value_type": "Normal",
+							"depends_on": [],
+							"connected_to": [],
+							"default_value": [
+								34, 72, 101, 108, 108, 111, 32, 70, 108, 111, 119, 34
+							],
+							"index": 2,
+							"options": null
+						},
+						"quick-toast": {
+							"id": "quick-toast",
+							"name": "toast",
+							"friendly_name": "On Screen?",
+							"description": "",
+							"pin_type": "Input",
+							"data_type": "Boolean",
+							"schema": null,
+							"value_type": "Normal",
+							"depends_on": [],
+							"connected_to": [],
+							"default_value": [116, 114, 117, 101],
+							"index": 3,
+							"options": null
+						},
+						"quick-next": {
+							"id": "quick-next",
+							"name": "exec_out",
+							"friendly_name": "Output",
+							"description": "",
+							"pin_type": "Output",
+							"data_type": "Execution",
+							"schema": null,
+							"value_type": "Normal",
+							"depends_on": [],
+							"connected_to": [],
+							"default_value": null,
+							"index": 1,
+							"options": null
+						}
+					},
+					"start": false,
+					"icon": "/flow/icons/log-info.svg",
+					"comment": null,
+					"long_running": null,
+					"error": null,
+					"docs": null,
+					"event_callback": null,
+					"layer": null,
+					"hash": 60002
+				}
+			},
+			"layers": {},
+			"comments": {},
+			"variables": {},
+			"version": [0, 0, 1],
+			"viewport": [0, 0, 1],
+			"execution_mode": "Local",
+			"stage": "Dev",
+			"log_level": "Debug",
+			"page_ids": [],
+			"created_at": {
+				"secs_since_epoch": 1785300000,
+				"nanos_since_epoch": 0
+			},
+			"updated_at": {
+				"secs_since_epoch": 1785301200,
+				"nanos_since_epoch": 0
+			}
+		},
+		"sync_board": {
+			"manifest": {
+				"meta": "workflow-render-meta-v1",
+				"variables": "workflow-render-variables-v1",
+				"comments": "workflow-render-comments-v1",
+				"layers": {},
+				"segments": {
+					"__root__": "workflow-render-segment-__root__"
+				}
+			},
+			"meta": {
+				"id": "docs-board",
+				"name": "Hello Flow",
+				"description": "The first-flow tutorial",
+				"viewport": [0, 0, 1],
+				"version": [0, 0, 1],
+				"stage": "Dev",
+				"log_level": "Debug",
+				"execution_mode": "Local",
+				"page_ids": [],
+				"hash": null,
+				"created_at": {
+					"secs_since_epoch": 1785300000,
+					"nanos_since_epoch": 0
+				},
+				"updated_at": {
+					"secs_since_epoch": 1785301200,
+					"nanos_since_epoch": 0
+				}
+			},
+			"variables": {},
+			"comments": {},
+			"layers": {},
+			"refs": {},
+			"segments": {
+				"__root__": {
+					"hash": "workflow-render-segment-__root__",
+					"nodes": {
+						"quick-event": {
+							"id": "quick-event",
+							"name": "events_simple",
+							"friendly_name": "Simple Event",
+							"description": "A simple event without input or output",
+							"coordinates": [0, 0, 0],
+							"category": "Events",
+							"scores": null,
+							"pins": {
+								"quick-out": {
+									"id": "quick-out",
+									"name": "exec_out",
+									"friendly_name": "Output",
+									"description": "",
+									"pin_type": "Output",
+									"data_type": "Execution",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": ["quick-in"],
+									"default_value": null,
+									"index": 1,
+									"options": null
+								}
+							},
+							"start": true,
+							"icon": "/flow/icons/event.svg",
+							"comment": null,
+							"long_running": null,
+							"error": null,
+							"docs": null,
+							"event_callback": null,
+							"layer": null,
+							"hash": 60001,
+							"h": false
+						},
+						"quick-info": {
+							"id": "quick-info",
+							"name": "log_info",
+							"friendly_name": "Print Info",
+							"description": "Print Debugging Information",
+							"coordinates": [400, 0, 0],
+							"category": "Logging",
+							"scores": null,
+							"pins": {
+								"quick-in": {
+									"id": "quick-in",
+									"name": "exec_in",
+									"friendly_name": "Input",
+									"description": "",
+									"pin_type": "Input",
+									"data_type": "Execution",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": ["quick-out"],
+									"connected_to": [],
+									"default_value": null,
+									"index": 1,
+									"options": null
+								},
+								"quick-message": {
+									"id": "quick-message",
+									"name": "message",
+									"friendly_name": "Message",
+									"description": "",
+									"pin_type": "Input",
+									"data_type": "String",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": [],
+									"default_value": "IkhlbGxvIEZsb3ci",
+									"index": 2,
+									"options": null
+								},
+								"quick-toast": {
+									"id": "quick-toast",
+									"name": "toast",
+									"friendly_name": "On Screen?",
+									"description": "",
+									"pin_type": "Input",
+									"data_type": "Boolean",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": [],
+									"default_value": "dHJ1ZQ==",
+									"index": 3,
+									"options": null
+								},
+								"quick-next": {
+									"id": "quick-next",
+									"name": "exec_out",
+									"friendly_name": "Output",
+									"description": "",
+									"pin_type": "Output",
+									"data_type": "Execution",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": [],
+									"default_value": null,
+									"index": 1,
+									"options": null
+								}
+							},
+							"start": false,
+							"icon": "/flow/icons/log-info.svg",
+							"comment": null,
+							"long_running": null,
+							"error": null,
+							"docs": null,
+							"event_callback": null,
+							"layer": null,
+							"hash": 60002,
+							"h": false
+						}
+					}
+				}
+			}
+		},
+		"get_catalog": [
+			{
+				"id": "quick-event",
+				"name": "events_simple",
+				"friendly_name": "Simple Event",
+				"description": "A simple event without input or output",
+				"coordinates": [0, 0, 0],
+				"category": "Events",
+				"scores": null,
+				"pins": {
+					"quick-out": {
+						"id": "quick-out",
+						"name": "exec_out",
+						"friendly_name": "Output",
+						"description": "",
+						"pin_type": "Output",
+						"data_type": "Execution",
+						"schema": null,
+						"value_type": "Normal",
+						"depends_on": [],
+						"connected_to": ["quick-in"],
+						"default_value": null,
+						"index": 1,
+						"options": null
+					}
+				},
+				"start": true,
+				"icon": "/flow/icons/event.svg",
+				"comment": null,
+				"long_running": null,
+				"error": null,
+				"docs": null,
+				"event_callback": null,
+				"layer": null,
+				"hash": 60001
+			},
+			{
+				"id": "quick-info",
+				"name": "log_info",
+				"friendly_name": "Print Info",
+				"description": "Print Debugging Information",
+				"coordinates": [400, 0, 0],
+				"category": "Logging",
+				"scores": null,
+				"pins": {
+					"quick-in": {
+						"id": "quick-in",
+						"name": "exec_in",
+						"friendly_name": "Input",
+						"description": "",
+						"pin_type": "Input",
+						"data_type": "Execution",
+						"schema": null,
+						"value_type": "Normal",
+						"depends_on": ["quick-out"],
+						"connected_to": [],
+						"default_value": null,
+						"index": 1,
+						"options": null
+					},
+					"quick-message": {
+						"id": "quick-message",
+						"name": "message",
+						"friendly_name": "Message",
+						"description": "",
+						"pin_type": "Input",
+						"data_type": "String",
+						"schema": null,
+						"value_type": "Normal",
+						"depends_on": [],
+						"connected_to": [],
+						"default_value": [
+							34, 72, 101, 108, 108, 111, 32, 70, 108, 111, 119, 34
+						],
+						"index": 2,
+						"options": null
+					},
+					"quick-toast": {
+						"id": "quick-toast",
+						"name": "toast",
+						"friendly_name": "On Screen?",
+						"description": "",
+						"pin_type": "Input",
+						"data_type": "Boolean",
+						"schema": null,
+						"value_type": "Normal",
+						"depends_on": [],
+						"connected_to": [],
+						"default_value": [116, 114, 117, 101],
+						"index": 3,
+						"options": null
+					},
+					"quick-next": {
+						"id": "quick-next",
+						"name": "exec_out",
+						"friendly_name": "Output",
+						"description": "",
+						"pin_type": "Output",
+						"data_type": "Execution",
+						"schema": null,
+						"value_type": "Normal",
+						"depends_on": [],
+						"connected_to": [],
+						"default_value": null,
+						"index": 1,
+						"options": null
+					}
+				},
+				"start": false,
+				"icon": "/flow/icons/log-info.svg",
+				"comment": null,
+				"long_running": null,
+				"error": null,
+				"docs": null,
+				"event_callback": null,
+				"layer": null,
+				"hash": 60002
+			}
+		],
+		"get_events": [],
+		"get_app_routes": [],
+		"get_pages": [],
+		"graph_list_overlays": [],
+		"graph_list_remote_ontology_imports": [],
+		"graph_list_imports": [],
+		"get_board_versions": [],
+		"list_runs": [],
+		"query_run": []
+	}
+}

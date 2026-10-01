@@ -1,0 +1,194 @@
+{
+	"version": 1,
+	"generator": "OpenAI built-in image_gen",
+	"generatedOn": "2026-09-30",
+	"purpose": "Course banners for Flow-Like University",
+	"format": {
+		"type": "image/webp",
+		"quality": 88
+	},
+	"images": [
+		{
+			"course": "foundations/welcome-to-flow-like",
+			"output": "courses/foundations/welcome-to-flow-like/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. Subject for WELCOME / FIRST FLOW: one broad folded coral-orange ribbon becomes a short ascending staircase through a large warm-ivory open portal; a small teal sphere has just passed through. Clear open doorway and the beginning of a path. Deep midnight navy background and floor, warm side light, striking bold orange/cream/teal contrast. Do not create a workflow diagram. Save as a single finished illustration.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "foundations/thinking-in-flows",
+			"output": "courses/foundations/thinking-in-flows/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. THINKING IN FLOWS: a continuous broad teal ribbon threading through three sculptural warm-ivory square frames, then splitting into two clean paths. A coral sphere travels along the selected path. Ink-blue background. Focus on connected logic, no arrows or diagrams.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "foundations/apps-for-builders",
+			"output": "courses/foundations/apps-for-builders/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. APP EXECUTION: one exploded architectural cube, warm-ivory outer frame holding carefully separated coral and teal compartments. A smaller matching cube connects to a larger cube by one solid cable. Must read as a well-designed container with an inside and outside. Flat burnt-orange backdrop.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "foundations/building-with-flowpilot",
+			"output": "courses/foundations/building-with-flowpilot/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. FLOWPILOT ASSISTED BUILDING: a large elegant coral pencil hovers beside a partially assembled path of warm ivory building blocks, one teal block being fitted precisely into the gap. No hand or person. Ink-blue background, playful precision.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "foundations/models-and-profiles",
+			"output": "courses/foundations/models-and-profiles/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. MODELS AND PROFILES: three interchangeable sculptural ceramic capsules with different geometric cutouts, arranged around one circular ivory socket; a teal capsule is selected and fits the socket. Must communicate choosing the right tool, no brain cliché. Golden ochre background.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "foundations/templates-and-store",
+			"output": "courses/foundations/templates-and-store/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. TEMPLATES AND REUSE: a coral geometric printing stamp above two identical ivory modular arches it has made, with a teal copy slightly rotated. Beautiful repetition of one reusable shape. Deep forest teal backdrop.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "foundations/control-flow",
+			"output": "courses/foundations/control-flow/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. BRANCHES AND COLLECTIONS: one sculptural ivory Y junction carrying a small family of coral spheres into one branch and a teal cube into another. Broad curved paths, strong simple composition, mustard-yellow background. Physical sorting sculpture, not UI diagram.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "specialist/flowscript",
+			"output": "courses/specialist/flowscript/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. FLOWSCRIPT: an ivory folded paper strip with a few abstract black line marks transforms smoothly into a precisely interlocked geometric teal and coral cube. The marks must not be readable text. Ink-navy background; visual metaphor for text becoming structure.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "specialist/events",
+			"output": "courses/specialist/events/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. EVENT TRIGGERS: a single large coral domino striking the first of three ivory dominoes in a sweeping arc; a teal circular ripple on the floor underneath the point of contact. Strong kinetic moment and restrained dramatic shadow. Deep cobalt blue background.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "specialist/interfaces-and-pages",
+			"output": "courses/specialist/interfaces-and-pages/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. INTERFACES AND PAGES: a sculptural upright ivory window frame, with a large coral rounded input slot and one teal circular button, abstract physical objects rather than a rendered app screen. A small sphere passes out into a clean arc. Warm sand background.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "specialist/data-in-flow-like",
+			"output": "courses/specialist/data-in-flow-like/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. DATA STORAGE AND QUERIES: stacked ivory ceramic cylinders with precise vertical slots; neat coral rectangular records slide into one slot, a single teal record is retrieved. Strong iconic database silhouette but tactile architectural objects, deep forest-green backdrop.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "specialist/api-integrations",
+			"output": "courses/specialist/api-integrations/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. API INTEGRATIONS: two large sculptural ivory cable plugs of complementary shapes connect at the center, one on a broad teal cable and the other on a coral cable. Precisely aligned interlocking fit, energetic diagonals, deep ink-blue backdrop.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "specialist/debugging-and-observability",
+			"output": "courses/specialist/debugging-and-observability/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. DEBUGGING: a large teal magnifying lens held over a chain of ivory sculptural links, revealing one broken coral connection. A replacement coral piece lies nearby. Clear point of investigation with simple large forms. Golden ochre background.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "specialist/automation-recipes",
+			"output": "courses/specialist/automation-recipes/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. AUTOMATION RECIPES: a sculptural coral crank and ivory cam wheel turn a flowing teal belt carrying three identical small ivory parcels. Elegant minimal kinetic machine, obvious purposeful motion, no gears clutter. Ink-navy background.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "specialist/document-processing",
+			"output": "courses/specialist/document-processing/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. DOCUMENT PROCESSING: a fan of three warm-ivory paper sheets passes through a chunky teal rectangular frame and becomes four precise coral and ivory data tiles. Paper has a few abstract relief grooves, no words. Bold terracotta backdrop.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "specialist/rpa-automation",
+			"output": "courses/specialist/rpa-automation/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. BROWSER AND DESKTOP AUTOMATION: one large ivory sculptural pointer arrow presses a coral physical button, causing a teal lever to move. Minimal precise interaction, clear recognizable pointer and tactile button. Cobalt-blue background.",
+			"width": 1672,
+			"height": 940
+		},
+		{
+			"course": "specialist/custom-nodes",
+			"output": "courses/specialist/custom-nodes/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. CUSTOM NODES: one bespoke coral geometric block with a round socket and two projecting pins slots into a row of two ivory blocks; a teal insert makes the custom block distinct. Macro craftsmanship, no jigsaw cliché, forest-teal background.",
+			"width": 1672,
+			"height": 940
+		},
+		{
+			"course": "specialist/rag",
+			"output": "courses/specialist/rag/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. RAG AND EVIDENCE: a large coral magnifying lens searches a small standing fan of warm-ivory pages; a teal thread runs from one selected page to a clean ivory speech bubble. One source, one answer, beautiful minimal editorial sculpture. Ink-navy background.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "specialist/release-and-rollback",
+			"output": "courses/specialist/release-and-rollback/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. RELEASE AND ROLLBACK: two ivory stepped platforms at different heights, connected by a looping teal ribbon that returns to the earlier platform. A coral cube rests firmly on each platform, showing stable snapshots. Golden ochre background, calm precise geometry.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "specialist/structured-ai-output",
+			"output": "courses/specialist/structured-ai-output/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. STRUCTURED AI OUTPUT: a loose cloud of small coral paper strips passes through a large ivory square sieve, emerging as a tidy teal 2-by-3 grid of ceramic tiles. Clear transformation from loose information into an exact shape. Deep cobalt background.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "specialist/platform-sdks",
+			"output": "courses/specialist/platform-sdks/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. PLATFORM CLIENT SDKS: an ivory open angular bracket on the left and matching bracket on the right enclose a teal cable plug connecting to a coral execution block. Physical sculptural punctuation with no letters or words. Warm sand background.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "advanced/agentic-in-flow-like",
+			"output": "courses/advanced/agentic-in-flow-like/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. BOUNDED AGENTS: one teal sculptural central hub within a large ivory circular boundary, with two short articulated arms reaching toward a coral tool block and an ivory tool block. Abstract mechanism, not robot or person. Clear limits and purposeful reach. Deep ink-blue background.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "advanced/app-governance",
+			"output": "courses/advanced/app-governance/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. APP GOVERNANCE: a large warm-ivory architectural gate with a coral key precisely fitting a teal lock; behind the gate two distinct ivory levels suggest scoped access. Restrained, sophisticated solid forms rather than security clip art. Forest-green background.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "advanced/ml-and-vision",
+			"output": "courses/advanced/ml-and-vision/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. MACHINE LEARNING: a sculptural ivory balance beam sorting coral spheres and teal cubes into two clean groups, one outlier sphere highlighted in ivory near the decision boundary. Strong geometry and measured comparison, no neural-network diagram. Golden ochre background.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "advanced/self-hosting",
+			"output": "courses/advanced/self-hosting/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. SELF HOSTING: a small elegant ivory architectural house frame shelters a stack of three teal server slabs; one coral cable enters under the roof. Solid grounded composition, tangible own infrastructure. Burnt-coral background, warm ivory and deep navy shadows.",
+			"width": 1672,
+			"height": 941
+		},
+		{
+			"course": "advanced/connected-apps",
+			"output": "courses/advanced/connected-apps/assets/course-banner-v2.webp",
+			"prompt": "Use case: stylized-concept. Asset type: final landscape course thumbnail for Flow-Like University, a visual workflow programming product. Create one premium editorial illustration, 16:9 landscape, composed to remain unmistakable at 320 pixels wide. Style: tactile architectural paper and matte ceramic sculpture, art-directed studio lighting, strong silhouette, precise cut edges, subtle grain, hard and soft shadows, warm ivory highlights and near-black navy details. A restrained but vivid color palette. One sculptural visual metaphor, occupying the center 65% of the frame, generous breathing room around it. Full-bleed simple colored background. Sophisticated design-school book-cover quality, tangible depth, curious and confident. No text, no letters, no numbers, no logos, no UI screens, no dashboards, no tiny icons, no neon, no floating glass, no stock 3D people, no gradients, no collage. CONNECTED APPS: two distinct ivory architectural towers on separate foundations joined by a single teal bridge; a coral rectangular contract tile crosses the bridge through a precise gateway. Strong single connection with controlled passage. Deep navy background.",
+			"width": 1672,
+			"height": 941
+		}
+	]
+}

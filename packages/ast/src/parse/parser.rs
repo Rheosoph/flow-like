@@ -211,6 +211,19 @@ impl Parser<'_> {
         None
     }
 
+    /// Comments within argument lists and collections have no AST slot. Consume them only
+    /// inside those delimiters so statement comments and trailing anchors stay intact.
+    fn is_value_comment(token: &Tok) -> bool {
+        matches!(token, Tok::Comment(text)
+            if !["@n:", "@v:", "@l:"].iter().any(|prefix| text.starts_with(prefix)))
+    }
+
+    fn skip_value_comments(&mut self) {
+        while Self::is_value_comment(self.cur()) {
+            self.bump();
+        }
+    }
+
     // ---- decorators -----------------------------------------------------------------------
 
     /// Parse zero or more leading `@decorator` lines. Most carry either no argument (`@secret`)
@@ -519,6 +532,22 @@ impl Parser<'_> {
                         return Err(self.err("decorators on `detached` blocks are not supported"));
                     }
                     ast.detached.push(self.detached_block()?);
+                }
+                Tok::Ident(kw)
+                    if kw == "for"
+                        && matches!(
+                            self.toks.get(self.pos + 1).map(|t| &t.tok),
+                            Some(Tok::LParen)
+                        )
+                        && matches!(self.toks.get(self.pos + 2).map(|t| &t.tok), Some(Tok::Ident(binding)) if binding == "const" || binding == "let")
+                        && matches!(
+                            self.toks.get(self.pos + 3).map(|t| &t.tok),
+                            Some(Tok::Ident(_) | Tok::LBracket)
+                        ) =>
+                {
+                    return Err(self.err(
+                        "`for` is a statement; place it inside an event, function, or `detached` block and check the preceding closing braces"
+                    ));
                 }
                 Tok::Ident(_) => {
                     if !decorators.is_empty() {
@@ -1158,13 +1187,22 @@ impl Parser<'_> {
         if let Some(stmt) = self.destructure_stmt()? {
             return Ok(stmt);
         }
+        let name_token = self.cur_token().clone();
         let name = self.ident()?;
         // `const count: int = 0` is how most authors write a typed binding. The value's own type
         // is what wires, so the annotation is accepted and the canonical render drops it.
         if self.eat(&Tok::Colon) {
             self.type_ref()?;
         }
-        self.expect(&Tok::Assign)?;
+        if !self.eat(&Tok::Assign) {
+            return Err(ParseError::new(
+                format!(
+                    "local `const {name}` requires an initializer; bind a value with `const {name} = ...`"
+                ),
+                name_token.line,
+                name_token.col,
+            ));
+        }
         let value = self.expr()?;
         let anchor = self.take_anchor();
         match value {
@@ -2025,16 +2063,21 @@ impl Parser<'_> {
         self.expect(&Tok::LParen)?;
         let mut positional = Vec::new();
         let mut args = Vec::new();
+        self.skip_value_comments();
         while !matches!(self.cur(), Tok::RParen) {
             if matches!(self.cur(), Tok::LBrace) && self.brace_is_last_call_argument() {
                 args = self.named_args()?;
+                self.skip_value_comments();
                 self.eat(&Tok::Comma);
+                self.skip_value_comments();
                 break;
             }
             positional.push(self.expr()?);
+            self.skip_value_comments();
             if !self.eat(&Tok::Comma) {
                 break;
             }
+            self.skip_value_comments();
         }
         self.expect(&Tok::RParen)?;
         Ok(Expr::Call(Call {
@@ -2061,7 +2104,21 @@ impl Parser<'_> {
                     depth = depth.saturating_sub(1);
                     if depth == 0 {
                         let mut next = index + 1;
+                        while self
+                            .toks
+                            .get(next)
+                            .is_some_and(|token| Self::is_value_comment(&token.tok))
+                        {
+                            next += 1;
+                        }
                         if matches!(self.toks.get(next).map(|t| &t.tok), Some(Tok::Comma)) {
+                            next += 1;
+                        }
+                        while self
+                            .toks
+                            .get(next)
+                            .is_some_and(|token| Self::is_value_comment(&token.tok))
+                        {
                             next += 1;
                         }
                         return matches!(self.toks.get(next).map(|t| &t.tok), Some(Tok::RParen));
@@ -2079,14 +2136,19 @@ impl Parser<'_> {
     fn named_args(&mut self) -> Result<Vec<Arg>, ParseError> {
         self.expect(&Tok::LBrace)?;
         let mut args = Vec::new();
+        self.skip_value_comments();
         while !matches!(self.cur(), Tok::RBrace) {
             let name = self.arg_key()?;
+            self.skip_value_comments();
             self.expect(&Tok::Colon)?;
+            self.skip_value_comments();
             let value = self.expr()?;
             args.push(Arg { name, value });
+            self.skip_value_comments();
             if !self.eat(&Tok::Comma) {
                 break;
             }
+            self.skip_value_comments();
         }
         self.expect(&Tok::RBrace)?;
         Ok(args)
@@ -2113,14 +2175,19 @@ impl Parser<'_> {
         }
         self.expect(&Tok::LBrace)?;
         let mut fields = Vec::new();
+        self.skip_value_comments();
         while !matches!(self.cur(), Tok::RBrace) {
             let key = self.arg_key()?;
+            self.skip_value_comments();
             self.expect(&Tok::Colon)?;
+            self.skip_value_comments();
             let value = self.expr()?;
             fields.push(ObjectField { key, value });
+            self.skip_value_comments();
             if !self.eat(&Tok::Comma) {
                 break;
             }
+            self.skip_value_comments();
         }
         self.expect(&Tok::RBrace)?;
         Ok(Expr::Object(fields))
@@ -2133,11 +2200,14 @@ impl Parser<'_> {
         }
         self.expect(&Tok::LBracket)?;
         let mut items = Vec::new();
+        self.skip_value_comments();
         while !matches!(self.cur(), Tok::RBracket) {
             items.push(self.expr()?);
+            self.skip_value_comments();
             if !self.eat(&Tok::Comma) {
                 break;
             }
+            self.skip_value_comments();
         }
         self.expect(&Tok::RBracket)?;
         Ok(Expr::Array(items))

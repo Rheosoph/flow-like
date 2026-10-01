@@ -1,25 +1,32 @@
 ---
 title: Developer Mode
-description: Show or hide Flow-Like's building tools — flows, events, data tooling, and package registries
+description: Show or hide Flow-Like's workflow, event, data, and package tools
 sidebar:
   order: 27
 ---
 
 Flow-Like starts in a **simplified view**. Building tools stay hidden until you switch on *Developer Mode*, so you can use apps, browse the store, and manage your files without the full builder surface in the way.
 
-If you are looking for something and cannot find it, this switch is almost always the reason.
+If a building tool is missing, check Developer Mode and your App permissions.
+A platform or role restriction can still hide or disable a feature after you
+enable the switch.
 
 ## What Developer Mode unlocks
 
 With Developer Mode **off**, Flow-Like hides:
 
+- **Explore Models** in the sidebar (models remain available through **Settings → AI Models**).
 - **Packages** in the sidebar: the WASM node packages you build (**Mine**) and the ones you use (**Library**)
 - Node packages in **Explore**, which then shows apps only
-- Most tabs inside a project's configuration: **Flows**, **Events**, **Templates**, **Widgets**, **Data Studio**, **User Storage**, **Packages**, **Suites**, **Roles**, **Sales**, **Analytics**, **Endpoints**, and **Publication** — the project keeps its Dashboard, **Setup**, **Storage**, and Team pages
-- **Sinks & Triggers**, **Board Statistics**, and the API **Token** page in settings and the account menu
+- The App's **Flows**, **Events**, **Templates**, **Widgets**, **Data Studio**, **User Storage**, **Packages**, **Suites**, **Roles**, **Analytics**, **Endpoints**, and **Publication** sections
+- **Active Sinks**, **Board Statistics**, and the API **Token** page in settings and the account menu
 - Store listing, compliance, and release panels in the project dashboard
 
-With Developer Mode **on**, everything above is visible — the full builder experience.
+With Developer Mode **on**, these building tools appear where the App, platform,
+and your permissions allow them. **Dashboard**, **Setup**, **Appearance**,
+**Devices**, **Storage**, **Offline access**, **Team**, **Monetization**, and
+**Audit trail** do not require Developer Mode, though their other access
+requirements still apply.
 
 Hiding is purely visual: direct links to these pages keep working, and your [roles and permissions](/apps/share/#rights-and-roles) are not affected.
 

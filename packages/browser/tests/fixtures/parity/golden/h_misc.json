@@ -1,0 +1,59 @@
+{
+  "submit_wd": {
+    "log": [
+      {
+        "isTrusted": true,
+        "t": "focus"
+      },
+      {
+        "isTrusted": true,
+        "t": "input"
+      },
+      {
+        "isTrusted": true,
+        "t": "input"
+      },
+      {
+        "isTrusted": true,
+        "t": "input"
+      },
+      {
+        "isTrusted": true,
+        "t": "input"
+      },
+      {
+        "isTrusted": true,
+        "t": "input"
+      },
+      {
+        "isTrusted": true,
+        "t": "change"
+      },
+      {
+        "t": "submit"
+      }
+    ],
+    "value": "hello"
+  },
+  "submit_insertText": {
+    "log": [
+      {
+        "t": "focus",
+        "isTrusted": true
+      },
+      {
+        "t": "input",
+        "isTrusted": true
+      }
+    ],
+    "value": "hello"
+  },
+  "clear_isolated": {
+    "log": [
+      "focus:true",
+      "change:false",
+      "blur:true"
+    ],
+    "value": ""
+  }
+}

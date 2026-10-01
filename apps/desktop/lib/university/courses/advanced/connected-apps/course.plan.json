@@ -1,0 +1,219 @@
+{
+	"schema": "flow-like.university-plan/v1",
+	"course": {
+		"id": "course-connected-apps",
+		"name": "Share Data Through Connected Apps",
+		"language": "en",
+		"slug": "connected-apps",
+		"difficulty": "ADVANCED",
+		"category": "DATA",
+		"isPublished": true,
+		"tags": [
+			"connected-apps"
+		],
+		"position": 21,
+		"media": {
+			"icon": "../../advanced/agentic-in-flow-like/assets/course-icon.webp",
+			"banner": "assets/course-banner-v2.webp"
+		},
+		"modules": [
+			{
+				"id": "module-connected-core",
+				"title": "Share and verify a contract",
+				"description": null,
+				"position": 0,
+				"lessons": [
+					{
+						"id": "lesson-connected-connection",
+						"title": "Connect producer and consumer",
+						"language": "en",
+						"contentFile": "content/connect-producer-and-consumer.md",
+						"videoUrl": null,
+						"estimatedMinutes": 6,
+						"position": 0,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-connected-direction",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Who controls the role granted to the consumer on producer data?",
+								"explanation": "The producer owns the access grant.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "b",
+											"label": "The consumer's model prompt"
+										},
+										{
+											"id": "a",
+											"label": "The producer app's administrator"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-connected-query",
+						"title": "Expose, install and query Part objects",
+						"language": "en",
+						"contentFile": "content/expose-and-query.md",
+						"videoUrl": null,
+						"estimatedMinutes": 8,
+						"position": 1,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-connected-copy",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "What does installing the remote contract provide?",
+								"explanation": "Queries still run against the producer under its authorization.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "b",
+											"label": "All producer boards and copied source tables"
+										},
+										{
+											"id": "a",
+											"label": "Sanitized semantics and bindings"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-connected-revoke",
+						"title": "Refresh the contract and revoke exposure",
+						"language": "en",
+						"contentFile": "content/refresh-and-revoke.md",
+						"videoUrl": null,
+						"estimatedMinutes": 6,
+						"position": 2,
+						"isOptional": false,
+						"finalAssessment": false,
+						"challenges": [
+							{
+								"id": "challenge-connected-refresh",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "The producer adds a projected property. How does the consumer update?",
+								"explanation": "Installed contracts retain their captured version until refreshed.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "b",
+											"label": "Wait for automatic replacement"
+										},
+										{
+											"id": "a",
+											"label": "Explicitly refresh its installed contract"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					},
+					{
+						"id": "lesson-connected-final",
+						"title": "Verify new, changed and revoked access",
+						"language": "en",
+						"contentFile": "content/final-assessment.md",
+						"videoUrl": null,
+						"estimatedMinutes": 5,
+						"position": 3,
+						"isOptional": false,
+						"finalAssessment": true,
+						"challenges": [
+							{
+								"id": "challenge-connected-transfer",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Exposure is disabled after installation. What should a fresh query do?",
+								"explanation": "A local contract copy is not a permanent access grant.",
+								"points": 10,
+								"position": 0,
+								"payload": {
+									"options": [
+										{
+											"id": "b",
+											"label": "Continue because the contract was installed"
+										},
+										{
+											"id": "a",
+											"label": "Fail authorization"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							},
+							{
+								"id": "challenge-connected-cleanup",
+								"kind": "SINGLE_CHOICE",
+								"prompt": "Can the consumer uninstall after the connection becomes inactive?",
+								"explanation": "Uninstall does not require an active connection.",
+								"points": 10,
+								"position": 1,
+								"payload": {
+									"options": [
+										{
+											"id": "a",
+											"label": "Yes, local cleanup remains available"
+										},
+										{
+											"id": "b",
+											"label": "No, the producer must reactivate access"
+										}
+									],
+									"correct": [
+										"a"
+									]
+								}
+							}
+						],
+						"appRefs": []
+					}
+				]
+			}
+		],
+		"description": "Connect two apps, query a shared ontology and prove revocation. Core: 25 min.",
+		"longDescription": "Prerequisites: two disposable online apps, role/connection administration and Data Studio table skills. In 25 minutes, import synthetic parts, expose an ontology, install/query it from a consumer, refresh one property and verify denied access after revocation. App/account setup is separate. The core is read-only; governed write actions are a later extension. Evidence is manually reviewed.",
+		"assets": [
+			{
+				"name": "PartsFixture",
+				"file": "fixtures/parts.json",
+				"kind": "DOCUMENT",
+				"replace": true
+			},
+			{
+				"name": "ConnectionChecks",
+				"file": "fixtures/connection-checks.csv",
+				"kind": "DOCUMENT",
+				"replace": true
+			}
+		],
+		"appLinks": [],
+		"estimatedMinutes": 25
+	}
+}

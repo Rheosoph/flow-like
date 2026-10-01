@@ -28,6 +28,7 @@ use tauri::AppHandle;
 
 use crate::{
     functions::{TauriFunctionError, flow::storage::current_user_sub},
+    offline_writes::data_studio::{self, DataStudioTarget},
     state::TauriFlowLikeState,
 };
 
@@ -63,6 +64,36 @@ fn validate_table_name(name: &str) -> flow_like_types::Result<()> {
 const MAX_OFFSET: u64 = 100_000;
 
 async fn db_connection_handle(
+    app_handle: &AppHandle,
+    app_id: &str,
+    credentials: Option<Arc<SharedCredentials>>,
+    user_scoped: bool,
+    sub: Option<String>,
+    token: Option<String>,
+) -> flow_like_types::Result<Connection> {
+    match data_studio::resolve(
+        app_handle,
+        app_id,
+        None,
+        user_scoped,
+        token.as_deref(),
+        None,
+    )
+    .await?
+    {
+        DataStudioTarget::Device => {}
+        DataStudioTarget::Managed(store) => {
+            return Err(anyhow!(
+                "Table '{}' is kept offline on this device and has no device database",
+                store.table_name()
+            ));
+        }
+    }
+    device_connection(app_handle, app_id, credentials, user_scoped, sub).await
+}
+
+/// The device databases of Offline apps.
+async fn device_connection(
     app_handle: &AppHandle,
     app_id: &str,
     credentials: Option<Arc<SharedCredentials>>,
@@ -124,11 +155,24 @@ async fn db_connection_inner(
     user_scoped: bool,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> flow_like_types::Result<LanceDBVectorStore> {
     let table_name = table_name.unwrap_or("default".to_string());
+    match data_studio::resolve(
+        app_handle,
+        &app_id,
+        Some(&table_name),
+        user_scoped,
+        token.as_deref(),
+        selector.clone(),
+    )
+    .await?
+    {
+        DataStudioTarget::Device => {}
+        DataStudioTarget::Managed(store) => return Ok(*store),
+    }
     validate_table_name(&table_name)?;
-    let connection =
-        db_connection_handle(app_handle, &app_id, credentials, user_scoped, sub).await?;
+    let connection = device_connection(app_handle, &app_id, credentials, user_scoped, sub).await?;
     let mut db = match selector {
         Some(selector) => {
             LanceDBVectorStore::from_connection_with_selector(connection, table_name, selector)
@@ -154,8 +198,10 @@ pub async fn db_table_names(
     app_handle: AppHandle,
     app_id: String,
     credentials: Option<Arc<SharedCredentials>>,
+    token: Option<String>,
 ) -> Result<Vec<String>, TauriFunctionError> {
-    let connection = db_connection_handle(&app_handle, &app_id, credentials, false, None).await?;
+    let connection =
+        db_connection_handle(&app_handle, &app_id, credentials, false, None, token).await?;
     Ok(table_names_from(&connection).await?)
 }
 
@@ -165,8 +211,10 @@ pub async fn db_table_names_user(
     app_id: String,
     credentials: Option<Arc<SharedCredentials>>,
     sub: Option<String>,
+    token: Option<String>,
 ) -> Result<Vec<String>, TauriFunctionError> {
-    let connection = db_connection_handle(&app_handle, &app_id, credentials, true, sub).await?;
+    let connection =
+        db_connection_handle(&app_handle, &app_id, credentials, true, sub, token).await?;
     Ok(table_names_from(&connection).await?)
 }
 
@@ -178,8 +226,10 @@ pub async fn db_table_summaries(
     app_handle: AppHandle,
     app_id: String,
     credentials: Option<Arc<SharedCredentials>>,
+    token: Option<String>,
 ) -> Result<Vec<TableSummary>, TauriFunctionError> {
-    let connection = db_connection_handle(&app_handle, &app_id, credentials, false, None).await?;
+    let connection =
+        db_connection_handle(&app_handle, &app_id, credentials, false, None, token).await?;
     let names = table_names_from(&connection).await?;
     Ok(summarize_tables(&connection, names).await)
 }
@@ -190,8 +240,10 @@ pub async fn db_table_summaries_user(
     app_id: String,
     credentials: Option<Arc<SharedCredentials>>,
     sub: Option<String>,
+    token: Option<String>,
 ) -> Result<Vec<TableSummary>, TauriFunctionError> {
-    let connection = db_connection_handle(&app_handle, &app_id, credentials, true, sub).await?;
+    let connection =
+        db_connection_handle(&app_handle, &app_id, credentials, true, sub, token).await?;
     let names = table_names_from(&connection).await?;
     Ok(summarize_tables(&connection, names).await)
 }
@@ -215,6 +267,7 @@ pub async fn db_count(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<usize, TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -224,6 +277,7 @@ pub async fn db_count(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     let cnt = db.count(None).await?;
@@ -239,6 +293,7 @@ pub async fn db_schema(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<Schema, TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -248,6 +303,7 @@ pub async fn db_schema(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     let schema = db.schema().await?;
@@ -271,6 +327,7 @@ pub async fn db_create_table(
     credentials: Option<Arc<SharedCredentials>>,
     user_scoped: Option<bool>,
     sub: Option<String>,
+    token: Option<String>,
 ) -> Result<CreateTableResponse, TauriFunctionError> {
     let schema = database_fields_to_arrow_schema(&fields)?;
     let if_not_exists = if_not_exists.unwrap_or(true);
@@ -282,6 +339,7 @@ pub async fn db_create_table(
         user_scoped.unwrap_or(false),
         sub,
         None,
+        token,
     )
     .await?;
     let created = db.create_empty_table(schema, if_not_exists).await?;
@@ -309,6 +367,7 @@ pub async fn db_drop_table(
     credentials: Option<Arc<SharedCredentials>>,
     user_scoped: Option<bool>,
     sub: Option<String>,
+    token: Option<String>,
 ) -> Result<DropTableResponse, TauriFunctionError> {
     validate_table_name(&table_name)?;
     let connection = db_connection_handle(
@@ -317,6 +376,7 @@ pub async fn db_drop_table(
         credentials,
         user_scoped.unwrap_or(false),
         sub,
+        token,
     )
     .await?;
     let mut db = LanceDBVectorStore::from_connection(connection.clone(), table_name.clone()).await;
@@ -343,6 +403,7 @@ pub async fn db_list(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<Vec<flow_like_types::Value>, TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -352,6 +413,7 @@ pub async fn db_list(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     let limit = limit.unwrap_or(25).min(250) as usize;
@@ -394,6 +456,7 @@ pub async fn db_query(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<Vec<flow_like_types::Value>, TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -403,6 +466,7 @@ pub async fn db_query(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     let limit = limit.unwrap_or(25).min(250) as usize;
@@ -484,6 +548,7 @@ pub async fn db_indices(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<Vec<IndexConfigDto>, TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -493,6 +558,7 @@ pub async fn db_indices(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     let indices = db.list_indices().await?;
@@ -509,6 +575,7 @@ pub async fn db_delete(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<(), TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -518,6 +585,7 @@ pub async fn db_delete(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     db.delete(&query).await?;
@@ -534,6 +602,7 @@ pub async fn db_add(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<(), TauriFunctionError> {
     let mut db = db_connection_inner(
         &app_handle,
@@ -543,6 +612,7 @@ pub async fn db_add(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     db.insert(items).await?;
@@ -561,6 +631,7 @@ pub async fn build_index(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<(), TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -570,6 +641,7 @@ pub async fn build_index(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     db.index(&column, Some(&index_type)).await?;
@@ -589,6 +661,7 @@ pub async fn db_optimize(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<(), TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -598,6 +671,7 @@ pub async fn db_optimize(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     db.optimize(keep_versions.unwrap_or(true)).await?;
@@ -615,6 +689,7 @@ pub async fn db_update(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<(), TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -624,6 +699,7 @@ pub async fn db_update(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     db.update(&filter, updates).await?;
@@ -640,6 +716,7 @@ pub async fn db_drop_columns(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<(), TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -649,6 +726,7 @@ pub async fn db_drop_columns(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     let column_refs: Vec<&str> = columns.iter().map(|s| s.as_str()).collect();
@@ -677,6 +755,7 @@ pub async fn db_add_column(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<(), TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -686,6 +765,7 @@ pub async fn db_add_column(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     db.add_column_definition(
@@ -709,6 +789,7 @@ pub async fn db_alter_column(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<(), TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -718,6 +799,7 @@ pub async fn db_alter_column(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     db.make_column_nullable(&column, nullable).await?;
@@ -734,6 +816,7 @@ pub async fn db_set_primary_key(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<(), TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -743,6 +826,7 @@ pub async fn db_set_primary_key(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     db.set_primary_key(&column).await?;
@@ -759,6 +843,7 @@ pub async fn db_drop_index(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<(), TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -768,6 +853,7 @@ pub async fn db_drop_index(
         user_scoped.unwrap_or(false),
         sub,
         selector,
+        token,
     )
     .await?;
     db.drop_index(&index_name).await?;
@@ -783,6 +869,7 @@ pub async fn db_history(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<DatabaseHistory, TauriFunctionError> {
     let db = db_connection_inner(
         &app_handle,
@@ -792,6 +879,7 @@ pub async fn db_history(
         user_scoped.unwrap_or(false),
         sub,
         Some(selector.unwrap_or_default()),
+        token,
     )
     .await?;
     Ok(db.history().await?)
@@ -807,6 +895,7 @@ pub async fn db_reference_action(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<DatabaseActionResult, TauriFunctionError> {
     if let DatabaseAction::Clone { name } = &action {
         validate_table_name(name)?;
@@ -819,6 +908,7 @@ pub async fn db_reference_action(
         user_scoped.unwrap_or(false),
         sub,
         Some(selector.unwrap_or_default()),
+        token,
     )
     .await?;
     Ok(db.reference_action(action).await?)
@@ -836,6 +926,7 @@ pub async fn db_compare(
     user_scoped: Option<bool>,
     sub: Option<String>,
     selector: Option<DatabaseSelector>,
+    token: Option<String>,
 ) -> Result<DatabaseDiff, TauriFunctionError> {
     let source = db_connection_inner(
         &app_handle,
@@ -845,6 +936,7 @@ pub async fn db_compare(
         user_scoped.unwrap_or(false),
         sub,
         Some(selector.unwrap_or_default()),
+        token,
     )
     .await?;
     let target = source.checkout(other).await?;

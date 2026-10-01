@@ -25,6 +25,8 @@ pub mod aws;
 pub mod azure;
 #[cfg(feature = "gcp")]
 pub mod gcp;
+#[cfg(any(feature = "aws", feature = "azure"))]
+mod tls;
 
 /// API-side: deliver a push the client could not send itself onto the transport the waiter
 /// listens on.
