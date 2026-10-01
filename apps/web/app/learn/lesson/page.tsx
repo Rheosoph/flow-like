@@ -115,6 +115,10 @@ function LessonContentPage() {
 			),
 		[structureQuery.data],
 	);
+	const lessonIndex = useMemo(
+		() => courseLessons.findIndex((l) => l.id === lessonId),
+		[courseLessons, lessonId],
+	);
 	const { previous: previousLesson, next: nextLesson } = useMemo(
 		() => lessonNeighbors(courseLessons, lessonId),
 		[courseLessons, lessonId],
