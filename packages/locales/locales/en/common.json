@@ -3030,6 +3030,7 @@
 	"whenYouBuildFlowsYouCanMarkVariablesAsQuotexposedquotAndQuoteditablequotTheseShowUpHereSoAppUsersCanCustomizeBehaviorWithoutEditingTheFlowItselfLikeApiKeysThresholdsOrToggleSwitches": "When you build Flows, you can mark variables as \"Exposed\" and \"Editable\". These show up here so app users can customize behavior without editing the flow itself — like API keys, thresholds, or toggle switches.",
 	"whereFlowLikeStopsBeingAToolAndStartsBeingAPlatform": "Where Flow-Like stops being a tool and starts being a platform.",
 	"widenTheFocusToTwoHops": "Widen the focus to two hops",
+	"widgetAccessFailed": "The widget's package could not be opened: {{detail}}",
 	"widgetActionActionidFailed": "Widget action '{{actionId}}' failed",
 	"widgetActionActionidHasANonworkflowBindingAndCannotRunHere": "Widget action '{{actionId}}' has a non-workflow binding and cannot run here.",
 	"widgetActionCannotRunMissingAppOrBoardContext": "Widget action cannot run: missing app or board context.",

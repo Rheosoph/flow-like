@@ -3023,6 +3023,7 @@
 	"whenYouBuildFlowsYouCanMarkVariablesAsQuotexposedquotAndQuoteditablequotTheseShowUpHereSoAppUsersCanCustomizeBehaviorWithoutEditingTheFlowItselfLikeApiKeysThresholdsOrToggleSwitches": "フローを作成する際、変数を「公開」と「編集可能」にマークできます。これらはここに表示され、アプリユーザーはフロー自体を編集することなく動作をカスタマイズできます — APIキーやしきい値、トグルスイッチなどです。",
 	"whereFlowLikeStopsBeingAToolAndStartsBeingAPlatform": "Flow-Likeがツールではなくプラットフォームとなる場所。",
 	"widenTheFocusToTwoHops": "",
+	"widgetAccessFailed": "",
 	"widgetActionActionidFailed": "ウィジェットアクション '{{actionId}}' が失敗しました",
 	"widgetActionActionidHasANonworkflowBindingAndCannotRunHere": "ウィジェットアクション '{{actionId}}' はワークフロー以外のバインディングを持ち、ここでは実行できません。",
 	"widgetActionCannotRunMissingAppOrBoardContext": "ウィジェットアクションを実行できません: アプリまたはボードのコンテキストがありません。",

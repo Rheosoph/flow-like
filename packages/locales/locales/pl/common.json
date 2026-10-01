@@ -3115,6 +3115,7 @@
 	"whenYouBuildFlowsYouCanMarkVariablesAsQuotexposedquotAndQuoteditablequotTheseShowUpHereSoAppUsersCanCustomizeBehaviorWithoutEditingTheFlowItselfLikeApiKeysThresholdsOrToggleSwitches": "",
 	"whereFlowLikeStopsBeingAToolAndStartsBeingAPlatform": "",
 	"widenTheFocusToTwoHops": "",
+	"widgetAccessFailed": "",
 	"widgetActionActionidFailed": "",
 	"widgetActionActionidHasANonworkflowBindingAndCannotRunHere": "",
 	"widgetActionCannotRunMissingAppOrBoardContext": "",

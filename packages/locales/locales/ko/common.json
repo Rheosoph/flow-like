@@ -3023,6 +3023,7 @@
 	"whenYouBuildFlowsYouCanMarkVariablesAsQuotexposedquotAndQuoteditablequotTheseShowUpHereSoAppUsersCanCustomizeBehaviorWithoutEditingTheFlowItselfLikeApiKeysThresholdsOrToggleSwitches": "플로우를 만들 때 변수를 \"노출\" 및 \"편집 가능\"으로 표시할 수 있습니다. 이렇게 하면 API 키, 임곗값, 토글 스위치처럼 플로우 자체를 수정하지 않고도 앱 사용자가 동작을 직접 조정할 수 있도록 여기에 표시됩니다.",
 	"whereFlowLikeStopsBeingAToolAndStartsBeingAPlatform": "Flow-Like가 단순한 도구를 넘어 플랫폼이 되는 지점입니다.",
 	"widenTheFocusToTwoHops": "",
+	"widgetAccessFailed": "",
 	"widgetActionActionidFailed": "위젯 액션 '{{actionId}}' 실행에 실패했습니다",
 	"widgetActionActionidHasANonworkflowBindingAndCannotRunHere": "위젯 액션 '{{actionId}}'은(는) 워크플로가 아닌 바인딩이어서 여기서 실행할 수 없습니다.",
 	"widgetActionCannotRunMissingAppOrBoardContext": "위젯 액션을 실행할 수 없습니다: 앱 또는 보드 컨텍스트가 없습니다.",

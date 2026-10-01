@@ -3023,6 +3023,7 @@
 	"whenYouBuildFlowsYouCanMarkVariablesAsQuotexposedquotAndQuoteditablequotTheseShowUpHereSoAppUsersCanCustomizeBehaviorWithoutEditingTheFlowItselfLikeApiKeysThresholdsOrToggleSwitches": "Beim Erstellen von Flows kannst du Variablen als „Exposed“ und „Editable“ markieren. Die Variablen werden hier angezeigt, damit App-Benutzer das Verhalten anpassen können, ohne den Flow selbst zu bearbeiten – etwa API-Schlüssel, Schwellenwerte oder Umschalter.",
 	"whereFlowLikeStopsBeingAToolAndStartsBeingAPlatform": "Wo Flow-Like aufhört, nur ein Tool zu sein, und zur Plattform wird.",
 	"widenTheFocusToTwoHops": "Fokus auf zwei Sprünge erweitern",
+	"widgetAccessFailed": "Das Paket des Widgets konnte nicht geöffnet werden: {{detail}}",
 	"widgetActionActionidFailed": "Widget-Aktion '{{actionId}}' fehlgeschlagen",
 	"widgetActionActionidHasANonworkflowBindingAndCannotRunHere": "Widget-Aktion '{{actionId}}' hat eine Nicht-Workflow-Bindung und kann hier nicht ausgeführt werden.",
 	"widgetActionCannotRunMissingAppOrBoardContext": "Widget-Aktion kann nicht ausgeführt werden: App- oder Board-Kontext fehlt.",
