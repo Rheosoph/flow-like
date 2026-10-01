@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "execute")]
 use flow_like::flow::execution::context::ExecutionContext;
 #[cfg(feature = "execute")]
-use flow_like_types::{Cacheable, create_id};
+use flow_like_types::{Cacheable, Context, create_id};
 #[cfg(feature = "execute")]
 use std::sync::Arc;
 
@@ -95,60 +95,149 @@ pub struct AutomationSession {
     pub browser_frame_selectors: Vec<crate::types::selectors::Selector>,
 }
 
-/// WebDriver server process (chromedriver, geckodriver, …) started for one session.
-#[cfg(feature = "execute")]
-pub(crate) struct DriverServer {
-    child: tokio::process::Child,
-}
-
-#[cfg(feature = "execute")]
-impl DriverServer {
-    pub(crate) fn new(child: tokio::process::Child) -> Self {
-        Self { child }
-    }
-
-    pub(crate) fn has_exited(&mut self) -> flow_like_types::Result<bool> {
-        Ok(self.child.try_wait()?.is_some())
-    }
-}
-
-#[cfg(feature = "execute")]
-impl Drop for DriverServer {
-    fn drop(&mut self) {
-        let _ = self.child.start_kill();
-    }
-}
-
-/// The server must outlive the WebDriver session: killing chromedriver before its
-/// session is deleted orphans the browser it launched.
+/// The Chrome DevTools browser of one session, registered as a run resource so it
+/// closes with the run even when the flow never reaches Stop Session.
 #[cfg(feature = "execute")]
 #[derive(Default)]
-struct BrowserState {
-    driver: Option<Arc<thirtyfour::WebDriver>>,
-    owned: bool,
-    server: Option<Arc<DriverServer>>,
+pub(crate) struct BrowserSlot {
+    browser: std::sync::Mutex<Option<flow_like_browser::Browser>>,
+    aborted: std::sync::atomic::AtomicBool,
+    pub(crate) refs: std::sync::Mutex<RefState>,
+    pub(crate) downloads: std::sync::Mutex<Option<DownloadArm>>,
 }
 
 #[cfg(feature = "execute")]
-impl Drop for BrowserState {
+#[derive(Default)]
+pub(crate) struct RefState {
+    pub table: flow_like_browser::RefTable,
+    pub elements: Vec<crate::browser::refs::SnapshotElement>,
+}
+
+#[cfg(feature = "execute")]
+pub(crate) struct DownloadArm {
+    pub directory: Option<std::path::PathBuf>,
+    pub cursor: u64,
+    pub include_in_progress: bool,
+}
+
+/// Runs `access` on the value behind a mutex; a panic of an earlier holder does not
+/// poison the slot for the rest of the run.
+#[cfg(feature = "execute")]
+pub(crate) fn locked<T, R>(mutex: &std::sync::Mutex<T>, access: impl FnOnce(&mut T) -> R) -> R {
+    access(
+        &mut mutex
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+}
+
+#[cfg(feature = "execute")]
+fn slot_occupied() -> flow_like_types::Error {
+    flow_like_types::anyhow!("Close the attached browser before replacing it")
+}
+
+#[cfg(feature = "execute")]
+impl BrowserSlot {
+    pub(crate) fn browser(&self) -> Option<flow_like_browser::Browser> {
+        locked(&self.browser, |browser| browser.clone())
+    }
+
+    /// Refuses a second browser and a browser that became ready after the run ended;
+    /// a refused browser is aborted so no Chrome outlives its run.
+    pub(crate) fn install(
+        &self,
+        browser: flow_like_browser::Browser,
+    ) -> flow_like_types::Result<()> {
+        let refusal = locked(&self.browser, |current| {
+            if current.is_some() {
+                Some(slot_occupied())
+            } else if self.aborted.load(std::sync::atomic::Ordering::Acquire) {
+                Some(flow_like_types::anyhow!(
+                    "The run was cancelled before the browser was ready"
+                ))
+            } else {
+                *current = Some(browser.clone());
+                None
+            }
+        });
+        match refusal {
+            None => Ok(()),
+            Some(refusal) => {
+                browser.abort();
+                Err(refusal)
+            }
+        }
+    }
+
+    pub(crate) fn take(&self) -> Option<flow_like_browser::Browser> {
+        let browser = locked(&self.browser, Option::take);
+        locked(&self.refs, |refs| *refs = RefState::default());
+        locked(&self.downloads, |arm| *arm = None);
+        browser
+    }
+}
+
+#[cfg(feature = "execute")]
+#[flow_like_types::async_trait]
+impl flow_like::flow::execution::resources::RunResource for BrowserSlot {
+    fn abort(&self) {
+        self.aborted
+            .store(true, std::sync::atomic::Ordering::Release);
+        if let Some(browser) = self.take() {
+            browser.abort();
+        }
+    }
+
+    async fn shutdown(&self) {
+        self.aborted
+            .store(true, std::sync::atomic::Ordering::Release);
+        if let Some(browser) = self.take() {
+            browser.shutdown().await;
+        }
+    }
+}
+
+#[cfg(feature = "execute")]
+impl Drop for BrowserSlot {
     fn drop(&mut self) {
-        let Some(driver) = self.driver.take() else {
-            return;
-        };
-        let server = self.server.take();
-        let owned = self.owned;
-        match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => {
-                runtime.spawn(async move {
-                    let _ = end_driver_session(&driver, owned).await;
-                    drop(driver);
-                    drop(server);
-                });
-            }
-            Err(_) => {
-                drop(driver);
-                drop(server);
-            }
+        if let Some(browser) = self.take() {
+            browser.abort();
+        }
+    }
+}
+
+/// A connected browser that no session slot owns yet. Dropping it disconnects, so a node that
+/// is stopped or dropped between connecting and installing leaves no DevTools connection open.
+#[cfg(feature = "execute")]
+pub(crate) struct UnclaimedBrowser {
+    browser: flow_like_browser::Browser,
+    claimed: bool,
+}
+
+#[cfg(feature = "execute")]
+impl UnclaimedBrowser {
+    pub(crate) fn new(browser: flow_like_browser::Browser) -> Self {
+        Self {
+            browser,
+            claimed: false,
+        }
+    }
+
+    pub(crate) fn browser(&self) -> &flow_like_browser::Browser {
+        &self.browser
+    }
+
+    pub(crate) fn claim(mut self) -> flow_like_browser::Browser {
+        self.claimed = true;
+        self.browser.clone()
+    }
+}
+
+#[cfg(feature = "execute")]
+impl Drop for UnclaimedBrowser {
+    fn drop(&mut self) {
+        if !self.claimed {
+            self.browser.abort();
         }
     }
 }
@@ -168,10 +257,23 @@ impl Drop for SessionLifetime {
 #[cfg(feature = "execute")]
 #[derive(Clone)]
 pub struct AutomationSessionWrapper {
-    browser: Arc<tokio::sync::RwLock<BrowserState>>,
+    slot: Arc<BrowserSlot>,
     browser_lock: Arc<tokio::sync::Mutex<()>>,
     active: Arc<std::sync::atomic::AtomicBool>,
     _lifetime: Arc<SessionLifetime>,
+}
+
+#[cfg(feature = "execute")]
+impl AutomationSessionWrapper {
+    fn new() -> Self {
+        let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        Self {
+            slot: Arc::new(BrowserSlot::default()),
+            browser_lock: Arc::new(tokio::sync::Mutex::new(())),
+            active: active.clone(),
+            _lifetime: Arc::new(SessionLifetime(active)),
+        }
+    }
 }
 
 #[cfg(feature = "execute")]
@@ -184,18 +286,55 @@ impl Cacheable for AutomationSessionWrapper {
     }
 }
 
-/// Keeps tab selection and every command in a node in one browser operation.
+/// Keeps the current page, its replayed frame and every command in a node in one browser operation.
 #[cfg(feature = "execute")]
 pub struct BrowserOperationGuard {
-    driver: Arc<thirtyfour::WebDriver>,
+    ctx: crate::browser::driver::PageContext,
     _guard: tokio::sync::OwnedMutexGuard<()>,
 }
 #[cfg(feature = "execute")]
 impl std::ops::Deref for BrowserOperationGuard {
-    type Target = thirtyfour::WebDriver;
+    type Target = crate::browser::driver::PageContext;
     fn deref(&self) -> &Self::Target {
-        &self.driver
+        &self.ctx
     }
+}
+
+/// One browser operation that does not need a current page (tab selection, new tabs).
+#[cfg(feature = "execute")]
+pub struct BrowserGuard {
+    pub browser: flow_like_browser::Browser,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+/// chromedriver window handles are `CDwindow-<target id>`; sessions saved before the
+/// DevTools port still carry them.
+#[cfg(feature = "execute")]
+fn page_target(handle: &str) -> flow_like_browser::types::TargetId {
+    flow_like_browser::types::TargetId::from(handle.strip_prefix("CDwindow-").unwrap_or(handle))
+}
+
+#[cfg(feature = "execute")]
+fn attached_browser(slot: &BrowserSlot) -> flow_like_types::Result<flow_like_browser::Browser> {
+    slot.browser()
+        .ok_or_else(|| flow_like_types::anyhow!("No browser attached to this session"))
+}
+
+/// Idempotent for the same slot; a closed run (finished, cancelled or detached) refuses it.
+#[cfg(feature = "execute")]
+fn register_slot(
+    resources: &flow_like::flow::execution::resources::RunResources,
+    session_ref: &str,
+    slot: &Arc<BrowserSlot>,
+) -> flow_like_types::Result<()> {
+    if slot.browser().is_some() {
+        return Err(slot_occupied());
+    }
+    let slot = slot.clone();
+    resources
+        .get_or_insert_with(format!("automation:browser:{session_ref}"), move || slot)
+        .context("Browser nodes need a live run to own the browser")?;
+    Ok(())
 }
 
 impl AutomationSession {
@@ -214,17 +353,10 @@ impl AutomationSession {
         } else {
             Platform::Linux
         };
-        let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let wrapper = AutomationSessionWrapper {
-            browser: Arc::new(tokio::sync::RwLock::new(BrowserState::default())),
-            browser_lock: Arc::new(tokio::sync::Mutex::new(())),
-            active: active.clone(),
-            _lifetime: Arc::new(SessionLifetime(active)),
-        };
         ctx.cache
             .write()
             .await
-            .insert(id.clone(), Arc::new(wrapper));
+            .insert(id.clone(), Arc::new(AutomationSessionWrapper::new()));
         Ok(Self {
             session_ref: id,
             platform,
@@ -287,99 +419,61 @@ impl AutomationSession {
     }
 
     #[cfg(feature = "execute")]
-    pub async fn attach_browser(
-        &mut self,
-        ctx: &mut ExecutionContext,
-        driver: thirtyfour::WebDriver,
-        options: &BrowserContextOptions,
-    ) -> flow_like_types::Result<()> {
-        self.attach(ctx, driver, options, true).await
-    }
-
-    #[cfg(feature = "execute")]
-    pub async fn attach_existing_browser(
-        &mut self,
-        ctx: &mut ExecutionContext,
-        driver: thirtyfour::WebDriver,
-        options: &BrowserContextOptions,
-    ) -> flow_like_types::Result<()> {
-        // Prevent the WebDriver destructor from closing a browser owned by the user.
-        driver.clone().leak()?;
-        self.attach(ctx, driver, options, false).await
-    }
-
-    #[cfg(feature = "execute")]
-    async fn attach(
-        &mut self,
-        ctx: &mut ExecutionContext,
-        driver: thirtyfour::WebDriver,
-        options: &BrowserContextOptions,
-        owned: bool,
-    ) -> flow_like_types::Result<()> {
-        let wrapper = self.wrapper(ctx).await?;
-        let _operation = wrapper.browser_lock.lock().await;
-        let mut state = wrapper.browser.write().await;
-        if state.driver.is_some() {
-            return Err(flow_like_types::anyhow!(
-                "Close the attached browser before replacing it"
-            ));
-        }
-        state.driver = Some(Arc::new(driver));
-        state.owned = owned;
+    fn set_browser_options(&mut self, options: &BrowserContextOptions) {
         self.browser_type = Some(options.browser_type.clone());
         self.browser_headless = Some(options.headless);
         self.browser_user_data_dir = options.user_data_dir.clone();
-        self.clear_current_page();
-        Ok(())
     }
 
+    /// Registers the browser slot of the session with the run before a browser is launched or
+    /// connected, so a browser that becomes ready after the run ended is never left running.
     #[cfg(feature = "execute")]
-    pub(crate) async fn has_driver_server(
+    pub async fn prepare_browser_slot(
         &self,
         ctx: &ExecutionContext,
-    ) -> flow_like_types::Result<bool> {
-        Ok(self
-            .wrapper(ctx)
-            .await?
-            .browser
-            .read()
-            .await
-            .server
-            .is_some())
-    }
-
-    /// Ties the WebDriver server to this session so it is stopped only after the browser session ends.
-    #[cfg(feature = "execute")]
-    pub(crate) async fn set_driver_server(
-        &self,
-        ctx: &ExecutionContext,
-        server: DriverServer,
     ) -> flow_like_types::Result<()> {
         let wrapper = self.wrapper(ctx).await?;
-        let mut state = wrapper.browser.write().await;
-        if state.server.is_some() {
-            return Err(flow_like_types::anyhow!(
-                "Stop this session's WebDriver before starting another"
-            ));
-        }
-        state.server = Some(Arc::new(server));
-        Ok(())
+        register_slot(&ctx.resources, &self.session_ref, &wrapper.slot)
     }
 
     #[cfg(feature = "execute")]
-    pub(crate) async fn stop_driver_server(
-        &self,
-        ctx: &ExecutionContext,
+    pub async fn attach_cdp_browser(
+        &mut self,
+        ctx: &mut ExecutionContext,
+        browser: flow_like_browser::Browser,
+        options: &BrowserContextOptions,
     ) -> flow_like_types::Result<()> {
-        self.wrapper(ctx).await?.browser.write().await.server = None;
-        Ok(())
+        let first_page = self.install_browser(ctx, browser).await?;
+        self.set_browser_options(options);
+        self.set_current_page_target(ctx, &first_page).await
     }
 
+    /// Hands the browser to the slot of the session; on every failure, and when the node is
+    /// dropped before the slot owns it, the browser is closed.
     #[cfg(feature = "execute")]
-    pub async fn get_browser_driver(
+    async fn install_browser(
         &self,
         ctx: &ExecutionContext,
-    ) -> flow_like_types::Result<BrowserOperationGuard> {
+        browser: flow_like_browser::Browser,
+    ) -> flow_like_types::Result<flow_like_browser::types::TargetId> {
+        let browser = UnclaimedBrowser::new(browser);
+        let wrapper = self.wrapper(ctx).await?;
+        register_slot(&ctx.resources, &self.session_ref, &wrapper.slot)?;
+        let Some(first_page) = browser.browser().pages().into_iter().next() else {
+            browser.claim().shutdown().await;
+            return Err(flow_like_types::anyhow!("The browser has no open tab"));
+        };
+        let _operation = wrapper.browser_lock.lock().await;
+        wrapper.slot.install(browser.claim())?;
+        Ok(first_page.target_id)
+    }
+
+    /// Serialises browser operations of parallel branches, then applies the session delay.
+    #[cfg(feature = "execute")]
+    async fn begin_operation(
+        &self,
+        ctx: &ExecutionContext,
+    ) -> flow_like_types::Result<(AutomationSessionWrapper, tokio::sync::OwnedMutexGuard<()>)> {
         let wrapper = self.wrapper(ctx).await?;
         let guard = wrapper.browser_lock.clone().lock_owned().await;
         crate::rpa::branch::delay(
@@ -390,17 +484,89 @@ impl AutomationSession {
         if !wrapper.active.load(std::sync::atomic::Ordering::Acquire) {
             return Err(flow_like_types::anyhow!("Automation session is closed"));
         }
-        let driver = wrapper
-            .browser
-            .read()
-            .await
-            .driver
-            .clone()
-            .ok_or_else(|| flow_like_types::anyhow!("No browser attached to this session"))?;
+        Ok((wrapper, guard))
+    }
+
+    /// The current page with its frame path replayed from the main frame (runs on every call).
+    #[cfg(feature = "execute")]
+    pub async fn browser_page(
+        &self,
+        ctx: &ExecutionContext,
+    ) -> flow_like_types::Result<BrowserOperationGuard> {
+        let (wrapper, guard) = self.begin_operation(ctx).await?;
+        let page = self
+            .page_context(&wrapper.slot, self.browser_frame_selectors.clone())
+            .await?
+            .enter_frame_path()
+            .await?;
         Ok(BrowserOperationGuard {
-            driver,
+            ctx: page,
             _guard: guard,
         })
+    }
+
+    /// The current page with its main frame as the current frame.
+    #[cfg(feature = "execute")]
+    pub async fn browser_top_page(
+        &self,
+        ctx: &ExecutionContext,
+    ) -> flow_like_types::Result<BrowserOperationGuard> {
+        let (wrapper, guard) = self.begin_operation(ctx).await?;
+        let page = self.page_context(&wrapper.slot, Vec::new()).await?;
+        Ok(BrowserOperationGuard {
+            ctx: page,
+            _guard: guard,
+        })
+    }
+
+    #[cfg(feature = "execute")]
+    pub async fn browser_guard(
+        &self,
+        ctx: &ExecutionContext,
+    ) -> flow_like_types::Result<BrowserGuard> {
+        let (wrapper, guard) = self.begin_operation(ctx).await?;
+        Ok(BrowserGuard {
+            browser: attached_browser(&wrapper.slot)?,
+            _guard: guard,
+        })
+    }
+
+    /// The browser without the operation lock or delay, for waits that must not block
+    /// other branches.
+    #[cfg(feature = "execute")]
+    pub async fn cdp_browser(
+        &self,
+        ctx: &ExecutionContext,
+    ) -> flow_like_types::Result<flow_like_browser::Browser> {
+        attached_browser(&self.wrapper(ctx).await?.slot)
+    }
+
+    #[cfg(feature = "execute")]
+    pub(crate) async fn browser_slot(
+        &self,
+        ctx: &ExecutionContext,
+    ) -> flow_like_types::Result<Arc<BrowserSlot>> {
+        Ok(self.wrapper(ctx).await?.slot)
+    }
+
+    #[cfg(feature = "execute")]
+    async fn page_context(
+        &self,
+        slot: &Arc<BrowserSlot>,
+        selectors: Vec<crate::types::selectors::Selector>,
+    ) -> flow_like_types::Result<crate::browser::driver::PageContext> {
+        let browser = attached_browser(slot)?;
+        let handle = self
+            .current_window_handle
+            .as_deref()
+            .ok_or_else(|| flow_like_types::anyhow!("Select or open a browser page first"))?;
+        let page = browser.page(&page_target(handle)).await?;
+        Ok(crate::browser::driver::PageContext::new(
+            browser,
+            page,
+            slot.clone(),
+            selectors,
+        ))
     }
 
     pub fn has_browser(&self) -> bool {
@@ -414,39 +580,16 @@ impl AutomationSession {
     }
 
     #[cfg(feature = "execute")]
-    pub async fn set_current_page(
+    pub async fn set_current_page_target(
         &mut self,
         ctx: &mut ExecutionContext,
-        window_handle: thirtyfour::WindowHandle,
+        target: &flow_like_browser::types::TargetId,
     ) -> flow_like_types::Result<()> {
         self.ensure_active(ctx).await?;
         self.browser_frame_selectors.clear();
         self.current_page_ref = Some(create_id());
-        self.current_window_handle = Some(window_handle.to_string());
+        self.current_window_handle = Some(page_target(target.as_str()).to_string());
         Ok(())
-    }
-
-    #[cfg(feature = "execute")]
-    pub async fn get_browser_driver_and_switch(
-        &self,
-        ctx: &ExecutionContext,
-    ) -> flow_like_types::Result<BrowserOperationGuard> {
-        let driver = self.get_browser_driver(ctx).await?;
-        let handle = self
-            .current_window_handle
-            .as_ref()
-            .ok_or_else(|| flow_like_types::anyhow!("Select or open a browser page first"))?;
-        driver
-            .switch_to_window(thirtyfour::WindowHandle::from(handle.clone()))
-            .await?;
-        driver.enter_default_frame().await?;
-        for selector in &self.browser_frame_selectors {
-            crate::browser::selector::find(&driver, selector)
-                .await?
-                .enter_frame()
-                .await?;
-        }
-        Ok(driver)
     }
 
     #[cfg(feature = "execute")]
@@ -459,25 +602,20 @@ impl AutomationSession {
         self.browser_headless = None;
         self.browser_user_data_dir = None;
         self.clear_current_page();
-        take_and_end_browser(&wrapper).await
+        release_browser(&wrapper).await
     }
 
-    /// Ends the browser session while its WebDriver server is still running, then
-    /// drops the session's cached resources, which stops the server.
+    /// Closes the browser of the session, then drops the session's cached resources.
     #[cfg(feature = "execute")]
     pub async fn close(&self, ctx: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let wrapper = self.wrapper(ctx).await?;
         wrapper
             .active
             .store(false, std::sync::atomic::Ordering::Release);
-        let ended = take_and_end_browser(&wrapper).await;
-        let server = wrapper.browser.write().await.server.take();
+        let ended = release_browser(&wrapper).await;
         let prefixes = [
             "automation:auth:",
             "automation:network:",
-            "automation:download:",
-            "automation:debugger:",
-            "automation:refs:",
             "automation:policy:",
             "automation:screen_state:",
         ]
@@ -488,57 +626,340 @@ impl AutomationSession {
                     .iter()
                     .any(|prefix| key == prefix || key.starts_with(&format!("{}:", prefix)))
         });
-        drop(server);
         ended
     }
 }
 
+/// Waits for an operation in flight on a parallel branch, then closes the DevTools browser
+/// (owned: close and clean up; attached: disconnect).
 #[cfg(feature = "execute")]
-async fn take_and_end_browser(wrapper: &AutomationSessionWrapper) -> flow_like_types::Result<()> {
+async fn release_browser(wrapper: &AutomationSessionWrapper) -> flow_like_types::Result<()> {
     let _guard = wrapper.browser_lock.lock().await;
-    let (driver, owned) = {
-        let mut state = wrapper.browser.write().await;
-        (state.driver.take(), state.owned)
-    };
-    match driver {
-        Some(driver) => end_driver_session(&driver, owned).await,
+    match wrapper.slot.take() {
+        Some(browser) => close_cdp_browser(&browser).await,
         None => Ok(()),
     }
 }
 
 #[cfg(feature = "execute")]
-async fn end_driver_session(
-    driver: &thirtyfour::WebDriver,
-    owned: bool,
-) -> flow_like_types::Result<()> {
-    if owned {
-        ignore_closed_driver(driver.clone().quit().await)
-    } else {
-        // Chromium's remote-debugging backend deletes the driver session without closing the attached browser.
-        ignore_closed_driver(
-            driver
-                .handle
-                .cmd(thirtyfour::common::command::Command::DeleteSession)
-                .await
-                .map(|_| ()),
-        )
+async fn close_cdp_browser(browser: &flow_like_browser::Browser) -> flow_like_types::Result<()> {
+    match browser.close().await {
+        Ok(()) | Err(flow_like_browser::BrowserError::Disconnected { .. }) => Ok(()),
+        Err(error) => Err(error.into()),
     }
 }
 
-#[cfg(feature = "execute")]
-fn ignore_closed_driver(
-    result: thirtyfour::error::WebDriverResult<()>,
-) -> flow_like_types::Result<()> {
-    match result {
-        Ok(()) => Ok(()),
-        Err(error)
-            if matches!(
-                error.as_inner(),
-                thirtyfour::error::WebDriverErrorInner::InvalidSessionId(_)
-            ) =>
-        {
-            Ok(())
+#[cfg(all(test, feature = "execute"))]
+pub(crate) mod tests {
+    use super::*;
+    use ahash::AHashMap;
+    use flow_like::flow::board::ExecutionStage;
+    use flow_like::flow::execution::internal_node::InternalNode;
+    use flow_like::flow::execution::resources::{RunResource, RunResources};
+    use flow_like::flow::execution::{LogLevel, Run};
+    use flow_like::flow::node::NodeLogic;
+    use flow_like::profile::Profile;
+    use flow_like::state::{FlowLikeConfig, FlowLikeState};
+    use flow_like::utils::http::HTTPClient;
+    use flow_like_browser::test_hooks::TestSetup;
+    use flow_like_browser::testing::default_auto_reply;
+    use flow_like_browser::transport::memory::{InMemoryControl, InMemoryTransport, SentCommand};
+    use flow_like_browser::types::{LoaderId, TargetId};
+    use flow_like_browser::{Browser, ConnectionKind, RefTable};
+    use flow_like_types::{Value, json::json};
+    use std::time::Duration;
+
+    const OCCUPIED: &str = "Close the attached browser before replacing it";
+    const CANCELLED: &str = "The run was cancelled before the browser was ready";
+
+    pub(crate) struct Scripted {
+        pub(crate) browser: Browser,
+        _control: InMemoryControl,
+    }
+
+    fn chrome_reply(command: &SentCommand) -> Option<Value> {
+        let reply = match command.method.as_str() {
+            "Browser.getVersion" => json!({
+                "protocolVersion": "1.3",
+                "product": "Chrome/154.0.8037.92",
+                "revision": "@0",
+                "userAgent": "Mozilla/5.0 Chrome/154.0.8037.92",
+                "jsVersion": "15.4",
+            }),
+            "Target.getTargets" => json!({"targetInfos": [
+                {"targetId": "T1", "type": "page", "url": "about:blank", "attached": false},
+            ]}),
+            "Target.attachToTarget" => json!({"sessionId": "S1"}),
+            "Page.getFrameTree" => json!({"frameTree": {
+                "frame": {"id": "T1", "loaderId": "L1", "url": "about:blank"},
+                "childFrames": [],
+            }}),
+            _ => default_auto_reply(command).unwrap_or_else(|| json!({})),
+        };
+        Some(reply)
+    }
+
+    pub(crate) async fn scripted() -> Scripted {
+        let (transport, control) = InMemoryTransport::new();
+        control.set_auto_reply(chrome_reply);
+        let setup = TestSetup {
+            kind: ConnectionKind::Direct,
+            headless: true,
+            page_load_timeout: Duration::from_secs(30),
+            process: None,
+            staging: None,
+            run_owned_setup: false,
+        };
+        let browser = Browser::connect_transport(Box::new(transport), setup)
+            .await
+            .expect("the scripted browser connects");
+        Scripted {
+            browser,
+            _control: control,
         }
-        Err(error) => Err(error.into()),
+    }
+
+    fn armed_slot(browser: &Browser) -> BrowserSlot {
+        let slot = BrowserSlot::default();
+        slot.install(browser.clone()).unwrap();
+        locked(&slot.refs, |refs| {
+            refs.table = RefTable::default()
+                .begin(&TargetId::from("T1"), &LoaderId::from("L1"))
+                .finish();
+        });
+        locked(&slot.downloads, |arm| {
+            *arm = Some(DownloadArm {
+                directory: None,
+                cursor: 3,
+                include_in_progress: false,
+            });
+        });
+        slot
+    }
+
+    fn assert_cleared(slot: &BrowserSlot) {
+        assert!(slot.browser().is_none());
+        assert!(locked(&slot.refs, |refs| refs.table.page().is_none()));
+        assert!(locked(&slot.downloads, |arm| arm.is_none()));
+    }
+
+    fn session_on(handle: Option<&str>) -> AutomationSession {
+        AutomationSession {
+            session_ref: "s1".into(),
+            platform: Platform::Linux,
+            default_delay_ms: 0,
+            click_delay_ms: 0,
+            debug_mode: false,
+            browser_type: None,
+            browser_headless: None,
+            browser_user_data_dir: None,
+            current_page_ref: None,
+            current_window_handle: handle.map(str::to_owned),
+            browser_frame_selectors: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_second_browser_is_refused_and_closed() {
+        let (first, second) = (scripted().await, scripted().await);
+        let slot = BrowserSlot::default();
+        slot.install(first.browser.clone()).unwrap();
+        assert_eq!(
+            slot.install(second.browser.clone())
+                .unwrap_err()
+                .to_string(),
+            OCCUPIED
+        );
+        assert!(!second.browser.is_alive());
+        assert!(first.browser.is_alive());
+        assert!(slot.browser().is_some_and(|browser| browser.is_alive()));
+    }
+
+    #[tokio::test]
+    async fn a_browser_ready_after_the_run_ended_is_refused_and_closed() {
+        let resources = RunResources::default();
+        let slot = Arc::new(BrowserSlot::default());
+        register_slot(&resources, "s1", &slot).unwrap();
+        register_slot(&resources, "s1", &slot).expect("registering the same slot is idempotent");
+        resources.abort();
+        let late = scripted().await;
+        assert_eq!(
+            slot.install(late.browser.clone()).unwrap_err().to_string(),
+            CANCELLED
+        );
+        assert!(!late.browser.is_alive());
+        assert!(slot.browser().is_none());
+    }
+
+    #[tokio::test]
+    async fn registering_needs_a_live_run_and_an_empty_slot() {
+        let detached = RunResources::default();
+        detached.abort();
+        let slot = Arc::new(BrowserSlot::default());
+        assert_eq!(
+            register_slot(&detached, "s1", &slot)
+                .unwrap_err()
+                .to_string(),
+            "Browser nodes need a live run to own the browser"
+        );
+        let attached = scripted().await;
+        slot.install(attached.browser.clone()).unwrap();
+        assert_eq!(
+            register_slot(&RunResources::default(), "s1", &slot)
+                .unwrap_err()
+                .to_string(),
+            OCCUPIED
+        );
+    }
+
+    #[tokio::test]
+    async fn ending_the_run_closes_the_browser_and_clears_the_slot() {
+        let aborted = scripted().await;
+        let slot = armed_slot(&aborted.browser);
+        RunResource::abort(&slot);
+        assert!(!aborted.browser.is_alive());
+        assert_cleared(&slot);
+        let late = scripted().await;
+        assert_eq!(
+            slot.install(late.browser.clone()).unwrap_err().to_string(),
+            CANCELLED
+        );
+
+        let shut_down = scripted().await;
+        let slot = armed_slot(&shut_down.browser);
+        RunResource::shutdown(&slot).await;
+        assert!(!shut_down.browser.is_alive());
+        assert_cleared(&slot);
+
+        let dropped = scripted().await;
+        drop(armed_slot(&dropped.browser));
+        assert!(!dropped.browser.is_alive());
+    }
+
+    #[tokio::test]
+    async fn the_current_page_needs_a_browser_then_a_tab_and_reads_chromedriver_handles() {
+        let slot = Arc::new(BrowserSlot::default());
+        let no_browser = session_on(Some("T1"))
+            .page_context(&slot, Vec::new())
+            .await
+            .err()
+            .expect("an empty slot has no page");
+        assert_eq!(
+            no_browser.to_string(),
+            "No browser attached to this session"
+        );
+
+        let scripted = scripted().await;
+        slot.install(scripted.browser.clone()).unwrap();
+        let no_tab = session_on(None)
+            .page_context(&slot, Vec::new())
+            .await
+            .err()
+            .expect("a session without a current tab has no page");
+        assert_eq!(no_tab.to_string(), "Select or open a browser page first");
+
+        let ctx = tokio::time::timeout(
+            Duration::from_secs(10),
+            session_on(Some("CDwindow-T1")).page_context(&slot, Vec::new()),
+        )
+        .await
+        .expect("attaching the scripted tab finishes")
+        .expect("a chromedriver window handle names the DevTools target");
+        assert_eq!(ctx.page.target_id().as_str(), "T1");
+        assert_eq!(ctx.frame().id(), ctx.page.main_frame().id());
+    }
+
+    #[tokio::test]
+    async fn stop_session_waits_for_the_operation_in_flight_then_closes_the_browser() {
+        let wrapper = AutomationSessionWrapper::new();
+        let scripted = scripted().await;
+        wrapper.slot.install(scripted.browser.clone()).unwrap();
+        let operation = wrapper.browser_lock.clone().lock_owned().await;
+        let releasing = tokio::spawn({
+            let wrapper = wrapper.clone();
+            async move { release_browser(&wrapper).await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(scripted.browser.is_alive());
+        assert!(wrapper.slot.browser().is_some());
+        drop(operation);
+        releasing
+            .await
+            .expect("releasing does not panic")
+            .expect("closing the browser succeeds");
+        assert!(!scripted.browser.is_alive());
+        assert!(wrapper.slot.browser().is_none());
+    }
+
+    #[tokio::test]
+    async fn an_unclaimed_browser_disconnects_when_dropped() {
+        let dropped = scripted().await;
+        drop(UnclaimedBrowser::new(dropped.browser.clone()));
+        assert!(!dropped.browser.is_alive());
+        let claimed = scripted().await;
+        let browser = UnclaimedBrowser::new(claimed.browser.clone()).claim();
+        assert!(browser.is_alive());
+    }
+
+    async fn live_run_context() -> ExecutionContext {
+        let logic: Arc<dyn NodeLogic> = Arc::new(crate::browser::manage::BrowserAttachNode::new());
+        let node = Arc::new(InternalNode::new(
+            logic.get_node(),
+            AHashMap::new(),
+            logic,
+            AHashMap::new(),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let run: std::sync::Weak<flow_like_types::sync::Mutex<Run>> = std::sync::Weak::new();
+        let mut context = ExecutionContext::new(
+            Arc::new(AHashMap::from_iter([(
+                node.node_id().to_string(),
+                node.clone(),
+            )])),
+            &run,
+            &state,
+            &node,
+            &Arc::new(flow_like_types::sync::Mutex::new(AHashMap::new())),
+            &Arc::new(flow_like_types::sync::RwLock::new(AHashMap::new())),
+            LogLevel::Info,
+            ExecutionStage::Dev,
+            Arc::new(Profile::default()),
+            None,
+            Arc::new(flow_like_types::sync::RwLock::new(Vec::new())),
+            None,
+            None,
+            Arc::new(AHashMap::new()),
+            None,
+        )
+        .await;
+        context.resources = Arc::new(RunResources::default());
+        context
+    }
+
+    #[tokio::test]
+    async fn a_browser_dropped_before_the_session_owns_it_is_disconnected() {
+        let mut context = live_run_context().await;
+        let mut session = AutomationSession::new(&mut context, 0, 0, false)
+            .await
+            .expect("the session starts");
+        let wrapper = session.wrapper(&context).await.unwrap();
+        let operation = wrapper.browser_lock.clone().lock_owned().await;
+        let attached = scripted().await;
+        let options = BrowserContextOptions::default();
+        {
+            let installing =
+                session.attach_cdp_browser(&mut context, attached.browser.clone(), &options);
+            let mut installing = std::pin::pin!(installing);
+            assert!(futures::poll!(installing.as_mut()).is_pending());
+        }
+        drop(operation);
+        assert!(wrapper.slot.browser().is_none());
+        assert!(
+            !attached.browser.is_alive(),
+            "a browser the node dropped before the slot owned it must disconnect"
+        );
     }
 }

@@ -415,6 +415,21 @@ fn classify(message: &str) -> FlowScriptDiagnostic {
             "Use an exact input name from the declaration signature.",
             diagnostic.declaration.clone(),
         );
+    } else if let Some((_, missing)) = message.split_once(" is missing required inputs: ") {
+        diagnostic.code = FlowScriptDiagnosticCode::FsUnresolvedArgument;
+        diagnostic.phase = FlowScriptDiagnosticPhase::Validation;
+        diagnostic.declaration = ticks.first().cloned();
+        let missing = missing.trim();
+        if !missing.is_empty() && !missing.contains(',') {
+            diagnostic.pin = Some(missing.to_string());
+        }
+        set_call_path(&mut diagnostic);
+        diagnostic.expected = Some("a value for every required input".into());
+        diagnostic.actual = Some(format!("missing required inputs: {missing}"));
+        diagnostic.fix = fix(
+            "Supply each missing required input with a compatible literal, variable, or node output using the declaration signature.",
+            diagnostic.declaration.clone(),
+        );
     } else if message.contains("argument")
         && message.contains("not a literal or resolvable node output")
     {
@@ -1011,6 +1026,45 @@ mod tests {
                 .as_ref()
                 .and_then(|fix| fix.declaration_search.as_deref()),
             Some("agentRegisterFunctionTools")
+        );
+    }
+
+    #[test]
+    fn missing_required_inputs_carry_repair_metadata_and_source_sites() {
+        let structured = result(&[
+            "node `get` is missing required inputs: field",
+            "node `get` is missing required inputs: field, fallback",
+        ])
+        .structured_diagnostics_for_source("eventsSimple() {\n    const value = record.get()\n}\n");
+
+        assert_eq!(
+            structured.len(),
+            2,
+            "different missing inputs stay distinct"
+        );
+        let diagnostic = &structured[0];
+        assert_eq!(
+            diagnostic.code,
+            FlowScriptDiagnosticCode::FsUnresolvedArgument
+        );
+        assert_eq!(diagnostic.phase, FlowScriptDiagnosticPhase::Validation);
+        assert_eq!(diagnostic.declaration.as_deref(), Some("get"));
+        assert_eq!(diagnostic.pin.as_deref(), Some("field"));
+        assert_eq!(diagnostic.ast_path.as_deref(), Some("calls.get.args.field"));
+        assert_eq!(diagnostic.spans[0].start.line, 2);
+        assert_eq!(
+            diagnostic
+                .fix
+                .as_ref()
+                .unwrap()
+                .declaration_search
+                .as_deref(),
+            Some("get")
+        );
+        assert_eq!(structured[1].pin, None);
+        assert_eq!(
+            structured[1].actual.as_deref(),
+            Some("missing required inputs: field, fallback")
         );
     }
 

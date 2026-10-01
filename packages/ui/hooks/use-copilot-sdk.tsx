@@ -73,6 +73,35 @@ interface UseCopilotSDKResult {
 	retry: () => Promise<void>;
 }
 
+interface BackendRequestScope {
+	backend: AgentBackendProvider;
+	active: boolean;
+	generation: number;
+}
+
+interface BackendViewState {
+	scope: BackendRequestScope;
+	isRunning: boolean;
+	isConnecting: boolean;
+	models: CopilotModel[];
+	hasLoadedModelCatalog: boolean;
+	authStatus: CopilotAuthStatus | null;
+	error: string | null;
+}
+
+function initialBackendState(
+	backend: AgentBackendProvider,
+	scope: BackendRequestScope,
+): BackendViewState {
+	return {
+		...copilotBackendConnectionCoordinator.snapshot(backend),
+		scope,
+		models: staticModelsForBackend(backend),
+		hasLoadedModelCatalog: false,
+		authStatus: null,
+	};
+}
+
 /**
  * Hook for managing a FlowPilot agent backend connection and state.
  *
@@ -83,49 +112,84 @@ interface UseCopilotSDKResult {
 export function useCopilotSDK(
 	backend: AgentBackendProvider = "github-copilot",
 ): UseCopilotSDKResult {
-	const initialConnection =
-		copilotBackendConnectionCoordinator.snapshot(backend);
-	const [isRunning, setIsRunning] = useState(initialConnection.isRunning);
-	const [isConnecting, setIsConnecting] = useState(
-		initialConnection.isConnecting,
+	const scope = useMemo<BackendRequestScope>(
+		() => ({ backend, active: false, generation: 0 }),
+		[backend],
 	);
-	const [models, setModels] = useState<CopilotModel[]>(() =>
-		staticModelsForBackend(backend),
-	);
-	const [hasLoadedModelCatalog, setHasLoadedModelCatalog] = useState(false);
-	const [authStatus, setAuthStatus] = useState<CopilotAuthStatus | null>(null);
-	const [error, setError] = useState<string | null>(null);
+	const [state, setState] = useState(() => initialBackendState(backend, scope));
+	// Reset before effects run so a provider never inherits another one's readiness.
+	const currentState =
+		state.scope === scope ? state : initialBackendState(backend, scope);
+	if (currentState !== state) setState(currentState);
+	const {
+		isRunning,
+		isConnecting,
+		models,
+		hasLoadedModelCatalog,
+		authStatus,
+		error,
+	} = currentState;
 
 	const isTauriEnv = isTauri();
 
-	useEffect(
-		() =>
-			copilotBackendConnectionCoordinator.subscribe(backend, (snapshot) => {
-				setIsRunning(snapshot.isRunning);
-				setIsConnecting(snapshot.isConnecting);
-				setError(snapshot.error);
-			}),
-		[backend],
+	const updateState = useCallback(
+		(
+			update:
+				| Partial<BackendViewState>
+				| ((current: BackendViewState) => Partial<BackendViewState>),
+		) => {
+			if (!scope.active) return;
+			setState((current) =>
+				current.scope === scope
+					? {
+							...current,
+							...(typeof update === "function" ? update(current) : update),
+						}
+					: current,
+			);
+		},
+		[scope],
 	);
 
 	useEffect(() => {
-		setModels(staticModelsForBackend(backend));
-		setHasLoadedModelCatalog(false);
-		setAuthStatus(null);
-	}, [backend]);
+		scope.active = true;
+		scope.generation += 1;
+		const unsubscribe = copilotBackendConnectionCoordinator.subscribe(
+			backend,
+			(snapshot) => updateState(snapshot),
+		);
+		return () => {
+			scope.active = false;
+			unsubscribe();
+		};
+	}, [backend, scope, updateState]);
+
+	const requestIsCurrent = useCallback(
+		(invalidatePending = false) => {
+			if (invalidatePending) scope.generation += 1;
+			const generation = scope.generation;
+			return () => scope.active && scope.generation === generation;
+		},
+		[scope],
+	);
 
 	const start = useCallback(
 		async (config?: CopilotConnectionConfig) => {
+			const targetBackend = config?.backend ?? backend;
+			const isCurrent = requestIsCurrent(
+				targetBackend === backend &&
+					!copilotBackendConnectionCoordinator.snapshot(backend).isRunning,
+			);
 			if (!isTauriEnv) {
-				setError(
-					"FlowPilot agent backends are only available in the desktop app",
-				);
+				updateState({
+					error:
+						"FlowPilot agent backends are only available in the desktop app",
+				});
 				return;
 			}
 
 			try {
 				const { invoke } = await import("@tauri-apps/api/core");
-				const targetBackend = config?.backend ?? backend;
 				await withTimeout(
 					copilotBackendConnectionCoordinator.start(targetBackend, () =>
 						invoke("flowpilot_agent_backend_start", {
@@ -142,21 +206,24 @@ export function useCopilotSDK(
 				// An immediate repeat can hit the coordinator's short cooldown.
 				// Preserve the actual native failure instead of replacing it with
 				// that secondary backoff message.
-				setError((current) =>
-					current && errMsg.toLowerCase().includes("cooling down")
-						? current
-						: errMsg,
-				);
+				if (isCurrent())
+					updateState((current) => ({
+						error:
+							current.error && errMsg.toLowerCase().includes("cooling down")
+								? current.error
+								: errMsg,
+					}));
 				throw e;
 			}
 		},
-		[backend, isTauriEnv],
+		[backend, isTauriEnv, requestIsCurrent, updateState],
 	);
 
 	const stop = useCallback(async () => {
 		if (!isTauriEnv) return;
+		const isCurrent = requestIsCurrent(true);
 
-		setError(null);
+		updateState({ error: null });
 
 		try {
 			const { invoke } = await import("@tauri-apps/api/core");
@@ -167,22 +234,32 @@ export function useCopilotSDK(
 				10_000,
 				`Stopping ${backend}`,
 			);
-			setModels(staticModelsForBackend(backend));
-			setHasLoadedModelCatalog(false);
-			setAuthStatus(null);
+			if (isCurrent())
+				updateState({
+					models: staticModelsForBackend(backend),
+					hasLoadedModelCatalog: false,
+					authStatus: null,
+				});
 		} catch (e) {
 			const errMsg = e instanceof Error ? e.message : String(e);
-			setError(errMsg);
+			if (isCurrent()) updateState({ error: errMsg });
 			throw e;
 		}
-	}, [backend, isTauriEnv]);
+	}, [backend, isTauriEnv, requestIsCurrent, updateState]);
 
 	const refreshModels = useCallback(async () => {
 		if (!isTauriEnv) return;
-		if (!isRunning && backend === "github-copilot") return;
+		const isCurrent = requestIsCurrent();
 
 		try {
 			const { invoke } = await import("@tauri-apps/api/core");
+			if (!isCurrent()) return;
+			const connection = copilotBackendConnectionCoordinator.snapshot(backend);
+			if (
+				backend === "github-copilot" &&
+				(!connection.isRunning || connection.isConnecting)
+			)
+				return;
 			const result = await withTimeout(
 				invoke<CopilotModel[]>("flowpilot_agent_backend_list_models", {
 					backend,
@@ -192,21 +269,31 @@ export function useCopilotSDK(
 				15_000,
 				`Loading ${backend} models`,
 			);
-			setModels(result.length > 0 ? result : staticModelsForBackend(backend));
-			setHasLoadedModelCatalog(true);
+			if (isCurrent())
+				updateState({
+					models: result.length > 0 ? result : staticModelsForBackend(backend),
+					hasLoadedModelCatalog: true,
+				});
 		} catch (e) {
 			const errMsg = e instanceof Error ? e.message : String(e);
-			setError(errMsg);
-			setModels(staticModelsForBackend(backend));
-			setHasLoadedModelCatalog(false);
+			if (isCurrent())
+				updateState({
+					error: errMsg,
+					models: staticModelsForBackend(backend),
+					hasLoadedModelCatalog: false,
+				});
 		}
-	}, [backend, isTauriEnv, isRunning]);
+	}, [backend, isTauriEnv, requestIsCurrent, updateState]);
 
 	const refreshAuthStatus = useCallback(async () => {
-		if (!isTauriEnv || !isRunning) return;
+		if (!isTauriEnv) return;
+		const isCurrent = requestIsCurrent();
 
 		try {
 			const { invoke } = await import("@tauri-apps/api/core");
+			const connection = copilotBackendConnectionCoordinator.snapshot(backend);
+			if (!isCurrent() || !connection.isRunning || connection.isConnecting)
+				return;
 			const result = await withTimeout(
 				invoke<CopilotAuthStatus>("flowpilot_agent_backend_get_auth_status", {
 					backend,
@@ -214,22 +301,30 @@ export function useCopilotSDK(
 				8_000,
 				`Loading ${backend} auth status`,
 			);
-			setAuthStatus(result);
+			if (isCurrent()) updateState({ authStatus: result });
 		} catch (e) {
 			const errMsg = e instanceof Error ? e.message : String(e);
-			setError(errMsg);
+			if (isCurrent()) updateState({ error: errMsg });
 		}
-	}, [backend, isTauriEnv, isRunning]);
+	}, [backend, isTauriEnv, requestIsCurrent, updateState]);
 
 	const retry = useCallback(async () => {
 		if (!isRunning) {
 			await start();
 			return;
 		}
-		setError(null);
+		requestIsCurrent(true);
+		updateState({ error: null });
 		await refreshModels();
 		await refreshAuthStatus();
-	}, [isRunning, refreshAuthStatus, refreshModels, start]);
+	}, [
+		isRunning,
+		refreshAuthStatus,
+		refreshModels,
+		requestIsCurrent,
+		start,
+		updateState,
+	]);
 
 	const diagnostic = useMemo(() => {
 		if (error) return classifyAgentBackendError(backend, error);
@@ -245,20 +340,35 @@ export function useCopilotSDK(
 	// Check initial running state
 	useEffect(() => {
 		if (!isTauriEnv) return;
+		const isCurrent = requestIsCurrent();
 
 		const checkRunning = async () => {
 			try {
 				const { invoke } = await import("@tauri-apps/api/core");
+				if (!isCurrent()) return;
+				const before = copilotBackendConnectionCoordinator.snapshot(backend);
+				if (before.isConnecting) return;
 				const running = await withTimeout(
 					invoke<boolean>("flowpilot_agent_backend_is_running", { backend }),
 					5_000,
 					`Checking ${backend}`,
 				);
+				if (!isCurrent()) return;
+				const current = copilotBackendConnectionCoordinator.snapshot(backend);
+				// A startup/stop completed while the native probe was pending.
+				if (
+					current.isConnecting ||
+					current.isRunning !== before.isRunning ||
+					current.error !== before.error
+				)
+					return;
 				copilotBackendConnectionCoordinator.reconcile(backend, running);
-				if (!running) {
-					setModels(staticModelsForBackend(backend));
-					setHasLoadedModelCatalog(false);
-					setAuthStatus(null);
+				if (!running && backend === "github-copilot") {
+					updateState({
+						models: staticModelsForBackend(backend),
+						hasLoadedModelCatalog: false,
+						authStatus: null,
+					});
 				}
 			} catch {
 				// Ignore errors during initial check
@@ -266,15 +376,14 @@ export function useCopilotSDK(
 		};
 
 		checkRunning();
-	}, [backend, isTauriEnv]);
+	}, [backend, isTauriEnv, requestIsCurrent, updateState]);
 
 	// Auto-fetch models and auth when running
 	useEffect(() => {
-		if (backend !== "github-copilot") {
+		if (backend !== "github-copilot" || isRunning) {
 			refreshModels();
 		}
 		if (isRunning) {
-			refreshModels();
 			refreshAuthStatus();
 		}
 	}, [backend, isRunning, refreshModels, refreshAuthStatus]);

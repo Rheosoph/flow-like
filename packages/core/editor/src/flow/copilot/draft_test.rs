@@ -349,6 +349,17 @@ mod tests {
                 .unwrap()
                 .contains(&json!("expected_output"))
         );
+        for field in ["payload", "expected_output"] {
+            let property = &schema["properties"][field];
+            let types = property["type"].as_array().unwrap();
+            let description = property["description"].as_str().unwrap();
+            for json_type in ["object", "array", "string", "number", "boolean", "null"] {
+                assert!(types.contains(&json!(json_type)), "{field}: {schema}");
+                assert!(description.contains(json_type), "{field}: {description}");
+            }
+            let nested = property["items"]["items"]["type"].as_array().unwrap();
+            assert!(nested.contains(&json!("array")), "{field}: {schema}");
+        }
     }
 
     #[tokio::test]

@@ -539,121 +539,127 @@ const FlowRunsComponent = ({
 			)}
 			<div className="flex flex-col gap-2 max-h-full overflow-y-auto">
 				{currentLogs?.map((run) => (
-					<button
+					<div
 						key={run.run_id}
 						className={`flex flex-row gap-2 items-center justify-between border p-2 rounded-md ${currentMetadata?.run_id === run.run_id ? "bg-muted/50" : "hover:bg-muted/50"}`}
-						onClick={() => {
-							void handleRunSelection(run);
-						}}
 					>
-						<div className="flex flex-col gap-2 items-start justify-center">
-							<div className="flex flex-row gap-2 items-center">
-								{run.is_remote ? (
-									<span title={t("remoteExecution", "Remote execution")}>
-										<CloudIcon className="w-3 h-3 text-blue-500" />
-									</span>
-								) : (
-									<span title={t("localExecution", "Local execution")}>
-										<HardDriveIcon className="w-3 h-3 text-muted-foreground" />
-									</span>
-								)}
-								<small className="leading-none">
-									{nodes[run.node_id]?.friendly_name ??
-										t("deletedEvent", "Deleted Event")}
-								</small>
-								<small className="text-muted-foreground">
-									{isCurrentBoardVersion(run.version, version)
-										? "Latest"
-										: `${run.version}`}
+						<button
+							type="button"
+							className="flex flex-1 min-w-0 flex-row gap-2 items-center justify-between"
+							onClick={() => {
+								void handleRunSelection(run);
+							}}
+						>
+							<div className="flex flex-col gap-2 items-start justify-center">
+								<div className="flex flex-row gap-2 items-center">
+									{run.is_remote ? (
+										<span title={t("remoteExecution", "Remote execution")}>
+											<CloudIcon className="w-3 h-3 text-blue-500" />
+										</span>
+									) : (
+										<span title={t("localExecution", "Local execution")}>
+											<HardDriveIcon className="w-3 h-3 text-muted-foreground" />
+										</span>
+									)}
+									<small className="leading-none">
+										{nodes[run.node_id]?.friendly_name ??
+											t("deletedEvent", "Deleted Event")}
+									</small>
+									<small className="text-muted-foreground">
+										{isCurrentBoardVersion(run.version, version)
+											? "Latest"
+											: `${run.version}`}
+									</small>
+								</div>
+
+								<small className="text-muted-foreground leading-none">
+									{formatRelativeTime(
+										{
+											nanos_since_epoch: (run.start % 1_000_000) * 1000,
+											secs_since_epoch: Math.floor(run.start / 1_000_000),
+										},
+										"narrow",
+									)}
 								</small>
 							</div>
-
-							<small className="text-muted-foreground leading-none">
-								{formatRelativeTime(
-									{
-										nanos_since_epoch: (run.start % 1_000_000) * 1000,
-										secs_since_epoch: Math.floor(run.start / 1_000_000),
-									},
-									"narrow",
+							<div className="flex flex-row items-center gap-2">
+								{selectedRunId === run.run_id && (
+									<Loader2Icon className="w-3 h-3 animate-spin text-muted-foreground" />
 								)}
-							</small>
-						</div>
-						<div className="flex flex-row items-center gap-2">
-							{selectedRunId === run.run_id && (
-								<Loader2Icon className="w-3 h-3 animate-spin text-muted-foreground" />
-							)}
-							<div className="flex flex-row gap-2 items-center">
-								<small className="text-muted-foreground">
-									{formatDuration(Math.abs(run.end - run.start))}
-								</small>
+								<div className="flex flex-row gap-2 items-center">
+									<small className="text-muted-foreground">
+										{formatDuration(Math.abs(run.end - run.start))}
+									</small>
 
-								<div>
-									{logLevelFromNumber(run.log_level) === ILogLevel.Debug && (
-										<CheckCircle2Icon className="w-3 h-3 text-green-500" />
-									)}
-									{logLevelFromNumber(run.log_level) === ILogLevel.Info && (
-										<CheckCircle2Icon className="w-3 h-3 text-green-500" />
-									)}
-									{logLevelFromNumber(run.log_level) === ILogLevel.Warn && (
-										<TriangleAlertIcon className="w-3 h-3 text-yellow-500" />
-									)}
-									{logLevelFromNumber(run.log_level) === ILogLevel.Error && (
-										<CircleXIcon className="w-3 h-3 text-red-500" />
-									)}
-									{logLevelFromNumber(run.log_level) === ILogLevel.Fatal && (
-										<BanIcon className="w-3 h-3 text-red-800" />
-									)}
+									<div>
+										{logLevelFromNumber(run.log_level) === ILogLevel.Debug && (
+											<CheckCircle2Icon className="w-3 h-3 text-green-500" />
+										)}
+										{logLevelFromNumber(run.log_level) === ILogLevel.Info && (
+											<CheckCircle2Icon className="w-3 h-3 text-green-500" />
+										)}
+										{logLevelFromNumber(run.log_level) === ILogLevel.Warn && (
+											<TriangleAlertIcon className="w-3 h-3 text-yellow-500" />
+										)}
+										{logLevelFromNumber(run.log_level) === ILogLevel.Error && (
+											<CircleXIcon className="w-3 h-3 text-red-500" />
+										)}
+										{logLevelFromNumber(run.log_level) === ILogLevel.Fatal && (
+											<BanIcon className="w-3 h-3 text-red-800" />
+										)}
+									</div>
 								</div>
 							</div>
-
-							<DropdownMenu>
-								<DropdownMenuTrigger asChild>
-									<Button
-										size={"icon"}
-										className="px-0 mx-0 w-4"
-										variant={"ghost"}
-									>
-										<EllipsisVerticalIcon className="w-4 h-4" />
-									</Button>
-								</DropdownMenuTrigger>
-								<DropdownMenuContent>
-									<DropdownMenuLabel>
-										{t("logActions", "Log Actions")}
-									</DropdownMenuLabel>
-									<DropdownMenuSeparator />
+						</button>
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<Button
+									type="button"
+									aria-label={t("logActions", "Log Actions")}
+									size={"icon"}
+									className="px-0 mx-0 w-4 shrink-0"
+									variant={"ghost"}
+								>
+									<EllipsisVerticalIcon className="w-4 h-4" />
+								</Button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent>
+								<DropdownMenuLabel>
+									{t("logActions", "Log Actions")}
+								</DropdownMenuLabel>
+								<DropdownMenuSeparator />
+								<DropdownMenuItem
+									onClick={() => {
+										onFocusNode(run.node_id);
+									}}
+									className="flex flex-row gap-2 items-center"
+								>
+									<CornerRightUpIcon className="w-4 h-4" />
+									{t("goToEvent", "Go to Event")}
+								</DropdownMenuItem>
+								<DropdownMenuItem
+									onClick={() => {
+										void handleReRun(run);
+									}}
+									className="flex flex-row gap-2 items-center"
+								>
+									<RefreshCcwIcon className="w-4 h-4" />
+									{t("rerun", "Re-Run")}
+								</DropdownMenuItem>
+								{promoteSupported && run.event_id && (
 									<DropdownMenuItem
 										onClick={() => {
-											onFocusNode(run.node_id);
+											void handleAddToRegressionSet(run);
 										}}
 										className="flex flex-row gap-2 items-center"
 									>
-										<CornerRightUpIcon className="w-4 h-4" />
-										{t("goToEvent", "Go to Event")}
+										<FlaskConicalIcon className="w-4 h-4" />
+										{t("addToRegressionSet", "Add to regression set")}
 									</DropdownMenuItem>
-									<DropdownMenuItem
-										onClick={() => {
-											void handleReRun(run);
-										}}
-										className="flex flex-row gap-2 items-center"
-									>
-										<RefreshCcwIcon className="w-4 h-4" />
-										{t("rerun", "Re-Run")}
-									</DropdownMenuItem>
-									{promoteSupported && run.event_id && (
-										<DropdownMenuItem
-											onClick={() => {
-												void handleAddToRegressionSet(run);
-											}}
-											className="flex flex-row gap-2 items-center"
-										>
-											<FlaskConicalIcon className="w-4 h-4" />
-											{t("addToRegressionSet", "Add to regression set")}
-										</DropdownMenuItem>
-									)}
-								</DropdownMenuContent>
-							</DropdownMenu>
-						</div>
-					</button>
+								)}
+							</DropdownMenuContent>
+						</DropdownMenu>
+					</div>
 				))}
 			</div>
 		</div>

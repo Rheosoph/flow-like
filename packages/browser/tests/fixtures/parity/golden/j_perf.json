@@ -1,0 +1,23 @@
+{
+  "elements_3000": {
+    "get_text_atom_ms": 52,
+    "innerText_ms": 1,
+    "is_displayed_atom_ms": 2,
+    "equal": false,
+    "len": 12889
+  },
+  "elements_15000": {
+    "get_text_atom_ms": 240,
+    "innerText_ms": 5,
+    "is_displayed_atom_ms": 1,
+    "equal": false,
+    "len": 68889
+  },
+  "elements_60000": {
+    "get_text_atom_ms": 884,
+    "innerText_ms": 82,
+    "is_displayed_atom_ms": 1,
+    "equal": false,
+    "len": 288889
+  }
+}

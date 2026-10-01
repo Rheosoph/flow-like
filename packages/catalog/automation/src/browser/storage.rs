@@ -1,14 +1,18 @@
+#[cfg(feature = "execute")]
+use super::driver::PageContext;
 use crate::types::handles::AutomationSession;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
+use flow_like_browser::script::{ScriptArg, ScriptValue};
 #[cfg(any(feature = "execute", test))]
 use flow_like_types::Value;
 use flow_like_types::{async_trait, json::json};
 
-/// Keys and values travel as WebDriver script arguments, never as script text.
+/// Keys and values travel as script arguments, never as script text.
 #[cfg(any(feature = "execute", test))]
 const STORAGE_PRELUDE: &str =
     "const storage = arguments[0] === 'session' ? window.sessionStorage : window.localStorage;";
@@ -75,16 +79,33 @@ fn storage_entries(
 }
 
 #[cfg(feature = "execute")]
+fn script_arguments(area: StorageArea, key: Option<&str>, value: Option<&str>) -> Vec<ScriptArg> {
+    storage_arguments(area, key, value)
+        .into_iter()
+        .map(ScriptArg::Json)
+        .collect()
+}
+
+/// Reads have no side effects, so they run as probes that a navigation retries, as chromedriver
+/// re-ran every script; writes run as user scripts, which are never retried.
+#[cfg(feature = "execute")]
+async fn read_storage(
+    page: &PageContext,
+    body: &str,
+    area: StorageArea,
+    key: Option<&str>,
+) -> flow_like_types::Result<ScriptValue> {
+    page.probe(&storage_script(body), script_arguments(area, key, None))
+        .await
+}
+
+#[cfg(feature = "execute")]
 async fn get_item(
-    driver: &thirtyfour::WebDriver,
+    page: &PageContext,
     area: StorageArea,
     key: &str,
 ) -> flow_like_types::Result<Option<String>> {
-    let result = driver
-        .execute(
-            storage_script(GET_ITEM_SCRIPT),
-            storage_arguments(area, Some(key), None),
-        )
+    let result = read_storage(page, GET_ITEM_SCRIPT, area, Some(key))
         .await
         .map_err(|e| flow_like_types::anyhow!("Failed to read {} key '{key}': {e}", area.name()))?;
     Ok(result.json().as_str().map(str::to_owned))
@@ -92,16 +113,13 @@ async fn get_item(
 
 #[cfg(feature = "execute")]
 async fn set_item(
-    driver: &thirtyfour::WebDriver,
+    page: &PageContext,
     area: StorageArea,
     key: &str,
     value: &str,
 ) -> flow_like_types::Result<()> {
-    driver
-        .execute(
-            storage_script(SET_ITEM_SCRIPT),
-            storage_arguments(area, Some(key), Some(value)),
-        )
+    let arguments = script_arguments(area, Some(key), Some(value));
+    page.execute(&storage_script(SET_ITEM_SCRIPT), arguments)
         .await
         .map_err(|e| {
             flow_like_types::anyhow!("Failed to write {} key '{key}': {e}", area.name())
@@ -227,8 +245,8 @@ impl NodeLogic for BrowserGetLocalStorageNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let key: String = context.evaluate_pin("key").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let value = get_item(&driver, StorageArea::Local, &key).await?;
+        let page = session.browser_page(context).await?;
+        let value = get_item(&page, StorageArea::Local, &key).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context
@@ -321,8 +339,8 @@ impl NodeLogic for BrowserSetLocalStorageNode {
         let key: String = context.evaluate_pin("key").await?;
         let value: String = context.evaluate_pin("value").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        set_item(&driver, StorageArea::Local, &key, &value).await?;
+        let page = session.browser_page(context).await?;
+        set_item(&page, StorageArea::Local, &key, &value).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -423,8 +441,8 @@ impl NodeLogic for BrowserGetSessionStorageNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let key: String = context.evaluate_pin("key").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let value = get_item(&driver, StorageArea::Session, &key).await?;
+        let page = session.browser_page(context).await?;
+        let value = get_item(&page, StorageArea::Session, &key).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context
@@ -517,8 +535,8 @@ impl NodeLogic for BrowserSetSessionStorageNode {
         let key: String = context.evaluate_pin("key").await?;
         let value: String = context.evaluate_pin("value").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        set_item(&driver, StorageArea::Session, &key, &value).await?;
+        let page = session.browser_page(context).await?;
+        set_item(&page, StorageArea::Session, &key, &value).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -615,7 +633,7 @@ impl NodeLogic for BrowserClearStorageNode {
         let clear_local: bool = context.evaluate_pin("clear_local").await?;
         let clear_session: bool = context.evaluate_pin("clear_session").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
         let mut script = String::new();
         if clear_local {
@@ -626,8 +644,7 @@ impl NodeLogic for BrowserClearStorageNode {
         }
 
         if !script.is_empty() {
-            driver
-                .execute(&script, vec![])
+            page.execute(&script, Vec::new())
                 .await
                 .map_err(|e| flow_like_types::anyhow!("Failed to clear storage: {}", e))?;
         }
@@ -738,7 +755,7 @@ impl NodeLogic for BrowserGetAllStorageNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let storage_type: String = context.evaluate_pin("storage_type").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
         let area = if storage_type == "session" {
             StorageArea::Session
@@ -746,11 +763,7 @@ impl NodeLogic for BrowserGetAllStorageNode {
             StorageArea::Local
         };
 
-        let result = driver
-            .execute(
-                storage_script(ALL_ITEMS_SCRIPT),
-                storage_arguments(area, None, None),
-            )
+        let result = read_storage(&page, ALL_ITEMS_SCRIPT, area, None)
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to list {}: {e}", area.name()))?;
         let data = storage_entries(result.json())?;

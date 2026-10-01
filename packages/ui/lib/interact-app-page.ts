@@ -8,6 +8,7 @@ import type {
 	LivePageRunRecord,
 } from "../components/a2ui/live-page-registry";
 import {
+	coerceLivePageValue,
 	findLivePage,
 	isLivePageComponentEffectivelyHidden,
 	isLivePageValueBearingComponent,
@@ -555,14 +556,15 @@ export async function interactWithAppPage(
 					});
 					continue;
 				}
+				const value = coerceLivePageValue(component, action.value);
 				assertComponentCanInteract(
 					handle,
 					component,
 					componentId,
 					"set_value",
-					action.value,
+					value,
 				);
-				handle.setElementValue(componentId, action.value);
+				handle.setElementValue(componentId, value);
 				appliedActions.push({
 					action: "set_value",
 					component_id: componentId,

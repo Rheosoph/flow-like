@@ -1,4 +1,6 @@
 #[cfg(feature = "execute")]
+use super::driver::PageContext;
+#[cfg(feature = "execute")]
 use crate::types::handles::AutomationSession;
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -129,55 +131,19 @@ impl StorageCookie {
     }
 }
 
+/// All cookies of the browser (every domain, including HttpOnly).
 #[cfg(feature = "execute")]
-fn uses_cdp(session: &AutomationSession) -> bool {
-    matches!(
-        session.browser_type,
-        Some(crate::types::handles::BrowserType::Chrome | crate::types::handles::BrowserType::Edge)
-    )
-}
-
-/// All cookies of the browser (every domain, including HttpOnly) on Chrome and Edge; only
-/// the current document's cookies on other browsers.
-#[cfg(feature = "execute")]
-pub(crate) async fn read_cookies(
-    session: &AutomationSession,
-    driver: &thirtyfour::WebDriver,
-) -> flow_like_types::Result<Vec<StorageCookie>> {
-    use super::cdp::cdp;
-    if uses_cdp(session) {
-        let response = match cdp(driver, "Network.getAllCookies", json!({})).await {
-            Ok(response) => response,
-            Err(_) => cdp(driver, "Storage.getCookies", json!({})).await?,
-        };
-        return Ok(response["cookies"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(StorageCookie::from_cdp)
-            .collect());
-    }
-    driver.enter_default_frame().await?;
-    let cookies = driver
-        .get_all_cookies()
-        .await
-        .map_err(|error| flow_like_types::anyhow!("Failed to read cookies: {error}"))?;
-    Ok(cookies
+pub(crate) async fn read_cookies(ctx: &PageContext) -> flow_like_types::Result<Vec<StorageCookie>> {
+    use super::cdp::send;
+    let response = match send(ctx, "Network.getAllCookies", json!({})).await {
+        Ok(response) => response,
+        Err(_) => send(ctx, "Storage.getCookies", json!({})).await?,
+    };
+    Ok(response["cookies"]
+        .as_array()
         .into_iter()
-        .map(|cookie| StorageCookie {
-            name: cookie.name,
-            value: cookie.value,
-            domain: cookie.domain.unwrap_or_default(),
-            path: cookie.path.unwrap_or_else(root_path),
-            expires: cookie.expiry.map_or(-1.0, |expiry| expiry as f64),
-            http_only: false,
-            secure: cookie.secure.unwrap_or(false),
-            same_site: same_site(cookie.same_site.map(|same_site| match same_site {
-                thirtyfour::cookie::SameSite::Strict => "Strict",
-                thirtyfour::cookie::SameSite::Lax => "Lax",
-                thirtyfour::cookie::SameSite::None => "None",
-            })),
-        })
+        .flatten()
+        .filter_map(StorageCookie::from_cdp)
         .collect())
 }
 
@@ -196,17 +162,15 @@ fn unix_now() -> f64 {
         .unwrap_or_default()
 }
 
-/// Sets cookies for any domain on Chrome and Edge (keeping HttpOnly, Secure, SameSite and
-/// expiry); other browsers only accept cookies for the current document's domain. Expired
-/// cookies count as failed.
+/// Sets cookies for any domain (keeping HttpOnly, Secure, SameSite and expiry); cookies without
+/// a domain are bound to the current page. Expired cookies count as failed.
 #[cfg(feature = "execute")]
 pub(crate) async fn write_cookies(
     context: &mut ExecutionContext,
-    session: &AutomationSession,
-    driver: &thirtyfour::WebDriver,
+    ctx: &PageContext,
     cookies: &[StorageCookie],
 ) -> flow_like_types::Result<CookieWriteReport> {
-    use super::cdp::cdp;
+    use super::cdp::send;
     use flow_like::flow::execution::LogLevel;
     let now = unix_now();
     let (live, expired): (Vec<&StorageCookie>, Vec<&StorageCookie>) =
@@ -224,56 +188,23 @@ pub(crate) async fn write_cookies(
     if live.is_empty() {
         return Ok(report);
     }
-    driver.enter_default_frame().await?;
-    if uses_cdp(session) {
-        let page_url = driver.current_url().await?.to_string();
-        let params: Vec<_> = live.iter().map(|cookie| cookie.to_cdp(&page_url)).collect();
-        if cdp(driver, "Network.setCookies", json!({ "cookies": params }))
-            .await
-            .is_ok()
-        {
-            report.applied += params.len();
-            return Ok(report);
-        }
-        for (cookie, param) in live.iter().zip(params) {
-            match cdp(driver, "Network.setCookie", param).await {
-                Ok(result) if result["success"].as_bool() != Some(false) => report.applied += 1,
-                Ok(_) | Err(_) => {
-                    report.failed += 1;
-                    context.log_message(
-                        &format!(
-                            "Browser rejected cookie '{}' for domain '{}'",
-                            cookie.name, cookie.domain
-                        ),
-                        LogLevel::Warn,
-                    );
-                }
-            }
-        }
+    let page_url = ctx.page.url().await?;
+    let params: Vec<_> = live.iter().map(|cookie| cookie.to_cdp(&page_url)).collect();
+    if send(ctx, "Network.setCookies", json!({ "cookies": params }))
+        .await
+        .is_ok()
+    {
+        report.applied += params.len();
         return Ok(report);
     }
-    for cookie in live {
-        let mut webdriver_cookie = thirtyfour::cookie::Cookie::new(&cookie.name, &cookie.value);
-        if !cookie.domain.is_empty() {
-            webdriver_cookie.set_domain(cookie.domain.clone());
-        }
-        webdriver_cookie.set_path(cookie.path.clone());
-        webdriver_cookie.set_secure(cookie.secure);
-        webdriver_cookie.set_same_site(match cookie.same_site.as_str() {
-            "Strict" => thirtyfour::cookie::SameSite::Strict,
-            "None" => thirtyfour::cookie::SameSite::None,
-            _ => thirtyfour::cookie::SameSite::Lax,
-        });
-        if cookie.expires > 0.0 {
-            webdriver_cookie.set_expiry(cookie.expires as i64);
-        }
-        match driver.add_cookie(webdriver_cookie).await {
-            Ok(()) => report.applied += 1,
-            Err(error) => {
+    for (cookie, param) in live.iter().zip(params) {
+        match send(ctx, "Network.setCookie", param).await {
+            Ok(result) if result["success"].as_bool() != Some(false) => report.applied += 1,
+            Ok(_) | Err(_) => {
                 report.failed += 1;
                 context.log_message(
                     &format!(
-                        "Browser rejected cookie '{}' for domain '{}': {error}",
+                        "Browser rejected cookie '{}' for domain '{}'",
                         cookie.name, cookie.domain
                     ),
                     LogLevel::Warn,
@@ -284,22 +215,11 @@ pub(crate) async fn write_cookies(
     Ok(report)
 }
 
-/// Deletes every cookie of the browser on Chrome and Edge; the current document's cookies
-/// elsewhere.
+/// Deletes every cookie of the browser.
 #[cfg(feature = "execute")]
-pub(crate) async fn clear_cookies(
-    session: &AutomationSession,
-    driver: &thirtyfour::WebDriver,
-) -> flow_like_types::Result<()> {
-    if uses_cdp(session) {
-        super::cdp::cdp(driver, "Network.clearBrowserCookies", json!({})).await?;
-        return Ok(());
-    }
-    driver.enter_default_frame().await?;
-    driver
-        .delete_all_cookies()
-        .await
-        .map_err(|error| flow_like_types::anyhow!("Failed to clear cookies: {error}"))
+pub(crate) async fn clear_cookies(ctx: &PageContext) -> flow_like_types::Result<()> {
+    super::cdp::send(ctx, "Network.clearBrowserCookies", json!({})).await?;
+    Ok(())
 }
 
 #[cfg(feature = "execute")]
@@ -325,6 +245,24 @@ for (const item of local) window.localStorage.setItem(item.name, item.value);
 for (const item of session) window.sessionStorage.setItem(item.name, item.value);
 return true;
 "#;
+
+/// Runs a storage script in the top-level document, so it sees the origin of the page even when
+/// the session is inside a frame.
+#[cfg(feature = "execute")]
+async fn run_top_level<T: flow_like_types::json::DeserializeOwned>(
+    ctx: &PageContext,
+    script: &str,
+    args: Vec<flow_like_types::Value>,
+) -> flow_like_types::Result<T> {
+    use flow_like_browser::script::{ScriptArg, ScriptOptions};
+    let args = args.into_iter().map(ScriptArg::Json).collect();
+    let result = ctx
+        .page
+        .main_frame()
+        .execute_script(script, args, ScriptOptions::USER)
+        .await?;
+    Ok(flow_like_types::json::from_value(result.into_json())?)
+}
 
 #[cfg(feature = "execute")]
 async fn read_storage_file(
@@ -364,7 +302,7 @@ impl NodeLogic for BrowserSaveStorageStateNode {
         let mut node = super::manage::base_node(
             "browser_save_storage_state",
             "Save Storage State",
-            "Saves all cookies (every domain, including HttpOnly, on Chrome and Edge) and the current origin's localStorage to a Playwright-compatible storageState JSON file. The file holds login sessions; store it like a password.",
+            "Saves all cookies (every domain, including HttpOnly) and the current origin's localStorage to a Playwright-compatible storageState JSON file. The file holds login sessions; store it like a password.",
         );
         node.category = "Automation/Browser/Auth".to_string();
         node.set_flowscript_name("browser", "saveStorageState");
@@ -413,15 +351,15 @@ impl NodeLogic for BrowserSaveStorageStateNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let file_path: FlowPath = context.evaluate_pin("file_path").await?;
         let include_session: bool = context.evaluate_pin("include_session_storage").await?;
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let cookies = read_cookies(&session, &driver).await?;
-        driver.enter_default_frame().await?;
-        let storage: OriginStorage = driver
-            .execute(READ_STORAGE, vec![json!(include_session)])
-            .await
-            .map_err(|error| flow_like_types::anyhow!("Failed to read page storage: {error}"))?
-            .convert()?;
-        drop(driver);
+        let page = session.browser_page(context).await?;
+        let cookies = read_cookies(&page).await?;
+        let storage: OriginStorage =
+            run_top_level(&page, READ_STORAGE, vec![json!(include_session)])
+                .await
+                .map_err(|error| {
+                    flow_like_types::anyhow!("Failed to read page storage: {error}")
+                })?;
+        drop(page);
         let has_storage = !storage.local_storage.is_empty() || !storage.session_storage.is_empty();
         let state = StorageState {
             cookies,
@@ -476,7 +414,7 @@ impl NodeLogic for BrowserLoadStorageStateNode {
         let mut node = super::manage::base_node(
             "browser_load_storage_state",
             "Load Storage State",
-            "Restores cookies and web storage from a Playwright-compatible storageState JSON file. Cookies for every domain are restored on Chrome and Edge (only the current domain elsewhere). Storage is applied only to the origin the page is on, without navigating; other origins are reported as skipped.",
+            "Restores cookies and web storage from a Playwright-compatible storageState JSON file. Cookies for every domain are restored. Storage is applied only to the origin the page is on, without navigating; other origins are reported as skipped.",
         );
         node.category = "Automation/Browser/Auth".to_string();
         node.set_flowscript_name("browser", "loadStorageState");
@@ -534,13 +472,10 @@ impl NodeLogic for BrowserLoadStorageStateNode {
         let state: StorageState = flow_like_types::json::from_slice(&data).map_err(|error| {
             flow_like_types::anyhow!("Storage state file is not valid: {error}")
         })?;
-        let driver = session.get_browser_driver_and_switch(context).await?;
-        let report = write_cookies(context, &session, &driver, &state.cookies).await?;
-        driver.enter_default_frame().await?;
-        let current_origin: String = driver
-            .execute("return location.origin;", vec![])
-            .await?
-            .convert()?;
+        let page = session.browser_page(context).await?;
+        let report = write_cookies(context, &page, &state.cookies).await?;
+        let current_origin: String =
+            run_top_level(&page, "return location.origin;", vec![]).await?;
         let mut origins_applied = 0;
         let mut skipped_origins = Vec::new();
         for origin in &state.origins {
@@ -548,21 +483,18 @@ impl NodeLogic for BrowserLoadStorageStateNode {
                 skipped_origins.push(origin.origin.clone());
                 continue;
             }
-            driver
-                .execute(
-                    WRITE_STORAGE,
-                    vec![json!(origin.local_storage), json!(origin.session_storage)],
-                )
-                .await
-                .map_err(|error| {
-                    flow_like_types::anyhow!(
-                        "Failed to restore storage for {}: {error}",
-                        origin.origin
-                    )
-                })?;
+            run_top_level::<flow_like_types::Value>(
+                &page,
+                WRITE_STORAGE,
+                vec![json!(origin.local_storage), json!(origin.session_storage)],
+            )
+            .await
+            .map_err(|error| {
+                flow_like_types::anyhow!("Failed to restore storage for {}: {error}", origin.origin)
+            })?;
             origins_applied += 1;
         }
-        drop(driver);
+        drop(page);
         context
             .set_pin_value("cookies_applied", json!(report.applied))
             .await?;

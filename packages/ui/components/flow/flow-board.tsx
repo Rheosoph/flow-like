@@ -322,6 +322,7 @@ import {
 	useRuntimeVariables,
 } from "../../state/runtime-variables-context";
 import { AutoLayoutDialog, type LayoutStyle } from "./auto-layout-dialog";
+import { BoardEditRecovery } from "./board-edit-recovery";
 import { GroupSuggestionsOverlay } from "./group-suggestions";
 import { CallFunctionNode } from "./call-function-node";
 import { FlowChat } from "./flow-chat";
@@ -5669,21 +5670,32 @@ export function FlowBoard({
 					) : undefined
 				}
 				breadcrumb={
-					<BoardBreadcrumb
-						fileLabel={
-							currentModuleId
-								? `${board.data?.layers?.[currentModuleId]?.name ?? ""}${MODULE_FILE_EXTENSION}`
-								: MAIN_FILE_LABEL
-						}
-						layerPath={layerPath}
-						fileRootPath={
-							resolveLayerChain(board.data?.layers ?? {}, currentModuleId).join(
-								"/",
-							) || undefined
-						}
-						layerNames={layerNames}
-						onJumpToLayer={jumpToLayer}
-					/>
+					<>
+						<BoardBreadcrumb
+							fileLabel={
+								currentModuleId
+									? `${board.data?.layers?.[currentModuleId]?.name ?? ""}${MODULE_FILE_EXTENSION}`
+									: MAIN_FILE_LABEL
+							}
+							layerPath={layerPath}
+							fileRootPath={
+								resolveLayerChain(
+									board.data?.layers ?? {},
+									currentModuleId,
+								).join("/") || undefined
+							}
+							layerNames={layerNames}
+							onJumpToLayer={jumpToLayer}
+						/>
+						{typeof version === "undefined" && (
+							<BoardEditRecovery
+								key={`${appId}:${boardId}`}
+								appId={appId}
+								boardId={boardId}
+								onApplyFlowIrCommit={handleApplyFlowIrCommit}
+							/>
+						)}
+					</>
 				}
 				script={isMobile ? undefined : scriptPane}
 				panel={

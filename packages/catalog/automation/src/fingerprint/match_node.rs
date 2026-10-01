@@ -137,12 +137,12 @@ impl NodeLogic for MatchFingerprintNode {
         context.deactivate_exec_pin("exec_found").await?;
         context.deactivate_exec_pin("exec_not_found").await?;
 
-        let page: AutomationSession = context.evaluate_pin("session").await?;
+        let session: AutomationSession = context.evaluate_pin("session").await?;
         let fingerprint: ElementFingerprint = context.evaluate_pin("fingerprint").await?;
         let strategy_str: String = context.evaluate_pin("strategy").await?;
         let timeout_ms: i64 = context.evaluate_pin("timeout_ms").await?;
 
-        let driver = page.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
         let strategy = match strategy_str.as_str() {
             "Dom" => MatchStrategy::Dom,
@@ -175,7 +175,7 @@ impl NodeLogic for MatchFingerprintNode {
         loop {
             for selector in &selectors_to_try {
                 context.check_cancelled()?;
-                if crate::browser::selector::find(&driver, selector)
+                if crate::browser::selector::find_element(&page, selector)
                     .await
                     .is_ok()
                 {

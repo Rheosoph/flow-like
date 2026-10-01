@@ -1845,6 +1845,7 @@ eventsGeneric probe(text: string) {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: source.into(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
             &binding,

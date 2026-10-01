@@ -1310,5 +1310,15 @@
 	"exploreLeaveTitle": "",
 	"explorePreviewUnavailable": "",
 	"exploreRuleMatches": "",
-	"exploreSummarySpotlightVisible": ""
+	"exploreSummarySpotlightVisible": "",
+	"agentBackendOperationsDescription": "Anonimowe zdarzenia diagnostyczne CLI. Wyniki i czasy obejmują uruchamianie, sprawdzanie uwierzytelnienia, wykrywanie modeli, uruchomienia i zamykanie.",
+	"agentErrorReports_one": "{{count}} raport o błędzie",
+	"agentErrorReports_other": "{{count}} raportu o błędach",
+	"agentOperation_one": "operacja",
+	"agentOperation_other": "operacji",
+	"agentOperationP95": "95. percentyl czasu trwania operacji",
+	"agentErrorReports_few": "{{count}} raporty o błędach",
+	"agentErrorReports_many": "{{count}} raportów o błędach",
+	"agentOperation_few": "operacje",
+	"agentOperation_many": "operacji"
 }

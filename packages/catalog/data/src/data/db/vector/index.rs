@@ -48,7 +48,7 @@ impl NodeLogic for IndexLocalDatabaseNode {
         node.add_input_pin(
             "type",
             "Type",
-            "Index type to build. Vector indexes use cosine distance; VECTOR and vector AUTO retain IVF-PQ.",
+            "Index type to build. Vector indexes use cosine distance. VECTOR and vector AUTO build IVF-PQ, or exact IVF-FLAT while the table has fewer than 256 rows, too few to train PQ; explicit PQ types fail on such tables.",
             VariableType::String,
         )
             .set_options(

@@ -150,13 +150,20 @@ function defaultSelection(question: AskUserQuestion): number[] {
 	return [index >= 0 ? index : 0];
 }
 
+function defaultText(question: AskUserQuestion): string {
+	if (question.mode !== "freeform") return "";
+	const value = question.defaultValue;
+	return typeof value === "string" ||
+		typeof value === "number" ||
+		typeof value === "boolean"
+		? String(value)
+		: "";
+}
+
 /** Preselect every recommended default so accepting the card unchanged is a complete answer. */
 export function initialAskUserDrafts(form: AskUserForm): AskUserDraft[] {
 	return form.questions.map((question) => ({
-		text:
-			question.mode === "freeform" && typeof question.defaultValue === "string"
-				? question.defaultValue
-				: "",
+		text: defaultText(question),
 		selected: defaultSelection(question),
 	}));
 }

@@ -1,13 +1,17 @@
 //! Browser-protocol listeners stay outside the page's JavaScript environment.
 #[cfg(feature = "execute")]
+use super::driver::PageContext;
+#[cfg(feature = "execute")]
 use crate::types::handles::AutomationSession;
 #[cfg(feature = "execute")]
 use flow_like::flow::execution::context::ExecutionContext;
 #[cfg(feature = "execute")]
-use flow_like_types::Cacheable;
-use flow_like_types::{Value, json::json};
+use flow_like_browser::{Page, connection::MethodMatch, fetch::Observation, types::SessionId};
 #[cfg(feature = "execute")]
-use futures::{SinkExt, StreamExt};
+use flow_like_types::Cacheable;
+#[cfg(feature = "execute")]
+use flow_like_types::tokio_util::sync::CancellationToken;
+use flow_like_types::{Value, json::json};
 #[cfg(feature = "execute")]
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -16,8 +20,6 @@ use std::{
 
 #[cfg(feature = "execute")]
 const MAX_BUFFERED_EVENTS: usize = 10_000;
-#[cfg(feature = "execute")]
-const DEBUGGER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[cfg(feature = "execute")]
 pub(crate) struct NetworkState {
@@ -54,6 +56,79 @@ impl NetworkState {
             self.console_logs.pop_front();
         }
         self.console_logs.push_back(message);
+    }
+
+    /// Applies one console or `Network.*` event; other events are ignored.
+    fn record(&mut self, method: &str, params: &Value) {
+        if let Some(message) = console_message(method, params) {
+            self.push_console(message);
+            return;
+        }
+        let request_id = params["requestId"].as_str().unwrap_or_default();
+        match method {
+            "Network.requestWillBeSent" => self.request_sent(request_id, params),
+            "Network.responseReceived" => self.response_received(request_id, &params["response"]),
+            "Network.loadingFinished" | "Network.loadingFailed" => {
+                self.loading_ended(request_id, params)
+            }
+            _ => {}
+        }
+    }
+
+    fn request_sent(&mut self, request_id: &str, params: &Value) {
+        self.last_activity = std::time::Instant::now();
+        self.pending.insert(request_id.to_string());
+        if let Some(timestamp) = params["timestamp"].as_f64() {
+            self.started.insert(request_id.to_owned(), timestamp);
+        }
+        let request = &params["request"];
+        let url = request["url"].as_str().unwrap_or_default();
+        if !self.url_pattern.is_empty() && !url.contains(&self.url_pattern) {
+            return;
+        }
+        if self.requests.len() >= MAX_BUFFERED_EVENTS {
+            self.requests.pop_front();
+            self.request_ids.pop_front();
+        }
+        self.requests.push_back(super::observe::NetworkRequest {
+            url: url.into(),
+            method: request["method"].as_str().unwrap_or_default().into(),
+            status: None,
+            status_text: None,
+            request_headers: request.get("headers").map(Value::to_string),
+            response_headers: None,
+            duration_ms: None,
+            size_bytes: None,
+            resource_type: params["type"].as_str().map(str::to_owned),
+        });
+        self.request_ids.push_back(request_id.to_owned());
+    }
+
+    fn response_received(&mut self, request_id: &str, response: &Value) {
+        if let Some(request) = self.recorded(request_id) {
+            request.status = response["status"].as_f64().map(|status| status as i32);
+            request.status_text = response["statusText"].as_str().map(str::to_owned);
+            request.response_headers = response.get("headers").map(Value::to_string);
+        }
+    }
+
+    fn loading_ended(&mut self, request_id: &str, params: &Value) {
+        self.last_activity = std::time::Instant::now();
+        self.pending.remove(request_id);
+        let started = self.started.remove(request_id);
+        if let Some(request) = self.recorded(request_id) {
+            request.size_bytes = params["encodedDataLength"]
+                .as_f64()
+                .map(|length| length as i64);
+            request.duration_ms = started
+                .zip(params["timestamp"].as_f64())
+                .map(|(start, end)| ((end - start).max(0.0) * 1000.0) as i64);
+        }
+    }
+
+    fn recorded(&mut self, request_id: &str) -> Option<&mut super::observe::NetworkRequest> {
+        let index = self.request_ids.iter().rposition(|id| id == request_id)?;
+        self.requests.get_mut(index)
     }
 }
 
@@ -142,61 +217,6 @@ fn console_level(level: &str) -> String {
     .to_string()
 }
 
-#[cfg(feature = "execute")]
-async fn send_confirmed<S>(
-    socket: &mut S,
-    id: u64,
-    method: &str,
-    params: Value,
-    queued_events: &mut VecDeque<Value>,
-) -> flow_like_types::Result<()>
-where
-    S: futures::Sink<
-            tokio_tungstenite::tungstenite::Message,
-            Error = tokio_tungstenite::tungstenite::Error,
-        > + futures::Stream<
-            Item = Result<
-                tokio_tungstenite::tungstenite::Message,
-                tokio_tungstenite::tungstenite::Error,
-            >,
-        > + Unpin,
-{
-    use tokio_tungstenite::tungstenite::Message;
-    socket
-        .send(Message::Text(
-            json!({"id":id,"method":method,"params":params})
-                .to_string()
-                .into(),
-        ))
-        .await?;
-    tokio::time::timeout(DEBUGGER_TIMEOUT, async {
-        while let Some(message) = socket.next().await {
-            if let Message::Text(text) = message? {
-                let value: Value = flow_like_types::json::from_str(&text)?;
-                if value["id"] == id {
-                    if let Some(error) = value.get("error") {
-                        return Err(flow_like_types::anyhow!(
-                            "Browser rejected {method}: {error}"
-                        ));
-                    }
-                    return Ok(());
-                }
-                queued_events.push_back(value);
-            }
-        }
-        Err(flow_like_types::anyhow!(
-            "Browser protocol connection closed while waiting for {method}"
-        ))
-    })
-    .await
-    .map_err(|_| {
-        flow_like_types::anyhow!(
-            "Browser did not confirm {method} within {} seconds",
-            DEBUGGER_TIMEOUT.as_secs()
-        )
-    })?
-}
-
 #[cfg(any(feature = "execute", test))]
 pub(crate) fn has_been_idle(
     pending: usize,
@@ -210,15 +230,19 @@ pub(crate) fn has_been_idle(
             .is_some_and(|elapsed| elapsed >= required)
 }
 
+/// `observed` is the DevTools session a CDP observer follows; the basic-auth entry has none.
 #[cfg(feature = "execute")]
 pub(crate) struct Listener {
     pub network: Arc<tokio::sync::Mutex<NetworkState>>,
-    abort: tokio::task::AbortHandle,
+    abort: Option<tokio::task::AbortHandle>,
+    observed: Option<SessionId>,
 }
 #[cfg(feature = "execute")]
 impl Drop for Listener {
     fn drop(&mut self) {
-        self.abort.abort();
+        if let Some(abort) = &self.abort {
+            abort.abort();
+        }
     }
 }
 #[cfg(feature = "execute")]
@@ -229,92 +253,6 @@ impl Cacheable for Listener {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
-}
-
-#[cfg(feature = "execute")]
-struct DebuggerEndpoint(String);
-#[cfg(feature = "execute")]
-impl Cacheable for DebuggerEndpoint {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-}
-
-#[cfg(feature = "execute")]
-#[derive(Clone)]
-struct DriverClient {
-    client: flow_like_types::reqwest::Client,
-    debugger_address: Arc<std::sync::Mutex<Option<String>>>,
-}
-
-#[cfg(feature = "execute")]
-#[flow_like_types::async_trait]
-impl thirtyfour::session::http::HttpClient for DriverClient {
-    async fn send(
-        &self,
-        request: http::Request<thirtyfour::session::http::Body<'_>>,
-    ) -> thirtyfour::error::WebDriverResult<http::Response<flow_like_types::Bytes>> {
-        let create_session =
-            request.method() == http::Method::POST && request.uri().path().ends_with("/session");
-        let response = thirtyfour::session::http::HttpClient::send(&self.client, request).await?;
-        if create_session && response.status().is_success() {
-            if let Ok(value) = flow_like_types::json::from_slice::<Value>(response.body()) {
-                let capabilities = &value["value"]["capabilities"];
-                let address = capabilities["goog:chromeOptions"]["debuggerAddress"]
-                    .as_str()
-                    .or_else(|| capabilities["ms:edgeOptions"]["debuggerAddress"].as_str());
-                if let Some(address) = address {
-                    *self
-                        .debugger_address
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner()) = Some(address.to_owned());
-                }
-            }
-        }
-        Ok(response)
-    }
-    async fn new(&self) -> Arc<dyn thirtyfour::session::http::HttpClient> {
-        Arc::new(self.clone())
-    }
-}
-
-#[cfg(feature = "execute")]
-pub(crate) async fn connect_webdriver(
-    url: &str,
-    mut capabilities: thirtyfour::Capabilities,
-) -> flow_like_types::Result<(thirtyfour::WebDriver, Option<String>)> {
-    capabilities.insert("unhandledPromptBehavior".into(), json!("ignore"));
-    let address = Arc::new(std::sync::Mutex::new(None));
-    let config = thirtyfour::common::config::WebDriverConfig::default();
-    let client = DriverClient {
-        client: flow_like_types::reqwest::Client::builder()
-            .timeout(config.reqwest_timeout)
-            .build()?,
-        debugger_address: address.clone(),
-    };
-    let driver =
-        thirtyfour::WebDriver::new_with_config_and_client(url, capabilities, config, client)
-            .await?;
-    let address = address
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .clone();
-    Ok((driver, address))
-}
-
-#[cfg(feature = "execute")]
-pub(crate) async fn remember_debugger_address(
-    context: &ExecutionContext,
-    session: &AutomationSession,
-    address: &str,
-) {
-    context.cache.write().await.insert(
-        format!("automation:debugger:{}", session.session_ref),
-        Arc::new(DebuggerEndpoint(address.to_owned())),
-    );
 }
 
 #[cfg(feature = "execute")]
@@ -350,241 +288,185 @@ pub(crate) async fn network_state(
 }
 
 #[cfg(feature = "execute")]
-pub(crate) async fn start_listener(
+const OBSERVER_ENABLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[cfg(feature = "execute")]
+const OBSERVED_PAGE_CHECK: std::time::Duration = std::time::Duration::from_millis(250);
+
+#[cfg(feature = "execute")]
+const OBSERVED_PAGE_GONE: &str =
+    "The observed browser tab was closed or replaced; start the console or network observer again";
+
+#[cfg(feature = "execute")]
+const OBSERVED_METHODS: [MethodMatch; 4] = [
+    MethodMatch::Prefix("Network."),
+    MethodMatch::Exact("Runtime.consoleAPICalled"),
+    MethodMatch::Exact("Runtime.exceptionThrown"),
+    MethodMatch::Exact("Log.entryAdded"),
+];
+
+/// Follows console and network events of the current page. The route is registered before
+/// `Network.enable`/`Log.enable`, so no event of the enabled domains is missed, and the
+/// console backlog replays messages of the current document logged before the observer.
+#[cfg(feature = "execute")]
+pub(crate) async fn start_observer(
     context: &mut ExecutionContext,
     session: &AutomationSession,
-    driver: &thirtyfour::WebDriver,
-    debugger_address: &str,
-    auth: Option<(String, String, String)>,
+    ctx: &PageContext,
 ) -> flow_like_types::Result<()> {
-    if auth.is_none() {
-        if let Ok(state) = network_state(context, session).await {
-            if state.lock().await.failure.is_none() {
-                return Ok(());
-            }
-        }
+    if observer_follows(context, session, &ctx.page).await {
+        return Ok(());
     }
-    use tokio_tungstenite::tungstenite::Message;
-    let saved_address = {
-        let cache = context.cache.read().await;
-        cache
-            .get(&format!("automation:debugger:{}", session.session_ref))
-            .and_then(|entry| entry.as_any().downcast_ref::<DebuggerEndpoint>())
-            .map(|entry| entry.0.clone())
-    };
-    let debugger_address = if debugger_address.is_empty() {
-        saved_address.as_deref().ok_or_else(|| flow_like_types::anyhow!("This browser did not expose a debugger address. Supply a Chrome or Edge debugging endpoint."))?
-    } else {
-        debugger_address
-    };
-    let address = if debugger_address.contains("://") {
-        debugger_address.to_owned()
-    } else {
-        format!("http://{debugger_address}")
-    };
-    let endpoint = flow_like_types::reqwest::Url::parse(&address)?;
-    if !matches!(endpoint.scheme(), "http" | "https") {
-        return Err(flow_like_types::anyhow!(
-            "Debugger address must use HTTP or HTTPS"
-        ));
-    }
-    let info = super::cdp::cdp(driver, "Target.getTargetInfo", json!({})).await?;
-    let target_id = info["targetInfo"]["targetId"]
-        .as_str()
-        .ok_or_else(|| flow_like_types::anyhow!("Browser did not return a target ID"))?;
-    let list_url = endpoint.join("/json/list")?;
-    let targets: Value = flow_like_types::reqwest::Client::builder()
-        .timeout(DEBUGGER_TIMEOUT)
-        .build()?
-        .get(list_url.clone())
-        .send()
-        .await
-        .map_err(|e| {
-            flow_like_types::anyhow!("Failed to list debugger targets at {list_url}: {e}")
-        })?
-        .error_for_status()?
-        .json()
-        .await?;
-    let websocket = targets
-        .as_array()
-        .and_then(|targets| {
-            targets
-                .iter()
-                .find(|target| target["id"].as_str() == Some(target_id))
-        })
-        .and_then(|target| target["webSocketDebuggerUrl"].as_str())
-        .ok_or_else(|| {
-            flow_like_types::anyhow!("Current tab is not exposed by this debugger endpoint")
-        })?;
-    let (mut socket, _) = tokio::time::timeout(
-        DEBUGGER_TIMEOUT,
-        tokio_tungstenite::connect_async(websocket),
-    )
-    .await
-    .map_err(|_| {
-        flow_like_types::anyhow!("Timed out connecting to the browser debugger at {websocket}")
-    })??;
-    let (kind, method, params) = if let Some((origin, _, _)) = &auth {
-        (
-            "auth",
-            "Fetch.enable",
-            json!({"handleAuthRequests":true,"patterns":[{"urlPattern":format!("{origin}/*")}]}),
-        )
-    } else {
-        ("network", "Network.enable", json!({}))
-    };
-    // Confirm protocol support before reporting that the node succeeded.
-    let mut queued_events = VecDeque::new();
-    send_confirmed(&mut socket, 1, method, params, &mut queued_events).await?;
-    if auth.is_none() {
-        send_confirmed(
-            &mut socket,
-            2,
-            "Runtime.enable",
-            json!({}),
-            &mut queued_events,
-        )
-        .await?;
-        send_confirmed(&mut socket, 3, "Log.enable", json!({}), &mut queued_events).await?;
-    }
+    let observation = observe_page(&ctx.page, ctx.browser.settings().page_load_timeout()).await?;
     let network = Arc::new(tokio::sync::Mutex::new(NetworkState::default()));
-    let task_state = network.clone();
-    let cancellation = context.get_cancellation_token();
-    let task = tokio::spawn(async move {
-        let mut id = 4u64;
-        let mut authenticated = HashSet::new();
-        loop {
-            let event = if let Some(event) = queued_events.pop_front() {
-                event
-            } else {
-                let next = tokio::select! {
-                    biased;
-                _ = async { if let Some(token) = &cancellation { token.cancelled().await } else { std::future::pending::<()>().await } } => {
-                    task_state.lock().await.failure = Some("Browser observer was cancelled".into());
-                    break;
-                },
-                    next = socket.next() => next,
-                };
-                let text = match next {
-                    Some(Ok(Message::Text(text))) => text,
-                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => {
-                        task_state.lock().await.failure =
-                            Some("Browser protocol connection closed".into());
-                        break;
-                    }
-                    Some(Ok(_)) => continue,
-                };
-                let Ok(event) = flow_like_types::json::from_str::<Value>(&text) else {
-                    continue;
-                };
-                event
-            };
-            let params = &event["params"];
-            let request_id = params["requestId"].as_str().unwrap_or_default();
-            let mut command = None;
-            let method = event["method"].as_str().unwrap_or_default();
-            if let Some(message) = console_message(method, params) {
-                task_state.lock().await.push_console(message);
-                continue;
-            }
-            match method {
-                "Fetch.requestPaused" => {
-                    command = Some(("Fetch.continueRequest", json!({"requestId":request_id})))
-                }
-                "Fetch.authRequired" => {
-                    if let Some((origin, username, password)) = &auth {
-                        let challenge = &params["authChallenge"];
-                        let first_attempt = authenticated.insert(request_id.to_string());
-                        let response =
-                            auth_response(origin, username, password, challenge, first_attempt);
-                        command = Some((
-                            "Fetch.continueWithAuth",
-                            json!({"requestId":request_id,"authChallengeResponse":response}),
-                        ));
-                    }
-                }
-                "Network.requestWillBeSent" => {
-                    let mut state = task_state.lock().await;
-                    state.last_activity = std::time::Instant::now();
-                    state.pending.insert(request_id.to_string());
-                    if let Some(timestamp) = params["timestamp"].as_f64() {
-                        state.started.insert(request_id.to_owned(), timestamp);
-                    }
-                    let request = &params["request"];
-                    if state.url_pattern.is_empty()
-                        || request["url"]
-                            .as_str()
-                            .unwrap_or_default()
-                            .contains(&state.url_pattern)
-                    {
-                        if state.requests.len() >= MAX_BUFFERED_EVENTS {
-                            state.requests.pop_front();
-                            state.request_ids.pop_front();
-                        }
-                        state.requests.push_back(super::observe::NetworkRequest {
-                            url: request["url"].as_str().unwrap_or_default().into(),
-                            method: request["method"].as_str().unwrap_or_default().into(),
-                            status: None,
-                            status_text: None,
-                            request_headers: request.get("headers").map(Value::to_string),
-                            response_headers: None,
-                            duration_ms: None,
-                            size_bytes: None,
-                            resource_type: params["type"].as_str().map(str::to_owned),
-                        });
-                        state.request_ids.push_back(request_id.to_owned());
-                    }
-                }
-                "Network.responseReceived" => {
-                    let mut state = task_state.lock().await;
-                    if let Some(index) = state.request_ids.iter().rposition(|id| id == request_id) {
-                        let response = &params["response"];
-                        let request = &mut state.requests[index];
-                        request.status = response["status"].as_f64().map(|status| status as i32);
-                        request.status_text = response["statusText"].as_str().map(str::to_owned);
-                        request.response_headers = response.get("headers").map(Value::to_string);
-                    }
-                }
-                "Network.loadingFinished" | "Network.loadingFailed" => {
-                    let mut state = task_state.lock().await;
-                    state.last_activity = std::time::Instant::now();
-                    state.pending.remove(request_id);
-                    let started = state.started.remove(request_id);
-                    if let Some(index) = state.request_ids.iter().rposition(|id| id == request_id) {
-                        let request = &mut state.requests[index];
-                        request.size_bytes = params["encodedDataLength"]
-                            .as_f64()
-                            .map(|length| length as i64);
-                        request.duration_ms = started
-                            .zip(params["timestamp"].as_f64())
-                            .map(|(start, end)| ((end - start).max(0.0) * 1000.0) as i64);
-                    }
-                }
-                _ => {}
-            }
-            if let Some((method, params)) = command {
-                if socket
-                    .send(Message::Text(
-                        json!({"id":id,"method":method,"params":params})
-                            .to_string()
-                            .into(),
-                    ))
-                    .await
-                    .is_err()
-                {
-                    task_state.lock().await.failure =
-                        Some("Browser protocol command failed".into());
-                    break;
-                }
-                id += 1;
-            }
-        }
-    });
+    let task = tokio::spawn(follow_observation(
+        observation,
+        ctx.page.clone(),
+        network.clone(),
+        context.get_cancellation_token(),
+    ));
     context.cache.write().await.insert(
-        listener_key(session, kind),
+        listener_key(session, "network"),
         Arc::new(Listener {
             network,
-            abort: task.abort_handle(),
+            abort: Some(task.abort_handle()),
+            observed: page_session(&ctx.page),
+        }),
+    );
+    Ok(())
+}
+
+/// The observer of the current tab has not failed and still follows the session the tab
+/// is attached through; a prerender activation or re-attach keeps the tab id but not the
+/// session.
+#[cfg(feature = "execute")]
+async fn observer_follows(
+    context: &ExecutionContext,
+    session: &AutomationSession,
+    page: &Page,
+) -> bool {
+    let followed = {
+        let cache = context.cache.read().await;
+        cache
+            .get(&listener_key(session, "network"))
+            .and_then(|entry| entry.as_any().downcast_ref::<Listener>())
+            .map(|listener| (listener.observed.clone(), listener.network.clone()))
+    };
+    let Some((observed, network)) = followed else {
+        return false;
+    };
+    !page.is_closed()
+        && observed.is_some()
+        && observed == page_session(page)
+        && network.lock().await.failure.is_none()
+}
+
+#[cfg(feature = "execute")]
+fn page_session(page: &Page) -> Option<SessionId> {
+    page.session().id().cloned()
+}
+
+/// `Page::cdp` first waits for a pending navigation, up to the page load timeout (past it,
+/// the load is stopped and the renderer timeout is reported), so each domain gets that wait
+/// plus the confirmation window.
+#[cfg(feature = "execute")]
+async fn observe_page(
+    page: &Page,
+    page_load_timeout: std::time::Duration,
+) -> flow_like_types::Result<Observation> {
+    let observation = page.observe(OBSERVED_METHODS.to_vec());
+    let budget = page_load_timeout + OBSERVER_ENABLE_TIMEOUT;
+    for method in ["Network.enable", "Log.enable"] {
+        tokio::time::timeout(budget, super::cdp::send_to(page, method, json!({})))
+            .await
+            .map_err(|_| {
+                flow_like_types::anyhow!(
+                    "Browser did not confirm {method} within {} seconds (page load wait included)",
+                    budget.as_secs()
+                )
+            })??;
+    }
+    Ok(observation)
+}
+
+/// Replays the backlog, then the route; an event in both (hooks run before routes) is
+/// applied once. Ends with a failure when the run is cancelled, the connection closes or
+/// the observed tab is closed or replaced, so waits never read a frozen state as idle.
+#[cfg(feature = "execute")]
+async fn follow_observation(
+    observation: Observation,
+    page: Page,
+    network: Arc<tokio::sync::Mutex<NetworkState>>,
+    cancellation: Option<CancellationToken>,
+) {
+    let Observation { backlog, mut route } = observation;
+    let replayed: HashSet<u64> = backlog.iter().map(|event| event.seq).collect();
+    for event in &backlog {
+        network.lock().await.record(&event.method, &event.params);
+    }
+    let mut page_check = tokio::time::interval(OBSERVED_PAGE_CHECK);
+    page_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let failure = loop {
+        let event = tokio::select! {
+            biased;
+            _ = cancelled(cancellation.as_ref()) => break "Browser observer was cancelled",
+            next = route.recv() => match next {
+                Some(event) => event,
+                None => break "Browser protocol connection closed",
+            },
+            _ = page_check.tick() => {
+                if page.is_closed() {
+                    break OBSERVED_PAGE_GONE;
+                }
+                continue;
+            }
+        };
+        if !replayed.contains(&event.seq) {
+            network.lock().await.record(&event.method, &event.params);
+        }
+    };
+    network.lock().await.failure = Some(failure.into());
+}
+
+#[cfg(feature = "execute")]
+async fn cancelled(token: Option<&CancellationToken>) {
+    match token {
+        Some(token) => token.cancelled().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Answers HTTP basic-auth challenges of `origin` on the current page and its frames.
+#[cfg(feature = "execute")]
+pub(crate) async fn start_basic_auth(
+    context: &mut ExecutionContext,
+    session: &AutomationSession,
+    ctx: &PageContext,
+    origin: String,
+    username: String,
+    password: String,
+) -> flow_like_types::Result<()> {
+    let decider_origin = origin.clone();
+    ctx.page
+        .enable_basic_auth(
+            &origin,
+            Arc::new(move |challenge, first_attempt| {
+                auth_response(
+                    &decider_origin,
+                    &username,
+                    &password,
+                    challenge,
+                    first_attempt,
+                )
+            }),
+        )
+        .await?;
+    context.cache.write().await.insert(
+        listener_key(session, "auth"),
+        Arc::new(Listener {
+            network: Arc::default(),
+            abort: None,
+            observed: None,
         }),
     );
     Ok(())
@@ -742,5 +624,301 @@ mod tests {
         );
         assert!(normalized_origin("file:///tmp/a").is_err());
         assert!(normalized_origin("https://user:secret@example.com").is_err());
+    }
+
+    #[cfg(feature = "execute")]
+    #[test]
+    fn network_events_fill_requests_with_status_size_and_duration() {
+        let mut state = NetworkState {
+            url_pattern: "/api/".into(),
+            ..NetworkState::default()
+        };
+        let request = |id: &str, url: &str| json!({"requestId": id, "timestamp": 10.0, "type": "Fetch", "request": {"url": url, "method": "POST", "headers": {"a": "b"}}});
+        state.record(
+            "Network.requestWillBeSent",
+            &request("1", "https://example.com/api/items"),
+        );
+        state.record(
+            "Network.requestWillBeSent",
+            &request("2", "https://example.com/logo.png"),
+        );
+        state.record(
+            "Network.responseReceived",
+            &json!({"requestId": "1", "response": {"status": 201.0, "statusText": "Created", "headers": {}}}),
+        );
+        state.record(
+            "Network.loadingFinished",
+            &json!({"requestId": "1", "timestamp": 10.25, "encodedDataLength": 512.0}),
+        );
+        state.record(
+            "Runtime.consoleAPICalled",
+            &json!({"type": "log", "args": [{"type": "string", "value": "ready"}]}),
+        );
+        state.record("Page.frameNavigated", &json!({}));
+
+        assert_eq!(state.requests.len(), 1);
+        let item = &state.requests[0];
+        assert_eq!((item.method.as_str(), item.status), ("POST", Some(201)));
+        assert_eq!((item.size_bytes, item.duration_ms), (Some(512), Some(250)));
+        assert_eq!(state.pending.len(), 1);
+        assert_eq!(state.console_logs.len(), 1);
+    }
+
+    #[cfg(feature = "execute")]
+    mod observation {
+        use super::super::*;
+        use flow_like_browser::connection::{RouteFilter, RouteReceiver, SessionScope};
+        use flow_like_browser::event_log::Event;
+        use flow_like_browser::testing::{PageHarness, default_auto_reply};
+        use std::time::Duration;
+
+        const SESSION: &str = "S1";
+        const MAIN_FRAME: &str = "T1";
+        const WAIT: Duration = Duration::from_secs(5);
+        const PAGE_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
+
+        async fn start_loading(harness: &PageHarness) {
+            let cursor = harness.connection.events().cursor();
+            harness.emit("Page.frameStartedLoading", json!({"frameId": MAIN_FRAME}));
+            let deadline = tokio::time::Instant::now() + WAIT;
+            let processed = harness
+                .connection
+                .events()
+                .wait_for(cursor, deadline, |event| {
+                    &*event.method == "Page.frameStartedLoading"
+                })
+                .await
+                .expect("the event log stays open");
+            assert!(
+                processed.is_some(),
+                "Page.frameStartedLoading was never processed"
+            );
+        }
+
+        fn sent_count(harness: &PageHarness, method: &str) -> usize {
+            harness
+                .control
+                .commands_seen()
+                .iter()
+                .filter(|command| {
+                    command.method == method && command.session.as_deref() == Some(SESSION)
+                })
+                .count()
+        }
+
+        fn console(text: &str) -> Value {
+            json!({"type": "log", "args": [{"type": "string", "value": text}]})
+        }
+
+        fn request(id: &str) -> Value {
+            json!({"requestId": id, "request": {"url": "https://example.com/", "method": "GET"}})
+        }
+
+        fn page_route(harness: &PageHarness) -> RouteReceiver {
+            harness.connection.route(RouteFilter {
+                sessions: SessionScope::Exactly(SessionId::from(SESSION)),
+                methods: OBSERVED_METHODS.to_vec(),
+            })
+        }
+
+        async fn received(route: &mut RouteReceiver, count: usize) -> Vec<Event> {
+            let mut events = Vec::new();
+            while events.len() < count {
+                let event = tokio::time::timeout(WAIT, route.recv())
+                    .await
+                    .expect("the scripted event reaches the route")
+                    .expect("the route stays open");
+                events.push(event);
+            }
+            events
+        }
+
+        fn console_texts(state: &NetworkState) -> Vec<String> {
+            state
+                .console_logs
+                .iter()
+                .map(|message| message.text.clone())
+                .collect()
+        }
+
+        fn follow(
+            harness: &PageHarness,
+            observation: Observation,
+            cancellation: Option<CancellationToken>,
+        ) -> (
+            Arc<tokio::sync::Mutex<NetworkState>>,
+            tokio::task::JoinHandle<()>,
+        ) {
+            let network = Arc::new(tokio::sync::Mutex::new(NetworkState::default()));
+            let follower = tokio::spawn(follow_observation(
+                observation,
+                harness.page.clone(),
+                network.clone(),
+                cancellation,
+            ));
+            (network, follower)
+        }
+
+        async fn stopped(follower: tokio::task::JoinHandle<()>) {
+            tokio::time::timeout(WAIT, follower)
+                .await
+                .expect("the observer stops")
+                .expect("the observer task does not panic");
+        }
+
+        #[tokio::test]
+        async fn the_backlog_is_applied_once_and_no_routed_event_is_lost() {
+            let harness = PageHarness::new().await;
+            let route = page_route(&harness);
+            let mut witness = page_route(&harness);
+            harness.emit("Network.requestWillBeSent", request("7"));
+            harness.emit("Runtime.consoleAPICalled", console("before observer"));
+            harness.emit("Runtime.consoleAPICalled", console("after observer"));
+            harness.emit_on("S-other", "Runtime.consoleAPICalled", console("other page"));
+            let events = received(&mut witness, 3).await;
+            assert!(events[0].seq < events[1].seq);
+            let observation = Observation {
+                backlog: vec![events[1].clone()],
+                route,
+            };
+            let (network, follower) = follow(&harness, observation, None);
+            harness.control.close("scripted browser went away");
+            stopped(follower).await;
+
+            let state = network.lock().await;
+            assert_eq!(
+                console_texts(&state),
+                vec!["before observer".to_owned(), "after observer".to_owned()]
+            );
+            assert_eq!(state.requests.len(), 1);
+            assert_eq!(
+                state.failure.as_deref(),
+                Some("Browser protocol connection closed")
+            );
+        }
+
+        #[tokio::test]
+        async fn cancelling_the_run_stops_the_observer() {
+            let harness = PageHarness::new().await;
+            let observation = Observation {
+                backlog: Vec::new(),
+                route: page_route(&harness),
+            };
+            let token = CancellationToken::new();
+            let (network, follower) = follow(&harness, observation, Some(token.clone()));
+            token.cancel();
+            stopped(follower).await;
+            assert_eq!(
+                network.lock().await.failure.as_deref(),
+                Some("Browser observer was cancelled")
+            );
+        }
+
+        #[tokio::test]
+        async fn a_closed_or_replaced_tab_ends_the_observer() {
+            let harness = PageHarness::new().await;
+            let observation = harness.page.observe(OBSERVED_METHODS.to_vec());
+            let (network, follower) = follow(&harness, observation, None);
+            harness.control.emit(
+                "Target.detachedFromTarget",
+                None,
+                json!({"sessionId": SESSION, "targetId": harness.page.target_id().as_str()}),
+            );
+            stopped(follower).await;
+            assert!(harness.page.is_closed());
+            assert_eq!(
+                network.lock().await.failure.as_deref(),
+                Some(OBSERVED_PAGE_GONE)
+            );
+        }
+
+        #[tokio::test]
+        async fn events_before_network_enable_is_answered_reach_the_observer() {
+            let mut harness = PageHarness::new().await;
+            harness.control.set_auto_reply(|command| {
+                (command.method != "Network.enable")
+                    .then(|| default_auto_reply(command))
+                    .flatten()
+            });
+            let page = harness.page.clone();
+            let observing =
+                tokio::spawn(async move { observe_page(&page, PAGE_LOAD_TIMEOUT).await });
+            let enable = harness
+                .control
+                .wait_for("Network.enable", Some(SESSION))
+                .await;
+            harness.emit("Network.requestWillBeSent", request("1"));
+            harness.control.reply(&enable, json!({}));
+            let mut observation = tokio::time::timeout(WAIT, observing)
+                .await
+                .expect("the observer confirms both domains")
+                .expect("the observing task does not panic")
+                .expect("Network.enable and Log.enable succeed");
+            let events = received(&mut observation.route, 1).await;
+            assert_eq!(&*events[0].method, "Network.requestWillBeSent");
+        }
+
+        #[tokio::test]
+        async fn a_page_load_longer_than_the_enable_timeout_delays_the_observer_without_failing_it()
+        {
+            let harness = PageHarness::new().await;
+            harness.set_page_load_timeout(PAGE_LOAD_TIMEOUT);
+            start_loading(&harness).await;
+            let page = harness.page.clone();
+            let observing =
+                tokio::spawn(async move { observe_page(&page, PAGE_LOAD_TIMEOUT).await });
+            tokio::time::sleep(OBSERVER_ENABLE_TIMEOUT + Duration::from_millis(500)).await;
+            if observing.is_finished() {
+                let outcome = observing.await.expect("the observing task does not panic");
+                panic!(
+                    "the observer ended while the page was still loading: {:?}",
+                    outcome.err()
+                );
+            }
+            assert_eq!(
+                sent_count(&harness, "Network.enable"),
+                0,
+                "Network.enable was sent while the page was loading"
+            );
+            harness.emit("Page.frameStoppedLoading", json!({"frameId": MAIN_FRAME}));
+            tokio::time::timeout(WAIT, observing)
+                .await
+                .expect("the observer starts once the load stopped")
+                .expect("the observing task does not panic")
+                .expect("Network.enable and Log.enable succeed after the load");
+            assert_eq!(sent_count(&harness, "Network.enable"), 1);
+            assert_eq!(sent_count(&harness, "Log.enable"), 1);
+        }
+
+        #[tokio::test]
+        async fn a_load_past_the_page_load_timeout_reports_the_renderer_timeout() {
+            let harness = PageHarness::new().await;
+            let page_load_timeout = Duration::from_millis(300);
+            harness.set_page_load_timeout(page_load_timeout);
+            start_loading(&harness).await;
+            let page = harness.page.clone();
+            let observing =
+                tokio::spawn(async move { observe_page(&page, page_load_timeout).await });
+            harness
+                .sent("Page.stopLoading", |command| {
+                    command.method == "Page.stopLoading"
+                })
+                .await;
+            harness.emit("Page.frameStoppedLoading", json!({"frameId": MAIN_FRAME}));
+            let error = tokio::time::timeout(WAIT, observing)
+                .await
+                .expect("the observer gives up at the page load timeout")
+                .expect("the observing task does not panic")
+                .err()
+                .expect("a load past the page load timeout fails the observer");
+            assert!(
+                matches!(
+                    super::super::super::driver::browser_error(&error),
+                    Some(flow_like_browser::BrowserError::RendererTimeout { .. })
+                ),
+                "{error:?}"
+            );
+            assert_eq!(sent_count(&harness, "Network.enable"), 0);
+        }
     }
 }

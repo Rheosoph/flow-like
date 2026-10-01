@@ -87,9 +87,9 @@ impl NodeLogic for BrowserGetTextNode {
         let selector: String = context.evaluate_pin("selector").await?;
         let locator = super::selector::evaluate_locator(context, &selector).await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        let element = super::selector::find(&driver, &locator)
+        let element = super::selector::find_element(&page, &locator)
             .await
             .map_err(|e| {
                 flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
@@ -205,15 +205,15 @@ impl NodeLogic for BrowserGetAttributeNode {
         let locator = super::selector::evaluate_locator(context, &selector).await?;
         let attribute: String = context.evaluate_pin("attribute").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        let element = super::selector::find(&driver, &locator)
+        let element = super::selector::find_element(&page, &locator)
             .await
             .map_err(|e| {
                 flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
             })?;
 
-        let value = element.attr(&attribute).await.map_err(|e| {
+        let value = element.attribute(&attribute).await.map_err(|e| {
             flow_like_types::anyhow!("Failed to get attribute '{}': {}", attribute, e)
         })?;
 
@@ -319,15 +319,15 @@ impl NodeLogic for BrowserGetHtmlNode {
         let locator = super::selector::evaluate_locator(context, &selector).await?;
         let outer_html: bool = context.evaluate_pin("outer_html").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
         let html = if locator.value.is_empty() {
-            driver
+            page.frame()
                 .source()
                 .await
                 .map_err(|e| flow_like_types::anyhow!("Failed to get page source: {}", e))?
         } else {
-            let element = super::selector::find(&driver, &locator)
+            let element = super::selector::find_element(&page, &locator)
                 .await
                 .map_err(|e| {
                     flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
@@ -441,17 +441,16 @@ impl NodeLogic for BrowserExecuteJsNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let script: String = context.evaluate_pin("script").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        let result = driver
-            .execute(&script, vec![])
+        let result = page
+            .execute(&user_script(&script), Vec::new())
             .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to execute JavaScript: {}", e))?;
-
-        let json_result = result.json();
+            .map_err(|e| flow_like_types::anyhow!("Failed to execute JavaScript: {}", e))?
+            .into_json();
 
         context.set_pin_value("session_out", json!(session)).await?;
-        context.set_pin_value("result", json_result.clone()).await?;
+        context.set_pin_value("result", result).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
@@ -462,5 +461,34 @@ impl NodeLogic for BrowserExecuteJsNode {
         Err(flow_like_types::anyhow!(
             "Browser automation requires the 'execute' feature"
         ))
+    }
+}
+
+/// A script body containing `//` gets a trailing newline, as chromedriver adds one, so a
+/// final line comment cannot swallow the closing brace of the function wrapped around it.
+#[cfg(any(feature = "execute", test))]
+pub(crate) fn user_script(body: &str) -> String {
+    if body.contains("//") {
+        format!("{body}\n")
+    } else {
+        body.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::user_script;
+
+    #[test]
+    fn a_final_line_comment_ends_on_its_own_line() {
+        assert_eq!(
+            user_script("return document.title // title"),
+            "return document.title // title\n"
+        );
+        assert_eq!(
+            user_script("const a = 1;\n// done"),
+            "const a = 1;\n// done\n"
+        );
+        assert_eq!(user_script("return 1;"), "return 1;");
     }
 }

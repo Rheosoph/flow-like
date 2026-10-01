@@ -113,7 +113,7 @@ impl NodeLogic for BrowserGetDomSnapshotNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let _include_styles: bool = context.evaluate_pin("include_styles").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
         let script = r#"
             return {
@@ -127,12 +127,12 @@ impl NodeLogic for BrowserGetDomSnapshotNode {
             };
         "#;
 
-        let result = driver
-            .execute(script, vec![])
+        let json_val = page
+            .probe(script, Vec::new())
             .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to get DOM snapshot: {}", e))?;
+            .map_err(|e| flow_like_types::anyhow!("Failed to get DOM snapshot: {}", e))?
+            .into_json();
 
-        let json_val = result.json();
         let snapshot = DomSnapshot {
             html: json_val["html"].as_str().unwrap_or("").to_string(),
             title: json_val["title"].as_str().unwrap_or("").to_string(),
@@ -259,9 +259,8 @@ impl NodeLogic for BrowserGetAccessibilitySnapshotNode {
         let max_depth: i64 = context.evaluate_pin("max_depth").await?;
         let include_hidden: bool = context.evaluate_pin("include_hidden").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        // JavaScript function to build accessibility tree
         let script = format!(
             r#"
             function buildA11yTree(element, depth, maxDepth, includeHidden) {{
@@ -303,13 +302,13 @@ impl NodeLogic for BrowserGetAccessibilitySnapshotNode {
             include_hidden = if include_hidden { "true" } else { "false" }
         );
 
-        let result = driver
-            .execute(&script, vec![])
+        let result = page
+            .probe(&script, Vec::new())
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to get accessibility snapshot: {}", e))?;
 
         let tree: AccessibilityTreeSnapshot =
-            flow_like_types::json::from_value(result.json().clone()).unwrap_or_default();
+            flow_like_types::json::from_value(result.into_json()).unwrap_or_default();
 
         let tree_json =
             flow_like_types::json::to_string_pretty(&tree).unwrap_or_else(|_| "{}".to_string());
@@ -425,9 +424,9 @@ impl NodeLogic for BrowserGetElementSnapshotNode {
         let selector: String = context.evaluate_pin("selector").await?;
         let locator = super::selector::evaluate_locator(context, &selector).await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        let element = match super::selector::find(&driver, &locator).await {
+        let element = match super::selector::find_element(&page, &locator).await {
             Ok(el) => el,
             Err(_) => {
                 context.set_pin_value("session_out", json!(session)).await?;

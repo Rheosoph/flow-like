@@ -90,10 +90,14 @@ impl DeclarationMatch {
         let Some(receiver) = self.receiver.as_deref() else {
             return static_form;
         };
+        // A receiver consumes only the first occurrence. Nodes such as string::equal and
+        // struct::merge also name their second operand after the receiver pin.
+        let receiver_index = pins.iter().position(|pin| pin == receiver);
         let rest = pins
             .iter()
-            .filter(|pin| pin.as_str() != receiver)
-            .map(|pin| format!("{pin}: {pin}"))
+            .enumerate()
+            .filter(|(index, _)| Some(*index) != receiver_index)
+            .map(|(_, pin)| format!("{pin}: {pin}"))
             .collect::<Vec<_>>()
             .join(", ");
         let method_form = if rest.is_empty() {
@@ -1818,6 +1822,26 @@ declare function utilsHashMd5({ input: string }): string;
             entries[2].to_match(0).call_hint(),
             "ai::ml::read({ path: path })"
         );
+    }
+
+    #[test]
+    fn call_hints_keep_repeated_receiver_operands() {
+        for (node_type, expected) in [
+            (
+                "equal_string",
+                "string::equal({ string: string, string: string, ignoreCase: ignoreCase })  or  string.equal({ string: string, ignoreCase: ignoreCase })",
+            ),
+            (
+                "struct_merge",
+                "struct::merge({ struct: struct, struct: struct, deep: deep, skipNull: skipNull })  or  struct.merge({ struct: struct, deep: deep, skipNull: skipNull })",
+            ),
+        ] {
+            let declaration = search_declarations(node_type)
+                .into_iter()
+                .find(|matched| matched.node_type == node_type)
+                .unwrap_or_else(|| panic!("no declaration for {node_type}"));
+            assert_eq!(declaration.call_hint(), expected, "{node_type}");
+        }
     }
 
     #[test]

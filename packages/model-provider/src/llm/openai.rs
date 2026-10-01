@@ -5,6 +5,7 @@ use super::{
     extract_headers,
     media::{self, MediaDialect},
     merge_additional_params, output_budget_as_body_param,
+    responses_tools::NonStrictToolsClient,
 };
 use crate::authorization::AuthorizedHttpClient;
 use crate::provider::random_provider;
@@ -382,9 +383,10 @@ impl ModelLogic for OpenAIModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
         Ok(match self.client.clone() {
-            OpenAIClientType::OpenAI(client) => {
-                ModelConstructor::with_request_fixup(client, responses_constraints)
-            }
+            OpenAIClientType::OpenAI(client) => ModelConstructor::with_request_fixup(
+                NonStrictToolsClient(client),
+                responses_constraints,
+            ),
             OpenAIClientType::OpenAIChatCompletions(client) => {
                 ModelConstructor::with_request_fixup(client, chat_completions_constraints)
             }
@@ -1513,13 +1515,14 @@ mod tests {
     async fn test_openai_parallel_tool_calls_stream() {
         let (provider, config) = openai_provider_and_config();
         let model = OpenAIModel::new(&provider, &config).await.unwrap();
+        let model_name = provider.model_id.as_ref().unwrap();
 
         let agent = model
             .provider()
             .await
             .unwrap()
             .inner
-            .agent("@preset/testing")
+            .agent(model_name)
             .preamble("You are a helpful assistant.")
             .tool(WeatherTool)
             .tool(ForecastTool)
@@ -1674,6 +1677,186 @@ mod tests {
         for rejected in ["max_tokens", "reasoning", "temperature", "top_p"] {
             assert!(body.get(rejected).is_none(), "{rejected} in {body}");
         }
+    }
+
+    fn custom_openai(endpoint: &str, model: &str, surface: ModelApiSurface) -> ModelProvider {
+        ModelProvider {
+            api_surface: Some(surface),
+            provider_name: "custom:openai".to_string(),
+            model_id: None,
+            version: None,
+            params: Some(HashMap::from([
+                ("api_key".to_string(), serde_json::json!("test-key")),
+                ("model_id".to_string(), serde_json::json!(model)),
+                ("endpoint".to_string(), serde_json::json!(endpoint)),
+            ])),
+        }
+    }
+
+    async fn agent_on(
+        endpoint: &str,
+        model: &str,
+        surface: ModelApiSurface,
+    ) -> rig::agent::AgentBuilder<crate::llm::CompletionModelHandle<'static>> {
+        OpenAIModel::from_provider_with_surface(&custom_openai(endpoint, model, surface), surface)
+            .await
+            .unwrap()
+            .provider()
+            .await
+            .unwrap()
+            .into_client()
+            .agent(model)
+    }
+
+    #[tokio::test]
+    async fn responses_stream_sends_tool_schemas_as_written() {
+        use crate::llm::test_support::{
+            assert_sends_tool_as_written, serve_once, sse_response, typeless_tool,
+        };
+        use futures::StreamExt;
+        use rig::completion::Completion;
+
+        let (endpoint, server) = serve_once(sse_response(&[])).await;
+        let agent = agent_on(&endpoint, "gpt-5.3-codex", ModelApiSurface::Responses)
+            .await
+            .build();
+
+        let mut stream = agent
+            .completion("Fill in the form.", Vec::<Message>::new())
+            .await
+            .unwrap()
+            .tools(vec![typeless_tool()])
+            .stream()
+            .await
+            .unwrap();
+        let _ = stream.next().await;
+
+        let body: serde_json::Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+        assert_sends_tool_as_written(&body, &typeless_tool());
+    }
+
+    #[tokio::test]
+    async fn responses_completion_sends_tool_schemas_as_written_after_the_request_fixup() {
+        use crate::llm::test_support::{
+            assert_sends_tool_as_written, json_response, responses_completion, serve_once,
+            typeless_tool,
+        };
+        use rig::completion::Completion;
+
+        let (endpoint, server) = serve_once(json_response(responses_completion("gpt-5.4"))).await;
+        let agent = agent_on(&endpoint, "gpt-5.4", ModelApiSurface::Responses)
+            .await
+            .temperature(0.2)
+            .additional_params(serde_json::json!({"top_p": 0.9}))
+            .build();
+
+        let response = agent
+            .completion("Fill in the form.", Vec::<Message>::new())
+            .await
+            .unwrap()
+            .tools(vec![typeless_tool()])
+            .send()
+            .await
+            .unwrap();
+
+        let body: serde_json::Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+        assert_sends_tool_as_written(&body, &typeless_tool());
+        for rejected in ["temperature", "top_p"] {
+            assert!(body.get(rejected).is_none(), "{rejected} in {body}");
+        }
+        assert_eq!(response.raw_response.finish_reason.as_deref(), Some("stop"));
+    }
+
+    async fn responses_body_forcing(
+        tools: Vec<rig::completion::ToolDefinition>,
+        choice: rig::message::ToolChoice,
+    ) -> serde_json::Value {
+        use crate::llm::test_support::{json_response, responses_completion, serve_once};
+        use rig::completion::Completion;
+
+        let (endpoint, server) = serve_once(json_response(responses_completion("gpt-5.4"))).await;
+        let agent = agent_on(&endpoint, "gpt-5.4", ModelApiSurface::Responses)
+            .await
+            .build();
+
+        agent
+            .completion("Fill in the form.", Vec::<Message>::new())
+            .await
+            .unwrap()
+            .tools(tools)
+            .tool_choice(choice)
+            .send()
+            .await
+            .unwrap();
+
+        serde_json::from_str(&server.await.unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn responses_forced_tool_choice_keeps_the_tool_it_forces() {
+        use crate::llm::test_support::{assert_sends_tool_as_written, typeless_tool};
+
+        let body =
+            responses_body_forcing(vec![typeless_tool()], rig::message::ToolChoice::Required).await;
+
+        assert_eq!(body["tool_choice"], "required", "{body}");
+        assert_sends_tool_as_written(&body, &typeless_tool());
+    }
+
+    #[tokio::test]
+    async fn responses_specific_tool_choice_sends_only_the_named_tool_and_requires_it() {
+        use crate::llm::test_support::{assert_sends_tool_as_written, typeless_tool};
+
+        let other = rig::completion::ToolDefinition {
+            name: "open_app_page".to_string(),
+            description: "Open an app page.".to_string(),
+            parameters: serde_json::json!({"type": "object", "properties": {}}),
+        };
+        let body = responses_body_forcing(
+            vec![other, typeless_tool()],
+            rig::message::ToolChoice::Specific {
+                function_names: vec![typeless_tool().name],
+            },
+        )
+        .await;
+
+        assert_eq!(body["tool_choice"], "required", "{body}");
+        assert_sends_tool_as_written(&body, &typeless_tool());
+    }
+
+    #[tokio::test]
+    async fn chat_completions_sends_tool_schemas_as_written_without_strict() {
+        use crate::llm::test_support::{chat_completion, json_response, serve_once, typeless_tool};
+        use rig::completion::Completion;
+
+        let (endpoint, server) =
+            serve_once(json_response(chat_completion("gpt-5.4", "stop", 1))).await;
+        let agent = agent_on(&endpoint, "gpt-5.4", ModelApiSurface::ChatCompletions)
+            .await
+            .build();
+
+        agent
+            .completion("Fill in the form.", Vec::<Message>::new())
+            .await
+            .unwrap()
+            .tools(vec![typeless_tool()])
+            .send()
+            .await
+            .unwrap();
+
+        let body: serde_json::Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+        let tool = typeless_tool();
+        assert_eq!(
+            body["tools"],
+            serde_json::json!([{
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                },
+            }])
+        );
     }
 
     #[test]

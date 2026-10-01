@@ -5,6 +5,8 @@ pub(crate) mod cdp;
 pub mod conditions;
 pub mod content;
 pub mod context;
+#[cfg(any(feature = "execute", test))]
+pub(crate) mod driver;
 pub mod emulation;
 pub mod extract;
 pub mod files;

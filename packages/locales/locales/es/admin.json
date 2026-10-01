@@ -1300,5 +1300,13 @@
 	"exploreLeaveTitle": "",
 	"explorePreviewUnavailable": "",
 	"exploreRuleMatches": "",
-	"exploreSummarySpotlightVisible": ""
+	"exploreSummarySpotlightVisible": "",
+	"agentBackendOperationsDescription": "Eventos anónimos de estado de la CLI. Los resultados y la duración abarcan el inicio, las comprobaciones de autenticación, la detección de modelos, las ejecuciones y el cierre.",
+	"agentErrorReports_one": "{{count}} informe de error",
+	"agentErrorReports_other": "{{count}} informes de error",
+	"agentOperationP95": "Duración de la operación en el percentil 95",
+	"agentOperation_one": "operación",
+	"agentOperation_other": "operaciones",
+	"agentErrorReports_many": "{{count}} informes de error",
+	"agentOperation_many": "operaciones"
 }

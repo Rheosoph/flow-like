@@ -97,8 +97,10 @@ Actionable empty-board edits:
   predicates, and success ordering (for example, acknowledge/mark complete only after downstream
   work succeeds). Catalog/type validity proves graph shape, not that this behavioral contract was
   preserved.
-- Always call `write_flowscript` with the complete source in the `source` argument. Never call it
-  with an empty string, a summary, or a markdown fenced block instead of the full document.
+- For a focused existing-board change, call `write_flowscript` with exact `edits` and omit `source`.
+  The host retains the complete merged document. For a new board or broad rewrite, pass complete
+  FlowScript in `source`. Both forms require executable changes; summaries, markdown fences, and
+  empty documents do not count as source.
 - Control flow IS supported: plain `if (booleanValue) { ... } else { ... }` creates a Branch node
   with both arms wired from its true/false pins, and the statement after the `if` continues
   correctly (fan-in from the arm ends and any untaken pin). Loops use `for (const item of items)`.

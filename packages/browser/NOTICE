@@ -1,0 +1,128 @@
+flow-like-browser
+Copyright 2026 Rheosoph GmbH
+
+flow-like-browser is the Chrome DevTools Protocol engine of Flow-Like. Parts
+of it are derived from the third-party projects listed below. Each derived
+source file starts with a one-line header naming its upstream source; the two
+JSON templates in src/templates carry none (JSON has no comment syntax).
+
+Original portions remain under their upstream licences (see the LICENSE-* and NOTICE-* files); modifications by Rheosoph GmbH are under the Flow-Like licence (../../LICENSE).
+
+No Chromium, Chrome for Testing or other browser binary is distributed with
+this crate.
+
+
+Upstream projects
+=================
+
+agent-browser
+  URL:        https://github.com/vercel-labs/agent-browser
+  Commit:     d01253d9db28d75080e36da3c1c31ef89454731e
+  Copyright:  Copyright 2025 Vercel Inc.
+  Licence:    Apache-2.0, see LICENSE-APACHE-agent-browser
+
+rustwright
+  URL:        https://github.com/Skyvern-AI/rustwright
+  Commit:     fca14389e99726bca3210190b905e32663395b5c
+  Copyright:  Copyright (c) 2026 Ikonomos Inc (dba Skyvern)
+  Licence:    MIT, see LICENSE-rustwright
+
+Chromium (ChromeDriver and net error list)
+  URL:        https://chromium.googlesource.com/chromium/src/+/refs/tags/154.0.8037.92/chrome/test/chromedriver/
+  Version:    154.0.8037.92
+  Copyright:  Copyright 2015 The Chromium Authors
+  Licence:    BSD-3-Clause, see LICENSE-chromium
+
+Selenium atoms (Chromium third_party/selenium-atoms)
+  URL:        https://chromium.googlesource.com/chromium/src/+/refs/tags/154.0.8037.92/third_party/selenium-atoms/
+  Version:    Chromium 154.0.8037.92, generated from Selenium
+              https://github.com/SeleniumHQ/selenium at commit
+              c0b8ff6451419542dcecc53c922e1a79e4dc3940
+  Copyright:  Copyright 2011-2014 Software Freedom Conservancy. The compiled
+              atoms embed Closure Library and Closure Compiler code
+              (Copyright The Closure Library Authors, Copyright The Closure
+              Compiler Authors, Apache-2.0); those notices are kept inside
+              each atom file.
+  Licence:    Apache-2.0, see LICENSE-selenium-atoms
+
+Playwright (US keyboard layout)
+  URL:        https://github.com/microsoft/playwright
+  Commit:     5f47e4fb551fa486aec567b05ee11dc7ea6bbeda
+  Copyright:  Copyright 2017 Google Inc.; modifications Copyright (c)
+              Microsoft Corporation
+  Licence:    Apache-2.0 (the licence text is the one in
+              LICENSE-APACHE-agent-browser); Playwright NOTICE, see
+              NOTICE-playwright
+
+
+Derived files
+=============
+
+Paths on the left are relative to this directory; paths on the right are
+relative to the upstream repository root.
+
+agent-browser @d01253d9db28d75080e36da3c1c31ef89454731e (Apache-2.0)
+  src/protocol.rs                  cli/src/native/cdp/client.rs (surrogate repair, id extraction)
+  src/transport/ws.rs              cli/src/native/cdp/client.rs (URL normalisation, keepalive, bounded close)
+  src/transport/dial.rs            cli/src/native/cdp/client.rs (socket shutdown)
+  src/connection.rs                cli/src/native/cdp/client.rs (pending-request guard)
+  tests/connection.rs              cli/src/native/cdp/client.rs (mock-server client tests)
+  src/input/mouse.rs               cli/src/native/interaction.rs (dialog-aware mouse dispatch, pending release)
+  src/target.rs                    cli/src/native/browser.rs (tab filter, discarded-tab liveness probe and revival)
+  src/attach.rs                    cli/src/native/cdp/chrome.rs (DevToolsActivePort read, /json/version host rewrite)
+  src/launch/windows_process.rs    cli/src/native/cdp/windows_process.rs
+  src/launch/process.rs            cli/src/native/cdp/chrome.rs (launch sequence, process-group kill)
+
+rustwright @fca14389e99726bca3210190b905e32663395b5c (MIT)
+  src/event_log.rs                 src/lib.rs (CDP event log design)
+  src/frames.rs                    src/lib.rs (page frame state design and its invariant tests)
+  src/transport/memory.rs          src/lib.rs (in-memory transport)
+  src/testing/mod.rs               src/lib.rs (navigation harness design)
+  src/launch/discovery.rs          src/lib.rs (browser candidate tables)
+  src/launch/process.rs            src/lib.rs (launch sequence, pipe file descriptors)
+
+Chromium @154.0.8037.92 (BSD-3-Clause)
+  src/launch/args.rs               chrome/test/chromedriver/chrome_launcher.cc (launch switches)
+  src/launch/profile.rs            chrome/test/chromedriver/chrome_launcher.cc (user data directory preparation)
+  src/templates/preferences.txt    chrome/test/chromedriver/chrome/preferences.txt
+  src/templates/local_state.txt    chrome/test/chromedriver/chrome/local_state.txt
+  src/window.rs                    chrome/test/chromedriver/chrome/chrome_impl.cc (window bounds)
+  src/settle.rs                    chrome/test/chromedriver/window_commands.cc,
+                                   chrome/test/chromedriver/chrome/web_view_impl.cc,
+                                   chrome/test/chromedriver/chrome/navigation_tracker.cc,
+                                   net/base/net_error_list.h (connection error table)
+  src/navigation.rs                chrome/test/chromedriver/chrome/navigation_tracker.cc
+  src/script.rs                    chrome/test/chromedriver/chrome/web_view_impl.cc (script execution)
+  src/element.rs                   chrome/test/chromedriver/element_util.cc,
+                                   chrome/test/chromedriver/element_commands.cc
+  src/input/keys.rs                chrome/test/chromedriver/key_converter.cc,
+                                   chrome/test/chromedriver/chrome/web_view_impl.cc (editing commands)
+  src/input/keyboard.rs            chrome/test/chromedriver/element_commands.cc (send keys, focus to element,
+                                   file upload),
+                                   chrome/test/chromedriver/chrome/web_view_impl.cc (key event dispatch)
+  src/input/mouse.rs               chrome/test/chromedriver/element_commands.cc,
+                                   chrome/test/chromedriver/element_util.cc,
+                                   chrome/test/chromedriver/window_commands.cc (click paths)
+  src/js/call_function.js          chrome/test/chromedriver/js/call_function.js
+  src/js/execute_script.js         chrome/test/chromedriver/js/execute_script.js
+  src/js/focus.js                  chrome/test/chromedriver/js/focus.js
+  src/js/get_element_region.js     chrome/test/chromedriver/js/get_element_region.js
+  src/js/is_option_element_toggleable.js
+                                   chrome/test/chromedriver/js/is_option_element_toggleable.js
+  src/js/execute_wrapper.js        chrome/test/chromedriver/chrome/web_view_impl.cc (call wrapper around
+                                   js/call_function.js and js/execute_script.js)
+
+Selenium atoms, Chromium @154.0.8037.92 / Selenium @c0b8ff6451419542dcecc53c922e1a79e4dc3940 (Apache-2.0)
+  src/js/atoms/get_text.js         third_party/selenium-atoms/atoms.cc (GET_TEXT)
+  src/js/atoms/is_displayed.js     third_party/selenium-atoms/atoms.cc (IS_DISPLAYED)
+  src/js/atoms/clear.js            third_party/selenium-atoms/atoms.cc (CLEAR)
+  src/js/atoms/get_location.js     third_party/selenium-atoms/atoms.cc (GET_LOCATION)
+  src/js/atoms/get_size.js         third_party/selenium-atoms/atoms.cc (GET_SIZE)
+  src/js/atoms/get_location_in_view.js
+                                   third_party/selenium-atoms/atoms.cc (GET_LOCATION_IN_VIEW)
+  src/js/atoms/is_selected.js      third_party/selenium-atoms/atoms.cc (IS_SELECTED)
+  src/js/atoms/is_enabled.js       third_party/selenium-atoms/atoms.cc (IS_ENABLED)
+  src/js/atoms/click.js            third_party/selenium-atoms/atoms.cc (CLICK)
+
+Playwright @5f47e4fb551fa486aec567b05ee11dc7ea6bbeda (Apache-2.0)
+  src/input/us_layout.rs           packages/playwright-core/src/server/usKeyboardLayout.ts

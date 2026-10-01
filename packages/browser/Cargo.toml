@@ -1,0 +1,60 @@
+[package]
+name = "flow-like-browser"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+publish = false
+
+[features]
+default = []
+test-support = []
+
+[dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "net", "sync", "time", "process", "fs", "io-util"] }
+tokio-tungstenite.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-platform-verifier = "0.7"
+webpki-root-certs = "1"
+reqwest = { workspace = true, features = ["stream"] }
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+base64.workspace = true
+thiserror.workspace = true
+futures-util.workspace = true
+url = "2.5"
+tracing.workspace = true
+uuid.workspace = true
+zip = { version = "8.2.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+md-5 = "0.10"
+socket2 = "0.6"
+dirs = "6"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_JobObjects",
+    "Win32_System_Registry",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+flow-like-browser = { path = ".", features = ["test-support"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "aws_lc_rs", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rcgen = "0.14"
+tempfile = "3"
+
+[[test]]
+name = "lifecycle"
+harness = false
+
+[[test]]
+name = "tls_provider_guard"

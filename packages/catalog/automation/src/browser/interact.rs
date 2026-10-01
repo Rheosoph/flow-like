@@ -95,9 +95,9 @@ impl NodeLogic for BrowserClickNode {
         let selector: String = context.evaluate_pin("selector").await?;
         let locator = super::selector::evaluate_locator(context, &selector).await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        let element = super::selector::find(&driver, &locator)
+        let element = super::selector::find_element(&page, &locator)
             .await
             .map_err(|e| {
                 flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
@@ -107,7 +107,7 @@ impl NodeLogic for BrowserClickNode {
             super::selector::optional_input(context, "button", "left".to_string()).await?;
         let modifiers: Vec<String> =
             super::selector::optional_input(context, "modifiers", Vec::new()).await?;
-        super::actions::click_with_modifiers(&driver, &element, &button, &modifiers).await?;
+        super::driver::click_element(&page, &element, &button, &modifiers, 1).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -212,9 +212,9 @@ impl NodeLogic for BrowserDoubleClickNode {
         let selector: String = context.evaluate_pin("selector").await?;
         let locator = super::selector::evaluate_locator(context, &selector).await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        let element = super::selector::find(&driver, &locator)
+        let element = super::selector::find_element(&page, &locator)
             .await
             .map_err(|e| {
                 flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
@@ -224,8 +224,7 @@ impl NodeLogic for BrowserDoubleClickNode {
             super::selector::optional_input(context, "button", "left".to_string()).await?;
         let modifiers: Vec<String> =
             super::selector::optional_input(context, "modifiers", Vec::new()).await?;
-        super::actions::click_with_modifiers_count(&driver, &element, &button, &modifiers, 2)
-            .await?;
+        super::driver::click_element(&page, &element, &button, &modifiers, 2).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -315,18 +314,16 @@ impl NodeLogic for BrowserHoverNode {
         let selector: String = context.evaluate_pin("selector").await?;
         let locator = super::selector::evaluate_locator(context, &selector).await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        let element = super::selector::find(&driver, &locator)
+        let element = super::selector::find_element(&page, &locator)
             .await
             .map_err(|e| {
                 flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
             })?;
 
-        driver
-            .action_chain()
-            .move_to_element_center(&element)
-            .perform()
+        element
+            .hover()
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to hover element: {}", e))?;
 
@@ -418,9 +415,9 @@ impl NodeLogic for BrowserScrollIntoViewNode {
         let selector: String = context.evaluate_pin("selector").await?;
         let locator = super::selector::evaluate_locator(context, &selector).await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        let element = super::selector::find(&driver, &locator)
+        let element = super::selector::find_element(&page, &locator)
             .await
             .map_err(|e| {
                 flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)

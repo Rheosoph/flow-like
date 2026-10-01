@@ -98,9 +98,9 @@ impl NodeLogic for BrowserTypeTextNode {
         let text: String = context.evaluate_pin("text").await?;
         let clear_first: bool = context.evaluate_pin("clear_first").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        let element = super::selector::find(&driver, &locator)
+        let element = super::selector::find_element(&page, &locator)
             .await
             .map_err(|e| {
                 flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
@@ -218,17 +218,17 @@ impl NodeLogic for BrowserPressKeyNode {
         let locator = super::selector::evaluate_locator(context, &selector).await?;
         let key: String = context.evaluate_pin("key").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
         let modifiers: Vec<String> =
             super::selector::optional_input(context, "modifiers", Vec::new()).await?;
         if !locator.value.is_empty() {
-            super::selector::find(&driver, &locator)
+            super::selector::find_element(&page, &locator)
                 .await?
                 .focus()
                 .await?;
         }
-        super::actions::key_chord(&driver, &key, &modifiers).await?;
+        super::driver::key_chord(&page, &key, &modifiers).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -260,7 +260,7 @@ impl NodeLogic for BrowserSelectOptionNode {
         let mut node = Node::new(
             "browser_select_option",
             "Select Option",
-            "Selects an option in a dropdown/select element",
+            "Selects an option in a dropdown/select element. Fails when no option has this value.",
             "Automation/Browser/Input",
         );
         node.set_flowscript_name("browser", "selectOption");
@@ -320,8 +320,6 @@ impl NodeLogic for BrowserSelectOptionNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::components::SelectElement;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
@@ -329,19 +327,15 @@ impl NodeLogic for BrowserSelectOptionNode {
         let locator = super::selector::evaluate_locator(context, &selector).await?;
         let value: String = context.evaluate_pin("value").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let page = session.browser_page(context).await?;
 
-        let element = super::selector::find(&driver, &locator)
+        let element = super::selector::find_element(&page, &locator)
             .await
             .map_err(|e| {
                 flow_like_types::anyhow!("Failed to find select element '{}': {}", selector, e)
             })?;
 
-        let select = SelectElement::new(&element)
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Element is not a select: {}", e))?;
-
-        select
+        element
             .select_by_value(&value)
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to select option: {}", e))?;

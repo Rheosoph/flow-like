@@ -2601,6 +2601,27 @@ impl Board {
         compress_to_file(store, to, &board).await
     }
 
+    /// Restore a saved graph in an open board without rerunning node updates. Keep the current
+    /// app, storage, and page revision context so later edits still use the same host resources.
+    pub fn restore_persisted_snapshot(&mut self, mut saved: Board) -> flow_like_types::Result<()> {
+        if saved.id != self.id {
+            return Err(flow_like_types::anyhow!(
+                "Cannot restore board `{}` into open board `{}`",
+                saved.id,
+                self.id
+            ));
+        }
+        saved.ensure_supported_format()?;
+        saved.validate_geometry_contracts()?;
+        saved.parent = self.parent.clone();
+        saved.board_dir = self.board_dir.clone();
+        saved.logic_nodes = self.logic_nodes.clone();
+        saved.app_state = self.app_state.clone();
+        saved.page_metadata_source = self.page_metadata_source;
+        *self = saved;
+        Ok(())
+    }
+
     // PAGE FUNCTIONS
 
     /// Where the pages of an arbitrary board on this app's store live.
@@ -3581,6 +3602,60 @@ mod tests {
     }
 
     struct DescribedEventLogic;
+
+    #[tokio::test]
+    async fn restore_persisted_snapshot_preserves_context_and_rejects_another_board() {
+        use crate::flow::node::NodeLogic;
+
+        let state = flow_state().await;
+        let mut live = super::Board::new(
+            Some("restore-board".into()),
+            Path::from("apps/restore"),
+            state.clone(),
+        );
+        live.parent = Some(super::BoardParent::App(std::sync::Weak::new()));
+        live.page_metadata_source = super::PageMetadataSource::Version((1, 2, 3));
+        let logic: Arc<dyn NodeLogic> = Arc::new(RefreshDefinitionLogic { label: "Runtime" });
+        live.logic_nodes
+            .insert("refresh_definition_test".into(), logic.clone());
+
+        let mut saved = super::Board::new_detached(Some(live.id.clone()), Path::from("unused"));
+        saved.name = "Persisted graph".to_string();
+        let node = logic.get_node();
+        let node_id = node.id.clone();
+        saved.nodes.insert(node_id.clone(), node);
+        saved
+            .insert_internal_ref(
+                format!("{}receipt", super::INTERNAL_BOARD_REF_PREFIX),
+                "saved receipt",
+            )
+            .unwrap();
+        let saved = super::Board::from_proto(saved.to_proto());
+        live.restore_persisted_snapshot(saved).unwrap();
+
+        assert_eq!(live.name, "Persisted graph");
+        assert!(live.nodes.contains_key(&node_id));
+        assert_eq!(live.board_dir, Path::from("apps/restore"));
+        assert_eq!(
+            live.page_metadata_source,
+            super::PageMetadataSource::Version((1, 2, 3))
+        );
+        assert!(matches!(live.parent, Some(super::BoardParent::App(_))));
+        assert!(Arc::ptr_eq(live.app_state.as_ref().unwrap(), &state));
+        assert!(Arc::ptr_eq(
+            &live.logic_nodes["refresh_definition_test"],
+            &logic
+        ));
+        assert_eq!(
+            live.internal_ref(&format!("{}receipt", super::INTERNAL_BOARD_REF_PREFIX)),
+            Some("saved receipt")
+        );
+
+        let before = live.to_proto();
+        let other = super::Board::new_detached(Some("another-board".into()), Path::from("unused"));
+        assert!(live.restore_persisted_snapshot(other).is_err());
+        assert_eq!(live.to_proto(), before);
+    }
 
     #[flow_like_types::async_trait]
     impl crate::flow::node::NodeLogic for DescribedEventLogic {

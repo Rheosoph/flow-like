@@ -30,10 +30,6 @@ const TEST_CFG_MARKERS: &[&str] = &["#[cfg(test)]", "#[cfg(all(test"];
 /// Path prefixes (relative to `packages/catalog`) allowed to build raw clients.
 const FIXED_HOST_CLIENTS: &[(&str, &str)] = &[
     (
-        "automation/src/browser/",
-        "WebDriver / DevTools endpoints of browsers the RPA nodes drive on the host",
-    ),
-    (
         "data/atlassian/src/data/atlassian/me.rs",
         "api.atlassian.com",
     ),

@@ -52,6 +52,63 @@ pub(crate) fn sse_response(events: &[Value]) -> String {
     format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}")
 }
 
+/// Shaped like FlowPilot's `interact_app_page`: `value` has no `type`, not every property is
+/// required, and `payload` is an open object. Strict mode can express none of that.
+pub(crate) fn typeless_tool() -> rig::completion::ToolDefinition {
+    rig::completion::ToolDefinition {
+        name: "interact_app_page".to_string(),
+        description: "Interact with components on an app page.".to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "actions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string"},
+                            "component_id": {"type": "string"},
+                            "value": {"description": "Any JSON value the component accepts."},
+                        },
+                        "required": ["action", "component_id"],
+                    },
+                },
+                "payload": {"type": "object"},
+            },
+            "required": ["actions"],
+        }),
+    }
+}
+
+/// The request body carries `tool` alone, as written, with an explicit `strict: false`.
+pub(crate) fn assert_sends_tool_as_written(body: &Value, tool: &rig::completion::ToolDefinition) {
+    let tools = body["tools"].as_array().expect("request has a tools array");
+    assert_eq!(tools.len(), 1, "{body}");
+    assert_eq!(tools[0]["type"], "function", "{body}");
+    assert_eq!(tools[0]["name"], tool.name.as_str(), "{body}");
+    assert_eq!(tools[0].get("strict"), Some(&Value::Bool(false)), "{body}");
+    assert_eq!(tools[0]["parameters"], tool.parameters, "{body}");
+}
+
+/// A completed OpenAI Responses API response with one text message.
+pub(crate) fn responses_completion(model: &str) -> Value {
+    serde_json::json!({
+        "id": "resp-test",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": model,
+        "output": [{
+            "type": "message",
+            "id": "msg-test",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }],
+        "usage": {"input_tokens": 12, "output_tokens": 1, "total_tokens": 13},
+    })
+}
+
 /// A one-choice OpenAI-compatible chat completion.
 pub(crate) fn chat_completion(model: &str, finish_reason: &str, completion_tokens: u32) -> Value {
     serde_json::json!({

@@ -16,6 +16,7 @@ runtime = [
     "dep:sha2",
     "dep:tokio",
     "dep:tracing",
+    "dep:zstd",
     "dep:flow-like-storage",
     "dep:flow-like-types",
 ]
@@ -40,6 +41,7 @@ reqwest = { workspace = true, optional = true }
 sha2 = { version = "0.10", optional = true }
 tokio = { version = "1", features = ["sync", "time", "rt", "macros"], optional = true }
 tracing = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
 flow-like-storage = { workspace = true, optional = true, features = ["files", "database-runtime"] }
 flow-like-types = { workspace = true, optional = true }
 
@@ -47,5 +49,9 @@ flow-like-types = { workspace = true, optional = true }
 libc = "0.2"
 
 [dev-dependencies]
+# Hosts such as the desktop enable `extra_check`, which rejects row-returning statements in `execute_batch`.
+rusqlite = { version = "0.32.1", features = ["bundled", "extra_check"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
+# Cloud shallow clones and legacy index manifests in the lazy mirror tests.
+lance-table = "=8.0.0"

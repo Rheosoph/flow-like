@@ -1300,5 +1300,13 @@
 	"exploreLeaveTitle": "",
 	"explorePreviewUnavailable": "",
 	"exploreRuleMatches": "",
-	"exploreSummarySpotlightVisible": ""
+	"exploreSummarySpotlightVisible": "",
+	"agentBackendOperationsDescription": "Eventos anônimos sobre o funcionamento da CLI. Os resultados e as durações abrangem a inicialização, as verificações de autenticação, a descoberta de modelos, as execuções e o encerramento.",
+	"agentErrorReports_one": "{{count}} relatório de erro",
+	"agentErrorReports_other": "{{count}} relatórios de erro",
+	"agentOperationP95": "Duração da operação no percentil 95",
+	"agentOperation_one": "operação",
+	"agentOperation_other": "operações",
+	"agentErrorReports_many": "{{count}} relatórios de erro",
+	"agentOperation_many": "operações"
 }

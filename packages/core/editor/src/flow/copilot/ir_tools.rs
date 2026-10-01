@@ -28,7 +28,7 @@ use super::ir::{
     FlowIrInterface, FlowIrLiteral, FlowIrModule, FlowIrObjectField, FlowIrParam, FlowIrProgram,
     FlowIrStep, FlowIrType, FlowIrValue, FlowIrVariable, FlowModuleKind,
     MAX_FLOW_IR_CAPABILITY_REQUIREMENTS, MAX_FLOW_IR_PIN_REQUIREMENTS_PER_DIRECTION,
-    ReachableFlowIrOccurrence, compile_flow_ir, plan_flow_capabilities,
+    ReachableFlowIrOccurrence, any_json_value_schema, compile_flow_ir, plan_flow_capabilities,
     reachable_flow_ir_occurrences, validate_flow_capability_usage, validate_ir_resource_limits,
 };
 use super::provider::{CatalogProvider, metadata_to_signature};
@@ -41,7 +41,8 @@ use super::types::{BoardCommand, FlowIrCommitToken, NodeMetadata, PinMetadata};
 use crate::flow::ast::{
     FlowScriptDiagnostic, FlowScriptDiagnosticCode, FlowScriptDiagnosticFix,
     FlowScriptDiagnosticPhase, ReconcileMode, ReconcileResult, RenderOptions, board_to_flowscript,
-    catalog_names, destructive_flowscript_command_summaries, reconcile_with_catalog_mode,
+    catalog_names, destructive_flowscript_command_summaries, parse_pin_occurrence_ref,
+    reconcile_with_catalog_mode,
 };
 use crate::flow::board::Board;
 
@@ -49,6 +50,7 @@ const MAX_FLOW_IR_DRAFTS_PER_STORE: usize = 32;
 const MAX_FLOWSCRIPT_DRAFTS_PER_STORE: usize = 32;
 const MAX_FLOW_IR_DRAFT_ID_BYTES: usize = 128;
 const MAX_FLOWSCRIPT_SOURCE_BYTES: usize = 1_048_576;
+const MAX_FLOWSCRIPT_INITIAL_EDITS: usize = 64;
 const MAX_FLOWSCRIPT_DRAFT_STORE_BYTES: usize = 8 * 1_048_576;
 const MAX_FLOWSCRIPT_REPAIR_DECLARATIONS: usize = 3;
 const MAX_FLOWSCRIPT_REPAIR_COMPANION_DECLARATIONS: usize = 8;
@@ -985,6 +987,18 @@ impl FlowIrDraftStore {
                 format!("source must be at most {MAX_FLOWSCRIPT_SOURCE_BYTES} bytes"),
             );
         }
+        if args.source.is_empty() == args.edits.is_empty() {
+            return FlowScriptDraftResponse::error(
+                "FLOWSCRIPT_SOURCE_INPUT_REQUIRED",
+                "Provide exactly one non-empty source document or non-empty edits list.",
+            );
+        }
+        if !args.edits.is_empty() && args.replace_existing {
+            return FlowScriptDraftResponse::error(
+                "FLOWSCRIPT_INITIAL_EDITS_REQUIRE_NEW_DRAFT",
+                "edits start a fresh draft from the current board. Use patch_flowscript to repair retained source.",
+            );
+        }
 
         let base_fingerprint = board_fingerprint(board);
 
@@ -1036,6 +1050,18 @@ impl FlowIrDraftStore {
             );
         }
 
+        // Initial edits use the same anchored render supplied in the prompt. Resolve the whole
+        // batch before claiming request scope or retaining anything, so a rejected edit leaves
+        // no partial draft and cannot advance the authoring progress ledger.
+        let source = if args.edits.is_empty() {
+            args.source
+        } else {
+            match apply_initial_flowscript_edits(board, &args.edits) {
+                Ok(source) => source,
+                Err((code, message)) => return FlowScriptDraftResponse::error(code, message),
+            }
+        };
+
         let claimed_request = if let Some(existing) = &existing {
             ClaimedRequestAcceptanceContract {
                 contract: existing.request_acceptance_contract.clone(),
@@ -1056,11 +1082,11 @@ impl FlowIrDraftStore {
         let evaluation = self.evaluate_flowscript(
             board,
             catalog,
-            &args.source,
+            &source,
             args.mode,
             Some(&claimed_request.contract),
         );
-        let candidate = retained_flowscript_candidate(&args.source, &evaluation);
+        let candidate = retained_flowscript_candidate(&source, &evaluation);
         if let Some(existing) = &existing
             && !args.allow_scope_reduction
             && let Some(regression) = detect_flowscript_candidate_regression(
@@ -1099,7 +1125,7 @@ impl FlowIrDraftStore {
             request_acceptance_contract: claimed_request.contract,
             request_identity: claimed_request.request_identity,
             mode: args.mode,
-            source: args.source,
+            source,
             evaluation,
             evaluation_catalog_fingerprint: flowscript_catalog_fingerprint(catalog),
             best_candidate,
@@ -3759,6 +3785,24 @@ impl FlowIrDraftStore {
             })
     }
 
+    /// Read the original source for an exact retained FlowScript review. Typed IR reviews have no
+    /// authored source. This lookup leaves the claim intact and never recompiles the board.
+    pub fn pending_flowscript_source_for_commit(
+        &self,
+        token: &FlowIrCommitToken,
+    ) -> Option<String> {
+        let drafts = self.source_drafts.lock().ok()?;
+        let draft = drafts.get(token.draft_id.trim())?;
+        (draft.board_id == token.board_id
+            && draft.revision == token.revision
+            && draft.committed_revision == Some(token.revision)
+            && draft.pending_revision == Some(token.revision)
+            && draft.base_fingerprint == token.base_fingerprint
+            && draft.pending_claim_id.as_deref() == Some(token.claim_id.as_str())
+            && draft.pending_commands.is_some())
+        .then(|| draft.source.clone())
+    }
+
     /// Return the host-side review policy for an exact pending batch. Replacement mode is always
     /// destructive-review gated, even when the current board happens to be empty and reconcile
     /// derives no removal commands. Callers must not treat the serialized token flag as authority.
@@ -4850,8 +4894,13 @@ fn enrich_flowscript_diagnostics_with_catalog(
         let Some(authored_name) = diagnostic.declaration.as_deref() else {
             continue;
         };
+        let missing_inputs = diagnostic
+            .message
+            .split_once(" is missing required inputs: ")
+            .map(|(_, inputs)| inputs.split(',').map(str::trim).collect::<Vec<_>>())
+            .unwrap_or_default();
         let (declarations, companion_declarations, exact_match) =
-            catalog_repair_declarations(catalog, authored_name, diagnostic.code);
+            catalog_repair_declarations(catalog, authored_name, diagnostic.code, &missing_inputs);
         if declarations.is_empty() {
             continue;
         }
@@ -4868,13 +4917,14 @@ fn enrich_flowscript_diagnostics_with_catalog(
         fix.declaration_search = None;
         fix.catalog_declarations = declarations;
         fix.companion_declarations = companion_declarations;
-        fix.summary = if exact_match {
-            "Patch the call to use the exact function and pin names in the supplied live-catalog declaration."
-                .to_string()
+        if exact_match {
+            fix.summary.push_str(
+                " Use the supplied live-catalog declaration for the exact function and pin names.",
+            );
         } else {
-            "Choose a supplied live-catalog candidate only if it matches the intended operation, then patch the function name and all arguments to that exact signature."
-                .to_string()
-        };
+            fix.summary = "Choose a supplied live-catalog candidate only if it matches the intended operation, then patch the function name and all arguments to that exact signature."
+                .to_string();
+        }
     }
 }
 
@@ -4882,14 +4932,54 @@ fn catalog_repair_declarations(
     catalog: &[NodeMetadata],
     authored_name: &str,
     code: FlowScriptDiagnosticCode,
+    missing_inputs: &[&str],
 ) -> (Vec<String>, Vec<String>, bool) {
-    let exact_metadata = catalog
+    let mut exact_metadata = catalog
         .iter()
         .filter(|metadata| {
             let signature = metadata_to_signature(metadata);
-            signature.display == authored_name || metadata.name == authored_name
+            signature.display == authored_name
+                || metadata.name == authored_name
+                || signature.qualified() == authored_name
         })
         .collect::<Vec<_>>();
+    let mut unique_match = exact_metadata.len() == 1;
+    // Method calls and names opened with `use` report the bare alias. Several namespaces may
+    // share it, so provide those signatures as candidates without selecting an operation.
+    if exact_metadata.is_empty() {
+        exact_metadata = catalog
+            .iter()
+            .filter(|metadata| metadata_to_signature(metadata).alias_name() == authored_name)
+            .collect();
+        unique_match = exact_metadata.len() == 1;
+        // A shared alias such as `get` can span many namespaces. The reported missing inputs
+        // identify relevant candidates before the bounded declaration list is truncated.
+        if !missing_inputs.is_empty() {
+            let matching_inputs = exact_metadata
+                .iter()
+                .copied()
+                .filter(|metadata| {
+                    missing_inputs.iter().all(|name| {
+                        let (name, occurrence) =
+                            parse_pin_occurrence_ref(name).unwrap_or((name, 0));
+                        metadata
+                            .inputs
+                            .iter()
+                            .filter(|pin| {
+                                pin.data_type != "Execution"
+                                    && (pin.name == name
+                                        || flow_like_ast::to_camel_case(&pin.name) == name)
+                            })
+                            .nth(occurrence)
+                            .is_some()
+                    })
+                })
+                .collect::<Vec<_>>();
+            if !matching_inputs.is_empty() {
+                exact_metadata = matching_inputs;
+            }
+        }
+    }
     let mut exact = exact_metadata
         .iter()
         .map(|metadata| compact_catalog_declaration(&metadata_to_signature(metadata)))
@@ -4917,7 +5007,7 @@ fn catalog_repair_declarations(
                 break;
             }
         }
-        return (exact, companion_declarations, true);
+        return (exact, companion_declarations, unique_match);
     }
 
     if code != FlowScriptDiagnosticCode::FsCatalogDeclarationNotFound {
@@ -9444,8 +9534,8 @@ impl FlowIrDraftMode {
     }
 }
 
-/// Begin a retained code-first FlowScript session. The source is kept byte-for-byte so streamed
-/// tool arguments and every subsequent response can be rendered as the same editable document.
+/// Begin a retained FlowScript session from a complete document or exact edits to the live board.
+/// The resulting source is retained byte-for-byte for previews and subsequent patches.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WriteFlowScriptArgs {
@@ -9456,12 +9546,97 @@ pub struct WriteFlowScriptArgs {
     /// the user has authorized at commit time.
     #[serde(default)]
     pub mode: FlowIrDraftMode,
-    #[serde(alias = "flowscript", alias = "script", alias = "content")]
+    /// Complete source document. Provide exactly one of source or edits.
+    #[serde(default, alias = "flowscript", alias = "script", alias = "content")]
     pub source: String,
+    /// For a fresh draft, apply these exact replacements in order to the current anchored board
+    /// render. The host preserves all other source text. Provide exactly one of source or edits,
+    /// and omit replace_existing.
+    #[serde(default)]
+    #[schemars(length(max = 64))]
+    pub edits: Vec<FlowScriptTextEdit>,
     /// Explicit gate for intentionally replacing a substantial retained application with a much
     /// smaller one. Ordinary in-place repairs never need this.
     #[serde(default)]
     pub allow_scope_reduction: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FlowScriptTextEdit {
+    /// Non-empty text that must occur exactly once after preceding edits are applied.
+    #[serde(alias = "search")]
+    pub old_text: String,
+    #[serde(alias = "replacement")]
+    pub new_text: String,
+}
+
+fn apply_initial_flowscript_edits(
+    board: &Board,
+    edits: &[FlowScriptTextEdit],
+) -> Result<String, (&'static str, String)> {
+    if edits.len() > MAX_FLOWSCRIPT_INITIAL_EDITS
+        || edits.iter().fold(0usize, |bytes, edit| {
+            bytes
+                .saturating_add(edit.old_text.len())
+                .saturating_add(edit.new_text.len())
+        }) > MAX_FLOWSCRIPT_SOURCE_BYTES
+    {
+        return Err((
+            "FLOWSCRIPT_INITIAL_EDITS_SIZE_LIMIT_EXCEEDED",
+            format!(
+                "Provide at most {MAX_FLOWSCRIPT_INITIAL_EDITS} edits totaling at most {MAX_FLOWSCRIPT_SOURCE_BYTES} bytes."
+            ),
+        ));
+    }
+    let original = board_to_flowscript(
+        board,
+        &RenderOptions {
+            anchors: true,
+            ..Default::default()
+        },
+    );
+    let mut source = original.clone();
+    for (index, edit) in edits.iter().enumerate() {
+        let Some(first_character) = edit.old_text.chars().next() else {
+            return Err((
+                "FLOWSCRIPT_PATCH_TEXT_REQUIRED",
+                format!("edits[{index}].old_text must identify one non-empty source range."),
+            ));
+        };
+        let Some(start) = source.find(&edit.old_text) else {
+            return Err((
+                "FLOWSCRIPT_PATCH_NOT_UNIQUE",
+                format!("edits[{index}].old_text does not occur in the current source."),
+            ));
+        };
+        // Search from the next character, so overlapping matches are ambiguous as well.
+        if source[start + first_character.len_utf8()..].contains(&edit.old_text) {
+            return Err((
+                "FLOWSCRIPT_PATCH_NOT_UNIQUE",
+                format!("edits[{index}].old_text occurs more than once in the current source."),
+            ));
+        }
+        let new_len = source
+            .len()
+            .saturating_sub(edit.old_text.len())
+            .saturating_add(edit.new_text.len());
+        if new_len > MAX_FLOWSCRIPT_SOURCE_BYTES {
+            return Err((
+                "FLOWSCRIPT_SOURCE_SIZE_LIMIT_EXCEEDED",
+                format!("edits[{index}] would exceed {MAX_FLOWSCRIPT_SOURCE_BYTES} source bytes."),
+            ));
+        }
+        source.replace_range(start..start + edit.old_text.len(), &edit.new_text);
+    }
+    if source == original {
+        return Err((
+            "FLOWSCRIPT_INITIAL_EDITS_NO_CHANGE",
+            "The edits leave the current board source unchanged. Submit a concrete behavior change."
+                .to_string(),
+        ));
+    }
+    Ok(source)
 }
 
 /// Apply one deterministic textual repair to a retained source document. `old_text` must occur
@@ -9507,9 +9682,12 @@ pub struct TestFlowScriptArgs {
     /// Exact named Generic Event entry to execute on the disposable draft board.
     pub entry: String,
     #[serde(default)]
+    #[schemars(schema_with = "any_json_value_schema")]
     pub payload: Option<serde_json::Value>,
-    /// Expected single Generic Event result, compared by the host using JSON equality.
+    /// Expected single Generic Event result, compared by the host using JSON equality. Any JSON
+    /// value: object, array, string, number, boolean or null.
     #[serde(deserialize_with = "deserialize_required_test_value")]
+    #[schemars(schema_with = "any_json_value_schema")]
     pub expected_output: serde_json::Value,
 }
 
@@ -9916,7 +10094,7 @@ impl BoardScopePlan {
         let active = self.active_segment();
         let strategy_rule = match self.strategy {
             ScopeStrategy::Single => {
-                "Author the whole request as one full-shape document, exactly as before."
+                "Complete the whole request in one retained document. For focused existing-board changes, use exact edits with write_flowscript; the host preserves unchanged source. New boards and broad rewrites use full source."
             }
             ScopeStrategy::Staged => {
                 "Write segment 1 alone first, then grow that SAME draft_id segment by segment, checking after each. Commit once, after the final segment checks valid."
@@ -10996,10 +11174,158 @@ function calculatePricing() {
             &catalog,
             "primaryCall",
             FlowScriptDiagnosticCode::FsUnknownInputPin,
+            &[],
         );
         assert!(exact);
         assert_eq!(declarations.len(), 1);
         assert!(companions.is_empty());
+    }
+
+    #[test]
+    fn missing_required_inputs_include_live_declarations_for_aliases() {
+        let mut getter = metadata(
+            "struct_get",
+            vec![pin("struct", "Struct"), pin("field", "String")],
+            vec![pin("value", "Generic")],
+        );
+        getter.namespace = Some("struct".to_string());
+        getter.alias = Some("get".to_string());
+        getter.receiver = Some("struct".to_string());
+        getter.required_inputs = vec!["field".to_string()];
+        let catalog = vec![
+            metadata(
+                "events_simple",
+                Vec::new(),
+                vec![pin("exec_out", "Execution")],
+            ),
+            getter,
+        ];
+        for call in ["structGet", "struct::get", "get"] {
+            let source =
+                format!("use struct::*\neventsSimple() {{\n    {call}({{ struct: {{}} }})\n}}\n");
+            let evaluation = evaluate_flowscript_source(
+                &empty_board(),
+                &catalog,
+                &source,
+                FlowIrDraftMode::Additive,
+                None,
+            );
+            let diagnostic = evaluation
+                .diagnostics
+                .iter()
+                .find(|diagnostic| {
+                    diagnostic.code == FlowScriptDiagnosticCode::FsUnresolvedArgument
+                        && diagnostic.pin.as_deref() == Some("field")
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing required field for {call}: {:?}",
+                        evaluation.diagnostics
+                    )
+                });
+            assert_eq!(diagnostic.spans[0].start.line, 3);
+            let fix = diagnostic.fix.as_ref().expect("required input repair");
+            assert_eq!(fix.catalog_declarations.len(), 1);
+            assert!(fix.catalog_declarations[0].contains("struct::get("));
+            assert!(fix.catalog_declarations[0].contains("field: string"));
+            assert!(fix.summary.contains("Supply each missing required input"));
+            assert!(fix.declaration_search.is_none());
+        }
+    }
+
+    #[test]
+    fn catalog_repair_keeps_shared_method_aliases_as_candidates() {
+        let catalog = ["struct", "map"].map(|namespace| {
+            let mut getter = metadata(
+                &format!("{namespace}_get"),
+                vec![pin("field", "String")],
+                vec![pin("value", "Generic")],
+            );
+            getter.namespace = Some(namespace.to_string());
+            getter.alias = Some("get".to_string());
+            getter
+        });
+        let (declarations, _, exact) = catalog_repair_declarations(
+            &catalog,
+            "get",
+            FlowScriptDiagnosticCode::FsUnresolvedArgument,
+            &[],
+        );
+        assert_eq!(declarations.len(), 2);
+        assert!(
+            !exact,
+            "a shared alias does not identify the intended operation"
+        );
+        let (declarations, _, exact) = catalog_repair_declarations(
+            &catalog,
+            "struct::get",
+            FlowScriptDiagnosticCode::FsUnresolvedArgument,
+            &[],
+        );
+        assert!(exact);
+        assert_eq!(declarations.len(), 1);
+        assert!(declarations[0].contains("struct::get("));
+    }
+
+    #[test]
+    fn missing_input_filters_shared_aliases_before_the_declaration_limit() {
+        let catalog = ["array", "files", "google::docs", "map", "struct"].map(|namespace| {
+            let mut getter = metadata(
+                &format!("{}_get", namespace.replace("::", "_")),
+                vec![pin(
+                    if namespace == "struct" {
+                        "field"
+                    } else {
+                        "index"
+                    },
+                    "String",
+                )],
+                vec![pin("value", "Generic")],
+            );
+            getter.namespace = Some(namespace.to_string());
+            getter.alias = Some("get".to_string());
+            getter
+        });
+        let mut diagnostics = crate::flow::ast::structure_reconcile_diagnostics(
+            &["node `get` is missing required inputs: field".to_string()],
+            None,
+        );
+        enrich_flowscript_diagnostics_with_catalog(&mut diagnostics, &catalog);
+        let fix = diagnostics[0].fix.as_ref().expect("input repair context");
+        assert_eq!(fix.catalog_declarations.len(), 1);
+        assert!(fix.catalog_declarations[0].contains("struct::get("));
+        assert!(fix.summary.contains("candidate"));
+    }
+
+    #[test]
+    fn missing_input_alias_filter_respects_repeated_pin_occurrences() {
+        let mut catalog = ["bool", "bytes", "float", "int", "string"]
+            .map(|namespace| {
+                let mut equal = metadata(
+                    &format!("{namespace}_equal"),
+                    vec![pin(namespace, "String"), pin(namespace, "String")],
+                    vec![pin("equal", "Boolean")],
+                );
+                equal.namespace = Some(namespace.to_string());
+                equal.alias = Some("equal".to_string());
+                equal
+            })
+            .to_vec();
+        let mut one_string_input = catalog[4].clone();
+        one_string_input.name = "single_equal".to_string();
+        one_string_input.namespace = Some("single".to_string());
+        one_string_input.inputs.pop();
+        catalog.push(one_string_input);
+
+        let (declarations, _, exact) = catalog_repair_declarations(
+            &catalog,
+            "equal",
+            FlowScriptDiagnosticCode::FsUnresolvedArgument,
+            &["string[#2]"],
+        );
+        assert!(!exact);
+        assert_eq!(declarations.len(), 1);
+        assert!(declarations[0].contains("string::equal("));
     }
 
     fn program(message: &str) -> FlowIrProgram {
@@ -11155,6 +11481,7 @@ function calculatePricing() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: source.to_string(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -11315,6 +11642,7 @@ function calculatePricing() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: source.to_string(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -11482,6 +11810,327 @@ function calculatePricing() {
         format!("eventsSimple() {{\n    logInfo({{ message: {message:?} }})\n}}\n")
     }
 
+    fn board_for_initial_flowscript_edits() -> Board {
+        use crate::flow::node::Node;
+
+        let mut board = empty_board();
+        let mut event = Node::new("events_simple", "events_simple", "", "");
+        event.id = "kept-event".to_string();
+        event.start = Some(true);
+        let event_pin = event
+            .add_output_pin("exec_out", "exec_out", "", VariableType::Execution)
+            .id
+            .clone();
+        let mut log = Node::new("log_info", "log_info", "", "");
+        log.id = "kept-log".to_string();
+        let log_pin = log.add_input_pin("exec_in", "exec_in", "", VariableType::Execution);
+        log_pin.depends_on.insert(event_pin.clone());
+        event
+            .pins
+            .get_mut(&event_pin)
+            .unwrap()
+            .connected_to
+            .insert(log_pin.id.clone());
+        log.add_output_pin("exec_out", "exec_out", "", VariableType::Execution);
+        log.add_input_pin("message", "message", "", VariableType::String)
+            .set_default_value(Some(json!("before")));
+        board.nodes.insert(event.id.clone(), event);
+        board.nodes.insert(log.id.clone(), log);
+        for name in ["keptFirst", "keptSecond"] {
+            let mut variable = Variable::new(name, VariableType::String, ValueType::Normal);
+            variable.id = name.to_string();
+            variable.set_default_value(json!(if name == "keptFirst" {
+                "shared aaa"
+            } else {
+                "shared"
+            }));
+            board.variables.insert(variable.id.clone(), variable);
+        }
+        board
+    }
+
+    #[test]
+    fn initial_flowscript_edits_preserve_live_source_and_use_normal_draft_lifecycle() {
+        let board = board_for_initial_flowscript_edits();
+        let original = board_to_flowscript(
+            &board,
+            &RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+        assert!(original.contains("//@n:kept-event"), "{original}");
+        assert!(original.contains("//@n:kept-log"), "{original}");
+        let store = FlowIrDraftStore::new();
+        let binding = store.bind_request_acceptance_contract(&board.id, "Log the updated message.");
+        let args = serde_json::from_value::<WriteFlowScriptArgs>(json!({
+            "draft_id": "compact-first-write",
+            "edits": [{ "old_text": "\"before\"", "new_text": "\"after\"" }]
+        }))
+        .unwrap();
+        let written = store.write_flowscript_with_acceptance_binding(
+            &board,
+            &flowscript_catalog(),
+            args,
+            &binding,
+        );
+        assert_eq!(written.status, "draft_started", "{written:#?}");
+        assert_eq!(written.revision, Some(0));
+        {
+            let drafts = store.source_drafts.lock().unwrap();
+            let commands = &drafts["compact-first-write"].evaluation.commands;
+            assert!(
+                commands.iter().any(|command| matches!(command,
+                    BoardCommand::UpdateNodePin { node_id, value, .. }
+                        if node_id == "kept-log" && value == &json!("after")
+                )),
+                "{commands:#?}"
+            );
+            assert!(
+                !commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::AddNode { .. } | BoardCommand::RemoveNode { .. }
+                )),
+                "{commands:#?}"
+            );
+        }
+        let expected = original.replacen("\"before\"", "\"after\"", 1);
+        assert_eq!(written.source.as_deref(), Some(expected.as_str()));
+        assert_eq!(
+            written.base_fingerprint.as_deref(),
+            Some(board_fingerprint(&board).as_str())
+        );
+        assert_eq!(
+            board_to_flowscript(
+                &board,
+                &RenderOptions {
+                    anchors: true,
+                    ..Default::default()
+                }
+            ),
+            original
+        );
+
+        let patched = store.patch_flowscript_with_acceptance_binding(
+            &board,
+            &flowscript_catalog(),
+            PatchFlowScriptArgs {
+                draft_id: "compact-first-write".to_string(),
+                expected_revision: 0,
+                old_text: "\"after\"".to_string(),
+                new_text: "\"repaired\"".to_string(),
+                allow_scope_reduction: false,
+            },
+            &binding,
+        );
+        assert_eq!(patched.revision, Some(1), "{patched:#?}");
+        let mut advanced = board.clone();
+        advanced
+            .variables
+            .get_mut("keptFirst")
+            .unwrap()
+            .set_default_value(json!("external change"));
+        let stale = store.check_flowscript_with_acceptance_binding(
+            &advanced,
+            &flowscript_catalog(),
+            CheckFlowScriptArgs {
+                draft_id: "compact-first-write".to_string(),
+                expected_revision: 1,
+            },
+            &binding,
+        );
+        assert_eq!(
+            stale.code.as_deref(),
+            Some("FLOWSCRIPT_BASE_REVISION_CONFLICT")
+        );
+    }
+
+    #[test]
+    fn initial_flowscript_edits_reject_missing_ambiguous_and_empty_text_atomically() {
+        let board = board_for_initial_flowscript_edits();
+        for (old_text, code) in [
+            ("missing source text", "FLOWSCRIPT_PATCH_NOT_UNIQUE"),
+            ("shared", "FLOWSCRIPT_PATCH_NOT_UNIQUE"),
+            ("aa", "FLOWSCRIPT_PATCH_NOT_UNIQUE"),
+            ("", "FLOWSCRIPT_PATCH_TEXT_REQUIRED"),
+        ] {
+            let store = FlowIrDraftStore::new();
+            let binding =
+                store.bind_request_acceptance_contract(&board.id, "Log the updated message.");
+            let args = serde_json::from_value::<WriteFlowScriptArgs>(json!({
+                "draft_id": "atomic-initial-edits",
+                "edits": [
+                    { "old_text": "\"before\"", "new_text": "\"after\"" },
+                    { "old_text": old_text, "new_text": "replacement" }
+                ]
+            }))
+            .unwrap();
+            let rejected = store.write_flowscript_with_acceptance_binding(
+                &board,
+                &flowscript_catalog(),
+                args,
+                &binding,
+            );
+            assert_eq!(rejected.code.as_deref(), Some(code), "{rejected:#?}");
+            assert!(store.source_drafts.lock().unwrap().is_empty());
+            assert_eq!(store.global_evaluation_count(), 0);
+            let retry = serde_json::from_value::<WriteFlowScriptArgs>(json!({
+                "draft_id": "successful-after-rejection",
+                "edits": [{ "old_text": "\"before\"", "new_text": "\"after\"" }]
+            }))
+            .unwrap();
+            let written = store.write_flowscript_with_acceptance_binding(
+                &board,
+                &flowscript_catalog(),
+                retry,
+                &binding,
+            );
+            assert_eq!(
+                written.status, "draft_started",
+                "a rejected batch must not claim request scope: {written:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn initial_flowscript_edits_require_one_input_and_a_fresh_draft() {
+        let board = board_for_initial_flowscript_edits();
+        let store = FlowIrDraftStore::new();
+        let edit = json!({ "old_text": "\"before\"", "new_text": "\"after\"" });
+        for args in [
+            json!({ "draft_id": "invalid", "source": valid_flowscript("extra"), "edits": [edit.clone()] }),
+            json!({ "draft_id": "invalid" }),
+            json!({ "draft_id": "invalid", "source": "", "edits": [] }),
+        ] {
+            let rejected = store.write_flowscript(
+                &board,
+                &flowscript_catalog(),
+                serde_json::from_value(args).unwrap(),
+            );
+            assert_eq!(
+                rejected.code.as_deref(),
+                Some("FLOWSCRIPT_SOURCE_INPUT_REQUIRED")
+            );
+        }
+        let args = json!({ "draft_id": "initial", "edits": [edit] });
+        let written = store.write_flowscript(
+            &board,
+            &flowscript_catalog(),
+            serde_json::from_value(args.clone()).unwrap(),
+        );
+        assert_eq!(written.status, "draft_started", "{written:#?}");
+        let duplicate = store.write_flowscript(
+            &board,
+            &flowscript_catalog(),
+            serde_json::from_value(args.clone()).unwrap(),
+        );
+        assert_eq!(
+            duplicate.code.as_deref(),
+            Some("FLOWSCRIPT_DRAFT_ALREADY_EXISTS")
+        );
+        let mut replacement = args;
+        replacement["replace_existing"] = json!(true);
+        let rejected = store.write_flowscript(
+            &board,
+            &flowscript_catalog(),
+            serde_json::from_value(replacement).unwrap(),
+        );
+        assert_eq!(
+            rejected.code.as_deref(),
+            Some("FLOWSCRIPT_INITIAL_EDITS_REQUIRE_NEW_DRAFT")
+        );
+        assert_eq!(store.source_drafts.lock().unwrap()["initial"].revision, 0);
+    }
+
+    #[test]
+    fn initial_flowscript_edits_are_ordered_bounded_and_must_change_source() {
+        let board = board_for_initial_flowscript_edits();
+        let make_edit = |old: &str, new: &str| FlowScriptTextEdit {
+            old_text: old.to_string(),
+            new_text: new.to_string(),
+        };
+        let source = apply_initial_flowscript_edits(
+            &board,
+            &[
+                make_edit("\"before\"", "\"after\""),
+                make_edit("\"after\"", "\"final\""),
+            ],
+        )
+        .unwrap();
+        assert!(source.contains("\"final\""));
+        assert_eq!(
+            apply_initial_flowscript_edits(
+                &board,
+                &[
+                    make_edit("\"before\"", "\"after\""),
+                    make_edit("\"after\"", "\"before\""),
+                ]
+            )
+            .unwrap_err()
+            .0,
+            "FLOWSCRIPT_INITIAL_EDITS_NO_CHANGE"
+        );
+        assert_eq!(
+            apply_initial_flowscript_edits(
+                &board,
+                &vec![make_edit("before", "after"); MAX_FLOWSCRIPT_INITIAL_EDITS + 1]
+            )
+            .unwrap_err()
+            .0,
+            "FLOWSCRIPT_INITIAL_EDITS_SIZE_LIMIT_EXCEEDED"
+        );
+        assert_eq!(
+            apply_initial_flowscript_edits(
+                &board,
+                &[make_edit(
+                    "before",
+                    &"x".repeat(MAX_FLOWSCRIPT_SOURCE_BYTES)
+                )]
+            )
+            .unwrap_err()
+            .0,
+            "FLOWSCRIPT_INITIAL_EDITS_SIZE_LIMIT_EXCEEDED"
+        );
+    }
+
+    #[test]
+    fn initial_flowscript_edits_schema_exposes_both_authoring_forms() {
+        let schema = serde_json::to_value(schema_for!(WriteFlowScriptArgs)).unwrap();
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["required"], json!(["draft_id"]));
+        for composition in ["oneOf", "anyOf", "allOf"] {
+            assert!(
+                schema.get(composition).is_none(),
+                "Anthropic rejects a top-level {composition} in tool input schemas"
+            );
+        }
+        let properties = &schema["properties"];
+        assert_eq!(properties["source"]["type"], "string");
+        assert_eq!(properties["edits"]["type"], "array");
+        assert_eq!(
+            properties["edits"]["items"]["$ref"],
+            "#/$defs/FlowScriptTextEdit"
+        );
+        for field in ["source", "edits"] {
+            assert!(
+                properties[field]["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains("exactly one of source or edits"),
+                "{field} must state the exclusive-input rule the host enforces"
+            );
+        }
+        assert_eq!(schema["$defs"]["FlowScriptTextEdit"]["type"], "object");
+        assert_eq!(
+            schema["$defs"]["FlowScriptTextEdit"]["required"],
+            json!(["old_text", "new_text"])
+        );
+        assert_eq!(
+            schema["properties"]["edits"]["maxItems"],
+            MAX_FLOWSCRIPT_INITIAL_EDITS
+        );
+    }
+
     fn acceptance_flowscript_catalog() -> Vec<NodeMetadata> {
         let mut catalog = acceptance_catalog();
         catalog.push(metadata(
@@ -11606,6 +12255,7 @@ function calculatePricing() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source,
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
             &binding,
@@ -11993,6 +12643,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: valid_flowscript("hello"),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -12045,6 +12696,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: valid_flowscript("hello"),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -12294,6 +12946,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: source.clone(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -12361,6 +13014,7 @@ eventsSimple() {
                         replace_existing: false,
                         mode: FlowIrDraftMode::Additive,
                         source: source.clone(),
+                        edits: Vec::new(),
                         allow_scope_reduction: false,
                     },
                 )
@@ -12521,6 +13175,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: valid_flowscript("hello"),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -12593,6 +13248,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: valid_flowscript("hello"),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -12633,6 +13289,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: valid_flowscript("customer"),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
             &binding,
@@ -12740,6 +13397,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: valid_flowscript("customer"),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
             &binding,
@@ -12798,6 +13456,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: source.clone(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
             &binding,
@@ -12850,6 +13509,27 @@ eventsSimple() {
             .latest_pending_commit_token(&board.id)
             .expect("commit retained one pending token");
         assert_eq!(first.token, original_token);
+        assert_eq!(
+            store.pending_flowscript_source_for_commit(&original_token),
+            Some(source.clone())
+        );
+        for field in ["board", "draft", "revision", "base", "claim"] {
+            let mut mismatched = original_token.clone();
+            match field {
+                "board" => mismatched.board_id.push_str("-other"),
+                "draft" => mismatched.draft_id.push_str("-other"),
+                "revision" => mismatched.revision += 1,
+                "base" => mismatched.base_fingerprint.push_str("-other"),
+                "claim" => mismatched.claim_id.push_str("-other"),
+                _ => unreachable!(),
+            }
+            assert!(
+                store
+                    .pending_flowscript_source_for_commit(&mismatched)
+                    .is_none(),
+                "{field} must match before source is attached to a review"
+            );
+        }
 
         // Merely observing or dropping a recovery payload must not claim, rotate, or release it.
         let expected_token = first.token.clone();
@@ -12908,6 +13588,17 @@ eventsSimple() {
             retained_access_sequence,
             "redelivery inspection must not mutate draft recency or claim state"
         );
+        assert!(store.release_commit_if_matches(
+            &expected_token.draft_id,
+            expected_token.revision,
+            &expected_token.base_fingerprint,
+            &expected_token.claim_id,
+        ));
+        assert!(
+            store
+                .pending_flowscript_source_for_commit(&expected_token)
+                .is_none()
+        );
     }
 
     #[test]
@@ -12925,6 +13616,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: source.clone(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
             &binding,
@@ -12950,6 +13642,7 @@ eventsSimple() {
                     replace_existing: true,
                     mode: FlowIrDraftMode::Additive,
                     source: valid_flowscript("attacker"),
+                    edits: Vec::new(),
                     allow_scope_reduction: false,
                 },
                 &unrelated_binding,
@@ -13058,6 +13751,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: valid_flowscript("unrelated"),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
             &unrelated_binding,
@@ -13098,6 +13792,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: source.clone(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -13142,6 +13837,7 @@ eventsSimple() {
                 replace_existing: true,
                 mode: FlowIrDraftMode::Additive,
                 source: valid_flowscript("replacement"),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -13186,6 +13882,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: valid_flowscript("hello"),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
             &binding,
@@ -13228,6 +13925,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: valid_flowscript("hello"),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
             &forged,
@@ -13246,6 +13944,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: valid_flowscript("hello"),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
             &binding,
@@ -13399,6 +14098,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: valid_flowscript("hello"),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -13484,6 +14184,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: substantial.to_string(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -13552,6 +14253,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: parseable.to_string(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -15733,6 +16435,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: source.clone(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
             &binding,
@@ -15803,6 +16506,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: valid_flowscript("hello"),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -15840,6 +16544,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: valid_flowscript("persisted"),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -15855,6 +16560,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: live_source.clone(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );

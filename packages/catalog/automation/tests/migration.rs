@@ -28,45 +28,82 @@ fn board() -> Board {
     Board::new_detached(Some("migration-test".into()), Default::default())
 }
 
-fn cases() -> Vec<(&'static str, &'static str, u32, Value)> {
-    vec![
+/// First catalog versions whose pins carry the typed array contract; boards placed earlier hold a
+/// Generic pin. Mirrors `expected_contract` in the runtime's automation collection migration.
+const UPLOAD_TYPED_SINCE: u32 = 1;
+const LLM_TYPED_SINCE: u32 = 4;
+
+struct Case {
+    name: &'static str,
+    pin: &'static str,
+    typed_since: u32,
+    catalog_version: u32,
+    value: Value,
+}
+
+fn legacy_contracts() -> [(&'static str, &'static str, u32, Value); 6] {
+    [
         (
             "browser_upload_multiple_files",
             "file_paths",
-            1,
+            UPLOAD_TYPED_SINCE,
             json!(["/tmp/Zoë.txt", "/tmp/文.csv"]),
         ),
         (
             "llm_observe_screen",
             "elements",
-            4,
+            LLM_TYPED_SINCE,
             json!([{"element_type":"button","description":"Save","approximate_location":"top right","is_interactive":true,"current_state":null}]),
         ),
         (
             "llm_plan_actions",
             "actions",
-            4,
+            LLM_TYPED_SINCE,
             json!([{"action_type":"click","target":"#save","parameters":{},"reasoning":"Save changes","expected_result":"Saved"}]),
         ),
         (
             "llm_resolve_element",
             "candidates",
-            4,
+            LLM_TYPED_SINCE,
             json!([{"index":0,"x":10,"y":20,"description":"Save"}]),
         ),
         (
             "llm_rank_candidates",
             "candidates",
-            4,
+            LLM_TYPED_SINCE,
             json!([{"id":"save","description":"Save","x":10,"y":20,"selector":"#save","additional_info":null}]),
         ),
         (
             "llm_rank_candidates",
             "ranked",
-            4,
+            LLM_TYPED_SINCE,
             json!([{"id":"save","rank":1,"score":0.95,"reasoning":"Matches intent","is_recommended":true}]),
         ),
     ]
+}
+
+fn cases(registry: &FlowNodeRegistryInner) -> Vec<Case> {
+    legacy_contracts()
+        .into_iter()
+        .map(|(name, pin, typed_since, value)| {
+            let catalog_version = registry
+                .get_node(name)
+                .unwrap()
+                .version
+                .unwrap_or_else(|| panic!("catalog node {name} has no version"));
+            assert!(
+                catalog_version >= typed_since,
+                "catalog {name} v{catalog_version} predates its typed contract v{typed_since}"
+            );
+            Case {
+                name,
+                pin,
+                typed_since,
+                catalog_version,
+                value,
+            }
+        })
+        .collect()
 }
 
 fn legacy_node(
@@ -110,12 +147,18 @@ fn assert_edge(source: &Pin, target: &Pin, expected: bool) {
 #[tokio::test]
 async fn six_legacy_array_contracts_preserve_valid_literal_bytes_and_pin_identity() {
     let registry = registry();
-    for (name, pin_name, version, value) in cases() {
+    for Case {
+        name,
+        pin: pin_name,
+        typed_since,
+        catalog_version,
+        value,
+    } in cases(&registry)
+    {
         let catalog = registry.get_node(name).unwrap();
-        assert_eq!(catalog.version, Some(version), "{name}");
         let catalog_pin = catalog.get_pin_by_name(pin_name).unwrap();
         for value_type in [ValueType::Normal, ValueType::Array] {
-            for placed_version in [None, Some(version - 1)] {
+            for placed_version in [None, Some(typed_since - 1)] {
                 let bytes = serde_json::to_vec_pretty(&value).unwrap();
                 let node = legacy_node(
                     &registry,
@@ -132,7 +175,7 @@ async fn six_legacy_array_contracts_preserve_valid_literal_bytes_and_pin_identit
                 sync_board_node_schemas(&mut board, &registry).await;
                 let migrated = &board.nodes[&node_id];
                 let pin = migrated.get_pin_by_name(pin_name).unwrap();
-                assert_eq!(migrated.version, Some(version), "{name}:{pin_name}");
+                assert_eq!(migrated.version, Some(catalog_version), "{name}:{pin_name}");
                 assert_eq!(pin.id, pin_id, "{name}:{pin_name}");
                 assert_eq!(
                     pin.default_value.as_ref(),
@@ -150,7 +193,13 @@ async fn six_legacy_array_contracts_preserve_valid_literal_bytes_and_pin_identit
 #[tokio::test]
 async fn invalid_items_and_scalar_defaults_reset_to_the_catalog_default() {
     let registry = registry();
-    for (name, pin_name, version, _) in cases() {
+    for Case {
+        name,
+        pin: pin_name,
+        typed_since,
+        ..
+    } in cases(&registry)
+    {
         let catalog = registry.get_node(name).unwrap();
         for invalid in [json!([false]), json!([{}]), json!("scalar"), json!({})] {
             let node = legacy_node(
@@ -158,7 +207,7 @@ async fn invalid_items_and_scalar_defaults_reset_to_the_catalog_default() {
                 name,
                 pin_name,
                 ValueType::Normal,
-                Some(version - 1),
+                Some(typed_since - 1),
                 serde_json::to_vec(&invalid).unwrap(),
             );
             let node_id = node.id.clone();
@@ -213,7 +262,7 @@ async fn migrated_inputs_preserve_typed_producers_and_prune_incompatible_or_unkn
             "llm_rank_candidates",
             "candidates",
             ValueType::Normal,
-            Some(3),
+            Some(LLM_TYPED_SINCE - 1),
             b"[]".to_vec(),
         );
         let target_id = target.id.clone();
@@ -243,7 +292,7 @@ async fn migrated_outputs_keep_generic_consumers_except_enforced_container_misma
             "llm_plan_actions",
             "actions",
             ValueType::Normal,
-            Some(3),
+            Some(LLM_TYPED_SINCE - 1),
             b"[]".to_vec(),
         );
         let source_id = source.id.clone();
@@ -319,8 +368,15 @@ async fn nested_layers_migrate_cross_layer_wires_and_second_sync_is_idempotent()
 #[tokio::test]
 async fn current_or_future_placed_versions_are_not_special_migrated() {
     let registry = registry();
-    for (name, pin_name, version, value) in cases() {
-        for placed_version in [version, version + 1] {
+    for Case {
+        name,
+        pin: pin_name,
+        catalog_version,
+        value,
+        ..
+    } in cases(&registry)
+    {
+        for placed_version in [catalog_version, catalog_version + 1] {
             let bytes = serde_json::to_vec_pretty(&value).unwrap();
             let node = legacy_node(
                 &registry,
@@ -346,7 +402,7 @@ async fn current_or_future_placed_versions_are_not_special_migrated() {
 
 #[tokio::test]
 async fn unsupported_catalog_versions_unrelated_nodes_and_nonlegacy_types_use_normal_sync() {
-    for variant in ["catalog-version", "unrelated-node", "nonlegacy-type"] {
+    for variant in ["pre-contract-catalog", "unrelated-node", "nonlegacy-type"] {
         let mut registry = registry();
         let original = "browser_upload_multiple_files";
         let name = if variant == "unrelated-node" {
@@ -359,16 +415,17 @@ async fn unsupported_catalog_versions_unrelated_nodes_and_nonlegacy_types_use_no
             node.name = name.into();
             registry.registry.insert(name.into(), (node, logic));
         }
+        let pre_contract_catalog = variant == "pre-contract-catalog";
         let mut placed = legacy_node(
             &registry,
             name,
             "file_paths",
             ValueType::Normal,
-            Some(0),
+            (!pre_contract_catalog).then_some(UPLOAD_TYPED_SINCE - 1),
             b"[\"/tmp/a.txt\"]".to_vec(),
         );
-        if variant == "catalog-version" {
-            registry.registry.get_mut(name).unwrap().0.version = Some(2);
+        if pre_contract_catalog {
+            registry.registry.get_mut(name).unwrap().0.version = Some(UPLOAD_TYPED_SINCE - 1);
         } else if variant == "nonlegacy-type" {
             placed.get_pin_mut_by_name("file_paths").unwrap().data_type = VariableType::Boolean;
         }

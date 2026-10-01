@@ -47,6 +47,7 @@ pub mod ollama;
 pub mod openai;
 pub mod openrouter;
 pub mod perplexity;
+mod responses_tools;
 pub mod subscription;
 #[cfg(test)]
 pub(crate) mod test_support;

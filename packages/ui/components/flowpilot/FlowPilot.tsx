@@ -758,7 +758,23 @@ function FlowPilotImpl({
 				current?.claim_id === job.token.claim_id ? undefined : current,
 			);
 			setPendingCommands([]);
-			if (job.phase === "stale") setFlowscriptWorkspaceStatus("stale");
+			const workspaceStatus =
+				job.phase === "applied"
+					? "applied"
+					: job.phase === "stale"
+						? "stale"
+						: "dismissed";
+			setFlowscriptWorkspaceStatus(workspaceStatus);
+			if (job.flowscriptSource?.trim()) {
+				setFlowscriptWorkspace(job.flowscriptSource);
+				setInlineFlowScriptPreview({
+					source: job.flowscriptSource,
+					status: workspaceStatus,
+				});
+				if (job.phase === "applied") {
+					setAppliedFlowScriptWorkspace(job.flowscriptSource);
+				}
+			}
 			return true;
 		},
 		[settleGenerationReview],
@@ -1007,9 +1023,14 @@ function FlowPilotImpl({
 					backendContext.boardState,
 					activeAppId,
 					board.id,
-					false,
+					true,
 				);
 				if (cancelled) return;
+				const current = pendingBoardEditJobRef.current;
+				const currentJob = current
+					? jobs.find((job) => job.jobId === current.jobId)
+					: undefined;
+				if (currentJob && settleAuthoritativeBoardEditJob(currentJob)) return;
 				const direct = jobs
 					.filter(
 						(job) =>
@@ -1023,12 +1044,25 @@ function FlowPilotImpl({
 							left.createdAtMs - right.createdAtMs ||
 							left.jobId.localeCompare(right.jobId),
 					);
-				const current = pendingBoardEditJobRef.current;
 				let pending = current
 					? direct.find((job) => job.jobId === current.jobId)
 					: undefined;
 				if (!pending && !pendingFlowIrCommitRef.current) pending = direct[0];
 				if (!pending) return;
+				const newlyAdopted = current?.jobId !== pending.jobId;
+				pendingBoardEditJobRef.current = pending;
+				setPendingBoardEditJob(pending);
+				pendingFlowIrCommitRef.current = pending.token;
+				setPendingFlowIrCommit(pending.token);
+				if (newlyAdopted && pending.flowscriptSource?.trim()) {
+					setFlowscriptWorkspace(pending.flowscriptSource);
+					setFlowscriptWorkspaceStatus("queued");
+					setInlineFlowScriptPreview({
+						source: pending.flowscriptSource,
+						status: "queued",
+					});
+					setShowWorkspace(true);
+				}
 
 				if (
 					pending.phase === "applied_pending_delivery" &&
@@ -1051,7 +1085,6 @@ function FlowPilotImpl({
 					pending = delivery.job;
 				}
 
-				const newlyAdopted = current?.jobId !== pending.jobId;
 				pendingBoardEditJobRef.current = pending;
 				setPendingBoardEditJob(pending);
 				pendingFlowIrCommitRef.current = pending.token;
@@ -3311,6 +3344,7 @@ function FlowPilotImpl({
 
 				const finalAssistantContent =
 					currentMessageContent || response.message || "";
+				let retainedFlowScriptSource: string | undefined;
 				if (
 					response.flow_ir_commit &&
 					activeAppId &&
@@ -3333,6 +3367,7 @@ function FlowPilotImpl({
 						}
 						pendingBoardEditJobRef.current = createdJob;
 						setPendingBoardEditJob(createdJob);
+						retainedFlowScriptSource = createdJob.flowscriptSource;
 					} catch (error) {
 						if (
 							activeCopilotRequestIdRef.current !== nativeRequestId ||
@@ -3360,7 +3395,9 @@ function FlowPilotImpl({
 				}
 				pendingFlowIrCommitRef.current = response.flow_ir_commit;
 				setPendingFlowIrCommit(response.flow_ir_commit);
-				if (response.flowscript_workspace) {
+				if (retainedFlowScriptSource?.trim()) {
+					applyFlowScriptWorkspace(retainedFlowScriptSource, "queued");
+				} else if (response.flowscript_workspace) {
 					const finalWorkspace = resolveFinalFlowScriptWorkspaceCandidate(
 						workspaceCandidates,
 						response.flowscript_workspace,

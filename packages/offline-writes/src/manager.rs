@@ -4,6 +4,7 @@ use crate::{
     fs,
     host::{Connectivity, OfflineHost, ReplayErrorKind},
     limits::{ReplayLimits, RequestError, validate_request},
+    mirror::{Lazy, MirrorUnavailable},
     outbox::{CLOSED, OutboxOptions, QueueLanes, QueuedOperation},
     table::TableOverlay,
 };
@@ -16,7 +17,8 @@ use flow_like_device_protocol::{
 use flow_like_storage::{
     databases::vector::{
         lancedb::{DatabaseSelector, LanceDBVectorStore},
-        offline_replay,
+        offline_mirror::{LazyMirrorSetup, MirrorHost},
+        offline_replay::{self, LocalConnection},
     },
     lancedb::Connection,
     object_store::{ObjectStore, path::Path as ObjectPath},
@@ -39,12 +41,15 @@ use tokio::{
 
 const KEY_VALIDATION_MEMORY: usize = 256 * 1024 * 1024;
 const MAX_COALESCED: usize = 1024;
-const ACTIVATION_ATTEMPTS: usize = 3;
+pub(crate) const ACTIVATION_ATTEMPTS: usize = 3;
 const MIN_SNAPSHOT_BYTES: u64 = 1024 * 1024;
 /// Outlasts local queries that still read a superseded snapshot while bounding how many
 /// 30 s refreshes can hold copies of one table.
 const STANDALONE_SNAPSHOT_GRACE: Duration = Duration::from_secs(120);
 const REFRESH_FAILED: &str = "Cloud table refresh failed; the last complete local snapshot remains active. Check connectivity and the mirror disk budget.";
+pub(crate) const LAZY_MIRROR_MISSING: &str = "Download everything needs a lazy offline mirror";
+/// Room for one refresh beyond what the required size already counts.
+pub(crate) const REQUIRED_HEADROOM: u64 = 64 * 1024 * 1024;
 
 /// Fast-forward refresh before a write to an idle table.
 #[derive(Clone, Copy, Debug)]
@@ -53,6 +58,40 @@ pub struct FastForward {
     pub probe_timeout: Duration,
     /// Minimum time between probes of one table (desktop 10 s).
     pub min_interval: Duration,
+}
+
+/// How a table snapshot keeps the cloud table on this device.
+#[derive(Clone, Copy, Debug)]
+pub enum MirrorMode {
+    /// Standalone: every snapshot is a complete local copy.
+    Materialize,
+    /// Desktop: manifest-only snapshots over a read-through file cache.
+    Lazy(LazyMirrorOptions),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LazyMirrorOptions {
+    /// Larger files are read by range and never cached, unless the table downloads everything.
+    pub max_lazy_file_bytes: u64,
+    /// Version-delta fetch cap of a refresh, for tables without Download everything.
+    pub max_refresh_fetch_bytes: u64,
+    pub max_download_bytes_per_day: u64,
+}
+
+/// Disk and download usage of a scope's mirror.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MirrorUsage {
+    /// `max_mirror_bytes`
+    pub maximum: u64,
+    /// Local snapshots plus cached cloud files.
+    pub used: u64,
+    pub cache_bytes: u64,
+    /// Files that are never evicted: Download everything tables and tables with queued changes.
+    pub pinned_bytes: u64,
+    /// The smallest mirror limit that keeps every pinned file and room for one refresh.
+    pub required: u64,
+    pub downloaded_today: u64,
+    pub max_download_bytes_per_day: Option<u64>,
 }
 
 pub struct WriteManagerOptions {
@@ -77,6 +116,7 @@ pub struct WriteManagerOptions {
     pub recreate_dropped_tables: bool,
     /// Superseded local snapshots are deleted after this grace; None: at startup only.
     pub retired_snapshot_grace: Option<Duration>,
+    pub mirror: MirrorMode,
 }
 
 impl WriteManagerOptions {
@@ -101,6 +141,7 @@ impl WriteManagerOptions {
             connectivity: None,
             recreate_dropped_tables: true,
             retired_snapshot_grace: Some(STANDALONE_SNAPSHOT_GRACE),
+            mirror: MirrorMode::Materialize,
         }
     }
 }
@@ -181,7 +222,8 @@ pub struct WriteManager {
     pub(crate) queue: Arc<Outbox>,
     pub(crate) host: Arc<dyn OfflineHost>,
     local: RwLock<Option<Connection>>,
-    local_budget: offline_replay::LocalBudget,
+    pub(crate) budget: offline_replay::MirrorBudget,
+    pub(crate) lazy: Option<Lazy>,
     tables: RwLock<Registry>,
     pub(crate) gate: Arc<Mutex<()>>,
     pub(crate) wake: Arc<Notify>,
@@ -189,22 +231,24 @@ pub struct WriteManager {
     pub(crate) max_mirror_bytes: AtomicU64,
     pub(crate) replay_limits: ReplayLimits,
     pub(crate) refresh_interval: Duration,
-    idle_poll: Duration,
+    pub(crate) idle_poll: Duration,
     lanes: QueueLanes,
     coalesce_row_batches: bool,
     pub(crate) fast_forward: Option<FastForward>,
     pub(crate) connectivity: Option<Arc<dyn Connectivity>>,
     pub(crate) recreate_dropped_tables: bool,
     retired_snapshot_grace: Option<Duration>,
+    mirror: RwLock<MirrorMode>,
     closed: AtomicBool,
-    stop: Notify,
+    pub(crate) stop: Notify,
     backoff: std::sync::Mutex<Backoff>,
     drain: std::sync::Mutex<Option<JoinHandle<()>>>,
 }
 
 impl WriteManager {
     /// Opens the outbox, takes the exclusive writer lock, optionally quarantines sibling
-    /// scopes, removes orphaned local tables and opens the budgeted local connection.
+    /// scopes, removes orphaned local tables and opens the budgeted local connection; in
+    /// Lazy mode with the mirror, whose retention it sets before any table is registered.
     pub async fn open(
         options: WriteManagerOptions,
         host: Arc<dyn OfflineHost>,
@@ -231,16 +275,35 @@ impl WriteManager {
             std::fs::remove_dir_all(&spill)?;
         }
         fs::private_directory(&spill)?;
-        let (local, local_budget) = offline_replay::budgeted_local_connection_with_budget(
+        let setup = match options.mirror {
+            MirrorMode::Lazy(lazy) => {
+                queue.prune_snapshots(&[])?;
+                let directory = queue.root().join("mirror");
+                fs::private_directory(&directory)?;
+                Some(LazyMirrorSetup {
+                    directory,
+                    roots: queue.mirror_roots()?,
+                    max_lazy_file_bytes: lazy.max_lazy_file_bytes,
+                })
+            }
+            MirrorMode::Materialize => None,
+        };
+        let LocalConnection {
+            connection,
+            budget,
+            mirror,
+        } = offline_replay::budgeted_local_connection_with_budget(
             &tables_root,
             options.limits.max_mirror_bytes,
+            setup,
         )
         .await?;
-        Ok(Arc::new(Self {
+        let manager = Arc::new(Self {
             queue,
             host,
-            local: RwLock::new(Some(local)),
-            local_budget,
+            local: RwLock::new(Some(connection)),
+            budget,
+            lazy: mirror.map(Lazy::new),
             tables: RwLock::new(Registry::default()),
             gate: Arc::new(Mutex::new(())),
             wake: Arc::new(Notify::new()),
@@ -255,11 +318,21 @@ impl WriteManager {
             connectivity: options.connectivity,
             recreate_dropped_tables: options.recreate_dropped_tables,
             retired_snapshot_grace: options.retired_snapshot_grace,
+            mirror: RwLock::new(options.mirror),
             closed: AtomicBool::new(false),
             stop: Notify::new(),
             backoff: std::sync::Mutex::new(Backoff::default()),
             drain: std::sync::Mutex::new(None),
-        }))
+        });
+        if let Some(lazy) = manager.lazy() {
+            let host: std::sync::Weak<dyn MirrorHost> = Arc::downgrade(&manager) as _;
+            lazy.mirror.attach(host);
+            manager.push_retention()?;
+            if manager.budget.used() > manager.budget.maximum() {
+                lazy.mirror.evict_to(manager.budget.maximum(), true).await?;
+            }
+        }
+        Ok(manager)
     }
 
     pub(crate) fn local(&self) -> Result<Connection> {
@@ -268,6 +341,17 @@ impl WriteManager {
             .map_err(|_| anyhow::anyhow!("Offline table connection poisoned"))?
             .clone()
             .context(CLOSED)
+    }
+
+    pub(crate) fn lazy_options(&self) -> Option<LazyMirrorOptions> {
+        match *self
+            .mirror
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        {
+            MirrorMode::Lazy(options) => Some(options),
+            MirrorMode::Materialize => None,
+        }
     }
 
     pub(crate) fn spill_directory(&self) -> PathBuf {
@@ -283,7 +367,7 @@ impl WriteManager {
     pub(crate) fn refresh_snapshot_budget(&self) -> Result<u64> {
         let mirror = self.max_mirror_bytes.load(Ordering::Acquire);
         let reserve = self.queue.limits()?.max_queue_bytes.min(mirror / 2);
-        let available = self.local_budget.available();
+        let available = self.budget.available();
         let budget = mirror.min(available.saturating_sub(reserve));
         ensure!(
             budget >= MIN_SNAPSHOT_BYTES,
@@ -323,13 +407,13 @@ impl WriteManager {
         self.authorize()?;
         table.validate()?;
         ensure!(
-            !setup.prefetch,
-            "Download everything needs a lazy offline mirror"
+            !setup.prefetch || self.lazy_options().is_some(),
+            LAZY_MIRROR_MISSING
         );
         let path = self.database_path(&table)?;
         let (resource, key) = Self::resource_key(&table)?;
         if let Some(existing) = self.overlay(&key) {
-            return self.state_of(&existing);
+            return self.state_of(&existing).await;
         }
         let overlay = Arc::new(TableOverlay::new(
             Arc::downgrade(self),
@@ -348,15 +432,24 @@ impl WriteManager {
             );
             tables.by_resource.insert(key, overlay.clone());
         }
-        self.state_of(&overlay)
+        if let Some(lazy) = self.lazy() {
+            self.push_retention()?;
+            lazy.resume_prefetch();
+        }
+        self.state_of(&overlay).await
     }
 
-    /// Held → Active after one refresh that catches the cloud's current version. A failed
-    /// refresh keeps the table held.
+    /// Held → Active on a cloud version read after the call started. Lazy mode switches
+    /// metadata-first; its files download afterwards. A failed probe or manifest read keeps
+    /// the table held.
     pub async fn activate_table(self: &Arc<Self>, table: &BufferedTable) -> Result<TableState> {
         let overlay = self.registered(table)?;
         if overlay.activation() == TableActivation::Held {
-            self.catch_up(&overlay).await.inspect_err(|error| {
+            let caught_up = match self.lazy() {
+                Some(_) => self.activate_lazy(&overlay).await,
+                None => self.catch_up(&overlay).await,
+            };
+            caught_up.inspect_err(|error| {
                 let _ = self.queue.mirror_error(
                     &overlay.key,
                     Some(&format!("The cloud table could not be read: {error}")),
@@ -364,7 +457,7 @@ impl WriteManager {
             })?;
             overlay.activate();
         }
-        self.state_of(&overlay)
+        self.state_of(&overlay).await
     }
 
     /// Refreshes until the table holds a cloud version read after the call started. A
@@ -383,8 +476,12 @@ impl WriteManager {
     }
 
     /// One refresh now, ignoring `refresh_interval`. Deferred while the lane has queued changes.
+    /// Lazy mode runs it on the mirror task and waits for its outcome.
     pub async fn refresh_table(self: &Arc<Self>, table: &BufferedTable) -> Result<RefreshOutcome> {
         let overlay = self.registered(table)?;
+        if self.lazy().is_some() {
+            return self.refresh_lazy(&overlay).await;
+        }
         overlay.refresh(self).await.inspect_err(|_| {
             let _ = self.queue.mirror_error(&overlay.key, Some(REFRESH_FAILED));
         })
@@ -422,29 +519,136 @@ impl WriteManager {
             table.table
         );
         let local = self.local()?;
-        for name in names.into_iter().flatten() {
-            match local.drop_table(&name, &[]).await {
+        let names = names.into_iter().flatten().collect::<Vec<_>>();
+        for name in &names {
+            match local.drop_table(name, &[]).await {
                 Ok(()) | Err(flow_like_storage::lancedb::Error::TableNotFound { .. }) => (),
                 Err(error) => return Err(error.into()),
             }
+        }
+        if let Some(lazy) = self.lazy() {
+            lazy.forget(&key, &names);
+            self.prune_snapshots()?;
+            self.push_retention()?;
+            self.host.mirror_changed();
         }
         self.host.queue_changed();
         Ok(())
     }
 
-    /// Hot limits: queue limits, the snapshot budget of later refreshes and the replay
-    /// limits of later freezes and dispatches.
+    /// Download everything on or off for a registered table. Lazy mode only. On refuses
+    /// with E31 when the required size does not fit the limit and otherwise starts the
+    /// download; off stops it and keeps the files until they are evicted.
+    pub async fn set_prefetch(
+        self: &Arc<Self>,
+        table: &BufferedTable,
+        prefetch: bool,
+    ) -> Result<TableState> {
+        self.authorize()?;
+        let lazy = self.lazy().context(LAZY_MIRROR_MISSING)?;
+        let overlay = self.registered(table)?;
+        if prefetch {
+            let (name, _, _) = overlay.local_view(self)?;
+            let files = self
+                .recorded(&name)?
+                .map(|recorded| recorded.files.clone())
+                .unwrap_or_default();
+            self.check_download_everything(
+                &overlay.selection.table,
+                crate::mirror::Candidate {
+                    resource: &overlay.key,
+                    local_name: &name,
+                    files: &files,
+                },
+            )?;
+        }
+        self.queue.set_prefetch(&overlay.key, prefetch)?;
+        self.push_retention()?;
+        if prefetch {
+            lazy.resume_prefetch();
+        } else {
+            lazy.stop_prefetch(&overlay.key);
+        }
+        self.host.mirror_changed();
+        self.state_of(&overlay).await
+    }
+
+    /// Disk and download usage of the scope's mirror. Materialize mode counts snapshots only.
+    pub fn mirror_usage(&self) -> Result<MirrorUsage> {
+        let lazy = self.lazy_options();
+        let required = match self.lazy() {
+            Some(_) => self.required(None)?,
+            None => self
+                .overlays()
+                .iter()
+                .map(|overlay| self.snapshot_bytes(overlay))
+                .sum::<Result<u64>>()?
+                .saturating_add(REQUIRED_HEADROOM),
+        };
+        Ok(MirrorUsage {
+            maximum: self.budget.maximum(),
+            used: self.budget.used(),
+            cache_bytes: self.lazy().map_or(0, |lazy| lazy.mirror.cache_bytes()),
+            pinned_bytes: self.pinned_bytes()?,
+            required,
+            downloaded_today: match lazy {
+                Some(_) => self.queue.downloaded_today(fs::unix_time()?)?,
+                None => 0,
+            },
+            max_download_bytes_per_day: lazy.map(|options| options.max_download_bytes_per_day),
+        })
+    }
+
+    /// Evicts garbage, then live files by least recent use, until `used` is at most
+    /// `target_used` or only pinned files remain. Returns the freed bytes.
+    pub async fn evict_mirror(&self, target_used: u64) -> Result<u64> {
+        self.authorize()?;
+        self.evict_lazy(target_used).await
+    }
+
+    /// Hot limits: queue limits, the snapshot budget of later refreshes, the replay limits
+    /// of later freezes and dispatches and, in Lazy mode, the mirror options.
     pub async fn set_limits(
         &self,
         limits: BufferingConfig,
         replay_limits: OfflineLimits,
+        mirror: Option<LazyMirrorOptions>,
     ) -> Result<()> {
         self.authorize()?;
         limits.validate_limits()?;
+        ensure!(
+            mirror.is_none() || self.lazy_options().is_some(),
+            LAZY_MIRROR_MISSING
+        );
+        if self.lazy_options().is_some() {
+            let required = self.mirror_usage()?.required;
+            ensure!(
+                limits.max_mirror_bytes >= required,
+                "Tables that download everything and tables with queued changes need at least {} on this device; choose a limit of at least that size.",
+                format_limit(usize::try_from(required).unwrap_or(usize::MAX))
+            );
+        }
+        if let Some(options) = mirror {
+            *self
+                .mirror
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = MirrorMode::Lazy(options);
+            if let Some(lazy) = self.lazy() {
+                lazy.mirror
+                    .set_max_lazy_file_bytes(options.max_lazy_file_bytes);
+            }
+        }
         self.queue.set_limits(limits.clone())?;
+        if limits.max_mirror_bytes < self.budget.used() {
+            self.evict_lazy(limits.max_mirror_bytes).await?;
+        }
+        self.budget.set_maximum(limits.max_mirror_bytes);
         self.max_mirror_bytes
             .store(limits.max_mirror_bytes, Ordering::Release);
         self.replay_limits.set(replay_limits);
+        if let Some(lazy) = self.lazy() {
+            lazy.resume_prefetch();
+        }
         Ok(())
     }
 
@@ -464,6 +668,9 @@ impl WriteManager {
             drain.abort();
         }
         self.stop.notify_waiters();
+        if let Some(lazy) = self.lazy() {
+            lazy.stop();
+        }
         let overlays = {
             let mut tables = self.registry_mut()?;
             let overlays = tables.by_resource.values().cloned().collect::<Vec<_>>();
@@ -571,20 +778,23 @@ impl WriteManager {
     }
 
     pub async fn table_states(&self) -> Result<Vec<TableState>> {
-        self.overlays()
-            .iter()
-            .map(|overlay| self.state_of(overlay))
-            .collect()
+        let mut states = Vec::new();
+        for overlay in self.overlays() {
+            states.push(self.state_of(&overlay).await?);
+        }
+        Ok(states)
     }
 
-    fn state_of(&self, overlay: &TableOverlay) -> Result<TableState> {
+    async fn state_of(&self, overlay: &TableOverlay) -> Result<TableState> {
+        let mirror = match self.lazy() {
+            Some(_) => Some(self.mirror_state(overlay).await?),
+            None => None,
+        };
         let revision = self
             .queue
             .resource_revision(&overlay.key)?
             .map(serde_json::from_value)
             .transpose()?;
-        let (name, _, _) = self.queue.local_view(&overlay.key)?;
-        let name = name.unwrap_or_else(|| overlay.local_name.clone());
         Ok(TableState {
             table: overlay.selection.clone(),
             database_path: overlay.database_path.clone(),
@@ -594,20 +804,27 @@ impl WriteManager {
             pending: self.queue.pending_states(&overlay.key)?.len() as u64,
             mirror_error: self.queue.table_mirror_error(&overlay.key)?,
             remote_missing: overlay.remote_missing(),
-            local_bytes: fs::directory_bytes(
-                &self
-                    .queue
-                    .root()
-                    .join("tables")
-                    .join(format!("{name}.lance")),
-            )?,
-            prefetch: false,
-            cached_bytes: 0,
-            total_bytes: None,
-            offline_complete: true,
-            downloading: false,
-            key_indexed: None,
+            local_bytes: self.snapshot_bytes(overlay)?,
+            prefetch: mirror.is_some() && self.queue.prefetch(&overlay.key)?,
+            cached_bytes: mirror.as_ref().map_or(0, |mirror| mirror.cached_bytes),
+            total_bytes: mirror.as_ref().and_then(|mirror| mirror.total_bytes),
+            offline_complete: mirror.as_ref().is_none_or(|mirror| mirror.offline_complete),
+            downloading: mirror.as_ref().is_some_and(|mirror| mirror.downloading),
+            key_indexed: mirror.and_then(|mirror| mirror.key_indexed),
         })
+    }
+
+    fn snapshot_bytes(&self, overlay: &TableOverlay) -> Result<u64> {
+        let (name, _, _) = overlay.local_view(self)?;
+        self.snapshot_directory_bytes(&name)
+    }
+
+    /// A table lane may have turned empty: its listed keys are no longer pinned by it.
+    pub(crate) fn lane_changed(&self, resource: &str) -> Result<()> {
+        if self.lazy().is_some() && !self.queue.has_pending(resource)? {
+            self.push_retention()?;
+        }
+        Ok(())
     }
 
     pub fn file_overlay(
@@ -657,8 +874,10 @@ impl WriteManager {
         self.drain_one().await
     }
 
-    /// The drain loop holds the manager weakly and stops once it is dropped or closed.
+    /// The drain loop holds the manager weakly and stops once it is dropped or closed. In
+    /// Lazy mode this also starts the mirror task.
     pub fn spawn_drain(self: &Arc<Self>) {
+        self.spawn_mirror();
         let weak = Arc::downgrade(self);
         let lanes = self.lanes;
         let handle = tokio::spawn(async move {
@@ -765,10 +984,16 @@ impl WriteManager {
     }
 
     /// Retired snapshot cleanup, then idle refreshes, so a new copy finds the space the
-    /// expired ones held.
+    /// expired ones held. Lazy mode only queues the refreshes on the mirror task.
     pub(crate) async fn idle_pass(&self) {
         if let Err(error) = self.prune_retired().await {
             tracing::debug!(%error, "Could not delete retired offline table snapshots");
+        }
+        if self.lazy().is_some() {
+            if let Err(error) = self.lazy_idle_pass().await {
+                tracing::debug!(%error, "Could not schedule offline table refreshes");
+            }
+            return;
         }
         for table in self.overlays() {
             if let Err(error) = table.refresh_idle(self).await {
@@ -839,7 +1064,7 @@ impl WriteManager {
         })
     }
 
-    fn overlays(&self) -> Vec<Arc<TableOverlay>> {
+    pub(crate) fn overlays(&self) -> Vec<Arc<TableOverlay>> {
         self.tables
             .read()
             .map(|tables| tables.by_resource.values().cloned().collect())
@@ -933,7 +1158,14 @@ impl WriteManager {
         let mut picked = None;
         let result = self.drain_step(&mut picked).await;
         self.record_backoff(picked.as_ref(), &result);
-        result
+        match result {
+            // Cloud data the head's local view needs is out of reach: only its lane waits.
+            Err(error) if picked.is_some() && error.is::<MirrorUnavailable>() => {
+                tracing::debug!(%error, "Offline table lane waits for its cloud data");
+                Ok(false)
+            }
+            result => result,
+        }
     }
 
     async fn complete_skips(&self) -> Result<()> {
@@ -948,6 +1180,7 @@ impl WriteManager {
             };
             if let Some(table) = self.overlay(&head.resource) {
                 table.skip(self, &id, &reason).await?;
+                self.lane_changed(&head.resource)?;
             } else {
                 self.queue.complete_skip(&id, &reason, None, "main", None)?;
                 let resource = serde_json::from_str::<OfflineResource>(&head.resource).ok();
@@ -1066,6 +1299,7 @@ impl WriteManager {
                             &serde_json::to_value(revision)?,
                             &serde_json::to_value(&response)?,
                         )?;
+                        self.lane_changed(&operation.resource)?;
                         self.host.queue_changed();
                         Ok(true)
                     }

@@ -13,6 +13,7 @@ import {
 	shouldPersistAgentBackendDiagnostic,
 } from "../../lib/flowpilot/agent-backend-diagnostics";
 import { buildChatMessageError } from "../../lib/flowpilot/chat-error";
+import { sanitizeFlowScriptForPersistence } from "../../lib/flowscript-persistence";
 import { isTauri } from "../../lib/platform";
 import { IRole } from "../../lib/schema/llm/history";
 import {
@@ -217,13 +218,27 @@ export const RUN_CONTEXT_SCHEMA = "flowpilot.run-context/v1";
 export async function persistGlobalChatMessage(message: IMessage) {
 	if (deletedConversations.has(message.sessionId)) return;
 	try {
+		let persistedMessage = message;
+		const workspace = message.flowscript_workspace;
+		if (workspace) {
+			const sanitized = sanitizeFlowScriptForPersistence(workspace.source);
+			persistedMessage = {
+				...message,
+				flowscript_workspace:
+					workspace.status !== "drafting" && sanitized.safe
+						? { source: sanitized.source, status: workspace.status }
+						: undefined,
+			};
+		}
 		if (FLOWPILOT_DEBUG_ENABLED) {
-			await globalChatDb.messages.put(message);
+			await globalChatDb.messages.put(persistedMessage);
 			return;
 		}
 		// Defense in depth: callers can pass restored or backend-provided messages that still carry
 		// an old report. Production must never write that diagnostic payload back to history.
-		await globalChatDb.messages.put(stripFlowPilotDebugReport(message));
+		await globalChatDb.messages.put(
+			stripFlowPilotDebugReport(persistedMessage),
+		);
 	} catch {
 		// history persistence is best-effort in v1
 	}
@@ -855,6 +870,7 @@ export function resumeGlobalChatStream() {
 			responseMessage.files = checkpoint.files ?? [];
 			responseMessage.widgets = checkpoint.widgets;
 			responseMessage.app_refs = checkpoint.app_refs;
+			responseMessage.flowscript_workspace = checkpoint.flowscript_workspace;
 			responseMessage.timestamp = checkpoint.timestamp;
 			responseMessage.run_context = checkpoint.run_context;
 		}

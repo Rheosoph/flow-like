@@ -315,21 +315,17 @@ pub(crate) async fn session_policy(
 /// Checks where a navigation ended (after redirects) and leaves the page when it is blocked.
 #[cfg(feature = "execute")]
 pub(crate) async fn verify_landing(
-    driver: &thirtyfour::WebDriver,
+    ctx: &super::driver::PageContext,
     policy: &NavigationPolicy,
     requested: &str,
 ) -> flow_like_types::Result<String> {
-    let landed = driver
-        .current_url()
-        .await
-        .map_err(|error| {
-            flow_like_types::anyhow!(
-                "Failed to read the URL after navigating to '{requested}': {error}"
-            )
-        })?
-        .to_string();
+    let landed = ctx.page.url().await.map_err(|error| {
+        flow_like_types::anyhow!(
+            "Failed to read the URL after navigating to '{requested}': {error}"
+        )
+    })?;
     if let Err(error) = policy.check(&landed).await {
-        let _ = driver.goto("about:blank").await;
+        let _ = ctx.page.goto("about:blank").await;
         return Err(flow_like_types::anyhow!(
             "Navigation to '{requested}' ended on a blocked page and was left: {error}"
         ));

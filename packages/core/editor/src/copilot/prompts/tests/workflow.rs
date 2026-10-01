@@ -250,8 +250,12 @@ fn board_prompts_bound_discovery_and_retain_a_full_shape_draft_early() {
         assert!(prompt.contains("ONE bounded, focused `get_declarations`"));
         assert!(prompt.contains("highest-leverage catalog signatures"));
         assert!(prompt.contains("After the plan is accepted"));
-        assert!(prompt.contains("FULL-SHAPE"));
-        assert!(prompt.contains("ACTIVE SEGMENT"));
+        assert!(prompt.contains("edits: [{old_text, new_text}]"));
+        assert!(prompt.contains("including every unchanged anchor"));
+        assert!(prompt.contains("Omit `source` when using `edits`"));
+        assert!(!prompt.contains("Always call `write_flowscript` with the complete source"));
+        assert!(prompt.contains("Both forms require executable changes"));
+        assert!(prompt.contains("whole\n   request for a single-segment plan"));
         assert!(prompt.contains("omitted or unmatched declaration searches"));
         assert!(prompt.contains("compiler diagnostics"));
         assert!(prompt.contains("at most six total ancillary inspection calls"));

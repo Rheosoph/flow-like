@@ -2120,6 +2120,7 @@ mod tests {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: source.to_string(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -2153,6 +2154,7 @@ mod tests {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: source.to_string(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );
@@ -2228,6 +2230,7 @@ eventsSimple() {
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
                 source: source.to_string(),
+                edits: Vec::new(),
                 allow_scope_reduction: false,
             },
         );

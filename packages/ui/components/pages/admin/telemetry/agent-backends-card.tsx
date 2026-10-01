@@ -15,130 +15,21 @@ import {
 	CardTitle,
 	Skeleton,
 } from "../../../ui";
-import type {
-	IAgentBackendErrorKindCount,
-	IAgentBackendId,
-	IAgentBackendStats,
-} from "./llm-types";
+import {
+	AGENT_BACKENDS,
+	AGENT_ERROR_EVENT,
+	AGENT_START_EVENT,
+	aggregateAgentBackends,
+} from "./agent-backend-stats";
+import type { IAgentBackendStats } from "./llm-types";
 import { EmptyState } from "./telemetry-shared";
 import { formatDurationMs, ratingTone } from "./traces-shared";
 import type { ITelemetryEventRow, ITelemetryEventsResponse } from "./types";
 
-const AGENT_BACKENDS: { id: IAgentBackendId; label: string }[] = [
-	{ id: "claude_code", label: "Claude Code" },
-	{ id: "codex", label: "Codex" },
-	{ id: "github_copilot", label: "GitHub Copilot" },
-];
+export { aggregateAgentBackends } from "./agent-backend-stats";
 
-const AGENT_START_EVENT = "agent_backend_start";
-const AGENT_ERROR_EVENT = "agent_backend_error";
 const EVENT_PAGE_SIZE = 100;
 const MAX_EVENT_PAGES = 4;
-const TOP_ERROR_KINDS = 3;
-
-function readString(
-	props: Record<string, unknown> | null | undefined,
-	key: string,
-): string | null {
-	const value = props?.[key];
-	return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function readNumber(
-	props: Record<string, unknown> | null | undefined,
-	key: string,
-): number | null {
-	const value = props?.[key];
-	return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function percentile(values: number[], p: number): number | null {
-	if (values.length === 0) return null;
-	const sorted = [...values].sort((a, b) => a - b);
-	const rank = Math.ceil((p / 100) * sorted.length);
-	return sorted[Math.min(sorted.length - 1, Math.max(0, rank - 1))];
-}
-
-interface BackendAccumulator {
-	calls: number;
-	successes: number;
-	errors: number;
-	stageErrors: number;
-	durations: number[];
-	errorKinds: Map<string, number>;
-}
-
-function emptyAccumulator(): BackendAccumulator {
-	return {
-		calls: 0,
-		successes: 0,
-		errors: 0,
-		stageErrors: 0,
-		durations: [],
-		errorKinds: new Map(),
-	};
-}
-
-function topErrorKinds(
-	kinds: Map<string, number>,
-): IAgentBackendErrorKindCount[] {
-	return [...kinds.entries()]
-		.map(([kind, count]) => ({ kind, count }))
-		.sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind))
-		.slice(0, TOP_ERROR_KINDS);
-}
-
-export function aggregateAgentBackends(
-	events: ITelemetryEventRow[],
-): IAgentBackendStats[] {
-	const accumulators = new Map<IAgentBackendId, BackendAccumulator>(
-		AGENT_BACKENDS.map((backend) => [backend.id, emptyAccumulator()]),
-	);
-
-	for (const event of events) {
-		const backend = readString(
-			event.props,
-			"backend",
-		) as IAgentBackendId | null;
-		if (!backend) continue;
-		const acc = accumulators.get(backend);
-		if (!acc) continue;
-
-		const errorKind = readString(event.props, "error_kind");
-		const duration = readNumber(event.props, "duration_ms");
-
-		if (event.name === AGENT_START_EVENT) {
-			acc.calls += 1;
-			if (readString(event.props, "outcome") === "error") {
-				acc.errors += 1;
-			} else {
-				acc.successes += 1;
-			}
-			if (duration != null) acc.durations.push(duration);
-		} else if (event.name === AGENT_ERROR_EVENT) {
-			acc.stageErrors += 1;
-		}
-
-		if (errorKind) {
-			acc.errorKinds.set(errorKind, (acc.errorKinds.get(errorKind) ?? 0) + 1);
-		}
-	}
-
-	return AGENT_BACKENDS.map(({ id, label }) => {
-		const acc = accumulators.get(id) ?? emptyAccumulator();
-		return {
-			backend: id,
-			label,
-			calls: acc.calls,
-			successes: acc.successes,
-			errors: acc.errors,
-			stageErrors: acc.stageErrors,
-			successRate: acc.calls > 0 ? acc.successes / acc.calls : null,
-			p95DurationMs: percentile(acc.durations, 95),
-			topErrorKinds: topErrorKinds(acc.errorKinds),
-		};
-	});
-}
 
 export function errorRateRating(errorRate: number): string {
 	if (errorRate < 0.01) return "good";
@@ -231,12 +122,22 @@ function BackendTile({ stats }: { readonly stats: IAgentBackendStats }) {
 							{stats.calls.toLocaleString()}
 						</span>
 						<span className="text-[11px] text-muted-foreground">
-							{stats.calls === 1 ? "start" : "starts"}
+							{t("agentOperation", {
+								count: stats.calls,
+								defaultValue_one: "operation",
+								defaultValue_other: "operations",
+							})}
 						</span>
 					</div>
 					<div className="mt-2 flex flex-wrap items-center gap-2">
 						<RatePill rate={stats.successRate} kind="success" />
-						<span className="text-[11px] tabular-nums text-muted-foreground">
+						<span
+							className="text-[11px] tabular-nums text-muted-foreground"
+							title={t(
+								"agentOperationP95",
+								"95th percentile operation duration",
+							)}
+						>
 							p95{" "}
 							{stats.p95DurationMs == null
 								? "—"
@@ -244,9 +145,11 @@ function BackendTile({ stats }: { readonly stats: IAgentBackendStats }) {
 						</span>
 					</div>
 					<div className="mt-1 text-[11px] tabular-nums text-muted-foreground">
-						{stats.errors.toLocaleString()} {t("failed", "failed ·")}{" "}
-						{stats.stageErrors.toLocaleString()}{" "}
-						{t("stageErrors", "stage errors")}
+						{t("agentErrorReports", {
+							count: stats.stageErrors,
+							defaultValue_one: "{{count}} error report",
+							defaultValue_other: "{{count}} error reports",
+						})}
 					</div>
 					{stats.topErrorKinds.length > 0 ? (
 						<ul className="mt-3 space-y-1 border-t pt-2">
@@ -320,7 +223,10 @@ export function AgentBackendsCard({
 					{t("agentBackends", "Agent backends")}
 				</CardTitle>
 				<CardDescription>
-					{`Local agent CLI health from anonymous aggregate events — start outcomes, durations and classified error kinds only.`}
+					{t(
+						"agentBackendOperationsDescription",
+						"Anonymous CLI health events. Outcomes and durations cover startup, auth checks, model discovery, runs, and shutdown.",
+					)}
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
@@ -332,7 +238,7 @@ export function AgentBackendsCard({
 					</div>
 				) : !observed ? (
 					<EmptyState
-						message="No agent backend telemetry in this window — desktop installs report these once usage telemetry is enabled."
+						message="No agent backend telemetry in this window. Desktop installs report these events when usage telemetry is enabled."
 						className="py-10 text-sm"
 					/>
 				) : (

@@ -1,0 +1,1947 @@
+{
+  "url": "http://127.0.0.1:57117/csp.html",
+  "rows": [
+    {
+      "name": "element",
+      "body": "return document.body",
+      "wd": {
+        "ok": {
+          "element-6066-11e4-a52e-4f735466cecf": "f.6BACDECB6E84083DDA7CB8C5EF8F740C.d.09C6369A07C7643BCFA530CB2B22AEE6.e.8"
+        }
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "node",
+          "value": {
+            "nodeType": 1,
+            "childNodeCount": 105,
+            "backendNodeId": 8,
+            "loaderId": "FBD92C2A1FABC5DB0E23D347B60A74B3",
+            "shadowRoot": null,
+            "localName": "body",
+            "namespaceURI": "http://www.w3.org/1999/xhtml",
+            "attributes": {}
+          }
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {
+              "element-6066-11e4-a52e-4f735466cecf": 0
+            }
+          },
+          "nodes": [
+            "node:node:8"
+          ]
+        }
+      }
+    },
+    {
+      "name": "nodelist",
+      "body": "return document.querySelectorAll('li')",
+      "wd": {
+        "ok": [
+          {
+            "element-6066-11e4-a52e-4f735466cecf": "f.6BACDECB6E84083DDA7CB8C5EF8F740C.d.09C6369A07C7643BCFA530CB2B22AEE6.e.9"
+          },
+          {
+            "element-6066-11e4-a52e-4f735466cecf": "f.6BACDECB6E84083DDA7CB8C5EF8F740C.d.09C6369A07C7643BCFA530CB2B22AEE6.e.10"
+          }
+        ]
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {
+            "0": {},
+            "1": {}
+          },
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {
+            "0": {},
+            "1": {}
+          },
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "nodelist",
+          "value": [
+            {
+              "type": "node",
+              "value": {
+                "nodeType": 1,
+                "childNodeCount": 1,
+                "backendNodeId": 8,
+                "loaderId": "E8A32C7EB125BC3276A74C1B2B0DEFA9",
+                "shadowRoot": null,
+                "localName": "li",
+                "namespaceURI": "http://www.w3.org/1999/xhtml",
+                "attributes": {}
+              }
+            },
+            {
+              "type": "node",
+              "value": {
+                "nodeType": 1,
+                "childNodeCount": 1,
+                "backendNodeId": 9,
+                "loaderId": "E8A32C7EB125BC3276A74C1B2B0DEFA9",
+                "shadowRoot": null,
+                "localName": "li",
+                "namespaceURI": "http://www.w3.org/1999/xhtml",
+                "attributes": {}
+              }
+            }
+          ]
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": [
+              {
+                "element-6066-11e4-a52e-4f735466cecf": 0
+              },
+              {
+                "element-6066-11e4-a52e-4f735466cecf": 1
+              }
+            ]
+          },
+          "nodes": [
+            "node:node:8",
+            "node:node:9"
+          ]
+        }
+      }
+    },
+    {
+      "name": "htmlcollection",
+      "body": "return document.getElementsByTagName('li')",
+      "wd": {
+        "ok": [
+          {
+            "element-6066-11e4-a52e-4f735466cecf": "f.6BACDECB6E84083DDA7CB8C5EF8F740C.d.09C6369A07C7643BCFA530CB2B22AEE6.e.9"
+          },
+          {
+            "element-6066-11e4-a52e-4f735466cecf": "f.6BACDECB6E84083DDA7CB8C5EF8F740C.d.09C6369A07C7643BCFA530CB2B22AEE6.e.10"
+          }
+        ]
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {
+            "0": {},
+            "1": {}
+          },
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {
+            "0": {},
+            "1": {}
+          },
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "htmlcollection",
+          "value": [
+            {
+              "type": "node",
+              "value": {
+                "nodeType": 1,
+                "childNodeCount": 1,
+                "backendNodeId": 8,
+                "loaderId": "A75B47D36FA5E88B4E6553B969FC03DD",
+                "shadowRoot": null,
+                "localName": "li",
+                "namespaceURI": "http://www.w3.org/1999/xhtml",
+                "attributes": {}
+              }
+            },
+            {
+              "type": "node",
+              "value": {
+                "nodeType": 1,
+                "childNodeCount": 1,
+                "backendNodeId": 9,
+                "loaderId": "A75B47D36FA5E88B4E6553B969FC03DD",
+                "shadowRoot": null,
+                "localName": "li",
+                "namespaceURI": "http://www.w3.org/1999/xhtml",
+                "attributes": {}
+              }
+            }
+          ]
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": [
+              {
+                "element-6066-11e4-a52e-4f735466cecf": 0
+              },
+              {
+                "element-6066-11e4-a52e-4f735466cecf": 1
+              }
+            ]
+          },
+          "nodes": [
+            "node:node:8",
+            "node:node:9"
+          ]
+        }
+      }
+    },
+    {
+      "name": "array_with_element",
+      "body": "return [document.body, 1]",
+      "wd": {
+        "ok": [
+          {
+            "element-6066-11e4-a52e-4f735466cecf": "f.6BACDECB6E84083DDA7CB8C5EF8F740C.d.09C6369A07C7643BCFA530CB2B22AEE6.e.8"
+          },
+          1
+        ]
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": [
+            {},
+            1
+          ],
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": [
+            {},
+            1
+          ],
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "array",
+          "value": [
+            {
+              "type": "node",
+              "value": {
+                "nodeType": 1,
+                "childNodeCount": 105,
+                "backendNodeId": 8,
+                "loaderId": "254BCB5CD041889A08C03BE44F8B3571",
+                "shadowRoot": null,
+                "localName": "body",
+                "namespaceURI": "http://www.w3.org/1999/xhtml",
+                "attributes": {}
+              }
+            },
+            {
+              "type": "number",
+              "value": 1
+            }
+          ]
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": [
+              {
+                "element-6066-11e4-a52e-4f735466cecf": 0
+              },
+              1
+            ]
+          },
+          "nodes": [
+            "node:node:8"
+          ]
+        }
+      }
+    },
+    {
+      "name": "object_with_element",
+      "body": "return {el: document.body, n: 1}",
+      "wd": {
+        "ok": {
+          "el": {
+            "element-6066-11e4-a52e-4f735466cecf": "f.6BACDECB6E84083DDA7CB8C5EF8F740C.d.09C6369A07C7643BCFA530CB2B22AEE6.e.8"
+          },
+          "n": 1
+        }
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {
+            "el": {},
+            "n": 1
+          },
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {
+            "el": {},
+            "n": 1
+          },
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "object",
+          "value": [
+            [
+              "el",
+              {
+                "type": "node",
+                "value": {
+                  "nodeType": 1,
+                  "childNodeCount": 105,
+                  "backendNodeId": 8,
+                  "loaderId": "244475983BA607FD3C96D443F1890B5F",
+                  "shadowRoot": null,
+                  "localName": "body",
+                  "namespaceURI": "http://www.w3.org/1999/xhtml",
+                  "attributes": {}
+                }
+              }
+            ],
+            [
+              "n",
+              {
+                "type": "number",
+                "value": 1
+              }
+            ]
+          ]
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {
+              "el": {
+                "element-6066-11e4-a52e-4f735466cecf": 0
+              },
+              "n": 1
+            }
+          },
+          "nodes": [
+            "node:node:8"
+          ]
+        }
+      }
+    },
+    {
+      "name": "promise_resolved",
+      "body": "return Promise.resolve(5)",
+      "wd": {
+        "ok": 5
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": 5,
+          "type": "number"
+        },
+        "async_returnByValue": {
+          "value": 5,
+          "type": "number"
+        },
+        "async_deep": {
+          "type": "number",
+          "value": 5
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": 5
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "promise_delayed",
+      "body": "return new Promise(r => setTimeout(() => r('late'), 50))",
+      "wd": {
+        "ok": "late"
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": "late",
+          "type": "string"
+        },
+        "async_returnByValue": {
+          "value": "late",
+          "type": "string"
+        },
+        "async_deep": {
+          "type": "string",
+          "value": "late"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": "late"
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "top_level_await",
+      "body": "await new Promise(r => setTimeout(r, 10)); return 'awaited'",
+      "wd": {
+        "ok": "awaited"
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "exception": "SyntaxError: await is only valid in async functions and the top level bodies of modules"
+        },
+        "async_returnByValue": {
+          "value": "awaited",
+          "type": "string"
+        },
+        "async_deep": {
+          "type": "string",
+          "value": "awaited"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": "awaited"
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "return_undefined",
+      "body": "return undefined",
+      "wd": {
+        "ok": null
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "type": "undefined"
+        },
+        "async_returnByValue": {
+          "type": "undefined"
+        },
+        "async_deep": {
+          "type": "undefined"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": null
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "no_return",
+      "body": "1 + 1",
+      "wd": {
+        "ok": null
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "type": "undefined"
+        },
+        "async_returnByValue": {
+          "type": "undefined"
+        },
+        "async_deep": {
+          "type": "undefined"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": null
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "return_null",
+      "body": "return null",
+      "wd": {
+        "ok": null
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": null,
+          "type": "object",
+          "subtype": "null"
+        },
+        "async_returnByValue": {
+          "value": null,
+          "type": "object",
+          "subtype": "null"
+        },
+        "async_deep": {
+          "type": "null"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": null
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "date",
+      "body": "return new Date(0)",
+      "wd": {
+        "ok": {}
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "date",
+          "value": "1970-01-01T00:00:00.000Z"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {}
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "cyclic",
+      "body": "const o = {a: 1}; o.self = o; return o",
+      "wd": {
+        "error": "javascript error",
+        "message": "javascript error: circular reference"
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "protocolError": "Object reference chain is too long"
+        },
+        "async_returnByValue": {
+          "protocolError": "Object reference chain is too long"
+        },
+        "async_deep": {
+          "type": "object",
+          "value": [
+            [
+              "a",
+              {
+                "type": "number",
+                "value": 1
+              }
+            ],
+            [
+              "self",
+              {
+                "type": "object",
+                "weakLocalObjectReference": 1
+              }
+            ]
+          ],
+          "weakLocalObjectReference": 1
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 17,
+            "value": "circular reference"
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "map",
+      "body": "return new Map([[1, 2]])",
+      "wd": {
+        "ok": {}
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "map",
+          "value": [
+            [
+              {
+                "type": "number",
+                "value": 1
+              },
+              {
+                "type": "number",
+                "value": 2
+              }
+            ]
+          ]
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {}
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "set",
+      "body": "return new Set([1, 2])",
+      "wd": {
+        "ok": {}
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "set",
+          "value": [
+            {
+              "type": "number",
+              "value": 1
+            },
+            {
+              "type": "number",
+              "value": 2
+            }
+          ]
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {}
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "nan",
+      "body": "return NaN",
+      "wd": {
+        "ok": null
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "unserializable": "NaN",
+          "type": "number",
+          "description": "NaN"
+        },
+        "async_returnByValue": {
+          "unserializable": "NaN",
+          "type": "number",
+          "description": "NaN"
+        },
+        "async_deep": {
+          "type": "number",
+          "value": "NaN"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": null
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "infinity",
+      "body": "return Infinity",
+      "wd": {
+        "ok": null
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "unserializable": "Infinity",
+          "type": "number",
+          "description": "Infinity"
+        },
+        "async_returnByValue": {
+          "unserializable": "Infinity",
+          "type": "number",
+          "description": "Infinity"
+        },
+        "async_deep": {
+          "type": "number",
+          "value": "Infinity"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": null
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "neg_zero",
+      "body": "return -0",
+      "wd": {
+        "ok": 0
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "unserializable": "-0",
+          "type": "number",
+          "description": "-0"
+        },
+        "async_returnByValue": {
+          "unserializable": "-0",
+          "type": "number",
+          "description": "-0"
+        },
+        "async_deep": {
+          "type": "number",
+          "value": "-0"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": 0
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "big_int_number",
+      "body": "return 2 ** 53 + 2",
+      "wd": {
+        "ok": 9007199254740994
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": 9007199254740994,
+          "type": "number"
+        },
+        "async_returnByValue": {
+          "value": 9007199254740994,
+          "type": "number"
+        },
+        "async_deep": {
+          "type": "number",
+          "value": 9007199254740994
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": 9007199254740994
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "bigint",
+      "body": "return 1n",
+      "wd": {
+        "ok": {}
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "unserializable": "1n",
+          "type": "bigint",
+          "description": "1n"
+        },
+        "async_returnByValue": {
+          "unserializable": "1n",
+          "type": "bigint",
+          "description": "1n"
+        },
+        "async_deep": {
+          "type": "bigint",
+          "value": "1"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {}
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "symbol",
+      "body": "return Symbol('x')",
+      "wd": {
+        "ok": {}
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "protocolError": "Object couldn't be returned by value"
+        },
+        "async_returnByValue": {
+          "protocolError": "Object couldn't be returned by value"
+        },
+        "async_deep": {
+          "type": "symbol"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {}
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "function",
+      "body": "return function f() {}",
+      "wd": {
+        "ok": {}
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {},
+          "type": "function"
+        },
+        "async_returnByValue": {
+          "value": {},
+          "type": "function"
+        },
+        "async_deep": {
+          "type": "function"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {}
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "window",
+      "body": "return window",
+      "wd": {
+        "ok": {
+          "window-fcc6-11e5-b4f8-330a88ab9d7f": "6BACDECB6E84083DDA7CB8C5EF8F740C"
+        }
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "protocolError": "Object reference chain is too long"
+        },
+        "async_returnByValue": {
+          "protocolError": "Object reference chain is too long"
+        },
+        "async_deep": {
+          "type": "window",
+          "value": {
+            "context": "B157BADEC0740B0F2F563CC39DE79431"
+          }
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {
+              "window-fcc6-11e5-b4f8-330a88ab9d7f": 0
+            }
+          },
+          "nodes": [
+            "node:window:?"
+          ]
+        }
+      }
+    },
+    {
+      "name": "document",
+      "body": "return document",
+      "wd": {
+        "ok": {
+          "element-6066-11e4-a52e-4f735466cecf": "f.6BACDECB6E84083DDA7CB8C5EF8F740C.d.09C6369A07C7643BCFA530CB2B22AEE6.e.7"
+        }
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {
+            "location": {
+              "ancestorOrigins": {},
+              "href": "http://127.0.0.1:57117/csp.html",
+              "origin": "http://127.0.0.1:57117",
+              "protocol": "http:",
+              "host": "127.0.0.1:57117",
+              "hostname": "127.0.0.1",
+              "port": "57117",
+              "pathname": "/csp.html",
+              "search": "",
+              "hash": "",
+              "assign": {},
+              "reload": {},
+              "replace": {},
+              "toString": {}
+            }
+          },
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {
+            "location": {
+              "ancestorOrigins": {},
+              "href": "http://127.0.0.1:57117/csp.html",
+              "origin": "http://127.0.0.1:57117",
+              "protocol": "http:",
+              "host": "127.0.0.1:57117",
+              "hostname": "127.0.0.1",
+              "port": "57117",
+              "pathname": "/csp.html",
+              "search": "",
+              "hash": "",
+              "assign": {},
+              "reload": {},
+              "replace": {},
+              "toString": {}
+            }
+          },
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "node",
+          "value": {
+            "nodeType": 9,
+            "childNodeCount": 2,
+            "backendNodeId": 7,
+            "loaderId": "D9034C28A2AD6BF49BE8ADB1EFDDD0B3"
+          }
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {
+              "element-6066-11e4-a52e-4f735466cecf": 0
+            }
+          },
+          "nodes": [
+            "node:node:7"
+          ]
+        }
+      }
+    },
+    {
+      "name": "array_mixed",
+      "body": "return [1, 'a', null, undefined]",
+      "wd": {
+        "ok": [
+          1,
+          "a",
+          null,
+          null
+        ]
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": [
+            1,
+            "a",
+            null,
+            null
+          ],
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": [
+            1,
+            "a",
+            null,
+            null
+          ],
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "array",
+          "value": [
+            {
+              "type": "number",
+              "value": 1
+            },
+            {
+              "type": "string",
+              "value": "a"
+            },
+            {
+              "type": "null"
+            },
+            {
+              "type": "undefined"
+            }
+          ]
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": [
+              1,
+              "a",
+              null,
+              null
+            ]
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "object_undefined_prop",
+      "body": "return {a: undefined, b: 1}",
+      "wd": {
+        "ok": {
+          "a": null,
+          "b": 1
+        }
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {
+            "b": 1
+          },
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {
+            "b": 1
+          },
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "object",
+          "value": [
+            [
+              "a",
+              {
+                "type": "undefined"
+              }
+            ],
+            [
+              "b",
+              {
+                "type": "number",
+                "value": 1
+              }
+            ]
+          ]
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {
+              "a": null,
+              "b": 1
+            }
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "own_toJSON",
+      "body": "return {toJSON() { return 'custom'; }}",
+      "wd": {
+        "ok": "custom"
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {
+            "toJSON": {}
+          },
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {
+            "toJSON": {}
+          },
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "object",
+          "value": [
+            [
+              "toJSON",
+              {
+                "type": "function"
+              }
+            ]
+          ]
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": "custom"
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "error_object",
+      "body": "return new Error('boom')",
+      "wd": {
+        "ok": {}
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "error"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {}
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "throw",
+      "body": "throw new Error('boom')",
+      "wd": {
+        "error": "javascript error",
+        "message": "javascript error: boom"
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "exception": "Error: boom"
+        },
+        "async_returnByValue": {
+          "exception": "Error: boom"
+        },
+        "async_deep": {
+          "exception": "Error: boom"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 17,
+            "value": "boom"
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "regexp",
+      "body": "return /re/g",
+      "wd": {
+        "ok": {}
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "regexp",
+          "value": {
+            "pattern": "re",
+            "flags": "g"
+          }
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {}
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "typed_array",
+      "body": "return new Uint8Array([1, 2])",
+      "wd": {
+        "ok": [
+          1,
+          2
+        ]
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {
+            "0": 1,
+            "1": 2
+          },
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {
+            "0": 1,
+            "1": 2
+          },
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "typedarray"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": [
+              1,
+              2
+            ]
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "arguments_length",
+      "body": "return arguments.length",
+      "wd": {
+        "ok": 0
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": 0,
+          "type": "number"
+        },
+        "async_returnByValue": {
+          "value": 0,
+          "type": "number"
+        },
+        "async_deep": {
+          "type": "number",
+          "value": 0
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": 0
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "this_is_window",
+      "body": "return this === window",
+      "wd": {
+        "ok": true
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": true,
+          "type": "boolean"
+        },
+        "async_returnByValue": {
+          "value": true,
+          "type": "boolean"
+        },
+        "async_deep": {
+          "type": "boolean",
+          "value": true
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": true
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "promise_rejected",
+      "body": "return Promise.reject(new Error('rej'))",
+      "wd": {
+        "error": "javascript error",
+        "message": "javascript error: rej"
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "exception": "Error: rej"
+        },
+        "async_returnByValue": {
+          "exception": "Error: rej"
+        },
+        "async_deep": {
+          "exception": "Error: rej"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 17,
+            "value": "rej"
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "shadow_root",
+      "body": "return document.querySelector('#t_shadow_host').shadowRoot",
+      "wd": {
+        "ok": {
+          "shadow-6066-11e4-a52e-4f735466cecf": "f.6BACDECB6E84083DDA7CB8C5EF8F740C.d.09C6369A07C7643BCFA530CB2B22AEE6.e.11"
+        }
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "node",
+          "value": {
+            "nodeType": 11,
+            "childNodeCount": 3,
+            "backendNodeId": 8,
+            "loaderId": "7231F9AF1837380A8DF86B4CB4EF7090",
+            "mode": "open"
+          }
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {
+              "shadow-6066-11e4-a52e-4f735466cecf": 0
+            }
+          },
+          "nodes": [
+            "node:node:8"
+          ]
+        }
+      }
+    },
+    {
+      "name": "detached_element",
+      "body": "return document.createElement('div')",
+      "wd": {
+        "error": "stale element reference",
+        "message": "stale element reference: stale element not found in the current frame"
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "node",
+          "value": {
+            "nodeType": 1,
+            "childNodeCount": 0,
+            "backendNodeId": 8,
+            "loaderId": "0D27A340EA1E49BF7FE1699E52ABC0F4",
+            "shadowRoot": null,
+            "localName": "div",
+            "namespaceURI": "http://www.w3.org/1999/xhtml",
+            "attributes": {}
+          }
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 10,
+            "value": "stale element not found in the current frame"
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "lone_surrogate",
+      "body": "return 'a\\ud83d'",
+      "wd": {
+        "error": "unknown error",
+        "message": "unknown error: cannot deserialize the result value received from Runtime.callFunctionOn"
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": "a\ud83d",
+          "type": "string"
+        },
+        "async_returnByValue": {
+          "value": "a\ud83d",
+          "type": "string"
+        },
+        "async_deep": {
+          "type": "string",
+          "value": "a\ud83d"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": "a\ud83d"
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "symbol_key",
+      "body": "return {[Symbol('s')]: 1, n: 1}",
+      "wd": {
+        "ok": {
+          "n": 1
+        }
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {
+            "n": 1
+          },
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {
+            "n": 1
+          },
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "object",
+          "value": [
+            [
+              "n",
+              {
+                "type": "number",
+                "value": 1
+              }
+            ]
+          ]
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {
+              "n": 1
+            }
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "throwing_getter",
+      "body": "return {get boom() { throw new Error('getter'); }}",
+      "wd": {
+        "error": "javascript error",
+        "message": "javascript error: error reading property"
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "protocolError": "Internal error"
+        },
+        "async_returnByValue": {
+          "protocolError": "Internal error"
+        },
+        "async_deep": {
+          "protocolError": "RENDERER CRASHED (Inspector.targetCrashed)"
+        },
+        "chromedriver_port": {
+          "protocolError": "renderer crashed earlier"
+        }
+      }
+    },
+    {
+      "name": "domrect",
+      "body": "const r = document.querySelector('#t_plain').getBoundingClientRect(); return r",
+      "wd": {
+        "ok": {
+          "bottom": 36.796875,
+          "height": 20.796875,
+          "left": 8,
+          "right": 1177,
+          "toJSON": {},
+          "top": 16,
+          "width": 1169,
+          "x": 8,
+          "y": 16
+        }
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "platformobject"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {
+              "x": 8,
+              "y": 16,
+              "width": 1169,
+              "height": 20.796875,
+              "top": 16,
+              "right": 1177,
+              "bottom": 36.796875,
+              "left": 8,
+              "toJSON": {}
+            }
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "class_instance",
+      "body": "return new (class Foo { constructor() { this.a = 1; } get b() { return 2; } })()",
+      "wd": {
+        "ok": {
+          "a": 1
+        }
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {
+            "a": 1
+          },
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {
+            "a": 1
+          },
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "object",
+          "value": [
+            [
+              "a",
+              {
+                "type": "number",
+                "value": 1
+              }
+            ]
+          ]
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {
+              "a": 1
+            }
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "inherited_enumerable",
+      "body": "return Object.create({inherited: 1})",
+      "wd": {
+        "ok": {
+          "inherited": 1
+        }
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {},
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "object",
+          "value": []
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {
+              "inherited": 1
+            }
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "nested",
+      "body": "return {nested: {deep: [1, {x: 2}]}}",
+      "wd": {
+        "ok": {
+          "nested": {
+            "deep": [
+              1,
+              {
+                "x": 2
+              }
+            ]
+          }
+        }
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {
+            "nested": {
+              "deep": [
+                1,
+                {
+                  "x": 2
+                }
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {
+            "nested": {
+              "deep": [
+                1,
+                {
+                  "x": 2
+                }
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "object",
+          "value": [
+            [
+              "nested",
+              {
+                "type": "object",
+                "value": [
+                  [
+                    "deep",
+                    {
+                      "type": "array",
+                      "value": [
+                        {
+                          "type": "number",
+                          "value": 1
+                        },
+                        {
+                          "type": "object",
+                          "value": [
+                            [
+                              "x",
+                              {
+                                "type": "number",
+                                "value": 2
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                ]
+              }
+            ]
+          ]
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": {
+              "nested": {
+                "deep": [
+                  1,
+                  {
+                    "x": 2
+                  }
+                ]
+              }
+            }
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "array_undefined",
+      "body": "return [undefined]",
+      "wd": {
+        "ok": [
+          null
+        ]
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": [
+            null
+          ],
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": [
+            null
+          ],
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "array",
+          "value": [
+            {
+              "type": "undefined"
+            }
+          ]
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": [
+              null
+            ]
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "sloppy_global",
+      "body": "undeclaredVar = 7; return undeclaredVar",
+      "wd": {
+        "ok": 7
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": 7,
+          "type": "number"
+        },
+        "async_returnByValue": {
+          "value": 7,
+          "type": "number"
+        },
+        "async_deep": {
+          "type": "number",
+          "value": 7
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": 7
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "eval",
+      "body": "return eval('1 + 1')",
+      "wd": {
+        "ok": 2
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": 2,
+          "type": "number"
+        },
+        "async_returnByValue": {
+          "value": 2,
+          "type": "number"
+        },
+        "async_deep": {
+          "type": "number",
+          "value": 2
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": 2
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "new_function",
+      "body": "return new Function('return 3')()",
+      "wd": {
+        "ok": 3
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": 3,
+          "type": "number"
+        },
+        "async_returnByValue": {
+          "value": 3,
+          "type": "number"
+        },
+        "async_deep": {
+          "type": "number",
+          "value": 3
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": 3
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "css_style_decl",
+      "body": "return document.querySelector('#t_upper').style",
+      "wd": {
+        "ok": [
+          "text-transform"
+        ]
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": {
+            "0": "text-transform"
+          },
+          "type": "object"
+        },
+        "async_returnByValue": {
+          "value": {
+            "0": "text-transform"
+          },
+          "type": "object"
+        },
+        "async_deep": {
+          "type": "platformobject"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": [
+              "text-transform"
+            ]
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "large_string",
+      "body": "return 'x'.repeat(100000).length",
+      "wd": {
+        "ok": 100000
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": 100000,
+          "type": "number"
+        },
+        "async_returnByValue": {
+          "value": 100000,
+          "type": "number"
+        },
+        "async_deep": {
+          "type": "number",
+          "value": 100000
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": 100000
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "syntax_error",
+      "body": "return )",
+      "wd": {
+        "error": "javascript error",
+        "message": "javascript error: Unexpected token ')'"
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "exception": "SyntaxError: Unexpected token ')'"
+        },
+        "async_returnByValue": {
+          "exception": "SyntaxError: Unexpected token ')'"
+        },
+        "async_deep": {
+          "exception": "SyntaxError: Unexpected token ')'"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 17,
+            "value": "Unexpected token ')'"
+          },
+          "nodes": []
+        }
+      }
+    },
+    {
+      "name": "element_argument",
+      "body": "return arguments[0].id + ':' + arguments[1]",
+      "wd": {
+        "ok": "t_plain:5"
+      },
+      "cdp": {
+        "plain_returnByValue": {
+          "value": "t_plain:5",
+          "type": "string"
+        },
+        "async_returnByValue": {
+          "value": "t_plain:5",
+          "type": "string"
+        },
+        "async_deep": {
+          "type": "string",
+          "value": "t_plain:5"
+        },
+        "chromedriver_port": {
+          "parsed": {
+            "status": 0,
+            "value": "t_plain:5"
+          },
+          "nodes": []
+        }
+      }
+    }
+  ]
+}
