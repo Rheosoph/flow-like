@@ -5,6 +5,7 @@ import {
 	AlertTriangleIcon,
 	CheckCircle2Icon,
 	CheckIcon,
+	ClockIcon,
 	GitForkIcon,
 	HardDriveIcon,
 	KeyRoundIcon,
@@ -12,7 +13,7 @@ import {
 	MinusIcon,
 	ShieldAlertIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { asArray, isRecord } from "../../../lib/response-shape";
 import {
@@ -43,6 +44,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../../ui/select";
+import { ForkBlockedPackages } from "./fork-blocked-packages";
 
 /**
  * The two response shapes the server returns from `/fork` (online → online)
@@ -133,6 +135,11 @@ export function ForkAppDialog({
 	const [showPatSelector, setShowPatSelector] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [response, setResponse] = useState<IBeginForkResponse | null>(null);
+	const [pendingCheckouts, setPendingCheckouts] = useState<ReadonlySet<string>>(
+		() => new Set(),
+	);
+	const previewRequest = useRef(0);
+	const loadPreviewRef = useRef(loadPreview);
 	const options =
 		targetOptions && targetOptions.length > 0
 			? targetOptions
@@ -142,6 +149,14 @@ export function ForkAppDialog({
 		DEFAULT_FORK_TARGET_OPTIONS[target];
 
 	useEffect(() => {
+		loadPreviewRef.current = loadPreview;
+	}, [loadPreview]);
+
+	// Every preview request, full load or refresh, takes the next number; only
+	// the newest one may apply its response.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `target` reloads the preview even when a host keeps `loadPreview` stable across targets.
+	useEffect(() => {
+		const request = ++previewRequest.current;
 		if (!open) {
 			// Reset whenever the dialog closes so the next open is fresh.
 			setStage("loading");
@@ -152,32 +167,73 @@ export function ForkAppDialog({
 			setResponse(null);
 			return;
 		}
-		let cancelled = false;
 		setStage("loading");
 		loadPreview()
 			.then((p) => {
-				if (cancelled) return;
+				if (request !== previewRequest.current) return;
 				if (!isRecord(p)) {
-					throw new Error(
-						t("couldntLoadForkPreview", "Couldn't load fork preview"),
-					);
+					setError(null);
+					setStage("error");
+					return;
 				}
 				setPreview(p);
 				setStage("preview");
 			})
 			.catch((err: unknown) => {
-				if (cancelled) return;
-				setError(
-					err instanceof Error
-						? err.message
-						: t("couldntLoadForkPreview", "Couldn't load fork preview"),
-				);
+				if (request !== previewRequest.current) return;
+				setError(err instanceof Error ? err.message : null);
 				setStage("error");
 			});
 		return () => {
-			cancelled = true;
+			previewRequest.current += 1;
 		};
 	}, [open, loadPreview, target]);
+
+	/** Reloads the preview in place after the forker bought or was granted a package. */
+	const refreshPreview = useCallback(async () => {
+		const request = ++previewRequest.current;
+		const next = await loadPreviewRef.current().catch((err: unknown) => {
+			console.warn("Failed to refresh the fork preview:", err);
+			return null;
+		});
+		if (request !== previewRequest.current) return;
+		if (isRecord(next)) setPreview(next);
+		setStage((current) => {
+			if (current !== "loading") return current;
+			return isRecord(next) ? "preview" : "error";
+		});
+	}, []);
+	const handlePackageAccessChanged = useCallback(
+		() => void refreshPreview(),
+		[refreshPreview],
+	);
+	const handleCheckoutPendingChange = useCallback(
+		(packageId: string, pending: boolean) => {
+			setPendingCheckouts((current) => {
+				if (current.has(packageId) === pending) return current;
+				const next = new Set(current);
+				if (pending) next.add(packageId);
+				else next.delete(packageId);
+				return next;
+			});
+		},
+		[],
+	);
+	// Offering a purchase only makes sense for a fork that can actually happen.
+	const blockedPackages = useMemo(
+		() =>
+			preview?.user_can_fork && preview.within_limits
+				? asArray(preview.blocked_packages)
+				: [],
+		[preview],
+	);
+	const pendingCheckoutNames = useMemo(
+		() =>
+			blockedPackages
+				.filter((pkg) => pendingCheckouts.has(pkg.package_id))
+				.map((pkg) => pkg.name),
+		[blockedPackages, pendingCheckouts],
+	);
 
 	const replaceableSites = useMemo(() => {
 		if (!preview) return [];
@@ -250,7 +306,7 @@ export function ForkAppDialog({
 			setStage("preview");
 			toast.error(message);
 		}
-	}, [preview, tokenRequired, token, beginFork, onForkStarted]);
+	}, [preview, tokenRequired, token, beginFork, onForkStarted, t]);
 
 	const skipped = asArray(response?.report?.skipped);
 	const warnings = asArray(response?.report?.warnings);
@@ -271,7 +327,9 @@ export function ForkAppDialog({
 						{target === "offline"
 							? t("onThisDevice", "on this device")
 							: t("onYourAccount", "on your account")}
-						{`. Variables marked \`secret\` are cleared and OAuth bindings will need to be re-authenticated on the new app.`}
+						{
+							". Variables marked `secret` are cleared and OAuth bindings will need to be re-authenticated on the new app."
+						}
 					</DialogDescription>
 				</DialogHeader>
 
@@ -315,7 +373,10 @@ export function ForkAppDialog({
 						<AlertTitle>
 							{t("couldntLoadPreview", "Couldn't load preview")}
 						</AlertTitle>
-						<AlertDescription>{error}</AlertDescription>
+						<AlertDescription>
+							{error ??
+								t("couldntLoadForkPreview", "Couldn't load fork preview")}
+						</AlertDescription>
 					</Alert>
 				)}
 
@@ -324,6 +385,15 @@ export function ForkAppDialog({
 						<ForkPreviewSummary preview={preview} appId={appId} />
 
 						<ForkContentsSummary preview={preview} />
+
+						{blockedPackages.length > 0 && (
+							<ForkBlockedPackages
+								packages={blockedPackages}
+								onAccessChanged={handlePackageAccessChanged}
+								onCheckoutPendingChange={handleCheckoutPendingChange}
+								disabled={stage === "submitting"}
+							/>
+						)}
 
 						{!preview.allow_forking && (
 							<Alert variant="destructive">
@@ -519,6 +589,22 @@ export function ForkAppDialog({
 					</Alert>
 				)}
 
+				{stage === "preview" && pendingCheckoutNames.length > 0 && (
+					<Alert>
+						<ClockIcon className="w-4 h-4" />
+						<AlertDescription>
+							{t("forkPendingCheckoutWarning", {
+								defaultValue_one:
+									"Payment for {{names}} isn't confirmed yet. If you fork now, it's left out of your copy.",
+								defaultValue_other:
+									"Payments for {{names}} aren't confirmed yet. If you fork now, they're left out of your copy.",
+								count: pendingCheckoutNames.length,
+								names: pendingCheckoutNames.join(", "),
+							})}
+						</AlertDescription>
+					</Alert>
+				)}
+
 				<DialogFooter>
 					{stage === "done" ? (
 						<Button onClick={() => onOpenChange(false)}>
@@ -560,7 +646,7 @@ export function ForkAppDialog({
 					setShowPatSelector(false);
 				}}
 				title={t("selectOrCreateForkToken", "Select or Create Fork Token")}
-				description={`Choose an existing token or create a new one. It will replace HTTP auth tokens and PATs at remote-event sites in your fork.`}
+				description="Choose an existing token or create a new one. It will replace HTTP auth tokens and PATs at remote-event sites in your fork."
 			/>
 		</Dialog>
 	);

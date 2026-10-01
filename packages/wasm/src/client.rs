@@ -299,6 +299,12 @@ impl RegistryClient {
         self.config.auth_token.as_ref()
     }
 
+    /// Point searches, downloads and publishes at another registry, such as
+    /// the hub the signed-in profile uses.
+    pub fn set_default_registry(&mut self, registry_url: String) {
+        self.config.default_registry = registry_url;
+    }
+
     fn build_search_url(&self, filters: &SearchFilters, include_own: bool) -> String {
         let base = format!("{}/search", self.config.default_registry);
         let mut url = reqwest::Url::parse(&base).expect("invalid registry URL");

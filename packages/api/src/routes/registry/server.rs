@@ -1051,6 +1051,40 @@ impl ServerRegistry {
         self.build_registry_entry(pkg, show_all).await
     }
 
+    /// Point `entry` at one of its versions: the manifest's version, artifact,
+    /// widgets and the node list become that version's. The entry otherwise
+    /// mixes the package row with its newest version's widgets, which neither
+    /// a project pinned to an older version nor a download of it runs.
+    pub async fn pin_entry_to_version(
+        &self,
+        entry: &mut RegistryEntry,
+        version: &str,
+    ) -> flow_like_types::Result<()> {
+        let row = wasm_package_version::Entity::find()
+            .filter(wasm_package_version::Column::PackageId.eq(&entry.id))
+            .filter(wasm_package_version::Column::Version.eq(version))
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| {
+                flow_like_types::anyhow!("Version {} of package {} not found", version, entry.id)
+            })?;
+
+        let mut widgets: Vec<PackageWidgetEntry> =
+            serde_json::from_value(row.widgets).unwrap_or_default();
+        for widget in &mut widgets {
+            widget.network = declared_widget_network(&widget.contract);
+        }
+        let manifest = &mut entry.manifest;
+        manifest.version = row.version;
+        manifest.wasm_path = Some(row.wasm_path);
+        manifest.wasm_hash = Some(row.wasm_hash);
+        manifest.min_flow_like_version = row.min_flow_like_version;
+        manifest.widgets = widgets;
+        manifest.widget_bundle_hash = row.widget_bundle_hash.filter(|hash| !hash.is_empty());
+        entry.nodes = serde_json::from_value(row.nodes).unwrap_or_default();
+        Ok(())
+    }
+
     async fn latest_pending_version(
         &self,
         package_id: &str,
@@ -1809,7 +1843,7 @@ impl ServerRegistry {
         version: Option<&str>,
         viewer_can_manage: bool,
     ) -> flow_like_types::Result<(Option<String>, PackageManifest, String, Option<bool>)> {
-        let entry = self.entry_for_viewer(pkg, viewer_can_manage).await?;
+        let mut entry = self.entry_for_viewer(pkg, viewer_can_manage).await?;
 
         let version_str = if let Some(v) = version {
             entry
@@ -1822,6 +1856,7 @@ impl ServerRegistry {
                 .map(|v| v.version.clone())
                 .unwrap_or_else(|| entry.manifest.version.clone())
         };
+        self.pin_entry_to_version(&mut entry, &version_str).await?;
 
         // Widgets-only packages carry no WASM artifact to sign
         let download_url = if manifest_has_wasm(&entry.manifest) {

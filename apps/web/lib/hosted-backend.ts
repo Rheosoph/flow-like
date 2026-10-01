@@ -1,5 +1,8 @@
 import {
+	ANONYMOUS_WIDGET_ACCESS,
 	isWebWidgetGrant,
+	isWidgetAccessUnsupportedError,
+	parseWidgetAccessResponse,
 	parseWidgetGrantResponse,
 	parseWidgetPolicyDescriptor,
 } from "@flow-like/flow-like-ui/components/a2ui/micro-widget-policy";
@@ -129,12 +132,20 @@ function scopedState<T extends object>(methods: Partial<T>): T {
 	}) as T;
 }
 
-function publicWidgetRegistry(): IRegistryState {
+export type HostedAccessToken = () => string | undefined;
+
+const anonymous: HostedAccessToken = () => undefined;
+
+/** A sign-in interface sends its viewer's token, so project members reach the private packages the project pins. */
+function publicWidgetRegistry(accessToken: HostedAccessToken): IRegistryState {
 	const send = async (path: string, body: unknown) => {
+		const headers = new Headers({ "Content-Type": "application/json" });
+		const token = accessToken();
+		if (token) headers.set("Authorization", `Bearer ${token}`);
 		const response = await fetch(getApiUrl(undefined, path), {
 			method: "POST",
 			credentials: "omit",
-			headers: { "Content-Type": "application/json" },
+			headers,
 			body: JSON.stringify(body),
 		});
 		if (!response.ok)
@@ -177,6 +188,21 @@ function publicWidgetRegistry(): IRegistryState {
 				),
 				isWebWidgetGrant,
 			),
+		getWidgetAccess: async (request) => {
+			try {
+				return parseWidgetAccessResponse(
+					await send(
+						`registry/package/${encodeURIComponent(request.packageId)}/widget-access`,
+						{ version: request.packageVersion, appId: request.appId },
+					),
+				);
+			} catch (error) {
+				if (isWidgetAccessUnsupportedError(error)) {
+					return { ...ANONYMOUS_WIDGET_ACCESS };
+				}
+				throw error;
+			}
+		},
 	});
 }
 
@@ -359,6 +385,7 @@ class HostedUserState extends EmptyUserState {
 export function createHostedBackend(
 	data: HostedBootstrap,
 	request: HostedRequest,
+	accessToken: HostedAccessToken = anonymous,
 ): IBackendState {
 	return {
 		appState: new EmptyAppState(),
@@ -394,7 +421,9 @@ export function createHostedBackend(
 				).json();
 			},
 		}),
-		registryState: publicWidgetRegistry(),
+		registryState: publicWidgetRegistry(
+			data.auth_proxy ? accessToken : anonymous,
+		),
 		capabilities: () => ({
 			needsSignIn: false,
 			canExecuteLocally: false,

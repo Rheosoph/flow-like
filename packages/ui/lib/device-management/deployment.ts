@@ -304,23 +304,39 @@ const placementConfigSchema = z
 	});
 export type DeploymentEvent = z.infer<typeof eventSchema>;
 export type DeploymentVariable = z.infer<typeof variableSchema>;
-const rolloutSchema = z.object({
-	rollout_id: identifier,
-	placement_id: identifier,
-	project_id: identifier,
-	state: z.enum([
-		"staged",
-		"validating",
-		"activating",
-		"healthy",
-		"rolling_back",
-		"rolled_back",
-		"failed",
-		"cancelled",
-	]),
-	failure_code: z.string().max(128).nullish(),
-	active_revision: z.number().int().positive().safe().nullish(),
-});
+const unixSeconds = z.number().int().safe();
+const revisionNumber = z.number().int().nonnegative().safe();
+const replicaCount = z.number().int().min(0).max(32);
+// Agents add timeline fields over time; unknown fields pass through instead of failing the read.
+export const rolloutSchema = z
+	.object({
+		rollout_id: identifier,
+		placement_id: identifier,
+		project_id: identifier,
+		state: z.enum([
+			"staged",
+			"validating",
+			"activating",
+			"healthy",
+			"rolling_back",
+			"rolled_back",
+			"failed",
+			"cancelled",
+		]),
+		failure_code: z.string().max(128).nullish(),
+		active_revision: z.number().int().positive().safe().nullish(),
+		active_intent: revisionNumber.nullish(),
+		base_revision: revisionNumber.optional(),
+		previous_replicas: replicaCount.optional(),
+		candidate_replicas: replicaCount.optional(),
+		stabilization_seconds: z.number().int().min(0).max(3600).optional(),
+		deadline_seconds: z.number().int().min(0).max(86400).optional(),
+		created_at: unixSeconds.optional(),
+		updated_at: unixSeconds.optional(),
+		deadline_at: unixSeconds.nullish(),
+		stable_since: unixSeconds.nullish(),
+	})
+	.passthrough();
 export type DeploymentRolloutStatus = z.infer<typeof rolloutSchema>;
 export type PlacementConfiguration = {
 	placement_id: string;
@@ -586,34 +602,107 @@ function samePins(
 		JSON.stringify(left.board_version) === JSON.stringify(right.board_version)
 	);
 }
-function onlineEvent(event: IEvent): DeploymentEvent {
+export const EVENT_INELIGIBLE_CODES = [
+	"paused",
+	"latest_flow",
+	"canary",
+	"variants",
+	"api_type",
+	"type",
+	"flow_error",
+	"refuse",
+] as const;
+export type EventIneligibleCode = (typeof EVENT_INELIGIBLE_CODES)[number];
+export type EventReadiness = "listener" | "explicit" | "unsupported";
+/** The `IEvent` fields the rule reads; app catalogues pass the same shape. */
+export interface EligibilityEvent {
+	active: boolean;
+	event_type: string;
+	canary?: unknown;
+	variants?: readonly unknown[] | null;
+	default_page_id?: string | null;
+	event_version?: readonly number[] | null;
+	board_version?: readonly number[] | null;
+}
+/** Facts from outside the event record: the approved bundle and a device's own refusal. */
+export interface EventEligibilityMetadata {
+	ineligibleReason?: string | null;
+	deviceRefusal?: string | null;
+}
+export interface EventEligibility {
+	eligible: boolean;
+	/** First failing rule, in the order the device checks them; null when eligible. */
+	code: EventIneligibleCode | null;
+	detail?: string;
+	hosted: boolean;
+	readiness: EventReadiness;
+	rolloutSupported: boolean;
+	eventVersion: [number, number, number] | null;
+	boardVersion: [number, number, number] | null;
+}
+const OWN_SERVER_TYPES = ["rest", "mcp"];
+const RUNS_ALONE_TYPES = ["daemon", "rest", "mcp"];
+/** The device's event rule (`sa/deployment.rs:114-150`), shared by online discovery and every app view. */
+export function eventEligibility(
+	event: EligibilityEvent,
+	metadata: EventEligibilityMetadata = {},
+): EventEligibility {
 	const hosted =
 		Boolean(event.default_page_id) ||
 		["http", "simple_chat"].includes(event.event_type);
 	const eventVersion = version.safeParse(event.event_version);
 	const boardVersion = version.safeParse(event.board_version);
-	return eventSchema.parse({
-		id: event.id,
-		name: event.name.slice(0, 120),
-		event_type: event.event_type,
-		event_version: eventVersion.success ? eventVersion.data : null,
-		board_version: boardVersion.success ? boardVersion.data : null,
+	const code: EventIneligibleCode | null = !event.active
+		? "paused"
+		: !eventVersion.success || !boardVersion.success
+			? "latest_flow"
+			: event.canary
+				? "canary"
+				: event.variants?.length
+					? "variants"
+					: !hosted && !RUNS_ALONE_TYPES.includes(event.event_type)
+						? event.event_type === "api"
+							? "api_type"
+							: "type"
+						: metadata.ineligibleReason
+							? "flow_error"
+							: metadata.deviceRefusal
+								? "refuse"
+								: null;
+	const detail =
+		code === "flow_error"
+			? (metadata.ineligibleReason ?? undefined)
+			: code === "refuse"
+				? (metadata.deviceRefusal ?? undefined)
+				: undefined;
+	return {
+		eligible: code === null,
+		code,
+		...(detail ? { detail } : {}),
 		hosted,
-		readiness_kind:
-			hosted || ["rest", "mcp"].includes(event.event_type)
+		readiness:
+			hosted || OWN_SERVER_TYPES.includes(event.event_type)
 				? "listener"
 				: event.event_type === "daemon"
 					? "explicit"
 					: "unsupported",
-		rollout_supported:
-			hosted || ["rest", "mcp", "daemon"].includes(event.event_type),
-		eligible:
-			event.active &&
-			!event.canary &&
-			!event.variants?.length &&
-			eventVersion.success &&
-			boardVersion.success &&
-			(hosted || ["daemon", "rest", "mcp"].includes(event.event_type)),
+		rolloutSupported: hosted || RUNS_ALONE_TYPES.includes(event.event_type),
+		eventVersion: eventVersion.success ? eventVersion.data : null,
+		boardVersion: boardVersion.success ? boardVersion.data : null,
+	};
+}
+function onlineEvent(event: IEvent): DeploymentEvent {
+	const rule = eventEligibility(event);
+	return eventSchema.parse({
+		id: event.id,
+		name: event.name.slice(0, 120),
+		event_type: event.event_type,
+		event_version: rule.eventVersion,
+		board_version: rule.boardVersion,
+		hosted: rule.hosted,
+		readiness_kind: rule.readiness,
+		rollout_supported: rule.rolloutSupported,
+		eligible: rule.eligible,
 	});
 }
 function boardVariables(

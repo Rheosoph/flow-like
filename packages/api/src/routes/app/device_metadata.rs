@@ -89,6 +89,18 @@ pub(crate) fn device_event(mut event: Event) -> Result<Event, ApiError> {
     Ok(super::events::db::filter_event_secrets(event))
 }
 
+/// The published snapshot a device receives: the working copy's version when it
+/// was published, else the newest one. `published` is newest first, as
+/// `App::get_widget_versions` returns it. `None` means never published.
+fn deployable_widget_version(
+    current: Option<(u32, u32, u32)>,
+    published: &[(u32, u32, u32)],
+) -> Option<(u32, u32, u32)> {
+    current
+        .filter(|version| published.contains(version))
+        .or_else(|| published.first().copied())
+}
+
 async fn append_current_template(
     documents: &mut Documents,
     app: &App,
@@ -108,6 +120,29 @@ async fn append_current_template(
     super::board::secrets::filter_board_secrets(&mut template);
     documents.add(path, template)?;
     Ok(())
+}
+
+async fn append_widget(documents: &mut Documents, app: &App, id: &str) -> Result<(), ApiError> {
+    let current = app.open_widget(id.to_string(), None).await?;
+    let published = app.get_widget_versions(id).await?;
+    let (version, widget) = match deployable_widget_version(current.version, &published) {
+        Some(version) => (
+            version,
+            app.open_widget(id.to_string(), Some(version)).await?,
+        ),
+        // Like templates, a widget that was never published ships its working
+        // copy. The controller digest freezes these exact bytes, and the
+        // fallback label sits below every version a publish can allocate.
+        None => {
+            let mut widget = current;
+            (*widget.version.get_or_insert_default(), widget)
+        }
+    };
+    require!(
+        widget.id == id && widget.version == Some(version),
+        "Widget identity differs"
+    );
+    documents.add(key("widgets", id, version)?, widget)
 }
 
 /// The client hashes and approves this content before sending it to the device.
@@ -189,16 +224,7 @@ pub async fn export(
         )?;
     }
     for id in &app.widget_ids {
-        let current = app.open_widget(id.clone(), None).await?;
-        let version = current
-            .version
-            .context("Publish widgets before deploying them")?;
-        let widget = app.open_widget(id.clone(), Some(version)).await?;
-        require!(
-            widget.id == *id && widget.version == Some(version),
-            "Published widget identity differs"
-        );
-        documents.add(key("widgets", id, version)?, widget)?;
+        append_widget(&mut documents, &app, id).await?;
     }
     for id in &app.templates {
         append_current_template(&mut documents, &app, id).await?;
@@ -236,22 +262,13 @@ pub async fn export(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like::state::FlowLikeState;
+    use flow_like_storage::object_store::ObjectStore;
+    use std::sync::Arc;
 
-    #[tokio::test]
-    async fn template_export_freezes_current_head_and_pages_without_requiring_an_archive() {
-        use flow_like::{
-            a2ui::widget::Page,
-            bit::Metadata,
-            flow::board::Board,
-            state::{FlowLikeConfig, FlowLikeState},
-            utils::{compression::compress_to_file, http::HTTPClient},
-        };
-        use flow_like_storage::{
-            Path,
-            files::store::FlowLikeStore,
-            object_store::{ObjectStore, ObjectStoreExt, memory::InMemory},
-        };
-        use std::sync::Arc;
+    async fn memory_project() -> (Arc<dyn ObjectStore>, Arc<FlowLikeState>, App) {
+        use flow_like::{bit::Metadata, state::FlowLikeConfig, utils::http::HTTPClient};
+        use flow_like_storage::{files::store::FlowLikeStore, object_store::memory::InMemory};
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let state = Arc::new(FlowLikeState::new(
             FlowLikeConfig::with_default_store(FlowLikeStore::Other(store.clone())),
@@ -265,6 +282,61 @@ mod tests {
         )
         .await
         .unwrap();
+        (store, state, app)
+    }
+
+    #[tokio::test]
+    async fn widget_export_ships_published_snapshots_and_never_published_working_copies() {
+        use flow_like::a2ui::widget::{VersionType, Widget};
+        let (_, _, mut app) = memory_project().await;
+        let mut drafted = Widget::new("drafted", "Drafted", "root");
+        drafted.version = None;
+        app.save_widget(&drafted).await.unwrap();
+        let mut forked = Widget::new("forked", "Forked", "root");
+        forked.version = Some((1, 2, 0));
+        app.save_widget(&forked).await.unwrap();
+        app.save_widget(&Widget::new("published", "Published", "root"))
+            .await
+            .unwrap();
+        let version = app
+            .create_widget_version("published", VersionType::Minor)
+            .await
+            .unwrap();
+        let mut edited = app.open_widget("published".into(), None).await.unwrap();
+        edited.name = "Unpublished edit".into();
+        app.save_widget(&edited).await.unwrap();
+
+        let mut documents = Documents {
+            values: BTreeMap::new(),
+            bytes: 0,
+        };
+        for id in ["drafted", "forked", "published"] {
+            append_widget(&mut documents, &app, id).await.unwrap();
+        }
+        let drafted = &documents.values["widgets/drafted/versions/0/0/0"];
+        assert_eq!(
+            (drafted["id"].as_str(), drafted["version"].clone()),
+            (Some("drafted"), serde_json::json!([0, 0, 0]))
+        );
+        assert_eq!(
+            documents.values["widgets/forked/versions/1/2/0"]["name"],
+            "Forked"
+        );
+        assert_eq!(version, (0, 1, 0));
+        assert_eq!(
+            documents.values["widgets/published/versions/0/1/0"]["name"],
+            "Published"
+        );
+        assert_eq!(documents.values.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn template_export_freezes_current_head_and_pages_without_requiring_an_archive() {
+        use flow_like::{
+            a2ui::widget::Page, flow::board::Board, utils::compression::compress_to_file,
+        };
+        use flow_like_storage::{Path, object_store::ObjectStoreExt};
+        let (store, state, app) = memory_project().await;
         let root = Path::from("apps/project");
         let mut template = Board::new(Some("template".into()), root.clone(), state);
         template.version = (3, 2, 1);
@@ -365,6 +437,22 @@ mod tests {
             event.config = config;
             assert_eq!(device_event(event.clone()).unwrap().config, event.config);
         }
+    }
+
+    #[test]
+    fn deployable_widget_version_prefers_the_published_working_copy_version() {
+        let published = [(1, 2, 0), (1, 1, 0)];
+        assert_eq!(
+            deployable_widget_version(Some((1, 1, 0)), &published),
+            Some((1, 1, 0))
+        );
+        assert_eq!(deployable_widget_version(None, &published), Some((1, 2, 0)));
+        assert_eq!(
+            deployable_widget_version(Some((2, 0, 0)), &published),
+            Some((1, 2, 0))
+        );
+        assert_eq!(deployable_widget_version(Some((0, 0, 1)), &[]), None);
+        assert_eq!(deployable_widget_version(None, &[]), None);
     }
 
     #[test]

@@ -64,6 +64,10 @@ pub enum TokenType {
     /// Capability carried in a widget sandbox URL. It widens one widget
     /// document to one approved policy and never authorizes access.
     WidgetGrant,
+    /// Capability carried in a widget sandbox URL that lets an iframe, which
+    /// sends no credentials, load the files of one package version the viewer
+    /// was authorized for when it was minted.
+    WidgetAccess,
     /// One redemption of a controller-approved device onboarding package.
     DeviceEnrollment,
     /// Device control-plane access bound to a registered device auth key.
@@ -86,6 +90,7 @@ impl TokenType {
             TokenType::AppConnection => "flow-like-app-connection",
             TokenType::PageAction => "flow-like-page-action",
             TokenType::WidgetGrant => "flow-like-widget-grant",
+            TokenType::WidgetAccess => "flow-like-widget-access",
             TokenType::DeviceEnrollment => "flow-like-device-enrollment",
             TokenType::DeviceSession => "flow-like-device-control",
             TokenType::DeviceSignaling => "flow-like-device-signaling",
@@ -97,14 +102,15 @@ impl TokenType {
     /// Get the default TTL in seconds for this token type
     pub fn default_ttl_seconds(&self) -> i64 {
         match self {
-            TokenType::Executor => 24 * 60 * 60,    // 24 hours
-            TokenType::Compiler => 24 * 60 * 60,    // 24 hours
-            TokenType::User => 60 * 60,             // 1 hour
-            TokenType::Realtime => 3 * 60 * 60,     // 3 hours
-            TokenType::ChannelResponder => 60 * 60, // 1 hour; callers pass the channel lifetime
-            TokenType::AppConnection => 10 * 60,    // 10 minutes
-            TokenType::PageAction => 24 * 60 * 60,  // 24 hours
-            TokenType::WidgetGrant => 60 * 60,      // 1 hour
+            TokenType::Executor => 24 * 60 * 60,     // 24 hours
+            TokenType::Compiler => 24 * 60 * 60,     // 24 hours
+            TokenType::User => 60 * 60,              // 1 hour
+            TokenType::Realtime => 3 * 60 * 60,      // 3 hours
+            TokenType::ChannelResponder => 60 * 60,  // 1 hour; callers pass the channel lifetime
+            TokenType::AppConnection => 10 * 60,     // 10 minutes
+            TokenType::PageAction => 24 * 60 * 60,   // 24 hours
+            TokenType::WidgetGrant => 60 * 60,       // 1 hour
+            TokenType::WidgetAccess => 12 * 60 * 60, // 12 hours
             TokenType::DeviceEnrollment => 24 * 60 * 60,
             TokenType::DeviceSession => 10 * 60,
             TokenType::DeviceSignaling | TokenType::InstanceProject => 5 * 60,

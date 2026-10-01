@@ -556,6 +556,7 @@ async fn signed_instances_enforce_consent_scope_leases_and_revocation() {
         include_str!(
             "../../prisma/migrations/20260923150000_instance_offline_replay/migration.sql"
         ),
+        include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
     ] {
         for statement in migration.split(';').filter(|s| !s.trim().is_empty()) {
             db.execute_unprepared(statement).await.unwrap();

@@ -501,7 +501,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		() => packageRows.map((p) => p.packageId),
 		[packageRows],
 	);
-	const manifests = usePackageManifests(packageIds);
+	const manifests = usePackageManifests(packageIds, appId);
 	const offline = !!isOffline.data;
 	const countsLoading = catalog.isLoading;
 
@@ -760,6 +760,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 							))}
 						</section>
 						<PackageWidgetsSection
+							appId={appId}
 							widgets={widgets}
 							loading={manifests.loading}
 							limit={OVERVIEW_WIDGET_LIMIT}
@@ -786,6 +787,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 
 					<TabsContent value="widgets">
 						<PackageWidgetsSection
+							appId={appId}
 							widgets={widgets}
 							loading={manifests.loading}
 						/>

@@ -1,5 +1,8 @@
 import type { IRegistryState } from "@flow-like/flow-like-ui";
 import {
+	ANONYMOUS_WIDGET_ACCESS,
+	type WidgetAccessRequest,
+	type WidgetAccessResponse,
 	type WidgetGrantRequest,
 	type WidgetGrantResponse,
 	WidgetPolicyChangedError,
@@ -8,17 +11,21 @@ import {
 	WidgetRuntimeSourcesError,
 	isPolicyChangedError,
 	isWebWidgetGrant,
+	isWidgetAccessUnsupportedError,
+	parseWidgetAccessResponse,
 	parseWidgetGrantResponse,
 	parseWidgetPolicyDescriptor,
 	widgetRuntimeSourcesErrorCode,
 } from "@flow-like/flow-like-ui/components/a2ui/micro-widget-policy";
 import { forgetMicroWidgetGrants } from "@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type {
 	AccessRequest,
 	CachedPackage,
 	InstalledPackage,
 	PackageCommentsResponse,
 	PackageUpdate,
+	RegistryEntry,
 	RequestAccessParams,
 	RequestAccessResponse,
 	SearchFilters,
@@ -42,6 +49,19 @@ function widgetPolicyPath(request: WidgetPolicyRequest): string {
 	)}/widget-policy/${encodeURIComponent(
 		request.packageVersion,
 	)}/${encodeURIComponent(request.widgetId)}`;
+}
+
+/** The registry has no install on the web: an entry stands in with the manifest of the version it describes. */
+function installedFromEntry(entry: RegistryEntry): InstalledPackage | null {
+	if (!isRecord(entry) || !isRecord(entry.manifest)) return null;
+	return {
+		id: entry.id,
+		version: entry.manifest.version,
+		source: entry.source,
+		installedAt: entry.updatedAt,
+		wasmPath: "",
+		manifest: entry.manifest,
+	};
 }
 
 /** 400 `INVALID_RUNTIME_SOURCES` / `RUNTIME_SOURCES_IN_PREVIEW` are host bugs, never user decisions. */
@@ -115,12 +135,18 @@ export class WebRegistryState implements IRegistryState {
 		);
 	}
 
-	async getPackage(packageId: string): Promise<InstalledPackage | null> {
+	/** Nothing is installed on the web; a package resolves only through a project that pins it. */
+	async getPackage(
+		packageId: string,
+		appId?: string,
+	): Promise<InstalledPackage | null> {
+		if (!appId) return null;
 		try {
-			return await apiGet<InstalledPackage>(
-				`registry/packages/${packageId}`,
+			const entry = await apiGet<RegistryEntry>(
+				`registry/package/${encodeURIComponent(packageId)}?app_id=${encodeURIComponent(appId)}`,
 				this.backend.auth,
 			);
+			return installedFromEntry(entry);
 		} catch {
 			return null;
 		}
@@ -296,8 +322,11 @@ export class WebRegistryState implements IRegistryState {
 		const runtimeSources = request.runtimeSources ?? [];
 		let descriptor: unknown;
 		if (runtimeSources.length === 0) {
+			const app = request.appId
+				? `&app_id=${encodeURIComponent(request.appId)}`
+				: "";
 			descriptor = await apiGet<unknown>(
-				`${widgetPolicyPath(request)}?preview=${request.preview}`,
+				`${widgetPolicyPath(request)}?preview=${request.preview}${app}`,
 				this.backend.auth,
 			);
 		} else {
@@ -351,5 +380,27 @@ export class WebRegistryState implements IRegistryState {
 			throw runtimeSourcesError(error, request) ?? error;
 		}
 		return parseWidgetGrantResponse(response, isWebWidgetGrant);
+	}
+
+	async getWidgetAccess(
+		request: WidgetAccessRequest,
+	): Promise<WidgetAccessResponse> {
+		let response: unknown;
+		try {
+			response = await apiPost<unknown>(
+				`registry/package/${encodeURIComponent(request.packageId)}/widget-access`,
+				{
+					version: request.packageVersion,
+					...(request.appId ? { appId: request.appId } : {}),
+				},
+				this.backend.auth,
+			);
+		} catch (error) {
+			if (isWidgetAccessUnsupportedError(error)) {
+				return { ...ANONYMOUS_WIDGET_ACCESS };
+			}
+			throw error;
+		}
+		return parseWidgetAccessResponse(response);
 	}
 }

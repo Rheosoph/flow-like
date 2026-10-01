@@ -16,9 +16,14 @@ pub(crate) fn fleet_snapshot(
     let telemetry = TelemetryStore::open(state_dir)?;
     let placements = telemetry.store.scoped_placements(scope)?;
     let value = match kind {
-        FleetKind::Status => json!({"device_id": telemetry.store.device_id(),
-            "boot_id":boot_id,"observed_at":now.checked_mul(1000).context("Fleet timestamp overflow")?,
-            "placements":placements.into_iter().map(crate::management::inspection_placement).collect::<Vec<_>>()}),
+        FleetKind::Status => status_snapshot(
+            state_dir,
+            scope,
+            telemetry.store.device_id(),
+            boot_id,
+            now,
+            &placements,
+        )?,
         FleetKind::Metrics => match scope {
             ManagementScope::Device => {
                 let mut sample = telemetry.latest_metrics(None)?;
@@ -61,6 +66,37 @@ pub(crate) fn fleet_snapshot(
         "Fleet snapshot exceeds its complete payload limit"
     );
     Ok(value)
+}
+
+/// Every row sheds detail together until the snapshot fits. Device-scope readers also
+/// receive the agent release, host facts and unhealthy background tasks.
+fn status_snapshot(
+    state_dir: &std::path::Path,
+    scope: &flow_like_device_protocol::ManagementScope,
+    device_id: &str,
+    boot_id: &str,
+    now: i64,
+    placements: &[crate::state::PlacementRecord],
+) -> Result<Value> {
+    use crate::diagnostics::{DETAILS, Rows, global};
+    let rows = Rows::snapshot(global(), state_dir);
+    let observed_at = now.checked_mul(1000).context("Fleet timestamp overflow")?;
+    let mut snapshot = Value::Null;
+    for detail in DETAILS {
+        snapshot = json!({"device_id":device_id,"boot_id":boot_id,"observed_at":observed_at,
+            "placements":placements.iter().map(|record| rows.placement(record, false, detail)).collect::<Vec<_>>()});
+        if let (flow_like_device_protocol::ManagementScope::Device, Value::Object(object)) =
+            (scope, &mut snapshot)
+        {
+            object.extend(global().device_facts(state_dir, true));
+        }
+        if serde_json::to_vec(&snapshot)?.len()
+            <= flow_like_device_protocol::MAX_FLEET_PLAINTEXT - 1024
+        {
+            break;
+        }
+    }
+    Ok(snapshot)
 }
 
 pub(crate) fn migrate(db: &Connection) -> Result<()> {
@@ -865,6 +901,88 @@ mod tests {
             fleet_snapshot(dir.path(), &missing, FleetKind::Metrics, "boot", 100)?["records"],
             json!([])
         );
+        let placement = ManagementScope::Placement {
+            project_id: "project".into(),
+            placement_id: "service".into(),
+        };
+        let placement_status =
+            fleet_snapshot(dir.path(), &placement, FleetKind::Status, "boot", 100)?;
+        assert_eq!(
+            placement_status["placements"][0]["events"][0]["event_id"],
+            "http"
+        );
+        let device_facts =
+            |snapshot: &Value| ["agent", "host", "tasks"].map(|fact| snapshot.get(fact).is_some());
+        assert_eq!(device_facts(&status), [false; 3]);
+        assert_eq!(device_facts(&placement_status), [false; 3]);
+        Ok(())
+    }
+
+    /// 64 worst-case placements, read as a Status snapshot for `scope`.
+    fn worst_case_status(
+        prefix: &str,
+        scope: &flow_like_device_protocol::ManagementScope,
+    ) -> Result<Value> {
+        use crate::diagnostics::{global, test_support::*};
+        let dir = tempfile::tempdir()?;
+        let mut state = StateStore::open(&dir.path().join("management.sqlite"))?;
+        for index in 0..64 {
+            let id = worst_case_id(&format!("{prefix}-{index:02}"));
+            worst_case_placement(&mut state, dir.path(), global(), &id)?;
+        }
+        let snapshot = fleet_snapshot(
+            dir.path(),
+            scope,
+            flow_like_device_protocol::FleetKind::Status,
+            "boot",
+            100,
+        )?;
+        let encoded = snapshot.to_string();
+        assert!(encoded.len() <= flow_like_device_protocol::MAX_FLEET_PLAINTEXT - 1024);
+        assert_eq!(snapshot["placements"].as_array().unwrap().len(), 64);
+        let volatile = [
+            "last_error",
+            "retry_in_seconds",
+            "process_id",
+            "variable-value",
+        ];
+        assert!(!volatile.iter().any(|field| encoded.contains(field)));
+        Ok(snapshot)
+    }
+
+    #[test]
+    fn worst_case_device_status_snapshot_fits_without_volatile_fields() -> Result<()> {
+        use crate::diagnostics::{TaskFailure, global};
+        global().report("worst_case_snapshot_task", Err(TaskFailure::Storage));
+        let device = worst_case_status(
+            "worst-device-snapshot",
+            &flow_like_device_protocol::ManagementScope::Device,
+        )?;
+        assert!(!device.to_string().contains("consecutive_failures"));
+        assert_eq!(device["placements"][0]["has_error"], true);
+        assert_eq!(device["agent"]["version"], env!("CARGO_PKG_VERSION"));
+        assert!(device["host"]["agent_started_at"].is_i64());
+        let tasks = device["tasks"].as_array().unwrap();
+        assert!(tasks.iter().all(|task| task["state"] != "ok"));
+        assert!(
+            tasks
+                .iter()
+                .any(|task| task["name"] == "worst_case_snapshot_task")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn project_status_snapshots_carry_no_device_facts() -> Result<()> {
+        let project = worst_case_status(
+            "worst-project-snapshot",
+            &flow_like_device_protocol::ManagementScope::Project {
+                project_id: "p".repeat(128),
+            },
+        )?;
+        for device_fact in ["agent", "host", "tasks"] {
+            assert!(project.get(device_fact).is_none(), "{device_fact}");
+        }
         Ok(())
     }
 

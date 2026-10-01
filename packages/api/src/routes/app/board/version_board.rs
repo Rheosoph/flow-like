@@ -41,6 +41,7 @@ pub struct CreateVersionQuery {
         (status = 200, description = "New version created as (major, minor, patch) tuple", body = (u32, u32, u32)),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
+        (status = 404, description = "Board not found"),
         (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]

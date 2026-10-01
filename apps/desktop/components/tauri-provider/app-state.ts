@@ -32,6 +32,7 @@ import {
 	type IForkJobView,
 	resolveOnlineFork,
 } from "@flow-like/flow-like-ui/lib/fork-job";
+import { usablePackagePins } from "@flow-like/flow-like-ui/lib/package-license";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
 import type {
@@ -44,6 +45,7 @@ import type {
 	IOnlineForkBody,
 	IOnlineForkResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
+import type { AppPackage } from "@flow-like/flow-like-ui/lib/schema/wasm";
 import {
 	mergeMetadataMedia,
 	stabilizeMetadata,
@@ -58,6 +60,7 @@ import { fetcher, put } from "../../lib/api";
 import type { ApiResponseError } from "../../lib/api-error";
 import { isMissingResourceError } from "../../lib/api-error";
 import { appsDB } from "../../lib/apps-db";
+import { HUB_REFRESH_TIMEOUT_MS } from "../../lib/request-deadline";
 import type { TauriBackend } from "../tauri-provider";
 
 /**
@@ -101,6 +104,80 @@ function normalizeGroup(group: IGroup | undefined): IGroup | undefined {
 
 function normalizeGroups(groups: IGroup[] | undefined): IGroup[] {
 	return asArray(groups).flatMap((group) => normalizeGroup(group) ?? []);
+}
+
+/** A project pin as the hub lists it, expired ones included. */
+export type RemoteAppPackage = Pick<AppPackage, "packageId" | "version"> &
+	Partial<Pick<AppPackage, "packageName" | "license">>;
+
+const REMOTE_PINS_SYNC_MS = 30_000;
+
+const remotePackageSyncs = new Map<string, Promise<RemoteAppPackage[]>>();
+
+/**
+ * The hub's pins of an online app, the usable ones mirrored into the local
+ * manifest that the native catalog and widget provider read. Concurrent calls
+ * for one app share a sync. Empty when offline, signed out or the hub fails.
+ */
+export function syncRemoteAppPackages(
+	backend: TauriBackend,
+	appId: string,
+): Promise<RemoteAppPackage[]> {
+	const pending = remotePackageSyncs.get(appId);
+	if (pending) return pending;
+	const sync = mirrorRemoteAppPackages(backend, appId).finally(() => {
+		remotePackageSyncs.delete(appId);
+	});
+	remotePackageSyncs.set(appId, sync);
+	return sync;
+}
+
+async function mirrorRemoteAppPackages(
+	backend: TauriBackend,
+	appId: string,
+): Promise<RemoteAppPackage[]> {
+	const { profile, auth, appState } = backend;
+	if (!profile || !auth || !appState.addPackage || !appState.removePackage) {
+		return [];
+	}
+	try {
+		if (await backend.isOffline(appId)) return [];
+		const [remotePackages, localPins] = await Promise.all([
+			fetcher<RemoteAppPackage[]>(
+				profile,
+				`apps/${appId}/packages`,
+				{ timeoutMs: HUB_REFRESH_TIMEOUT_MS },
+				auth,
+			),
+			invoke<Record<string, string>>("app_list_packages", { appId }),
+		]);
+		if (!Array.isArray(remotePackages)) {
+			throw new Error(
+				`The hub packages of app ${appId} were not a list (${typeof remotePackages})`,
+			);
+		}
+		const remotePins = new Map(
+			Object.entries(usablePackagePins(remotePackages)),
+		);
+		// One write at a time: each loads and saves the whole local manifest.
+		for (const [packageId, version] of remotePins) {
+			if (localPins[packageId] !== version) {
+				await appState.addPackage(appId, packageId, version);
+			}
+		}
+		for (const packageId of Object.keys(localPins)) {
+			if (!remotePins.has(packageId)) {
+				await appState.removePackage(appId, packageId);
+			}
+		}
+		return remotePackages;
+	} catch (error) {
+		console.warn(
+			`Failed to sync the hub packages of app ${appId} into its local pins:`,
+			error,
+		);
+		return [];
+	}
 }
 
 export class AppState implements IAppState {
@@ -1426,8 +1503,36 @@ export class AppState implements IAppState {
 		);
 	}
 
+	/**
+	 * The local pins, which the native catalog and widget provider read. For an
+	 * online app they first take what the hub pins, so both sides list the same.
+	 */
 	async listPackages(appId: string): Promise<Record<string, string>> {
+		await this.syncRemotePins(appId);
 		return invoke("app_list_packages", { appId });
+	}
+
+	/**
+	 * At most one hub sync per app every `REMOTE_PINS_SYNC_MS`. It is cached
+	 * under the app's packages, so invalidating them, as the Packages page does
+	 * after every pin change, lets the next listing sync at once. The cache
+	 * never pauses offline and is not persisted, so a restart syncs again.
+	 */
+	private async syncRemotePins(appId: string): Promise<void> {
+		const { queryClient, profile, auth } = this.backend;
+		if (!profile || !auth) return;
+		const sync = () => syncRemoteAppPackages(this.backend, appId);
+		if (!queryClient) {
+			await sync();
+			return;
+		}
+		await queryClient.fetchQuery({
+			queryKey: ["app", appId, "packages", "local-pins"],
+			queryFn: sync,
+			staleTime: REMOTE_PINS_SYNC_MS,
+			networkMode: "always",
+			meta: { persist: false },
+		});
 	}
 
 	async addPackage(

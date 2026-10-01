@@ -69,10 +69,13 @@ async fn signed_enrollment_session_presence_and_revocation() {
     let mut options = ConnectOptions::new(scoped_url.to_string());
     options.max_connections(2).min_connections(1);
     let db = Database::connect(options).await.unwrap();
-    for statement in
-        include_str!("../../prisma/migrations/20260921120000_standalone_devices/migration.sql")
-            .split(';')
-            .filter(|statement| !statement.trim().is_empty())
+    for statement in [
+        include_str!("../../prisma/migrations/20260921120000_standalone_devices/migration.sql"),
+        include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
+    ]
+    .into_iter()
+    .flat_map(|migration| migration.split(';'))
+    .filter(|statement| !statement.trim().is_empty())
     {
         db.execute_unprepared(statement).await.unwrap();
     }

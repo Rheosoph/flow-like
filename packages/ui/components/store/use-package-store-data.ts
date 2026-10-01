@@ -33,6 +33,23 @@ export function viewerHasPackageAccess(
 	return pkg.visibility === "public" && (pkg.price ?? 0) <= 0;
 }
 
+/** While a checkout runs in the browser, re-checks access until it lands or the window closes. */
+export function useCheckoutPolling(
+	awaiting: boolean,
+	onPoll: (() => void) | undefined,
+	onGiveUp: () => void,
+) {
+	useEffect(() => {
+		if (!awaiting) return;
+		const poll = window.setInterval(() => onPoll?.(), CHECKOUT_POLL_MS);
+		const stop = window.setTimeout(onGiveUp, CHECKOUT_POLL_LIMIT_MS);
+		return () => {
+			window.clearInterval(poll);
+			window.clearTimeout(stop);
+		};
+	}, [awaiting, onPoll, onGiveUp]);
+}
+
 export function usePackageStoreData(
 	packageId: string | undefined,
 	pkg: RegistryEntry | null | undefined,
@@ -60,21 +77,15 @@ export function usePackageStoreData(
 		[grantedAccess, pkg],
 	);
 
-	useEffect(() => {
-		if (!awaitingCheckout || hasAccess) return;
-		const poll = window.setInterval(
-			() => onAccessChanged?.(),
-			CHECKOUT_POLL_MS,
-		);
-		const stop = window.setTimeout(
-			() => setAwaitingCheckout(false),
-			CHECKOUT_POLL_LIMIT_MS,
-		);
-		return () => {
-			window.clearInterval(poll);
-			window.clearTimeout(stop);
-		};
-	}, [awaitingCheckout, hasAccess, onAccessChanged]);
+	const stopAwaitingCheckout = useCallback(
+		() => setAwaitingCheckout(false),
+		[],
+	);
+	useCheckoutPolling(
+		awaitingCheckout && !hasAccess,
+		onAccessChanged,
+		stopAwaitingCheckout,
+	);
 
 	const formatPrice = useCallback((price?: number | null) => {
 		if (!price || price <= 0) return "Free";

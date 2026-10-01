@@ -34,6 +34,8 @@ import {
 	type IForkJobView,
 	resolveOnlineFork,
 } from "@flow-like/flow-like-ui/lib/fork-job";
+import { usablePackagePins } from "@flow-like/flow-like-ui/lib/package-license";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
 import type {
 	IBeginOfflineForkBody,
@@ -45,6 +47,7 @@ import type {
 	IOnlineForkBody,
 	IOnlineForkResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
+import type { AppPackage } from "@flow-like/flow-like-ui/lib/schema/wasm";
 import {
 	stabilizeMetadata,
 	stabilizeMetadataEntries,
@@ -500,5 +503,13 @@ export class WebAppState implements IAppState {
 
 	async deleteAppComment(appId: string, commentId: string): Promise<void> {
 		await apiDelete(`apps/${appId}/comments/${commentId}`, this.backend.auth);
+	}
+
+	async listPackages(appId: string): Promise<Record<string, string>> {
+		const packages = await apiGet<AppPackage[]>(
+			`apps/${appId}/packages`,
+			this.backend.auth,
+		);
+		return usablePackagePins(asArray(packages));
 	}
 }

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readDeviceInspection } from "./inspection";
+import { hostOperationSchema, readDeviceInspection } from "./inspection";
 import type { ManagementCall } from "./telemetry";
 function row(id: string) {
 	return {
@@ -154,4 +154,222 @@ test("inspection rejects reboot, duplicate cursors, wrong audiences and oversize
 		},
 	});
 	await expect(readDeviceInspection(malformed, "device")).rejects.toThrow();
+});
+
+function page(result: Record<string, unknown>): ManagementCall {
+	return async () => ({
+		operation_id: "op",
+		state: "completed",
+		result: {
+			device_id: "device",
+			boot_id: "boot",
+			next: null,
+			...result,
+		},
+	});
+}
+
+const diagnosed = {
+	...row("diag"),
+	process_id: 4211,
+	last_error: "listen failed in <state>",
+	has_error: true,
+	restarts: {
+		failures: 3,
+		max_restarts: 5,
+		crash_looping: true,
+		retry_in_seconds: 40,
+		last_started_at: 1727770000,
+	},
+	offline_writes: {
+		scopes: 1,
+		pending_count: 13,
+		pending_bytes: 2048,
+		oldest_at: 1727760000,
+		quarantined_scopes: 0,
+		needs_attention: 1,
+		mirror_error: false,
+	},
+	source: "online",
+	events: [
+		{ event_id: "event-1", event_version: [1, 2, 0], board_version: [3, 0, 1] },
+	],
+	events_truncated: false,
+	online_metadata_sha256: "a".repeat(64),
+	replicas: [
+		{
+			slot: 0,
+			observed_state: "backoff",
+			applied_revision: 1,
+			process_id: null,
+			last_error: "exit 1",
+			restarts: {
+				failures: 3,
+				max_restarts: 5,
+				crash_looping: true,
+				retry_in_seconds: 40,
+				last_started_at: 1727770000,
+			},
+		},
+	],
+};
+
+const deviceScope = {
+	agent_version: "0.9.3",
+	host_operations: { reboot: true, update_agent: false },
+	host_isolation: "optional",
+	isolation: {
+		platform: "linux",
+		sandbox_available: true,
+		require_isolation: false,
+		placement_preflight_required: true,
+		network_boundary: "loopback",
+		disk_requirement: "quota",
+		landlock_abi: 4,
+		reason: null,
+	},
+	features: { placement_diagnostics: 1, task_health: 1, placement_events: 1 },
+	agent: { version: "0.9.3", release_version: "1.4.0", release_sequence: 44 },
+	host: { booted_at: 1727700000, agent_started_at: 1727700100 },
+	tasks: [
+		{
+			name: "fleet_publisher",
+			state: "failing",
+			since: 1727760000,
+			consecutive_failures: 4,
+			category: "hub_unreachable",
+		},
+	],
+	host_operation: {
+		operation_id: "op-1",
+		kind: "reboot",
+		state: "requested",
+		created_at: 1727760000,
+		issued_by: "you",
+	},
+	network: {
+		interfaces: [
+			{ name: "eth0", addresses: ["192.168.1.20"], loopback: false },
+		],
+	},
+};
+
+test("inspection keeps every agent fact a newer agent sends", async () => {
+	const result = await readDeviceInspection(
+		page({ ...deviceScope, placements: [diagnosed] }),
+		"device",
+		{ now: () => 1234 },
+	);
+	expect<unknown>(result.placements).toEqual([diagnosed]);
+	expect(result.observed_at).toBe(1234);
+	expect<unknown>(result.features).toEqual(deviceScope.features);
+	expect(result.agentVersion).toBe("0.9.3");
+	expect(result.hostOperations).toEqual(deviceScope.host_operations);
+	expect(result.hostIsolation).toBe("optional");
+	expect(result.isolation).toEqual(deviceScope.isolation);
+	expect(result.agent).toEqual(deviceScope.agent);
+	expect(result.host).toEqual(deviceScope.host);
+	expect<unknown>(result.tasks).toEqual(deviceScope.tasks);
+	expect<unknown>(result.hostOperation).toEqual(deviceScope.host_operation);
+	expect(result.network).toEqual(deviceScope.network);
+});
+
+test("an older agent's page passes unchanged with no feature flags", async () => {
+	const result = await readDeviceInspection(
+		page({ placements: [row("old")] }),
+		"device",
+	);
+	expect(result.placements).toEqual([row("old")]);
+	expect(result.features).toEqual({});
+	for (const key of [
+		"agentVersion",
+		"hostOperations",
+		"hostIsolation",
+		"isolation",
+		"agent",
+		"host",
+		"tasks",
+		"hostOperation",
+		"network",
+	])
+		expect(key in result).toBe(false);
+});
+
+test("malformed agent facts are dropped without failing the inspection", async () => {
+	const result = await readDeviceInspection(
+		page({
+			agent_version: 7,
+			host_isolation: "maybe",
+			isolation: null,
+			host_operation: null,
+			tasks: [{ name: "Bad Name", state: "ok" }],
+			placements: [
+				{
+					...row("odd"),
+					process_id: -1,
+					last_error: "x".repeat(2000),
+					source: "cloud",
+					events: [{ event_id: "e", event_version: [1], board_version: [] }],
+					online_metadata_sha256: "not-hex",
+					has_error: false,
+					restarts: { failures: 1, max_restarts: 5, crash_looping: false },
+				},
+			],
+		}),
+		"device",
+	);
+	const [odd] = result.placements;
+	expect(odd).toEqual({
+		...row("odd"),
+		has_error: false,
+		restarts: {
+			failures: 1,
+			max_restarts: 5,
+			crash_looping: false,
+			retry_in_seconds: null,
+			last_started_at: null,
+		},
+	});
+	expect(result.agentVersion).toBeUndefined();
+	expect(result.hostIsolation).toBeUndefined();
+	expect(result.isolation).toBeNull();
+	expect(result.hostOperation).toBeNull();
+	expect(result.tasks).toBeUndefined();
+});
+
+test("page progress reports reads and an estimate from the previous count", async () => {
+	const progress: [number, number | null][] = [];
+	await readDeviceInspection(
+		async (command) => ({
+			operation_id: "op",
+			state: "completed",
+			result: {
+				device_id: "device",
+				boot_id: "boot",
+				placements: command.after ? [row("c")] : [row("a"), row("b")],
+				next: command.after ? null : "b",
+			},
+		}),
+		"device",
+		{
+			expectedPlacements: 6,
+			onPage: (done, total) => progress.push([done, total]),
+		},
+	);
+	expect(progress).toEqual([
+		[1, 3],
+		[2, 2],
+	]);
+});
+
+test("the host operation schema is shared with the command reader", () => {
+	expect(
+		hostOperationSchema.safeParse(deviceScope.host_operation).success,
+	).toBe(true);
+	expect(
+		hostOperationSchema.safeParse({
+			...deviceScope.host_operation,
+			kind: "shutdown",
+		}).success,
+	).toBe(false);
 });

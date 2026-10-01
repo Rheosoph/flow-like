@@ -43,6 +43,17 @@ export function isExpiredPin(pkg: Pick<AppPackage, "license">): boolean {
 	return pkg.license?.status === "expired";
 }
 
+/** Package id → pinned version of an app's packages; expired pins are disabled for the project. */
+export function usablePackagePins(
+	packages: readonly Pick<AppPackage, "packageId" | "version" | "license">[],
+): Record<string, string> {
+	return Object.fromEntries(
+		packages
+			.filter((pkg) => !isExpiredPin(pkg))
+			.map((pkg) => [pkg.packageId, pkg.version]),
+	);
+}
+
 export function licenseTimeLeft(
 	expiresAt: number | undefined,
 	now: number,

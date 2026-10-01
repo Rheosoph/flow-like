@@ -662,7 +662,9 @@ pub async fn sample(state_dir: PathBuf, cancel: CancellationToken) -> Result<()>
     let mut failures = 0u32;
     loop {
         tokio::select! {_=cancel.cancelled()=>return Ok(()),_=tick.tick()=>()}
-        match sampler.pass() {
+        let sampled = sampler.pass();
+        crate::diagnostics::global().report_error(crate::diagnostics::TELEMETRY_SAMPLER, &sampled);
+        match sampled {
             Ok(()) => failures = 0,
             Err(error) => {
                 failures = failures.saturating_add(1);
@@ -1391,6 +1393,11 @@ mod tests {
         let sampler = tokio::spawn(sample(dir.path().join("missing"), cancel.clone()));
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(!sampler.is_finished());
+        use crate::diagnostics::{TELEMETRY_SAMPLER, TaskFailure, TaskState, test_support::health};
+        assert_eq!(
+            health(TELEMETRY_SAMPLER),
+            Some((TaskState::Failing, Some(TaskFailure::Storage)))
+        );
         cancel.cancel();
         sampler.await??;
         Ok(())

@@ -715,6 +715,9 @@ pub fn spawn_sweeper(state: AppState) -> Option<tokio::task::JoinHandle<()>> {
     }))
 }
 
+#[derive(utoipa::OpenApi)]
+pub(crate) struct CertificatesApi;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -946,6 +949,7 @@ mod tests {
             include_str!(
                 "../../prisma/migrations/20260925120000_device_certificates/migration.sql"
             ),
+            include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
         ] {
             for statement in migration
                 .split(';')

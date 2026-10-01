@@ -88,6 +88,27 @@ export interface IForkPreviewResponse {
 	allow_forking: boolean;
 	user_can_fork: boolean;
 	disallow_reason: string;
+	/** Packages the fork drops because the caller doesn't hold them. Empty when the fork can't happen; absent on hubs that predate it. */
+	blocked_packages?: IBlockedPackage[];
+}
+
+export type IPackageBlock =
+	| "paid"
+	| "request_access"
+	| "private"
+	| "missing"
+	| "unavailable"
+	| "revoked";
+
+export interface IBlockedPackage {
+	package_id: string;
+	/** Registry display name; the id when the package is private or missing. */
+	name: string;
+	block: IPackageBlock;
+	/** Price in cents. Zero unless `block` is `paid`. */
+	price: number;
+	/** The caller already asked the author for access. */
+	request_pending: boolean;
 }
 
 export interface IMetaBlob {

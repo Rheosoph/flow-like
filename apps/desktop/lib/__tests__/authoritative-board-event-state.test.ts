@@ -153,8 +153,9 @@ describe("project package licences before a local run", () => {
 			pin("pkg-lapsed", "2.0.0", "lapsed"),
 			pin("pkg-expired", "3.0.0", "expired"),
 		]);
+		mocks.invoke.mockResolvedValueOnce(localPackages);
 		const appState = {
-			listPackages: vi.fn().mockResolvedValue(localPackages),
+			listPackages: vi.fn().mockResolvedValue({}),
 			addPackage: vi.fn().mockResolvedValue(undefined),
 			removePackage: vi.fn().mockResolvedValue(undefined),
 		};
@@ -175,6 +176,7 @@ describe("project package licences before a local run", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mocks.fetcher.mockReset();
+		mocks.invoke.mockReset();
 	});
 
 	test("installs usable pins through the project licence and skips expired ones", async () => {
@@ -207,6 +209,10 @@ describe("project package licences before a local run", () => {
 			expect.anything(),
 		);
 		expect(appState.removePackage).toHaveBeenCalledWith("app-1", "pkg-expired");
+		expect(mocks.invoke).toHaveBeenCalledWith("app_list_packages", {
+			appId: "app-1",
+		});
+		expect(appState.listPackages).not.toHaveBeenCalled();
 	});
 
 	test("refuses a local run of a board that uses an expired package", async () => {

@@ -10,11 +10,14 @@ import {
 	abortProjectArtifact,
 	abortRefusalSettles,
 	forgetArtifactTransfer,
+	legacyArtifactTransferDevices,
 	parseProjectArtifactAssets,
 	pendingArtifactTransfers,
 	prepareProjectArtifact,
+	readArtifactTransfer,
 	rememberArtifactTransfer,
 	selectedProjectAssetFiles,
+	takeLegacyArtifactTransfers,
 	uploadProjectArtifact,
 	validateProjectArtifactPath,
 } from "./artifacts";
@@ -632,4 +635,164 @@ test("unfinished transfers persist per device until committed, aborted or expire
 		if (previous) Object.defineProperty(globalThis, "localStorage", previous);
 		else Reflect.deleteProperty(globalThis, "localStorage");
 	}
+});
+
+function withMemoryStorage(run: (values: Map<string, string>) => void) {
+	const values = new Map<string, string>();
+	const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+	Object.defineProperty(globalThis, "localStorage", {
+		configurable: true,
+		value: {
+			get length() {
+				return values.size;
+			},
+			key: (index: number) => [...values.keys()][index] ?? null,
+			getItem: (key: string) => values.get(key) ?? null,
+			setItem: (key: string, value: string) => values.set(key, value),
+			removeItem: (key: string) => values.delete(key),
+		},
+	});
+	try {
+		run(values);
+	} finally {
+		if (previous) Object.defineProperty(globalThis, "localStorage", previous);
+		else Reflect.deleteProperty(globalThis, "localStorage");
+	}
+}
+
+const account = (name: string, apiOrigin = "https://hub.example") => ({
+	issuer: "https://id.example",
+	account: name,
+	apiOrigin,
+	profileId: "default",
+});
+
+test("scoped upload hints belong to one account and hub", () => {
+	withMemoryStorage(() => {
+		const transfer = {
+			transfer_id: crypto.randomUUID(),
+			project_id: "project",
+			manifest_sha256: "a".repeat(64),
+		};
+		rememberArtifactTransfer("device", transfer, account("ana"));
+		expect(
+			pendingArtifactTransfers("device", "project", account("ana")),
+		).toHaveLength(1);
+		expect(
+			pendingArtifactTransfers("device", undefined, account("ben")),
+		).toEqual([]);
+		expect(
+			pendingArtifactTransfers(
+				"device",
+				undefined,
+				account("ana", "https://other.example"),
+			),
+		).toEqual([]);
+		expect(pendingArtifactTransfers("device")).toEqual([]);
+		expect(legacyArtifactTransferDevices()).toEqual([]);
+		forgetArtifactTransfer("device", transfer.transfer_id, account("ana"));
+		expect(
+			pendingArtifactTransfers("device", undefined, account("ana")),
+		).toEqual([]);
+	});
+});
+
+test("legacy upload hints are listed and taken exactly once", () => {
+	withMemoryStorage((values) => {
+		const transfer = {
+			transfer_id: crypto.randomUUID(),
+			project_id: "project",
+			manifest_sha256: "a".repeat(64),
+			confirmed: true,
+		};
+		rememberArtifactTransfer("edge-1", transfer);
+		values.set(
+			"flow-like.device-artifact-transfers.edge-2",
+			JSON.stringify([{ ...transfer, expires_at: 1 }]),
+		);
+		values.set("unrelated", "1");
+		expect(legacyArtifactTransferDevices().sort()).toEqual([
+			"edge-1",
+			"edge-2",
+		]);
+		expect(takeLegacyArtifactTransfers("edge-1")).toEqual([
+			expect.objectContaining(transfer),
+		]);
+		expect(takeLegacyArtifactTransfers("edge-1")).toEqual([]);
+		expect(takeLegacyArtifactTransfers("edge-2")).toEqual([]);
+		expect(legacyArtifactTransferDevices()).toEqual([]);
+		expect(values.get("unrelated")).toBe("1");
+	});
+});
+
+test("an upload's device status is read for resuming, and a forgotten transfer reads as gone", async () => {
+	const artifact = await prepared();
+	const transfer = {
+		transfer_id: crypto.randomUUID(),
+		project_id: "project",
+		manifest_sha256: artifact.descriptor.manifest_sha256,
+	};
+	const status: ArtifactTransferStatus = {
+		transfer_id: transfer.transfer_id,
+		descriptor: artifact.descriptor,
+		state: "receiving",
+		expires_at: 2_000_000_000,
+		manifest_ready: true,
+		file_index: null,
+		offset: artifact.descriptor.manifest_size,
+		complete: true,
+		project_path: null,
+	};
+	const sent: Record<string, unknown>[] = [];
+	const reply =
+		(response: { state: string; result: unknown }): ArtifactManagementCall =>
+		async (command) => {
+			sent.push(command);
+			return response;
+		};
+	expect(
+		await readArtifactTransfer(
+			reply({ state: "completed", result: status }),
+			transfer,
+		),
+	).toEqual(status);
+	expect(sent[0]).toEqual({
+		type: "artifact",
+		request: {
+			kind: "status",
+			project_id: "project",
+			transfer_id: transfer.transfer_id,
+			file_index: null,
+		},
+	});
+	expect(
+		await readArtifactTransfer(
+			reply({
+				state: "rejected",
+				result: { code: "failed", error: "Unknown transfer", retryable: true },
+			}),
+			transfer,
+		),
+	).toBeNull();
+	await expect(
+		readArtifactTransfer(
+			reply({
+				state: "completed",
+				result: {
+					...status,
+					descriptor: { ...status.descriptor, manifest_sha256: "f".repeat(64) },
+				},
+			}),
+			transfer,
+		),
+	).rejects.toThrow("does not match this upload");
+	await expect(
+		readArtifactTransfer(
+			reply({
+				state: "rejected",
+				result: { code: "unauthorized", error: "No Deploy access." },
+			}),
+			transfer,
+		),
+	).rejects.toThrow("No Deploy access.");
 });

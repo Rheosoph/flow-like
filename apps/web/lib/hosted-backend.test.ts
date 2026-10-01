@@ -213,6 +213,137 @@ describe("hosted API contract", () => {
 			backend.eventState.cancelExecution("run-1"),
 		).resolves.toBeUndefined();
 	});
+	describe("package widgets", () => {
+		const ACCESS = "eyJhbGciOiJFUzI1NiJ9.eyJwa2ciOiJ4In0.YWNjZXNz";
+		const DIGEST = `sha256:${"a".repeat(64)}`;
+		const widget = {
+			packageId: "com.example.maps",
+			packageVersion: "1.2.0",
+			widgetId: "map",
+			preview: false,
+			appId: "published-app",
+		};
+		const hosting = (auth_proxy: boolean) =>
+			({
+				app_id: "published-app",
+				auth_proxy,
+				bootstrap: { event: { id: "published-event" } },
+			}) as HostedBootstrap;
+		const unusedRequest = async () => new Response("{}");
+
+		function recordRegistry() {
+			const requests: { path: string; init?: RequestInit }[] = [];
+			globalThis.fetch = (async (
+				input: string | URL | Request,
+				init?: RequestInit,
+			) => {
+				const path = new URL(String(input)).pathname;
+				requests.push({ path, init });
+				if (path.endsWith("/widget-access"))
+					return Response.json({ access: ACCESS, expiresIn: 43_200 });
+				if (path.endsWith("/widget-grant"))
+					return Response.json({
+						grant: null,
+						expiresIn: 86_400,
+						policyDigest: DIGEST,
+					});
+				return Response.json({
+					source: "registry:api.flow-like.com",
+					packageId: widget.packageId,
+					packageVersion: widget.packageVersion,
+					bundleHash: "b".repeat(64),
+					widgetId: widget.widgetId,
+					preview: false,
+					status: "ok",
+					policy: {},
+					policyDigest: DIGEST,
+					networkInputs: [],
+				});
+			}) as typeof fetch;
+			return requests;
+		}
+
+		async function openWidget(backend: ReturnType<typeof createHostedBackend>) {
+			await backend.registryState.describeWidgetPolicy?.(widget);
+			await backend.registryState.mintWidgetGrant?.({
+				...widget,
+				policyDigest: DIGEST,
+			});
+			return backend.registryState.getWidgetAccess?.({
+				packageId: widget.packageId,
+				packageVersion: widget.packageVersion,
+				appId: widget.appId,
+			});
+		}
+
+		const authorizations = (requests: { init?: RequestInit }[]) =>
+			requests.map(({ init }) =>
+				new Headers(init?.headers).get("Authorization"),
+			);
+
+		it("a sign-in interface opens them as its viewer, with the token current at each call", async () => {
+			const requests = recordRegistry();
+			let token: string | undefined = "viewer-token-1";
+			const backend = createHostedBackend(
+				hosting(true),
+				unusedRequest,
+				() => token,
+			);
+
+			await expect(openWidget(backend)).resolves.toEqual({
+				access: ACCESS,
+				expiresIn: 43_200,
+			});
+			expect(requests.map(({ path }) => path)).toEqual([
+				"/api/v1/registry/package/com.example.maps/widget-policy/1.2.0/map",
+				"/api/v1/registry/package/com.example.maps/widget-grant",
+				"/api/v1/registry/package/com.example.maps/widget-access",
+			]);
+			expect(authorizations(requests)).toEqual([
+				"Bearer viewer-token-1",
+				"Bearer viewer-token-1",
+				"Bearer viewer-token-1",
+			]);
+			for (const { init } of requests) {
+				expect(init?.credentials).toBe("omit");
+				expect(JSON.parse(String(init?.body)).appId).toBe("published-app");
+			}
+
+			token = "viewer-token-2";
+			await openWidget(backend);
+			expect(authorizations(requests.slice(3))).toEqual([
+				"Bearer viewer-token-2",
+				"Bearer viewer-token-2",
+				"Bearer viewer-token-2",
+			]);
+
+			token = undefined;
+			await openWidget(backend);
+			expect(authorizations(requests.slice(6))).toEqual([null, null, null]);
+		});
+
+		it("an anonymous interface never borrows the viewer's login", async () => {
+			const requests = recordRegistry();
+			await openWidget(
+				createHostedBackend(
+					hosting(false),
+					unusedRequest,
+					() => "viewer-token",
+				),
+			);
+			await openWidget(createHostedBackend(hosting(true), unusedRequest));
+			expect(requests).toHaveLength(6);
+			expect(authorizations(requests)).toEqual([
+				null,
+				null,
+				null,
+				null,
+				null,
+				null,
+			]);
+			for (const { init } of requests) expect(init?.credentials).toBe("omit");
+		});
+	});
 	it("reads the API error envelope instead of printing a bare status", () => {
 		expect(
 			hostedErrorMessage(

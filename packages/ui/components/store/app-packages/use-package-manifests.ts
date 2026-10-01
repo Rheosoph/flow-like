@@ -30,11 +30,14 @@ export interface PackageManifests {
 
 /**
  * Manifests of the given packages: the installed copy on desktop, the
- * registry entry on web. A package the host cannot resolve is simply absent,
- * so the page falls back to what the node catalog reports.
+ * registry entry of the version the app pins on web. Both resolve through the
+ * app, so members see packages the project licenses. A package the host
+ * cannot resolve is simply absent, so the page falls back to what the node
+ * catalog reports.
  */
 export function usePackageManifests(
 	packageIds: readonly string[],
+	appId: string,
 ): PackageManifests {
 	const backend = useBackend();
 	const idsKey = packageIds.join("\n");
@@ -56,9 +59,9 @@ export function usePackageManifests(
 
 	return useQueries({
 		queries: packageIds.map((packageId) => ({
-			queryKey: [APP_PACKAGE_MANIFEST_KEY, packageId],
+			queryKey: [APP_PACKAGE_MANIFEST_KEY, appId, packageId],
 			queryFn: async (): Promise<PackageManifestView | null> => {
-				const pkg = await backend.registryState.getPackage(packageId);
+				const pkg = await backend.registryState.getPackage(packageId, appId);
 				if (!pkg) return null;
 				return {
 					access: readManifestAccess(pkg.manifest),

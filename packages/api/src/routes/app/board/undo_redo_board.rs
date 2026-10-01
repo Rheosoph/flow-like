@@ -39,6 +39,7 @@ pub struct ExecuteCommandsBody {
         (status = 200, description = "Undo operation completed"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
+        (status = 404, description = "Board not found"),
         (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]
@@ -110,6 +111,7 @@ pub async fn undo_board(
         (status = 200, description = "Redo operation completed"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
+        (status = 404, description = "Board not found"),
         (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]

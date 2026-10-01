@@ -28,6 +28,7 @@ import {
 import { isTauri } from "../../lib/platform";
 import type { PackageWidgetEntry } from "../../lib/schema/wasm";
 import { cn } from "../../lib/utils";
+import { ActionProvider } from "../a2ui/ActionHandler";
 import { A2UIMicroWidget } from "../a2ui/layout/A2UIMicroWidget";
 import type {
 	A2UIComponent,
@@ -45,6 +46,7 @@ import {
 import { WidgetNetworkSummary } from "./widget-network-access";
 
 const MAX_KEYWORD_CHIPS = 4;
+const PREVIEW_SURFACE_ID = "widget-card-preview";
 
 type PausedReason = "lru" | "offscreen" | "error" | null;
 
@@ -59,6 +61,8 @@ export interface WidgetCardProps {
 	bundleHash?: string | null;
 	/** Shown under the name where widgets of several packages share a grid. */
 	packageName?: string;
+	/** Project whose pinned version the preview loads; lets members preview private packages. */
+	appId?: string;
 	className?: string;
 }
 
@@ -189,6 +193,7 @@ function renderNoChild(): ReactNode {
 interface LivePreviewProps {
 	component: MicroWidgetInstanceComponent;
 	instanceId: string;
+	appId?: string;
 	onError: () => void;
 	onOffscreen: () => void;
 }
@@ -196,6 +201,7 @@ interface LivePreviewProps {
 function LivePreview({
 	component,
 	instanceId,
+	appId,
 	onError,
 	onOffscreen,
 }: LivePreviewProps) {
@@ -218,18 +224,28 @@ function LivePreview({
 		return () => observer.disconnect();
 	}, [onOffscreen]);
 
+	const widget = (
+		<A2UIMicroWidget
+			component={component as A2UIComponent}
+			componentId={instanceId}
+			surfaceId={PREVIEW_SURFACE_ID}
+			renderChild={renderNoChild}
+		/>
+	);
+
 	return (
 		<div
 			ref={containerRef}
 			className="overflow-hidden rounded-md border bg-muted/40 dark:border-white/15"
 		>
 			<PreviewErrorBoundary onError={onError}>
-				<A2UIMicroWidget
-					component={component as A2UIComponent}
-					componentId={instanceId}
-					surfaceId="widget-card-preview"
-					renderChild={renderNoChild}
-				/>
+				{appId ? (
+					<ActionProvider surfaceId={PREVIEW_SURFACE_ID} appId={appId}>
+						{widget}
+					</ActionProvider>
+				) : (
+					widget
+				)}
 			</PreviewErrorBoundary>
 		</div>
 	);
@@ -249,6 +265,7 @@ export function WidgetCard({
 	packageVersion,
 	bundleHash,
 	packageName,
+	appId,
 	className,
 }: WidgetCardProps) {
 	const { t } = useTranslation("store");
@@ -368,6 +385,7 @@ export function WidgetCard({
 					<LivePreview
 						component={previewComponent}
 						instanceId={instanceId}
+						appId={appId}
 						onError={handlePreviewError}
 						onOffscreen={handleOffscreen}
 					/>

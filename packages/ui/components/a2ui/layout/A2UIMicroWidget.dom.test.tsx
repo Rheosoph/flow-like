@@ -1,10 +1,20 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	setDefaultTimeout,
+	spyOn,
+	test,
+} from "bun:test";
 import { Window } from "happy-dom";
 import { act, createElement } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import type { AppPackageWidget } from "../../../lib/package-widgets";
 import type { FlwEnvelope } from "../micro-widget-host";
 import {
+	type WidgetAccessRequest,
+	type WidgetAccessResponse,
 	type WidgetGrantRequest,
 	type WidgetGrantResponse,
 	WidgetPolicyChangedError,
@@ -25,6 +35,9 @@ let restoreTimers: () => void;
 let restoreBackend: (() => void) | undefined;
 let readyTimeout: (() => void) | undefined;
 const cleanup: (() => void)[] = [];
+
+// The first render imports the widget graph (about 5 s cold), past bun's 5 s default on a loaded machine.
+setDefaultTimeout(60_000);
 
 const SOURCE = "registry:hub.example.com";
 const BUNDLE_HASH = "b".repeat(64);
@@ -1076,6 +1089,174 @@ describe("micro widget consent and grants", () => {
 		expect(findButton("Allow this time")).toBeNull();
 		expect(host.textContent).toContain("needs a newer server");
 		expect(host.textContent).toContain("404 Not Found");
+	});
+});
+
+describe("micro widget web sandbox access", () => {
+	const ACCESS = "eyJhbGciOiJFUzI1NiJ9.eyJwa2ciOiJ4In0.YWNjZXNz";
+	const HOUR = 3_600_000;
+	const sandboxPath = (access: string) =>
+		`/registry/package/com.example.sales/widget-sandbox/1.0.0/~${access}/frame/chart/0`;
+
+	function onTheWeb(
+		access: (
+			request: WidgetAccessRequest,
+			call: number,
+		) => Promise<WidgetAccessResponse>,
+	) {
+		Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+		const calls = stubRegistry();
+		const accessCalls: WidgetAccessRequest[] = [];
+		(registryState as Record<string, unknown>).getWidgetAccess = (
+			request: WidgetAccessRequest,
+		) => {
+			accessCalls.push(request);
+			return access(request, accessCalls.length);
+		};
+		return { calls, accessCalls };
+	}
+
+	/** Each call answers a new token, `${ACCESS}1`, `${ACCESS}2`, …, living 12 h unless `expiresIn` says otherwise. */
+	const numberedTokens = (
+		expiresIn: (call: number) => number = () => 43_200,
+	) =>
+		onTheWeb(async (_request, call) => ({
+			access: `${ACCESS}${call}`,
+			expiresIn: expiresIn(call),
+		}));
+
+	/** Moves `Date.now()` forward like a device asleep; the monotonic clock does not see it. */
+	function shiftWallClock() {
+		const wallNow = Date.now.bind(Date);
+		let shift = 0;
+		const spy = spyOn(Date, "now").mockImplementation(() => wallNow() + shift);
+		cleanup.push(() => spy.mockRestore());
+		return (ms: number) => {
+			shift += ms;
+		};
+	}
+
+	/** The inline page runtime moves its portal host between a card slot and its parking slot, which reloads the frame. */
+	async function moveHost() {
+		const slot = window.document.createElement("div");
+		window.document.body.appendChild(slot);
+		await act(async () => {
+			slot.appendChild(host as never);
+		});
+		await settle();
+	}
+
+	async function remount() {
+		await act(() => root.unmount());
+		root = createRoot(host);
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+	}
+
+	test("the frame carries the viewer's access, asked for through the project", async () => {
+		const { calls, accessCalls } = onTheWeb(async () => ({
+			access: ACCESS,
+			expiresIn: 43_200,
+		}));
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+
+		expect(calls.describe[0]?.appId).toBe("app-1");
+		expect(accessCalls).toEqual([
+			{
+				packageId: "com.example.sales",
+				packageVersion: "1.0.0",
+				appId: "app-1",
+			},
+		]);
+		expect(frameSrc()).toEndWith(
+			`/registry/package/com.example.sales/widget-sandbox/1.0.0/~${ACCESS}/frame/chart/0`,
+		);
+	});
+
+	test("a public package loads anonymously", async () => {
+		onTheWeb(async () => ({ access: null, expiresIn: 43_200 }));
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		expect(frameSrc()).toEndWith(
+			"/registry/package/com.example.sales/widget-sandbox/1.0.0/frame/chart/0",
+		);
+	});
+
+	test("a viewer without access sees why instead of waiting for the ready timeout", async () => {
+		onTheWeb(async () => {
+			throw new Error("You have no access to this package");
+		});
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		expect(frame()).toBeNull();
+		expect(bodyText()).toContain("could not be opened");
+		expect(bodyText()).toContain("You have no access to this package");
+	});
+
+	test("a baseline frame keeps a healthy token and gets a fresh one when it reloads past the deadline", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = numberedTokens();
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		const built = frame();
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}1`));
+
+		elapse(6 * HOUR);
+		await moveHost();
+		expect(frame()).toBe(built);
+		expect(accessCalls).toHaveLength(1);
+
+		elapse(6 * HOUR);
+		await moveHost();
+		expect(accessCalls).toHaveLength(2);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`));
+		expect(bodyText()).not.toContain("did not become ready");
+	});
+
+	test("an expired token is replaced on frame load at most once per minute", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = numberedTokens((call) =>
+			call === 1 ? 43_200 : 60,
+		);
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		elapse(12 * HOUR);
+		await moveHost();
+		expect(accessCalls).toHaveLength(2);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`));
+
+		await moveHost();
+		expect(accessCalls).toHaveLength(2);
+
+		elapse(60_000);
+		await moveHost();
+		expect(accessCalls).toHaveLength(3);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}3`));
+	});
+
+	test("a new frame reuses a token only while half its lifetime is left, counting time asleep", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = numberedTokens();
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+
+		elapse(5 * HOUR);
+		await remount();
+		expect(accessCalls).toHaveLength(1);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}1`));
+
+		elapse(2 * HOUR);
+		await remount();
+		expect(accessCalls).toHaveLength(2);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`));
+	});
+
+	test("a frame that failed with its token makes later mounts fetch a fresh one", async () => {
+		const { accessCalls } = numberedTokens();
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		await remount();
+		expect(accessCalls).toHaveLength(1);
+
+		await act(() => readyTimeout?.());
+		expect(bodyText()).toContain("did not become ready");
+
+		await remount();
+		expect(accessCalls).toHaveLength(2);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`));
 	});
 });
 

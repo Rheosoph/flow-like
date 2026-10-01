@@ -94,6 +94,7 @@ fn get_credentials_access() -> crate::credentials::CredentialsAccess {
         (status = 200, description = "Async invocation started", body = InvokeBoardAsyncResponse),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
+        (status = 404, description = "Board or requested board version not found"),
         (status = 500, description = "JWT signing not configured")
     )
 )]

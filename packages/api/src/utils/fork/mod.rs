@@ -1,9 +1,8 @@
 use crate::{
     entity::{
         app, app_package, event, event_sink, meta, page, role,
-        sea_orm_active_enums::{Status, Visibility, WasmPackageVisibility},
-        template, wasm_package, wasm_package_author, wasm_package_purchase, wasm_package_user,
-        widget,
+        sea_orm_active_enums::{Status, Visibility},
+        template, widget,
     },
     error::ApiError,
     permission::role_permission::RolePermissions,
@@ -15,6 +14,7 @@ pub mod cleanup;
 pub mod db_schema;
 pub mod ids;
 pub mod job;
+pub mod packages;
 pub mod policy;
 pub mod preview;
 use flow_like::app::remap::{self, remap_widget_json};
@@ -218,6 +218,7 @@ pub struct OfflineMetaBundle {
 pub async fn compute_offline_fork_bundle(
     state: &AppState,
     src_app_id: &str,
+    user_sub: Option<&str>,
 ) -> Result<OfflineMetaBundle, ApiError> {
     use crate::routes::app::events::db::db_model_to_event;
     use base64::Engine as _;
@@ -696,42 +697,37 @@ pub async fn compute_offline_fork_bundle(
         }
     }
     for (src_widget_id, new_widget_id) in maps.widgets.clone().iter().filter(|_| policy.widgets) {
-        let src_path = src_prefix.clone().join(format!("{}.widget", src_widget_id));
-        let mut widget: flow_like_types::Value =
-            match from_compressed_json(src_meta_store.clone(), src_path).await {
-                Ok(w) => w,
-                Err(err) => {
-                    tracing::warn!("skip widget {}: {}", src_widget_id, err);
-                    skipped.push(SkippedItem {
-                        kind: SkippedKind::Other,
-                        source_id: src_widget_id.clone(),
-                        reason: format!(
-                            "widget definition could not be read from the source app: {err}"
-                        ),
-                    });
-                    continue;
-                }
-            };
-        if let Some(obj) = widget.as_object_mut() {
-            obj.insert(
-                "id".to_string(),
-                flow_like_types::Value::String(new_widget_id.clone()),
-            );
-        }
-        for issue in remap_widget_json(&mut widget, &maps) {
-            skipped.push(SkippedItem {
-                kind: SkippedKind::Other,
-                source_id: src_widget_id.clone(),
-                reason: format!(
-                    "widget kept a reference payload the fork could not rewrite: {issue}"
-                ),
+        let Some(widget) = read_forked_widget(
+            &src_meta_store,
+            src_prefix.clone().join(format!("{}.widget", src_widget_id)),
+            "widget definition",
+            src_widget_id,
+            new_widget_id,
+            &maps,
+            &mut skipped,
+        )
+        .await
+        else {
+            continue;
+        };
+        let versions = read_forked_widget_versions(
+            &src_meta_store,
+            &src_prefix,
+            src_widget_id,
+            new_widget_id,
+            &maps,
+            &mut skipped,
+        )
+        .await;
+        for (relative_path, document) in
+            std::iter::once((format!("{}.widget", new_widget_id), widget)).chain(versions)
+        {
+            let bytes = encode_json(&document).await?;
+            blobs.push(MetaBlob {
+                relative_path,
+                data_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
             });
         }
-        let bytes = encode_json(&widget).await?;
-        blobs.push(MetaBlob {
-            relative_path: format!("{}.widget", new_widget_id),
-            data_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
-        });
         shipped_widgets.insert(src_widget_id.clone());
     }
 
@@ -866,6 +862,22 @@ pub async fn compute_offline_fork_bundle(
         }
     }
     manifest_proto.route_mappings = new_routes;
+
+    // The hub's pins are authoritative for an online app; the manifest
+    // map is whatever a client last saved.
+    let src_pins = app_package::Entity::find()
+        .filter(app_package::Column::AppId.eq(src_app_id))
+        .all(&state.db)
+        .await?;
+    let (held_pins, blocked_packages) =
+        packages::split_pins(&state.db, user_sub, &src_pins).await?;
+    manifest_proto.packages = packages::pin_map(&held_pins);
+    skipped.extend(
+        blocked_packages
+            .iter()
+            .map(packages::BlockedPackage::skipped_item),
+    );
+
     manifest_proto.visibility = proto::AppVisibility::Offline as i32;
     manifest_proto.status = proto::AppStatus::Active as i32;
     manifest_proto.forked_from = Some(src_app_id.to_string());
@@ -2174,6 +2186,10 @@ pub(crate) async fn materialize_meta(
     src_app_proto.avg_rating = None;
     src_app_proto.relevance_score = None;
 
+    let (allowed_packages, blocked_packages) =
+        packages::split_pins(&state.db, Some(user_sub), src_package_rows).await?;
+    src_app_proto.packages = packages::pin_map(&allowed_packages);
+
     compress_to_file(
         dst_meta_store.clone(),
         dst_prefix.clone().join("manifest.app"),
@@ -2207,15 +2223,6 @@ pub(crate) async fn materialize_meta(
         Vec::new()
     };
 
-    // Filter packages: only carry packages the destination owner can
-    // actually use. Anything public+free is always carried; private and
-    // paid packages survive only if the target user has explicit access
-    // (member, author, or owns a completed purchase). Inaccessible
-    // packages get a SkippedItem entry so the UI can prompt the user
-    // ("3 packages weren't copied because you don't have access").
-    let (allowed_packages, package_skips) =
-        filter_accessible_packages(state, user_sub, &src_package_rows).await?;
-
     // Translate sink rows: rewrite event_id to the destination id space,
     // re-encrypt PAT with the caller-supplied token (if any), clear
     // OAuth tokens (caller must re-auth on the fork). We compute the
@@ -2236,7 +2243,11 @@ pub(crate) async fn materialize_meta(
         now,
     );
 
-    skipped.extend(package_skips);
+    skipped.extend(
+        blocked_packages
+            .iter()
+            .map(packages::BlockedPackage::skipped_item),
+    );
     skipped.extend(sink_skips);
     Ok(ForkPlan {
         maps,
@@ -2299,7 +2310,7 @@ pub(crate) fn plan_package_rows(
             version: Set(pkg.version.clone()),
             added_at: Set(ctx.now),
             auto_update: Set(pkg.auto_update),
-            // `filter_accessible_packages` only carries packages the new owner holds.
+            // `packages::split_pins` only carries packages the new owner holds.
             stale: Set(false),
             stale_since: Set(None),
         })
@@ -3320,48 +3331,157 @@ async fn fork_widgets(
 ) -> Result<HashSet<String>, ApiError> {
     let mut shipped_widgets = HashSet::new();
     for (src_widget_id, new_widget_id) in &maps.widgets {
-        let src_path = src_prefix.clone().join(format!("{}.widget", src_widget_id));
-        let mut widget: flow_like_types::Value =
-            match from_compressed_json(src_store.clone(), src_path).await {
-                Ok(w) => w,
-                Err(err) => {
-                    tracing::warn!("skip widget {}: {}", src_widget_id, err);
-                    skipped.push(SkippedItem {
-                        kind: SkippedKind::Other,
-                        source_id: src_widget_id.clone(),
-                        reason: format!(
-                            "widget definition could not be read from the source app: {err}"
-                        ),
-                    });
-                    continue;
-                }
-            };
-        if let Some(obj) = widget.as_object_mut() {
-            obj.insert(
-                "id".to_string(),
-                flow_like_types::Value::String(new_widget_id.clone()),
-            );
-        }
-        // Components inside the widget def carry the same `Action` /
-        // `actionBindings` shapes that pages do, and its exposed-prop and
-        // customization defaults hide ids inside byte arrays, so the whole
-        // document goes through the shared widget pass.
-        for issue in remap_widget_json(&mut widget, maps) {
-            skipped.push(SkippedItem {
-                kind: SkippedKind::Other,
-                source_id: src_widget_id.clone(),
-                reason: format!(
-                    "widget kept a reference payload the fork could not rewrite: {issue}"
-                ),
-            });
-        }
-        let dst_path = dst_prefix.clone().join(format!("{}.widget", new_widget_id));
-        compress_to_file_json(dst_store.clone(), dst_path, &widget)
+        let Some(widget) = read_forked_widget(
+            src_store,
+            src_prefix.clone().join(format!("{}.widget", src_widget_id)),
+            "widget definition",
+            src_widget_id,
+            new_widget_id,
+            maps,
+            skipped,
+        )
+        .await
+        else {
+            continue;
+        };
+        let versions = read_forked_widget_versions(
+            src_store,
+            src_prefix,
+            src_widget_id,
+            new_widget_id,
+            maps,
+            skipped,
+        )
+        .await;
+        for (relative_path, document) in
+            std::iter::once((format!("{}.widget", new_widget_id), widget)).chain(versions)
+        {
+            compress_to_file_json(
+                dst_store.clone(),
+                join_relative(dst_prefix, &relative_path),
+                &document,
+            )
             .await
-            .map_err(|e| ApiError::internal_error(anyhow!("write widget: {e}")))?;
+            .map_err(|e| ApiError::internal_error(anyhow!("write widget {relative_path}: {e}")))?;
+        }
         shipped_widgets.insert(src_widget_id.clone());
     }
     Ok(shipped_widgets)
+}
+
+/// One widget document of the source app, rewritten into the fork's id
+/// space. Components inside a widget carry the same `Action` /
+/// `actionBindings` shapes that pages do, and its exposed-prop and
+/// customization defaults hide ids inside byte arrays, so the whole
+/// document goes through the shared widget pass.
+async fn read_forked_widget(
+    src_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    src_path: Path,
+    document: &str,
+    src_widget_id: &str,
+    new_widget_id: &str,
+    maps: &ForkIdMap,
+    skipped: &mut Vec<SkippedItem>,
+) -> Option<flow_like_types::Value> {
+    let mut widget: flow_like_types::Value =
+        match from_compressed_json(src_store.clone(), src_path).await {
+            Ok(widget) => widget,
+            Err(err) => {
+                tracing::warn!("skip {document} of widget {src_widget_id}: {err}");
+                skipped.push(SkippedItem {
+                    kind: SkippedKind::Other,
+                    source_id: src_widget_id.to_string(),
+                    reason: format!("{document} could not be read from the source app: {err}"),
+                });
+                return None;
+            }
+        };
+    if let Some(obj) = widget.as_object_mut() {
+        obj.insert(
+            "id".to_string(),
+            flow_like_types::Value::String(new_widget_id.to_string()),
+        );
+    }
+    for issue in remap_widget_json(&mut widget, maps) {
+        skipped.push(SkippedItem {
+            kind: SkippedKind::Other,
+            source_id: src_widget_id.to_string(),
+            reason: format!(
+                "{document} kept a reference payload the fork could not rewrite: {issue}"
+            ),
+        });
+    }
+    Some(widget)
+}
+
+/// A widget's published snapshots, keyed by their path relative to the
+/// destination app prefix. Device deploys and pinned widget references read
+/// only snapshots, so a fork that left them behind would unpublish every
+/// widget it copied.
+async fn read_forked_widget_versions(
+    src_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    src_prefix: &Path,
+    src_widget_id: &str,
+    new_widget_id: &str,
+    maps: &ForkIdMap,
+    skipped: &mut Vec<SkippedItem>,
+) -> Vec<(String, flow_like_types::Value)> {
+    let versions_dir = src_prefix
+        .clone()
+        .join("widgets")
+        .join("versions")
+        .join(src_widget_id);
+    let mut listing = src_store.list(Some(&versions_dir));
+    let mut files = Vec::new();
+    loop {
+        // A never-published widget has no directory, which a filesystem
+        // store reports as an error rather than an empty listing.
+        match listing.try_next().await {
+            Ok(Some(item)) => {
+                if let Some(file) = item
+                    .location
+                    .filename()
+                    .filter(|name| name.ends_with(".widget"))
+                {
+                    files.push(file.to_string());
+                }
+            }
+            Ok(None) => break,
+            Err(err) if is_missing_prefix(&err) => break,
+            Err(err) => {
+                tracing::warn!("list published versions of widget {src_widget_id}: {err}");
+                skipped.push(SkippedItem {
+                    kind: SkippedKind::Other,
+                    source_id: src_widget_id.to_string(),
+                    reason: format!(
+                        "published widget versions could not be listed, so the widget ships unpublished: {err}"
+                    ),
+                });
+                break;
+            }
+        }
+    }
+    let mut versions = Vec::with_capacity(files.len());
+    for file in files {
+        let document = format!(
+            "published widget version {}",
+            file.trim_end_matches(".widget")
+        );
+        if let Some(widget) = read_forked_widget(
+            src_store,
+            versions_dir.clone().join(file.as_str()),
+            &document,
+            src_widget_id,
+            new_widget_id,
+            maps,
+            skipped,
+        )
+        .await
+        {
+            versions.push((format!("widgets/versions/{new_widget_id}/{file}"), widget));
+        }
+    }
+    versions
 }
 
 /// Loads each template (a serialized `proto::Board`) and runs it through
@@ -3792,108 +3912,6 @@ fn prepare_dst_sinks(
         });
     }
     (to_insert, skipped)
-}
-
-/// Splits the source app's package list into a "carry into the fork"
-/// vector and a "skipped" log. A package survives iff one of:
-///
-/// 1. It is public AND free (price <= 0); OR
-/// 2. The target user is an author, member (WasmPackageUser row), or has
-///    a completed purchase.
-///
-/// Packages that fail both checks are reported via `SkippedItem` so the
-/// UI can prompt the user to install them manually after the fork.
-async fn filter_accessible_packages(
-    state: &AppState,
-    user_sub: &str,
-    src_packages: &[app_package::Model],
-) -> Result<(Vec<app_package::Model>, Vec<SkippedItem>), ApiError> {
-    use crate::entity::sea_orm_active_enums::PurchaseStatus;
-
-    let package_ids: Vec<String> = src_packages
-        .iter()
-        .map(|p| p.package_id.clone())
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    if package_ids.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
-    }
-
-    let packages: HashMap<String, wasm_package::Model> = wasm_package::Entity::find()
-        .filter(wasm_package::Column::Id.is_in(package_ids.clone()))
-        .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|p| (p.id.clone(), p))
-        .collect();
-    let authored: HashSet<String> = wasm_package_author::Entity::find()
-        .filter(wasm_package_author::Column::PackageId.is_in(package_ids.clone()))
-        .filter(wasm_package_author::Column::UserId.eq(user_sub))
-        .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|row| row.package_id)
-        .collect();
-    let granted: HashSet<String> = wasm_package_user::Entity::find()
-        .filter(wasm_package_user::Column::PackageId.is_in(package_ids.clone()))
-        .filter(wasm_package_user::Column::UserId.eq(user_sub))
-        .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|row| row.package_id)
-        .collect();
-    let purchased: HashSet<String> = wasm_package_purchase::Entity::find()
-        .filter(wasm_package_purchase::Column::PackageId.is_in(package_ids))
-        .filter(wasm_package_purchase::Column::UserId.eq(user_sub))
-        .filter(wasm_package_purchase::Column::Status.eq(PurchaseStatus::Completed))
-        .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|row| row.package_id)
-        .collect();
-
-    let mut allowed = Vec::with_capacity(src_packages.len());
-    let mut skipped = Vec::new();
-    for pkg in src_packages {
-        let package_id = pkg.package_id.as_str();
-        let Some(registry_row) = packages.get(package_id) else {
-            skipped.push(SkippedItem {
-                kind: SkippedKind::Package,
-                source_id: pkg.package_id.clone(),
-                reason: format!("package {package_id} no longer exists in the registry"),
-            });
-            continue;
-        };
-        let public_free = matches!(registry_row.visibility, WasmPackageVisibility::Public)
-            && registry_row.price <= 0;
-        if public_free
-            || authored.contains(package_id)
-            || granted.contains(package_id)
-            || purchased.contains(package_id)
-        {
-            allowed.push(pkg.clone());
-            continue;
-        }
-        let is_public = matches!(
-            registry_row.visibility,
-            WasmPackageVisibility::Public | WasmPackageVisibility::PublicRequestAccess
-        );
-        let reason = if is_public {
-            format!(
-                "package {package_id} is paid (price {} cents) and you don't have a purchase on file",
-                registry_row.price
-            )
-        } else {
-            format!("package {package_id} is private and you are not a member or author")
-        };
-        skipped.push(SkippedItem {
-            kind: SkippedKind::Package,
-            source_id: pkg.package_id.clone(),
-            reason,
-        });
-    }
-    Ok((allowed, skipped))
 }
 
 #[cfg(test)]
@@ -5086,6 +5104,65 @@ mod tests {
             .expect("list");
         keys.sort();
         keys
+    }
+
+    #[tokio::test]
+    async fn forked_widgets_keep_their_published_snapshots_under_the_new_id() {
+        let src = memory_store();
+        let dst = memory_store();
+        let src_prefix = Path::from("apps/src_app");
+        let dst_prefix = Path::from("apps/dst_app");
+        use flow_like_types::json::json;
+        let widget =
+            |version: [u32; 3]| json!({"id": "src_widget", "name": "Card", "version": version});
+        for (path, version) in [
+            ("src_widget.widget", [1, 1, 0]),
+            ("widgets/versions/src_widget/1-0-0.widget", [1, 0, 0]),
+            ("widgets/versions/src_widget/1-1-0.widget", [1, 1, 0]),
+        ] {
+            compress_to_file_json(
+                src.clone(),
+                join_relative(&src_prefix, path),
+                &widget(version),
+            )
+            .await
+            .expect("seed widget");
+        }
+        let mut maps = widget_fork_maps();
+        maps.widgets
+            .insert("draft_widget".to_string(), "dst_draft".to_string());
+        compress_to_file_json(
+            src.clone(),
+            src_prefix.clone().join("draft_widget.widget"),
+            &json!({"id": "draft_widget", "name": "Draft"}),
+        )
+        .await
+        .expect("seed draft");
+
+        let mut skipped = Vec::new();
+        let shipped = fork_widgets(&src, &dst, &src_prefix, &dst_prefix, &maps, &mut skipped)
+            .await
+            .expect("fork widgets");
+
+        assert_eq!(shipped.len(), 2);
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(
+            listed(&dst, None).await,
+            [
+                "apps/dst_app/dst_draft.widget",
+                "apps/dst_app/dst_widget.widget",
+                "apps/dst_app/widgets/versions/dst_widget/1-0-0.widget",
+                "apps/dst_app/widgets/versions/dst_widget/1-1-0.widget",
+            ]
+        );
+        let snapshot: flow_like_types::Value = from_compressed_json(
+            dst.clone(),
+            join_relative(&dst_prefix, "widgets/versions/dst_widget/1-0-0.widget"),
+        )
+        .await
+        .expect("read snapshot");
+        assert_eq!(snapshot["id"], "dst_widget");
+        assert_eq!(snapshot["version"], json!([1, 0, 0]));
     }
 
     #[test]

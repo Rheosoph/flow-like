@@ -233,6 +233,7 @@ fn prune_command_receipts(
         (status = 200, description = "Commands executed. Returns the resulting commands, or `{commands, sync}` when the request carried a sync manifest", body = Object),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
+        (status = 404, description = "Board not found"),
         (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]

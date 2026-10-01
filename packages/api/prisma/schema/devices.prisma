@@ -9,8 +9,20 @@ model ManagedDevice {
   receipt      String
   registeredAt BigInt
   lastSeenAt   BigInt?
+  revokedAt    BigInt?
+  displayName  String?
 
   @@index([ownerId, status])
+}
+
+/// Last attributable authentication rejection per device. Overwritten, never a log.
+model DeviceAuthRejection {
+  deviceId    String  @id
+  code        String
+  skewSeconds BigInt?
+  count       BigInt  @default(1)
+  firstAt     BigInt
+  lastAt      BigInt
 }
 
 /// The exact unsigned manifest template is immutable after the JWT is issued.

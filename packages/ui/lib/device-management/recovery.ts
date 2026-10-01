@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { IApiState } from "../../state/backend-state/api-state";
 import type { IProfile } from "../../types";
+import { isMissingResourceError } from "../api-error";
 import {
 	base64url,
 	loadDeviceCrypto,
@@ -10,10 +11,10 @@ import {
 import {
 	type DeviceAccountScope,
 	type LocalDeviceVault,
-	acquireDeviceLock,
 	completeAccountRecovery,
 	controllerBackup,
 	encryptedControllerBackup,
+	holdDeviceLock,
 	isPublicKey,
 	readAccountRecoveryState,
 	readDeviceVault,
@@ -26,6 +27,7 @@ import type {
 	DeviceCrypto,
 	Ed25519PublicKey,
 } from "./types";
+import type { VaultLease } from "./workspace/types";
 
 const reply = z
 	.object({
@@ -49,7 +51,13 @@ export interface RecoveryInput {
 	password: string;
 	signal?: AbortSignal;
 	crypto?: Pick<DeviceCrypto, "sealAccountRecovery" | "openAccountRecovery">;
+	/** The key session's lock; without it the device lock is taken for this call. */
+	lease?: VaultLease;
 }
+type PublishInput = Pick<
+	RecoveryInput,
+	"api" | "profile" | "scope" | "deviceId" | "signal"
+>;
 
 /** Account revisions count up from one, so local files never collide with a hub copy. */
 const LOCAL_BACKUP_REVISION = Number.MAX_SAFE_INTEGER;
@@ -73,13 +81,28 @@ function context(
 function path(deviceId: string) {
 	return `devices/controller-vaults/${encodeURIComponent(deviceId)}`;
 }
-async function digest(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
-	return base64url(
+async function backupSource(
+	scope: DeviceAccountScope,
+	vault: LocalDeviceVault,
+) {
+	const bytes = new Uint8Array(
+		await encryptedControllerBackup(scope, vault).arrayBuffer(),
+	);
+	const digest = base64url(
 		new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
 	);
+	return { bytes, digest };
 }
 
-async function publish(input: RecoveryInput, request: AccountRecoveryWrite) {
+/** Compared with the recovery watermark: a difference means the account copy holds other envelopes. */
+export async function backupSourceDigest(
+	scope: DeviceAccountScope,
+	vault: LocalDeviceVault,
+): Promise<string> {
+	return (await backupSource(scope, vault)).digest;
+}
+
+async function publish(input: PublishInput, request: AccountRecoveryWrite) {
 	const result = await input.api.fetch<{ revision: number }>(
 		input.profile,
 		path(input.deviceId),
@@ -101,7 +124,11 @@ export async function saveAccountRecovery(
 	input: RecoveryInput,
 ): Promise<number> {
 	input.signal?.throwIfAborted();
-	const release = await acquireDeviceLock(input.scope, input.deviceId);
+	const release = await holdDeviceLock(
+		input.scope,
+		input.deviceId,
+		input.lease,
+	);
 	try {
 		const record = await readDeviceVault(input.scope, input.deviceId);
 		if (!record)
@@ -115,10 +142,10 @@ export async function saveAccountRecovery(
 			await publish(input, state.pending.request);
 			state = await readAccountRecoveryState(input.scope, input.deviceId);
 		}
-		const bytes = new Uint8Array(
-			await encryptedControllerBackup(input.scope, record).arrayBuffer(),
+		const { bytes, digest: sourceDigest } = await backupSource(
+			input.scope,
+			record,
 		);
-		const sourceDigest = await digest(bytes);
 		const module = input.crypto ?? (await loadDeviceCrypto());
 		const revision = state.revision + 1;
 		if (!Number.isSafeInteger(revision))
@@ -161,7 +188,11 @@ export async function restoreAccountRecovery(
 	input: RecoveryInput,
 ): Promise<LocalDeviceVault> {
 	input.signal?.throwIfAborted();
-	const release = await acquireDeviceLock(input.scope, input.deviceId);
+	const release = await holdDeviceLock(
+		input.scope,
+		input.deviceId,
+		input.lease,
+	);
 	try {
 		const response = reply.parse(
 			await input.api.fetch<unknown>(input.profile, path(input.deviceId), {
@@ -202,20 +233,65 @@ export async function restoreAccountRecovery(
 				"The recovery controller does not match the account backup.",
 			);
 		input.signal?.throwIfAborted();
-		const bytes = new Uint8Array(
-			await encryptedControllerBackup(input.scope, restored).arrayBuffer(),
-		);
-		const sourceDigest = await digest(bytes);
+		const { digest: sourceDigest } = await backupSource(input.scope, restored);
 		input.signal?.throwIfAborted();
-		return await restoreAccountRecoveryVault(
+		const saved = await restoreAccountRecoveryVault(
 			input.scope,
 			restored,
 			response.revision,
 			sourceDigest,
 			state.pending?.request,
 		);
+		input.lease?.replace(saved);
+		return saved;
 	} finally {
 		release();
+	}
+}
+
+/** Publishes an upload that was sealed and staged but never acknowledged; needs no password. */
+export async function retryPendingAccountBackup(
+	api: IApiState,
+	profile: IProfile,
+	scope: DeviceAccountScope,
+	deviceId: string,
+	lease?: VaultLease,
+	signal?: AbortSignal,
+): Promise<number> {
+	signal?.throwIfAborted();
+	const release = await holdDeviceLock(scope, deviceId, lease);
+	try {
+		const state = await readAccountRecoveryState(scope, deviceId);
+		if (!state.pending) return state.revision;
+		await publish(
+			{ api, profile, scope, deviceId, signal },
+			state.pending.request,
+		);
+		return state.pending.request.revision;
+	} finally {
+		release();
+	}
+}
+
+const status = z.object({ revision: reply.shape.revision });
+
+/** The account copy's revision without downloading keys into storage; undefined when none exists. */
+export async function readAccountBackupStatus(
+	api: IApiState,
+	profile: IProfile,
+	deviceId: string,
+	signal?: AbortSignal,
+): Promise<{ revision: number } | undefined> {
+	try {
+		return status.parse(
+			await api.fetch<unknown>(profile, path(deviceId), {
+				method: "GET",
+				signal,
+			}),
+		);
+	} catch (error) {
+		if (isMissingResourceError(error)) return undefined;
+		throw error;
 	}
 }
 

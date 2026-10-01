@@ -35,6 +35,7 @@ import {
 import { AuthProvider, useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import {
+	type HostedAccessToken,
 	type HostedBootstrap,
 	HostedHttpError,
 	type HostedRoute,
@@ -164,6 +165,7 @@ export function HostedSession({
 	useLayoutEffect(() => {
 		tokenRef.current = token;
 	}, [token]);
+	const accessToken = useCallback(() => tokenRef.current, []);
 	const session = auth.isAuthenticated ? (auth.user?.profile.sub ?? "") : null;
 	const data =
 		initialData ?? (loaded?.session === session ? loaded.data : undefined);
@@ -244,6 +246,7 @@ export function HostedSession({
 			data={data}
 			target={target}
 			request={runtimeRequest}
+			accessToken={accessToken}
 			queryParams={Object.fromEntries(searchParams.entries())}
 		/>
 	);
@@ -253,16 +256,18 @@ function HostedRuntime({
 	data,
 	target,
 	request,
+	accessToken,
 	queryParams,
 }: {
 	data: HostedBootstrap;
 	target: HostedTarget;
 	request: HostedRequest;
+	accessToken: HostedAccessToken;
 	queryParams: Record<string, string>;
 }) {
 	const backend = useMemo(
-		() => createHostedBackend(data, request),
-		[data, request],
+		() => createHostedBackend(data, request, accessToken),
+		[data, request, accessToken],
 	);
 	const config = useMemo(
 		() => parseUint8ArrayToJson(data.bootstrap.event.config) ?? {},

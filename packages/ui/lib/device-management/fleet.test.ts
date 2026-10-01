@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { IApiState } from "../../state/backend-state/api-state";
 import type { IProfile } from "../../types";
-import { checkFleetAnchor, readFleet, registerFleetReader } from "./fleet";
+import {
+	FLEET_READER_RENEW_S,
+	type ReadFleetOptions,
+	checkFleetAnchor,
+	readFleet,
+	registerFleetReader,
+	removeFleetReader,
+} from "./fleet";
+import { SnapshotIntegrityError } from "./inventory";
 import { type LocalDeviceVault, updateFleetState } from "./storage";
 import { digestText } from "./telemetry";
 import type {
@@ -12,6 +20,7 @@ import type {
 	FleetLocalState,
 	FleetReaderState,
 	FleetView,
+	ManagementGrant,
 } from "./types";
 
 const account = {
@@ -326,6 +335,12 @@ function readerFixture(grant = "owner") {
 		policy_jws: null,
 		snapshots: [bundle],
 	};
+	const inspection: Record<string, unknown> = {
+		device_id: "device",
+		boot_id: "boot",
+		observed_at: now * 1000,
+		placements: [],
+	};
 	let opened: Uint8Array | undefined;
 	const controller = {
 		publicBundle: () => vault.controllerPublic,
@@ -335,22 +350,16 @@ function readerFixture(grant = "owner") {
 			audiences: [audience],
 		}),
 		openFleet: () => {
-			opened = new TextEncoder().encode(
-				JSON.stringify({
-					inspection: {
-						device_id: "device",
-						boot_id: "boot",
-						observed_at: now * 1000,
-						placements: [],
-					},
-				}),
-			);
+			opened = new TextEncoder().encode(JSON.stringify({ inspection }));
 			return opened;
 		},
 	} as unknown as BrowserController;
+	const gets: string[] = [];
 	const api = {
-		get: async (_profile: unknown, url: string) =>
-			url.endsWith("/identity") ? receipt : view,
+		get: async (_profile: unknown, url: string) => {
+			gets.push(url);
+			return url.endsWith("/identity") ? receipt : view;
+		},
 	} as unknown as IApiState;
 	const crypto = {
 		verifyManagementPolicy: (value: string) => payload(value),
@@ -361,7 +370,9 @@ function readerFixture(grant = "owner") {
 	return {
 		view,
 		audience,
+		inspection,
 		controller,
+		gets,
 		opened: () => opened,
 		publish: (sequence: number) => {
 			view.snapshots = [
@@ -376,7 +387,17 @@ function readerFixture(grant = "owner") {
 				},
 			];
 		},
-		read: () => readFleet(api, profile, account, controller, vault, crypto),
+		read: (options?: ReadFleetOptions, reader: LocalDeviceVault = vault) =>
+			readFleet(
+				api,
+				profile,
+				account,
+				controller,
+				reader,
+				crypto,
+				undefined,
+				options,
+			),
 	};
 }
 
@@ -460,7 +481,12 @@ test("reader renewal allows repeated pending views after registration without re
 	f.audience.reader_digest = await digestText(f.view.reader_jws);
 	f.view.snapshots = [];
 	for (let poll = 0; poll < 2; poll++) {
-		await expect(f.read()).resolves.toEqual({ observations: [], metrics: [] });
+		await expect(f.read()).resolves.toMatchObject({
+			observations: [],
+			metrics: [],
+			streams: [],
+			readerRevision: 2,
+		});
 		expect((await state()).anchors).toEqual(previous);
 	}
 	for (const sequence of [3, 4]) {
@@ -525,7 +551,12 @@ test("policy renewal leaves still-authorized streams pending until their next si
 	f.audience.policy_digest = await digestText(f.view.policy_jws);
 	f.view.snapshots = [];
 	for (let poll = 0; poll < 2; poll++) {
-		await expect(f.read()).resolves.toEqual({ observations: [], metrics: [] });
+		await expect(f.read()).resolves.toMatchObject({
+			observations: [],
+			metrics: [],
+			streams: [],
+			policyVersion: 2,
+		});
 		expect((await state()).anchors).toEqual(prior);
 		expect((await state()).policyVersion).toBe(2);
 	}
@@ -539,4 +570,348 @@ test("policy renewal leaves still-authorized streams pending until their next si
 	});
 	f.view.snapshots = [];
 	await expect(f.read()).rejects.toThrow("missing");
+});
+
+test("a cached receipt skips the identity read and the second pin: one GET per poll", async () => {
+	const f = readerFixture();
+	await f.read();
+	expect(f.gets).toEqual([
+		"devices/device/identity",
+		"devices/device/fleet/snapshots/key",
+	]);
+	f.gets.length = 0;
+	f.publish(2);
+	const cached = { ...receipt, identity: identity(2) };
+	await expect(f.read({ receipt: cached })).resolves.toMatchObject({
+		streams: [{ sequence: 2 }],
+	});
+	expect(f.gets).toEqual(["devices/device/fleet/snapshots/key"]);
+});
+
+test("a read reports the reader expiry, each stream's sequence and boot, and the authorized streams", async () => {
+	const f = readerFixture();
+	f.publish(3);
+	const id = JSON.stringify(["project/project", "status", "owner"]);
+	const result = await f.read();
+	expect(result).toMatchObject({
+		readerRevision: 1,
+		readerExpiresAt: epoch + 3600,
+		streams: [
+			{
+				id,
+				kind: "status",
+				scope: { kind: "project", project_id: "project" },
+				grantId: "owner",
+				sequence: 3,
+				bootId: "boot",
+				observedAt: epoch,
+			},
+		],
+		authorized: [id],
+	});
+	expect(result.policyVersion).toBeUndefined();
+	expect(result.myGrant).toBeUndefined();
+});
+
+/** The agent's snapshot row (`Rows::placement`, plan §3.4.2) at its smallest detail level. */
+const snapshotRow = {
+	id: "placement",
+	project_id: "project",
+	deployment_id: "deployment",
+	revision: "r1",
+	desired_state: "running",
+	observed_state: "running",
+	config_revision: 2,
+	intent_revision: 3,
+	applied_revision: 2,
+	desired_replicas: 1,
+	running_replicas: 1,
+	ready_replicas: 1,
+	max_replicas: 2,
+	replicas: [{ slot: 0, observed_state: "running", applied_revision: 2 }],
+	has_error: true,
+	source: "online",
+	events_truncated: true,
+};
+
+test("agent status snapshots are accepted at every detail level and never keep error text or process ids", async () => {
+	const f = readerFixture();
+	f.audience.scope = { kind: "device" };
+	Object.assign(f.inspection, {
+		agent: { version: "0.1.0", release_version: null, release_sequence: null },
+		host: { booted_at: null, agent_started_at: 100 },
+		tasks: [
+			{
+				name: "fleet_publisher",
+				state: "failing",
+				since: 100,
+				category: "hub_unreachable",
+			},
+		],
+	});
+	const full = {
+		...snapshotRow,
+		process_id: 4211,
+		last_error: "failed under <state>",
+		online_metadata_sha256: null,
+		events: [
+			{ event_id: "event", event_version: [1, 2, 0], board_version: [3, 0, 1] },
+		],
+		events_truncated: false,
+		replicas: [
+			{
+				...snapshotRow.replicas[0],
+				has_error: true,
+				process_id: 4212,
+				restarts: {
+					failures: 3,
+					max_restarts: 5,
+					crash_looping: true,
+					last_started_at: 100,
+				},
+			},
+		],
+	};
+	for (const [index, row] of [full, snapshotRow].entries()) {
+		f.inspection.placements = [row];
+		f.publish(index + 1);
+		const { observations } = await f.read();
+		expect(observations).toMatchObject([
+			{
+				scope: { kind: "device" },
+				placements: [
+					{
+						id: "placement",
+						ready_replicas: 1,
+						replicas: [
+							{ slot: 0, observed_state: "running", applied_revision: 2 },
+						],
+					},
+				],
+			},
+		]);
+		expect(JSON.stringify(observations)).not.toMatch(/last_error|process_id/u);
+	}
+});
+
+test("a status snapshot keeps the agent's validated facts and nothing else", async () => {
+	const f = readerFixture();
+	f.audience.scope = { kind: "device" };
+	const task = {
+		name: "fleet_publisher",
+		state: "failing",
+		since: 100,
+		category: "hub_unreachable",
+	};
+	const facts = {
+		agent: { version: "0.1.0", release_version: "1.4.0", release_sequence: 44 },
+		host: { booted_at: 90, agent_started_at: 100 },
+		tasks: [task],
+		host_operation: null,
+	};
+	Object.assign(f.inspection, facts, { hostname: "edge-berlin-01" });
+	const event = {
+		event_id: "event",
+		event_version: [1, 2, 0],
+		board_version: [3, 0, 1],
+	};
+	const restarts = {
+		failures: 3,
+		max_restarts: 5,
+		crash_looping: true,
+		last_started_at: 100,
+	};
+	f.inspection.placements = [
+		{
+			...snapshotRow,
+			online_metadata_sha256: "a".repeat(64),
+			events: [event],
+			events_truncated: false,
+			variables: { "api-key": "value" },
+			replicas: [
+				{ ...snapshotRow.replicas[0], has_error: true, restarts, note: "x" },
+			],
+		},
+	];
+	const [full] = (await f.read()).observations;
+	expect(full).toMatchObject({
+		agent: facts.agent,
+		host: facts.host,
+		tasks: [task],
+		hostOperation: null,
+	});
+	expect(full.placements[0]).toMatchObject({
+		has_error: true,
+		source: "online",
+		events: [event],
+		events_truncated: false,
+		online_metadata_sha256: "a".repeat(64),
+		replicas: [
+			{
+				slot: 0,
+				has_error: true,
+				restarts: { ...restarts, retry_in_seconds: null },
+			},
+		],
+	});
+	expect(JSON.stringify(full)).not.toMatch(/hostname|variables|note/u);
+
+	f.inspection.placements = [{ ...snapshotRow, source: "elsewhere" }];
+	Object.assign(f.inspection, { agent: "0.1.0", tasks: [{ name: "bad" }] });
+	f.publish(2);
+	const [minimal] = (await f.read()).observations;
+	expect(minimal.placements[0]).toMatchObject({
+		has_error: true,
+		events_truncated: true,
+	});
+	expect(minimal.placements[0]).not.toHaveProperty("source");
+	expect(minimal.placements[0]).not.toHaveProperty("events");
+	expect(minimal).not.toHaveProperty("agent");
+	expect(minimal).not.toHaveProperty("tasks");
+	expect(minimal.host).toEqual(facts.host);
+
+	const old = readerFixture();
+	old.inspection.placements = [
+		{
+			...snapshotRow,
+			has_error: undefined,
+			source: undefined,
+			events_truncated: undefined,
+		},
+	];
+	const [legacy] = (await old.read()).observations;
+	expect(Object.keys(legacy).sort()).toEqual([
+		"boot_id",
+		"device_id",
+		"observed_at",
+		"placements",
+		"scope",
+	]);
+	expect(Object.keys(legacy.placements[0])).not.toContain("has_error");
+	expect(Object.keys(legacy.placements[0].replicas?.[0] ?? {}).sort()).toEqual([
+		"applied_revision",
+		"observed_state",
+		"slot",
+	]);
+});
+
+test("a shared reader gets its own grant from the verified policy", async () => {
+	const f = readerFixture("grant");
+	const grant: ManagementGrant = {
+		grant_id: "grant",
+		user_id: "reader",
+		controller_key: vault.controllerPublic.controller_key,
+		scope: { kind: "project", project_id: "project" },
+		capabilities: ["status"],
+		expires_at: epoch + 86400,
+		group_id: null,
+		group_version: null,
+	};
+	f.view.policy_jws = signed({
+		policy_version: 5,
+		grants: [{ ...grant, grant_id: "other" }, grant],
+	});
+	f.audience.policy_digest = await digestText(f.view.policy_jws);
+	f.publish(1);
+	const result = await f.read(undefined, { ...vault, grantId: "grant" });
+	expect(result.policyVersion).toBe(5);
+	expect(result.myGrant).toEqual(grant);
+});
+
+test("verification failures are integrity errors; hub and storage failures are not", async () => {
+	const f = readerFixture();
+	await f.read();
+	f.view.snapshots = [];
+	await expect(f.read()).rejects.toBeInstanceOf(SnapshotIntegrityError);
+	const controller = f.controller as unknown as { verifyFleetView: () => void };
+	controller.verifyFleetView = () => {
+		throw new Error("Fleet view signature is invalid");
+	};
+	await expect(f.read()).rejects.toBeInstanceOf(SnapshotIntegrityError);
+	const offline = {
+		get: async () => {
+			throw new Error("Failed to fetch");
+		},
+	} as unknown as IApiState;
+	const network = await readFleet(
+		offline,
+		profile,
+		account,
+		f.controller,
+		vault,
+		{} as DeviceCrypto,
+	).catch((error: unknown) => error);
+	expect(network).toBeInstanceOf(Error);
+	expect(network).not.toBeInstanceOf(SnapshotIntegrityError);
+	Reflect.deleteProperty(globalThis, "indexedDB");
+	const storage = await readerFixture()
+		.read()
+		.catch((error: unknown) => error);
+	expect((storage as Error).message).toContain("unavailable");
+	expect(storage).not.toBeInstanceOf(SnapshotIntegrityError);
+});
+
+test("registration renews a reader with 30 days or less left, or when asked to", async () => {
+	const expiring = (seconds: number) =>
+		signed({ revision: 1, issued_at: 1, expires_at: epoch + seconds });
+	const f = fixture();
+	f.remote({
+		revision: 1,
+		reader_jws: expiring(FLEET_READER_RENEW_S + 3600),
+		deleted: false,
+	});
+	await f.register();
+	expect(f.creations()).toBe(0);
+	await registerFleetReader(
+		f.api as unknown as IApiState,
+		profile,
+		account,
+		f.controller,
+		vault,
+		receipt,
+		undefined,
+		{ renew: true },
+	);
+	expect(f.creations()).toBe(1);
+	expect((await state()).revision).toBe(2);
+	rows = new Map();
+	const g = fixture();
+	g.remote({
+		revision: 1,
+		reader_jws: expiring(FLEET_READER_RENEW_S - 60),
+		deleted: false,
+	});
+	await g.register();
+	expect(g.creations()).toBe(1);
+	expect(payload(g.uploads[0] ?? "").expires_at).toBeGreaterThan(
+		epoch + 364 * 86400,
+	);
+});
+
+test("stop receiving deletes the reader at its next revision once", async () => {
+	const deletes: unknown[] = [];
+	let reader: FleetReaderState | undefined = {
+		revision: 3,
+		reader_jws: "reader",
+		deleted: false,
+	};
+	const api = {
+		get: async () => {
+			if (!reader) throw { status: 404, code: "NOT_FOUND" };
+			return reader;
+		},
+		del: async (_profile: IProfile, url: string, body: unknown) => {
+			deletes.push([url, body]);
+			return reader;
+		},
+	} as unknown as IApiState;
+	await removeFleetReader(api, profile, "device", "key");
+	expect(deletes).toEqual([
+		["devices/device/fleet/readers/key", { revision: 4 }],
+	]);
+	reader = { revision: 4, reader_jws: "reader", deleted: true };
+	await removeFleetReader(api, profile, "device", "key");
+	reader = undefined;
+	await removeFleetReader(api, profile, "device", "key");
+	expect(deletes).toHaveLength(1);
 });

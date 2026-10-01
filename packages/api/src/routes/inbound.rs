@@ -3708,8 +3708,16 @@ async fn mcp_tools_for_event(
             target.board_version,
         )
         .await
-        .map_err(ApiError::internal_error)?;
+        .map_err(mcp_board_load_error)?;
     Ok(mcp_tool_entries(&board, &function_refs))
+}
+
+/// MCP's Streamable HTTP transport reserves 404 for an expired session, which clients answer by
+/// re-initializing. A served board that cannot be loaded (e.g. deleted while its MCP Event stays
+/// active) is a server fault for the app owner, so it never becomes the usual missing-board 404.
+fn mcp_board_load_error(error: flow_like_types::Error) -> ApiError {
+    ApiError::from_board_format_error(&error)
+        .unwrap_or_else(|| ApiError::internal(format!("{error:#}")))
 }
 
 fn mcp_tool_entries(board: &Board, function_refs: &[String]) -> Vec<McpToolEntry> {
@@ -5049,5 +5057,24 @@ mod tests {
         assert_eq!(client["auth"]["type"], json!("oauth_bearer"));
         assert_eq!(client["proxy"]["via"], json!("app_connection"));
         assert_eq!(client["proxy"]["origin_app_id"], json!("source-app"));
+    }
+
+    #[tokio::test]
+    async fn missing_mcp_board_is_a_server_error_not_a_session_ending_404() {
+        let missing = flow_like::flow::board::Board::load_proto(
+            std::sync::Arc::new(flow_like_storage::object_store::memory::InMemory::new()),
+            &flow_like_storage::object_store::path::Path::from("apps/app"),
+            "gone",
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        let error = super::mcp_board_load_error(missing);
+        assert_eq!(
+            error.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(error.public_message(), None);
     }
 }

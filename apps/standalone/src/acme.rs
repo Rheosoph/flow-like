@@ -471,6 +471,7 @@ pub async fn run(root: PathBuf, cancel: CancellationToken) -> Result<()> {
         tokio::select! { _ = cancel.cancelled() => return Ok(()), _ = interval.tick() => () }
         let jobs =
             (|| -> Result<_> { list(&StateStore::open(&root.join("management.sqlite"))?) })();
+        crate::diagnostics::global().report_error(crate::diagnostics::ACME_RENEWAL, &jobs);
         let Ok(jobs) = jobs else {
             tracing::warn!("Unable to read ACME renewal policies");
             continue;

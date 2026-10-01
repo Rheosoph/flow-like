@@ -340,8 +340,11 @@ pub async fn run(root: PathBuf, cancellation: CancellationToken) {
         let path = root.clone();
         let result =
             tokio::task::spawn_blocking(move || renew_due(&path, crate::enrollment::unix_time()?))
-                .await;
-        if !matches!(result, Ok(Ok(_))) {
+                .await
+                .context("Device certificate renewal pass panicked")
+                .and_then(|result| result);
+        crate::diagnostics::global().report_error(crate::diagnostics::CERTIFICATE_RENEWAL, &result);
+        if result.is_err() {
             tracing::warn!("Device certificate renewal pass failed");
         }
         tokio::select! {
@@ -564,6 +567,21 @@ mod tests {
         assert_eq!(certificates::metadata(&store, &id)?, original);
         assert_eq!(renew_due(&root, now + 3600)?, 0);
         assert_eq!(std::fs::read_dir(root.join("certificates"))?.count(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_failing_renewal_pass_is_reported_as_task_health() -> Result<()> {
+        use crate::diagnostics::{CERTIFICATE_RENEWAL, TaskFailure, TaskState, test_support};
+        let temp = tempfile::tempdir()?;
+        let cancel = CancellationToken::new();
+        let renewal = tokio::spawn(run(temp.path().join("missing"), cancel.clone()));
+        assert_eq!(
+            test_support::reported(CERTIFICATE_RENEWAL).await,
+            (TaskState::Failing, Some(TaskFailure::Storage))
+        );
+        cancel.cancel();
+        renewal.await?;
         Ok(())
     }
 }

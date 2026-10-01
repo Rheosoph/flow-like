@@ -1,0 +1,347 @@
+# Proves our own browser stack against the browser users get: Chrome for Testing, installed through
+# the production installer (launch::cft::install) as Settings > Automation > Install does. Every leg
+# installs it, hides the image's own Chrome and Chromium, checks that discovery (launch::find)
+# resolves to the download, and then runs
+#   crate: flow-like-browser's lint, unit, scripted and real-browser e2e tests;
+#   nodes: the automation nodes' run() bodies in real flows (browser_nodes_e2e).
+# The desktop installs the newest Stable build, which changes without a commit. Pull requests and
+# dev pushes test the build pinned in launch/cft.rs so their result follows the commit; the weekly
+# and manual runs add a leg on the newest Stable build.
+# Windows on Arm is not covered: Chrome for Testing has no win-arm64 build.
+name: "Browser"
+
+on:
+  pull_request:
+    branches:
+      - dev
+  push:
+    branches:
+      - dev
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+# Per event, so a dev push never displaces a pending weekly Stable run.
+concurrency:
+  group: browser-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  changes:
+    name: Detect browser changes
+    runs-on: ubuntu-latest
+    outputs:
+      browser: ${{ steps.changes.outputs.browser }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # A scheduled or manual run has no base revision to compare, so the detector enables every check.
+      - uses: ./.github/actions/detect-changes
+        id: changes
+
+  crate:
+    name: Browser crate (${{ matrix.runner }}, ${{ matrix.cft }})
+    needs: changes
+    if: needs.changes.outputs.browser == 'true'
+    strategy: &runners
+      fail-fast: false
+      matrix:
+        # ubuntu-24.04 ships Chrome, Chromium and Edge; ubuntu-24.04-arm none of them;
+        # windows-2022 Chrome and Edge; both macOS images Chrome and Edge.
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, windows-2022, macos-15, macos-15-intel]
+        # Only the weekly and manual runs add the newest Stable build.
+        cft: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["pinned","stable"]' || '["pinned"]') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    # The harness installs `stable` (the desktop's call) or `download` (the pinned build). Steps
+    # that resolve the browser through discovery instead clear it.
+    env: &provision
+      FLOW_LIKE_BROWSER_E2E_PROVISION: ${{ matrix.cft == 'stable' && 'stable' || 'download' }}
+    steps:
+      # Vendored scripts, templates and fixtures must keep their LF bytes.
+      - &line-endings
+        name: Disable line-ending conversion
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - &checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - &setup-rust
+        uses: ./.github/actions/setup-rust
+      - &rust-cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+        with:
+          shared-key: workspace-${{ runner.os }}-${{ runner.arch }}-browser-${{ github.job }}
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+          # A red or flaky dev run must still save the third-party build, as in setup-environment.
+          cache-on-failure: true
+
+      - name: Lint the browser crate
+        run: cargo clippy --locked --profile ci -p flow-like-browser --all-targets -- -D clippy::correctness -D clippy::suspicious
+
+      # Windows and macOS use the per-user cache folder the desktop app installs into, so the
+      # installer's permission and quarantine handling meets the same folder as for users.
+      - &cft-folder
+        name: Choose the Chrome for Testing folder
+        run: |
+          case "$RUNNER_OS" in
+            Windows) dir="$LOCALAPPDATA\\flow-like-e2e\\browsers" ;;
+            macOS) dir="$HOME/Library/Caches/flow-like-e2e/browsers" ;;
+            *) dir="$RUNNER_TEMP/flow-like-browser" ;;
+          esac
+          echo "FLOW_LIKE_BROWSER_CACHE_DIR=$dir" >> "$GITHUB_ENV"
+
+      # Ubuntu 24.04 only grants unprivileged user namespaces to AppArmor-profiled
+      # binaries, so a downloaded Chrome cannot start its sandbox otherwise.
+      - &sandbox
+        name: Allow the Chromium sandbox for the downloaded browser
+        if: runner.os == 'Linux'
+        run: echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+
+      - &cft-version
+        name: Read the pinned Chrome for Testing version
+        id: cft
+        if: runner.os == 'Linux' && matrix.cft == 'pinned'
+        run: |
+          CFT=$(grep -m1 -oP 'CFT_PINNED: &str = "\K[^"]+' packages/browser/src/launch/cft.rs)
+          test -n "$CFT"
+          echo "version=$CFT" >> "$GITHUB_OUTPUT"
+
+      # Windows and macOS never restore a cached build, so every run exercises setup.exe and the
+      # icacls fallback test, or the quarantine removal. Stable legs never cache either: their newer
+      # build saved under this key would be the one discovery picks on later pinned legs.
+      - &cft-cache
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        if: runner.os == 'Linux' && matrix.cft == 'pinned'
+        with:
+          path: ${{ runner.temp }}/flow-like-browser
+          key: cft-${{ runner.arch }}-${{ steps.cft.outputs.version }}
+
+      - &provision-step
+        name: Install Chrome for Testing through the production installer
+        run: cargo test --locked --profile ci -p flow-like-browser --test e2e_core -- --ignored --exact provision_browser --nocapture
+
+      # Discovery prefers an installed Chrome or a non-snap Chromium to Chrome for Testing, so the
+      # image's own builds go, as for a user who never installed Chrome. Edge stays: Browser Type
+      # Chrome never considers it, which the discovery check confirms.
+      - &hide-linux
+        name: Hide the runner's Chrome and Chromium
+        if: runner.os == 'Linux'
+        run: |
+          hidden="$RUNNER_TEMP/hidden-browsers"
+          mkdir -p "$hidden"
+          # shellcheck disable=SC2016
+          packages=$(dpkg-query -W -f '${db:Status-Abbrev} ${binary:Package}\n' 'google-chrome*' 'chromium*' 2>/dev/null | awk '$1 == "ii" { print $2 }' || true)
+          if [ -n "$packages" ]; then
+            # shellcheck disable=SC2086
+            sudo apt-get remove -y $packages
+          fi
+          for name in google-chrome-stable google-chrome chromium chromium-browser; do
+            while found=$(command -v "$name"); do
+              sudo mv "$found" "$hidden/${found//\//_}"
+              hash -r
+            done
+          done
+          for dir in /opt/google/chrome /opt/google/chrome-beta /opt/google/chrome-unstable /opt/google/chrome-canary /usr/local/share/chromium; do
+            if [ -e "$dir" ]; then
+              sudo mv "$dir" "$hidden/${dir//\//_}"
+            fi
+          done
+
+      - &hide-windows
+        name: Hide the runner's Chrome
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $roots = @($env:LOCALAPPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ }
+          foreach ($root in $roots) {
+            foreach ($channel in 'Chrome', 'Chrome Beta', 'Chrome Dev', 'Chrome SxS') {
+              $dir = Join-Path $root "Google\$channel"
+              if (Test-Path -LiteralPath $dir) {
+                Rename-Item -LiteralPath $dir -NewName "$channel.hidden"
+                Write-Output "Hid $dir"
+              }
+            }
+          }
+          foreach ($hive in 'HKLM:', 'HKCU:') {
+            $key = "$hive\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
+            if (Test-Path -LiteralPath $key) {
+              Remove-Item -LiteralPath $key -Recurse
+              Write-Output "Removed $key"
+            }
+          }
+
+      - &hide-macos
+        name: Hide the runner's Chrome and Chromium
+        if: runner.os == 'macOS'
+        run: |
+          hidden="$RUNNER_TEMP/hidden-browsers"
+          mkdir -p "$hidden"
+          for root in /Applications "$HOME/Applications"; do
+            for name in "Google Chrome" "Google Chrome Beta" "Google Chrome Dev" "Google Chrome Canary" Chromium; do
+              app="$root/$name.app"
+              if [ -e "$app" ]; then
+                sudo mv "$app" "$hidden/${app//\//_}"
+                echo "Hid $app"
+              fi
+            done
+          done
+
+      # Installs the system libraries from the installed build's own deb.deps (found through the
+      # executable the install step recorded), as Puppeteer's install-deps does, instead of a
+      # hand-written package list.
+      - &cft-deps
+        name: Install the system libraries of Chrome for Testing
+        if: runner.os == 'Linux'
+        run: |
+          chrome=$(head -n 1 target/browser-e2e-logs/provision_browser.txt)
+          install_dir=$(dirname "$(dirname "$chrome")")
+          deps=$(find "$install_dir" -name deb.deps -print -quit)
+          if [ -z "$deps" ]; then
+            echo "deb.deps of the Chrome for Testing at $chrome not found under $install_dir" >&2
+            exit 1
+          fi
+          sudo apt-get update
+          sudo apt-get satisfy -y --no-install-recommends "$(paste -sd, "$deps")"
+
+      # Without FLOW_LIKE_BROWSER_E2E_PROVISION the harness resolves its browser with launch::find
+      # and default_cache_dir(), as Open Browser does, and records the path it chose.
+      - name: Check that discovery resolves to the downloaded Chrome for Testing
+        env:
+          FLOW_LIKE_BROWSER_E2E_PROVISION: ""
+        run: |
+          record=target/browser-e2e-logs/provision_browser.txt
+          installed=$(head -n 1 "$record")
+          rm -f "$record"
+          cargo test --locked --profile ci -p flow-like-browser --test e2e_core -- --ignored --exact provision_browser --nocapture | tee "$RUNNER_TEMP/discovery.log"
+          found=$(head -n 1 "$record")
+          if [ -z "$installed" ] || [ "$found" != "$installed" ]; then
+            echo "::error::Discovery resolves to $found instead of the Chrome for Testing the installer put at $installed"
+            exit 1
+          fi
+          if ! grep -qF '(ChromeForTesting, CachedCft,' "$RUNNER_TEMP/discovery.log"; then
+            echo "::error::Discovery resolves to $found, but not as a cached Chrome for Testing"
+            exit 1
+          fi
+
+      # The parity goldens carry the recording Mac's font metrics and day-first date fields, so
+      # every runner compares rects with the in-page atoms and skips the date case when its
+      # locale orders the fields differently (strict is only the local default on macOS).
+      - name: Run the browser crate tests including e2e
+        env:
+          FLOW_LIKE_BROWSER_E2E_PARITY_LAYOUT: relative
+        run: cargo test --locked --profile ci -p flow-like-browser -- --include-ignored --test-threads=4 | tee "$RUNNER_TEMP/tests.log"
+
+      # The real-browser tests are #[ignore]d by default, so any ignored test means one did not run.
+      - &all-tests-ran
+        name: Check that no test was ignored
+        run: |
+          results=$(grep -E '^test result:' "$RUNNER_TEMP/tests.log" || true)
+          if [ -z "$results" ]; then
+            echo "::error::The test log reports no results"
+            exit 1
+          fi
+          if grep -E ' [1-9][0-9]* ignored;' <<< "$results"; then
+            echo "::error::Some tests were ignored, so not every real-browser test ran"
+            exit 1
+          fi
+
+      - &upload-logs
+        name: Upload browser e2e logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-${{ github.job }}-${{ matrix.runner }}-${{ matrix.cft }}
+          path: |
+            target/browser-e2e-logs
+            ${{ runner.temp }}/discovery.log
+            ${{ runner.temp }}/tests.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  nodes:
+    name: Browser nodes (${{ matrix.runner }}, ${{ matrix.cft }})
+    needs: changes
+    if: needs.changes.outputs.browser == 'true'
+    strategy: *runners
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    # The node suite installs the same build again (a no-op) and then requires discovery to find it.
+    env: *provision
+    # The aliased steps are the crate job's, so both jobs set up and provision the browser alike.
+    steps:
+      - *line-endings
+      - *checkout
+      - *setup-rust
+      - *rust-cache
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@f4d5893b897028ff5739576ea0409746887fa536 # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Screen capture and input nodes link X11, XCB, Wayland, PipeWire, libinput, GBM and
+      # OpenCL (rustautogui), and bindgen needs libclang.
+      - name: Install the native libraries of the automation crate
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            pkg-config libclang-dev libx11-dev libxi-dev libxtst-dev libxcb1-dev libxcb-randr0-dev libxrandr-dev \
+            libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev libdrm-dev libinput-dev \
+            libudev-dev ocl-icd-libopencl1 ocl-icd-opencl-dev
+
+      - *cft-folder
+      - *sandbox
+      - *cft-version
+      - *cft-cache
+      - *provision-step
+      - *hide-linux
+      - *hide-windows
+      - *hide-macos
+      - *cft-deps
+
+      # Fails unless Open Browser with Browser Type Chrome resolves to and launches the download.
+      - name: Check that Open Browser resolves to the downloaded Chrome for Testing
+        run: |
+          cargo test --locked --profile ci -p flow-like-catalog-automation --features execute --test browser_nodes_e2e -- --ignored --exact node_discovery_uses_the_downloaded_browser | tee "$RUNNER_TEMP/discovery.log"
+          if ! grep -qE '^test result: ok\. 1 passed;' "$RUNNER_TEMP/discovery.log"; then
+            echo "::error::node_discovery_uses_the_downloaded_browser did not run"
+            exit 1
+          fi
+
+      - name: Run the browser node tests
+        run: cargo test --locked --profile ci -p flow-like-catalog-automation --features execute --test browser_nodes_e2e -- --include-ignored | tee "$RUNNER_TEMP/tests.log"
+
+      - *all-tests-ran
+      - *upload-logs
+
+  result:
+    name: Browser result
+    needs: [changes, crate, nodes]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check browser results
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          BROWSER: ${{ needs.changes.outputs.browser }}
+          CRATE_RESULT: ${{ needs.crate.result }}
+          NODES_RESULT: ${{ needs.nodes.result }}
+        run: |
+          test "$CHANGES_RESULT" = success
+          expected=skipped
+          if [ "$BROWSER" = true ]; then
+            expected=success
+          fi
+          for job in "crate=$CRATE_RESULT" "nodes=$NODES_RESULT"; do
+            if [ "${job#*=}" != "$expected" ]; then
+              echo "::error::Browser ${job%%=*} jobs: ${job#*=}, expected $expected"
+              exit 1
+            fi
+          done

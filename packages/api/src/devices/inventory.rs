@@ -316,6 +316,7 @@ mod tests {
             include_str!("../../prisma/migrations/20260921120000_standalone_devices/migration.sql"),
             include_str!("../../prisma/migrations/20260922120000_device_management/migration.sql"),
             include_str!("../../prisma/migrations/20260924120000_device_inventory/migration.sql"),
+            include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
         ] {
             for sql in migration.split(';').filter(|s| !s.trim().is_empty()) {
                 db.execute_unprepared(sql).await.unwrap();

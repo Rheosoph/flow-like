@@ -39,7 +39,7 @@ const PROVISION_ENV: &str = "FLOW_LIKE_BROWSER_E2E_PROVISION";
 const CACHE_ENV: &str = "FLOW_LIKE_BROWSER_CACHE_DIR";
 const HEADFUL_ENV: &str = "FLOW_LIKE_BROWSER_E2E_HEADFUL";
 const PROFILE_ROOT_ENV: &str = "FLOW_LIKE_BROWSER_E2E_PROFILE_ROOT";
-const NO_BROWSER: &str = "The Chromium e2e tests were run (--ignored or --include-ignored) but no browser was found. Install Google Chrome, set FLOW_LIKE_BROWSER_E2E_CHROME=<path to the executable>, or set FLOW_LIKE_BROWSER_E2E_PROVISION=download to install Chrome for Testing.";
+const NO_BROWSER: &str = "The Chromium e2e tests were run (--ignored or --include-ignored) but no browser was found. Install Google Chrome, set FLOW_LIKE_BROWSER_E2E_CHROME=<path to the executable>, or set FLOW_LIKE_BROWSER_E2E_PROVISION=stable (the build Settings > Automation installs) or download (the pinned build) to install Chrome for Testing.";
 const MAX_BROWSERS: usize = 4;
 const WINDOW_SIZE: (u32, u32) = (1280, 800);
 const PAGE_LOAD_TIMEOUT: Duration = Duration::from_secs(20);
@@ -72,8 +72,21 @@ pub fn headless() -> bool {
     std::env::var_os(HEADFUL_ENV).is_none()
 }
 
+/// The Chrome for Testing build `FLOW_LIKE_BROWSER_E2E_PROVISION` installs: `stable` the newest
+/// Stable one, as Settings > Automation > Install does, or `download` the pinned one.
+fn provision_version() -> Option<CftVersion> {
+    let mode = std::env::var(PROVISION_ENV)
+        .ok()
+        .filter(|mode| !mode.is_empty())?;
+    match mode.as_str() {
+        "stable" => Some(CftVersion::Stable),
+        "download" => Some(CftVersion::Pinned),
+        _ => panic!("{PROVISION_ENV}={mode} is neither stable nor download"),
+    }
+}
+
 fn provisioning() -> bool {
-    std::env::var(PROVISION_ENV).is_ok_and(|mode| mode == "download")
+    provision_version().is_some()
 }
 
 /// A provisioning run never installs into (and prunes) the developer's own browser cache.
@@ -125,13 +138,13 @@ async fn resolve_executable() -> Executable {
             source: ExecutableSource::Explicit,
         };
     }
-    if provisioning() {
+    if let Some(version) = provision_version() {
         let cache = cache_dir();
-        return cft::install(CftVersion::Pinned, &cache, |_| {})
+        return cft::install(version.clone(), &cache, |_| {})
             .await
             .unwrap_or_else(|error| {
                 panic!(
-                    "{PROVISION_ENV}=download could not install Chrome for Testing into {}: {error}",
+                    "{PROVISION_ENV} could not install Chrome for Testing ({version:?}) into {}: {error}",
                     cache.display()
                 )
             });
@@ -161,10 +174,15 @@ fn flavor_of(path: &Path) -> Flavor {
     }
 }
 
+/// Writes the executable's path, then its version (empty when unknown), one per line.
 pub fn record_provisioned(executable: &Executable) -> PathBuf {
     let path = logs_dir().join("provision_browser.txt");
-    let written = std::fs::create_dir_all(logs_dir())
-        .and_then(|()| std::fs::write(&path, format!("{}\n", executable.path.display())));
+    let record = format!(
+        "{}\n{}\n",
+        executable.path.display(),
+        executable.version.as_deref().unwrap_or_default()
+    );
+    let written = std::fs::create_dir_all(logs_dir()).and_then(|()| std::fs::write(&path, record));
     if let Err(error) = written {
         eprintln!("could not write {}: {error}", path.display());
     }
@@ -359,8 +377,15 @@ impl Drop for FailureGuard {
             return;
         };
         let deadline = std::time::Instant::now() + CLEANUP_WAIT;
-        while !processes_using(scratch.path()).is_empty() && std::time::Instant::now() < deadline {
-            std::thread::sleep(POLL);
+        while std::time::Instant::now() < deadline {
+            match try_processes_using(scratch.path()) {
+                Ok(processes) if processes.is_empty() => break,
+                Ok(_) => std::thread::sleep(POLL),
+                Err(error) => {
+                    eprintln!("browser e2e cleanup stopped waiting for its browsers: {error}");
+                    break;
+                }
+            }
         }
         drop(scratch);
     }
@@ -643,27 +668,50 @@ pub fn url_port(url: &str) -> u16 {
         .unwrap_or_else(|| panic!("{url} has no explicit port"))
 }
 
-#[cfg(unix)]
+/// A scan that fails panics, so "no process left" never comes from a scan that did not run.
 pub fn processes_using(path: &Path) -> Vec<u32> {
+    try_processes_using(path).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// For cleanup that may run while a test unwinds, where a second panic would abort the binary.
+#[cfg(unix)]
+pub fn try_processes_using(path: &Path) -> Result<Vec<u32>, String> {
     let output = std::process::Command::new("pgrep")
         .arg("-f")
         .arg(regex_escape(&path.to_string_lossy()))
         .output()
-        .unwrap_or_else(|error| panic!("the e2e cleanup checks need pgrep: {error}"));
-    parse_pids(&output.stdout)
+        .map_err(|error| format!("the e2e cleanup checks need pgrep: {error}"))?;
+    // pgrep exits 1 when nothing matches and 2 or 3 when the scan itself failed.
+    if !matches!(output.status.code(), Some(0 | 1)) {
+        return Err(scan_failure("pgrep", path, &output));
+    }
+    Ok(parse_pids(&output.stdout))
 }
 
+/// A substring match, not `-like`, so `[` and `]` in a path are not wildcards that match nothing.
 #[cfg(windows)]
-pub fn processes_using(path: &Path) -> Vec<u32> {
+pub fn try_processes_using(path: &Path) -> Result<Vec<u32>, String> {
     let pattern = path.display().to_string().replace('\'', "''");
     let script = format!(
-        "Get-CimInstance Win32_Process | Where-Object {{ $_.ProcessId -ne $PID -and $_.CommandLine -like '*{pattern}*' }} | ForEach-Object {{ $_.ProcessId }}"
+        "Get-CimInstance Win32_Process | Where-Object {{ $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.IndexOf('{pattern}', [StringComparison]::OrdinalIgnoreCase) -ge 0 }} | ForEach-Object {{ $_.ProcessId }}"
     );
     let output = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
-        .unwrap_or_else(|error| panic!("the e2e cleanup checks need PowerShell: {error}"));
-    parse_pids(&output.stdout)
+        .map_err(|error| format!("the e2e cleanup checks need PowerShell: {error}"))?;
+    if !output.status.success() {
+        return Err(scan_failure("PowerShell", path, &output));
+    }
+    Ok(parse_pids(&output.stdout))
+}
+
+fn scan_failure(tool: &str, path: &Path, output: &std::process::Output) -> String {
+    format!(
+        "{tool} could not scan for {} ({}): {}",
+        path.display(),
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    )
 }
 
 fn regex_escape(text: &str) -> String {

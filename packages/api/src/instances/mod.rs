@@ -7,6 +7,7 @@ mod jwt;
 pub(crate) mod offline;
 pub(crate) mod project;
 mod repository;
+pub(crate) mod routes;
 
 pub(crate) use budget::{authorize_start, reserve_budget, settle_budget};
 // The device grant, billing and registration routes record through these once wired.

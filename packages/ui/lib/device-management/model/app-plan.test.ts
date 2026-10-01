@@ -1,0 +1,646 @@
+import { describe, expect, test } from "bun:test";
+import {
+	APPS,
+	CHANGES,
+	HASH,
+	PLACEMENTS,
+	SERVICES,
+	type SampleAppId,
+	sampleDevices,
+} from "./__fixtures__/apps";
+import {
+	type AppDeviceInput,
+	type AppServiceRow,
+	type AppView,
+	appMode,
+	appUnknownOf,
+	buildAppView,
+} from "./app-plan";
+import type { GateFailure } from "./types";
+
+function view(
+	appId: SampleAppId,
+	options: {
+		labUnlocked?: boolean;
+		devices?: AppDeviceInput[];
+		focus?: string[];
+	} = {},
+): AppView {
+	return buildAppView({
+		app: APPS[appId],
+		devices: options.devices ?? sampleDevices(options),
+		placements: PLACEMENTS[appId],
+		changes: CHANGES,
+		focusDeviceIds: options.focus,
+	});
+}
+
+function pinText(row: AppServiceRow): string[] | null {
+	return (
+		row.events?.map(
+			(event) =>
+				`${event.event_id} ${event.event_version.join(".")}/${event.board_version.join(".")}`,
+		) ?? null
+	);
+}
+
+function cloudText(row: AppServiceRow): string {
+	const cloud = row.cloud;
+	if (cloud.state !== "approved") return cloud.state;
+	const billing = cloud.placement.billing;
+	return [
+		cloud.placement.grant.online_access ?? "models",
+		billing ? `${billing.used_micros}/${billing.limit_micros}` : "no limit",
+	].join(" · ");
+}
+
+const PICTURE: [
+	SampleAppId,
+	boolean,
+	string,
+	string[] | null,
+	string | null,
+	number | null,
+	string,
+	string,
+	string,
+][] = [
+	[
+		"app_support_portal",
+		false,
+		"support-bot@edge-berlin-01",
+		["evt_support_chat 2.3.0/5.1.2", "evt_support_http 1.0.4/5.1.2"],
+		"v2.3.0",
+		1,
+		"running→converged 2/2 max 4",
+		"device since 1787209200",
+		"none",
+	],
+	[
+		"app_invoice_ai",
+		false,
+		"invoice-extractor@edge-berlin-01",
+		["evt_extract_http 1.4.0/2.1.0"],
+		"v1.4.0",
+		1,
+		"running→update_in_progress 1/1 max 1",
+		"cloud · writes 0",
+		"read_write · 7410000/25000000",
+	],
+	[
+		"app_invoice_ai",
+		true,
+		"invoice-extractor-gpu@lab-gpu-02",
+		["evt_gpu_extract 1.0.2/1.3.0"],
+		"v1.3.0",
+		2,
+		"running→converged 1/1 max 1",
+		"cloud",
+		"hidden",
+	],
+	[
+		"app_crm_sync",
+		false,
+		"nightly-sync@edge-berlin-01",
+		["evt_crm_nightly 1.1.0/4.0.0"],
+		"v3.0.0",
+		1,
+		"stopped→stopped_by_user 0/0 max 1",
+		"device since 1788339600",
+		"none",
+	],
+	[
+		"app_warehouse_scan",
+		false,
+		"scanner-ingest@warehouse-pi",
+		null,
+		"v1.1.0",
+		1,
+		"running→crash_looping 1/1 max 1",
+		"device since 1783497600",
+		"none",
+	],
+	[
+		"app_field_notes",
+		false,
+		"field-notes@studio-mac-mini",
+		["evt_notes_http 1.2.0/3.0.1"],
+		"v2.0.0",
+		0,
+		"running→converged 1/1 max 1",
+		"cloud · writes 14 quarantined",
+		"read_write · no limit",
+	],
+];
+
+describe("APP §5.5 resulting picture per app", () => {
+	for (const [
+		appId,
+		labUnlocked,
+		where,
+		events,
+		label,
+		behind,
+		state,
+		data,
+		cloud,
+	] of PICTURE) {
+		test(`${APPS[appId].name}: ${where}`, () => {
+			const result = view(appId, { labUnlocked });
+			const row = result.services.find(
+				(value) => `${value.serviceId}@${value.deviceId}` === where,
+			);
+			if (!row) throw new Error(`${where} is missing`);
+			const writes =
+				typeof row.writes === "object" && row.writes
+					? ` · writes ${row.writes.pending}${row.writes.quarantined ? " quarantined" : ""}`
+					: "";
+			expect([
+				pinText(row),
+				row.version?.label ?? null,
+				row.behind,
+				`${row.view.desired}→${row.view.conv} ${row.view.instances.ready}/${row.view.instances.requested} max ${row.view.instances.max}`,
+				`${row.data.where}${row.data.since ? ` since ${row.data.since}` : ""}${writes}`,
+				cloudText(row),
+			]).toEqual([events, label, behind, state, data, cloud]);
+		});
+	}
+
+	test("Partner Reports: the revoked device is not counted and flows are unreadable", () => {
+		const result = view("app_partner_reports");
+		expect(result.app.canReadFlows).toBe(false);
+		expect(result.versions).toEqual([]);
+		expect(result.services).toEqual([]);
+		expect(result.coverage.total).toBe(5);
+		expect(result.events.rows.map((row) => row.eventId)).toEqual([
+			"evt_render_report",
+			"evt_report_tools",
+		]);
+		expect(result.events.ineligible.map((row) => row.eligibility.code)).toEqual(
+			["type"],
+		);
+	});
+
+	test("Visitor Check-in is never deployed and 2 of its 4 events can run", () => {
+		const result = view("app_visitor_checkin");
+		expect(result.layout).toBe("never");
+		expect(result.app.mode).toBe("online");
+		expect(result.newestRuns).toMatchObject({ services: 0, of: 0 });
+		expect(result.versions[0].runningOn).toEqual([]);
+		expect(result.events.rows.map((row) => row.eventId)).toEqual([
+			"evt_visitor_page",
+			"evt_badge_printer",
+		]);
+		expect(
+			result.events.ineligible.map((row) => [
+				row.eventId,
+				row.eligibility.code,
+			]),
+		).toEqual([
+			["evt_visitor_mail", "type"],
+			["evt_visitor_report", "type"],
+		]);
+		expect(
+			result.everywhereElse.notDeployed.map((row) => row.deviceId),
+		).toEqual(["edge-berlin-01", "studio-mac-mini", "warehouse-pi"]);
+		expect(
+			result.everywhereElse.unknown.map((row) => [
+				row.deviceId,
+				row.unknown?.kind,
+			]),
+		).toEqual([
+			["lab-gpu-02", "locked"],
+			["cold-storage-nas", "never"],
+		]);
+		expect(result.coverage).toEqual({
+			total: 5,
+			readable: 3,
+			unknown: 2,
+			locked: ["lab-gpu-02"],
+		});
+	});
+});
+
+describe("last known", () => {
+	test("rows that are delayed or kept after a failed read are last known, like their attention items", () => {
+		const lastKnown = (age: "live" | "current" | "delayed" | "error") => {
+			const devices = sampleDevices().map((device) =>
+				Array.isArray(device.services)
+					? {
+							...device,
+							services: device.services.map((service) => ({
+								...service,
+								freshness: { ...service.freshness, age },
+							})),
+						}
+					: device,
+			);
+			return view("app_support_portal", { devices }).services[0].lastKnown;
+		};
+		expect(lastKnown("live")).toBe(false);
+		expect(lastKnown("current")).toBe(false);
+		expect(lastKnown("delayed")).toBe(true);
+		expect(lastKnown("error")).toBe(true);
+	});
+});
+
+describe("unknown never means not deployed", () => {
+	test("a snapshot without events gives null events with the snapshot reason", () => {
+		const result = view("app_warehouse_scan");
+		const [row] = result.services;
+		expect([row.events, row.eventsWhy, row.lastKnown, row.rank]).toEqual([
+			null,
+			"snapshot",
+			true,
+			0,
+		]);
+		const ingest = result.events.rows.find(
+			(value) => value.eventId === "evt_scan_ingest",
+		);
+		expect(ingest?.cells["warehouse-pi"]).toMatchObject({
+			state: "unknown",
+			unknown: { kind: "snapshot" },
+		});
+	});
+
+	test("locked and never-checked-in devices are unknown, never in Not deployed", () => {
+		const result = view("app_invoice_ai");
+		expect(result.groups.map((group) => [group.deviceId, group.rank])).toEqual([
+			["edge-berlin-01", 2],
+			["cold-storage-nas", 3],
+			["lab-gpu-02", 3],
+		]);
+		expect(
+			result.everywhereElse.notDeployed.map((row) => row.deviceId),
+		).toEqual(["studio-mac-mini", "warehouse-pi"]);
+		expect(result.versions[0].unknownOn).toEqual([
+			"cold-storage-nas",
+			"lab-gpu-02",
+		]);
+	});
+
+	test("every device locked has no service and nothing readable", () => {
+		const devices = sampleDevices().map(
+			(device): AppDeviceInput => ({
+				...device,
+				keyState: "locked",
+				services: { state: "locked" },
+			}),
+		);
+		const result = view("app_invoice_ai", { devices });
+		expect(result.layout).toBe("all_unknown");
+		expect(result.coverage).toEqual({
+			total: 5,
+			readable: 0,
+			unknown: 5,
+			locked: [
+				"edge-berlin-01",
+				"lab-gpu-02",
+				"studio-mac-mini",
+				"warehouse-pi",
+			],
+		});
+	});
+
+	test("no devices", () => {
+		expect(view("app_invoice_ai", { devices: [] }).layout).toBe("no_devices");
+	});
+
+	test("the unknown kind follows presence, keys and the plane's state", () => {
+		const base = sampleDevices()[0];
+		const kinds = (
+			[
+				[{ presence: { kind: "never" } }, "never"],
+				[
+					{
+						services: { state: "locked", reason: { code: "no_keys_here" } },
+					},
+					"nokeys",
+				],
+				[{ keyState: "none", services: { state: "notloaded" } }, "nokeys"],
+				[
+					{ keyState: "held_elsewhere", services: { state: "notloaded" } },
+					"locked",
+				],
+				[{ services: { state: "noaccess" } }, "noaccess"],
+				[
+					{
+						presence: { kind: "offline", since: 5 },
+						services: { state: "notloaded" },
+					},
+					"offline",
+				],
+				[{ services: { state: "error" } }, "error"],
+				[{ services: { state: "notloaded" } }, "notloaded"],
+			] as [Partial<AppDeviceInput>, string][]
+		).map(([change, kind]) => [
+			appUnknownOf({ ...base, ...change }).kind,
+			kind,
+		]);
+		for (const [actual, expected] of kinds) expect(actual).toBe(expected);
+	});
+});
+
+describe("By event matrix (APP §2.10)", () => {
+	test("Invoice AI with lab-gpu-02 locked, then unlocked", () => {
+		const locked = view("app_invoice_ai");
+		const cell = (result: AppView, event: string, device: string) =>
+			result.events.rows.find((row) => row.eventId === event)?.cells[device];
+		expect(locked.events.cols).toEqual([
+			"edge-berlin-01",
+			"cold-storage-nas",
+			"lab-gpu-02",
+		]);
+		expect(cell(locked, "evt_extract_http", "edge-berlin-01")).toMatchObject({
+			state: "served",
+			serviceIds: ["invoice-extractor"],
+			pin: { eventVersion: [1, 4, 0], boardVersion: [2, 1, 0] },
+			behind: true,
+		});
+		expect(cell(locked, "evt_extract_http", "lab-gpu-02")).toMatchObject({
+			state: "unknown",
+			unknown: { kind: "locked" },
+		});
+		expect(cell(locked, "evt_gpu_extract", "edge-berlin-01")?.state).toBe(
+			"not_served",
+		);
+		const mcp = locked.events.rows.find(
+			(row) => row.eventId === "evt_invoice_mcp",
+		);
+		expect(mcp?.newIn).toBe("v1.5.0");
+		expect(
+			locked.events.ineligible.map((row) => [
+				row.eventId,
+				row.eligibility.code,
+			]),
+		).toEqual([
+			["evt_invoice_review", "latest_flow"],
+			["evt_invoice_inbox", "type"],
+			["evt_invoice_reconcile", "type"],
+		]);
+		const unlocked = view("app_invoice_ai", { labUnlocked: true });
+		expect(cell(unlocked, "evt_gpu_extract", "lab-gpu-02")).toMatchObject({
+			state: "served",
+			serviceIds: ["invoice-extractor-gpu"],
+			behind: true,
+		});
+		expect(cell(unlocked, "evt_extract_http", "lab-gpu-02")?.state).toBe(
+			"not_served",
+		);
+		expect(unlocked.versions[2].runningOn.map((row) => row.serviceId)).toEqual([
+			"invoice-extractor-gpu",
+		]);
+	});
+
+	test("CRM Sync: the device's refusal is Can't run here; focus adds a column", () => {
+		const result = view("app_crm_sync", { focus: ["studio-mac-mini"] });
+		const watch = result.events.rows.find(
+			(row) => row.eventId === "evt_crm_watch",
+		);
+		expect(watch?.newIn).toBe("v3.1.0");
+		expect(watch?.cells["edge-berlin-01"]).toMatchObject({
+			state: "cant_here",
+			reason: expect.stringContaining("requires sandboxed services"),
+		});
+		expect(watch?.cells["studio-mac-mini"]?.state).toBe("not_served");
+		expect(
+			result.events.rows.find((row) => row.eventId === "evt_crm_nightly")
+				?.cells["edge-berlin-01"],
+		).toMatchObject({ state: "served", conv: "stopped_by_user" });
+		expect(
+			result.events.ineligible.map((row) => [
+				row.eventId,
+				row.eligibility.code,
+			]),
+		).toEqual([
+			["evt_crm_hourly", "type"],
+			["evt_crm_rest", "canary"],
+		]);
+	});
+
+	test("Support Portal serves both events on edge; the paused mailbox can't run", () => {
+		const result = view("app_support_portal");
+		expect(
+			result.events.rows.map((row) => [
+				row.eventId,
+				row.cells["edge-berlin-01"]?.state,
+			]),
+		).toEqual([
+			["evt_support_chat", "served"],
+			["evt_support_http", "served"],
+		]);
+		expect(
+			result.events.ineligible.map((row) => [
+				row.eventId,
+				row.eligibility.code,
+			]),
+		).toEqual([
+			["evt_support_reply", "type"],
+			["evt_support_digest", "type"],
+			["evt_support_mailbox", "paused"],
+		]);
+	});
+
+	test("a staged rollout marks the cell and ranks the service as updating", () => {
+		const devices = sampleDevices();
+		devices[0] = {
+			...devices[0],
+			services: [
+				{
+					...SERVICES.supportBot,
+					rollout: {
+						rollout_id: "r1",
+						placement_id: "support-bot",
+						project_id: "app_support_portal",
+						state: "staged",
+					},
+				},
+			],
+		};
+		const result = view("app_support_portal", { devices });
+		expect([result.services[0].staged, result.services[0].rank]).toEqual([
+			true,
+			2,
+		]);
+		expect(result.events.rows[0].cells["edge-berlin-01"]?.state).toBe("staged");
+	});
+
+	test("shared-for-another-app devices get a no-access column; gates reach Deploy here", () => {
+		const gate: GateFailure = {
+			ok: false,
+			gate: "G6",
+			kind: "live",
+			hide: false,
+			copy: { code: "device_offline" as never },
+		};
+		const devices = sampleDevices();
+		devices[1] = { ...devices[1], services: { state: "noaccess" } };
+		devices[2] = { ...devices[2], deployGate: gate };
+		const result = view("app_visitor_checkin", {
+			devices,
+			focus: ["studio-mac-mini"],
+		});
+		expect(result.events.cols).toEqual([
+			"cold-storage-nas",
+			"lab-gpu-02",
+			"studio-mac-mini",
+		]);
+		expect(result.events.rows[0].cells["lab-gpu-02"]?.state).toBe("no_access");
+		expect(result.events.rows[0].cells["studio-mac-mini"]).toMatchObject({
+			state: "not_served",
+			gate,
+		});
+		expect(result.everywhereElse.noAccess.map((row) => row.deviceId)).toEqual([
+			"lab-gpu-02",
+		]);
+		expect(
+			result.everywhereElse.notDeployed.find(
+				(row) => row.deviceId === "studio-mac-mini",
+			),
+		).toMatchObject({
+			gate,
+			runs: [{ serviceId: "field-notes", projectId: "app_field_notes" }],
+		});
+	});
+
+	test("more than four device columns switch to list mode", () => {
+		const devices = sampleDevices().map(
+			(device): AppDeviceInput => ({
+				...device,
+				presence:
+					device.presence.kind === "revoked"
+						? { kind: "online" }
+						: device.presence,
+				services: { state: "locked" },
+			}),
+		);
+		expect(view("app_invoice_ai", { devices }).events.listMode).toBe(true);
+		expect(view("app_invoice_ai").events.listMode).toBe(false);
+	});
+});
+
+describe("versions and drift (APP §2.11, A7)", () => {
+	test("each version lists the event changes against the next older one", () => {
+		const result = view("app_invoice_ai");
+		expect(result.versions.map((row) => [row.label, row.short])).toEqual([
+			["v1.5.0", "7c2d1e90"],
+			["v1.4.0", "491e8acf"],
+			["v1.3.0", "684d0cd5"],
+		]);
+		expect(
+			result.versions[0].diff?.map((row) => [
+				row.eventId,
+				row.kind,
+				row.from?.eventVersion.join("."),
+				row.to?.eventVersion.join("."),
+			]),
+		).toEqual([
+			["evt_extract_http", "changed", "1.4.0", "1.5.0"],
+			["evt_gpu_extract", "changed", "1.0.2", "1.1.0"],
+			["evt_invoice_mcp", "added", undefined, "1.0.2"],
+		]);
+		expect(result.versions[1].diff).toEqual([
+			{
+				eventId: "evt_extract_http",
+				kind: "changed",
+				from: { eventVersion: [1, 3, 0], boardVersion: [2, 0, 0] },
+				to: { eventVersion: [1, 4, 0], boardVersion: [2, 1, 0] },
+			},
+		]);
+		expect(result.versions[2].diff).toBeNull();
+		expect(result.versions[1].runningOn).toEqual([
+			{
+				deviceId: "edge-berlin-01",
+				serviceId: "invoice-extractor",
+				conv: "update_in_progress",
+				lastKnown: false,
+			},
+		]);
+		expect(result.newestRuns).toMatchObject({ services: 0, of: 1 });
+		expect(result.howRuns).toMatchObject({
+			visibility: "Prototype",
+			mode: "online",
+			newest: { label: "v1.5.0" },
+		});
+	});
+
+	test("a removed event shows in the newer version's diff", () => {
+		const app = {
+			...APPS.app_crm_sync,
+			versions: [
+				{ ...APPS.app_crm_sync.versions[1], hash: "f".repeat(64) },
+				APPS.app_crm_sync.versions[0],
+			],
+		};
+		const result = buildAppView({ app, devices: [] });
+		expect(
+			result.versions[0].diff?.filter((row) => row.kind === "removed"),
+		).toEqual([
+			{
+				eventId: "evt_crm_watch",
+				kind: "removed",
+				from: { eventVersion: [0, 3, 0], boardVersion: [4, 1, 0] },
+			},
+		]);
+	});
+
+	test("without a hash, pins identify a version only when exactly one matches", () => {
+		const devices = sampleDevices({ labUnlocked: true });
+		devices[1] = {
+			...devices[1],
+			services: [{ ...SERVICES.invoiceGpu, appVersion: null }],
+		};
+		devices[0] = {
+			...devices[0],
+			services: [{ ...SERVICES.invoiceExtractor, appVersion: null }],
+		};
+		const result = view("app_invoice_ai", { devices });
+		const byService = Object.fromEntries(
+			result.services.map((row) => [row.serviceId, row.behind]),
+		);
+		expect(byService).toEqual({
+			"invoice-extractor": 1,
+			"invoice-extractor-gpu": null,
+		});
+		expect(result.versions[0].unknownOn).toContain(
+			"lab-gpu-02/invoice-extractor-gpu",
+		);
+	});
+
+	test("short hashes of eight characters or more match the full hash", () => {
+		const devices = sampleDevices();
+		devices[2] = {
+			...devices[2],
+			services: [
+				{
+					...SERVICES.fieldNotes,
+					appVersion: { hash: HASH.notes19.slice(0, 8).toUpperCase() },
+				},
+			],
+		};
+		expect(view("app_field_notes", { devices }).services[0].behind).toBe(1);
+	});
+
+	test("cloud access is unknown until E20 loads", () => {
+		const result = buildAppView({
+			app: APPS.app_invoice_ai,
+			devices: sampleDevices(),
+		});
+		expect(result.services[0].cloud).toEqual({ state: "unknown" });
+		expect(result.services[0].lastChange).toBeNull();
+	});
+});
+
+test("the mode follows visibility (A1)", () => {
+	expect(
+		(
+			[
+				"Offline",
+				"Private",
+				"Prototype",
+				"PublicRequestAccess",
+				"Public",
+			] as const
+		).map(appMode),
+	).toEqual(["offline", "online", "online", "online", "online"]);
+});

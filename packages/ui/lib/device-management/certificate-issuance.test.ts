@@ -4,13 +4,13 @@ import {
 	readAcmeCertificates,
 } from "./certificate-acme";
 import {
-	createCertificateRequest,
-	createCertificateIssuerRequest,
-	installCertificateRequest,
-	installCertificateIssuer,
-	readCertificateRequests,
-	readCertificateIssuers,
 	type CertificateRequest,
+	createCertificateIssuerRequest,
+	createCertificateRequest,
+	installCertificateIssuer,
+	installCertificateRequest,
+	readCertificateIssuers,
+	readCertificateRequests,
 } from "./certificate-issuance";
 import type { ManagementCall } from "./telemetry";
 
@@ -251,4 +251,68 @@ test("ACME listing fails closed for inconsistent pagination and strips account s
 			response({ policies: [policy], next: other }),
 		),
 	).rejects.toThrow("could not be read");
+});
+
+const renewal = {
+	certificate_id: id,
+	label: "Gateway",
+	revision: 1,
+	dns_names: request.dns_names,
+	environment: "lets_encrypt_production" as const,
+	http_bind: "0.0.0.0:80",
+	next_attempt_at: 100,
+	last_renewed_at: null,
+	last_error: "Renewal failed.",
+};
+const readRenewal = async (extra: Record<string, unknown>) =>
+	(
+		await readAcmeCertificates(async () =>
+			response({ policies: [{ ...renewal, ...extra }], next: null }),
+		)
+	)[0];
+
+test("ACME failure detail is optional and a malformed value reads as unknown", async () => {
+	const older = await readRenewal({});
+	expect(older).toEqual(renewal);
+	expect(older).not.toHaveProperty("failures");
+	const detailed = await readRenewal({ failures: 3, error_category: "dns" });
+	expect(detailed?.failures).toBe(3);
+	expect(detailed?.error_category).toBe("dns");
+	const malformed = await readRenewal({
+		failures: -1,
+		error_category: "solar_flare",
+	});
+	expect(malformed?.failures).toBeUndefined();
+	expect(malformed?.error_category).toBeUndefined();
+});
+
+test("renewal delegation carries the same optional failure detail", async () => {
+	const issuer = {
+		certificate_id: other,
+		revision: 1,
+		dns_names: request.dns_names,
+		ip_addresses: [],
+		leaf_lifetime_days: 30,
+		not_after: 200,
+		last_renewed_at: null,
+		next_renewal_at: 150,
+		last_error: null,
+	};
+	const issuers = await readCertificateIssuers(async () =>
+		response({
+			issuers: [
+				issuer,
+				{
+					...issuer,
+					certificate_id: "00000000-0000-4000-8000-000000000003",
+					failures: 2,
+					error_category: "authority_expired",
+				},
+			],
+			next: null,
+		}),
+	);
+	expect(issuers[0]).toEqual(issuer);
+	expect(issuers[1]?.failures).toBe(2);
+	expect(issuers[1]?.error_category).toBe("authority_expired");
 });

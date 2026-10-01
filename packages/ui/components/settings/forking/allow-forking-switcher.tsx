@@ -73,7 +73,7 @@ export function AllowForkingSwitcher({
 				setPending(false);
 			}
 		},
-		[allow, pending, localApp.id, onAllowForkingChange],
+		[allow, pending, localApp.id, onAllowForkingChange, t],
 	);
 
 	const inputId = `allow-forking-${localApp.id}`;

@@ -180,8 +180,11 @@ export interface AppPackageWidget {
 export interface AppPackageWidgetSources {
 	/** `IAppState.listPackages` — package id → pinned version for the app. */
 	listPackages?: (appId: string) => Promise<Record<string, string>>;
-	/** `IRegistryState.getPackage` — locally installed package (with manifest). */
-	getPackage: (packageId: string) => Promise<{
+	/** `IRegistryState.getPackage` through the app, so members resolve the packages it pins. */
+	getPackage: (
+		packageId: string,
+		appId: string,
+	) => Promise<{
 		version: string;
 		manifest: unknown;
 		metadata?: { name?: string };
@@ -190,14 +193,9 @@ export interface AppPackageWidgetSources {
 
 /**
  * List the widgets of every package added to an app, resolved from the
- * installed manifests (§6.1 — one widget list everywhere). Desktop resolves
- * this fully offline via `appState.listPackages` + `registryState.getPackage`.
- *
- * TODO(web): remote deployments have no `listPackages`/local manifests — the
- * `apps/{appId}/packages` route would need to return package manifests (or a
- * dedicated `apps/{appId}/package-widgets` endpoint) before package widgets
- * can appear in the web builder. Until then this resolves to an empty list
- * there and the project-widget list renders unchanged.
+ * package manifests (§6.1 — one widget list everywhere): the local install on
+ * desktop, the registry entry of the pinned version on web. Hosts without
+ * `appState.listPackages` resolve to an empty list.
  */
 export async function listAppPackageWidgets(
 	sources: AppPackageWidgetSources,
@@ -216,7 +214,7 @@ export async function listAppPackageWidgets(
 	const resolved = await Promise.all(
 		packageIds.map(async (packageId) => {
 			try {
-				const installed = await sources.getPackage(packageId);
+				const installed = await sources.getPackage(packageId, appId);
 				if (!installed) return [];
 				const widgets = readManifestWidgets(installed.manifest);
 				if (widgets.length === 0) return [];

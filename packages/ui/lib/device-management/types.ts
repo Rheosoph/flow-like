@@ -5,6 +5,7 @@ import type {
 	CertificateAuthoritySpec,
 	SignedCertificateChain,
 } from "./certificate-authority";
+import type { AgentFeatures } from "./model/types";
 export interface Ed25519PublicKey {
 	kty: "OKP";
 	crv: "Ed25519";
@@ -486,6 +487,50 @@ export interface Inspection {
 	certificate_issuance?: 1;
 	certificate_acme?: 1;
 	can_delegate_certificate_renewal?: boolean;
+}
+
+/** Raw `inspect_page` result. Every field after `next` is absent on older agents (plan §3.4). */
+export interface InspectionPageWire {
+	device_id: string;
+	boot_id: string | null;
+	placements: unknown[];
+	next: string | null;
+	certificate_management?: 1;
+	can_manage_certificates?: boolean;
+	certificate_issuance?: 1;
+	certificate_acme?: 1;
+	can_delegate_certificate_renewal?: boolean;
+	agent_version?: string;
+	host_operations?: { reboot: boolean; update_agent: boolean };
+	host_isolation?: "required" | "optional" | "none" | null;
+	isolation?: Record<string, unknown> | null;
+	features?: Record<string, 1>;
+	agent?: {
+		version: string;
+		release_version: string | null;
+		release_sequence: number | null;
+	};
+	host?: { booted_at: number | null; agent_started_at: number };
+	tasks?: unknown[];
+	host_operation?: unknown;
+	network?: { interfaces: unknown[] };
+}
+
+const FEATURE_FLAG = /^[a-z][a-z0-9_]{0,63}$/;
+const MAX_FEATURE_FLAGS = 64;
+
+/** The `features` map (plan §3.4.1). A missing or malformed map means an older agent without flags. */
+export function agentFeatures(value: unknown): AgentFeatures {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	const flags: Record<string, 1> = {};
+	let count = 0;
+	for (const [flag, enabled] of Object.entries(value)) {
+		if (count >= MAX_FEATURE_FLAGS) break;
+		if (enabled !== 1 || !FEATURE_FLAG.test(flag)) continue;
+		flags[flag] = 1;
+		count++;
+	}
+	return flags as AgentFeatures;
 }
 
 export type InventoryScope = ManagementGrant["scope"];

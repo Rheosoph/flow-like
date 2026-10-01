@@ -38,7 +38,7 @@ function buildPreviewSurface(
 
 	// If there's a "root" component, use it; otherwise pick the first unreferenced component
 	const rootComponentId =
-		componentsRecord["root"] != null
+		componentsRecord.root != null
 			? "root"
 			: (components.find((c) => !referencedChildIds.has(c.id))?.id ??
 				components[0]?.id ??
@@ -56,6 +56,8 @@ interface PendingComponentsViewProps {
 	components: SurfaceComponent[];
 	canvasSettings?: CanvasSettings;
 	warnings?: string[];
+	/** Project the components were generated for; package widgets in the preview load through it. */
+	appId?: string;
 	onApply: () => void;
 	onDismiss: () => void;
 }
@@ -64,6 +66,7 @@ export const PendingComponentsView = memo(function PendingComponentsView({
 	components,
 	canvasSettings,
 	warnings = [],
+	appId,
 	onApply,
 	onDismiss,
 }: PendingComponentsViewProps) {
@@ -203,6 +206,7 @@ export const PendingComponentsView = memo(function PendingComponentsView({
 								<div className="pt-2 max-h-64 overflow-y-auto rounded-md border border-border/30 bg-background">
 									<A2UIRenderer
 										surface={previewSurface}
+										appId={appId}
 										isPreviewMode={true}
 										className="w-full min-h-20 pointer-events-none scale-[0.85] origin-top-left"
 									/>

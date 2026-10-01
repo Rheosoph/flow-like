@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import type { IRegistryState } from "../../state/backend-state/registry-state";
 import {
@@ -12,6 +12,7 @@ import {
 	revokeMicroWidgetConsent,
 } from "./micro-widget-capability-consent";
 import {
+	type WidgetAccessRequest,
 	type WidgetGrantRequest,
 	type WidgetPolicy,
 	WidgetPolicyChangedError,
@@ -25,11 +26,14 @@ import {
 } from "./micro-widget-policy";
 import {
 	MICRO_WIDGET_GRANT_CACHE_LIMIT,
+	MICRO_WIDGET_GRANT_REFRESH_MARGIN_MS,
 	type MicroWidgetFrameMount,
 	type MicroWidgetGrant,
 	type MicroWidgetGrantClock,
 	MicroWidgetGrantController,
 	type MicroWidgetGrantControllerInputs,
+	forgetMicroWidgetAccess,
+	loadMicroWidgetAccess,
 	microWidgetGrantCacheSizeForTests,
 	resetMicroWidgetGrantCacheForTests,
 } from "./use-micro-widget-grant";
@@ -356,6 +360,7 @@ describe("mount", () => {
 				bundleHash: HASH,
 				widgetId: WIDGET,
 				preview: false,
+				appId: APP,
 			},
 			{
 				packageId: PACKAGE,
@@ -425,6 +430,19 @@ describe("mount", () => {
 		expect(view.grant.prompt?.hasRuntimeCheckbox).toBe(false);
 	});
 
+	test("a widget outside a project describes and mints without an app id", async () => {
+		const backend = stubBackend();
+		const view = mount(backend, {}, { appId: null });
+		await flush();
+		await clock.advance(1_000);
+		view.controller.actions.allowOnce();
+		await flush();
+		expect(backend.calls.describe).toHaveLength(1);
+		expect(backend.calls.describe[0]).not.toHaveProperty("appId");
+		expect(backend.calls.mint).toHaveLength(1);
+		expect(backend.calls.mint[0]).not.toHaveProperty("appId");
+	});
+
 	test("an unchecked runtime box grants declared-only, blocks the addresses and mints the declared digest", async () => {
 		const backend = stubBackend();
 		const view = mount(backend, layers(A));
@@ -438,6 +456,7 @@ describe("mount", () => {
 		expect(backend.calls.mint).toHaveLength(1);
 		expect(backend.calls.mint[0].policyDigest).toBe(digest(DECLARED));
 		expect(backend.calls.mint[0].runtimeSources).toBeUndefined();
+		expect(backend.calls.mint[0].appId).toBe(APP);
 		expect([...readMicroWidgetRuntimeBlocks(TARGET)]).toEqual([A]);
 		expect(frameOf(view.grant).runtime).toBeNull();
 	});
@@ -1003,5 +1022,185 @@ describe("instances sharing one dialog", () => {
 			expect(view.grant.prompt).toBeNull();
 			expect(frameOf(view.grant).policy.csp?.imgSrc).toEqual([A]);
 		}
+	});
+});
+
+describe("sandbox access", () => {
+	const target = { packageId: PACKAGE, packageVersion: "1.0.0", appId: APP };
+	const TOKEN = "h.access.s";
+	const HOUR = 3_600_000;
+
+	function accessBackend(
+		answer: (
+			request: WidgetAccessRequest,
+			call: number,
+		) => Promise<{ access: string | null; expiresIn: number }> = async () => ({
+			access: TOKEN,
+			expiresIn: 3600,
+		}),
+	) {
+		const calls: WidgetAccessRequest[] = [];
+		const registry = {
+			getWidgetAccess: (request: WidgetAccessRequest) => {
+				calls.push(structuredClone(request));
+				return answer(request, calls.length);
+			},
+		} as unknown as IRegistryState;
+		return { calls, registry };
+	}
+
+	test("a backend without access tokens loads every sandbox anonymously", async () => {
+		const backend = stubBackend();
+		const anonymous = { access: null, deadline: Number.POSITIVE_INFINITY };
+		expect(
+			await loadMicroWidgetAccess(backend.registry, target, clock),
+		).toEqual(anonymous);
+		expect(await loadMicroWidgetAccess(null, target, clock)).toEqual(
+			anonymous,
+		);
+	});
+
+	test("one request per package version and project; new frames reuse a token while half its lifetime is left", async () => {
+		const backend = accessBackend();
+		const access = {
+			access: TOKEN,
+			deadline: 1_000 + HOUR - MICRO_WIDGET_GRANT_REFRESH_MARGIN_MS,
+		};
+		const [first, second] = await Promise.all([
+			loadMicroWidgetAccess(backend.registry, target, clock),
+			loadMicroWidgetAccess(backend.registry, target, clock),
+		]);
+		expect([first, second]).toEqual([access, access]);
+		expect(backend.calls).toEqual([
+			{ packageId: PACKAGE, packageVersion: "1.0.0", appId: APP },
+		]);
+
+		await clock.advance(HOUR / 2);
+		expect(
+			await loadMicroWidgetAccess(backend.registry, target, clock),
+		).toEqual(access);
+		expect(backend.calls).toHaveLength(1);
+
+		await clock.advance(1);
+		await loadMicroWidgetAccess(backend.registry, target, clock);
+		expect(backend.calls).toHaveLength(2);
+
+		await loadMicroWidgetAccess(
+			backend.registry,
+			{ ...target, packageVersion: "1.1.0" },
+			clock,
+		);
+		await loadMicroWidgetAccess(
+			backend.registry,
+			{ ...target, appId: null },
+			clock,
+		);
+		expect(backend.calls.slice(2)).toEqual([
+			{ packageId: PACKAGE, packageVersion: "1.1.0", appId: APP },
+			{ packageId: PACKAGE, packageVersion: "1.0.0" },
+		]);
+	});
+
+	test("a refusal rejects and is asked again on the next frame", async () => {
+		const refusal = new Error("403 Forbidden");
+		const backend = accessBackend(async (_request, call) => {
+			if (call === 1) throw refusal;
+			return { access: null, expiresIn: 3600 };
+		});
+		await expect(
+			loadMicroWidgetAccess(backend.registry, target, clock),
+		).rejects.toBe(refusal);
+		expect(
+			(await loadMicroWidgetAccess(backend.registry, target, clock)).access,
+		).toBeNull();
+		expect(backend.calls).toHaveLength(2);
+	});
+
+	test("anonymous access is reused while it has the refresh margin left", async () => {
+		const backend = accessBackend(async () => ({
+			access: null,
+			expiresIn: 3600,
+		}));
+		await loadMicroWidgetAccess(backend.registry, target, clock);
+		await clock.advance(HOUR - MICRO_WIDGET_GRANT_REFRESH_MARGIN_MS);
+		expect(
+			await loadMicroWidgetAccess(backend.registry, target, clock),
+		).toEqual({
+			access: null,
+			deadline: 1_000 + HOUR - MICRO_WIDGET_GRANT_REFRESH_MARGIN_MS,
+		});
+		expect(backend.calls).toHaveLength(1);
+
+		await clock.advance(1);
+		await loadMicroWidgetAccess(backend.registry, target, clock);
+		expect(backend.calls).toHaveLength(2);
+	});
+
+	test("a short-lived token is never reused past its deadline", async () => {
+		const backend = accessBackend(async () => ({
+			access: TOKEN,
+			expiresIn: 400,
+		}));
+		const { deadline } = await loadMicroWidgetAccess(
+			backend.registry,
+			target,
+			clock,
+		);
+		expect(deadline).toBe(
+			1_000 + 400_000 - MICRO_WIDGET_GRANT_REFRESH_MARGIN_MS,
+		);
+		await clock.advance(deadline - clock.time);
+		await loadMicroWidgetAccess(backend.registry, target, clock);
+		expect(backend.calls).toHaveLength(1);
+
+		await clock.advance(1);
+		await loadMicroWidgetAccess(backend.registry, target, clock);
+		expect(backend.calls).toHaveLength(2);
+	});
+
+	test("deadlines run on the wall clock, so time the device slept counts", async () => {
+		const backend = accessBackend();
+		let wall = Date.UTC(2026, 9, 1, 9);
+		const wallClock = spyOn(Date, "now").mockImplementation(() => wall);
+		const monotonic = spyOn(performance, "now").mockImplementation(
+			() => 5_000,
+		);
+		restorers.push(() => {
+			wallClock.mockRestore();
+			monotonic.mockRestore();
+		});
+		expect(await loadMicroWidgetAccess(backend.registry, target)).toEqual({
+			access: TOKEN,
+			deadline: wall + HOUR - MICRO_WIDGET_GRANT_REFRESH_MARGIN_MS,
+		});
+
+		wall += HOUR / 2 + 1;
+		await loadMicroWidgetAccess(backend.registry, target);
+		expect(backend.calls).toHaveLength(2);
+	});
+
+	test("forgetting a token drops only the entry that still holds it", async () => {
+		const backend = accessBackend(async (_request, call) => ({
+			access: `h.access${call}.s`,
+			expiresIn: 3600,
+		}));
+		const load = async () =>
+			(await loadMicroWidgetAccess(backend.registry, target, clock)).access;
+		expect(await load()).toBe("h.access1.s");
+		forgetMicroWidgetAccess(target, "h.access2.s");
+		forgetMicroWidgetAccess({ ...target, appId: null }, "h.access1.s");
+		expect(await load()).toBe("h.access1.s");
+
+		forgetMicroWidgetAccess(target, "h.access1.s");
+		expect(await load()).toBe("h.access2.s");
+		expect(backend.calls).toHaveLength(2);
+	});
+
+	test("forgetting the grant cache forgets access tokens too", async () => {
+		const backend = accessBackend();
+		await loadMicroWidgetAccess(backend.registry, target, clock);
+		resetMicroWidgetGrantCacheForTests();
+		await loadMicroWidgetAccess(backend.registry, target, clock);
+		expect(backend.calls).toHaveLength(2);
 	});
 });

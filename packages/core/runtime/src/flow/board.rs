@@ -112,6 +112,47 @@ fn draft_was_replaced(before: &Option<String>, after: &Option<String>) -> bool {
     matches!((before, after), (Some(before), Some(after)) if before != after)
 }
 
+/// The requested board (or board version) has no stored object, e.g. because it was deleted
+/// while a client still held its id. Attached as context to the store's `NotFound`, so callers
+/// that downcast to [`object_store::Error`] keep working.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoardNotFound {
+    pub board_id: String,
+    pub version: Option<(u32, u32, u32)>,
+}
+
+impl std::fmt::Display for BoardNotFound {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.version {
+            Some((major, minor, patch)) => write!(
+                formatter,
+                "Board {} version {major}.{minor}.{patch} not found",
+                self.board_id
+            ),
+            None => write!(formatter, "Board {} not found", self.board_id),
+        }
+    }
+}
+
+impl std::error::Error for BoardNotFound {}
+
+fn tag_missing_board(
+    error: flow_like_types::Error,
+    board_id: &str,
+    version: Option<(u32, u32, u32)>,
+) -> flow_like_types::Error {
+    if !matches!(
+        error.downcast_ref::<object_store::Error>(),
+        Some(object_store::Error::NotFound { .. })
+    ) {
+        return error;
+    }
+    error.context(BoardNotFound {
+        board_id: board_id.to_string(),
+        version,
+    })
+}
+
 const VERSION_SNAPSHOT_SUFFIX: &str = ".board";
 const VERSION_META_SUFFIX: &str = ".meta.json";
 const VERSION_META_READ_CONCURRENCY: usize = 8;
@@ -2426,7 +2467,9 @@ impl Board {
         version: Option<(u32, u32, u32)>,
     ) -> flow_like_types::Result<flow_like_types::proto::Board> {
         let path = Self::proto_path(board_dir, id, version);
-        let proto = from_compressed(store, path).await?;
+        let proto = from_compressed(store, path)
+            .await
+            .map_err(|error| tag_missing_board(error, id, version))?;
         Self::validate_proto_types(&proto)?;
         Ok(proto)
     }
@@ -2446,7 +2489,9 @@ impl Board {
         flow_like_storage::object_store::ObjectMeta,
     )> {
         let path = Self::proto_path(board_dir, id, version);
-        let (proto, meta) = from_compressed_with_meta(store, path).await?;
+        let (proto, meta) = from_compressed_with_meta(store, path)
+            .await
+            .map_err(|error| tag_missing_board(error, id, version))?;
         Self::validate_proto_types(&proto)?;
         Ok((proto, meta))
     }
@@ -2467,7 +2512,9 @@ impl Board {
         e_tag: Option<&str>,
     ) -> flow_like_types::Result<ConditionalRead<flow_like_types::proto::Board>> {
         let path = Self::proto_path(board_dir, id, version);
-        let result = from_compressed_if_changed(store, path, e_tag).await?;
+        let result = from_compressed_if_changed(store, path, e_tag)
+            .await
+            .map_err(|error| tag_missing_board(error, id, version))?;
         if let ConditionalRead::Fresh(proto, _) = &result {
             Self::validate_proto_types(proto)?;
         }
@@ -3599,6 +3646,46 @@ mod tests {
         assert_eq!(board.nodes[&node_id].friendly_name, "New logic");
         assert_eq!(board.updated_at, updated_at);
         assert_eq!(board.hash, Some(0xdead_beef));
+    }
+
+    #[tokio::test]
+    async fn missing_board_load_names_the_board_and_keeps_the_store_error() {
+        let store: Arc<dyn object_store::ObjectStore> =
+            Arc::new(object_store::memory::InMemory::new());
+        let board_dir = Path::from("apps/app");
+
+        let versioned =
+            super::Board::load_proto(store.clone(), &board_dir, "gone", Some((1, 2, 3)))
+                .await
+                .unwrap_err();
+        let Err(draft) =
+            super::Board::load_proto_if_changed(store, &board_dir, "gone", None, Some("etag"))
+                .await
+        else {
+            panic!("a missing draft must not read as present or unchanged");
+        };
+
+        for (error, version, message) in [
+            (
+                versioned,
+                Some((1, 2, 3)),
+                "Board gone version 1.2.3 not found",
+            ),
+            (draft, None, "Board gone not found"),
+        ] {
+            assert_eq!(
+                error.downcast_ref::<super::BoardNotFound>(),
+                Some(&super::BoardNotFound {
+                    board_id: "gone".into(),
+                    version,
+                })
+            );
+            assert!(matches!(
+                error.downcast_ref::<object_store::Error>(),
+                Some(object_store::Error::NotFound { .. })
+            ));
+            assert_eq!(error.to_string(), message);
+        }
     }
 
     struct DescribedEventLogic;

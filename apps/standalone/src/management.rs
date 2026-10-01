@@ -989,10 +989,6 @@ fn execute_artifact(
     Ok(response)
 }
 
-pub(crate) fn inspection_placement(p: crate::state::PlacementRecord) -> Value {
-    json!({"id":p.id,"project_id":p.config.get("project_id"),"deployment_id":p.config.get("deployment_id"),"revision":p.config.get("revision"),"desired_state":p.desired_state,"observed_state":p.observed_state,"config_revision":p.config_revision,"intent_revision":p.intent_revision,"applied_revision":p.applied_revision,"desired_replicas":p.desired_replicas,"running_replicas":p.running_replicas,"ready_replicas":p.ready_replicas,"max_replicas":p.config.get("max_replicas").cloned().unwrap_or(json!(1)),"replicas":p.replicas.iter().map(|r|json!({"slot":r.slot,"observed_state":r.observed_state,"applied_revision":r.applied_revision})).collect::<Vec<_>>()})
-}
-
 fn host_isolation_mode(capabilities: &crate::isolation::Capabilities) -> &'static str {
     if capabilities.require_isolation {
         "required"
@@ -1014,12 +1010,13 @@ fn inspection_result(
 ) -> Value {
     let device_status = authority.permits(ManagementCapability::Status, None, None);
     let isolation = device_status.then(|| crate::isolation::capabilities(state_dir));
-    json!({
+    let mut result = json!({
         "device_id":manifest.device_id,
         "agent_version":env!("CARGO_PKG_VERSION"),
         "certificate_management":1,
         "certificate_issuance":1,
         "certificate_acme":1,
+        "features":crate::diagnostics::features(),
         "can_delegate_certificate_renewal":authority.grant.is_none(),
         "can_manage_certificates":authority.permits(ManagementCapability::ManageCertificates,None,None),
         "host_operations":{"reboot":REMOTE_HOST_OPERATIONS,"update_agent":REMOTE_HOST_OPERATIONS},
@@ -1027,7 +1024,71 @@ fn inspection_result(
         "host_isolation":isolation.as_ref().map(host_isolation_mode),
         "isolation":isolation,
         "placements":placements
-    })
+    });
+    if device_status && let Value::Object(object) = &mut result {
+        object.extend(crate::diagnostics::global().device_facts(state_dir, false));
+    }
+    result
+}
+
+/// A reply that fits one encrypted message: a two-row page first drops to one row,
+/// then the row sheds detail. `page` carries the cursor of a paged read.
+fn fitted_inspection(
+    authority: &Authority,
+    manifest: &OnboardingManifest,
+    boot_id: &str,
+    state_dir: &Path,
+    operation_id: &str,
+    records: &[crate::state::PlacementRecord],
+    page: Option<Option<String>>,
+) -> Result<ManagementResponse> {
+    use crate::diagnostics::{DETAILS, Detail, Rows};
+    let rows = Rows::new(crate::diagnostics::global(), state_dir, false);
+    let error_text: Vec<bool> = records
+        .iter()
+        .map(|record| {
+            authority.permits(
+                ManagementCapability::Logs,
+                record.config.get("project_id").and_then(Value::as_str),
+                Some(&record.id),
+            )
+        })
+        .collect();
+    let build = |count: usize, detail: Detail, next: Option<&str>| {
+        let placements = records[..count]
+            .iter()
+            .zip(&error_text)
+            .map(|(record, error_text)| rows.placement(record, *error_text, detail))
+            .collect();
+        let mut result = inspection_result(authority, manifest, boot_id, state_dir, placements);
+        if page.is_some() {
+            result["next"] = json!(next);
+        }
+        ManagementResponse {
+            operation_id: operation_id.to_owned(),
+            state: "completed".into(),
+            result,
+        }
+    };
+    let next = page.clone().flatten();
+    let mut attempts = Vec::new();
+    if page.is_some() && records.len() > 1 {
+        attempts.push((records.len(), Detail::Full, next.as_deref()));
+        let first = records.first().map(|record| record.id.as_str());
+        attempts.extend(DETAILS.map(|detail| (1, detail, first)));
+    } else {
+        attempts.extend(DETAILS.map(|detail| (records.len(), detail, next.as_deref())));
+    }
+    for (count, detail, next) in attempts {
+        let response = build(count, detail, next);
+        if serde_json::to_vec(&response)?.len() <= noise::MAX_PLAINTEXT {
+            return Ok(response);
+        }
+    }
+    Err(refusal(
+        RejectionCode::Limit,
+        "Inspection exceeds the encrypted message limit even at minimal detail",
+    ))
 }
 
 fn execute_telemetry_group(
@@ -1530,7 +1591,7 @@ fn execute(
                 .query_map(params![after.as_deref().unwrap_or(""), project, placement, u32::from(*limit)+1], |r| r.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?;
             let more = ids.len() > usize::from(*limit);
-            let mut placements = Vec::new();
+            let mut records = Vec::new();
             for id in ids.into_iter().take(usize::from(*limit)) {
                 if let Some(record) = store.get_placement(&id)? {
                     authority.require(
@@ -1538,33 +1599,32 @@ fn execute(
                         record.config.get("project_id").and_then(Value::as_str),
                         Some(&record.id),
                     )?;
-                    placements.push(inspection_placement(record));
+                    records.push(record);
                 }
             }
             let next = if more {
-                placements
-                    .last()
-                    .and_then(|p| p["id"].as_str())
-                    .map(str::to_owned)
+                records.last().map(|record| record.id.clone())
             } else {
                 None
             };
             guard(&transaction)?;
             transaction.commit()?;
-            let mut result = inspection_result(authority, manifest, boot_id, state_dir, placements);
-            result["next"] = json!(next);
-            return Ok(ManagementResponse {
-                operation_id: request.operation_id.clone(),
-                state: "completed".into(),
-                result,
-            });
+            return fitted_inspection(
+                authority,
+                manifest,
+                boot_id,
+                state_dir,
+                &request.operation_id,
+                &records,
+                Some(next),
+            );
         }
         ManagementCommand::Inspect => {
             return authorized_read(
                 store,
                 authority.read_guard(manifest, request, now, None, None),
                 || {
-                    let placements: Vec<Value> = store
+                    let records: Vec<_> = store
                         .list_placements()?
                         .into_iter()
                         .filter(|p| {
@@ -1574,21 +1634,22 @@ fn execute(
                                 Some(&p.id),
                             )
                         })
-                        .map(inspection_placement)
                         .collect();
                     refuse_unless(
                         authority.permits(ManagementCapability::Status, None, None)
-                            || !placements.is_empty(),
+                            || !records.is_empty(),
                         RejectionCode::Unauthorized,
                         "Status access denied",
                     )?;
-                    Ok(ManagementResponse {
-                        operation_id: request.operation_id.clone(),
-                        state: "completed".into(),
-                        result: inspection_result(
-                            authority, manifest, boot_id, state_dir, placements,
-                        ),
-                    })
+                    fitted_inspection(
+                        authority,
+                        manifest,
+                        boot_id,
+                        state_dir,
+                        &request.operation_id,
+                        &records,
+                        None,
+                    )
                 },
             );
         }
@@ -3730,6 +3791,163 @@ mod tests {
             .is_err()
         );
         assert_eq!(store.rollout("rollout-scope")?.unwrap().state, "staged");
+        Ok(())
+    }
+
+    #[test]
+    fn inspection_error_text_follows_logs_and_device_facts_follow_device_scope() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        let signing = SigningKey::generate();
+        let manifest = manifest(&signing);
+        store.upsert_placement(
+            "api",
+            &placement(&root)?,
+            crate::state::DesiredState::Running,
+        )?;
+        let error = format!("Cannot open {}/projects/api", root.display());
+        store.connection.execute(
+            "UPDATE placements SET observed_state='backoff',last_error=?1 WHERE id='api'",
+            [&error],
+        )?;
+        store.connection.execute(
+            "INSERT INTO placement_replicas(placement_id,slot,config_revision,intent_revision,observed_state,last_error) VALUES('api',0,1,1,'backoff',?1)",
+            [&error],
+        )?;
+        let logs = project_grant(
+            "logs",
+            vec![ManagementCapability::Status, ManagementCapability::Logs],
+            1000,
+        );
+        let status = project_grant("status", vec![ManagementCapability::Status], 1000);
+        let mut device = project_grant("device", vec![ManagementCapability::Status], 1000);
+        if let Some(grant) = &mut device.grant {
+            grant.scope = ManagementScope::Device;
+        }
+        accept_grants(&store, &signing, &[&logs, &status, &device], 100, 1000)?;
+        let mut inspect = |authority: &Authority| {
+            execute(
+                &mut store,
+                authority,
+                &request(
+                    &format!("inspect-{}", authority.principal.replace(':', "-")),
+                    ManagementCommand::InspectPage {
+                        after: None,
+                        limit: 2,
+                    },
+                ),
+                &manifest,
+                "boot",
+                &root,
+                101,
+            )
+            .map(|response| response.result)
+        };
+        let owned = inspect(&owner(&manifest))?;
+        for flag in ["placement_diagnostics", "task_health", "placement_events"] {
+            assert_eq!(owned["features"][flag], 1, "{flag}");
+        }
+        let row = &owned["placements"][0];
+        assert_eq!(row["last_error"], "Cannot open <state>/projects/api");
+        assert_eq!(
+            row["replicas"][0]["last_error"],
+            "Cannot open <state>/projects/api"
+        );
+        assert_eq!(row["source"], "offline");
+        assert_eq!(row["events"][0]["event_id"], "event");
+        assert!(!row.to_string().contains("public-listen-port"));
+        assert_eq!(owned["agent"]["version"], env!("CARGO_PKG_VERSION"));
+        assert!(owned["agent"]["release_sequence"].is_null());
+        assert!(owned["host"]["agent_started_at"].is_i64());
+        assert!(owned["tasks"].is_array());
+
+        let with_logs = inspect(&logs)?;
+        assert_eq!(with_logs["placements"][0]["last_error"], row["last_error"]);
+        let status_only = inspect(&status)?;
+        let row = &status_only["placements"][0];
+        assert!(row.get("last_error").is_none());
+        assert_eq!(row["has_error"], true);
+        assert!(row["replicas"][0].get("last_error").is_none());
+        assert_eq!(row["replicas"][0]["has_error"], true);
+        for project_reader in [&with_logs, &status_only] {
+            assert_eq!(project_reader["features"]["task_health"], 1);
+            for device_fact in ["agent", "host", "tasks"] {
+                assert!(project_reader.get(device_fact).is_none(), "{device_fact}");
+            }
+        }
+        let device_reader = inspect(&device)?;
+        assert!(device_reader["placements"][0].get("last_error").is_none());
+        assert!(device_reader["agent"].is_object());
+        assert!(device_reader["tasks"].is_array());
+        Ok(())
+    }
+
+    #[test]
+    fn worst_case_inspection_rows_fit_one_encrypted_message() -> Result<()> {
+        use crate::diagnostics::test_support::{worst_case_id, worst_case_placement};
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        let manifest = manifest(&SigningKey::generate());
+        let ids = ["worst-inspect-a", "worst-inspect-b"].map(worst_case_id);
+        for id in &ids {
+            worst_case_placement(&mut store, &root, crate::diagnostics::global(), id)?;
+        }
+        let owner = owner(&manifest);
+        let mut inspect = |after: Option<&String>| {
+            execute(
+                &mut store,
+                &owner,
+                &request(
+                    "inspect",
+                    ManagementCommand::InspectPage {
+                        after: after.cloned(),
+                        limit: 2,
+                    },
+                ),
+                &manifest,
+                "boot",
+                &root,
+                101,
+            )
+        };
+        let first = inspect(None)?;
+        assert_eq!(first.state, "completed");
+        assert!(serde_json::to_vec(&first)?.len() <= noise::MAX_PLAINTEXT);
+        let rows = first.result["placements"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], ids[0]);
+        assert_eq!(first.result["next"], ids[0]);
+        assert_eq!(rows[0]["replicas"].as_array().unwrap().len(), 32);
+        assert!(rows[0]["replicas"][31]["restarts"].is_object());
+        assert!(
+            rows[0]["last_error"]
+                .as_str()
+                .unwrap()
+                .starts_with("<state>/projects failed")
+        );
+        assert_eq!(rows[0]["events_truncated"], true);
+        let second = inspect(Some(&ids[0]))?;
+        assert!(serde_json::to_vec(&second)?.len() <= noise::MAX_PLAINTEXT);
+        assert_eq!(second.result["placements"][0]["id"], ids[1]);
+        assert!(second.result["next"].is_null());
+
+        for index in 0..6 {
+            let id = worst_case_id(&format!("worst-inspect-more-{index}"));
+            worst_case_placement(&mut store, &root, crate::diagnostics::global(), &id)?;
+        }
+        let unpaged = execute(
+            &mut store,
+            &owner,
+            &request("inspect", ManagementCommand::Inspect),
+            &manifest,
+            "boot",
+            &root,
+            101,
+        )
+        .unwrap_err();
+        assert_eq!(rejection_code(&unpaged), RejectionCode::Limit);
         Ok(())
     }
 

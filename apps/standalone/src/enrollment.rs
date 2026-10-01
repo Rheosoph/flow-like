@@ -1249,6 +1249,7 @@ pub async fn maintain_presence_with_session(
             uptime_seconds: started.elapsed().as_secs(),
         };
         let result = tokio::select! { _ = cancel.cancelled() => return Ok(()), result = session.heartbeat(&heartbeat) => result };
+        crate::diagnostics::global().report_error(crate::diagnostics::DEVICE_PRESENCE, &result);
         let (status, wait) = match &result {
             Ok(()) => {
                 delay = 2;
@@ -1704,6 +1705,24 @@ mod tests {
             error_code(format!(r#"{{"error":{{"code":"{}"}}}}"#, "A".repeat(65)).as_bytes()),
             None
         );
+    }
+
+    #[test]
+    fn task_health_separates_hub_outages_from_refusals() {
+        use crate::diagnostics::TaskFailure;
+        let outage = status(StatusCode::BAD_GATEWAY, "").context("Renew device admission");
+        assert_eq!(TaskFailure::classify(&outage), TaskFailure::HubUnreachable);
+        for refusal in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::PAYMENT_REQUIRED,
+        ] {
+            assert_eq!(
+                TaskFailure::classify(&status(refusal, "")),
+                TaskFailure::HubRefused,
+                "{refusal}"
+            );
+        }
     }
 
     #[test]

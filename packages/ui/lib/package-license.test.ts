@@ -5,6 +5,7 @@ import {
 	licenseTimeLeft,
 	packageNeedsLicense,
 	packagePinState,
+	usablePackagePins,
 } from "./package-license";
 import type { AppPackageLicense } from "./schema/wasm";
 
@@ -118,4 +119,34 @@ test("isExpiredPin only trusts the server status", () => {
 	expect(isExpiredPin({ license: license({ status: "expired" }) })).toBe(true);
 	expect(isExpiredPin({ license: license({ status: "lapsed" }) })).toBe(false);
 	expect(isExpiredPin({})).toBe(false);
+});
+
+describe("usablePackagePins", () => {
+	test("maps every pin to its version except the expired ones", () => {
+		expect(
+			usablePackagePins([
+				{ packageId: "pkg-old", version: "0.9.0" },
+				{
+					packageId: "pkg-active",
+					version: "1.0.0",
+					license: license({ status: "active" }),
+				},
+				{
+					packageId: "pkg-lapsed",
+					version: "2.0.0",
+					license: license({ status: "lapsed" }),
+				},
+				{
+					packageId: "pkg-expired",
+					version: "3.0.0",
+					license: license({ status: "expired" }),
+				},
+			]),
+		).toEqual({
+			"pkg-old": "0.9.0",
+			"pkg-active": "1.0.0",
+			"pkg-lapsed": "2.0.0",
+		});
+		expect(usablePackagePins([])).toEqual({});
+	});
 });

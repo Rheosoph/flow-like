@@ -17,6 +17,7 @@ pub fn routes() -> Router<AppState> {
         .merge(devices::certificates::routes())
         .merge(devices::inventory::routes())
         .merge(devices::fleet::routes())
+        .merge(instances::routes::routes())
         .route("/", get(list))
         .route("/setup", get(devices::readiness::get))
         .route("/enrollments", post(create))
@@ -27,28 +28,6 @@ pub fn routes() -> Router<AppState> {
         .route("/{id}", get(status).delete(revoke))
         .route("/{id}/heartbeat", post(heartbeat))
         .route("/{id}/receipt", post(receipt))
-        .route(
-            "/{id}/resource-grants",
-            get(resource_grants).post(create_resource_grant),
-        )
-        .route(
-            "/{id}/resource-grants/{grant}",
-            get(resource_grant).delete(revoke_resource_grant),
-        )
-        .route(
-            "/{id}/resource-grants/{grant}/billing",
-            get(grant_billing).post(approve_billing_grant),
-        )
-        .route("/{id}/billing-grants", get(billing_grants))
-        .route(
-            "/{id}/billing-grants/{billing}",
-            get(billing_grant).delete(revoke_billing_grant),
-        )
-        .route(
-            "/{id}/instances",
-            get(list_instances).post(register_instance),
-        )
-        .route("/{id}/instances/{instance}", delete(retire_instance))
         .layer(DefaultBodyLimit::max(96 * 1024))
         .layer(from_fn(no_store))
 }
@@ -226,120 +205,12 @@ async fn heartbeat(
     ))
 }
 
-async fn create_resource_grant(
-    State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    Path(id): Path<String>,
-    Json(request): Json<CreateResourceGrantRequest>,
-) -> Result<Json<ResourceGrantResponse>, ApiError> {
-    let owner = devices::human_owner(&state, &user).await?;
-    Ok(Json(
-        instances::create_grant(&devices::context(&state), &owner, &id, request).await?,
-    ))
-}
-async fn resource_grants(
-    State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    Path(id): Path<String>,
-) -> Result<Json<Vec<ResourceGrantResponse>>, ApiError> {
-    let owner = devices::human_owner(&state, &user).await?;
-    Ok(Json(
-        instances::grants(&devices::context(&state), &owner, &id).await?,
-    ))
-}
-async fn resource_grant(
-    State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    Path((id, grant)): Path<(String, String)>,
-) -> Result<Json<ResourceGrantResponse>, ApiError> {
-    let owner = devices::human_owner(&state, &user).await?;
-    Ok(Json(
-        instances::get_grant(&devices::context(&state), &owner, &id, &grant).await?,
-    ))
-}
-async fn revoke_resource_grant(
-    State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    Path((id, grant)): Path<(String, String)>,
-) -> Result<StatusCode, ApiError> {
-    let owner = devices::human_owner(&state, &user).await?;
-    instances::revoke_grant(&devices::context(&state), &owner, &id, &grant).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-async fn approve_billing_grant(
-    State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    Path((id, grant)): Path<(String, String)>,
-    Json(request): Json<ApproveBillingGrantRequest>,
-) -> Result<Json<BillingGrantResponse>, ApiError> {
-    let owner = devices::human_owner(&state, &user).await?;
-    Ok(Json(
-        instances::approve_billing(&devices::context(&state), &owner, &id, &grant, request).await?,
-    ))
-}
-async fn grant_billing(
-    State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    Path((id, grant)): Path<(String, String)>,
-) -> Result<Json<BillingGrantResponse>, ApiError> {
-    let owner = devices::human_owner(&state, &user).await?;
-    Ok(Json(
-        instances::get_billing(&devices::context(&state), &owner, &id, &grant).await?,
-    ))
-}
-async fn billing_grants(
-    State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    Path(id): Path<String>,
-) -> Result<Json<Vec<BillingGrantResponse>>, ApiError> {
-    let owner = devices::human_owner(&state, &user).await?;
-    Ok(Json(
-        instances::billing_grants(&devices::context(&state), &owner, &id).await?,
-    ))
-}
-async fn billing_grant(
-    State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    Path((id, billing)): Path<(String, String)>,
-) -> Result<Json<BillingGrantResponse>, ApiError> {
-    let owner = devices::human_owner(&state, &user).await?;
-    Ok(Json(
-        instances::billing_grant(&devices::context(&state), &owner, &id, &billing).await?,
-    ))
-}
-async fn revoke_billing_grant(
-    State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    Path((id, billing)): Path<(String, String)>,
-) -> Result<StatusCode, ApiError> {
-    let owner = devices::human_owner(&state, &user).await?;
-    instances::revoke_billing(&devices::context(&state), &owner, &id, &billing).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-async fn list_instances(
-    State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    Path(id): Path<String>,
-) -> Result<Json<Vec<InstanceReceipt>>, ApiError> {
-    let owner = devices::human_owner(&state, &user).await?;
-    Ok(Json(
-        instances::instances(&devices::context(&state), &owner, &id).await?,
-    ))
-}
-async fn register_instance(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(request): Json<InstanceRegistrationRequest>,
-) -> Result<Json<InstanceReceipt>, ApiError> {
-    Ok(Json(
-        instances::register(&devices::context(&state), &id, request).await?,
-    ))
-}
-async fn retire_instance(
-    State(state): State<AppState>,
-    Path((id, instance)): Path<(String, String)>,
-    Json(request): Json<ReceiptRequest>,
-) -> Result<StatusCode, ApiError> {
-    instances::retire(&devices::context(&state), &id, &instance, request).await?;
-    Ok(StatusCode::NO_CONTENT)
+#[cfg(test)]
+mod tests {
+    /// Two merged routers claiming one path and method, or naming a path parameter
+    /// differently, panic here instead of when the server starts.
+    #[test]
+    fn merged_device_routers_do_not_overlap() {
+        let _ = super::routes();
+    }
 }

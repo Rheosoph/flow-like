@@ -2,8 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
 	detectEpochUnit,
 	formatAbsoluteDateTime,
+	formatAbsoluteDateTimeZoned,
 	formatCalendarDate,
+	formatCountdown,
+	formatMoment,
 	formatRelativeTime,
+	formatTimeOfDay,
 	fromDateInputValue,
 	fromDateTimeInputValue,
 	inferTemporalValue,
@@ -36,6 +40,23 @@ describe("formatRelativeTime", () => {
 	test("falls back rather than rendering NaN", () => {
 		expect(formatRelativeTime("not a date", "long", "—")).toBe("—");
 	});
+
+	test("measures against an injected now instead of the wall clock", () => {
+		const now = Date.parse("2026-09-30T12:00:00Z");
+		expect(
+			formatRelativeTime(now - 13_000, "long", "", { now, locale: "en" }),
+		).toBe("13 seconds ago");
+		expect(
+			formatRelativeTime(now + 5 * 60_000, "short", "", { now, locale: "en" }),
+		).toBe("in 5 min.");
+	});
+
+	test("formats in the locale it is given, not the runtime default", () => {
+		const now = Date.parse("2026-09-30T12:00:00Z");
+		expect(
+			formatRelativeTime(now - 2 * DAY_MS, "long", "", { now, locale: "de" }),
+		).toBe("vorgestern");
+	});
 });
 
 describe("formatAbsoluteDateTime", () => {
@@ -47,6 +68,109 @@ describe("formatAbsoluteDateTime", () => {
 		const text = formatAbsoluteDateTime(new Date("2026-08-14T10:30:00Z"));
 		expect(text).toContain("2026");
 		expect(text.length).toBeGreaterThan(10);
+	});
+});
+
+describe("formatAbsoluteDateTimeZoned", () => {
+	const at = Date.parse("2026-09-30T11:59:47Z");
+
+	test("names the zone and keeps seconds", () => {
+		const text = formatAbsoluteDateTimeZoned(at, {
+			locale: "en-GB",
+			timeZone: "Europe/Berlin",
+		});
+		expect(text).toContain("2026");
+		expect(text).toContain("13:59:47");
+		expect(text).toMatch(/CEST|GMT\+2/);
+	});
+
+	test("drops the year only when now falls in the same year", () => {
+		const sameYear = formatAbsoluteDateTimeZoned(at, {
+			now: Date.parse("2026-12-01T00:00:00Z"),
+			locale: "en-GB",
+			timeZone: "UTC",
+		});
+		expect(sameYear).not.toContain("2026");
+		expect(sameYear).toContain("UTC");
+		const otherYear = formatAbsoluteDateTimeZoned(at, {
+			now: Date.parse("2027-01-02T00:00:00Z"),
+			locale: "en-GB",
+			timeZone: "UTC",
+		});
+		expect(otherYear).toContain("2026");
+	});
+
+	test("uses the given locale", () => {
+		const text = formatAbsoluteDateTimeZoned(at, {
+			locale: "de-DE",
+			timeZone: "UTC",
+		});
+		expect(text).toContain("Sept");
+		expect(text).toContain("11:59:47");
+	});
+
+	test("returns the fallback for unparseable input", () => {
+		expect(formatAbsoluteDateTimeZoned("nope", {}, "—")).toBe("—");
+	});
+});
+
+describe("formatTimeOfDay", () => {
+	test("renders the wall-clock time in the given zone", () => {
+		const at = Date.parse("2026-09-30T11:59:58Z");
+		expect(
+			formatTimeOfDay(at, { locale: "en-GB", timeZone: "Europe/Berlin" }),
+		).toBe("13:59:58");
+		expect(
+			formatTimeOfDay(at, {
+				locale: "en-GB",
+				timeZone: "UTC",
+				seconds: false,
+			}),
+		).toBe("11:59");
+	});
+});
+
+describe("formatMoment", () => {
+	const now = Date.parse("2026-09-30T11:59:58Z");
+	const berlin = { now, locale: "en-GB", timeZone: "Europe/Berlin" };
+
+	test("reads only the time on the same calendar day", () => {
+		expect(formatMoment(Date.parse("2026-09-30T09:00:00Z"), berlin)).toBe(
+			"11:00",
+		);
+	});
+
+	test("adds the date on another day and the year in another year", () => {
+		const yesterday = formatMoment(Date.parse("2026-09-29T09:00:00Z"), berlin);
+		expect(yesterday).toMatch(/^29 Sept?\b.*11:00$/);
+		expect(yesterday).not.toContain("2026");
+		const lastYear = formatMoment(Date.parse("2025-12-31T09:00:00Z"), berlin);
+		expect(lastYear).toMatch(/^31 Dec 2025\b.*10:00$/);
+	});
+
+	test("judges the day in the given zone", () => {
+		const lateUtc = Date.parse("2026-09-29T22:30:00Z");
+		expect(formatMoment(lateUtc, berlin)).toBe("00:30");
+		expect(formatMoment(lateUtc, { ...berlin, timeZone: "UTC" })).toMatch(
+			/^29 Sept?\b.*22:30$/,
+		);
+	});
+
+	test("returns the fallback for unparseable input", () => {
+		expect(formatMoment("nope", berlin, "—")).toBe("—");
+	});
+});
+
+describe("formatCountdown", () => {
+	test("reads minutes and seconds, adding hours only when needed", () => {
+		expect(formatCountdown(244)).toBe("4:04");
+		expect(formatCountdown(27.9)).toBe("0:27");
+		expect(formatCountdown(3729)).toBe("1:02:09");
+	});
+
+	test("never counts below zero", () => {
+		expect(formatCountdown(-5)).toBe("0:00");
+		expect(formatCountdown(Number.NaN)).toBe("0:00");
 	});
 });
 

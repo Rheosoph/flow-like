@@ -16,6 +16,7 @@ import {
 	useBackend,
 	useInvalidateInvoke,
 } from "@flow-like/flow-like-ui";
+import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import type {
 	IBeginOnlineForkBody,
 	IBeginOnlineForkResponse,
@@ -160,6 +161,14 @@ function uniquePages(pages: PageListItem[]): PageListItem[] {
 	return result;
 }
 
+/** Why the hub refused to pin a package on the new online copy. */
+function packageSkipReason(error: unknown): string {
+	if (!(error instanceof ApiResponseError)) return "couldn't add it";
+	if (error.code === "PACKAGE_LICENSE_REQUIRED") return "paid, not owned";
+	if (error.code === "PACKAGE_ACCESS_REQUIRED") return "no access";
+	return error.status === 404 ? "no longer in the registry" : "couldn't add it";
+}
+
 export function useOfflineToOnlineFork() {
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
@@ -220,7 +229,10 @@ export function useOfflineToOnlineFork() {
 				const localPackages = await invoke<Record<string, string>>(
 					"app_list_packages",
 					{ appId: sourceAppId },
-				).catch(() => ({}) as Record<string, string>);
+				).catch((error: unknown) => {
+					console.warn("Couldn't read the app's packages for the fork:", error);
+					return null;
+				});
 				const sinksByEvent = await loadLocalSinks(
 					backend.sinkState,
 					sourceAppId,
@@ -372,7 +384,12 @@ export function useOfflineToOnlineFork() {
 					);
 				}
 
-				for (const [packageId, version] of Object.entries(localPackages)) {
+				if (!localPackages) {
+					skipped.push("packages (couldn't read this app's packages)");
+				}
+				for (const [packageId, version] of Object.entries(
+					localPackages ?? {},
+				)) {
 					try {
 						await backend.apiState.post<unknown>(
 							profile,
@@ -381,7 +398,7 @@ export function useOfflineToOnlineFork() {
 						);
 					} catch (error) {
 						console.warn("Skipping package during fork:", packageId, error);
-						skipped.push(`package ${packageId}`);
+						skipped.push(`package ${packageId} (${packageSkipReason(error)})`);
 					}
 				}
 

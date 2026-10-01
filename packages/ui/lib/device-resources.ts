@@ -11,6 +11,13 @@ const identifier = z
 	.refine((value) => value !== "." && value !== "..");
 const expiry = integer.max(253402300799);
 const status = z.enum(["active", "revoked"]);
+/** Hub additions (BG32/33/36) that older hubs omit; a malformed value reads as absent. */
+const optional = <T extends z.ZodTypeAny>(schema: T) =>
+	schema.optional().catch(undefined);
+const approvalAudit = {
+	approved_by_user_id: optional(z.string().min(1)),
+	created_at: optional(expiry),
+};
 const resourceSchema = z.object({
 	grant_id: identifier,
 	device_id: identifier,
@@ -25,6 +32,12 @@ const resourceSchema = z.object({
 	max_instances: integer.min(1).max(100),
 	expires_at: expiry,
 	status,
+	effective_expires_at: optional(expiry),
+	effective_limit: optional(
+		z.enum(["approval", "sharing_grant", "access_rules"]),
+	),
+	online_write_blocked: optional(z.literal("storage_full")),
+	...approvalAudit,
 });
 const billingSchema = z.object({
 	billing_grant_id: identifier,
@@ -36,6 +49,7 @@ const billingSchema = z.object({
 	reserved_micros: integer,
 	expires_at: expiry,
 	status,
+	...approvalAudit,
 });
 const instanceSchema = z.object({
 	instance_id: identifier,

@@ -7,9 +7,11 @@ pub(crate) mod fleet;
 pub(crate) mod inventory;
 pub(crate) mod jwt;
 pub(crate) mod management;
+pub(crate) mod openapi_registry;
 pub(crate) mod readiness;
 pub(crate) mod recovery;
 pub(crate) mod repository;
+pub(crate) mod view;
 
 use crate::{
     backend_jwt::{self, TokenType},

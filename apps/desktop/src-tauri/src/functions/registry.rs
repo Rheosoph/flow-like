@@ -64,14 +64,34 @@ pub(crate) fn wasm_registry_cache_dir(project_dir: &std::path::Path) -> std::pat
         .join("wasm_registry_cache")
 }
 
+const DEFAULT_REGISTRY_URL: &str = "https://api.flow-like.com/api/v1/registry";
+
+/// The registry of a hub; `None` for a profile without one.
+fn hub_registry_url(hub: &str, secure: bool) -> Option<String> {
+    flow_like::hub::hub_api_url(hub, secure, &["registry"])
+        .ok()
+        .map(|url| url.to_string())
+}
+
+/// The registry of the hub the current profile talks to, which also holds the
+/// projects, pins and sign-in its downloads go through.
+async fn profile_registry_url(app_handle: &AppHandle) -> Option<String> {
+    let settings = TauriSettingsState::construct(app_handle).await.ok()?;
+    let profile = settings.lock().await.get_current_profile().ok()?;
+    hub_registry_url(&profile.hub_profile.hub, profile.hub_profile.secure)
+}
+
 /// Get the registry client with the auth token refreshed on the stored instance.
 /// This ensures every API-calling command uses a fresh token and the stored
 /// client stays up-to-date for future calls (e.g. search uses stored token).
+/// The registry follows the current profile's hub, so switching profiles
+/// needs no re-init.
 async fn get_client_with_token(
     app_handle: &AppHandle,
     token: Option<String>,
 ) -> Result<RegistryClient, TauriFunctionError> {
     use tauri::Manager;
+    let registry_url = profile_registry_url(app_handle).await;
     let state = app_handle
         .try_state::<TauriRegistryState>()
         .ok_or_else(|| TauriFunctionError::new("Registry state not found"))?;
@@ -81,6 +101,9 @@ async fn get_client_with_token(
         .ok_or_else(|| TauriFunctionError::new("Registry client not initialized"))?;
     if let Some(t) = token {
         client.set_auth_token(Some(t));
+    }
+    if let Some(registry_url) = registry_url {
+        client.set_default_registry(registry_url);
     }
     Ok(client.clone())
 }
@@ -856,7 +879,15 @@ pub async fn registry_init(
 
     let default_registry = config
         .and_then(|c| c.registry_url)
-        .unwrap_or_else(|| "https://api.flow-like.com/api/v1/registry".to_string());
+        .or_else(|| {
+            settings_guard
+                .get_current_profile()
+                .ok()
+                .and_then(|profile| {
+                    hub_registry_url(&profile.hub_profile.hub, profile.hub_profile.secure)
+                })
+        })
+        .unwrap_or_else(|| DEFAULT_REGISTRY_URL.to_string());
 
     drop(settings_guard);
 
@@ -993,6 +1024,23 @@ mod tests {
             &[current.as_str()],
         );
         assert_eq!(registry_bundle_host(Some(&local), &current), None);
+    }
+
+    #[test]
+    fn the_registry_follows_the_profile_hub() {
+        assert_eq!(
+            hub_registry_url("api.flow-like.com", true).as_deref(),
+            Some(DEFAULT_REGISTRY_URL)
+        );
+        assert_eq!(
+            hub_registry_url("localhost:8080", false).as_deref(),
+            Some("http://localhost:8080/api/v1/registry")
+        );
+        assert_eq!(
+            hub_registry_url("https://hub.acme.eu/api/v1/", true).as_deref(),
+            Some("https://hub.acme.eu/api/v1/registry")
+        );
+        assert_eq!(hub_registry_url("  ", true), None);
     }
 
     #[test]

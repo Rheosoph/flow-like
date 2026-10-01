@@ -29,6 +29,8 @@ const harness = vi.hoisted(() => {
 		runtimeRequest: null as
 			| null
 			| ((suffix?: string, init?: RequestInit) => Promise<Response>),
+		accessToken: null as null | (() => string | undefined),
+		backendBuilds: 0,
 		auth: {
 			get: () => state,
 			set(next: Partial<AuthState>) {
@@ -95,8 +97,11 @@ vi.mock("../lib/hosted-backend", () => {
 		createHostedBackend: (
 			_data: unknown,
 			request: typeof harness.runtimeRequest,
+			accessToken: typeof harness.accessToken,
 		) => {
 			harness.runtimeRequest = request;
+			harness.accessToken = accessToken;
+			harness.backendBuilds += 1;
 			return {};
 		},
 	};
@@ -209,6 +214,8 @@ beforeEach(() => {
 	harness.requestTokens = [];
 	harness.bootstrapStatus = 200;
 	harness.runtimeRequest = null;
+	harness.accessToken = null;
+	harness.backendBuilds = 0;
 	harness.auth.reset({
 		isLoading: false,
 		isAuthenticated: true,
@@ -241,6 +248,19 @@ describe("HostedSession", () => {
 
 		await harness.runtimeRequest?.("/routes");
 		expect(harness.requestTokens).toEqual(["token-2"]);
+	});
+
+	it("lets package widgets ask as the viewer, with the renewed token and the same backend", async () => {
+		await act(async () => root.render(<HostedSession />));
+		await flush();
+		expect(harness.backendBuilds).toBe(1);
+		expect(harness.accessToken?.()).toBe("token-1");
+
+		await act(async () => harness.auth.set(signedIn("user-1", "token-2")));
+		await flush();
+
+		expect(harness.backendBuilds).toBe(1);
+		expect(harness.accessToken?.()).toBe("token-2");
 	});
 
 	it("reloads the interface for a different user", async () => {

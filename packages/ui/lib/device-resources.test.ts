@@ -384,4 +384,53 @@ describe("device resource consent", () => {
 		purpose = "unknown";
 		await expect(loadDeviceResources(api, profile, "device")).rejects.toThrow();
 	});
+	test("keeps the newer hub's approval facts and tolerates their absence or malformed values", async () => {
+		const profile = { id: "profile" } as IProfile;
+		const effective = {
+			effective_expires_at: 1500,
+			effective_limit: "access_rules",
+			online_write_blocked: "storage_full",
+			approved_by_user_id: "owner",
+			created_at: 900,
+		};
+		let grants: unknown[] = [{ ...grant, ...effective }];
+		let billings: unknown[] = [
+			{ ...billing, approved_by_user_id: "payer", created_at: 950 },
+		];
+		const api = {
+			get: async (_profile: unknown, path: string) =>
+				path.endsWith("/resource-grants")
+					? grants
+					: path.endsWith("/billing-grants")
+						? billings
+						: [],
+		} as unknown as IApiState;
+		const newer = await loadDeviceResources(api, profile, "device");
+		expect(newer.grants[0]).toEqual({ ...grant, ...effective } as never);
+		expect(newer.billing[0]).toMatchObject({
+			approved_by_user_id: "payer",
+			created_at: 950,
+		});
+
+		grants = [grant];
+		billings = [billing];
+		const older = await loadDeviceResources(api, profile, "device");
+		expect(older.grants[0]).toEqual(grant);
+		expect(older.grants[0].effective_limit).toBeUndefined();
+		expect(older.billing[0].approved_by_user_id).toBeUndefined();
+
+		grants = [
+			{
+				...grant,
+				effective_limit: "future_limit",
+				online_write_blocked: "quota",
+				created_at: -1,
+			},
+		];
+		const odd = await loadDeviceResources(api, profile, "device");
+		expect(odd.grants[0].effective_limit).toBeUndefined();
+		expect(odd.grants[0].online_write_blocked).toBeUndefined();
+		expect(odd.grants[0].created_at).toBeUndefined();
+		expect(odd.grants[0].grant_id).toBe("grant");
+	});
 });

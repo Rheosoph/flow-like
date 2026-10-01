@@ -1,7 +1,14 @@
 "use client";
 
 import type { WidgetContract } from "@flow-like/widget-sdk";
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import {
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 import { useBackend, useBackendReady } from "../../state/backend-state";
 import type { IRegistryState } from "../../state/backend-state/registry-state";
 import {
@@ -58,9 +65,9 @@ import {
 	extractRuntimeSources,
 } from "./micro-widget-runtime-sources";
 
-/** A cached grant is reused only while it has at least this long left. */
+/** Grants and sandbox access count as expired this long before they expire. */
 export const MICRO_WIDGET_GRANT_REFRESH_MARGIN_MS = 5 * 60_000;
-/** A mount re-mints an expired grant on frame load at most this often. */
+/** A mount re-mints an expired grant, or replaces an expired access token, on frame load at most this often. */
 export const MICRO_WIDGET_REMINT_INTERVAL_MS = 60_000;
 /** Minted grants kept on this page, least recently used first out. */
 export const MICRO_WIDGET_GRANT_CACHE_LIMIT = 256;
@@ -246,6 +253,22 @@ const forgottenGrants = new Map<string, number>();
 const forgetListeners = new Set<() => void>();
 let forgetRevision = 0;
 
+/** Sandbox access token of a package version, or null when its sandbox loads anonymously. */
+export interface MicroWidgetAccess {
+	access: string | null;
+	/** Wall-clock milliseconds from which a frame that loads again replaces the token. */
+	deadline: number;
+}
+
+interface CachedAccess extends MicroWidgetAccess {
+	/** New frames reuse the entry until then. */
+	reuseUntil: number;
+}
+
+/** Sandbox access per `[packageId, packageVersion, appId]`, and the requests in flight for it. */
+const accessCache = new Map<string, CachedAccess>();
+const accessRequests = new Map<string, Promise<MicroWidgetAccess>>();
+
 function forgottenKey(packageId: string, widgetId?: string): string {
 	return JSON.stringify(
 		widgetId === undefined ? [packageId] : [packageId, widgetId],
@@ -317,6 +340,8 @@ export function microWidgetGrantCacheSizeForTests(): number {
 export function resetMicroWidgetGrantCacheForTests(): void {
 	grantCache.clear();
 	forgottenGrants.clear();
+	accessCache.clear();
+	accessRequests.clear();
 }
 
 function errorMessage(error: unknown): string {
@@ -331,7 +356,9 @@ function errorMessage(error: unknown): string {
 }
 
 /** Registry methods, bound; null when the backend predates widget grants or is a placeholder that throws. */
-function registryMethod<K extends "describeWidgetPolicy" | "mintWidgetGrant">(
+function registryMethod<
+	K extends "describeWidgetPolicy" | "mintWidgetGrant" | "getWidgetAccess",
+>(
 	registry: IRegistryState | null | undefined,
 	name: K,
 ): NonNullable<IRegistryState[K]> | null {
@@ -370,9 +397,11 @@ export interface MicroWidgetFrameLocation {
 	useHttpBridge: boolean;
 	/** Resolves an API path on web; null while the profile that picks the API origin loads. */
 	apiUrl: ((path: string) => string) | null;
+	/** Web sandbox access token of the frame's package version; absent or null loads anonymously. */
+	access?: string | null;
 }
 
-/** Throws when a grant or runtime component is malformed, so a bad backend answer never becomes a URL. */
+/** Throws when a grant, runtime component or access token is malformed, so a bad backend answer never becomes a URL. */
 export function microWidgetFrameSrc(
 	frame: MicroWidgetFrameMount,
 	location: MicroWidgetFrameLocation,
@@ -411,6 +440,7 @@ export function microWidgetFrameSrc(
 					widgetId: frame.widgetId,
 					grant: frame.grant,
 					runtime: frame.runtime,
+					access: location.access,
 				}),
 	);
 }
@@ -429,6 +459,229 @@ const DEFAULT_CLOCK: MicroWidgetGrantClock = {
 	clearTimeout: (handle) =>
 		clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
+
+/** Access tokens expire on the server's wall clock, which keeps running while the device sleeps; `performance.now()` may not. */
+const WALL_CLOCK: Pick<MicroWidgetGrantClock, "now"> = {
+	now: () => Date.now(),
+};
+
+export interface MicroWidgetAccessTarget {
+	packageId: string;
+	packageVersion: string;
+	appId: string | null;
+}
+
+function accessKey(target: MicroWidgetAccessTarget): string {
+	return JSON.stringify([
+		target.packageId,
+		target.packageVersion,
+		target.appId,
+	]);
+}
+
+function pruneAccessCache(now: number): void {
+	for (const [key, entry] of accessCache) {
+		if (now > entry.reuseUntil) accessCache.delete(key);
+	}
+}
+
+/** Later frames fetch a fresh token instead of reusing `access`; an entry holding another token stays. */
+export function forgetMicroWidgetAccess(
+	target: MicroWidgetAccessTarget,
+	access: string,
+): void {
+	const key = accessKey(target);
+	if (accessCache.get(key)?.access === access) accessCache.delete(key);
+}
+
+/**
+ * The sandbox access of a package version for this viewer; its access is null
+ * when the sandbox loads anonymously or the backend has no access tokens.
+ * Every request of a frame checks its token again, so a new frame reuses a
+ * cached token only while at least half of its lifetime is left, and
+ * anonymous access while it has the refresh margin left. Rejects when the
+ * viewer has no access.
+ */
+export function loadMicroWidgetAccess(
+	registry: IRegistryState | null,
+	target: MicroWidgetAccessTarget,
+	clock: Pick<MicroWidgetGrantClock, "now"> = WALL_CLOCK,
+): Promise<MicroWidgetAccess> {
+	const getAccess = registryMethod(registry, "getWidgetAccess");
+	if (!getAccess) {
+		return Promise.resolve({
+			access: null,
+			deadline: Number.POSITIVE_INFINITY,
+		});
+	}
+	pruneAccessCache(clock.now());
+	const key = accessKey(target);
+	const cached = accessCache.get(key);
+	if (cached) {
+		return Promise.resolve({
+			access: cached.access,
+			deadline: cached.deadline,
+		});
+	}
+	const pending = accessRequests.get(key);
+	if (pending) return pending;
+	const requested = clock.now();
+	const request = Promise.resolve()
+		.then(() =>
+			getAccess({
+				packageId: target.packageId,
+				packageVersion: target.packageVersion,
+				...(target.appId ? { appId: target.appId } : {}),
+			}),
+		)
+		.then((response) => {
+			const lifetime = response.expiresIn * 1000;
+			const deadline =
+				requested + lifetime - MICRO_WIDGET_GRANT_REFRESH_MARGIN_MS;
+			accessCache.set(key, {
+				access: response.access,
+				deadline,
+				reuseUntil:
+					response.access === null
+						? deadline
+						: Math.min(deadline, requested + lifetime / 2),
+			});
+			return { access: response.access, deadline };
+		})
+		.finally(() => {
+			accessRequests.delete(key);
+		});
+	accessRequests.set(key, request);
+	return request;
+}
+
+export type MicroWidgetFrameAccessState =
+	| { status: "loading" }
+	| { status: "ready"; access: string | null }
+	| { status: "error"; detail: string };
+
+export interface MicroWidgetFrameAccess {
+	state: MicroWidgetFrameAccessState;
+	/** Call from the iframe `load` handler: a token past its deadline is replaced, which rebuilds the frame. */
+	onFrameLoad: () => void;
+	/** Call when the frame failed: later frames fetch a fresh token instead of reusing its token. */
+	onFrameFailed: () => void;
+}
+
+const ANONYMOUS_FRAME_ACCESS: MicroWidgetFrameAccessState = {
+	status: "ready",
+	access: null,
+};
+const LOADING_FRAME_ACCESS: MicroWidgetFrameAccessState = {
+	status: "loading",
+};
+
+interface FrameAccessToken {
+	target: MicroWidgetAccessTarget;
+	access: string;
+	deadline: number;
+}
+
+interface SettledFrameAccess {
+	key: string;
+	state: MicroWidgetFrameAccessState;
+	token: FrameAccessToken | null;
+}
+
+/**
+ * Sandbox access of a web grant frame, settled per built frame. A healthy
+ * frame keeps the token it was built with, because a new token is a new
+ * document and the widget would lose its state. A frame that loads again once
+ * its token is past the deadline (a host move reloads it) is rebuilt with a
+ * fresh one, at most once per `MICRO_WIDGET_REMINT_INTERVAL_MS`. Legacy frames
+ * and disabled hosts load anonymously.
+ */
+export function useMicroWidgetFrameAccess(
+	frame: MicroWidgetFrameMount | null,
+	appId: string | null | undefined,
+	enabled: boolean,
+	clock: Pick<MicroWidgetGrantClock, "now"> = WALL_CLOCK,
+): MicroWidgetFrameAccess {
+	const backend = useBackend();
+	const registry =
+		(backend as { registryState?: IRegistryState }).registryState ?? null;
+	const [refreshes, setRefreshes] = useState(0);
+	const frameKey =
+		enabled && frame?.kind === "grant"
+			? JSON.stringify([
+					frame.packageId,
+					frame.packageVersion,
+					appId ?? null,
+					frame.grant,
+					frame.runtime,
+					refreshes,
+				])
+			: null;
+	const [settled, setSettled] = useState<SettledFrameAccess | null>(null);
+
+	useEffect(() => {
+		if (frameKey === null) return;
+		const [packageId, packageVersion, targetAppId] = JSON.parse(frameKey) as [
+			string,
+			string,
+			string | null,
+		];
+		const target = { packageId, packageVersion, appId: targetAppId };
+		let live = true;
+		const settle = (
+			state: MicroWidgetFrameAccessState,
+			token: FrameAccessToken | null,
+		) => {
+			if (live) setSettled({ key: frameKey, state, token });
+		};
+		loadMicroWidgetAccess(registry, target, clock).then(
+			({ access, deadline }) =>
+				settle(
+					{ status: "ready", access },
+					access === null ? null : { target, access, deadline },
+				),
+			(error) => settle({ status: "error", detail: errorMessage(error) }, null),
+		);
+		return () => {
+			live = false;
+		};
+	}, [frameKey, registry, clock]);
+
+	const shown = frameKey !== null && settled?.key === frameKey ? settled : null;
+	const shownToken = useRef<FrameAccessToken | null>(null);
+	shownToken.current = shown?.token ?? null;
+	const lastRefresh = useRef<number | null>(null);
+
+	const onFrameLoad = useCallback(() => {
+		const token = shownToken.current;
+		if (!token) return;
+		const now = clock.now();
+		if (now < token.deadline) return;
+		if (
+			lastRefresh.current !== null &&
+			now - lastRefresh.current < MICRO_WIDGET_REMINT_INTERVAL_MS
+		) {
+			return;
+		}
+		lastRefresh.current = now;
+		forgetMicroWidgetAccess(token.target, token.access);
+		setRefreshes((count) => count + 1);
+	}, [clock]);
+
+	const onFrameFailed = useCallback(() => {
+		const token = shownToken.current;
+		if (token) forgetMicroWidgetAccess(token.target, token.access);
+	}, []);
+
+	const state =
+		frameKey === null
+			? ANONYMOUS_FRAME_ACCESS
+			: (shown?.state ?? LOADING_FRAME_ACCESS);
+	return useMemo(
+		() => ({ state, onFrameLoad, onFrameFailed }),
+		[state, onFrameLoad, onFrameFailed],
+	);
+}
 
 /** Everything the controller reads from the component. */
 export interface MicroWidgetGrantControllerInputs {
@@ -908,6 +1161,7 @@ export class MicroWidgetGrantController {
 					bundleHash: inputs.bundleHash,
 					widgetId: inputs.widgetId,
 					preview: inputs.preview,
+					...(inputs.appId ? { appId: inputs.appId } : {}),
 				}),
 			)
 			.then(
@@ -1329,9 +1583,8 @@ export class MicroWidgetGrantController {
 					widgetId: descriptor.widgetId,
 					preview: descriptor.preview,
 					policyDigest: descriptor.policyDigest,
-					...(withRuntime
-						? { appId: inputs.appId, runtimeSources: candidate.request }
-						: {}),
+					...(inputs.appId ? { appId: inputs.appId } : {}),
+					...(withRuntime ? { runtimeSources: candidate.request } : {}),
 				}),
 			)
 			.then(

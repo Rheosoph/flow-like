@@ -6,7 +6,6 @@ use crate::entity::sea_orm_active_enums::{WasmPackageStatus, WasmPackageVisibili
 use crate::entity::wasm_package;
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
-use crate::permission::role_permission::RolePermissions;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::{Extension, Json};
@@ -21,12 +20,13 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 /// - PublicRequestAccess: requires a wasm_package_user record (granted via join approval or purchase)
 /// - Private: requires a wasm_package_user record
 /// - With `app_id`: members of that project may download the pinned version
-///   while an admin or the owner licenses it (or within the lapse grace period)
+///   while an admin or the owner licenses it (or within the lapse grace period),
+///   and a request without `version` gets the pinned version
 #[utoipa::path(
     post,
     path = "/registry/download",
     tag = "registry",
-    description = "Get a download link for a package. Members of a project can download the version the project uses while the project's licence for it is valid.",
+    description = "Get a download link for a package. With a project, you get the version the project uses unless you ask for another one, and members of the project can download it while the project's licence for it is valid.",
     request_body = DownloadRequest,
     responses(
         (status = 200, description = "Download URL and package info", body = DownloadResponse),
@@ -66,7 +66,10 @@ pub async fn download(
     }
 
     let is_free_public = package.visibility == WasmPackageVisibility::Public && package.price <= 0;
-    let mut requested_version = request.version.clone();
+    let project_version = match request.app_id.as_deref() {
+        Some(app_id) => project_licensed_version(&state, &user, app_id, &request).await?,
+        None => None,
+    };
 
     if !is_free_public {
         let sub = sub
@@ -74,15 +77,7 @@ pub async fn download(
             .ok_or_else(|| ApiError::unauthorized("Authentication required for downloads"))?;
 
         let access = crate::check_wasm_access!(state, &sub, &request.package_id);
-        let project_version = match (&access, request.app_id.as_deref()) {
-            (None, Some(app_id)) => {
-                project_licensed_version(&state, &user, app_id, &request).await?
-            }
-            _ => None,
-        };
-        if project_version.is_some() {
-            requested_version = project_version;
-        } else if access.is_none() {
+        if access.is_none() && project_version.is_none() {
             return match package.visibility {
                 WasmPackageVisibility::Public if package.price > 0 => Err(
                     ApiError::purchase_required("Purchase required to download this package"),
@@ -97,6 +92,7 @@ pub async fn download(
 
     let can_manage = super::viewer_can_manage(&state, sub.as_deref(), &request.package_id).await?;
     let package_id = package.id.clone();
+    let requested_version = request.version.clone().or(project_version);
 
     let (download_url, manifest, version, has_widget_bundle) = registry
         .get_wasm_url_as_viewer(package, requested_version.as_deref(), can_manage)
@@ -176,24 +172,22 @@ pub async fn download(
 }
 
 /// The pinned version a member of `app_id` may download through the project's
-/// licence, or `None` when they are not a member or the pin expired.
+/// licence, or `None` when they are not a member, the pin expired or the
+/// request names another version.
 async fn project_licensed_version(
     state: &AppState,
     user: &AppUser,
     app_id: &str,
     request: &DownloadRequest,
 ) -> Result<Option<String>, ApiError> {
-    let Ok(permission) = user.app_permission(app_id, state).await else {
-        return Ok(None);
-    };
-    if !permission.has_permission(RolePermissions::ReadBoards) {
-        return Ok(None);
-    }
-    crate::package_license::project_download_version(
-        &state.db,
-        app_id,
-        &request.package_id,
-        request.version.as_deref(),
+    Ok(
+        crate::package_license::member_pinned_version(state, user, app_id, &request.package_id)
+            .await?
+            .filter(|pinned| {
+                request
+                    .version
+                    .as_deref()
+                    .is_none_or(|version| version == pinned)
+            }),
     )
-    .await
 }

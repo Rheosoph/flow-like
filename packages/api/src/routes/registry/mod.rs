@@ -18,6 +18,7 @@ pub mod server;
 pub mod types;
 pub mod upload;
 pub mod users;
+pub mod widget_access;
 pub mod widget_asset;
 pub mod widget_grant_jwt;
 pub mod widget_policy;
@@ -179,6 +180,12 @@ pub fn routes() -> Router<AppState> {
                 .layer(DefaultBodyLimit::max(
                     widget_policy::MAX_WIDGET_POLICY_REQUEST_BYTES,
                 )),
+        )
+        .route(
+            "/package/{package_id}/widget-access",
+            post(widget_access::mint_widget_access).layer(DefaultBodyLimit::max(
+                widget_policy::MAX_WIDGET_POLICY_REQUEST_BYTES,
+            )),
         )
         .route(
             "/package/{package_id}/widget-grant",

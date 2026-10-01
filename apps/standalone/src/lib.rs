@@ -9,6 +9,7 @@ pub mod certificate_requests;
 pub mod certificates;
 pub mod config;
 pub mod crypto;
+pub mod diagnostics;
 pub mod enrollment;
 pub mod fleet;
 pub mod host;

@@ -12,6 +12,7 @@ import {
 	widgetRuntimeSourcesErrorCode,
 } from "@flow-like/flow-like-ui/components/a2ui/micro-widget-policy";
 import { forgetMicroWidgetGrants } from "@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant";
+import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type {
 	AccessRequest,
@@ -52,6 +53,39 @@ function widgetPolicyArgs(request: WidgetPolicyRequest, bundleHash: string) {
 		appId: request.appId ?? null,
 		runtimeSources: runtimeSources.length > 0 ? runtimeSources : null,
 	};
+}
+
+const PROJECT_INSTALL_RETRY_MS = 5 * 60_000;
+
+/** Native installs of one package share its staging paths, so they run one after another. */
+const packageInstallQueues = new Map<string, Promise<unknown>>();
+/** One install through a project's licence per `{appId}:{packageId}@{version}`, however many widgets ask. */
+const projectInstalls = new Map<string, Promise<void>>();
+/** When an install through a project last failed, per `{appId}:{packageId}@{version}`. */
+const failedProjectInstalls = new Map<string, number>();
+
+/** Runs `install` once every earlier install of the package settled; `waited` says whether one was pending. */
+function queuePackageInstall<T>(
+	packageId: string,
+	install: (waited: boolean) => Promise<T>,
+): Promise<T> {
+	const previous = packageInstallQueues.get(packageId);
+	const queued = (previous ?? Promise.resolve())
+		.catch(() => undefined)
+		.then(() => install(previous !== undefined));
+	packageInstallQueues.set(packageId, queued);
+	const release = () => {
+		if (packageInstallQueues.get(packageId) === queued) {
+			packageInstallQueues.delete(packageId);
+		}
+	};
+	queued.then(release, release);
+	return queued;
+}
+
+/** Rust: `Widget bundle {hash} of package '{pkg}' is not installed`. */
+function isBundleNotInstalledError(error: unknown): boolean {
+	return getErrorMessage(error, "").includes("is not installed");
 }
 
 /** `invalid_runtime_sources: …` and `runtime_sources_in_preview: …` are host bugs, never user decisions. */
@@ -171,15 +205,126 @@ export class RegistryState implements IRegistryState {
 		return this.backend.auth?.user?.access_token ?? undefined;
 	}
 
-	async getPackage(packageId: string): Promise<InstalledPackage | null> {
+	/**
+	 * The local install. With `appId` of an online project it is the version the
+	 * project pins: a missing or other local version is replaced by the pinned
+	 * one, installed through the project, and null stands for a failed install.
+	 */
+	async getPackage(
+		packageId: string,
+		appId?: string,
+	): Promise<InstalledPackage | null> {
+		const local = await this.getInstalledPackage(packageId);
+		if (!appId || !(await this.canInstallThroughProject(appId))) return local;
+		const pinned = await this.projectPin(appId, packageId);
+		if (!pinned || local?.version === pinned) return local;
+		try {
+			await this.installThroughProject(packageId, appId, pinned);
+		} catch (error) {
+			console.warn(
+				`[Registry] Could not install ${packageId}@${pinned} through project ${appId}:`,
+				error,
+			);
+			return null;
+		}
+		const installed = await this.getInstalledPackage(packageId);
+		return installed?.version === pinned ? installed : null;
+	}
+
+	private async getInstalledPackage(
+		packageId: string,
+	): Promise<InstalledPackage | null> {
 		await this.ensureInit();
 		return invoke("registry_get_package", { packageId });
+	}
+
+	private async canInstallThroughProject(appId: string): Promise<boolean> {
+		if (!this.backend.profile || !this.backend.auth) return false;
+		return !(await this.backend.isOffline(appId).catch(() => true));
+	}
+
+	/** `appState.listPackages` syncs an online project's local pins with the hub first. */
+	private async projectPin(
+		appId: string,
+		packageId: string,
+	): Promise<string | undefined> {
+		try {
+			const pin = (await this.backend.appState.listPackages?.(appId))?.[
+				packageId
+			];
+			return typeof pin === "string" && pin ? pin : undefined;
+		} catch (error) {
+			console.warn(
+				`[Registry] Could not read the package pins of project ${appId}:`,
+				error,
+			);
+			return undefined;
+		}
+	}
+
+	/**
+	 * An install of the package that was pending and left `version` installed
+	 * makes this one unnecessary. A failed install is not retried for
+	 * `PROJECT_INSTALL_RETRY_MS`.
+	 */
+	private installThroughProject(
+		packageId: string,
+		appId: string,
+		version: string,
+	): Promise<void> {
+		const key = `${appId}:${packageId}@${version}`;
+		const pending = projectInstalls.get(key);
+		if (pending) return pending;
+		const failedAt = failedProjectInstalls.get(key);
+		if (
+			failedAt !== undefined &&
+			Date.now() - failedAt < PROJECT_INSTALL_RETRY_MS
+		) {
+			return Promise.reject(
+				new Error(
+					`Installing ${packageId}@${version} through project ${appId} failed less than ${PROJECT_INSTALL_RETRY_MS / 60_000} minutes ago`,
+				),
+			);
+		}
+		const install = queuePackageInstall(packageId, async (waited) => {
+			if (
+				waited &&
+				(await this.getInstalledPackage(packageId))?.version === version
+			) {
+				return;
+			}
+			await this.invokeInstall(packageId, version, appId);
+		})
+			.then(
+				() => {
+					failedProjectInstalls.delete(key);
+				},
+				(error: unknown) => {
+					failedProjectInstalls.set(key, Date.now());
+					throw error;
+				},
+			)
+			.finally(() => {
+				projectInstalls.delete(key);
+			});
+		projectInstalls.set(key, install);
+		return install;
 	}
 
 	async installPackage(
 		packageId: string,
 		version?: string,
 		_token?: string | null,
+		appId?: string,
+	): Promise<CachedPackage> {
+		return queuePackageInstall(packageId, () =>
+			this.invokeInstall(packageId, version, appId),
+		);
+	}
+
+	private async invokeInstall(
+		packageId: string,
+		version?: string,
 		appId?: string,
 	): Promise<CachedPackage> {
 		await this.ensureInit();
@@ -313,10 +458,7 @@ export class RegistryState implements IRegistryState {
 		await this.ensureInit();
 		let descriptor: unknown;
 		try {
-			descriptor = await invoke<unknown>(
-				"registry_describe_widget_policy",
-				widgetPolicyArgs(request, bundleHash),
-			);
+			descriptor = await this.describeInstalledWidget(request, bundleHash);
 		} catch (error) {
 			throw runtimeSourcesError(error, request) ?? error;
 		}
@@ -326,6 +468,52 @@ export class RegistryState implements IRegistryState {
 			widgetId: request.widgetId,
 			preview: request.preview,
 		});
+	}
+
+	/**
+	 * A widget of the version the online project pins, whose bundle this device
+	 * lacks, is described once more after installing that version through the
+	 * project. Any other version keeps the original error: installing it would
+	 * replace the pinned one device-wide, and Reload in the builder moves a stale
+	 * placement to the pin.
+	 */
+	private async describeInstalledWidget(
+		request: WidgetPolicyRequest,
+		bundleHash: string,
+	): Promise<unknown> {
+		const describe = () =>
+			invoke<unknown>(
+				"registry_describe_widget_policy",
+				widgetPolicyArgs(request, bundleHash),
+			);
+		try {
+			return await describe();
+		} catch (error) {
+			const appId = request.appId;
+			if (
+				!appId ||
+				!isBundleNotInstalledError(error) ||
+				!(await this.canInstallThroughProject(appId)) ||
+				(await this.projectPin(appId, request.packageId)) !==
+					request.packageVersion
+			) {
+				throw error;
+			}
+			try {
+				await this.installThroughProject(
+					request.packageId,
+					appId,
+					request.packageVersion,
+				);
+			} catch (installError) {
+				console.warn(
+					`[Registry] Could not install ${request.packageId}@${request.packageVersion} through project ${appId}:`,
+					installError,
+				);
+				throw error;
+			}
+			return describe();
+		}
 	}
 
 	async mintWidgetGrant(

@@ -1677,6 +1677,95 @@ model DeviceArchiveHead {
   @@id([deviceId, scope, kind])
 }
 
+// ---- device_certificates.prisma
+/// Only opaque certificate references and expiration times leave the device.
+model DeviceCertificateInventory {
+  deviceId    String @id
+  revision    BigInt
+  payload     String
+  updatedAt   BigInt
+  nextCheckAt BigInt
+
+  @@index([nextCheckAt])
+}
+
+/// Each delivery channel retries independently with a leased, stable identity.
+model DeviceCertificateNotice {
+  id                  String  @id
+  deviceId            String
+  certificateId       String
+  certificateRevision BigInt
+  fingerprint         String
+  notAfter            BigInt
+  userId              String
+  stage               String
+  channel             String
+  status              String
+  attempts            BigInt  @default(0)
+  nextAttemptAt       BigInt
+  leaseId             String?
+  leaseUntil          BigInt?
+  completedAt         BigInt?
+
+  @@index([status, nextAttemptAt])
+  @@index([deviceId])
+}
+
+/// Per-user certificate reminder mute. certificateId '*' mutes the whole device.
+model DeviceCertificateNoticeMute {
+  userId        String
+  deviceId      String
+  certificateId String
+  until         BigInt?
+  createdAt     BigInt
+
+  @@id([userId, deviceId, certificateId])
+  @@index([deviceId])
+}
+
+// ---- device_fleet.prisma
+model DeviceFleetReader {
+  deviceId  String
+  userId    String
+  keyId     String
+  revision  BigInt
+  readerJws String
+  deleted   Boolean
+
+  @@id([deviceId, userId, keyId])
+}
+
+model DeviceFleetHead {
+  deviceId String @id
+  sequence BigInt
+  digest   String
+}
+
+model DeviceFleetSnapshot {
+  deviceId    String
+  streamId    String
+  userId      String
+  keyId       String
+  manifestJws String
+  bundle      String
+  updatedAt   BigInt
+
+  @@id([deviceId, streamId])
+}
+
+// ---- device_inventory.prisma
+model DeviceInventoryObservation {
+  userId    String
+  deviceId  String
+  keyId     String
+  scopeKey  String
+  revision  BigInt
+  payload   String
+  updatedAt BigInt
+
+  @@id([userId, deviceId, keyId, scopeKey])
+}
+
 // ---- device_management.prisma
 model DeviceManagementPolicy {
   deviceId  String
@@ -1730,8 +1819,20 @@ model ManagedDevice {
   receipt      String
   registeredAt BigInt
   lastSeenAt   BigInt?
+  revokedAt    BigInt?
+  displayName  String?
 
   @@index([ownerId, status])
+}
+
+/// Last attributable authentication rejection per device. Overwritten, never a log.
+model DeviceAuthRejection {
+  deviceId    String  @id
+  code        String
+  skewSeconds BigInt?
+  count       BigInt  @default(1)
+  firstAt     BigInt
+  lastAt      BigInt
 }
 
 /// The exact unsigned manifest template is immutable after the JWT is issued.
@@ -1909,6 +2010,72 @@ model ErrorReport {
   updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([createdAt])
+}
+
+// ---- explore.prisma
+/// Explore storefront layout header, one row per edition: "DRAFT" (admins edit) and "LIVE" (viewers read).
+model ExploreLayout {
+  edition     String    @id
+  /// Changes on every write to this edition; compare-and-swap token for admin edits and cache key for reads.
+  revision    String
+  publishedAt DateTime? @db.Timestamptz(3)
+  updatedAt   DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
+}
+
+/// A place on the Explore page. Grid slots are fixed (hero, notice, feature, collection, stat, categories);
+/// rows ("row:<id>") are added, removed and reordered by admins; "unplaced" parks placements off the page.
+model ExploreSlot {
+  edition  String
+  key      String
+  /// GRID | ROW | UNPLACED
+  area     String
+  /// Row order for ROW slots; fixed 0..5 for GRID slots; 0 for UNPLACED.
+  position Int
+
+  @@id([edition, key])
+}
+
+/// One curated or system placement. Inside a slot, `position` is the priority: the viewer gets the first
+/// placement that is live, matches their audience and has enough visible items.
+model ExplorePlacement {
+  edition   String
+  id        String
+  slotKey   String
+  position  Int
+  /// ANNOUNCEMENT | SPOTLIGHT | FEATURE | COLLECTION | RAIL | SPONSORED. Always derived from `content.kind` on
+  /// write and immutable after creation (PUT rejects a change); kept as a column for slot checks and the editor list.
+  kind      String
+  /// Admin-facing label (the list and canvas show it); never rendered to viewers.
+  name      String
+  /// false = Draft: visible to admins only. Scheduled / Live / Ended derive from the window at read time.
+  enabled   Boolean   @default(false)
+  startsAt  DateTime? @db.Timestamptz(3)
+  endsAt    DateTime? @db.Timestamptz(3)
+  /// Audience tags (StringList): everyone | dev | signed_in | signed_out | desktop | web | locale:<code>
+  audience  Json      @default("[]")
+  /// Kind-specific payload, typed in Rust as PlacementContent.
+  content   Json      @default("{}")
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@id([edition, id])
+  @@index([edition, slotKey, position])
+}
+
+/// Items of a placement (spotlight slides, featured item, collection picks, sponsored item). Loose references:
+/// no FK, so deleted/private apps or packages are filtered at read time and flagged in the editor.
+model ExplorePlacementItem {
+  edition     String
+  placementId String
+  position    Int
+  /// APP | PACKAGE | COLLECTION (COLLECTION = id of a COLLECTION placement in the same edition)
+  itemKind    String
+  itemId      String
+  /// ItemOverrides: headline, subline, artworkUrl, accent
+  overrides   Json   @default("{}")
+
+  @@id([edition, placementId, position])
+  @@index([edition, itemKind, itemId])
 }
 
 // ---- file-accounting.prisma
@@ -2178,7 +2345,7 @@ model TemplateProfile {
 // Address reservations survive deletion so old senders cannot reach a different app.
 // Addresses of deleted events turn `quarantined` and are released after 30 days.
 model InboundMailAddress {
-  address   String @id
+  address   String  @id
   appId     String
   eventId   String
   kind      String
@@ -2192,14 +2359,14 @@ model InboundMailAddress {
 // Ciphertext contains transport metadata. Expiry clears it while retaining deduplication IDs.
 // Cleanup moves rows to a settled status, so the status/expiry index skips cleaned rows.
 model InboundMailDelivery {
-  id          String @id
+  id          String  @id
   messageId   String
   appId       String
   eventId     String
   status      String
   envelope    String?
   objects     String?
-  attempts    Int @default(0)
+  attempts    Int     @default(0)
   nextAttempt BigInt
   lease       String?
   receivedAt  BigInt
@@ -3469,6 +3636,32 @@ model StripeEvent {
   @@index([eventType])
 }
 
+// ---- teams_bot.prisma
+model TeamsBotConnection {
+  id        String  @id
+  appId     String
+  eventId   String  @unique
+  data      String
+  revision  Int     @default(0)
+  // Counts against the app's Flow-Like-managed bot quota (managed and not disconnected).
+  managed   Boolean @default(false)
+  updatedAt BigInt
+
+  @@index([appId])
+}
+
+// Encrypted conversation, delivery and interaction records. Versions fence concurrent callbacks.
+model TeamsBotState {
+  id           String @id
+  connectionId String
+  data         String
+  revision     Int    @default(0)
+  expiresAt    BigInt
+
+  @@index([connectionId])
+  @@index([expiresAt])
+}
+
 // ---- telemetry.prisma
 model TelemetryEvent {
   id         String    @id
@@ -4668,164 +4861,4 @@ model WasmPackagePurchase {
   @@index([packageId, completedAt])
   @@index([stripeSessionId])
   @@index([paymentOrderId])
-}
-
-model DeviceInventoryObservation {
-  userId String
-  deviceId String
-  keyId String
-  scopeKey String
-  revision BigInt
-  payload String
-  updatedAt BigInt
-  @@id([userId, deviceId, keyId, scopeKey])
-}
-
-model DeviceFleetReader {
- deviceId String
- userId String
- keyId String
- revision BigInt
- readerJws String
- deleted Boolean
- @@id([deviceId, userId, keyId])
-}
-model DeviceFleetHead {
- deviceId String @id
- sequence BigInt
- digest String
-}
-model DeviceFleetSnapshot {
- deviceId String
- streamId String
- userId String
- keyId String
- manifestJws String
- bundle String
- updatedAt BigInt
- @@id([deviceId, streamId])
-}
-
-// ---- explore.prisma
-/// Explore storefront layout header, one row per edition: "DRAFT" (admins edit) and "LIVE" (viewers read).
-model ExploreLayout {
-  edition     String    @id
-  /// Changes on every write to this edition; compare-and-swap token for admin edits and cache key for reads.
-  revision    String
-  publishedAt DateTime? @db.Timestamptz(3)
-  updatedAt   DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
-}
-
-/// A place on the Explore page. Grid slots are fixed (hero, notice, feature, collection, stat, categories);
-/// rows ("row:<id>") are added, removed and reordered by admins; "unplaced" parks placements off the page.
-model ExploreSlot {
-  edition  String
-  key      String
-  /// GRID | ROW | UNPLACED
-  area     String
-  /// Row order for ROW slots; fixed 0..5 for GRID slots; 0 for UNPLACED.
-  position Int
-
-  @@id([edition, key])
-}
-
-/// One curated or system placement. Inside a slot, `position` is the priority: the viewer gets the first
-/// placement that is live, matches their audience and has enough visible items.
-model ExplorePlacement {
-  edition   String
-  id        String
-  slotKey   String
-  position  Int
-  /// ANNOUNCEMENT | SPOTLIGHT | FEATURE | COLLECTION | RAIL | SPONSORED. Always derived from `content.kind` on
-  /// write and immutable after creation (PUT rejects a change); kept as a column for slot checks and the editor list.
-  kind      String
-  /// Admin-facing label (the list and canvas show it); never rendered to viewers.
-  name      String
-  /// false = Draft: visible to admins only. Scheduled / Live / Ended derive from the window at read time.
-  enabled   Boolean   @default(false)
-  startsAt  DateTime? @db.Timestamptz(3)
-  endsAt    DateTime? @db.Timestamptz(3)
-  /// Audience tags (StringList): everyone | dev | signed_in | signed_out | desktop | web | locale:<code>
-  audience  Json      @default("[]")
-  /// Kind-specific payload, typed in Rust as PlacementContent.
-  content   Json      @default("{}")
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
-
-  @@id([edition, id])
-  @@index([edition, slotKey, position])
-}
-
-/// Items of a placement (spotlight slides, featured item, collection picks, sponsored item). Loose references:
-/// no FK, so deleted/private apps or packages are filtered at read time and flagged in the editor.
-model ExplorePlacementItem {
-  edition     String
-  placementId String
-  position    Int
-  /// APP | PACKAGE | COLLECTION (COLLECTION = id of a COLLECTION placement in the same edition)
-  itemKind    String
-  itemId      String
-  /// ItemOverrides: headline, subline, artworkUrl, accent
-  overrides   Json   @default("{}")
-
-  @@id([edition, placementId, position])
-  @@index([edition, itemKind, itemId])
-}
-
-/// Only opaque certificate references and expiration times leave the device.
-model DeviceCertificateInventory {
-  deviceId String @id
-  revision BigInt
-  payload String
-  updatedAt BigInt
-  nextCheckAt BigInt
-
-  @@index([nextCheckAt])
-}
-
-/// Each delivery channel retries independently with a leased, stable identity.
-model DeviceCertificateNotice {
-  id String @id
-  deviceId String
-  certificateId String
-  certificateRevision BigInt
-  fingerprint String
-  notAfter BigInt
-  userId String
-  stage String
-  channel String
-  status String
-  attempts BigInt @default(0)
-  nextAttemptAt BigInt
-  leaseId String?
-  leaseUntil BigInt?
-  completedAt BigInt?
-
-  @@index([status, nextAttemptAt])
-  @@index([deviceId])
-}
-
-model TeamsBotConnection {
-  id        String @id
-  appId     String
-  eventId   String @unique
-  data      String
-  revision  Int @default(0)
-  // Counts against the app's Flow-Like-managed bot quota (managed and not disconnected).
-  managed   Boolean @default(false)
-  updatedAt BigInt
-
-  @@index([appId])
-}
-
-// Encrypted conversation, delivery and interaction records. Versions fence concurrent callbacks.
-model TeamsBotState {
-  id           String @id
-  connectionId String
-  data         String
-  revision     Int @default(0)
-  expiresAt    BigInt
-
-  @@index([connectionId])
-  @@index([expiresAt])
 }

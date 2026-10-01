@@ -138,6 +138,18 @@ pub fn install_package_trust(state_dir: &Path, package_dir: &Path) -> Result<()>
     Ok(())
 }
 
+/// The release this agent was installed or last updated from, or `None` for development builds.
+/// Install and update commit only write the record after verifying it, and an expired
+/// signature must not hide the installed version, so the payload is not verified again.
+pub fn installed_release(state_dir: &Path) -> Option<StandaloneRelease> {
+    let compact = vault::read_private(&state_dir.join("active-release.jws")).ok()?;
+    if compact.len() > MAX_COMPACT_JWS_BYTES {
+        return None;
+    }
+    let payload = std::str::from_utf8(&compact).ok()?.split('.').nth(1)?;
+    serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()
+}
+
 const METADATA_TIMEOUT: Duration = Duration::from_secs(300);
 const DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const ARTIFACT_MINIMUM_BYTES_PER_SECOND: u64 = 32 * 1024;
@@ -456,20 +468,14 @@ mod tests {
         assert!(artifact_timeout(u64::MAX) >= artifact_timeout(largest));
     }
 
-    #[test]
-    fn pinned_release_and_file_check_reject_changed_and_linked_artifacts() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let binary = directory.path().join("binary");
-        std::fs::write(&binary, b"binary")?;
-        let key = SigningKey::generate();
-        let now = unix_time()?;
-        let manifest = StandaloneRelease {
+    fn release_manifest(sequence: u64, issued_at: i64, expires_at: i64) -> StandaloneRelease {
+        StandaloneRelease {
             version: 1,
             state_schema_version: crate::state::SCHEMA_VERSION.try_into().unwrap(),
-            sequence: 1,
+            sequence,
             release_version: "1.2.3".into(),
-            issued_at: now,
-            expires_at: now + 300,
+            issued_at,
+            expires_at,
             artifacts: vec![StandaloneArtifact {
                 target: ReleaseTarget::LinuxX86_64,
                 url: "https://releases.example/binary".into(),
@@ -477,7 +483,31 @@ mod tests {
                 sha256: format!("{:x}", Sha256::digest(b"binary")),
             }],
             container: None,
-        };
+        }
+    }
+
+    #[test]
+    fn installed_release_is_reported_after_its_signature_expires() -> Result<()> {
+        let state = tempfile::tempdir()?;
+        assert_eq!(installed_release(state.path()), None);
+        let expired = release_manifest(44, 1, 2);
+        let compact = sign_standalone_release(&expired, &SigningKey::generate())?;
+        vault::write_new_private(&state.path().join("active-release.jws"), compact.as_bytes())?;
+        assert_eq!(installed_release(state.path()), Some(expired));
+        let agent = crate::diagnostics::agent_json(state.path());
+        assert_eq!(agent["release_version"], "1.2.3");
+        assert_eq!(agent["release_sequence"], 44);
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_release_and_file_check_reject_changed_and_linked_artifacts() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let binary = directory.path().join("binary");
+        std::fs::write(&binary, b"binary")?;
+        let key = SigningKey::generate();
+        let now = unix_time()?;
+        let manifest = release_manifest(1, now, now + 300);
         let trust = ReleaseTrust {
             manifest_url: "https://releases.example/release.jws".into(),
             public_keys: vec![URL_SAFE_NO_PAD.encode(key.public_key().to_bytes()?)],

@@ -1,4 +1,5 @@
 use crate::{
+    diagnostics::TaskFailure,
     enrollment::{DeviceSession, api_status, unix_time},
     state::StateStore,
     telemetry::TelemetryStore,
@@ -347,30 +348,43 @@ fn seal_one(
     })
 }
 
-fn seal_streams(telemetry: &TelemetryStore, device: &DeviceSession) -> Result<()> {
+/// Returns why the first failing stream could not seal; other streams still seal.
+fn seal_streams(telemetry: &TelemetryStore, device: &DeviceSession) -> Result<Option<TaskFailure>> {
     let streams: Vec<(String, String)> = telemetry
         .store
         .connection
         .prepare("SELECT scope,kind FROM archive_rosters ORDER BY scope,kind")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
+    let mut failure = None;
     for (scope, kind) in streams {
-        for _ in 0..SEGMENTS_PER_STREAM_PASS {
-            match seal_one(telemetry, device, &scope, &kind) {
-                Ok(true) => (),
-                Ok(false) => break,
-                Err(error) if error.is::<PublicationPaused>() => {
-                    tracing::debug!(scope = %scope, kind = %kind, "Archive publication paused pending policy or outbox capacity: {error:#}");
-                    break;
-                }
-                Err(error) => {
-                    tracing::warn!(scope = %scope, kind = %kind, "Archive sealing failed; this stream retries next pass: {error:#}");
-                    break;
-                }
+        let sealed = seal_stream(telemetry, device, &scope, &kind);
+        failure = failure.or(sealed);
+    }
+    Ok(failure)
+}
+
+fn seal_stream(
+    telemetry: &TelemetryStore,
+    device: &DeviceSession,
+    scope: &str,
+    kind: &str,
+) -> Option<TaskFailure> {
+    for _ in 0..SEGMENTS_PER_STREAM_PASS {
+        match seal_one(telemetry, device, scope, kind) {
+            Ok(true) => (),
+            Ok(false) => break,
+            Err(error) if error.is::<PublicationPaused>() => {
+                tracing::debug!(scope = %scope, kind = %kind, "Archive publication paused pending policy or outbox capacity: {error:#}");
+                break;
+            }
+            Err(error) => {
+                tracing::warn!(scope = %scope, kind = %kind, "Archive sealing failed; this stream retries next pass: {error:#}");
+                return Some(TaskFailure::classify(&error));
             }
         }
     }
-    Ok(())
+    None
 }
 
 type PendingStream = ((String, String), Vec<(String, u64, String)>);
@@ -414,16 +428,18 @@ fn ends_upload_phase(error: &anyhow::Error) -> bool {
     )
 }
 
+/// Returns why the hub did not take every pending segment.
 async fn upload_pending<F, Fut>(
     store: &mut StateStore,
     cancel: &CancellationToken,
     mut upload: F,
-) -> Result<()>
+) -> Result<Option<TaskFailure>>
 where
     F: FnMut(EncryptedArchive) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
     let streams = pending_segments(store)?;
+    let mut failure = None;
     for ((scope, kind), segments) in streams {
         for (id, sequence, encoded) in segments {
             let bundle: EncryptedArchive = match serde_json::from_str(&encoded) {
@@ -433,8 +449,7 @@ where
                     break;
                 }
             };
-            let result =
-                tokio::select! {_=cancel.cancelled()=>return Ok(()),result=upload(bundle)=>result};
+            let result = tokio::select! {_=cancel.cancelled()=>return Ok(failure),result=upload(bundle)=>result};
             match result {
                 Ok(()) => {
                     store.connection.execute(
@@ -444,29 +459,31 @@ where
                 }
                 Err(error) if ends_upload_phase(&error) => {
                     tracing::warn!(scope = %scope, kind = %kind, sequence, "Archive upload failed; every stream retries next pass: {error:#}");
-                    return Ok(());
+                    return Ok(Some(TaskFailure::classify(&error)));
                 }
                 Err(error) => {
                     tracing::warn!(scope = %scope, kind = %kind, sequence, "Archive segment rejected; this stream retries next pass: {error:#}");
+                    failure.get_or_insert(TaskFailure::HubRefused);
                     break;
                 }
             }
         }
     }
-    Ok(())
+    Ok(failure)
 }
 
 async fn publish_pass(
     root: &Path,
     device: &DeviceSession,
     cancel: &CancellationToken,
-) -> Result<()> {
+) -> Result<Option<TaskFailure>> {
     let mut telemetry = TelemetryStore::open(root)?;
-    seal_streams(&telemetry, device)?;
-    upload_pending(&mut telemetry.store, cancel, |bundle| async move {
+    let sealing = seal_streams(&telemetry, device)?;
+    let upload = upload_pending(&mut telemetry.store, cancel, |bundle| async move {
         device.upload_archive(&bundle).await
     })
-    .await
+    .await?;
+    Ok(upload.or(sealing))
 }
 
 pub async fn publish(
@@ -479,8 +496,17 @@ pub async fn publish(
     let mut failures = 0u32;
     loop {
         tokio::select! {_=cancel.cancelled()=>return Ok(()),_=tick.tick()=>()}
-        match publish_pass(&root, &device, &cancel).await {
-            Ok(()) => failures = 0,
+        let result = publish_pass(&root, &device, &cancel).await;
+        crate::diagnostics::global().report(
+            crate::diagnostics::ARCHIVE_PUBLISHER,
+            match &result {
+                Ok(None) => Ok(()),
+                Ok(Some(failure)) => Err(*failure),
+                Err(error) => Err(TaskFailure::classify(error)),
+            },
+        );
+        match result {
+            Ok(_) => failures = 0,
             Err(error) => {
                 failures = failures.saturating_add(1);
                 tracing::warn!(

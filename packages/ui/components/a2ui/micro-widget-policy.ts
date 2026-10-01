@@ -222,6 +222,26 @@ export interface WidgetGrantResponse {
 	runtime: string | null;
 }
 
+/** Web only: `appId` lets a project member in through the version the project pins. */
+export interface WidgetAccessRequest {
+	packageId: string;
+	packageVersion: string;
+	appId?: string | null;
+}
+
+export interface WidgetAccessResponse {
+	/** Null when the sandbox of this version loads anonymously (public package). */
+	access: string | null;
+	/** Seconds until the token stops opening the sandbox. */
+	expiresIn: number;
+}
+
+/** Stands in for an API without access tokens; held for an hour so frames do not repeat its 404. */
+export const ANONYMOUS_WIDGET_ACCESS: Readonly<WidgetAccessResponse> = {
+	access: null,
+	expiresIn: 60 * 60,
+};
+
 export const WIDGET_POLICY_SOURCE_LOCAL = "local";
 export const WIDGET_POLICY_SOURCE_HUB = "hub";
 export const WIDGET_POLICY_REGISTRY_PREFIX = "registry:";
@@ -270,6 +290,11 @@ export function isDesktopWidgetGrant(value: string): boolean {
 
 export function isWebWidgetGrant(value: string): boolean {
 	return value.length <= MAX_WEB_GRANT_LENGTH && WEB_GRANT.test(value);
+}
+
+/** A sandbox access token has the shape of a web grant. */
+export function isWebWidgetAccess(value: string): boolean {
+	return isWebWidgetGrant(value);
 }
 
 /** Mirrors `widget_frame::is_runtime_component`: base64url without padding, at most 1366 characters. */
@@ -1008,6 +1033,31 @@ export function parseWidgetGrantResponse(
 	};
 }
 
+export function parseWidgetAccessResponse(
+	value: unknown,
+): WidgetAccessResponse {
+	if (!isRecord(value)) {
+		throw new Error("Widget access response is not an object");
+	}
+	const { access, expiresIn } = value;
+	if (
+		access !== null &&
+		(typeof access !== "string" || !isWebWidgetAccess(access))
+	) {
+		throw new Error("Widget access response carries a malformed access token");
+	}
+	if (
+		typeof expiresIn !== "number" ||
+		!Number.isFinite(expiresIn) ||
+		expiresIn < 0
+	) {
+		throw new Error(
+			`Widget access response has an invalid expiresIn: ${JSON.stringify(expiresIn)}`,
+		);
+	}
+	return { access, expiresIn };
+}
+
 /** Distinct sources of a runtime request, sorted. */
 export function widgetRuntimeRequestSources(
 	request: readonly WidgetRuntimeSourceRequest[],
@@ -1217,4 +1267,17 @@ export function isWidgetRuntimeDescribeUnsupportedError(
 	error: unknown,
 ): boolean {
 	return isRecord(error) && (error.status === 404 || error.status === 405);
+}
+
+/**
+ * An API that predates sandbox access tokens answers 405, or a bare 404:
+ * every API error carries a `code`, so a 404 with one is a refusal.
+ */
+export function isWidgetAccessUnsupportedError(error: unknown): boolean {
+	if (!isRecord(error)) return false;
+	if (error.status === 405) return true;
+	return (
+		error.status === 404 &&
+		!(typeof error.code === "string" && error.code.length > 0)
+	);
 }

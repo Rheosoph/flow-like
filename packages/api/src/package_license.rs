@@ -25,8 +25,10 @@ use utoipa::ToSchema;
 use crate::entity::sea_orm_active_enums::{NotificationType, WasmPackageVisibility};
 use crate::entity::{
     app_package, membership, meta, notification, role, wasm_package, wasm_package_user,
+    wasm_package_version,
 };
 use crate::error::ApiError;
+use crate::middleware::jwt::AppUser;
 use crate::permission::role_permission::RolePermissions;
 use crate::push_notifications::{DispatchNotificationInput, dispatch_notification_idempotent};
 use crate::state::AppState;
@@ -35,6 +37,10 @@ pub const GRACE_DAYS: i64 = 30;
 const SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 const SWEEP_APP_LIMIT: u64 = 200;
 static LAST_SWEEP_MS: AtomicI64 = AtomicI64::new(0);
+/// Last app id of a full sweep page; the next sweep continues after it.
+static SWEEP_CURSOR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// Pins that expired longer ago than this have had every reminder.
+const SWEEP_AFTER_EXPIRY_DAYS: i64 = 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -519,7 +525,8 @@ pub async fn notify_lapses(state: &AppState, lapses: &[Lapse]) {
 
 /// Reconcile projects a hook may have missed (a holder removed by a raw
 /// delete leaves `membershipId` null) and send the week, day and expiry
-/// reminders for lapsed pins. Bounded per call; runs at most hourly per process.
+/// reminders for lapsed pins. Bounded per call and paged by app id, so every
+/// project is reached however many there are; runs at most hourly per process.
 pub async fn sweep(state: &AppState) -> Result<u64, ApiError> {
     let now = Utc::now();
     let last = LAST_SWEEP_MS.load(Ordering::Relaxed);
@@ -535,20 +542,43 @@ pub async fn sweep(state: &AppState) -> Result<u64, ApiError> {
     {
         return Ok(0);
     }
-    let app_ids: Vec<String> = app_package::Entity::find()
+    let reminders_due_since =
+        (now - grace() - chrono::Duration::days(SWEEP_AFTER_EXPIRY_DAYS)).fixed_offset();
+    let mut query = app_package::Entity::find()
         .select_only()
         .column(app_package::Column::AppId)
         .filter(
             Condition::any()
-                .add(app_package::Column::Stale.eq(true))
-                .add(app_package::Column::MembershipId.is_null()),
+                .add(
+                    Condition::all()
+                        .add(app_package::Column::Stale.eq(true))
+                        .add(
+                            Condition::any()
+                                .add(app_package::Column::StaleSince.is_null())
+                                .add(app_package::Column::StaleSince.gt(reminders_due_since)),
+                        ),
+                )
+                .add(
+                    Condition::all()
+                        .add(app_package::Column::Stale.eq(false))
+                        .add(app_package::Column::MembershipId.is_null()),
+                ),
         )
         .distinct()
         .order_by_asc(app_package::Column::AppId)
-        .limit(SWEEP_APP_LIMIT)
-        .into_tuple()
-        .all(&state.db)
-        .await?;
+        .limit(SWEEP_APP_LIMIT);
+    let cursor = SWEEP_CURSOR.lock().ok().and_then(|cursor| cursor.clone());
+    if let Some(cursor) = cursor {
+        query = query.filter(app_package::Column::AppId.gt(cursor));
+    }
+    let app_ids: Vec<String> = query.into_tuple().all(&state.db).await?;
+    if let Ok(mut cursor) = SWEEP_CURSOR.lock() {
+        *cursor = if app_ids.len() as u64 == SWEEP_APP_LIMIT {
+            app_ids.last().cloned()
+        } else {
+            None
+        };
+    }
     let mut reminded = 0;
     for app_id in &app_ids {
         refresh_app(state, app_id).await;
@@ -602,6 +632,21 @@ pub fn spawn_sweeper(state: AppState) -> Option<JoinHandle<()>> {
     }))
 }
 
+/// The pin of `package_id` in `app_id` while it may still be used: licensed,
+/// or lapsed within the grace period.
+pub async fn usable_pin<C: ConnectionTrait>(
+    db: &C,
+    app_id: &str,
+    package_id: &str,
+) -> Result<Option<app_package::Model>, ApiError> {
+    Ok(app_package::Entity::find()
+        .filter(app_package::Column::AppId.eq(app_id))
+        .filter(app_package::Column::PackageId.eq(package_id))
+        .one(db)
+        .await?
+        .filter(|pin| status(pin, Utc::now()) != LicenseStatus::Expired))
+}
+
 /// The version a project member may download through the project's licence:
 /// the pinned one, while the pin is not expired.
 pub async fn project_download_version<C: ConnectionTrait>(
@@ -610,21 +655,86 @@ pub async fn project_download_version<C: ConnectionTrait>(
     package_id: &str,
     requested: Option<&str>,
 ) -> Result<Option<String>, ApiError> {
-    let Some(pin) = app_package::Entity::find()
-        .filter(app_package::Column::AppId.eq(app_id))
-        .filter(app_package::Column::PackageId.eq(package_id))
+    Ok(usable_pin(db, app_id, package_id)
+        .await?
+        .map(|pin| pin.version)
+        .filter(|pinned| requested.is_none_or(|version| version == pinned)))
+}
+
+/// The usable pin of `package_id` in `app_id` for `user_id`. Every member of
+/// the project uses the packages it licenses, whatever their role, so page
+/// viewers see the widgets on its pages.
+pub async fn member_pin<C: ConnectionTrait>(
+    db: &C,
+    user_id: &str,
+    app_id: &str,
+    package_id: &str,
+) -> Result<Option<app_package::Model>, ApiError> {
+    let member = membership::Entity::find()
+        .filter(membership::Column::AppId.eq(app_id))
+        .filter(membership::Column::UserId.eq(user_id))
         .one(db)
         .await?
-    else {
+        .is_some();
+    if !member {
+        return Ok(None);
+    }
+    usable_pin(db, app_id, package_id).await
+}
+
+/// The pin of `package_id` the caller uses through `app_id`. API keys and app
+/// connections act for a project rather than as one of its members, so only
+/// signed-in members qualify.
+pub async fn caller_pin(
+    state: &AppState,
+    user: &AppUser,
+    app_id: &str,
+    package_id: &str,
+) -> Result<Option<app_package::Model>, ApiError> {
+    let Ok(user_id) = user.sub() else {
         return Ok(None);
     };
-    if status(&pin, Utc::now()) == LicenseStatus::Expired {
-        return Ok(None);
+    member_pin(&state.db, &user_id, app_id, package_id).await
+}
+
+/// The version of `package_id` the caller may use through `app_id`.
+pub async fn member_pinned_version(
+    state: &AppState,
+    user: &AppUser,
+    app_id: &str,
+    package_id: &str,
+) -> Result<Option<String>, ApiError> {
+    Ok(caller_pin(state, user, app_id, package_id)
+        .await?
+        .map(|pin| pin.version))
+}
+
+/// Whether `pin` opens the widget files of `version`: the pinned version, or
+/// one published before it, so widgets placed before the pin moved keep
+/// loading for members until an editor reloads them.
+pub async fn pin_covers_widget_version<C: ConnectionTrait>(
+    db: &C,
+    pin: &app_package::Model,
+    version: &str,
+) -> Result<bool, ApiError> {
+    if pin.version == version {
+        return Ok(true);
     }
-    if requested.is_some_and(|version| version != pin.version) {
-        return Ok(None);
-    }
-    Ok(Some(pin.version))
+    let published: HashMap<String, DateTime<FixedOffset>> = wasm_package_version::Entity::find()
+        .select_only()
+        .column(wasm_package_version::Column::Version)
+        .column(wasm_package_version::Column::PublishedAt)
+        .filter(wasm_package_version::Column::PackageId.eq(&pin.package_id))
+        .filter(wasm_package_version::Column::Version.is_in([version, pin.version.as_str()]))
+        .into_tuple::<(String, DateTime<FixedOffset>)>()
+        .all(db)
+        .await?
+        .into_iter()
+        .collect();
+    Ok(matches!(
+        (published.get(version), published.get(&pin.version)),
+        (Some(requested), Some(pinned)) if requested <= pinned
+    ))
 }
 
 #[cfg(test)]
@@ -792,6 +902,89 @@ INSERT INTO "AppPackage" (id,"appId","membershipId","packageId",version) VALUES
                 .await
                 .unwrap(),
             None
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires PACKAGE_LICENSE_TEST_DATABASE_URL pointing at a database with the full PostgreSQL schema"]
+    async fn members_use_the_project_pin_against_a_real_schema() {
+        use sea_orm::ConnectionTrait;
+        let url = std::env::var("PACKAGE_LICENSE_TEST_DATABASE_URL")
+            .expect("PACKAGE_LICENSE_TEST_DATABASE_URL must point at a disposable database");
+        let db = sea_orm::Database::connect(url).await.unwrap();
+        let page_viewer = (RolePermissions::ReadTemplates
+            | RolePermissions::ExecuteEvents
+            | RolePermissions::ListEvents)
+            .bits();
+        db.execute_unprepared(&format!(r#"
+INSERT INTO "User" (id,"updatedAt") VALUES ('m-admin',now()),('m-viewer',now()),('m-stranger',now());
+INSERT INTO "App" (id,"updatedAt") VALUES ('m-app',now());
+INSERT INTO "Role" (id,"appId",name,permissions,"updatedAt") VALUES ('m-admin-role','m-app','Admin',2,now()),('m-user-role','m-app','User',{page_viewer},now());
+INSERT INTO "Membership" (id,"userId","appId","roleId","createdAt","updatedAt") VALUES
+ ('m-m-admin','m-admin','m-app','m-admin-role',now(),now()),
+ ('m-m-viewer','m-viewer','m-app','m-user-role',now(),now());
+INSERT INTO "WasmPackage" (id,name,description,version,"wasmPath","wasmHash","wasmSize",nodes,permissions,visibility,status,price,"updatedAt") VALUES
+ ('m-priv','Private','','2.0.0','p','h',1,'[]','{{}}','PRIVATE','ACTIVE',0,now());
+INSERT INTO "WasmPackageVersion" (id,"packageId",version,"wasmPath","wasmHash","wasmSize","publishedAt") VALUES
+ ('m-v1','m-priv','1.0.0','p','h',1,now()-interval '2 days'),
+ ('m-v2','m-priv','1.1.0','p','h',1,now()-interval '1 day'),
+ ('m-v3','m-priv','2.0.0','p','h',1,now());
+INSERT INTO "WasmPackageUser" (id,"packageId","userId",permission) VALUES ('m-u-admin','m-priv','m-admin',4);
+INSERT INTO "AppPackage" (id,"appId","membershipId","packageId",version) VALUES ('m-pin','m-app','m-m-admin','m-priv','1.1.0');
+"#)).await.expect("database must carry the full schema and none of this test's rows");
+
+        // A page viewer has no ReadBoards and no access to the package of their own.
+        let pin = member_pin(&db, "m-viewer", "m-app", "m-priv")
+            .await
+            .unwrap()
+            .expect("every member uses the packages the project licenses");
+        assert_eq!(pin.version, "1.1.0");
+        assert!(
+            member_pin(&db, "m-stranger", "m-app", "m-priv")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // Widgets placed before the pin moved keep loading; newer versions stay closed.
+        for (version, covered) in [
+            ("1.1.0", true),
+            ("1.0.0", true),
+            ("2.0.0", false),
+            ("9.9.9", false),
+        ] {
+            assert_eq!(
+                pin_covers_widget_version(&db, &pin, version).await.unwrap(),
+                covered,
+                "{version}"
+            );
+        }
+        // Downloads stay on the pinned version.
+        assert_eq!(
+            project_download_version(&db, "m-app", "m-priv", Some("1.0.0"))
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            project_download_version(&db, "m-app", "m-priv", None)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("1.1.0")
+        );
+
+        db.execute_unprepared(
+            r#"UPDATE "AppPackage" SET stale=true,"staleSince"=now()-interval '31 days',"membershipId"=NULL WHERE id='m-pin'"#,
+        )
+        .await
+        .unwrap();
+        assert!(
+            member_pin(&db, "m-viewer", "m-app", "m-priv")
+                .await
+                .unwrap()
+                .is_none(),
+            "an expired pin opens nothing"
         );
     }
 

@@ -60,13 +60,15 @@ async fn authoritative_enrollment_and_replay() {
     let mut options = ConnectOptions::new(scoped_url.to_string());
     options.max_connections(16).min_connections(1);
     let db = Database::connect(options).await.unwrap();
-    for statement in
-        include_str!("../../../prisma/migrations/20260921120000_standalone_devices/migration.sql")
-            .split(';')
+    for statement in [
+        include_str!("../../../prisma/migrations/20260921120000_standalone_devices/migration.sql"),
+        include_str!("../../../prisma/migrations/20261001120000_device_console/migration.sql"),
+    ]
+    .into_iter()
+    .flat_map(|migration| migration.split(';'))
+    .filter(|statement| !statement.trim().is_empty())
     {
-        if !statement.trim().is_empty() {
-            db.execute_unprepared(statement).await.unwrap();
-        }
+        db.execute_unprepared(statement).await.unwrap();
     }
     db.execute_unprepared(r#"CREATE TABLE "User" (id TEXT PRIMARY KEY, status TEXT NOT NULL, "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now())"#).await.unwrap();
     db.execute_unprepared(

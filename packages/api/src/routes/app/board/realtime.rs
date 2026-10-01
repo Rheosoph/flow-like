@@ -131,6 +131,7 @@ pub async fn jwks(
         (status = 200, description = "Realtime access", body = RealtimeParams),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
+        (status = 404, description = "Board not found"),
         (status = 502, description = "Configured ICE provider unavailable")
     ),
     security(

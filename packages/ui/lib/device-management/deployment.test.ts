@@ -11,6 +11,8 @@ import {
 	DeploymentRolloutEndedError,
 	type DeploymentRolloutStatus,
 	type DeploymentVariable,
+	type EventIneligibleCode,
+	type EventReadiness,
 	type InstalledProject,
 	type PlacementConfiguration,
 	StaleDeploymentRevisionError,
@@ -23,10 +25,12 @@ import {
 	discoverOnlineVariables,
 	discoverPreviousOfflineVariables,
 	discoverPreviousOnlineVariables,
+	eventEligibility,
 	executeDeploymentPlan,
 	mergeVariables,
 	offlineWritesSchema,
 	placementResourcesSchema,
+	readDeploymentRollout,
 	readExistingDeployment,
 	removesOfflineBuffering,
 	validateVariableValue,
@@ -2174,4 +2178,160 @@ test("oversized configurations name the pins or values that exceed one managemen
 			overrides: { ...input().overrides, greeting: "x".repeat(12_000) },
 		}),
 	).toThrow("Shorten the public variable overrides");
+});
+
+test("rollout reads keep the timeline fields and pass unknown agent fields through", async () => {
+	const scope = {
+		rollout_id: crypto.randomUUID(),
+		placement_id: "placement",
+		project_id: "project",
+	};
+	const timeline = {
+		base_revision: 11,
+		active_revision: 12,
+		active_intent: 4,
+		previous_replicas: 1,
+		candidate_replicas: 1,
+		stabilization_seconds: 10,
+		deadline_seconds: 120,
+		created_at: 1790769560,
+		updated_at: 1790769600,
+		deadline_at: 1790769690,
+		stable_since: 1790769594,
+	};
+	const status = await readDeploymentRollout(
+		async () => ({
+			operation_id: "read",
+			state: "completed",
+			result: {
+				...scope,
+				state: "activating",
+				...timeline,
+				cohort: "boot-1",
+			},
+		}),
+		scope,
+	);
+	expect(status).toMatchObject({ ...scope, state: "activating", ...timeline });
+	expect((status as Record<string, unknown>).cohort).toBe("boot-1");
+	const older = await readDeploymentRollout(
+		async () => ({
+			operation_id: "read",
+			state: "completed",
+			result: { ...scope, state: "healthy" },
+		}),
+		scope,
+	);
+	expect(older.deadline_at).toBeUndefined();
+	expect(older.stable_since).toBeUndefined();
+	await expect(
+		readDeploymentRollout(
+			async () => ({
+				operation_id: "read",
+				state: "completed",
+				result: { ...scope, state: "activating", deadline_at: "soon" },
+			}),
+			scope,
+		),
+	).rejects.toThrow();
+});
+
+const shadowVariant = {
+	name: "shadow",
+	board_id: "shadow",
+	node_id: "entry",
+	mode: { Shadow: { sample_rate: 0.5 } },
+	created_at: time,
+	updated_at: time,
+	variables: {},
+};
+const canaryTarget = {
+	board_id: "canary",
+	node_id: "entry",
+	weight: 1,
+	created_at: time,
+	updated_at: time,
+	variables: {},
+};
+const ELIGIBILITY_CASES: [
+	Partial<IEvent>,
+	EventIneligibleCode | null,
+	boolean,
+	EventReadiness,
+][] = [
+	[{}, null, true, "listener"],
+	[{ event_type: "simple_chat" }, null, true, "listener"],
+	[
+		{ event_type: "generic_form", default_page_id: "page" },
+		null,
+		true,
+		"listener",
+	],
+	[{ event_type: "rest" }, null, false, "listener"],
+	[{ event_type: "mcp" }, null, false, "listener"],
+	[{ event_type: "daemon" }, null, false, "explicit"],
+	[{ event_type: "cron" }, "type", false, "unsupported"],
+	[{ event_type: "api" }, "api_type", false, "unsupported"],
+	[{ active: false, event_type: "cron" }, "paused", false, "unsupported"],
+	[{ board_version: null }, "latest_flow", true, "listener"],
+	[{ event_version: [1, 2, 4294967295] }, "latest_flow", true, "listener"],
+	[
+		{ canary: canaryTarget, event_type: "cron" },
+		"canary",
+		false,
+		"unsupported",
+	],
+	[{ variants: [shadowVariant] }, "variants", true, "listener"],
+];
+
+test("event eligibility names the first failing device rule and agrees with online discovery", () => {
+	for (const [change, code, hosted, readiness] of ELIGIBILITY_CASES) {
+		const record = approvedEvent(change);
+		const rule = eventEligibility(record);
+		expect([rule.code, rule.hosted, rule.readiness]).toEqual([
+			code,
+			hosted,
+			readiness,
+		]);
+		expect(rule.eligible).toBe(code === null);
+		if (!rule.eventVersion || !rule.boardVersion) continue;
+		const [discovered] = approvedOnlineCatalog(
+			approvedDocuments([record]),
+		).events;
+		expect([
+			discovered.eligible,
+			discovered.hosted,
+			discovered.readiness_kind,
+			discovered.rollout_supported,
+		]).toEqual([
+			rule.eligible,
+			rule.hosted,
+			rule.readiness,
+			rule.rolloutSupported,
+		]);
+	}
+});
+
+test("bundle and device refusals come after the event's own rules", () => {
+	const flow = eventEligibility(approvedEvent(), {
+		ineligibleReason: "Board board 3.2.1 cannot be deployed",
+		deviceRefusal: "edge requires sandboxed services",
+	});
+	expect([flow.code, flow.detail]).toEqual([
+		"flow_error",
+		"Board board 3.2.1 cannot be deployed",
+	]);
+	const refused = eventEligibility(approvedEvent({ event_type: "daemon" }), {
+		deviceRefusal: "edge requires sandboxed services",
+	});
+	expect([refused.eligible, refused.code, refused.detail]).toEqual([
+		false,
+		"refuse",
+		"edge requires sandboxed services",
+	]);
+	expect(
+		eventEligibility(approvedEvent({ active: false }), {
+			deviceRefusal: "edge requires sandboxed services",
+		}).code,
+	).toBe("paused");
 });

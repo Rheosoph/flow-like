@@ -640,6 +640,8 @@ pub async fn publish_live(
             .await
             .context("Encrypted telemetry publication pass panicked")
             .and_then(|result| result);
+        crate::diagnostics::global()
+            .report_error(crate::diagnostics::LIVE_TELEMETRY_PUBLISHER, &pass);
         match pass {
             Ok(()) => failures = 0,
             Err(error) => {

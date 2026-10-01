@@ -696,6 +696,7 @@ async fn instance_quota_fixture(
         include_str!("../prisma/migrations/20260921140000_instance_resources/migration.sql"),
         include_str!("../prisma/migrations/20260922010000_instance_online_resources/migration.sql"),
         include_str!("../prisma/migrations/20260923120000_instance_validation/migration.sql"),
+        include_str!("../prisma/migrations/20261001120000_device_console/migration.sql"),
     ] {
         for statement in migration.split(';').filter(|s| !s.trim().is_empty()) {
             execute(&db, statement).await;
