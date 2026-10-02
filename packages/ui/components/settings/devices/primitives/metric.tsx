@@ -226,7 +226,10 @@ export function Metric({
 			)}
 		>
 			<div className="flex min-w-0 items-center justify-between gap-2">
-				<span className="max-w-full flex-none truncate text-xs font-medium text-ink-2">
+				<span
+					title={typeof label === "string" ? label : undefined}
+					className="max-w-full flex-none truncate text-xs font-medium text-ink-2"
+				>
 					{label}
 				</span>
 				{stamp}

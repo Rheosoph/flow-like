@@ -65,7 +65,9 @@ function StepperStep({
  * SPEC §4.22: numbered steps joined by hairlines. Labels wrap instead of
  * ending in "…" in a window up to 1200 px or an area up to 1100 px wide; below
  * 720 px of container width a "Step 3 of 8 · Device password" line with a bar
- * replaces the row.
+ * replaces the row. With `fit`, from 780 px a step never gets narrower than
+ * its longest word, so one-word labels stay whole and the others wrap (the
+ * current one too); a row that still doesn't fit is clipped, never scrolled.
  */
 export function WizardStepper({
 	steps,
@@ -108,7 +110,10 @@ export function WizardStepper({
 		<div className={cx("@container/stepper min-w-0", className)}>
 			<ol
 				aria-label={label ?? t("view.wizard.steps", "Steps")}
-				className="flex min-w-0 items-center @max-[720px]/stepper:hidden"
+				className={cx(
+					"flex min-w-0 items-center @max-[720px]/stepper:hidden",
+					fit && "-mx-1 overflow-x-clip px-1",
+				)}
 			>
 				{steps.map((step, index) => {
 					const state: StepperState =
@@ -125,7 +130,8 @@ export function WizardStepper({
 							aria-current={state === "current" ? "step" : undefined}
 							className={cx(
 								"flex min-w-0 flex-1 items-center gap-2 last:flex-none data-[s=current]:min-w-fit [&:not(:last-child)]:after:mr-2 [&:not(:last-child)]:after:h-px [&:not(:last-child)]:after:min-w-2 [&:not(:last-child)]:after:flex-auto [&:not(:last-child)]:after:bg-border [&:not(:last-child)]:after:content-['']",
-								fit && "flex-auto",
+								fit &&
+									"flex-auto @min-[780px]/stepper:min-w-min @min-[780px]/stepper:data-[s=current]:min-w-min",
 							)}
 						>
 							{onSelect && reachable?.[index] && index !== current ? (

@@ -13,9 +13,9 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 pub mod internal;
 
 pub mod ai_act;
-mod artifact_cache;
 pub mod analytics;
 pub mod api;
+mod artifact_cache;
 pub mod audit;
 pub mod board;
 pub mod cache;

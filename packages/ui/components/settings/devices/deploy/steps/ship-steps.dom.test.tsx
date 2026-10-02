@@ -890,8 +890,23 @@ describe("Copy & upload (APP §3.11)", () => {
 		).toBeNull();
 	});
 
+	/** A lost session reconnects after 1 s of real time; here that first retry fires at once. */
+	const reconnectAtOnce = (run: () => void, ms: number) => {
+		const timer = setTimeout(run, ms <= 1_000 ? 0 : ms);
+		return () => clearTimeout(timer);
+	};
+
+	/** An upload asked for while the session reconnects is refused with "Connecting to …", so wait for it. */
+	const sessionBack = (fake: FakeWorkspace) =>
+		until(
+			() => fake.workspace.live.state(EDGE).kind === "live",
+			"the session to come back",
+		);
+
 	async function edgeCopyStage(begins: string[]) {
-		const served = await createFakeWorkspace();
+		const served = await createFakeWorkspace(undefined, {
+			workspace: { live: { schedule: reconnectAtOnce } },
+		});
 		serveArtifacts(served.agent(EDGE), begins);
 		const bundle = await bundleOf("app_crm_sync", "offline");
 		const stage = await mountStage(
@@ -934,6 +949,7 @@ describe("Copy & upload (APP §3.11)", () => {
 			byRole("button", "Upload now").getAttribute("aria-disabled"),
 		).toBeNull();
 
+		await sessionBack(fake);
 		await clickByText("Upload now");
 		await until(
 			() => /checked the events/.test(text(block("dp-uploads"))),
@@ -966,6 +982,7 @@ describe("Copy & upload (APP §3.11)", () => {
 			complete: true,
 			project_path: `/private/projects/${descriptor.project_id}/revisions/${descriptor.manifest_sha256}`,
 		});
+		await sessionBack(fake);
 		await act(async () => {
 			await fake.queryClient.invalidateQueries();
 		});

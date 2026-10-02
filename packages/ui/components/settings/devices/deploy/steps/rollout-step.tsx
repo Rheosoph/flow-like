@@ -846,7 +846,10 @@ function TokenRow({ detail }: Readonly<TokenRowProps>) {
 	}
 	return (
 		<li className="flex min-w-0 flex-wrap items-center gap-2 py-2 text-ui first:pt-0 last:pb-0">
-			<span className="min-w-0 flex-1 truncate font-mono">
+			<span
+				title={`${detail.deviceName} › ${detail.serviceId}`}
+				className="min-w-0 flex-1 truncate font-mono"
+			>
 				{detail.deviceName}
 				<span className="text-muted-foreground"> › {detail.serviceId}</span>
 			</span>

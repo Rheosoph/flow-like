@@ -92,6 +92,7 @@ export function Th({
 	return (
 		<th
 			scope="col"
+			title={typeof children === "string" ? children : undefined}
 			className={cx(HEAD_CELL, numeric && "text-right", className)}
 			{...props}
 		>

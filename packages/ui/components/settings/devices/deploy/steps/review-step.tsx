@@ -354,9 +354,18 @@ function EndpointCell({
 		certificateId === undefined
 			? item.existing?.config.tls_certificate_id
 			: certificateId;
+	const address = addressOf(item);
+	const port = address.lastIndexOf(":");
 	return (
 		<>
-			<span className="font-mono text-xs">{addressOf(item)}</span>
+			<span title={address} className="flex min-w-0 font-mono text-xs">
+				<span className="truncate">
+					{port > 0 ? address.slice(0, port) : address}
+				</span>
+				{port > 0 ? (
+					<span className="shrink-0">{address.slice(port)}</span>
+				) : null}
+			</span>
 			<CellSub>
 				{certificate
 					? c.t("devices:deployShip.plan.certificate", "with a certificate")
@@ -438,7 +447,7 @@ function PlanRow({
 				data-tone={exceptions.length ? "warning" : undefined}
 				className={exceptions.length ? WARNING_ROW : undefined}
 			>
-				<Td label={label.device} kind="mono">
+				<Td label={label.device} kind="mono" title={item.target.name}>
 					{item.target.name}
 					{exceptions.length ? (
 						<DvButton

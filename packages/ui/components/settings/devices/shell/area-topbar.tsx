@@ -158,12 +158,16 @@ function TopbarCrumbs({
 								{props ? (
 									<BreadcrumbLink
 										{...props}
+										title={crumb.label}
 										className="truncate hover:underline"
 									>
 										{crumb.label}
 									</BreadcrumbLink>
 								) : (
-									<BreadcrumbPage className="truncate font-semibold">
+									<BreadcrumbPage
+										title={crumb.label}
+										className="truncate font-semibold"
+									>
 										{crumb.label}
 									</BreadcrumbPage>
 								)}
@@ -176,6 +180,7 @@ function TopbarCrumbs({
 	);
 }
 
+/** Shrinks 30000 times faster than the nav: the nav label would show an ellipsis at any sub-pixel loss. */
 function SearchButton({
 	label,
 	onSearch,
@@ -185,8 +190,9 @@ function SearchButton({
 			type="button"
 			data-shell="search"
 			aria-label={label}
+			title={label}
 			onClick={onSearch}
-			className="@container/cmdk inline-flex h-8 min-w-8.5 flex-[0_30_300px] items-center gap-2 overflow-hidden rounded-lg border border-border bg-card pr-1.5 pl-2.5 text-left text-ui text-muted-foreground hover:border-border-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring @max-[720px]/devices:w-8 @max-[720px]/devices:min-w-8 @max-[720px]/devices:flex-none @max-[720px]/devices:justify-center @max-[720px]/devices:border-transparent @max-[720px]/devices:bg-transparent @max-[720px]/devices:px-0"
+			className="@container/cmdk inline-flex h-8 min-w-8.5 flex-[0_30000_300px] items-center gap-2 overflow-hidden rounded-lg border border-border bg-card pr-1.5 pl-2.5 text-left text-ui text-muted-foreground hover:border-border-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring @max-[720px]/devices:w-8 @max-[720px]/devices:min-w-8 @max-[720px]/devices:flex-none @max-[720px]/devices:justify-center @max-[720px]/devices:border-transparent @max-[720px]/devices:bg-transparent @max-[720px]/devices:px-0"
 		>
 			<Search aria-hidden className="size-4 shrink-0" />
 			<span className="min-w-0 flex-1 truncate @max-[150px]/cmdk:hidden @max-[720px]/devices:hidden">

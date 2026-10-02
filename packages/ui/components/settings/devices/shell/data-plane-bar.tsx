@@ -304,7 +304,10 @@ function CompactBar({
 			<b className="shrink-0 font-medium text-foreground">
 				{t("chrome.planes.dataSources", "Data sources")}
 			</b>
-			<span className={cx("min-w-0 truncate", STATE_TEXT[state])}>
+			<span
+				title={summary}
+				className={cx("min-w-0 truncate", STATE_TEXT[state])}
+			>
 				· {summary}
 			</span>
 			<ChevronUp aria-hidden className="size-3 shrink-0" />

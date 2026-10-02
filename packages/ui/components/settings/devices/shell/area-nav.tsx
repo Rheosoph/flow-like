@@ -101,6 +101,7 @@ export function AreaNav({ className }: Readonly<{ className?: string }>) {
 							aria-label={t("shell.nav.switch", "{{section}}: switch area", {
 								section: labels[current],
 							})}
+							title={labels[current]}
 							className="min-w-0 shrink @max-[720px]/devices:px-1.5 @max-[720px]/devices:has-[>svg]:px-1.5"
 						>
 							<span className="truncate">{labels[current]}</span>
