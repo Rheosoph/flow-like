@@ -1,8 +1,9 @@
-use crate::entity::sea_orm_active_enums::InvitationStatus;
+use crate::entity::sea_orm_active_enums::{InvitationStatus, NotificationType};
 use crate::entity::{user, wasm_package_invitation, wasm_package_user};
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::permission::wasm_package_permission::WasmPackagePermission;
+use crate::push_notifications::{DispatchNotificationInput, dispatch_notification};
 use crate::routes::user::sign_avatar;
 use crate::state::AppState;
 use axum::extract::{Path, State};
@@ -10,11 +11,14 @@ use axum::{Extension, Json};
 use flow_like_types::create_id;
 use futures::stream::{self, StreamExt};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter,
-    sea_query::OnConflict,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, QueryFilter,
+    QueryOrder, Select, sea_query::OnConflict,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+#[path = "users_accept.rs"]
+mod acceptance;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateUserRequest {
@@ -96,10 +100,49 @@ fn build_invitation_response(inv: wasm_package_invitation::Model) -> InvitationR
         invitee_id: inv.invitee_id,
         invited_by_id: inv.invited_by_id,
         permission: inv.permission,
-        status: format!("{:?}", inv.status),
+        status: match inv.status {
+            InvitationStatus::Pending => "pending",
+            InvitationStatus::Accepted => "accepted",
+            InvitationStatus::Rejected => "rejected",
+            InvitationStatus::Expired => "expired",
+        }
+        .to_string(),
         created_at: inv.created_at.to_utc(),
         expires_at: inv.expires_at.map(|dt| dt.to_utc()),
     }
+}
+
+fn invitation_notification(
+    invitation: &wasm_package_invitation::Model,
+) -> DispatchNotificationInput {
+    DispatchNotificationInput {
+        user_id: invitation.invitee_id.clone(),
+        app_id: None,
+        title: format!("You've been invited to package {}", invitation.package_id),
+        description: Some("Open your invitations to accept or decline.".to_string()),
+        icon: Some("mail".to_string()),
+        link: Some("/notifications".to_string()),
+        image: None,
+        notification_type: NotificationType::System,
+        source_run_id: None,
+        source_node_id: None,
+    }
+}
+
+pub(crate) fn pending_package_invitations(
+    invitee_id: &str,
+    now: chrono::DateTime<chrono::FixedOffset>,
+) -> Select<wasm_package_invitation::Entity> {
+    wasm_package_invitation::Entity::find()
+        .filter(wasm_package_invitation::Column::InviteeId.eq(invitee_id))
+        .filter(wasm_package_invitation::Column::Status.eq(InvitationStatus::Pending))
+        .filter(
+            Condition::any()
+                .add(wasm_package_invitation::Column::ExpiresAt.is_null())
+                .add(wasm_package_invitation::Column::ExpiresAt.gte(now)),
+        )
+        .order_by_desc(wasm_package_invitation::Column::CreatedAt)
+        .order_by_asc(wasm_package_invitation::Column::Id)
 }
 
 #[utoipa::path(
@@ -277,6 +320,15 @@ pub async fn invite_user(
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
         .ok_or_else(|| ApiError::internal("Invitation missing after upsert".to_string()))?;
 
+    if let Err(error) = dispatch_notification(&state, invitation_notification(&result)).await {
+        tracing::warn!(
+            error = %error,
+            invitation_id = %result.id,
+            package_id = %result.package_id,
+            "Failed to dispatch package invitation notification"
+        );
+    }
+
     Ok(Json(build_invitation_response(result)))
 }
 
@@ -302,56 +354,24 @@ pub async fn accept_invitation(
         .sub()
         .map_err(|_| ApiError::unauthorized("Authentication required"))?;
 
-    let invitation = wasm_package_invitation::Entity::find_by_id(&invitation_id)
-        .one(&state.db)
-        .await
-        .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
-        .ok_or_else(|| ApiError::not_found("Invitation not found"))?;
+    let pu = state
+        .transaction(|txn| {
+            let invitation_id = invitation_id.clone();
+            let caller_id = caller_id.clone();
+            Box::pin(async move {
+                acceptance::accept_in_transaction(txn, &invitation_id, &caller_id, create_id())
+                    .await
+            })
+        })
+        .await?;
 
-    if invitation.invitee_id != caller_id {
-        return Err(ApiError::forbidden("This invitation is not for you"));
-    }
-
-    if invitation.status != InvitationStatus::Pending {
-        return Err(ApiError::bad_request("Invitation is no longer pending"));
-    }
-
-    if let Some(expires_at) = invitation.expires_at
-        && chrono::Utc::now().fixed_offset() > expires_at
-    {
-        return Err(ApiError::bad_request("Invitation has expired"));
-    }
-
-    let now = chrono::Utc::now().fixed_offset();
-
-    let package_user = wasm_package_user::ActiveModel {
-        id: Set(create_id()),
-        package_id: Set(invitation.package_id.clone()),
-        user_id: Set(caller_id.clone()),
-        permission: Set(invitation.permission),
-        granted_by: Set(Some(invitation.invited_by_id.clone())),
-        granted_at: Set(now),
-    };
-
-    let pu = package_user
-        .insert(&state.db)
-        .await
-        .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
-
-    let mut inv_active: wasm_package_invitation::ActiveModel = invitation.into();
-    inv_active.status = Set(InvitationStatus::Accepted);
-    inv_active
-        .update(&state.db)
-        .await
-        .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
+    state.invalidate_wasm_permission(&caller_id, &pu.package_id);
+    crate::package_license::refresh_package_access(&state, &caller_id, &pu.package_id).await;
 
     let user_record = user::Entity::find_by_id(&caller_id)
         .one(&state.db)
         .await
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
-
-    state.invalidate_wasm_permission(&caller_id, &pu.package_id);
-    crate::package_license::refresh_package_access(&state, &caller_id, &pu.package_id).await;
 
     Ok(Json(build_user_response(&state, pu, user_record).await))
 }
@@ -623,9 +643,7 @@ pub async fn list_my_invitations(
         .sub()
         .map_err(|_| ApiError::unauthorized("Authentication required"))?;
 
-    let invitations = wasm_package_invitation::Entity::find()
-        .filter(wasm_package_invitation::Column::InviteeId.eq(&caller_id))
-        .filter(wasm_package_invitation::Column::Status.eq(InvitationStatus::Pending))
+    let invitations = pending_package_invitations(&caller_id, chrono::Utc::now().fixed_offset())
         .all(&state.db)
         .await
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
@@ -636,4 +654,49 @@ pub async fn list_my_invitations(
         .collect();
 
     Ok(Json(response))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn invitation(status: InvitationStatus) -> wasm_package_invitation::Model {
+        let now = chrono::Utc::now().fixed_offset();
+        wasm_package_invitation::Model {
+            id: "invitation".to_string(),
+            package_id: "acme/reports".to_string(),
+            invited_by_id: "owner".to_string(),
+            invitee_id: "recipient".to_string(),
+            permission: WasmPackagePermission::User.bits(),
+            status,
+            created_at: now,
+            expires_at: Some(now + chrono::Duration::days(7)),
+        }
+    }
+
+    #[test]
+    fn package_invitation_status_matches_the_client_contract() {
+        for (status, expected) in [
+            (InvitationStatus::Pending, "pending"),
+            (InvitationStatus::Accepted, "accepted"),
+            (InvitationStatus::Rejected, "rejected"),
+            (InvitationStatus::Expired, "expired"),
+        ] {
+            let response =
+                serde_json::to_value(build_invitation_response(invitation(status))).unwrap();
+            assert_eq!(response["status"], expected);
+            assert_eq!(response["inviteeId"], "recipient");
+            assert_eq!(response["packageId"], "acme/reports");
+        }
+    }
+
+    #[test]
+    fn package_invitation_notifies_the_recipient_without_an_app_foreign_key() {
+        let input = invitation_notification(&invitation(InvitationStatus::Pending));
+        assert_eq!(input.user_id, "recipient");
+        assert_eq!(input.app_id, None);
+        assert_eq!(input.notification_type, NotificationType::System);
+        assert_eq!(input.link.as_deref(), Some("/notifications"));
+        assert!(input.title.contains("acme/reports"));
+    }
 }

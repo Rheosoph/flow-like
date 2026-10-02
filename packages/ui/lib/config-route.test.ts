@@ -9,6 +9,7 @@ describe("configRouteFillsHeight", () => {
 			"/library/config/explore",
 			"/library/config/setup",
 			"/library/config/appearance",
+			"/library/config/devices",
 		]) {
 			expect(configRouteFillsHeight(route)).toBe(true);
 		}

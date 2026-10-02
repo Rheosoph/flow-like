@@ -11,10 +11,12 @@ import {
 	queryDeviceLock,
 } from "../storage";
 import type {
+	ArchiveRoster,
 	BrowserController,
 	DeviceCrypto,
 	DeviceReceipt,
 	ManagementPolicy,
+	TelemetryRoster,
 } from "../types";
 import {
 	IDLE_LOCK_MS,
@@ -24,6 +26,8 @@ import {
 	type KeySessionPorts,
 	OwnerPasswordRequiredError,
 	createKeySessionManager,
+	readAskPasswordForAccessChanges,
+	writeAskPasswordForAccessChanges,
 } from "./keys";
 import type {
 	ActivityItem,
@@ -157,9 +161,23 @@ function receipt(deviceId: string): DeviceReceipt {
 	};
 }
 
-function fakeController(stored: LocalDeviceVault) {
+const WRONG_PASSWORD = "Incorrect password or damaged vault";
+
+interface HeldSignerFake {
+	passwords: Uint8Array[];
+	/** Runs inside the attach, before the password is checked. */
+	onAttach?: () => void;
+}
+
+function fakeController(stored: LocalDeviceVault, held?: HeldSignerFake) {
 	const state = { closed: 0, freed: 0 };
+	const signer = { attached: 0, detached: 0, holding: false };
 	let publicBundle = stored.controllerPublic;
+	const sign = (signature: string) => () => {
+		if (!signer.holding)
+			throw new Error("The owner invitation key is not held");
+		return signature;
+	};
 	const controller = {
 		publicBundle: () => publicBundle,
 		freshEndpointVault(bytes: Uint8Array) {
@@ -167,19 +185,42 @@ function fakeController(stored: LocalDeviceVault) {
 			publicBundle = { ...publicBundle, endpoint_id: "fresh-endpoint" };
 			return { public_bundle: publicBundle, vault: Array(80).fill(6) };
 		},
+		...(held && {
+			attachInvitation(bytes: Uint8Array, invitation: Uint8Array) {
+				held.passwords.push(bytes);
+				held.onAttach?.();
+				if (new TextDecoder().decode(bytes) !== PASSWORD)
+					throw new Error(WRONG_PASSWORD);
+				expect(invitation).toBe(stored.invitationVault as Uint8Array);
+				signer.attached++;
+				signer.holding = true;
+			},
+			detachInvitation() {
+				if (signer.holding) signer.detached++;
+				signer.holding = false;
+			},
+			signManagementPolicyHeld: sign("held-policy"),
+			signTelemetryRosterHeld: sign("held-telemetry"),
+			signArchiveRosterHeld: sign("held-archive"),
+		}),
 		close() {
 			state.closed++;
+			signer.holding = false;
 		},
 		free() {
 			state.freed++;
 		},
 	} as unknown as BrowserController;
-	return { controller, state };
+	return { controller, state, signer };
 }
 
 function harness(
 	vaults: LocalDeviceVault[] = [vault("dev")],
-	options: { platform?: "web" | "desktop" } = {},
+	options: {
+		platform?: "web" | "desktop";
+		/** False simulates a crypto bundle built before the held owner key. */
+		heldSigner?: boolean;
+	} = {},
 ) {
 	let clock = 1_000_000;
 	const stored = new Map(vaults.map((row) => [row.deviceId, row]));
@@ -187,6 +228,18 @@ function harness(
 	const passwords: Uint8Array[] = [];
 	const calls: string[] = [];
 	const signed: { policy: unknown; invitation: Uint8Array }[] = [];
+	const held: HeldSignerFake = { passwords };
+	let askStored = false;
+	let storageBlocked = false;
+	const typed =
+		(signature: string) =>
+		(payload: unknown, bytes: Uint8Array, invitation: Uint8Array) => {
+			passwords.push(bytes);
+			if (new TextDecoder().decode(bytes) !== PASSWORD)
+				throw new Error(WRONG_PASSWORD);
+			signed.push({ policy: payload, invitation });
+			return signature;
+		};
 	const crypto = {
 		unlockControllerVault(
 			deviceId: string,
@@ -199,7 +252,10 @@ function harness(
 				new TextDecoder().decode(bytes) !== new TextDecoder().decode(ciphertext)
 			)
 				throw new Error("aead::Error");
-			const value = fakeController(stored.get(deviceId) as LocalDeviceVault);
+			const value = fakeController(
+				stored.get(deviceId) as LocalDeviceVault,
+				options.heldSigner === false ? undefined : held,
+			);
 			opened.push(value);
 			return value.controller;
 		},
@@ -214,15 +270,9 @@ function harness(
 					row.ownerControllerKey ?? row.controllerPublic.controller_key,
 			};
 		},
-		signManagementPolicy(
-			policy: ManagementPolicy,
-			bytes: Uint8Array,
-			invitation: Uint8Array,
-		) {
-			passwords.push(bytes);
-			signed.push({ policy, invitation });
-			return "signed-policy";
-		},
+		signManagementPolicy: typed("signed-policy"),
+		signTelemetryRoster: typed("signed-telemetry"),
+		signArchiveRoster: typed("signed-archive"),
 	} as unknown as DeviceCrypto;
 
 	const timers = new Map<number, { at: number; run: () => void }>();
@@ -251,6 +301,12 @@ function harness(
 				leaseVault: input.lease?.vault,
 			});
 			return 1;
+		},
+		readAskPassword: () => askStored,
+		writeAskPassword(_scope, ask) {
+			if (storageBlocked) return false;
+			askStored = ask;
+			return true;
 		},
 		setTimer(run, ms) {
 			timers.set(++timerId, { at: clock + ms, run });
@@ -407,6 +463,16 @@ function harness(
 		},
 		setSummary(patch: Partial<LocalSummary>) {
 			summary = { ...summary, ...patch };
+		},
+		/** The stored choice changes without a call here, as from another window. */
+		setAskStored(value: boolean) {
+			askStored = value;
+		},
+		blockStorage() {
+			storageBlocked = true;
+		},
+		onAttach(run: (() => void) | undefined) {
+			held.onAttach = run;
 		},
 	};
 }
@@ -745,6 +811,25 @@ test("unlocking several devices tries each vault in turn and reports every outco
 	h.keys.lockAll();
 });
 
+test("the session holds the vault that storage has once the device lock is granted", async () => {
+	const h = harness([vault("dev"), vault("gone")]);
+	const rewrapped = { ...vault("dev") };
+	const request = locks.request;
+	locks.request = (name, options, run) => {
+		if (name === lockName("dev")) h.stored.set("dev", rewrapped);
+		else h.stored.delete("gone");
+		return request(name, options, run);
+	};
+	await h.keys.unlock("dev", PASSWORD);
+	expect(h.keys.vault("dev")).toBe(rewrapped);
+
+	const missing = await h.keys.unlock("gone", PASSWORD).catch((cause) => cause);
+	expect((missing as KeySessionError).keyError).toEqual({ code: "no_vault" });
+	await flush();
+	expect(await queryDeviceLock(scope, "gone")).toBe("free");
+	h.keys.lockAll();
+});
+
 test("vault leases run under the session lock and fall back to a transient lock", async () => {
 	const h = harness([vault("dev"), vault("other")]);
 	await h.keys.unlock("dev", PASSWORD);
@@ -820,27 +905,280 @@ test("the account backup is sealed with the typed password under the lease and t
 	h.keys.lockAll();
 });
 
-test("owner signatures ask for the password until the signer holds the invitation key", async () => {
-	const h = harness([vault("dev"), vault("shared", { owner: false })]);
+const policy = { version: 2 } as unknown as ManagementPolicy;
+const telemetryRoster = { scope: "device" } as unknown as TelemetryRoster;
+const archiveRoster = { kind: "logs" } as unknown as ArchiveRoster;
+
+test("a crypto bundle without the held key asks for the password at every owner signature", async () => {
+	const h = harness([vault("dev"), vault("shared", { owner: false })], {
+		heldSigner: false,
+	});
 	expect(h.keys.signer("dev")).toBeUndefined();
 	await h.keys.unlock("dev", PASSWORD);
 	await h.keys.unlock("shared", PASSWORD);
 	expect(h.keys.signer("shared")).toBeUndefined();
+	expect(h.keys.snapshot("dev")).toMatchObject({
+		state: "unlocked",
+		canSign: false,
+	});
 	const signer = h.keys.signer("dev");
-	const policy = { version: 2 } as unknown as ManagementPolicy;
 	await expect(signer?.signPolicy(policy)).rejects.toBeInstanceOf(
 		OwnerPasswordRequiredError,
 	);
 	expect(await signer?.signPolicy(policy, PASSWORD)).toBe("signed-policy");
+	expect(await signer?.signPolicy(policy, PASSWORD)).toBe("signed-policy");
+	const invitation = vault("dev").invitationVault as Uint8Array;
 	expect(h.signed).toEqual([
-		{ policy, invitation: vault("dev").invitationVault as Uint8Array },
+		{ policy, invitation },
+		{ policy, invitation },
 	]);
+	expect(h.keys.snapshot("dev").canSign).toBe(false);
 	expect(zeroed(h.passwords)).toBe(true);
 	h.keys.lock("dev");
 	await expect(signer?.signPolicy(policy, PASSWORD)).rejects.toBeInstanceOf(
 		KeySessionError,
 	);
 	h.keys.lockAll();
+});
+
+test("an owner unlock holds the invitation key, so access changes need no password until lock", async () => {
+	const h = harness([vault("dev"), vault("shared", { owner: false })]);
+	await h.keys.unlock("dev", PASSWORD);
+	await h.keys.unlock("shared", PASSWORD);
+	expect(h.keys.snapshot("dev")).toMatchObject({
+		role: "owner",
+		canSign: true,
+	});
+	expect(h.keys.snapshot("shared")).toMatchObject({
+		state: "unlocked",
+		role: "shared",
+		canSign: false,
+	});
+	expect(h.opened.map(({ signer }) => signer)).toEqual([
+		{ attached: 1, detached: 0, holding: true },
+		{ attached: 0, detached: 0, holding: false },
+	]);
+	expect(h.keys.signer("shared")).toBeUndefined();
+
+	const signer = h.keys.signer("dev");
+	expect(await signer?.signPolicy(policy)).toBe("held-policy");
+	expect(await signer?.signTelemetryRoster(telemetryRoster)).toBe(
+		"held-telemetry",
+	);
+	expect(await signer?.signArchiveRoster(archiveRoster)).toBe("held-archive");
+	expect(await signer?.signPolicy(policy, "not needed")).toBe("held-policy");
+	expect(h.signed).toEqual([]);
+	expect(h.opened[0].signer.attached).toBe(1);
+	expect(zeroed(h.passwords)).toBe(true);
+
+	h.advance(IDLE_LOCK_MS - 60_000);
+	await signer?.signPolicy(policy);
+	expect(h.keys.snapshot("dev").lastUsedAt).toBe(
+		1_000_000 + IDLE_LOCK_MS - 60_000,
+	);
+
+	h.keys.lock("dev");
+	expect(h.opened[0].signer).toEqual({
+		attached: 1,
+		detached: 1,
+		holding: false,
+	});
+	expect(h.opened[0].state).toEqual({ closed: 1, freed: 1 });
+	expect(h.keys.snapshot("dev").canSign).toBe(false);
+	await expect(signer?.signPolicy(policy)).rejects.toBeInstanceOf(
+		KeySessionError,
+	);
+	h.keys.lockAll();
+});
+
+test("with 'ask for my password again' on, nothing is held and every signature needs the password", async () => {
+	const h = harness();
+	expect(h.keys.askPasswordForAccessChanges()).toBe(false);
+	h.keys.setAskPasswordForAccessChanges(true);
+	expect(h.keys.askPasswordForAccessChanges()).toBe(true);
+	await h.keys.unlock("dev", PASSWORD);
+	expect(h.keys.snapshot("dev")).toMatchObject({
+		state: "unlocked",
+		canSign: false,
+	});
+	const signer = h.keys.signer("dev");
+	await expect(signer?.signPolicy(policy)).rejects.toBeInstanceOf(
+		OwnerPasswordRequiredError,
+	);
+	expect(await signer?.signPolicy(policy, PASSWORD)).toBe("signed-policy");
+	expect(await signer?.signTelemetryRoster(telemetryRoster, PASSWORD)).toBe(
+		"signed-telemetry",
+	);
+	expect(await signer?.signArchiveRoster(archiveRoster, PASSWORD)).toBe(
+		"signed-archive",
+	);
+	expect(h.signed.map((entry) => entry.policy)).toEqual([
+		policy,
+		telemetryRoster,
+		archiveRoster,
+	]);
+	await expect(signer?.signPolicy(policy, "wrong password")).rejects.toThrow(
+		WRONG_PASSWORD,
+	);
+	expect(h.opened[0].signer).toEqual({
+		attached: 0,
+		detached: 0,
+		holding: false,
+	});
+	expect(h.keys.snapshot("dev").canSign).toBe(false);
+	expect(zeroed(h.passwords)).toBe(true);
+
+	h.keys.setAskPasswordForAccessChanges(false);
+	expect(h.keys.snapshot("dev").canSign).toBe(false);
+	await expect(signer?.signPolicy(policy)).rejects.toBeInstanceOf(
+		OwnerPasswordRequiredError,
+	);
+	expect(await signer?.signPolicy(policy, PASSWORD)).toBe("held-policy");
+	expect(h.keys.snapshot("dev").canSign).toBe(true);
+	expect(await signer?.signArchiveRoster(archiveRoster)).toBe("held-archive");
+	expect(h.signed).toHaveLength(3);
+	expect(zeroed(h.passwords)).toBe(true);
+	h.keys.lockAll();
+});
+
+test("turning 'ask for my password again' on drops every held key at once, from this or another window", async () => {
+	const h = harness([vault("a"), vault("b")]);
+	await h.keys.unlock("a", PASSWORD);
+	await h.keys.unlock("b", PASSWORD);
+	let notified = 0;
+	const stop = h.keys.subscribe(() => notified++);
+	h.keys.setAskPasswordForAccessChanges(true);
+	expect(notified).toBe(1);
+	expect(h.keys.list().map((row) => `${row.state}:${row.canSign}`)).toEqual([
+		"unlocked:false",
+		"unlocked:false",
+	]);
+	expect(h.opened.map(({ signer }) => signer)).toEqual([
+		{ attached: 1, detached: 1, holding: false },
+		{ attached: 1, detached: 1, holding: false },
+	]);
+	await expect(h.keys.signer("a")?.signPolicy(policy)).rejects.toBeInstanceOf(
+		OwnerPasswordRequiredError,
+	);
+	stop();
+
+	h.keys.setAskPasswordForAccessChanges(false);
+	h.keys.lock("a");
+	await h.keys.unlock("a", PASSWORD);
+	expect(h.keys.snapshot("a").canSign).toBe(true);
+	h.setAskStored(true);
+	expect(h.keys.askPasswordForAccessChanges()).toBe(true);
+	await expect(h.keys.signer("a")?.signPolicy(policy)).rejects.toBeInstanceOf(
+		OwnerPasswordRequiredError,
+	);
+	expect(h.keys.snapshot("a").canSign).toBe(false);
+	expect(h.opened[2].signer).toEqual({
+		attached: 1,
+		detached: 1,
+		holding: false,
+	});
+	expect(await h.keys.signer("a")?.signPolicy(policy, PASSWORD)).toBe(
+		"signed-policy",
+	);
+	expect(h.opened[2].signer.attached).toBe(1);
+
+	h.setAskStored(false);
+	h.blockStorage();
+	h.keys.setAskPasswordForAccessChanges(true);
+	expect(h.keys.askPasswordForAccessChanges()).toBe(true);
+	h.keys.lock("b");
+	await h.keys.unlock("b", PASSWORD);
+	expect(h.keys.snapshot("b").canSign).toBe(false);
+	expect(h.opened[3].signer.attached).toBe(0);
+	h.keys.lockAll();
+});
+
+test("a failed attach keeps the unlock, and an unlock that ends after attaching clears the held key", async () => {
+	const h = harness();
+	h.onAttach(() => {
+		throw new Error("damaged invitation vault");
+	});
+	await h.keys.unlock("dev", PASSWORD);
+	expect(h.keys.snapshot("dev")).toMatchObject({
+		state: "unlocked",
+		canSign: false,
+	});
+	const signer = h.keys.signer("dev");
+	await expect(signer?.signPolicy(policy)).rejects.toBeInstanceOf(
+		OwnerPasswordRequiredError,
+	);
+	await expect(signer?.signPolicy(policy, PASSWORD)).rejects.toThrow(
+		"damaged invitation vault",
+	);
+	h.onAttach(undefined);
+	await expect(signer?.signPolicy(policy, "wrong password")).rejects.toThrow(
+		WRONG_PASSWORD,
+	);
+	expect(h.keys.snapshot("dev").canSign).toBe(false);
+	expect(h.signed).toEqual([]);
+	expect(await signer?.signPolicy(policy, PASSWORD)).toBe("held-policy");
+	expect(h.keys.snapshot("dev").canSign).toBe(true);
+	expect(zeroed(h.passwords)).toBe(true);
+	h.keys.lock("dev");
+
+	h.onAttach(() => queueMicrotask(() => h.keys.lock("dev")));
+	const ended = await h.keys.unlock("dev", PASSWORD).catch((cause) => cause);
+	expect((ended as DOMException).name).toBe("AbortError");
+	expect(h.opened[1].signer).toEqual({
+		attached: 1,
+		detached: 1,
+		holding: false,
+	});
+	expect(h.opened[1].state).toEqual({ closed: 1, freed: 1 });
+	expect(h.keys.snapshot("dev")).toMatchObject({
+		state: "locked",
+		canSign: false,
+	});
+	expect(h.keys.controller("dev")).toBeUndefined();
+	await flush();
+	expect(await queryDeviceLock(scope, "dev")).toBe("free");
+});
+
+test("the 'ask for my password again' choice is stored per account on this computer and is off by default", () => {
+	const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+	const install = (value: unknown) =>
+		Object.defineProperty(globalThis, "localStorage", {
+			configurable: true,
+			value,
+		});
+	const entries = new Map<string, string>();
+	try {
+		install({
+			getItem: (key: string) => entries.get(key) ?? null,
+			setItem: (key: string, value: string) => void entries.set(key, value),
+			removeItem: (key: string) => void entries.delete(key),
+		});
+		expect(readAskPasswordForAccessChanges(scope)).toBe(false);
+		expect(writeAskPasswordForAccessChanges(scope, true)).toBe(true);
+		expect(readAskPasswordForAccessChanges(scope)).toBe(true);
+		expect(
+			readAskPasswordForAccessChanges({ ...scope, account: "colleague" }),
+		).toBe(false);
+		expect([...entries.keys()]).toEqual([
+			`flow-like/devices/ask-password-for-access-changes/${accountStorageKey(scope)}`,
+		]);
+		expect(writeAskPasswordForAccessChanges(scope, false)).toBe(true);
+		expect(entries.size).toBe(0);
+		expect(readAskPasswordForAccessChanges(scope)).toBe(false);
+
+		const refuse = () => {
+			throw new DOMException("Blocked", "SecurityError");
+		};
+		install({ getItem: refuse, setItem: refuse, removeItem: refuse });
+		expect(readAskPasswordForAccessChanges(scope)).toBe(false);
+		expect(writeAskPasswordForAccessChanges(scope, true)).toBe(false);
+		install(undefined);
+		expect(readAskPasswordForAccessChanges(scope)).toBe(false);
+		expect(writeAskPasswordForAccessChanges(scope, true)).toBe(false);
+	} finally {
+		if (original) Object.defineProperty(globalThis, "localStorage", original);
+		else Reflect.deleteProperty(globalThis, "localStorage");
+	}
 });
 
 test("page hide and dispose lock every session", async () => {

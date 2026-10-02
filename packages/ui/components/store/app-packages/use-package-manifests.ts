@@ -1,6 +1,10 @@
 "use client";
 
-import { type UseQueryResult, useQueries } from "@tanstack/react-query";
+import {
+	type QueryClient,
+	type UseQueryResult,
+	useQueries,
+} from "@tanstack/react-query";
 import { useCallback } from "react";
 import {
 	type ManifestAccess,
@@ -16,6 +20,23 @@ import { useBackend } from "../../../state/backend-state";
 export const APP_PACKAGE_MANIFEST_KEY = "app-package-manifest";
 
 const MANIFEST_STALE_MS = 5 * 60_000;
+
+/** Reloads everything read from an app's package pins after they changed. */
+export function invalidateAppPackageQueries(
+	queryClient: QueryClient,
+	appId: string,
+): void {
+	const queryKeys = [
+		["app", appId, "packages"],
+		["app", appId, "package-updates"],
+		["app-catalog-nodes", appId],
+		["getCatalog", appId],
+		["app-package-widgets", appId],
+		[APP_PACKAGE_MANIFEST_KEY],
+	];
+	for (const queryKey of queryKeys)
+		void queryClient.invalidateQueries({ queryKey });
+}
 
 export interface PackageManifestView {
 	access?: ManifestAccess;

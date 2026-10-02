@@ -209,11 +209,15 @@ const READINESS_CHECKS = [
 	"database",
 ];
 
+/** A state this app doesn't know (a newer agent) reads "Unknown", never its wire value (R3). */
 function observedLabel(c: SentenceContext, key: string) {
 	const value = c.str(key);
-	return known<"observed">(OBSERVED, value)
-		? enumLabel(c.t, "observed", value)
-		: (value ?? "");
+	if (value === undefined) return "";
+	return enumLabel(
+		c.t,
+		"observed",
+		known<"observed">(OBSERVED, value) ? value : "unknown",
+	);
 }
 
 function desiredLabel(c: SentenceContext) {
@@ -227,8 +231,53 @@ function failureLabel(c: SentenceContext) {
 	const value = c.str("failure");
 	if (known<"failureCode">(FAILURE_CODES, value))
 		return enumLabel(c.t, "failureCode", value);
-	return value ?? c.t("devices:attention.unknownReason", "reason unknown");
+	// A code this app doesn't know stays off the screen (R3); diagnostics carry it.
+	return c.t("devices:attention.unknownReason", "reason unknown");
 }
+
+/** Agent task names are identifiers: known ones get words, a new one loses its underscores. */
+const TASKS = {
+	device_presence: (t) =>
+		t("devices:attention.task.devicePresence", "check-ins"),
+	fleet_publisher: (t) =>
+		t("devices:attention.task.fleetPublisher", "encrypted status updates"),
+	archive_publisher: (t) =>
+		t("devices:attention.task.archivePublisher", "retained history uploads"),
+	acme_renewal: (t) =>
+		t("devices:attention.task.acmeRenewal", "Let's Encrypt renewal"),
+	secret_publisher: (t) =>
+		t("devices:attention.task.secretPublisher", "secret confirmations"),
+	telemetry_sampler: (t) =>
+		t("devices:attention.task.telemetrySampler", "metric sampling"),
+	live_telemetry_publisher: (t) =>
+		t("devices:attention.task.liveTelemetryPublisher", "shared live metrics"),
+	certificate_inventory_publisher: (t) =>
+		t(
+			"devices:attention.task.certificateInventoryPublisher",
+			"certificate reports",
+		),
+	certificate_renewal: (t) =>
+		t(
+			"devices:attention.task.certificateRenewal",
+			"automatic certificate renewal",
+		),
+	management_transport: (t) =>
+		t(
+			"devices:attention.task.managementTransport",
+			"the link to the connection service",
+		),
+	reboot_watcher: (t) =>
+		t("devices:attention.task.rebootWatcher", "reboot tracking"),
+	update_watcher: (t) =>
+		t("devices:attention.task.updateWatcher", "agent update tracking"),
+} satisfies Record<string, (t: DevicesT) => string>;
+
+const taskLabel = (c: SentenceContext) => {
+	const name = c.str("task") ?? "";
+	return Object.hasOwn(TASKS, name)
+		? TASKS[name as keyof typeof TASKS](c.t)
+		: name.replace(/_/g, " ");
+};
 
 function renewalSentence(c: SentenceContext): string {
 	const { t } = c;
@@ -372,7 +421,7 @@ const SENTENCES = {
 		c.num("more") > 0
 			? c.t("devices:attention.background_task_failing.more", {
 					device: c.device,
-					task: c.str("task"),
+					task: taskLabel(c),
 					count: c.num("more"),
 					defaultValue_one:
 						"Background work on {{device}} is failing: {{task}} and {{count, number}} more.",
@@ -382,7 +431,7 @@ const SENTENCES = {
 			: c.t(
 					"devices:attention.background_task_failing.sentence",
 					"Background work on {{device}} is failing: {{task}}.",
-					{ device: c.device, task: c.str("task") },
+					{ device: c.device, task: taskLabel(c) },
 				),
 	agent_update_available: (c) =>
 		c.item.lastKnown

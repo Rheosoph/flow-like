@@ -1,9 +1,18 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { Ban, CircleDashed, KeyRound, Lock, Rocket } from "lucide-react";
+import {
+	Ban,
+	CircleDashed,
+	KeyRound,
+	Lock,
+	type LucideIcon,
+	OctagonX,
+	Rocket,
+	WifiOff,
+} from "lucide-react";
 import type { ReactNode } from "react";
-import type { DevicesT } from "./area-context";
+import { type DevicesT, useAreaTime } from "./area-context";
 import { DvButton } from "./dv-button";
 import { type Gate, GatedAction } from "./gate-notice";
 import { PairedPins } from "./paired-pins";
@@ -62,7 +71,10 @@ export interface MatrixCantHereCell {
 
 export interface MatrixUnknownCell {
 	state: "unknown";
-	why: "locked" | "snapshot" | "nokeys";
+	/** Every kind `AppUnknown` can put on a matrix cell (DM/model/app-plan.ts), plus `snapshot`: readable, but without an event list. */
+	why: "locked" | "snapshot" | "nokeys" | "offline" | "notloaded" | "error";
+	/** `offline`: unix seconds the device went offline. */
+	since?: number;
 	/** Unlock… / Diagnose / Restore keys…. */
 	action?: ReactNode;
 }
@@ -206,31 +218,61 @@ function NoAccess() {
 	);
 }
 
-const UNKNOWN_ICON = {
+const UNKNOWN_ICON: Record<MatrixUnknownCell["why"], LucideIcon> = {
 	locked: Lock,
 	nokeys: KeyRound,
 	snapshot: CircleDashed,
-} as const;
+	offline: WifiOff,
+	notloaded: CircleDashed,
+	error: OctagonX,
+};
 
-const unknownText = (t: DevicesT, why: MatrixUnknownCell["why"]) => {
+const offlineText = (t: DevicesT, since: string | null) => {
+	if (since === null)
+		return t("devices:view.matrix.offline", "No status: the device is offline");
+	return t("devices:view.matrix.offlineSince", "No status since {{time}}", {
+		time: since,
+	});
+};
+
+/** `since` = the formatted time for `offline`. A kind this client doesn't know reads "Status unknown". */
+const unknownText = (
+	t: DevicesT,
+	why: MatrixUnknownCell["why"],
+	since: string | null,
+) => {
 	if (why === "locked")
 		return t("devices:view.matrix.locked", "Unknown until unlocked");
 	if (why === "nokeys")
 		return t("devices:view.matrix.noKeys", "No keys on this computer");
-	return t(
-		"devices:view.matrix.snapshot",
-		"Unknown: the status snapshot has no event list",
-	);
+	if (why === "offline") return offlineText(t, since);
+	if (why === "notloaded")
+		return t("devices:view.matrix.notLoaded", "Not loaded yet");
+	if (why === "error")
+		return t("devices:view.matrix.error", "Couldn't read its status");
+	if (why === "snapshot")
+		return t(
+			"devices:view.matrix.snapshot",
+			"Unknown: the status snapshot has no event list",
+		);
+	return t("devices:enum.health.unknown", "Status unknown");
 };
 
-function Unknown({ why, action }: Readonly<MatrixUnknownCell>) {
+function Unknown({ why, since, action }: Readonly<MatrixUnknownCell>) {
 	const { t } = useTranslation("devices");
-	const Icon = UNKNOWN_ICON[why];
+	const time = useAreaTime();
+	const Icon = UNKNOWN_ICON[why] ?? CircleDashed;
 	return (
 		<div data-matrix-cell="unknown" data-why={why} className={CELL}>
 			<span className={NONE}>
-				<Icon aria-hidden className="mt-0.5 size-3 shrink-0" />
-				{unknownText(t, why)}
+				<Icon
+					aria-hidden
+					className={cx(
+						"mt-0.5 size-3 shrink-0",
+						why === "error" && "text-critical",
+					)}
+				/>
+				{unknownText(t, why, since === undefined ? null : time.at(since))}
 			</span>
 			{action}
 		</div>

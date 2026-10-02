@@ -12,6 +12,8 @@ export interface Coverage {
 	snapshot: number;
 	/** Not readable, for any reason. */
 	unknown: string[];
+	/** The part of `unknown` that never checked in: nothing can run there, so it is counted on its own, never as unknown. */
+	never: string[];
 	/** Not readable because keys here are locked. */
 	locked: string[];
 	/** Not readable because this computer has no keys. */
@@ -49,6 +51,8 @@ const partOfDevice = (scopes: InventoryScope[] | undefined) =>
 
 const unreadableReason = (device: DeviceFacts) => {
 	if (keysLocked(device.keys)) return "locked";
+	// A device you only approved cloud access for was never yours to read: restoring keys doesn't apply.
+	if (device.relationship === "cloud_approval") return undefined;
 	return device.keys.state === "none" ? "noKeys" : undefined;
 };
 
@@ -84,6 +88,7 @@ const countDevice = (
 		return;
 	}
 	result.unknown.push(device.id);
+	if (device.presence.kind === "never") result.never.push(device.id);
 	const reason = unreadableReason(device);
 	if (reason) result[reason].push(device.id);
 };
@@ -95,6 +100,7 @@ export function coverage(input: AttentionInputExt, appId?: string): Coverage {
 		live: 0,
 		snapshot: 0,
 		unknown: [],
+		never: [],
 		locked: [],
 		noKeys: [],
 		noAccess: [],

@@ -13,7 +13,7 @@ import { useBackend } from "../../state/backend-state";
 import type { GenericFetcher } from "../pages/store/store-package-detail";
 import { usePaymentDistribution, usePayments } from "../payments/use-payments";
 
-const CHECKOUT_POLL_MS = 4000;
+export const CHECKOUT_POLL_MS = 4000;
 const CHECKOUT_POLL_LIMIT_MS = 10 * 60_000;
 
 /**
@@ -33,21 +33,34 @@ export function viewerHasPackageAccess(
 	return pkg.visibility === "public" && (pkg.price ?? 0) <= 0;
 }
 
-/** While a checkout runs in the browser, re-checks access until it lands or the window closes. */
+/**
+ * How long a checkout is still followed: the whole window for one that starts
+ * now, what is left of it for one that started at `since`.
+ */
+export function checkoutWindowLeft(since?: number): number {
+	if (since === undefined) return CHECKOUT_POLL_LIMIT_MS;
+	return Math.max(0, since + CHECKOUT_POLL_LIMIT_MS - Date.now());
+}
+
+/**
+ * While a checkout runs in the browser, re-checks access until it lands or the
+ * window closes. `since` is when a checkout that is being resumed started.
+ */
 export function useCheckoutPolling(
 	awaiting: boolean,
 	onPoll: (() => void) | undefined,
 	onGiveUp: () => void,
+	since?: number,
 ) {
 	useEffect(() => {
 		if (!awaiting) return;
 		const poll = window.setInterval(() => onPoll?.(), CHECKOUT_POLL_MS);
-		const stop = window.setTimeout(onGiveUp, CHECKOUT_POLL_LIMIT_MS);
+		const stop = window.setTimeout(onGiveUp, checkoutWindowLeft(since));
 		return () => {
 			window.clearInterval(poll);
 			window.clearTimeout(stop);
 		};
-	}, [awaiting, onPoll, onGiveUp]);
+	}, [awaiting, onPoll, onGiveUp, since]);
 }
 
 export function usePackageStoreData(

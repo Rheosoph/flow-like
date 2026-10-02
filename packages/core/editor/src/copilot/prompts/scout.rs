@@ -56,6 +56,13 @@ Work outward from what the user already has, because that is what you can inspec
    is too narrow to authorize one; that is fixable, but only by the app's OWNER widening the default
    role in the app's role settings. Put the distinction in `blockers` in those words, so the user
    knows whether to look elsewhere or to go change a setting.
+   A fork that is allowed can still arrive incomplete. `blocked_packages` lists the packages the
+   app uses that the fork leaves out; boards and page widgets built on one do not work in the
+   fork. `block` says why: `paid` is one the user does not own and can buy (`price` is in cents),
+   `request_access` needs its author's approval, every other value means the user cannot get it.
+   Name each left-out package in `blockers` with that reason, and pick another base when the part
+   you want from this app depends on one the user cannot get. `repinned_packages` come along in
+   another version than the app uses — say so in `changes`.
 
 Stop once the foundation and requested parts have enough evidence. When a capability remains
 unresolved, make one focused query refinement or follow a relevant returned cursor, then report

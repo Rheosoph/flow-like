@@ -98,6 +98,23 @@ export const pendingOrder = (status: string) =>
 		"REFUND_PENDING",
 	].includes(status);
 
+/**
+ * States in which an order still waits for its payment. A subset of what
+ * `pendingOrder` accepts: an order being cancelled or refunded is no longer
+ * on its way to being paid.
+ */
+export const AWAITING_PAYMENT_STATES: readonly string[] = [
+	"CREATING",
+	"CREATED",
+	"OPENING",
+	"OPEN",
+	"AWAITING_PAYMENT",
+	"PROCESSING",
+];
+
+export const awaitingPayment = (status: string) =>
+	AWAITING_PAYMENT_STATES.includes(status);
+
 /** EUR input stays decimal text until the integer minor-unit conversion. */
 export function parseEuroAmount(input: string): number | null {
 	const match = /^(0|[1-9]\d*)(?:[.,](\d{1,2}))?$/.exec(input.trim());

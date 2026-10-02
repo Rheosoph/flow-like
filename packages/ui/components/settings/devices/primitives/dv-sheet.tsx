@@ -37,6 +37,12 @@ export interface DvSheetProps {
 	children?: ReactNode;
 }
 
+/* As the phone bottom sheet, the last row keeps clear of the home indicator. */
+const PHONE_SAFE_FOOT =
+	"max-[720px]:pb-[calc(--spacing(3)+var(--fl-safe-bottom,0px))]";
+const PHONE_SAFE_BODY =
+	"max-[720px]:pb-[calc(--spacing(4)+var(--fl-safe-bottom,0px))]";
+
 /**
  * SPEC §4.21: popover surface, `border-strong`, scrim, no blur or shadow
  * (R13); 620/780 px; bottom sheet below 720 px of viewport (it is portalled,
@@ -60,6 +66,7 @@ export function DvSheet({
 	children,
 }: Readonly<DvSheetProps>) {
 	const { t } = useTranslation("devices");
+	const hasFoot = Boolean(foot || footNote);
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
@@ -72,9 +79,9 @@ export function DvSheet({
 				{...(sub ? {} : { "aria-describedby": undefined })}
 				className={cx(
 					"gap-0 overflow-hidden rounded-lg border border-border-strong bg-popover p-0 shadow-none backdrop-blur-none [&>[data-slot=dialog-accent]]:hidden",
-					"max-h-[calc(100dvh-48px)] w-[min(620px,calc(100vw-32px))] max-w-[calc(100vw-32px)] sm:max-w-[620px]",
+					"max-h-[calc(100dvh-48px-var(--fl-safe-top,0px)-var(--fl-safe-bottom,0px))] w-[min(620px,calc(100vw-32px))] max-w-[calc(100vw-32px)] sm:max-w-[620px]",
 					wide && "w-[min(780px,calc(100vw-32px))] sm:max-w-[780px]",
-					"max-[720px]:top-auto max-[720px]:bottom-0 max-[720px]:max-h-[calc(100dvh-24px)] max-[720px]:w-full max-[720px]:max-w-full max-[720px]:translate-y-0 max-[720px]:rounded-b-none max-[720px]:sm:max-w-full",
+					"max-[720px]:top-auto max-[720px]:bottom-0 max-[720px]:max-h-[calc(100dvh-24px-var(--fl-safe-top,0px))] max-[720px]:w-full max-[720px]:max-w-full max-[720px]:translate-y-0 max-[720px]:rounded-b-none max-[720px]:sm:max-w-full",
 					className,
 				)}
 			>
@@ -118,13 +125,19 @@ export function DvSheet({
 				<div
 					className={cx(
 						"flex min-h-0 flex-1 flex-col gap-3.5 overflow-auto px-5 py-4 text-sm",
+						!hasFoot && PHONE_SAFE_BODY,
 						bodyClassName,
 					)}
 				>
 					{children}
 				</div>
-				{foot || footNote ? (
-					<div className="sticky bottom-0 flex flex-wrap items-center gap-2 border-t border-hairline bg-surface-sunken px-5 py-3 text-xs text-muted-foreground">
+				{hasFoot ? (
+					<div
+						className={cx(
+							"sticky bottom-0 flex flex-wrap items-center gap-2 border-t border-hairline bg-surface-sunken px-5 py-3 text-xs text-muted-foreground",
+							PHONE_SAFE_FOOT,
+						)}
+					>
 						<span className="min-w-[12ch] flex-1">{footNote}</span>
 						{foot}
 					</div>

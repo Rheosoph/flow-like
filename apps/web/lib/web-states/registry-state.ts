@@ -24,7 +24,9 @@ import type {
 	CachedPackage,
 	InstalledPackage,
 	PackageCommentsResponse,
+	PackageInvitation,
 	PackageUpdate,
+	PackageUser,
 	RegistryEntry,
 	RequestAccessParams,
 	RequestAccessResponse,
@@ -79,6 +81,9 @@ function runtimeSourcesError(
 }
 
 export class WebRegistryState implements IRegistryState {
+	/** An API that answered an access request has the route: a bare 404 or 405 after that is a proxy's. */
+	private accessAnswered = false;
+
 	constructor(private readonly backend: WebBackendRef) {}
 
 	async init(registryUrl?: string): Promise<void> {
@@ -271,6 +276,29 @@ export class WebRegistryState implements IRegistryState {
 		);
 	}
 
+	async listMyInvitations(): Promise<PackageInvitation[]> {
+		return apiGet<PackageInvitation[]>(
+			"registry/invitations/me",
+			this.backend.auth,
+		);
+	}
+
+	async acceptInvitation(invitationId: string): Promise<PackageUser> {
+		return apiPost<PackageUser>(
+			`registry/invitation/${encodeURIComponent(invitationId)}/accept`,
+			undefined,
+			this.backend.auth,
+		);
+	}
+
+	async rejectInvitation(invitationId: string): Promise<void> {
+		await apiPost(
+			`registry/invitation/${encodeURIComponent(invitationId)}/reject`,
+			undefined,
+			this.backend.auth,
+		);
+	}
+
 	async getPackageComments(
 		packageId: string,
 		offset?: number,
@@ -396,11 +424,13 @@ export class WebRegistryState implements IRegistryState {
 				this.backend.auth,
 			);
 		} catch (error) {
-			if (isWidgetAccessUnsupportedError(error)) {
+			if (!this.accessAnswered && isWidgetAccessUnsupportedError(error)) {
 				return { ...ANONYMOUS_WIDGET_ACCESS };
 			}
 			throw error;
 		}
-		return parseWidgetAccessResponse(response);
+		const access = parseWidgetAccessResponse(response);
+		this.accessAnswered = true;
+		return access;
 	}
 }

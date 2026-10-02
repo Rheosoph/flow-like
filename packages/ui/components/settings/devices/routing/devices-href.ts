@@ -9,13 +9,6 @@ export const ACCOUNT_DEVICES_PATH = "/settings/devices";
 export const APP_DEVICES_PATH = "/library/config/devices";
 export const APP_EVENTS_PATH = "/library/config/events";
 
-let previewLinks = false;
-
-/** Build only: while the area is reached through `?ui=next`, every built link keeps `ui=next`. Removed in W4. */
-export function setPreviewLinks(on: boolean): void {
-	previewLinks = on;
-}
-
 function withQuery(path: string, params: URLSearchParams): string {
 	const query = params.toString();
 	return query ? `${path}?${query}` : path;
@@ -24,11 +17,9 @@ function withQuery(path: string, params: URLSearchParams): string {
 /** Every internal link, attention action and Spotlight item goes through here so the two bases never drift. */
 export function devicesHref(route: DevicesRoute, scope: DevicesScope): string {
 	const target = routeScope(route, scope);
-	const params = serializeDevicesRoute(route, target);
-	if (previewLinks) params.set("ui", "next");
 	return withQuery(
 		target.kind === "app" ? APP_DEVICES_PATH : ACCOUNT_DEVICES_PATH,
-		params,
+		serializeDevicesRoute(route, target),
 	);
 }
 

@@ -78,6 +78,21 @@ describe("my access as a recipient", () => {
 		).toEqual([]);
 	});
 
+	test("a device list that hasn't loaded, or can't be read, ends nobody's access", () => {
+		const input = sampleFleet();
+		const ended = (change: Partial<typeof input>) =>
+			evaluate("shared_access_ended", { ...input, ...change }).length;
+		expect(ended({ devices: [] })).toBe(0);
+		expect(ended({ devices: [], devicesLoaded: false })).toBe(0);
+		// The hub answered with no devices: the shared vault's device really is gone.
+		expect(ended({ devices: [], devicesLoaded: true })).toBe(1);
+		const withoutLab = input.devices.filter(
+			(row) => row.device_id !== SAMPLE_IDS.lab,
+		);
+		expect(ended({ devices: withoutLab })).toBe(1);
+		expect(ended({ devices: withoutLab, devicesLoaded: false })).toBe(0);
+	});
+
 	test("pending requests are Info until the hub lists the device", () => {
 		const input = sampleFleet();
 		const [item] = evaluate("access_request_pending", input);

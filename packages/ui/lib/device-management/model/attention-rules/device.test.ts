@@ -9,7 +9,7 @@ import {
 	vault,
 } from "../__fixtures__/sample-fleet";
 import type { AttentionInputExt } from "../attention";
-import type { AttentionKey } from "../types";
+import type { AttentionKey, TaskHealth } from "../types";
 import { DEVICE_RULES } from "./device";
 
 const evaluate = (key: AttentionKey, input: AttentionInputExt) =>
@@ -62,6 +62,31 @@ describe("presence", () => {
 		).toBe("info");
 		expect(
 			evaluate("late", withDevice({ last_seen_at: SAMPLE_NOW - 60 })),
+		).toEqual([]);
+	});
+
+	test("a device you only approved cloud access for is not yours to watch; shared and older-hub rows are", () => {
+		const offline = (relationship?: "shared" | "cloud_approval") =>
+			evaluate(
+				"offline_since",
+				withDevice({
+					last_seen_at: SAMPLE_NOW - 601,
+					owner_id: "someone",
+					relationship,
+				}),
+			);
+		expect(offline("cloud_approval")).toEqual([]);
+		expect(offline("shared")).toHaveLength(1);
+		expect(offline(undefined)).toHaveLength(1);
+		expect(
+			evaluate(
+				"late",
+				withDevice({
+					last_seen_at: SAMPLE_NOW - 300,
+					owner_id: "someone",
+					relationship: "cloud_approval",
+				}),
+			),
 		).toEqual([]);
 	});
 
@@ -241,10 +266,10 @@ describe("status, agent and host", () => {
 				consecutive_failures: 4,
 			},
 			{
-				name: "archive_sealer",
-				state: "failing",
+				name: "archive_publisher",
+				state: "stopped",
 				since: SAMPLE_NOW - 100,
-				consecutive_failures: 1,
+				consecutive_failures: 0,
 			},
 		];
 		const [item] = evaluate("background_task_failing", input);
@@ -252,6 +277,40 @@ describe("status, agent and host", () => {
 			task: "fleet_publisher",
 			more: 1,
 		});
+	});
+
+	test("one failed pass is not a warning; without a counter a minute of failing is", () => {
+		const withTask = (
+			task: Partial<TaskHealth> & Pick<TaskHealth, "state" | "since">,
+		) => {
+			const input = sampleFleet();
+			const inspection = input.live[SAMPLE_IDS.edge].inspection;
+			if (!inspection) throw new Error("fixture");
+			inspection.value.tasks = [{ name: "device_presence", ...task }];
+			return evaluate("background_task_failing", input);
+		};
+		expect(
+			withTask({
+				state: "failing",
+				since: SAMPLE_NOW - 600,
+				consecutive_failures: 1,
+			}),
+		).toEqual([]);
+		expect(
+			withTask({
+				state: "failing",
+				since: SAMPLE_NOW - 5,
+				consecutive_failures: 2,
+			}),
+		).toHaveLength(1);
+		expect(withTask({ state: "failing", since: SAMPLE_NOW - 59 })).toEqual([]);
+		expect(withTask({ state: "failing", since: SAMPLE_NOW - 60 })).toHaveLength(
+			1,
+		);
+		expect(withTask({ state: "stopped", since: SAMPLE_NOW - 1 })).toHaveLength(
+			1,
+		);
+		expect(withTask({ state: "ok", since: SAMPLE_NOW - 600 })).toEqual([]);
 	});
 
 	test("agent update: newer release than the running agent; Update agent on Linux, How to update elsewhere", () => {
@@ -283,9 +342,9 @@ describe("status, agent and host", () => {
 					item.subject.deviceId !== SAMPLE_IDS.warehouse,
 			);
 		const current = sampleFleet();
-		expect(
-			current.live[SAMPLE_IDS.edge].inspection?.value.agent?.version,
-		).toBe("0.1.0");
+		expect(current.live[SAMPLE_IDS.edge].inspection?.value.agent?.version).toBe(
+			"0.1.0",
+		);
 		expect(live(current)).toEqual([]);
 		const sameLabel = sampleFleet();
 		sameLabel.latestRelease = { version: "0.9.4", sequence: 45 };
@@ -337,9 +396,13 @@ describe("status, agent and host", () => {
 		const reader = input.fleet[SAMPLE_IDS.edge].reader;
 		if (!reader) throw new Error("fixture");
 		reader.expiresAt = SAMPLE_NOW + 29 * 86_400;
-		expect(evaluate("status_subscription_expiring", input)[0]?.severity).toBe(
-			"notice",
-		);
+		const [item] = evaluate("status_subscription_expiring", input);
+		expect(item?.severity).toBe("notice");
+		// Renew lives in N2 › Device settings › Encrypted status subscription.
+		expect(item?.action).toEqual({
+			code: "renew",
+			target: { screen: "device", deviceId: SAMPLE_IDS.edge, tab: "settings" },
+		});
 	});
 
 	test("device slots ≥ 90 % need BG3 usage", () => {

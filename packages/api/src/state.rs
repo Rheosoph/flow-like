@@ -474,7 +474,8 @@ pub struct State {
     pub prerun_manifest_cache:
         moka::sync::Cache<String, Arc<flow_like::flow::compiled::PrerunManifest>>,
     pub response_cache: moka::sync::Cache<String, Value>,
-    /// WASM package permission cache: "{user_id}:{package_id}" -> WasmPackagePermission
+    /// WASM package permission cache: "wasm:{user_id}:{package_id}" -> the
+    /// caller's grant. "No access" is never stored.
     pub wasm_permission_cache: moka::sync::Cache<String, WasmPackagePermission>,
     /// Auth token cache: token_hash -> CachedAuth
     /// Short TTL (240s) to balance security vs performance
@@ -1704,7 +1705,15 @@ impl State {
         package_id: &str,
         perm: WasmPackagePermission,
     ) {
+        // Only grants are cached. Access is granted by other API processes
+        // too (purchase webhook, approval, invitation), and their invalidation
+        // never reaches this one, so a cached "no access" would outlive it.
+        // A lookup that finds none still drops a grant cached before it.
         let key = format!("wasm:{}:{}", user_id, package_id);
+        if perm.is_empty() {
+            self.wasm_permission_cache.invalidate(&key);
+            return;
+        }
         self.wasm_permission_cache.insert(key, perm);
     }
 

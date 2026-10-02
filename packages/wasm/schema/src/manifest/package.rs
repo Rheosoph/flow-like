@@ -97,6 +97,8 @@ pub struct PackageAuthor {
     pub url: Option<String>,
 }
 
+const NODES_WITHHELD_KEY: &str = "nodes_withheld";
+
 /// Package manifest for WASM nodes and micro-frontend widgets.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -162,6 +164,33 @@ impl PackageManifest {
             widget_bundle_hash: None,
             metadata: HashMap::new(),
         }
+    }
+
+    /// Turn this into the widgets-only view of the package: no node binary is
+    /// delivered with it. A registry sends this view to a project member who
+    /// may load the package's widgets but not run its nodes on their device.
+    pub fn withhold_nodes(&mut self) {
+        self.wasm_path = None;
+        self.wasm_hash = None;
+        self.metadata.insert(
+            NODES_WITHHELD_KEY.to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+
+    /// Whether the registry left the node binary out of this copy, so a later
+    /// install asks for it again. A manifest that names its node binary holds
+    /// it, whatever its metadata says: the mark alone is the publisher's to set.
+    pub fn nodes_withheld(&self) -> bool {
+        let named =
+            |field: &Option<String>| field.as_deref().is_some_and(|value| !value.is_empty());
+        !named(&self.wasm_path)
+            && !named(&self.wasm_hash)
+            && self
+                .metadata
+                .get(NODES_WITHHELD_KEY)
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
     }
 
     pub fn validate(&self) -> Result<(), Vec<String>> {
@@ -252,6 +281,39 @@ mod tests {
         assert!(manifest.widgets.is_empty());
         assert!(manifest.widget_bundle_path.is_none());
         assert!(manifest.validate().is_ok());
+        assert!(!manifest.nodes_withheld());
+    }
+
+    #[test]
+    fn withholding_nodes_drops_the_binary_and_survives_the_wire() {
+        let mut manifest = PackageManifest::new("com.example.maps", "Maps", "1.2.0", "maps");
+        manifest.wasm_path = Some("packages/com.example.maps/1.2.0/node.wasm".into());
+        manifest.wasm_hash = Some("abc".into());
+        manifest.withhold_nodes();
+
+        assert!(manifest.wasm_path.is_none() && manifest.wasm_hash.is_none());
+        let wire = serde_json::to_string(&manifest).unwrap();
+        assert!(PackageManifest::from_json(&wire).unwrap().nodes_withheld());
+    }
+
+    #[test]
+    fn a_manifest_that_names_its_binary_is_not_withheld_by_its_metadata() {
+        let mut marked = PackageManifest::new("com.example.maps", "Maps", "1.2.0", "maps");
+        marked.withhold_nodes();
+        assert!(marked.nodes_withheld());
+
+        let mut with_hash = marked.clone();
+        with_hash.wasm_hash = Some("abc".into());
+        assert!(!with_hash.nodes_withheld());
+
+        let mut with_path = marked.clone();
+        with_path.wasm_path = Some("node.wasm".into());
+        assert!(!with_path.nodes_withheld());
+
+        let mut empty_fields = marked;
+        empty_fields.wasm_path = Some(String::new());
+        empty_fields.wasm_hash = Some(String::new());
+        assert!(empty_fields.nodes_withheld());
     }
 
     #[test]

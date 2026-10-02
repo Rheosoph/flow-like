@@ -92,8 +92,9 @@ pub async fn get_package(
         None => None,
     };
 
-    if package.visibility == WasmPackageVisibility::Private && access.is_none() && pinned.is_none()
-    {
+    let through_project_only =
+        package.visibility == WasmPackageVisibility::Private && access.is_none();
+    if through_project_only && pinned.is_none() {
         return Err(ApiError::FORBIDDEN);
     }
 
@@ -113,7 +114,25 @@ pub async fn get_package(
             )));
         }
         registry.pin_entry_to_version(&mut entry, pinned).await?;
+        // A member who cannot read the project's boards only loads the
+        // package's widgets: the node list, the node binary's hash and size
+        // and the other versions stay with the package's own users.
+        if through_project_only
+            && let Some(app_id) = query.app_id.as_deref()
+            && !crate::package_license::reads_project_boards(&state, &user, app_id).await
+        {
+            entry.nodes.clear();
+            entry.versions.retain(|listed| listed.version == pinned);
+            if super::server::manifest_has_wasm(&entry.manifest) {
+                entry.manifest.withhold_nodes();
+                for listed in &mut entry.versions {
+                    listed.wasm_hash.clear();
+                    listed.wasm_size = 0;
+                }
+            }
+        }
     }
+    entry.pinned_version = pinned;
     entry.current_user_permission = access.map(|a| a.bits() as i32);
 
     Ok(Json(entry))

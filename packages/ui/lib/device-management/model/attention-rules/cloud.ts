@@ -88,9 +88,12 @@ const resourceApprovals = (
 		grantId: grant.grant_id,
 		appId: grant.app_id ?? grant.project_id,
 		revoked: grant.status === "revoked",
-		active: grant.status === "active" && grant.expires_at > input.now,
-		effectiveExpiresAt: grant.expires_at,
-		onlineWriteBlocked: false,
+		active:
+			grant.status === "active" &&
+			(grant.effective_expires_at ?? grant.expires_at) > input.now,
+		// E15: a hub that sends the tighter end (sharing grant, access rules) and the storage block sends them here too.
+		effectiveExpiresAt: grant.effective_expires_at ?? grant.expires_at,
+		onlineWriteBlocked: grant.online_write_blocked === "storage_full",
 		approverIsMe: grant.delegating_user_id === input.me,
 	}));
 

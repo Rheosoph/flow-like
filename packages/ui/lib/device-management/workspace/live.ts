@@ -166,6 +166,12 @@ export interface LiveManagerOptions {
 }
 
 export interface LiveSessionManagerImpl extends LiveSessionManager {
+	/** `lane` defaults to "operation"; background sections (group metrics) run on "poll". */
+	exclusive<T>(
+		deviceId: string,
+		run: (call: ManagementCall) => Promise<T>,
+		options?: { signal?: AbortSignal; lane?: CallLane },
+	): Promise<T>;
 	/** Progress of the latest connection attempt (unlock sheet, Copy diagnostics). */
 	steps(deviceId: string): UnlockStep[];
 	/** Retry an unreachable device at once when its presence turns online. */
@@ -219,7 +225,6 @@ interface Entry {
 	coalesced: Map<string, RequestTask>;
 	draining: boolean;
 	timers: Partial<Record<TimerName, () => void>>;
-	intentional: WeakSet<LiveConnection>;
 	inspection?: LiveInspection;
 	inspecting?: Promise<void>;
 	inspectAgain: boolean;
@@ -445,7 +450,6 @@ class LiveManager implements LiveSessionManagerImpl {
 				coalesced: new Map(),
 				draining: false,
 				timers: {},
-				intentional: new WeakSet(),
 				inspectAgain: false,
 				steps: freshSteps(),
 			};
@@ -564,6 +568,7 @@ class LiveManager implements LiveSessionManagerImpl {
 		}
 		this.cancel(entry, "retry");
 		this.cancel(entry, "presence");
+		this.closeConnection(entry);
 		const renewing = entry.state.kind === "renewing";
 		const abort = new AbortController();
 		entry.abort = abort;
@@ -633,7 +638,6 @@ class LiveManager implements LiveSessionManagerImpl {
 			entry.abort?.signal.aborted ||
 			this.ports.keys.controller(entry.id) !== controller
 		) {
-			entry.intentional.add(conn);
 			conn.close();
 			throw new LiveCallError(
 				"keys_locked",
@@ -774,13 +778,12 @@ class LiveManager implements LiveSessionManagerImpl {
 		return this.connect(entry);
 	}
 
+	/** The connection stops being the entry's before it closes, so its close event is not taken for a drop. */
 	private closeConnection(entry: Entry): void {
 		const conn = entry.conn;
 		entry.conn = undefined;
 		this.cancel(entry, "renew");
-		if (!conn) return;
-		entry.intentional.add(conn);
-		conn.close();
+		conn?.close();
 	}
 
 	private closed(
@@ -788,11 +791,9 @@ class LiveManager implements LiveSessionManagerImpl {
 		conn: LiveConnection,
 		_reason: "local" | "remote",
 	): void {
-		if (entry.conn === conn) {
-			entry.conn = undefined;
-			this.cancel(entry, "renew");
-		}
-		if (entry.intentional.has(conn)) return;
+		if (entry.conn !== conn) return;
+		entry.conn = undefined;
+		this.cancel(entry, "renew");
 		if (
 			(totalDemand(entry) > 0 || hasTasks(entry)) &&
 			this.ports.keys.controller(entry.id)
@@ -965,6 +966,7 @@ class LiveManager implements LiveSessionManagerImpl {
 		const call: ManagementCall = (command, operationId) => {
 			const next = chain.then(() =>
 				this.transmit(entry, {
+					lane: task.lane,
 					command,
 					operationId,
 					idempotent: READ_COMMANDS.has(String(command.type)),
@@ -981,12 +983,15 @@ class LiveManager implements LiveSessionManagerImpl {
 		}
 	}
 
-	/** Sends one request; NotSent and pre-send expiry retry once on the next session, reads also after no reply. */
+	/**
+	 * Sends one request; NotSent and pre-send expiry retry once on the next session, reads also after no reply.
+	 * A change that got no reply becomes a tray item, unless background polling sent it: nobody asked for that one.
+	 */
 	private async transmit(
 		entry: Entry,
 		task: Pick<
 			RequestTask,
-			"command" | "operationId" | "idempotent" | "retried" | "track"
+			"lane" | "command" | "operationId" | "idempotent" | "retried" | "track"
 		>,
 	): Promise<ManagementResponse> {
 		for (;;) {
@@ -998,7 +1003,11 @@ class LiveManager implements LiveSessionManagerImpl {
 					task.retried = true;
 					continue;
 				}
-				if (error instanceof ManagementUnconfirmedError && !task.idempotent)
+				if (
+					error instanceof ManagementUnconfirmedError &&
+					!task.idempotent &&
+					task.lane !== "poll"
+				)
 					this.recordUnknown(entry, task, error);
 				throw error;
 			}
@@ -1109,8 +1118,10 @@ class LiveManager implements LiveSessionManagerImpl {
 			slots ? "skipped" : "failed",
 			slots ? "slots_in_use" : stepDetail(liveErrorCode(cause)),
 		);
-		if (entry.inspection)
-			entry.inspection = { ...entry.inspection, error: cause };
+		if (entry.inspection) {
+			const { progress: _, ...read } = entry.inspection;
+			entry.inspection = { ...read, error: cause };
+		}
 		this.notify();
 		if (slots) {
 			this.closeConnection(entry);

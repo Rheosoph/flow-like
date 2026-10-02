@@ -421,6 +421,26 @@ describe("other targets", () => {
 		).toMatchObject({ ok: true, changed: false });
 	});
 
+	test("Keys keeps the highlight of keys whose device the hub no longer lists", () => {
+		const vaults = [{ deviceId: GONE, role: "shared" as const }];
+		const keys: DevicesRoute = { screen: "keys", focusDeviceId: GONE };
+		expect(resolveTarget(keys, fleet({ vaults }))).toStrictEqual({
+			ok: true,
+			route: keys,
+			changed: false,
+		});
+		expect(resolveTarget(keys, fleet({ vaults: [] }))).toMatchObject({
+			route: { screen: "keys" },
+			changed: true,
+		});
+		expect(
+			resolveTarget(
+				{ screen: "app-devices", by: "device", focusDeviceId: GONE },
+				fleet({ vaults }),
+			),
+		).toMatchObject({ route: { screen: "app-devices", by: "device" } });
+	});
+
 	test("sections without objects always resolve", () => {
 		for (const route of [
 			{ screen: "hub" },

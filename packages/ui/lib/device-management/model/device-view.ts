@@ -93,6 +93,14 @@ export function fleetFacts(input: AttentionInputExt): FleetFacts {
 	return facts;
 }
 
+/**
+ * Whether "not in the hub list" means anything yet. Before the list has loaded,
+ * or while it can't be read, `devices` is empty and says nothing about a device.
+ */
+export function deviceListKnown(input: AttentionInputExt): boolean {
+	return input.devicesLoaded ?? input.devices.length > 0;
+}
+
 export function deviceName(row: Pick<DeviceRow, "name" | "display_name">) {
 	return row.display_name || row.name;
 }
@@ -318,16 +326,25 @@ const SNAPSHOT_BLOCKED = new Set<AgeState>([
 	"error",
 ]);
 
-/** Without a live read, a snapshot that can't be read explains the gap. A failed read with earlier rows keeps them. */
+type FleetState = AttentionInputExt["fleet"][string];
+
+/** A snapshot that can't be read; a failed read that still has earlier rows keeps them (IA §2.2). */
+const snapshotBlocked = (fleet: FleetState): Freshness | undefined => {
+	const status = fleet.freshness.status;
+	if (!SNAPSHOT_BLOCKED.has(status.age)) return undefined;
+	const keepsRows = status.age === "error" && (fleet.status || fleet.saved);
+	return keepsRows ? undefined : status;
+};
+
+/** Without a live read, a snapshot that can't be read explains the gap. */
 const snapshotUnavailable = (
 	input: AttentionInputExt,
 	facts: DeviceFacts,
 ): ServicesUnavailable | undefined => {
 	const fleet = input.fleet[facts.id];
-	const status = fleet?.freshness.status;
-	if (facts.liveInput?.inspection || !fleet || !status) return undefined;
-	if (!SNAPSHOT_BLOCKED.has(status.age)) return undefined;
-	if (status.age === "error" && (fleet.status || fleet.saved)) return undefined;
+	if (facts.liveInput?.inspection || !fleet) return undefined;
+	const status = snapshotBlocked(fleet);
+	if (!status) return undefined;
 	const reason =
 		status.reason ?? (status.error ? { code: status.error.code } : undefined);
 	return reason ? { state: status.age, reason } : { state: status.age };
@@ -342,6 +359,22 @@ const ACTIVE_ROLLOUT = new Set<DeploymentRolloutStatus["state"]>([
 	"activating",
 	"rolling_back",
 ]);
+
+/** The device discards an update that stays staged this long (`staging_timeout`). */
+export const STAGED_ROLLOUT_TTL_S = DAY_S;
+
+/**
+ * When the device ends this rollout on its own. A staged update has no
+ * `deadline_at` yet: it is discarded a day after it was staged.
+ */
+export function rolloutEndsAt(
+	rollout: DeploymentRolloutStatus,
+): number | undefined {
+	if (rollout.state !== "staged") return rollout.deadline_at ?? undefined;
+	return rollout.created_at === undefined
+		? undefined
+		: rollout.created_at + STAGED_ROLLOUT_TTL_S;
+}
 
 const rolloutTime = (rollout: DeploymentRolloutStatus) =>
 	rollout.updated_at ?? rollout.created_at ?? 0;
@@ -405,7 +438,7 @@ function diagnosticsOf(
 		placement.last_error ??
 		placement.replicas?.find((replica) => replica.last_error)?.last_error;
 	const replicaError = placement.replicas?.some(
-		(replica) => "has_error" in replica && replica.has_error === true,
+		(replica) => replica.has_error === true,
 	);
 	if (
 		placement.has_error === undefined &&

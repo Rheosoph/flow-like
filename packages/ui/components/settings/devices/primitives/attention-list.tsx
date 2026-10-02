@@ -199,8 +199,14 @@ function SnoozeMenu({ onSnooze }: Readonly<SnoozeMenuProps>) {
 					aria-label={t("view.attention.more", "More for this item")}
 				/>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end">
-				<DropdownMenuItem onSelect={onSnooze}>
+			<DropdownMenuContent
+				align="end"
+				className="border-border-strong bg-popover shadow-none backdrop-blur-none"
+			>
+				<DropdownMenuItem
+					onSelect={onSnooze}
+					className="text-[13px]/[18px] focus:bg-row-hover focus:text-foreground"
+				>
 					{t("view.attention.snooze", "Snooze for 7 days")}
 				</DropdownMenuItem>
 			</DropdownMenuContent>

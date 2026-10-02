@@ -256,7 +256,9 @@ export function FreshnessStamp({
 		? { dataFrom: hub.dataFrom, retryAt: hub.retryAt, reason: hub.reason }
 		: (error ?? (ageIn === "error" ? {} : undefined));
 	const age: StampAge = failure ? "error" : ageIn;
-	const ago = observedAt === undefined ? "" : time.ago(observedAt);
+	/* A device clock ahead of the area clock must not read "in 40 s": an observation is never in the future. */
+	const ago =
+		observedAt === undefined ? "" : time.ago(Math.min(observedAt, time.nowS));
 	const cadence = cadenceSec ?? DEFAULT_CADENCE[source] ?? 0;
 
 	const text = failure

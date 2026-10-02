@@ -1,6 +1,6 @@
 use crate::{
     functions::TauriFunctionError,
-    state::{TauriFlowLikeState, TauriRegistryState, TauriSettingsState},
+    state::{TauriFlowLikeState, TauriSettingsState},
 };
 use anyhow::{Context, Result, ensure};
 use flow_like::{
@@ -326,7 +326,9 @@ async fn dependencies(
     }
     let mut total_wasm = 0usize;
     if !app.packages.is_empty() {
-        let registry = TauriRegistryState::get_client(handle).await?;
+        let registry = crate::functions::registry::registry_client(handle).await?;
+        let project = (!matches!(app.visibility, flow_like::app::AppVisibility::Offline))
+            .then_some(app.id.as_str());
         let mut packages = app.packages.iter().collect::<Vec<_>>();
         packages.sort();
         for (id, version) in packages {
@@ -335,7 +337,9 @@ async fn dependencies(
             let installed = registry.get_installed(id).await;
             let selected = installed
                 .as_ref()
-                .and_then(|package| package.get_version(version));
+                .filter(|package| registry.from_current_registry(package))
+                .and_then(|package| package.get_version(version))
+                .filter(|selected| !selected.manifest.nodes_withheld());
             let (manifest, wasm) = if let Some(selected) = selected {
                 ensure!(
                     selected.manifest.id == *id
@@ -364,7 +368,7 @@ async fn dependencies(
                 (selected.manifest.clone(), wasm)
             } else {
                 registry
-                    .export_package_version(id, version, 64 * 1024 * 1024)
+                    .export_package_version(id, version, 64 * 1024 * 1024, project)
                     .await?
             };
             total_wasm += wasm.len();

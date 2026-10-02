@@ -33,17 +33,25 @@ export class HubError extends Error {
 	readonly code: HubErrorCode;
 	readonly status?: number;
 	readonly gate?: GateId;
+	/** How long the hub asked to wait (429), in seconds, when the API error carries it. */
+	readonly retryAfterS?: number;
 
 	constructor(
 		code: HubErrorCode,
 		message: string,
-		options: { status?: number; gate?: GateId; cause?: unknown } = {},
+		options: {
+			status?: number;
+			gate?: GateId;
+			cause?: unknown;
+			retryAfterS?: number;
+		} = {},
 	) {
 		super(message, { cause: options.cause });
 		this.name = "HubError";
 		this.code = code;
 		this.status = options.status;
 		this.gate = options.gate;
+		this.retryAfterS = options.retryAfterS;
 	}
 }
 
@@ -53,6 +61,14 @@ function statusOf(error: unknown): number | undefined {
 	const status = (error as { status?: unknown } | null)?.status;
 	return typeof status === "number" ? status : undefined;
 }
+
+/** `ApiResponseError.retryAfter` (seconds) once the API error keeps the hub's `Retry-After`. */
+const retryAfterOf = (error: unknown) => {
+	const seconds = (error as { retryAfter?: unknown } | null)?.retryAfter;
+	return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0
+		? seconds
+		: undefined;
+};
 
 function codeOf(error: unknown): string | undefined {
 	const code = (error as { code?: unknown } | null)?.code;
@@ -120,6 +136,7 @@ export function toHubError(
 		status,
 		gate: hubErrorGate(code, scope),
 		cause: error,
+		retryAfterS: retryAfterOf(error),
 	});
 }
 
@@ -674,6 +691,20 @@ export function muteCertificateNotices(
 				until,
 			}),
 		(value) => muteSchema.parse(value),
+	);
+}
+
+/** The caller's active mutes on one device; a `null` id mutes every certificate of it. */
+export function listCertificateNoticeMutes(
+	api: IApiState,
+	profile: IProfile,
+	deviceId: string,
+): Promise<HubResult<CertificateNoticeMute[]>> {
+	return hubCall(
+		"device",
+		"GET devices/{id}/certificate-notices/mute",
+		() => api.get(profile, `${devicePath(deviceId)}/certificate-notices/mute`),
+		(value) => z.array(muteSchema).max(64).parse(value),
 	);
 }
 

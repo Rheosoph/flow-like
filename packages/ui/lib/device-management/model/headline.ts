@@ -6,6 +6,7 @@ import {
 	fleetFacts,
 	isLastKnown,
 	itemsForDevice,
+	rolloutEndsAt,
 } from "./device-view";
 import type { AttentionItem, CopyParams, CopyRef, ServiceView } from "./types";
 
@@ -42,7 +43,7 @@ export type HeadlineCode =
 	| "app.all_stopped"
 	| "app.drift"
 	| "app.coverage"
-	| "app.no_access";
+	| "app.not_checked_in";
 
 export interface HeadlineRef extends CopyRef<HeadlineCode> {
 	/** Name lists (devices, events), formatted by the copy layer. */
@@ -178,19 +179,30 @@ function writesNeedYou(entry: AppService) {
 	return conflicts > 0 || paused > 0;
 }
 
+/** Unknown devices that could be read (locked, no keys, failed read): never-checked-in ones are counted on their own. */
+const unknownCount = (covered: Coverage) =>
+	covered.unknown.length - covered.never.length;
+
+/** The one coverage sentence (APP §6.3): readable of total, then unknown, never checked in and no access. */
 function appCoverage(app: HeadlineApp, covered: Coverage): HeadlineRef[] {
-	const parts = [
+	return [
 		ref("app.coverage", {
+			app: app.name,
 			readable: covered.readable,
 			total: covered.total,
-			unknown: covered.unknown.length,
+			unknown: unknownCount(covered),
+			never: covered.never.length,
+			noAccess: covered.noAccess.length,
 		}),
 	];
-	if (covered.noAccess.length)
-		parts.push(
-			ref("app.no_access", { app: app.name, count: covered.noAccess.length }),
-		);
-	return parts;
+}
+
+/** The settings version an update switches to: until it is active the device only reports the one it started from. */
+function targetRevision({ rollout, settings }: ServiceView): number {
+	if (rollout?.active_revision != null) return rollout.active_revision;
+	return rollout?.base_revision === undefined
+		? settings.latest
+		: rollout.base_revision + 1;
 }
 
 function subjectParams({ device, service }: AppService): CopyParams {
@@ -215,19 +227,32 @@ function appHeadline(input: AttentionInputExt, app: HeadlineApp): Headline {
 			: [],
 	);
 	if (!services.length) {
-		if (!covered.readable)
+		const unknown = unknownCount(covered);
+		// A device that never checked in runs nothing: it neither asks for an unlock nor makes the answer uncertain.
+		if (!covered.readable && unknown > 0) {
+			const locked = covered.locked.filter(
+				(id) => !covered.never.includes(id),
+			).length;
 			return {
 				...ref("app.all_locked", { app: app.name }),
 				rest: [
-					ref("app.locked_detail", {
-						count: covered.locked.length || covered.unknown.length,
-					}),
+					ref("app.locked_detail", { count: locked || unknown }),
+					...(covered.never.length
+						? [
+								ref(
+									"app.not_checked_in",
+									{ count: covered.never.length },
+									{ names: names(input, covered.never) },
+								),
+							]
+						: []),
 				],
 			};
+		}
 		return {
 			...ref("app.never_deployed", {
 				app: app.name,
-				seen: covered.unknown.length ? 1 : 0,
+				seen: unknown > 0 || covered.noAccess.length > 0 ? 1 : 0,
 			}),
 			rest: [
 				ref("app.mode", {
@@ -277,10 +302,7 @@ function appHeadline(input: AttentionInputExt, app: HeadlineApp): Headline {
 			};
 		case 2:
 			return {
-				...ref("app.updating", {
-					...subject,
-					to: rollout?.active_revision ?? top.service.settings.latest,
-				}),
+				...ref("app.updating", { ...subject, to: targetRevision(top.service) }),
 				rest: [
 					...(rollout?.deadline_at && rollout.base_revision !== undefined
 						? [
@@ -293,16 +315,18 @@ function appHeadline(input: AttentionInputExt, app: HeadlineApp): Headline {
 					...coverageParts,
 				],
 			};
-		case 3:
+		case 3: {
+			const expiresAt = rollout ? rolloutEndsAt(rollout) : undefined;
 			return {
 				...ref("app.staged", subject),
 				rest: [
 					ref("app.staged_detail", {
-						to: rollout?.active_revision ?? top.service.settings.latest,
-						...(rollout?.deadline_at ? { expiresAt: rollout.deadline_at } : {}),
+						to: targetRevision(top.service),
+						...(expiresAt ? { expiresAt } : {}),
 					}),
 				],
 			};
+		}
 		case 4:
 			return { ...ref("app.applying", subject), rest: coverageParts };
 		case 5:

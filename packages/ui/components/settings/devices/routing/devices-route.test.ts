@@ -1,14 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type {
 	DevicesRoute,
 	DevicesScope,
 } from "../../../../lib/device-management/model/types";
-import {
-	appEventsHref,
-	deployExitHref,
-	devicesHref,
-	setPreviewLinks,
-} from "./devices-href";
+import { appEventsHref, deployExitHref, devicesHref } from "./devices-href";
 import {
 	type DevicesHost,
 	isRouteId,
@@ -421,12 +416,6 @@ describe("parsing rules", () => {
 			parseDevicesRoute(`view=keys&device=${DEVICE}`, "account").route.screen,
 		).toBe("device");
 	});
-
-	test("the preview param is not part of the route", () => {
-		expect(
-			parseDevicesRoute("ui=next&view=hub", "account").route,
-		).toStrictEqual({ screen: "hub" });
-	});
 });
 
 describe("app scope", () => {
@@ -639,23 +628,5 @@ const NAVIGATION_CASES = [
 describe("navigationMode", () => {
 	test.each(NAVIGATION_CASES)("%s", (_name, from, to, mode) => {
 		expect(navigationMode(from, to)).toBe(mode);
-	});
-});
-
-describe("preview links (build only)", () => {
-	afterEach(() => setPreviewLinks(false));
-
-	test("links keep ui=next while the preview is on", () => {
-		setPreviewLinks(true);
-		expect(devicesHref({ screen: "hub" }, ACCOUNT)).toBe(
-			"/settings/devices?view=hub&ui=next",
-		);
-		expect(devicesHref({ screen: "fleet", view: "devices" }, ACCOUNT)).toBe(
-			"/settings/devices?ui=next",
-		);
-		setPreviewLinks(false);
-		expect(devicesHref({ screen: "hub" }, ACCOUNT)).toBe(
-			"/settings/devices?view=hub",
-		);
 	});
 });

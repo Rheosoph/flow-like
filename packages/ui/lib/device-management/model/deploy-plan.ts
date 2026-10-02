@@ -128,6 +128,7 @@ export interface DeployDraft {
 	maxInstances: number;
 	targets: DeployTargetDraft[];
 	vars: Record<string, string>;
+	/** Values of secret variables live only here and in `over.secrets`: `draftWithoutSecrets` drops exactly these. */
 	secrets: Record<string, string>;
 	secretsMode: "same" | "per_device";
 	/** Variable ids changed in this draft; updates send only these. */
@@ -146,6 +147,12 @@ export interface DeployDraft {
 	/** One deployment id per plan, reused on every device. */
 	deploymentId: string;
 	acceptRemovedEvents: boolean;
+	/**
+	 * Version-only update of several services (APP §2.16, §3.14): every updated
+	 * service keeps the events it serves now. `events` then only says which of
+	 * them the newest version still has; nothing is added and nothing is split.
+	 */
+	keepEvents?: boolean;
 }
 
 export interface PlanApp extends Pick<AppInput, "id" | "name" | "visibility"> {
@@ -214,6 +221,8 @@ export interface PlanTargetService {
 	renamedFrom?: string;
 	/** Events the update drops (APP §3.5 item 6). */
 	removedEvents: string[];
+	/** Set when this service can't use the target's port: another served service of the plan has it (A5). */
+	port?: number;
 }
 
 export interface PlanTarget {
@@ -283,8 +292,10 @@ export const PLAN_ISSUE_CODES = [
 	"variable_invalid",
 	"secret_size",
 	"service_instances_range",
+	"update_needs_service",
 	"host_invalid",
 	"port_invalid",
+	"port_in_use",
 	"token_invalid",
 	"unencrypted",
 	"writes_offline",
@@ -491,6 +502,9 @@ export function makePlan(entry: PlanEntry): DeployDraft {
 			tokenValue: "",
 		},
 		...(update ? {} : { isolation: DEFAULT_ISOLATION, writes: null }),
+		...(update && !entry.route.eventId && !entry.route.serviceId
+			? { keepEvents: true }
+			: {}),
 		approval: {
 			files: mode === "online" ? "read_only" : "none",
 			ownerConsent: false,
@@ -505,6 +519,19 @@ export function makePlan(entry: PlanEntry): DeployDraft {
 		strategy: "auto",
 		deploymentId: entry.deploymentId,
 		acceptRemovedEvents: false,
+	};
+}
+
+/** The draft as saved progress may keep it (APP §3.1): every choice, no secret value and no typed token. */
+export function draftWithoutSecrets(draft: DeployDraft): DeployDraft {
+	return {
+		...draft,
+		secrets: {},
+		endpoint: { ...draft.endpoint, tokenValue: "" },
+		targets: draft.targets.map((target) => {
+			const { secrets: _secrets, token: _token, ...over } = target.over;
+			return { ...target, over };
+		}),
 	};
 }
 
@@ -594,10 +621,14 @@ export function planServices(
 	const chosen = eligibleEvents(app).filter((event) =>
 		draft.events.includes(event.id),
 	);
-	return groupEvents(chosen, app, draft.split).map((group, index) => {
+	// Services that keep their events were split when they were created: one entry stands for all of them.
+	const groups = draft.keepEvents
+		? [{ events: chosen, why: [] }]
+		: groupEvents(chosen, app, draft.split);
+	return groups.map((group, index) => {
 		const [first] = group.events;
-		const key =
-			draft.split === "one" && index === 0 ? "main" : (first?.id ?? "main");
+		const single = draft.keepEvents || (draft.split === "one" && index === 0);
+		const key = single ? "main" : (first?.id ?? "main");
 		const limit = instanceLimit(draft, group.events);
 		return {
 			key,
@@ -657,7 +688,8 @@ function targetService(
 	service: PlannedService,
 	target: DeployTargetDraft,
 	device: PlanDevice | undefined,
-	appId: string | null,
+	{ appId, keepEvents }: Pick<DeployDraft, "appId" | "keepEvents">,
+	planned: ReadonlySet<string>,
 ): PlanTargetService {
 	const choice = target.choices[service.key] ?? { kind: "new" };
 	const appServices = appServicesOn(device, appId);
@@ -665,7 +697,10 @@ function targetService(
 		const base = service.id;
 		const serviceId = freeId(
 			base,
-			new Set((device?.services ?? []).map((value) => value.serviceId)),
+			new Set([
+				...(device?.services ?? []).map((value) => value.serviceId),
+				...planned,
+			]),
 		);
 		const { kept, leftOut } = leftOutOn(
 			service.events,
@@ -687,6 +722,18 @@ function targetService(
 		(value) => value.serviceId === choice.serviceId,
 	);
 	const current = existing?.events ?? [];
+	if (keepEvents && choice.kind === "update") {
+		// Its own events that the newest version still has; one that is gone is a removed event to accept.
+		const kept = current.filter((eventId) => service.events.includes(eventId));
+		return {
+			key: service.key,
+			serviceId: choice.serviceId,
+			kind: "update",
+			events: kept,
+			leftOut: [],
+			removedEvents: current.filter((eventId) => !kept.includes(eventId)),
+		};
+	}
 	const wanted =
 		choice.kind === "add"
 			? [...new Set([...current, ...service.events])]
@@ -787,6 +834,31 @@ function targetResources(
 		: { resources: null, runsAsAgent: true };
 }
 
+/** A5: one endpoint per service. The first served service takes the target's port, each further one the next free port. */
+function servicePorts(
+	resolved: PlanTargetService[],
+	planned: readonly PlannedService[],
+	endpoint: PlanTarget["endpoint"],
+	device: PlanDevice | undefined,
+): PlanTargetService[] {
+	const first = endpoint.port;
+	if (first === null) return resolved;
+	const hosted = new Set(
+		planned.filter((service) => service.hosted).map((service) => service.key),
+	);
+	const own = resolved.map((service) => service.serviceId);
+	let last: number | undefined;
+	return resolved.map((service) => {
+		if (!hosted.has(service.key) || !service.events.length) return service;
+		if (last === undefined) {
+			last = first;
+			return service;
+		}
+		last = nextFreePort(last + 1, device, own);
+		return { ...service, port: last };
+	});
+}
+
 function planTarget(
 	draft: DeployDraft,
 	target: DeployTargetDraft,
@@ -794,16 +866,21 @@ function planTarget(
 	facts: PlanFacts,
 ): PlanTarget {
 	const device = facts.devices[target.deviceId];
-	const resolved = services.map((service) =>
-		targetService(service, target, device, draft.appId),
-	);
+	// An id that had to change also stays clear of the ids this plan already uses on the device.
+	const planned = new Set<string>();
+	const resolved = services.map((service) => {
+		const value = targetService(service, target, device, draft, planned);
+		planned.add(value.serviceId);
+		return value;
+	});
+	const endpoint = targetEndpoint(draft, target, device, resolved);
 	return {
 		deviceId: target.deviceId,
 		name: device?.name ?? target.deviceId,
 		gate: device?.gate ?? null,
 		locked: device?.locked ?? true,
-		services: resolved,
-		endpoint: targetEndpoint(draft, target, device, resolved),
+		services: servicePorts(resolved, services, endpoint, device),
+		endpoint,
 		...targetResources(target.over.isolation ?? draft.isolation, device),
 	};
 }
@@ -997,20 +1074,33 @@ function checkWhat(plan: DeployPlan, facts: PlanFacts, issues: Issues) {
 		issues.push(issue("local_only_web", "how"));
 }
 
+/** Another service of the plan would write the same service on this device. */
+const sharesId = (target: PlanTarget, service: PlanTargetService) =>
+	target.services.some(
+		(other) => other !== service && other.serviceId === service.serviceId,
+	);
+
 const targetServiceIssues = (
 	plan: DeployPlan,
-	deviceId: string,
+	target: PlanTarget,
 	service: PlanTargetService,
 	reserved: readonly string[],
 ): PlanIssue[] => {
-	const at = { deviceId, serviceKey: service.key };
+	const at = { deviceId: target.deviceId, serviceKey: service.key };
+	const params = { service: service.serviceId };
 	return flagged([
 		[
-			issue("service_id_reserved", "where", {
-				...at,
-				params: { service: service.serviceId },
-			}),
+			issue("service_id_reserved", "where", { ...at, params }),
 			service.kind === "new" && reserved.includes(service.serviceId),
+		],
+		[
+			issue("service_id_twice", "where", { ...at, params }),
+			sharesId(target, service),
+		],
+		[
+			// An update entry never creates a service: the caller picks the one to update per device.
+			issue("update_needs_service", "where", at),
+			service.kind === "new" && plan.draft.entry === "update",
 		],
 		[
 			issue("removed_events", "what", {
@@ -1041,7 +1131,7 @@ function checkTarget(
 	);
 	const reserved = facts.devices[deviceId]?.reservedIds ?? [];
 	for (const service of target.services)
-		issues.push(...targetServiceIssues(plan, deviceId, service, reserved));
+		issues.push(...targetServiceIssues(plan, target, service, reserved));
 }
 
 function serviceVariables(plan: DeployPlan, service: PlannedService) {
@@ -1131,27 +1221,80 @@ function validPort(port: number) {
 	return Number.isInteger(port) && port >= 1 && port <= 65535;
 }
 
-function checkAddress(target: PlanTarget, issues: Issues) {
-	const deviceId = target.deviceId;
-	const { host, port } = target.endpoint;
-	if (host !== null && !validHost(host))
-		issues.push(issue("host_invalid", "endpoint", { deviceId }));
-	if (port !== null && !validPort(port))
-		issues.push(issue("port_invalid", "endpoint", { deviceId }));
+/** The target's port and every port a further served service of the plan was given. */
+function plannedPorts(target: PlanTarget): number[] {
+	return [
+		target.endpoint.port,
+		...target.services.map((service) => service.port),
+	].filter((port): port is number => typeof port === "number");
 }
 
-function portException(target: PlanTarget): PlanException[] {
+function portIssues(
+	target: PlanTarget,
+	device: PlanDevice | undefined,
+): PlanIssue[] {
+	const deviceId = target.deviceId;
+	const ports = plannedPorts(target);
+	if (ports.some((port) => !validPort(port)))
+		return [issue("port_invalid", "endpoint", { deviceId })];
+	const own = new Set(target.services.map((service) => service.serviceId));
+	return (device?.portsInUse ?? [])
+		.filter(
+			(row) =>
+				ports.includes(row.port) && !(row.serviceId && own.has(row.serviceId)),
+		)
+		.map((row) =>
+			issue("port_in_use", "endpoint", {
+				deviceId,
+				params: {
+					port: row.port,
+					...(row.serviceId ? { service: row.serviceId } : {}),
+				},
+			}),
+		);
+}
+
+function checkAddress(
+	target: PlanTarget,
+	device: PlanDevice | undefined,
+	issues: Issues,
+) {
+	const { host } = target.endpoint;
+	if (host !== null && !validHost(host))
+		issues.push(
+			issue("host_invalid", "endpoint", { deviceId: target.deviceId }),
+		);
+	issues.push(...portIssues(target, device));
+}
+
+const portMoved = (deviceId: string, params: CopyParams): PlanException => ({
+	code: "port_moved",
+	step: "endpoint",
+	deviceId,
+	tone: "info",
+	params,
+});
+
+/** The target's port when it had to move, and every further service that took the next free one. */
+function portExceptions(target: PlanTarget): PlanException[] {
 	const { port, portMovedFrom } = target.endpoint;
-	if (portMovedFrom === undefined) return [];
-	return [
-		{
-			code: "port_moved",
-			step: "endpoint",
-			deviceId: target.deviceId,
-			tone: "info",
-			params: { from: portMovedFrom, to: port ?? portMovedFrom },
-		},
-	];
+	if (port === null) return [];
+	const first =
+		portMovedFrom === undefined
+			? []
+			: [portMoved(target.deviceId, { from: portMovedFrom, to: port })];
+	const further = target.services.flatMap((service) =>
+		service.port === undefined
+			? []
+			: [
+					portMoved(target.deviceId, {
+						from: port,
+						to: service.port,
+						service: service.serviceId,
+					}),
+				],
+	);
+	return [...first, ...further];
 }
 
 function servesUnencrypted(target: PlanTarget) {
@@ -1167,12 +1310,13 @@ function servesUnencrypted(target: PlanTarget) {
 function checkEndpoint(
 	plan: DeployPlan,
 	target: PlanTarget,
+	facts: PlanFacts,
 	issues: Issues,
 	exceptions: PlanException[],
 ) {
 	const deviceId = target.deviceId;
-	checkAddress(target, issues);
-	exceptions.push(...portException(target));
+	checkAddress(target, facts.devices[deviceId], issues);
+	exceptions.push(...portExceptions(target));
 	checkToken(plan.draft, target, issues);
 	if (!servesUnencrypted(target)) return;
 	exceptions.push({
@@ -1238,13 +1382,17 @@ function checkLimits(plan: DeployPlan, issues: Issues) {
 		issues.push(issue("writes_invalid", "access_cost"));
 }
 
+/** New online services always get an approval; offline copies only for hosted models (APP §3.11). */
+function wantsApproval(plan: DeployPlan) {
+	return plan.mode === "online" || plan.draft.approval.models.length > 0;
+}
+
 function checkAccess(plan: DeployPlan, facts: PlanFacts, issues: Issues) {
 	const creates = plan.targets.some((target) =>
 		target.services.some((service) => service.kind === "new"),
 	);
 	const { approval, spending, appId } = plan.draft;
-	const wanted = plan.mode === "online" || approval.models.length > 0;
-	if (!creates || !wanted) return;
+	if (!creates || !wantsApproval(plan)) return;
 	const step = plan.mode === "online" ? "access_cost" : "copy_upload";
 	const found = checkApprovalDraft(approval, {
 		appId: plan.mode === "online" ? appId : null,
@@ -1309,7 +1457,8 @@ export function checkPlan(plan: DeployPlan, facts: PlanFacts): PlanCheck {
 	for (const target of plan.targets) {
 		checkTarget(plan, target, facts, issues);
 		exceptions.push(...targetExceptions(target));
-		if (serves(plan, target)) checkEndpoint(plan, target, issues, exceptions);
+		if (serves(plan, target))
+			checkEndpoint(plan, target, facts, issues, exceptions);
 		checkIsolation(plan, target, facts, issues, exceptions);
 	}
 	checkSettings(plan, issues);
@@ -1421,7 +1570,7 @@ export function wirePlan(
 		previousVariables: facts.previousVariables ?? [],
 		overrides: wireOverrides(plan, draft, variables, existing),
 		host: target.endpoint.host ?? hosting?.host ?? "127.0.0.1",
-		port: target.endpoint.port ?? hosting?.port ?? 8080,
+		port: service.port ?? target.endpoint.port ?? hosting?.port ?? 8080,
 		replicas: existing?.config.max_replicas ?? planned?.maxInstances ?? 1,
 		serviceToken: facts.serviceToken,
 		tlsCertificateId: wireCertificate(target, facts),
@@ -1442,13 +1591,14 @@ function updatePhases(plan: DeployPlan, options: PhaseOptions): DeployPhase[] {
 	const ship: DeployPhase[] =
 		plan.draft.version === "keep" ? [] : ["upload", "install"];
 	const secrets: DeployPhase[] = options.secrets ? ["secrets"] : [];
+	// The device stages a safe update first; its new secrets are written into the staged update.
 	return options.safe
-		? [...ship, ...secrets, "prepare_update", "check_new", "switch"]
+		? [...ship, "prepare_update", ...secrets, "check_new", "switch"]
 		: [...ship, "stop", ...secrets, "start"];
 }
 
 function accessPhases(plan: DeployPlan): DeployPhase[] {
-	if (plan.mode !== "online") return [];
+	if (!wantsApproval(plan)) return [];
 	return plan.draft.spending ? ["approve", "spending"] : ["approve"];
 }
 

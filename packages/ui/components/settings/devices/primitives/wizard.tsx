@@ -58,7 +58,7 @@ export function WizardStepper({
 							key={step}
 							data-s={state}
 							aria-current={state === "current" ? "step" : undefined}
-							className="flex min-w-0 flex-1 items-center gap-2 last:flex-none [&:not(:last-child)]:after:mr-2 [&:not(:last-child)]:after:h-px [&:not(:last-child)]:after:min-w-2 [&:not(:last-child)]:after:flex-auto [&:not(:last-child)]:after:bg-border [&:not(:last-child)]:after:content-['']"
+							className="flex min-w-0 flex-1 items-center gap-2 last:flex-none data-[s=current]:min-w-fit [&:not(:last-child)]:after:mr-2 [&:not(:last-child)]:after:h-px [&:not(:last-child)]:after:min-w-2 [&:not(:last-child)]:after:flex-auto [&:not(:last-child)]:after:bg-border [&:not(:last-child)]:after:content-['']"
 						>
 							<span
 								className={cx(
@@ -77,6 +77,7 @@ export function WizardStepper({
 								)}
 							</span>
 							<span
+								title={step}
 								className={cx(
 									"truncate text-ui",
 									state === "current" && "font-semibold text-foreground",

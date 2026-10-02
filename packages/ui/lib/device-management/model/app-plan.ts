@@ -244,10 +244,14 @@ export interface EverywhereRow {
 export interface AppCoverage {
 	total: number;
 	readable: number;
+	/** Not readable, for any reason (the devices in `never` included, as in `Coverage`). */
 	unknown: number;
 	locked: string[];
+	/** The part of `unknown` that never checked in: nothing can run there, so it is shown on its own (APP §2.18). */
+	never: string[];
 }
 
+/** `all_unknown`: nothing is readable and at least one device could be (locked, no keys, failed read). */
 export type AppLayout = "normal" | "never" | "all_unknown" | "no_devices";
 
 export interface AppView {
@@ -272,6 +276,8 @@ export interface AppView {
 	everywhereElse: {
 		notDeployed: EverywhereRow[];
 		unknown: EverywhereRow[];
+		/** "Hasn't checked in yet". */
+		never: EverywhereRow[];
 		noAccess: EverywhereRow[];
 	};
 	coverage: AppCoverage;
@@ -403,6 +409,8 @@ export function appUnknownOf(device: AppDeviceInput): AppUnknown {
 	const services = isUnreadable(device.services) ? device.services : undefined;
 	const reason = services?.reason;
 	if (device.presence.kind === "never") return { kind: "never" };
+	// Approving cloud access or spending gives no access to a device's status: keys are not what is missing.
+	if (device.relationship === "cloud_approval") return { kind: "noaccess" };
 	if (reason?.code === "no_keys_here" || device.keyState === "none")
 		return { kind: "nokeys" };
 	if (services?.state === "noaccess")
@@ -436,8 +444,11 @@ const CONV_RANK: Record<Convergence, number> = {
 
 const serviceRank = (view: ServiceView, staged: boolean): number => {
 	const rank = CONV_RANK[view.conv];
+	const writes =
+		typeof view.offlineWrites === "object" ? view.offlineWrites : undefined;
+	// The same "writes need you" as the app headline: paused queues or a conflict at the head.
 	const writesNeedYou =
-		typeof view.offlineWrites === "object" && view.offlineWrites.quarantined;
+		!!writes && (writes.quarantined || writes.head?.state === "conflict");
 	if (rank === 0) return 0;
 	if (writesNeedYou) return 1;
 	return staged ? Math.min(rank, 2) : rank;
@@ -534,6 +545,9 @@ function matrixCell(
 	const base = { deviceId: device.id, serviceIds: [] as string[] };
 	if (!readable(device)) {
 		const unknown = group?.unknown ?? appUnknownOf(device);
+		// Nothing runs on a device that never checked in: not served, with its deploy gate.
+		if (unknown.kind === "never")
+			return { ...base, state: "not_served", gate: device.deployGate ?? null };
 		return unknown.kind === "noaccess"
 			? { ...base, state: "no_access" }
 			: { ...base, state: "unknown", unknown };
@@ -652,6 +666,7 @@ export function buildAppView(input: AppViewInput): AppView {
 	const everywhereElse: AppView["everywhereElse"] = {
 		notDeployed: [],
 		unknown: [],
+		never: [],
 		noAccess: [],
 	};
 	const coverage: AppCoverage = {
@@ -659,6 +674,7 @@ export function buildAppView(input: AppViewInput): AppView {
 		readable: 0,
 		unknown: 0,
 		locked: [],
+		never: [],
 	};
 	for (const device of devices) {
 		const views = readable(device);
@@ -671,6 +687,11 @@ export function buildAppView(input: AppViewInput): AppView {
 		if (!views) {
 			const unknown = appUnknownOf(device);
 			coverage.unknown++;
+			if (unknown.kind === "never") {
+				coverage.never.push(device.id);
+				everywhereElse.never.push(everywhereRow(device, app.id, unknown));
+				continue;
+			}
 			if (unknown.kind === "locked") coverage.locked.push(device.id);
 			if (unknown.kind === "noaccess")
 				everywhereElse.noAccess.push(everywhereRow(device, app.id, unknown));
@@ -730,7 +751,7 @@ export function buildAppView(input: AppViewInput): AppView {
 			? "no_devices"
 			: services.length
 				? "normal"
-				: coverage.readable
+				: coverage.readable || !everywhereElse.unknown.length
 					? "never"
 					: "all_unknown",
 		groups,

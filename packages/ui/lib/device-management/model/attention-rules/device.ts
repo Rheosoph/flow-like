@@ -17,6 +17,7 @@ import {
 	perDevice,
 } from "../device-view";
 import { CLOCK_SKEW_FLAG_S, classify } from "../freshness";
+import type { TaskHealth } from "../types";
 import { consentResources } from "./cloud";
 
 const NEVER_CHECKED_IN_WARNING_S = 10 * MINUTE_S;
@@ -25,6 +26,8 @@ const READER_RENEW_S = 30 * DAY_S;
 const SLOTS_NEARLY_FULL = 0.9;
 /** A tracked reboot or agent update that finished this close to the boot explains it. */
 const TRACKED_REBOOT_WINDOW_S = 10 * MINUTE_S;
+const TASK_FAILING_PASSES = 2;
+const TASK_FAILING_S = MINUTE_S;
 
 const subject = (device: DeviceFacts) =>
 	({ kind: "device", deviceId: device.id }) as const;
@@ -42,8 +45,12 @@ function runningCount(device: DeviceFacts) {
 		: 0;
 }
 
+/** IA §6.5 "owner, people with access": a device you only approved cloud access or spending for is not yours to watch. */
+const watched = (device: DeviceFacts) =>
+	device.active && device.relationship !== "cloud_approval";
+
 const offlineSince = perDevice("offline_since", (input, device) => {
-	if (!device.active || device.presence.kind !== "offline") return undefined;
+	if (!watched(device) || device.presence.kind !== "offline") return undefined;
 	const critical = hasRequestedRunning(device);
 	return attentionCandidate({
 		key: "offline_since",
@@ -64,7 +71,7 @@ const offlineSince = perDevice("offline_since", (input, device) => {
 });
 
 const late = perDevice("late", (input, device) =>
-	device.active && device.presence.kind === "late"
+	watched(device) && device.presence.kind === "late"
 		? attentionCandidate({
 				key: "late",
 				severity: "info",
@@ -300,9 +307,22 @@ const statusStale = perDevice("status_stale_while_online", (input, device) => {
 	});
 });
 
+/**
+ * A task that stopped (ended, failed for good or panicked) always counts; a
+ * retrying one only after a second failed pass, or a minute when the reader
+ * gets no counter, so a single busy pass never raises a warning.
+ */
+function taskNeedsAttention(task: TaskHealth, now: number) {
+	if (task.state === "stopped") return true;
+	if (task.state !== "failing") return false;
+	return task.consecutive_failures === undefined
+		? now - task.since >= TASK_FAILING_S
+		: task.consecutive_failures >= TASK_FAILING_PASSES;
+}
+
 const backgroundTask = perDevice("background_task_failing", (input, device) => {
-	const failing = device.inspection?.tasks?.filter(
-		(task) => task.state === "failing",
+	const failing = device.inspection?.tasks?.filter((task) =>
+		taskNeedsAttention(task, input.now),
 	);
 	const source = device.inspectionSource;
 	if (!device.active || !failing?.length || !source) return undefined;
@@ -438,7 +458,8 @@ const subscriptionExpiring = perDevice(
 			severity: "notice",
 			subject: subject(device),
 			params: { device: device.name, expiresAt: reader.expiresAt },
-			action: { code: "renew", target: deviceRoute(device.id, "access") },
+			// IA §6.2 N2: Renew sits in Device settings › Encrypted status subscription.
+			action: { code: "renew", target: deviceRoute(device.id, "settings") },
 			source: localSource(input),
 		});
 	},

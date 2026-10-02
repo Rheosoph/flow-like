@@ -6,7 +6,7 @@ import {
 	TemplateMetadataReadError,
 	type TemplateReadOptions,
 } from "../../state/backend-state/template-read";
-import { scoutSearchTemplates } from "./scout-tools";
+import { scoutForkPreview, scoutSearchTemplates } from "./scout-tools";
 
 function owned(id: string, appId = "private"): TemplateMetadataEntry {
 	return [
@@ -336,4 +336,28 @@ describe("Scout template search coverage", () => {
 			expect(state.templateState.getTemplates).not.toHaveBeenCalled();
 		},
 	);
+});
+
+describe("Scout fork preview", () => {
+	const preview = {
+		user_can_fork: true,
+		blocked_packages: [{ package_id: "chart-kit", block: "paid", price: 499 }],
+	};
+	const state = () =>
+		({
+			appState: { getForkPreview: vi.fn(async () => preview) },
+		}) as unknown as IBackendState;
+
+	test("relays the hub's preview, left-out packages included", async () => {
+		expect(await scoutForkPreview(state(), { app_id: "source" }, true)).toEqual(
+			{ status: "ok", preview },
+		);
+	});
+
+	test("says that a paid package cannot be bought on a build that may not sell", async () => {
+		const result = await scoutForkPreview(state(), { app_id: "source" }, false);
+
+		expect(result.preview).toBe(preview);
+		expect(result.note).toContain("cannot be bought here");
+	});
 });

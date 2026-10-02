@@ -122,6 +122,13 @@ contract supplies the input pins. **Update Widget Inputs** sends new values;
 **Query Widget** invokes declared queries. Bind the widget's emitted actions
 to the app's handler before relying on them to change application data.
 
+In an online App the package version the App pins decides those input pins,
+for every member and for cloud runs. A folder on your computer that declares
+other inputs under the same version number shows them only on that computer:
+when the Flow syncs, an input the pinned version does not declare is removed
+again unless it is connected. Publish the new version and update the App's
+pin, or try the change in an offline App first.
+
 ## Add framework or network features
 
 The repository also has React, Preact, Vue, Svelte, Solid, and Lit templates.

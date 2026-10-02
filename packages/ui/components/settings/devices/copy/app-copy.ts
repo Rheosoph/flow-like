@@ -103,7 +103,7 @@ const MODE = {
 			),
 			cost: t(
 				"devices:app.mode.onlineCost",
-				"The device's compute is yours. Model use is charged to whoever sets the spending limit. Files written count against the approver's storage.",
+				"The device's compute is yours. Model use is charged to whoever sets the spending limit; a limit is required whenever models are approved. Files written count against the approver's storage.",
 			),
 			needs: t(
 				"devices:app.mode.onlineNeeds",
@@ -142,7 +142,7 @@ const MODE = {
 			),
 			cost: t(
 				"devices:app.mode.offlineCost",
-				"The device's compute is yours. Model use only if you approve hosted models, up to your limit.",
+				"The device's compute is yours. Model use only if you approve hosted models, and then only up to the limit you must set.",
 			),
 			needs: t(
 				"devices:app.mode.offlineNeeds",

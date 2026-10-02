@@ -3,7 +3,6 @@ import type {
 	InspectionPlus,
 	PlacementStatusPlus,
 	ReplicaStatusPlus,
-	TaskHealth,
 } from "./model/types";
 import type { ManagementCall } from "./telemetry";
 import {
@@ -106,6 +105,7 @@ const PLACEMENT_FACTS = {
 const REPLICA_FACTS = {
 	process_id: PLACEMENT_FACTS.process_id,
 	last_error: PLACEMENT_FACTS.last_error,
+	has_error: PLACEMENT_FACTS.has_error,
 	restarts,
 } satisfies Partial<
 	Record<keyof ReplicaStatusPlus, z.ZodType<unknown, z.ZodTypeDef, unknown>>
@@ -124,7 +124,8 @@ const task = z.object({
 	name: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/u),
 	state: z.enum(["ok", "failing", "stopped"]),
 	since: count,
-	consecutive_failures: count,
+	/** Absent in status snapshots: it changes on every failed pass. */
+	consecutive_failures: count.optional(),
 	category: z
 		.enum(["hub_unreachable", "hub_refused", "storage", "policy", "internal"])
 		.nullish(),
@@ -252,17 +253,15 @@ const SNAPSHOT_REPLICA_FACTS = {
 const SNAPSHOT_DEVICE_FACTS = {
 	agent: DEVICE_FACTS.agent,
 	host: DEVICE_FACTS.host,
-	tasks: z.array(task.partial({ consecutive_failures: true })).max(64),
+	tasks: DEVICE_FACTS.tasks,
 	host_operation: DEVICE_FACTS.host_operation,
 };
 
 /** Device-scope facts of a status snapshot: only unhealthy tasks, without their failure counter. */
-export interface SnapshotDeviceFacts
-	extends Pick<InspectionPlus, "agent" | "host" | "hostOperation"> {
-	tasks?: (Omit<TaskHealth, "consecutive_failures"> & {
-		consecutive_failures?: number;
-	})[];
-}
+export type SnapshotDeviceFacts = Pick<
+	InspectionPlus,
+	"agent" | "host" | "tasks" | "hostOperation"
+>;
 
 export function snapshotDeviceFacts(source: unknown): SnapshotDeviceFacts {
 	const { host_operation, ...facts } = validFacts(

@@ -249,13 +249,26 @@ function resolveSetup(route: SetupRoute, fleet: ResolveFleet): ResolveResult {
 	return { ok: true, route, changed: false };
 }
 
-/** A highlight of a device that is not listed is dropped without a banner. */
+/** The Keys screen also lists keys of devices the hub no longer lists (ended access, revoked, abandoned requests). */
+function focusKnown(
+	route: KeysRoute | AppDevicesRoute,
+	focus: string,
+	fleet: ResolveFleet,
+): boolean {
+	if (fleet.devices.some((device) => device.device_id === focus)) return true;
+	return (
+		route.screen === "keys" &&
+		(fleet.vaults ?? []).some((vault) => vault.deviceId === focus)
+	);
+}
+
+/** A highlight of a device that is neither listed nor has keys here is dropped without a banner. */
 function dropUnknownFocus(
 	route: KeysRoute | AppDevicesRoute,
 	fleet: ResolveFleet,
 ): ResolveResult {
 	const focus = route.focusDeviceId;
-	if (!focus || fleet.devices.some((device) => device.device_id === focus))
+	if (!focus || focusKnown(route, focus, fleet))
 		return { ok: true, route, changed: false };
 	return { ok: true, route: without(route, "focusDeviceId"), changed: true };
 }

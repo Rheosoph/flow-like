@@ -197,6 +197,22 @@ impl StateStore {
         ).optional()?)
     }
 
+    /// Newest first, continuing after rollout `before`. A cursor that was pruned in the
+    /// meantime has nothing older left, so it yields no rows.
+    pub(crate) fn rollout_history(
+        &self,
+        placement: &str,
+        before: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<RolloutRecord>> {
+        let mut query = self.connection.prepare(&format!(
+            "SELECT {COLUMNS} FROM placement_rollouts WHERE placement_id=?1 AND (?2 IS NULL OR (created_at,rowid)<(SELECT created_at,rowid FROM placement_rollouts WHERE placement_id=?1 AND rollout_id=?2)) ORDER BY created_at DESC,rowid DESC LIMIT ?3"
+        ))?;
+        Ok(query
+            .query_map(params![placement, before, limit], decode)?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub(crate) fn require_no_active_rollout(&self, placement: &str) -> Result<()> {
         let active: bool = self.connection.query_row(
             &format!("SELECT EXISTS(SELECT 1 FROM placement_rollouts WHERE placement_id=?1 AND state IN {ACTIVE})"),
@@ -204,6 +220,21 @@ impl StateStore {
         )?;
         ensure!(!active, "Placement has an active rollout");
         Ok(())
+    }
+
+    /// Project paths that an update in progress may still switch to or back to.
+    pub(crate) fn active_rollout_project_paths(&self) -> Result<Vec<String>> {
+        let mut query = self.connection.prepare(&format!(
+            "SELECT json_extract(previous_config_json,'$.project_path'),json_extract(candidate_config_json,'$.project_path') FROM placement_rollouts WHERE state IN {ACTIVE}"
+        ))?;
+        let rollouts = query.query_map([], |row| {
+            Ok([row.get::<_, Option<String>>(0)?, row.get(1)?])
+        })?;
+        let mut paths = Vec::new();
+        for rollout in rollouts {
+            paths.extend(rollout?.into_iter().flatten());
+        }
+        Ok(paths)
     }
 
     pub(crate) fn has_active_rollouts(&self) -> Result<bool> {
@@ -617,6 +648,60 @@ mod tests {
         store.reconcile_rollouts(106)?;
         assert_eq!(store.rollout("rollout")?.unwrap().state, "healthy");
         store.require_no_active_rollout("service")?;
+        Ok(())
+    }
+
+    /// Stages and cancels `rollout-<index>`; four rollouts share each creation second.
+    fn finished_rollouts(
+        store: &StateStore,
+        candidate: &PlacementConfig,
+        indexes: std::ops::Range<i64>,
+    ) {
+        for index in indexes {
+            let id = format!("rollout-{index:02}");
+            store
+                .stage_rollout(&id, candidate, 1, 2, 30, 100 + index / 4)
+                .unwrap();
+            store.cancel_rollout("service", 500).unwrap();
+        }
+    }
+
+    fn history(store: &StateStore, before: Option<&str>, limit: u32) -> Vec<String> {
+        let page = store.rollout_history("service", before, limit).unwrap();
+        page.into_iter().map(|rollout| rollout.rollout_id).collect()
+    }
+
+    fn newest_first(indexes: std::ops::Range<i64>) -> Vec<String> {
+        indexes
+            .rev()
+            .map(|index| format!("rollout-{index:02}"))
+            .collect()
+    }
+
+    #[test]
+    fn history_pages_newest_first_within_one_placement() -> Result<()> {
+        let (_directory, store, candidate) = fixture()?;
+        finished_rollouts(&store, &candidate, 0..20);
+        assert_eq!(history(&store, None, 32), newest_first(0..20));
+        assert_eq!(history(&store, None, 8), newest_first(12..20));
+        assert_eq!(history(&store, Some("rollout-12"), 8), newest_first(4..12));
+        assert_eq!(history(&store, Some("rollout-04"), 8), newest_first(0..4));
+        assert!(history(&store, Some("rollout-00"), 8).is_empty());
+        assert!(history(&store, Some("never-staged"), 8).is_empty());
+        assert!(store.rollout_history("other", None, 8)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn a_pruned_history_cursor_has_nothing_older() -> Result<()> {
+        let (_directory, store, candidate) = fixture()?;
+        finished_rollouts(&store, &candidate, 0..45);
+        assert!(store.rollout("rollout-12")?.is_none());
+        assert_eq!(
+            history(&store, None, 64),
+            newest_first(45 - TERMINAL_HISTORY_PER_PLACEMENT..45)
+        );
+        assert!(history(&store, Some("rollout-12"), 8).is_empty());
         Ok(())
     }
 

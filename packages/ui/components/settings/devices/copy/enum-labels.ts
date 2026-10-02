@@ -1583,13 +1583,33 @@ const BUILDERS: { [F in EnumFamily]: Builder<F> } = {
 
 export const ENUM_FAMILIES = Object.keys(BUILDERS) as EnumFamily[];
 
-/** All values of a family with their copy (pickers, legends, exhaustive tests). */
+/*
+ * Tables without params are built once per `t`: a table costs one t() call
+ * per string of the family, and rows ask for a label on every render.
+ * react-i18next hands out a new `t` when the language or its resources
+ * change, which drops the cached tables with the old one.
+ */
+const TABLES = new WeakMap<DevicesT, Map<EnumFamily, unknown>>();
+
+/** All values of a family with their copy (pickers, legends, exhaustive tests). Read-only: tables without params are shared. */
 export function enumTable<F extends EnumFamily>(
 	t: DevicesT,
 	family: F,
-	params: EnumParams = {},
+	params?: EnumParams,
 ): Table<F> {
-	return (BUILDERS[family] as Builder<F>)(t, params);
+	const build = BUILDERS[family] as Builder<F>;
+	if (params) return build(t, params);
+	let tables = TABLES.get(t);
+	if (!tables) {
+		tables = new Map();
+		TABLES.set(t, tables);
+	}
+	let table = tables.get(family) as Table<F> | undefined;
+	if (!table) {
+		table = build(t, {});
+		tables.set(family, table);
+	}
+	return table;
 }
 
 /**

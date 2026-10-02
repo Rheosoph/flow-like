@@ -9,11 +9,11 @@ import {
 } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
-import { type Root, createRoot } from "react-dom/client";
+import type { Root } from "react-dom/client";
 import type { Lesson, LessonAssetView } from "../../lib/learn/types";
 
 // bun keeps globals and module mocks for every later file in the process, so both are
-// captured first and put back in afterAll.
+// captured first and put back: the globals after the modules loaded and again in afterAll.
 const globalDescriptors = [
 	"document",
 	"Element",
@@ -29,12 +29,33 @@ const globalDescriptors = [
 ].map(
 	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
 );
+function restoreGlobals() {
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+}
+
+async function loadModules() {
+	const { createRoot } = await import("react-dom/client");
+	return {
+		createRoot,
+		actual: {
+			nextDynamic: { ...(await import("next/dynamic")) },
+			textEditor: { ...(await import("../ui/text-editor")) },
+		},
+	};
+}
+
 // Radix picks its layout effect when first imported, so the real modules load under a document.
-Object.assign(globalThis, { document: new Window().document });
-const actual = {
-	nextDynamic: { ...(await import("next/dynamic")) },
-	textEditor: { ...(await import("../ui/text-editor")) },
-};
+// react-dom decides once, for every later file too, whether inputs fire input events, and
+// needs a window for that. A load that fails must not leave either behind.
+const loadWindow = new Window();
+Object.assign(globalThis, {
+	window: loadWindow,
+	document: loadWindow.document,
+});
+const { createRoot, actual } = await loadModules().finally(restoreGlobals);
 
 mock.module("next/dynamic", () => ({
 	...actual.nextDynamic,
@@ -121,10 +142,7 @@ afterAll(() => {
 	mock.restore();
 	mock.module("next/dynamic", () => actual.nextDynamic);
 	mock.module("../ui/text-editor", () => actual.textEditor);
-	for (const [key, descriptor] of globalDescriptors) {
-		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-		else Reflect.deleteProperty(globalThis, key);
-	}
+	restoreGlobals();
 });
 
 async function renderLesson() {

@@ -71,9 +71,7 @@ const issuedAt = (item: ActivityItem) =>
 /** A paused upload resumes until its transfer expires on the device. */
 const resumableUntil = (item: ActivityItem) => {
 	if (item.resume?.type === "transfer") return item.resume.expiresAt;
-	return item.deadlineAt === undefined
-		? undefined
-		: activityS(item.deadlineAt);
+	return item.deadlineAt === undefined ? undefined : activityS(item.deadlineAt);
 };
 
 const unconfirmed: AttentionRuleExt = {

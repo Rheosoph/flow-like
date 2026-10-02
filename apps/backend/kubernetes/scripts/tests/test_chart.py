@@ -88,6 +88,13 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(queue["REDIS_EXECUTION_QUEUE"]["value"], api["REDIS_EXECUTION_QUEUE"]["value"])
         self.assertFalse(any(x["metadata"]["name"] == "flow-like-executor-pool" for x in self.docs))
 
+    def test_aws_bucket_keys_default_on_and_preserve_explicit_opt_out(self):
+        args = ("--set", "storage.provider=aws,rustfs.enabled=false,execution.isolationMode=trusted_shared,execution.asyncBackend=http", "--set-string", "storage.aws.existingSecret=")
+        docs = self.render(*args)
+        self.assertEqual(self.resource("Secret", "storage", docs)["stringData"]["S3_KMS_BUCKET_KEY"], "true")
+        docs = self.render(*args, "--set", "storage.aws.kmsBucketKey=false")
+        self.assertEqual(self.resource("Secret", "storage", docs)["stringData"]["S3_KMS_BUCKET_KEY"], "false")
+
     def test_stripe_api_secret_is_not_inherited_by_other_workloads(self):
         api_secret = {"secretRef": {"name": self.values["api"]["existingSecret"]}}
         api = self.resource("Deployment", "api")["spec"]["template"]["spec"]

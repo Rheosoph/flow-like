@@ -1269,6 +1269,10 @@ export function isWidgetRuntimeDescribeUnsupportedError(
 	return isRecord(error) && (error.status === 404 || error.status === 405);
 }
 
+function hasErrorCode(error: Record<string, unknown>): boolean {
+	return typeof error.code === "string" && error.code.length > 0;
+}
+
 /**
  * An API that predates sandbox access tokens answers 405, or a bare 404:
  * every API error carries a `code`, so a 404 with one is a refusal.
@@ -1276,8 +1280,16 @@ export function isWidgetRuntimeDescribeUnsupportedError(
 export function isWidgetAccessUnsupportedError(error: unknown): boolean {
 	if (!isRecord(error)) return false;
 	if (error.status === 405) return true;
-	return (
-		error.status === 404 &&
-		!(typeof error.code === "string" && error.code.length > 0)
-	);
+	return error.status === 404 && !hasErrorCode(error);
+}
+
+/**
+ * The API ruled on the viewer's sandbox access: 403, or a 404 with a `code`.
+ * Any other failure (network, timeout, 5xx, 429) says nothing about the
+ * access and may be asked again.
+ */
+export function isWidgetAccessRefusedError(error: unknown): boolean {
+	if (!isRecord(error)) return false;
+	if (error.status === 403) return true;
+	return error.status === 404 && hasErrorCode(error);
 }

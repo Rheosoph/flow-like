@@ -1,18 +1,24 @@
 //! Workload keys authorize one placement's cloud resources. They never become
 //! human principals or device management credentials.
 
+pub(crate) mod app_placements;
 mod budget;
 mod delegation_audit;
 mod jwt;
 pub(crate) mod offline;
 pub(crate) mod project;
 mod repository;
+mod resource_summary;
 pub(crate) mod routes;
 
-pub(crate) use budget::{authorize_start, reserve_budget, settle_budget};
-// The device grant, billing and registration routes record through these once wired.
-#[allow(unused_imports)]
-pub(crate) use delegation_audit::{audit_billing, audit_grant, audit_registration};
+pub(crate) use budget::{
+    BillingEligibility, authorize_start, billing_eligibility, reserve_budget, settle_budget,
+};
+pub(crate) use delegation_audit::{
+    BILLING_APPROVE, BILLING_REVOKE, GRANT_CREATE, GRANT_REVOKE, audit_billing, audit_grant,
+    audit_registration,
+};
+pub(crate) use resource_summary::{ResourceSummary, resource_summary};
 
 use crate::{
     backend_jwt::{self, TokenType},
@@ -35,6 +41,35 @@ const MAX_BUDGET_MICROS: i64 = 1_000_000_000_000;
 /// A 401 with this code is a proof, signature or clock failure that a fresh proof can
 /// fix. Revoked or inactive authority is answered without it, so devices never fence on skew.
 pub(crate) const INSTANCE_PROOF_INVALID: &str = "INSTANCE_PROOF_INVALID";
+const CHAT_PATH: &str = "/instances/chat/completions";
+const RESPONSES_PATH: &str = "/instances/responses";
+const EMBEDDINGS_PATH: &str = "/instances/embeddings/embed";
+
+/// Spend on one spending approval, in total and by the instances that caused it.
+#[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+pub(crate) struct BillingGrantUsage {
+    pub billing_grant_id: String,
+    pub totals: BillingGrantUsageTotals,
+    /// The instances that spent most recently, at most 100.
+    pub instances: Vec<BillingGrantInstanceUsage>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+pub(crate) struct BillingGrantUsageTotals {
+    pub used_micros: i64,
+    pub reserved_micros: i64,
+    pub operations: i64,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+pub(crate) struct BillingGrantInstanceUsage {
+    pub instance_id: String,
+    pub used_micros: i64,
+    pub reserved_micros: i64,
+    pub operations: i64,
+    pub first_at: i64,
+    pub last_at: i64,
+}
 
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -114,10 +149,7 @@ fn validate_usage(
         || usage.app_id != grant.app_id
         || !grant.model_ids.contains(&usage.model_id)
         || usage.request_method != "POST"
-        || !matches!(
-            usage.request_path.as_str(),
-            "/instances/chat/completions" | "/instances/responses" | "/instances/embeddings/embed"
-        )
+        || ![CHAT_PATH, RESPONSES_PATH, EMBEDDINGS_PATH].contains(&usage.request_path.as_str())
     {
         return Err(ApiError::forbidden(
             "Request exceeds the current instance resource grant",
@@ -186,9 +218,14 @@ pub(crate) async fn create_grant(
         expires_at: request.expires_at,
         status: "active".into(),
         online_access: request.online_access,
+        effective_expires_at: None,
+        effective_limit: None,
+        online_write_blocked: None,
+        approved_by_user_id: Some(owner.into()),
+        created_at: None,
     };
     retry_transaction(state.db,state.dialect,None,&RetryPolicy::default(),move |tx| {
-        let info=info.clone();
+        let mut info=info.clone();
         Box::pin(async move {
             let device=lock_device(tx,&info.device_id).await?;
             device_deployment_authority(tx, &device, &info).await?;
@@ -199,8 +236,10 @@ pub(crate) async fn create_grant(
             for model in &info.model_ids {
                 if tx.query_one_raw(sql(r#"SELECT id FROM "Bit" WHERE id=$1"#,[model.clone().into()])).await?.is_none() {return Err(ApiError::bad_request("An allowed model does not exist"));}
             }
+            let created_at=now();
             tx.execute_raw(sql(r#"INSERT INTO "PlacementResourceGrant" (id,"deviceId","placementId","deploymentId","projectId","appId","delegatingUserId","approvedByUserId",status,"authzVersion","modelIds","maxInstances","expiresAt","createdAt","onlineAccess") VALUES ($1,$2,$3,$4,$5,$6,$7,$7,'active',1,$8,$9,$10,$11,$12)"#,
-                vec![info.grant_id.clone().into(),info.device_id.clone().into(),info.placement_id.clone().into(),info.deployment_id.clone().into(),info.project_id.clone().into(),info.app_id.clone().into(),info.delegating_user_id.clone().into(),serde_json::to_string(&info.model_ids)?.into(),i64::from(info.max_instances).into(),info.expires_at.into(),now().into(),info.online_access.map(|access|serde_json::to_string(&access)).transpose()?.into()])).await?;
+                vec![info.grant_id.clone().into(),info.device_id.clone().into(),info.placement_id.clone().into(),info.deployment_id.clone().into(),info.project_id.clone().into(),info.app_id.clone().into(),info.delegating_user_id.clone().into(),serde_json::to_string(&info.model_ids)?.into(),i64::from(info.max_instances).into(),info.expires_at.into(),created_at.into(),info.online_access.map(|access|serde_json::to_string(&access)).transpose()?.into()])).await?;
+            info.created_at=Some(created_at);
             live(info.expires_at)?; Ok(info)
         })
     }).await
@@ -213,7 +252,7 @@ pub(crate) async fn approve_billing(
     grant_id: &str,
     request: ApproveBillingGrantRequest,
 ) -> Result<BillingGrantResponse, ApiError> {
-    get_grant(state, owner, device_id, grant_id).await?;
+    visible_grant(state, owner, device_id, grant_id).await?;
     if request.limit_micros <= 0
         || request.limit_micros > MAX_BUDGET_MICROS
         || request.expires_at <= now()
@@ -236,23 +275,41 @@ pub(crate) async fn approve_billing(
             if request.expires_at>grant.info.expires_at {return Err(ApiError::bad_request("Billing grant cannot outlive resource access"));}
             live(request.expires_at)?;
             if tx.query_one_raw(sql(r#"SELECT id FROM "PlacementBillingGrant" WHERE "grantId"=$1 AND status='active' AND "expiresAt">$2"#,[grant_id.clone().into(),now().into()])).await?.is_some() {return Err(ApiError::conflict("This resource grant already has billing consent"));}
-            tx.execute_raw(sql(r#"INSERT INTO "PlacementBillingGrant" (id,"grantId","payerId","approvedByUserId",status,"authzVersion","limitMicros","usedMicros","reservedMicros","expiresAt","createdAt") VALUES ($1,$2,$3,$3,'active',1,$4,0,0,$5,$6)"#,[id.clone().into(),grant_id.clone().into(),owner.clone().into(),request.limit_micros.into(),request.expires_at.into(),now().into()])).await?;
+            let created_at=now();
+            tx.execute_raw(sql(r#"INSERT INTO "PlacementBillingGrant" (id,"grantId","payerId","approvedByUserId",status,"authzVersion","limitMicros","usedMicros","reservedMicros","expiresAt","createdAt") VALUES ($1,$2,$3,$3,'active',1,$4,0,0,$5,$6)"#,[id.clone().into(),grant_id.clone().into(),owner.clone().into(),request.limit_micros.into(),request.expires_at.into(),created_at.into()])).await?;
             live(request.expires_at)?;
-            Ok(BillingGrantResponse {billing_grant_id:id,grant_id,payer_id:owner,authz_version:1,limit_micros:request.limit_micros,used_micros:0,reserved_micros:0,expires_at:request.expires_at,status:"active".into()})
+            Ok(BillingGrantResponse {billing_grant_id:id,grant_id,payer_id:owner.clone(),authz_version:1,limit_micros:request.limit_micros,used_micros:0,reserved_micros:0,expires_at:request.expires_at,status:"active".into(),approved_by_user_id:Some(owner),created_at:Some(created_at)})
         })
     }).await
 }
 
-/// Keep consent reachable after sharing is withdrawn so a delegator can revoke it.
-/// Only consent that can still be revoked keeps the device visible.
-pub(crate) async fn consent_devices(
+/// The device a person lists approvals, spending or leases of. Which rows they see is
+/// decided by each list query.
+async fn listed_device(
     state: &DeviceContext<'_>,
-    user: &str,
-) -> Result<Vec<DeviceStatus>, ApiError> {
-    let rows = state.db.query_all_raw(sql(r#"SELECT d.* FROM "ManagedDevice" d WHERE d."ownerId"<>$1 AND (EXISTS(SELECT 1 FROM "PlacementResourceGrant" g WHERE g."deviceId"=d.id AND g."delegatingUserId"=$1 AND g.status='active' AND g."expiresAt">$2) OR EXISTS(SELECT 1 FROM "PlacementBillingGrant" b JOIN "PlacementResourceGrant" g ON g.id=b."grantId" WHERE g."deviceId"=d.id AND b."payerId"=$1 AND b.status='active' AND b."expiresAt">$2)) ORDER BY d."registeredAt" DESC LIMIT 1000"#, [user.into(), now().into()])).await?;
-    rows.into_iter()
-        .map(|row| devices::repository::device(row).map(|device| device.status))
-        .collect()
+    viewer: &str,
+    device_id: &str,
+) -> Result<devices::repository::Device, ApiError> {
+    devices::enabled(state)?;
+    devices::repository::active_account(state.db, viewer).await?;
+    devices::repository::current_device(state.db, device_id).await
+}
+
+/// A device's owner sees every approval on it; anyone else sees only their own.
+async fn visible_grant(
+    state: &DeviceContext<'_>,
+    viewer: &str,
+    device_id: &str,
+    id: &str,
+) -> Result<(devices::repository::Device, ResourceGrantResponse), ApiError> {
+    let device = listed_device(state, viewer, device_id).await?;
+    let grant = read_grant(state.db, id).await?;
+    if grant.info.device_id != device_id
+        || (device.status.owner_id != viewer && grant.info.delegating_user_id != viewer)
+    {
+        return Err(ApiError::NOT_FOUND);
+    }
+    Ok((device, grant.info))
 }
 
 pub(crate) async fn grants(
@@ -260,14 +317,10 @@ pub(crate) async fn grants(
     owner: &str,
     device_id: &str,
 ) -> Result<Vec<ResourceGrantResponse>, ApiError> {
-    devices::enabled(state)?;
-    devices::repository::active_account(state.db, owner).await?;
-    let device = devices::repository::current_device(state.db, device_id).await?;
-    Ok(list_grants(state.db, device_id)
-        .await?
-        .into_iter()
-        .filter(|grant| device.status.owner_id == owner || grant.delegating_user_id == owner)
-        .collect())
+    let device = listed_device(state, owner, device_id).await?;
+    let mut grants = list_grants(state.db, &device, owner).await?;
+    effective_expiry(state.db, &device, &mut grants).await?;
+    Ok(grants)
 }
 pub(crate) async fn get_grant(
     state: &DeviceContext<'_>,
@@ -275,16 +328,9 @@ pub(crate) async fn get_grant(
     device_id: &str,
     id: &str,
 ) -> Result<ResourceGrantResponse, ApiError> {
-    devices::enabled(state)?;
-    devices::repository::active_account(state.db, owner).await?;
-    let device = devices::repository::current_device(state.db, device_id).await?;
-    let grant = read_grant(state.db, id).await?;
-    if grant.info.device_id != device_id
-        || (device.status.owner_id != owner && grant.info.delegating_user_id != owner)
-    {
-        return Err(ApiError::NOT_FOUND);
-    }
-    Ok(grant.info)
+    let (device, mut grant) = visible_grant(state, owner, device_id, id).await?;
+    effective_expiry(state.db, &device, std::slice::from_mut(&mut grant)).await?;
+    Ok(grant)
 }
 pub(crate) async fn get_billing(
     state: &DeviceContext<'_>,
@@ -292,8 +338,8 @@ pub(crate) async fn get_billing(
     device_id: &str,
     grant_id: &str,
 ) -> Result<BillingGrantResponse, ApiError> {
-    get_grant(state, owner, device_id, grant_id).await?;
-    let row=state.db.query_one_raw(sql(r#"SELECT id FROM "PlacementBillingGrant" WHERE "grantId"=$1 ORDER BY CASE WHEN status='active' AND "expiresAt">$2 THEN 0 ELSE 1 END, "createdAt" DESC,id DESC LIMIT 1"#,[grant_id.into(),now().into()])).await?.ok_or(ApiError::NOT_FOUND)?;
+    visible_grant(state, owner, device_id, grant_id).await?;
+    let row=state.db.query_one_raw(sql(&format!(r#"SELECT c.id FROM "PlacementBillingGrant" c WHERE c."grantId"=$1 ORDER BY {CURRENT_LIMIT_FIRST} LIMIT 1"#),[grant_id.into(),now().into()])).await?.ok_or(ApiError::NOT_FOUND)?;
     Ok(read_billing(state.db, &row.try_get::<String>("", "id")?)
         .await?
         .info)
@@ -303,16 +349,8 @@ pub(crate) async fn instances(
     owner: &str,
     device_id: &str,
 ) -> Result<Vec<InstanceReceipt>, ApiError> {
-    let allowed = grants(state, owner, device_id).await?;
-    Ok(list_instances(state.db, device_id)
-        .await?
-        .into_iter()
-        .filter(|instance| {
-            allowed
-                .iter()
-                .any(|grant| grant.grant_id == instance.grant_id)
-        })
-        .collect())
+    let device = listed_device(state, owner, device_id).await?;
+    list_instances(state.db, &device, owner).await
 }
 
 /// Returns the revoked grant so the caller can record who withdrew which delegation.
@@ -322,7 +360,7 @@ pub(crate) async fn revoke_grant(
     device_id: &str,
     grant_id: &str,
 ) -> Result<ResourceGrantResponse, ApiError> {
-    get_grant(state, owner, device_id, grant_id).await?;
+    visible_grant(state, owner, device_id, grant_id).await?;
     let owner = owner.to_owned();
     let device_id = device_id.to_owned();
     let grant_id = grant_id.to_owned();
@@ -345,22 +383,8 @@ pub(crate) async fn billing_grants(
     owner: &str,
     device_id: &str,
 ) -> Result<Vec<BillingGrantResponse>, ApiError> {
-    let allowed = grants(state, owner, device_id).await?;
-    let rows=state.db.query_all_raw(sql(r#"SELECT b.id FROM "PlacementBillingGrant" b JOIN "PlacementResourceGrant" g ON g.id=b."grantId" WHERE g."deviceId"=$1 ORDER BY CASE WHEN b.status='active' THEN 0 ELSE 1 END,b."createdAt" DESC LIMIT 1000"#,[device_id.into()])).await?;
-    let mut result = Vec::with_capacity(rows.len());
-    for row in rows {
-        result.push(
-            read_billing(state.db, &row.try_get::<String>("", "id")?)
-                .await?
-                .info,
-        );
-    }
-    result.retain(|billing| {
-        allowed
-            .iter()
-            .any(|grant| grant.grant_id == billing.grant_id)
-    });
-    Ok(result)
+    let device = listed_device(state, owner, device_id).await?;
+    list_billing(state.db, &device, owner).await
 }
 
 pub(crate) async fn billing_grant(
@@ -369,9 +393,21 @@ pub(crate) async fn billing_grant(
     device_id: &str,
     billing_id: &str,
 ) -> Result<BillingGrantResponse, ApiError> {
+    devices::enabled(state)?;
     let billing = read_billing(state.db, billing_id).await?;
-    get_grant(state, owner, device_id, &billing.info.grant_id).await?;
+    visible_grant(state, owner, device_id, &billing.info.grant_id).await?;
     Ok(billing.info)
+}
+
+/// Seen by whoever sees the spending approval: the device owner, the approver and the payer.
+pub(crate) async fn billing_usage(
+    state: &DeviceContext<'_>,
+    owner: &str,
+    device_id: &str,
+    billing_id: &str,
+) -> Result<BillingGrantUsage, ApiError> {
+    let billing = billing_grant(state, owner, device_id, billing_id).await?;
+    read_billing_usage(state.db, billing.billing_grant_id).await
 }
 
 /// Returns the revoked sponsorship so the caller can record who withdrew it.

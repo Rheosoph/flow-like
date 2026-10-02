@@ -735,8 +735,65 @@ impl BrowserController {
         })
     }
 
-    /// Close clears this unlock and every derived Noise/MLS session, including
-    /// prepared plaintext that has not yet been released after persistence.
+    /// The owner's invitation key stays in this unlock until `detachInvitation`,
+    /// `close` or `free`, so approvals need no second password entry.
+    #[wasm_bindgen(js_name = attachInvitation)]
+    pub fn attach_invitation(
+        &mut self,
+        password: Vec<u8>,
+        ciphertext: &[u8],
+    ) -> std::result::Result<(), JsValue> {
+        let password = Zeroizing::new(password);
+        self.controller
+            .as_mut()
+            .context("Controller is locked")
+            .and_then(|controller| controller.attach_invitation(&password, ciphertext))
+            .map_err(error)
+    }
+
+    #[wasm_bindgen(js_name = detachInvitation)]
+    pub fn detach_invitation(&mut self) {
+        if let Some(controller) = self.controller.as_mut() {
+            controller.detach_invitation();
+        }
+    }
+
+    #[wasm_bindgen(js_name = signManagementPolicyHeld)]
+    pub fn sign_management_policy_held(
+        &self,
+        policy: JsValue,
+    ) -> std::result::Result<String, JsValue> {
+        let policy = decode(policy).map_err(error)?;
+        self.controller()
+            .and_then(|controller| controller.approve_management_policy(&policy))
+            .map_err(error)
+    }
+
+    #[wasm_bindgen(js_name = signTelemetryRosterHeld)]
+    pub fn sign_telemetry_roster_held(
+        &self,
+        roster: JsValue,
+    ) -> std::result::Result<String, JsValue> {
+        let roster = decode(roster).map_err(error)?;
+        self.controller()
+            .and_then(|controller| controller.approve_telemetry_roster(&roster))
+            .map_err(error)
+    }
+
+    #[wasm_bindgen(js_name = signArchiveRosterHeld)]
+    pub fn sign_archive_roster_held(
+        &self,
+        roster: JsValue,
+    ) -> std::result::Result<String, JsValue> {
+        let roster = decode(roster).map_err(error)?;
+        self.controller()
+            .and_then(|controller| controller.approve_archive_roster(&roster))
+            .map_err(error)
+    }
+
+    /// Close clears this unlock, a held invitation key and every derived
+    /// Noise/MLS session, including prepared plaintext that has not yet been
+    /// released after persistence.
     pub fn close(&mut self) {
         self.registry.close();
         self.controller = None;
@@ -936,5 +993,41 @@ mod tests {
         assert!(dropped.get());
         assert!(session.with(|_| Ok(())).is_err());
         assert!(registry.register(0).is_err());
+    }
+
+    #[test]
+    fn detaching_or_closing_the_controller_releases_the_held_invitation_key() {
+        let password = b"a memorable local password";
+        let sealed = controller::create_controller_vault("device", password).unwrap();
+        let invitation = controller::create_invitation_vault("device", password).unwrap();
+        let mut browser = BrowserController {
+            controller: Some(
+                controller::unlock_controller_vault("device", password, &sealed.vault).unwrap(),
+            ),
+            registry: Rc::new(Registry::default()),
+        };
+        let held = |browser: &BrowserController| {
+            browser
+                .controller
+                .as_ref()
+                .is_some_and(|controller| controller.holds_invitation())
+        };
+        assert!(!held(&browser));
+        assert!(
+            browser
+                .attach_invitation(password.to_vec(), &invitation.vault)
+                .is_ok()
+        );
+        assert!(held(&browser));
+        browser.detach_invitation();
+        assert!(!held(&browser));
+        assert!(
+            browser
+                .attach_invitation(password.to_vec(), &invitation.vault)
+                .is_ok()
+        );
+        browser.close();
+        assert!(browser.controller.is_none());
+        browser.detach_invitation();
     }
 }

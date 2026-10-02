@@ -8,8 +8,56 @@ import { cx } from "./tone";
 const W = 240;
 const H = 40;
 
+interface SparkPoint {
+	/** Position in `series`: a gap keeps its slot, so later points keep their place and time. */
+	slot: number;
+	value: number;
+}
+
+const sparkPoints = (series: readonly number[]) =>
+	series.flatMap((value, slot): SparkPoint[] =>
+		Number.isFinite(value) ? [{ slot, value }] : [],
+	);
+
+function sparkGeometry(
+	points: readonly SparkPoint[],
+	slots: number,
+	min: number | undefined,
+	max: number | undefined,
+) {
+	if (!points.length) return null;
+	const values = points.map((point) => point.value);
+	const low = Math.min(...values);
+	const high = Math.max(...values);
+	const lo = min ?? low;
+	const span = (max ?? high) - lo || 1;
+	const coords = points.map(
+		(point) =>
+			[
+				slots <= 1 ? W : (point.slot / (slots - 1)) * W,
+				H - 3 - ((point.value - lo) / span) * (H - 6),
+			] as const,
+	);
+	const line = `M${coords.map(([px, py]) => `${px.toFixed(1)},${py.toFixed(1)}`).join("L")}`;
+	const from = coords[0][0].toFixed(1);
+	const to = coords[coords.length - 1][0].toFixed(1);
+	return { coords, line, area: `${line}L${to},${H}L${from},${H}Z`, low, high };
+}
+
+/** Index of the point whose slot is closest to a (fractional) slot under the pointer. */
+function nearestPoint(points: readonly SparkPoint[], slot: number) {
+	let nearest = 0;
+	for (let index = 1; index < points.length; index++) {
+		const closer =
+			Math.abs(points[index].slot - slot) <
+			Math.abs(points[nearest].slot - slot);
+		if (closer) nearest = index;
+	}
+	return nearest;
+}
+
 export interface SparklineProps {
-	/** Oldest first; the last point is the value shown above the line. */
+	/** Oldest first; the last point is the value shown above the line. A non-finite value is a gap. */
 	series: readonly number[];
 	/** The metric's name for the accessible summary ("CPU"). */
 	label: string;
@@ -42,36 +90,24 @@ export function Sparkline({
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
 	const [hover, setHover] = useState<number | null>(null);
-	const points = useMemo(
-		() => series.filter((value) => Number.isFinite(value)),
-		[series],
+	const slots = series.length;
+	const points = useMemo(() => sparkPoints(series), [series]);
+	const geometry = useMemo(
+		() => sparkGeometry(points, slots, min, max),
+		[points, slots, min, max],
 	);
-	const lo = min ?? Math.min(...points);
-	const hi = max ?? Math.max(...points);
-	const n = points.length;
-
-	const geometry = useMemo(() => {
-		if (n === 0) return null;
-		const y = (value: number) =>
-			H - 3 - ((value - lo) / (hi - lo || 1)) * (H - 6);
-		const x = (index: number) => (n === 1 ? W : (index / (n - 1)) * W);
-		const coords = points.map((value, index) => [x(index), y(value)] as const);
-		const line = `M${coords.map(([px, py]) => `${px.toFixed(1)},${py.toFixed(1)}`).join("L")}`;
-		return { coords, line, area: `${line}L${W},${H}L0,${H}Z` };
-	}, [points, n, lo, hi]);
 
 	if (!geometry) return null;
 
-	const last = points[n - 1];
 	const summary = t(
 		"view.metric.sparkLabel",
 		"{{label}} over {{span}}, {{min}} to {{max}}, now {{now}}",
 		{
 			label,
 			span: span ?? t("view.metric.spanDefault", "the shown period"),
-			min: format(Math.min(...points)),
-			max: format(Math.max(...points)),
-			now: format(last),
+			min: format(geometry.low),
+			max: format(geometry.high),
+			now: format(points[points.length - 1].value),
 		},
 	);
 
@@ -79,19 +115,20 @@ export function Sparkline({
 		const rect = event.currentTarget.getBoundingClientRect();
 		if (rect.width <= 0) return;
 		const share = (event.clientX - rect.left) / rect.width;
-		setHover(Math.max(0, Math.min(n - 1, Math.round(share * (n - 1)))));
+		setHover(nearestPoint(points, share * Math.max(1, slots - 1)));
 	};
 
-	const hovered = hover === null ? null : geometry.coords[hover];
-	const tip =
-		hover === null
-			? null
-			: startAt === undefined
-				? format(points[hover])
-				: t("view.metric.tip", "{{time}} · {{value}}", {
-						time: time.clock(startAt + hover * stepSec, false),
-						value: format(points[hover]),
-					});
+	const end = geometry.coords[geometry.coords.length - 1];
+	const hoverPoint = hover === null ? undefined : points[hover];
+	const hovered = hoverPoint ? geometry.coords[hover ?? 0] : undefined;
+	const tip = !hoverPoint
+		? null
+		: startAt === undefined
+			? format(hoverPoint.value)
+			: t("view.metric.tip", "{{time}} · {{value}}", {
+					time: time.clock(startAt + hoverPoint.slot * stepSec, false),
+					value: format(hoverPoint.value),
+				});
 
 	return (
 		<div
@@ -129,9 +166,10 @@ export function Sparkline({
 			</svg>
 			<i
 				aria-hidden
-				className="absolute -right-1.25 -mt-1.25 size-2.5 rounded-full border-2 border-card bg-spark"
+				className="absolute -mt-1.25 -ml-1.25 size-2.5 rounded-full border-2 border-card bg-spark"
 				style={{
-					top: `${((geometry.coords[n - 1][1] / H) * 100).toFixed(1)}%`,
+					left: `${((end[0] / W) * 100).toFixed(2)}%`,
+					top: `${((end[1] / H) * 100).toFixed(1)}%`,
 				}}
 			/>
 			{hovered ? (
@@ -188,7 +226,9 @@ export function Metric({
 			)}
 		>
 			<div className="flex min-w-0 items-center justify-between gap-2">
-				<span className="text-xs font-medium text-ink-2">{label}</span>
+				<span className="max-w-full flex-none truncate text-xs font-medium text-ink-2">
+					{label}
+				</span>
 				{stamp}
 			</div>
 			<div className="flex flex-wrap items-baseline gap-1">

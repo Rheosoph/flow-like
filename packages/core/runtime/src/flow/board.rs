@@ -2684,7 +2684,7 @@ impl Board {
         self.board_pages_dir(&self.id)
     }
 
-    fn page_path(&self, page_id: &str) -> Path {
+    pub fn page_path(&self, page_id: &str) -> Path {
         self.pages_dir().join(format!("{}.page", page_id))
     }
 
@@ -2696,7 +2696,7 @@ impl Board {
             .join(format!("{}_{}_{}", version.0, version.1, version.2))
     }
 
-    fn versioned_page_path(&self, version: (u32, u32, u32), page_id: &str) -> Path {
+    pub fn versioned_page_path(&self, version: (u32, u32, u32), page_id: &str) -> Path {
         self.versioned_pages_dir(version)
             .join(format!("{}.page", page_id))
     }
@@ -3215,6 +3215,16 @@ impl Board {
         };
 
         let board: flow_like_types::proto::Board = from_compressed(store, path).await?;
+        Self::from_loaded_template_proto(board, board_dir, app_state).await
+    }
+
+    /// Hydrate a template read with its storage metadata, preserving the same
+    /// validation and node migrations as [`Self::load_template`].
+    pub async fn from_loaded_template_proto(
+        board: proto::Board,
+        board_dir: Path,
+        app_state: Arc<FlowLikeState>,
+    ) -> flow_like_types::Result<Self> {
         Self::validate_proto_types(&board)?;
         let mut board = Board::from_proto(board);
         board.ensure_supported_format()?;

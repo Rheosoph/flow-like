@@ -5,6 +5,7 @@ import type {
 	Freshness,
 	FreshnessReason,
 	FreshnessSignal,
+	InspectionPlus,
 } from "../model/types";
 import { readOfflineQueues } from "../offline-queue";
 import { GroupMetricsReader, type ManagementCall } from "../telemetry";
@@ -234,7 +235,14 @@ class Streams implements LiveStreamsImpl {
 	private readonly buffers = new Map<string, Map<string, Buffer>>();
 	private readonly sessions = new Map<
 		string,
-		{ connectedAt?: number; inspected: boolean; autoLoaded?: number }
+		{
+			connectedAt?: number;
+			inspected: boolean;
+			autoLoaded?: number;
+			/** The inspection last seen, and the one the current session started with. */
+			value?: InspectionPlus;
+			before?: InspectionPlus;
+		}
 	>();
 	private readonly schedule: NonNullable<StreamPorts["schedule"]>;
 	private readonly nowMs: () => number;
@@ -254,7 +262,8 @@ class Streams implements LiveStreamsImpl {
 			});
 		this.nowMs = ports.now ?? deps.now ?? Date.now;
 		this.stopLive = live.subscribe?.(() => this.liveChanged()) ?? (() => {});
-		this.stopKeys = ports.keys?.subscribe(() => this.keysChanged()) ?? (() => {});
+		this.stopKeys =
+			ports.keys?.subscribe(() => this.keysChanged()) ?? (() => {});
 	}
 
 	subscribe<T>(
@@ -456,7 +465,8 @@ class Streams implements LiveStreamsImpl {
 		const paused =
 			subscriber.spec.kind === "logs" && subscriber.spec.follow === false;
 		if (!paused) subscriber.frozen = undefined;
-		else subscriber.frozen ??= { data: buffer.data, appended: buffer.appended };
+		else if (buffer.data !== undefined)
+			subscriber.frozen ??= { data: buffer.data, appended: buffer.appended };
 		subscriber.listener(this.state(buffer, subscriber.frozen));
 	}
 
@@ -758,15 +768,19 @@ class Streams implements LiveStreamsImpl {
 			return;
 		}
 		session.inspected = !!inspection;
+		const previous = session.value;
+		session.value = inspection?.value;
 		if (state.kind !== "live") return;
 		if (session.connectedAt !== state.connectedAt) {
 			session.connectedAt = state.connectedAt;
+			session.before = previous;
 			this.resume(deviceId);
 		}
+		// A read of this session: `readAt` runs on the hub clock and `connectedAt` on this computer's, so they are not compared.
 		if (
 			inspection &&
 			session.autoLoaded !== state.connectedAt &&
-			inspection.readAt >= state.connectedAt
+			inspection.value !== session.before
 		) {
 			session.autoLoaded = state.connectedAt;
 			this.autoLoad(deviceId);

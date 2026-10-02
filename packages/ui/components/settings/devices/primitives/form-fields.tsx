@@ -106,7 +106,7 @@ export function Field({
 			className={cx("flex min-w-0 flex-col gap-1.5", className)}
 		>
 			<Label htmlFor={id} className="text-[13px]/[18px] font-medium">
-				{label}
+				<span className="min-w-0">{label}</span>
 			</Label>
 			{control}
 			{error ? (
@@ -222,7 +222,6 @@ export function SecretInput({
 				size="xs"
 				iconOnly
 				icon={shown ? EyeOff : Eye}
-				aria-pressed={shown}
 				aria-label={
 					shown
 						? t("common.secret.hide", "Hide password")
@@ -506,7 +505,7 @@ export function CheckField({
 				htmlFor={id}
 				className="text-[13px]/[18px] font-normal peer-disabled:opacity-60"
 			>
-				{children}
+				<span className="min-w-0">{children}</span>
 			</Label>
 		</div>
 	);
@@ -537,7 +536,7 @@ export function SwitchField({
 				className="mt-px shadow-none data-[state=checked]:bg-foreground focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring dark:data-[state=checked]:**:data-[slot=switch-thumb]:bg-background"
 			/>
 			<Label htmlFor={id} className="text-[13px]/[18px] font-normal">
-				{children}
+				<span className="min-w-0">{children}</span>
 			</Label>
 		</div>
 	);

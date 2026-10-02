@@ -869,14 +869,14 @@ pub async fn compute_offline_fork_bundle(
         .filter(app_package::Column::AppId.eq(src_app_id))
         .all(&state.db)
         .await?;
-    let (held_pins, blocked_packages) =
-        packages::split_pins(&state.db, user_sub, &src_pins).await?;
-    manifest_proto.packages = packages::pin_map(&held_pins);
+    let pins = packages::split_pins(&state.db, user_sub, &src_pins).await?;
+    manifest_proto.packages = packages::pin_map(&pins.held);
     skipped.extend(
-        blocked_packages
+        pins.blocked
             .iter()
             .map(packages::BlockedPackage::skipped_item),
     );
+    warnings.extend(pins.repinned.iter().map(packages::RepinnedPackage::warning));
 
     manifest_proto.visibility = proto::AppVisibility::Offline as i32;
     manifest_proto.status = proto::AppStatus::Active as i32;
@@ -2186,9 +2186,8 @@ pub(crate) async fn materialize_meta(
     src_app_proto.avg_rating = None;
     src_app_proto.relevance_score = None;
 
-    let (allowed_packages, blocked_packages) =
-        packages::split_pins(&state.db, Some(user_sub), src_package_rows).await?;
-    src_app_proto.packages = packages::pin_map(&allowed_packages);
+    let pins = packages::split_pins(&state.db, Some(user_sub), src_package_rows).await?;
+    src_app_proto.packages = packages::pin_map(&pins.held);
 
     compress_to_file(
         dst_meta_store.clone(),
@@ -2244,11 +2243,12 @@ pub(crate) async fn materialize_meta(
     );
 
     skipped.extend(
-        blocked_packages
+        pins.blocked
             .iter()
             .map(packages::BlockedPackage::skipped_item),
     );
     skipped.extend(sink_skips);
+    warnings.extend(pins.repinned.iter().map(packages::RepinnedPackage::warning));
     Ok(ForkPlan {
         maps,
         rewritten_events: rewritten_events.into_values().collect(),
@@ -2256,7 +2256,7 @@ pub(crate) async fn materialize_meta(
         shipped_widgets,
         shipped_templates,
         roles_to_copy,
-        allowed_packages,
+        allowed_packages: pins.held,
         sinks_to_insert,
         skipped,
         warnings,

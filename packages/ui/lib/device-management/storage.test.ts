@@ -17,6 +17,7 @@ import {
 	deviceIdentityKey,
 	forgetDeviceIdentityPin,
 	listAccountRecoveryStates,
+	listDeviceIdentityPins,
 	listDeviceVaults,
 	markPasswordChangedSinceBackup,
 	pinDeviceIdentity,
@@ -297,6 +298,18 @@ test("lists this scope's vaults and reads identity pins newest first", async () 
 	);
 	expect(pinnedDeviceIdentity({ identity: "not json" })).toBeUndefined();
 	expect(await readDeviceIdentityPins(scope, "dev-2")).toEqual([]);
+
+	await pinDeviceIdentity(scope, "dev-2", receipt("dev-2", "only", "auth-d"));
+	await pinDeviceIdentity(
+		otherScope,
+		"elsewhere",
+		receipt("elsewhere", "other", "auth-e"),
+	);
+	const all = await listDeviceIdentityPins(scope);
+	expect([...all.keys()].sort()).toEqual(["dev", "dev-2"]);
+	expect(all.get("dev")).toEqual(pins);
+	expect(all.get("dev-2")?.map((pin) => pin.enrollmentId)).toEqual(["only"]);
+	await forgetDeviceIdentityPin(scope, "dev-2");
 
 	await forgetDeviceIdentityPin(scope, "dev", "first");
 	expect(

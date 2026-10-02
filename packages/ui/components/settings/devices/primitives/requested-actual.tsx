@@ -152,7 +152,10 @@ const sinceLine = (
 	{ conv, since, lastKnown }: Readonly<ServiceStateProps>,
 ) => {
 	if (since === undefined) return null;
-	const params = { state: convergenceLabel(t, conv), ago: time.ago(since) };
+	const params = {
+		state: convergenceLabel(t, conv),
+		ago: time.ago(Math.min(since, time.nowS)),
+	};
 	return lastKnown
 		? t(
 				"devices:view.dvo.sinceLastKnown",

@@ -1,4 +1,5 @@
 use crate::{
+    diagnostics::RulesDiffer,
     enrollment::{DeviceSession, api_status, device_proof_rejected, unix_time},
     state::StateStore,
 };
@@ -59,7 +60,7 @@ fn current_audiences(
         ensure!(
             store.management_policy_head()?.map(|(_, digest)| digest)
                 == Some(compact_digest(compact)),
-            "Fleet publication waits for current locally accepted management policy"
+            RulesDiffer("Fleet publication waits for current locally accepted management policy")
         );
     } else {
         ensure!(
@@ -68,7 +69,7 @@ fn current_audiences(
                 .ok()
                 .flatten()
                 .is_none(),
-            "Fleet server omitted current management policy"
+            RulesDiffer("Fleet server omitted current management policy")
         );
     }
     let mut values = Vec::new();

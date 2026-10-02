@@ -232,7 +232,9 @@ impl Policy {
                     "/api/v1/execution/progress" | "/api/v1/execution/events"
                 ))
                 || (method == Method::GET
-                    && path == format!("/api/v1/execution/apps/{}/widgets", self.data.app_id))
+                    && path
+                        .strip_prefix(&format!("/api/v1/execution/apps/{}/", self.data.app_id))
+                        .is_some_and(|route| matches!(route, "widgets" | "package-widgets")))
                 || (method == Method::POST
                     && path
                         .strip_prefix(&format!("/api/v1/execution/apps/{}/", self.data.app_id))
@@ -575,7 +577,37 @@ mod tests {
             (Method::GET, "/api/v1/channels/run-2/status", true, false),
             (
                 Method::GET,
+                "/api/v1/execution/apps/app-1/widgets",
+                true,
+                true,
+            ),
+            (
+                Method::GET,
                 "/api/v1/execution/apps/app-2/widgets",
+                true,
+                false,
+            ),
+            (
+                Method::GET,
+                "/api/v1/execution/apps/app-1/package-widgets",
+                true,
+                true,
+            ),
+            (
+                Method::GET,
+                "/api/v1/execution/apps/app-2/package-widgets",
+                true,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/package-widgets",
+                true,
+                false,
+            ),
+            (
+                Method::GET,
+                "/api/v1/execution/apps/app-1/package-widgets/extra",
                 true,
                 false,
             ),

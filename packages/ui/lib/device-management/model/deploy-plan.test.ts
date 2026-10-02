@@ -7,6 +7,7 @@ import {
 	mergeVariables,
 } from "../deployment";
 import {
+	APPS,
 	CRM_CATALOG,
 	CRM_INSTALLED,
 	CRM_PLAN_APP,
@@ -32,6 +33,7 @@ import {
 	checkApprovalDraft,
 	checkPlan,
 	diffPlacementConfig,
+	draftWithoutSecrets,
 	makePlan,
 	planPhases,
 	planServices,
@@ -42,6 +44,7 @@ import {
 import type { GateFailure } from "./types";
 
 const TOKEN = "visitor-checkin-access-token-0123456789";
+const INVOICE_PLAN_APP: PlanApp = APPS.app_invoice_ai;
 
 function entry(
 	app: PlanApp,
@@ -190,6 +193,47 @@ describe("entries (APP §3.1)", () => {
 		});
 		expect(update.isolation).toBeUndefined();
 		expect(update.writes).toBeUndefined();
+	});
+
+	test("saved progress keeps every choice and no secret", () => {
+		const draft = draftFor(VISITOR_PLAN_APP, ["studio-mac-mini"], {
+			vars: { var_site_name: "Berlin office" },
+			secrets: { var_host_token: "host-directory-token" },
+			edited: ["var_host_token"],
+			endpoint: {
+				host: "0.0.0.0",
+				port: 8080,
+				token: "own",
+				tokenValue: TOKEN,
+			},
+		});
+		draft.targets[0].over = {
+			vars: { var_printer_url: "ipp://192.168.1.40/print" },
+			secrets: { var_host_token: "per-device-secret" },
+			token: `${TOKEN}-studio`,
+			port: 8082,
+			allowUnencrypted: true,
+		};
+		const saved = draftWithoutSecrets(draft);
+		expect(saved).toEqual({
+			...draft,
+			secrets: {},
+			endpoint: { ...draft.endpoint, tokenValue: "" },
+			targets: [
+				{
+					...draft.targets[0],
+					over: {
+						vars: { var_printer_url: "ipp://192.168.1.40/print" },
+						port: 8082,
+						allowUnencrypted: true,
+					},
+				},
+			],
+		});
+		const text = JSON.stringify(saved);
+		for (const secret of ["host-directory-token", "per-device-secret", TOKEN])
+			expect(text).not.toContain(secret);
+		expect(draft.secrets).toEqual({ var_host_token: "host-directory-token" });
 	});
 
 	test("default service ids are slugs that a device accepts", () => {
@@ -344,6 +388,36 @@ describe("targets (APP §3.7)", () => {
 		).toEqual(["evt_crm_nightly", "evt_crm_webhook"]);
 	});
 
+	test("two services of one plan never share an id on a device", () => {
+		const draft = draftFor(CRM_PLAN_APP, ["edge-berlin-01"], {
+			serviceIds: { main: "nightly-sync", evt_crm_watch: "nightly-sync-2" },
+		});
+		const { plan, check } = planFor(draft, CRM_PLAN_APP);
+		expect(
+			plan.targets[0].services.map((service) => [
+				service.serviceId,
+				service.renamedFrom,
+			]),
+		).toEqual([
+			["nightly-sync-2", "nightly-sync"],
+			["nightly-sync-2-2", "nightly-sync-2"],
+		]);
+		expect(check.issues).toEqual([]);
+		draft.serviceIds = {};
+		draft.targets[0].choices = {
+			main: { kind: "update", serviceId: "nightly-sync" },
+			evt_crm_watch: { kind: "add", serviceId: "nightly-sync" },
+		};
+		expect(
+			codes(draft, CRM_PLAN_APP).filter((code) =>
+				code.startsWith("service_id"),
+			),
+		).toEqual([
+			"service_id_twice@edge-berlin-01",
+			"service_id_twice@edge-berlin-01",
+		]);
+	});
+
 	test("Add to an existing service keeps its events; an update can drop one", () => {
 		const draft = draftFor(
 			CRM_PLAN_APP,
@@ -387,6 +461,72 @@ describe("targets (APP §3.7)", () => {
 		).not.toContain("removed_events");
 	});
 
+	test("a version-only update of several services keeps each service's own events", () => {
+		const devices = {
+			...PLAN_DEVICES,
+			"lab-gpu-02": {
+				...PLAN_DEVICES["lab-gpu-02"],
+				locked: false,
+				services: [
+					{
+						serviceId: "invoice-extractor-gpu",
+						projectId: "app_invoice_ai",
+						events: ["evt_gpu_extract", "evt_invoice_reconcile"],
+					},
+				],
+			},
+		};
+		const draft = draftFor(
+			INVOICE_PLAN_APP,
+			["edge-berlin-01", "lab-gpu-02"],
+			{},
+			{ mode: "update" },
+		);
+		expect(draft).toMatchObject({ entry: "update", keepEvents: true });
+		draft.targets[0].choices = {
+			main: { kind: "update", serviceId: "invoice-extractor" },
+		};
+		draft.targets[1].choices = {
+			main: { kind: "update", serviceId: "invoice-extractor-gpu" },
+		};
+		const { plan, check } = planFor(draft, INVOICE_PLAN_APP, { devices });
+		expect(plan.services.map((service) => service.key)).toEqual(["main"]);
+		expect(
+			plan.targets.map((target) => [
+				target.deviceId,
+				target.services[0].serviceId,
+				target.services[0].events,
+				target.services[0].removedEvents,
+			]),
+		).toEqual([
+			["edge-berlin-01", "invoice-extractor", ["evt_extract_http"], []],
+			[
+				"lab-gpu-02",
+				"invoice-extractor-gpu",
+				["evt_gpu_extract"],
+				["evt_invoice_reconcile"],
+			],
+		]);
+		// The schedule can't run on devices any more: dropping it needs the user's yes.
+		expect(
+			check.issues.map((issue) => `${issue.code}@${issue.deviceId}`),
+		).toEqual(["removed_events@lab-gpu-02"]);
+		expect(
+			planFor({ ...draft, acceptRemovedEvents: true }, INVOICE_PLAN_APP, {
+				devices,
+			}).check.ok,
+		).toBe(true);
+		expect(
+			makePlan(
+				entry(INVOICE_PLAN_APP, {
+					deviceIds: ["edge-berlin-01"],
+					mode: "update",
+					serviceId: "invoice-extractor",
+				}),
+			).keepEvents,
+		).toBeUndefined();
+	});
+
 	test("a port in use moves to the next free one; the device's own override stays", () => {
 		const draft = draftFor(VISITOR_PLAN_APP, ["edge-berlin-01"], {
 			endpoint: {
@@ -414,6 +554,74 @@ describe("targets (APP §3.7)", () => {
 		expect(
 			resolvePlan(draft, facts(VISITOR_PLAN_APP)).targets[0].endpoint.port,
 		).toBe(8081);
+	});
+
+	test("two served services of one plan never share a port on a device (A5)", () => {
+		const draft = draftFor(INVOICE_PLAN_APP, ["studio-mac-mini"], {
+			split: "per_event",
+			endpoint: {
+				host: "127.0.0.1",
+				port: 8089,
+				token: "per_device",
+				tokenValue: "",
+			},
+		});
+		draft.approval.ownerConsent = true;
+		draft.targets[0].over.trustAgent = true;
+		const { plan, check } = planFor(draft, INVOICE_PLAN_APP);
+		expect(
+			plan.targets[0].services.map((service) => [
+				service.serviceId,
+				service.port,
+			]),
+		).toEqual([
+			["extract-invoice", undefined],
+			["extract-invoice-gpu", 8091],
+			["invoice-tools-mcp", undefined],
+		]);
+		expect(plan.targets[0].endpoint.port).toBe(8089);
+		expect(check.issues).toEqual([]);
+		expect(check.exceptions).toContainEqual({
+			code: "port_moved",
+			step: "endpoint",
+			deviceId: "studio-mac-mini",
+			tone: "info",
+			params: { from: 8089, to: 8091, service: "extract-invoice-gpu" },
+		});
+		const wired = (serviceKey: string) =>
+			wirePlan(
+				plan,
+				{ deviceId: "studio-mac-mini", serviceKey },
+				{
+					installed: VISITOR_INSTALLED,
+					events: [],
+					variables: {},
+					serviceToken: TOKEN,
+					canManageCertificates: false,
+				},
+			).port;
+		expect([wired("evt_extract_http"), wired("evt_gpu_extract")]).toEqual([
+			8089, 8091,
+		]);
+	});
+
+	test("a port typed for a device that another service uses there is refused", () => {
+		const draft = draftFor(VISITOR_PLAN_APP, ["edge-berlin-01"]);
+		draft.approval.ownerConsent = true;
+		draft.targets[0].over.port = 8081;
+		expect(planFor(draft, VISITOR_PLAN_APP).check.issues).toEqual([
+			{
+				code: "port_in_use",
+				step: "endpoint",
+				severity: "error",
+				deviceId: "edge-berlin-01",
+				params: { port: 8081, service: "invoice-extractor" },
+			},
+		]);
+		draft.targets[0].over.port = 80;
+		expect(planFor(draft, VISITOR_PLAN_APP).check.issues[0].params).toEqual({
+			port: 80,
+		});
 	});
 
 	test("isolation follows each device's policy and is clamped to its memory", () => {
@@ -508,6 +716,19 @@ const CHECK_CASES: [
 			"target_no_events@lab-gpu-02",
 			"agent_trust@studio-mac-mini",
 		],
+	],
+	[
+		"an update entry that names no service to update never creates one",
+		() =>
+			draftFor(
+				CRM_PLAN_APP,
+				["edge-berlin-01"],
+				{ events: ["evt_crm_webhook"] },
+				{ mode: "update" },
+			),
+		CRM_PLAN_APP,
+		{},
+		["update_needs_service@edge-berlin-01", "token_invalid@edge-berlin-01"],
 	],
 	[
 		"ids a device refuses",
@@ -1117,6 +1338,27 @@ describe("phases (APP §3.13)", () => {
 		).toEqual(["upload", "check_events", "install", "create"]);
 	});
 
+	test("an offline copy with hosted models gets its model access and spending limit first", () => {
+		const offline = draftFor(CRM_PLAN_APP, ["studio-mac-mini"]);
+		offline.approval = { ...offline.approval, models: ["mistral-small-3"] };
+		offline.spending = {
+			limitMicros: 10_000_000,
+			expiresAt: offline.approval.expiresAt,
+			consent: true,
+		};
+		expect(
+			phases(offline, CRM_PLAN_APP, { secrets: false, safe: false }),
+		).toEqual([
+			"approve",
+			"spending",
+			"upload",
+			"check_events",
+			"install",
+			"create",
+			"start",
+		]);
+	});
+
 	test("updates: safe, quick and settings only", () => {
 		const update = draftFor(
 			CRM_PLAN_APP,
@@ -1124,11 +1366,12 @@ describe("phases (APP §3.13)", () => {
 			{ events: ["evt_crm_nightly"] },
 			{ serviceId: "nightly-sync", mode: "update" },
 		);
+		// The device's order: stage the update, write its new secrets, then check and switch.
 		expect(phases(update, CRM_PLAN_APP)).toEqual([
 			"upload",
 			"install",
-			"secrets",
 			"prepare_update",
+			"secrets",
 			"check_new",
 			"switch",
 		]);

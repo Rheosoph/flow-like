@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { getI18n } from "@flow-like/locales";
 import type { CopyTime } from "../../../components/settings/devices/copy/attention-copy";
-import { headlineCopy } from "../../../components/settings/devices/copy/headline-copy";
+import {
+	headlineCopy,
+	headlinePartCopy,
+} from "../../../components/settings/devices/copy/headline-copy";
 import type { DevicesT } from "../../../components/settings/devices/primitives/area-context";
 import { formatMoment, formatRelativeTime } from "../../date";
 import {
@@ -205,13 +208,30 @@ describe("app headline (APP §7.4, first match wins)", () => {
 		});
 	});
 
-	test("all locked", () => {
+	test("all locked: a device that never checked in is named, not counted as locked", () => {
 		const input = sampleFleet();
 		for (const keys of input.keys) keys.state = "locked";
 		expect(appText(input, app(APP.invoiceAi, "Invoice AI"))).toEqual({
 			lead: "Unlock to see where Invoice AI runs.",
-			rest: "The hub doesn't know which apps run on your devices; only keys on this computer can read it. 5 devices are locked.",
+			rest: "The hub doesn't know which apps run on your devices; only keys on this computer can read it. 4 devices are locked. cold-storage-nas hasn't checked in yet.",
 		});
+	});
+
+	test("only devices that never checked in: nothing to unlock, nothing uncertain", () => {
+		const input = sampleFleet();
+		input.devices = input.devices.filter((row) => row.device_id === ID.cold);
+		expect(appText(input, app(APP.invoiceAi, "Invoice AI"))).toEqual({
+			lead: "Invoice AI isn't on any device yet.",
+			rest: "It's an online app, so devices will run it online with its data in the cloud. 2 of its 2 events can run on a device.",
+		});
+	});
+
+	test("never deployed with a device shared for another app still says 'you can see'", () => {
+		const input = sampleFleet();
+		input.devices = input.devices.filter((row) => row.device_id !== ID.cold);
+		expect(
+			appText(input, app(APP.partnerReports, "Partner Reports")).lead,
+		).toBe("Partner Reports isn't on any device you can see yet.");
 	});
 
 	test("never deployed: online and local-only", () => {
@@ -238,7 +258,7 @@ describe("app headline (APP §7.4, first match wins)", () => {
 			appText(sampleFleet(), app(APP.warehouseScanner, "Warehouse Scanner")),
 		).toEqual({
 			lead: "scanner-ingest on warehouse-pi kept crashing when last seen.",
-			rest: "warehouse-pi has been offline since 11:00 (3 hours ago), so this is the last known state. Status from 3 of 5 devices you can see; 1 is unknown. Your access doesn't cover Warehouse Scanner on 1 more device.",
+			rest: "warehouse-pi has been offline since 11:00 (3 hours ago), so this is the last known state. Status from 3 of 5 devices you can see; 1 hasn't checked in yet and your access doesn't cover Warehouse Scanner on 1 more.",
 		});
 	});
 
@@ -254,7 +274,7 @@ describe("app headline (APP §7.4, first match wins)", () => {
 		);
 		expect(appText(input, app(APP.supportPortal, "Support Portal"))).toEqual({
 			lead: "support-bot on edge-berlin-01 keeps crashing.",
-			rest: "1 other service runs as you asked. Status from 3 of 5 devices you can see; 1 is unknown. Your access doesn't cover Support Portal on 1 more device.",
+			rest: "1 other service runs as you asked. Status from 3 of 5 devices you can see; 1 hasn't checked in yet and your access doesn't cover Support Portal on 1 more.",
 		});
 	});
 
@@ -283,22 +303,40 @@ describe("app headline (APP §7.4, first match wins)", () => {
 	test("updating with a deadline", () => {
 		expect(appText(sampleFleet(), app(APP.invoiceAi, "Invoice AI"))).toEqual({
 			lead: "invoice-extractor on edge-berlin-01 is switching to settings v12.",
-			rest: "If it isn't healthy by 14:01, the device restores settings v11 on its own. Status from 3 of 5 devices you can see; 2 are unknown.",
+			rest: "If it isn't healthy by 14:01, the device restores settings v11 on its own. Status from 3 of 5 devices you can see; 1 is unknown, 1 hasn't checked in yet.",
 		});
 	});
 
-	test("staged", () => {
+	test("an update that is still being checked names the version it switches to", () => {
 		const input = sampleFleet();
 		const rollouts = input.live[ID.edge].rollouts;
 		if (!rollouts) throw new Error("fixture: rollouts");
 		rollouts[0] = {
 			...rollouts[0],
+			state: "validating",
+			active_revision: null,
+		};
+		expect(appText(input, app(APP.invoiceAi, "Invoice AI")).lead).toBe(
+			"invoice-extractor on edge-berlin-01 is switching to settings v12.",
+		);
+	});
+
+	test("staged: the device discards it a day after it was staged", () => {
+		const input = sampleFleet();
+		const rollouts = input.live[ID.edge].rollouts;
+		if (!rollouts) throw new Error("fixture: rollouts");
+		const stagedAt = SAMPLE_NOW - 3_600;
+		rollouts[0] = {
+			...rollouts[0],
 			state: "staged",
-			deadline_at: SAMPLE_NOW + 86_400,
+			active_revision: null,
+			created_at: stagedAt,
+			updated_at: stagedAt,
+			deadline_at: null,
 		};
 		expect(appText(input, app(APP.invoiceAi, "Invoice AI"))).toEqual({
 			lead: "An update for invoice-extractor on edge-berlin-01 is ready but not active.",
-			rest: `Activate it to switch to settings v12; it's discarded on ${time.at(SAMPLE_NOW + 86_400)} otherwise.`,
+			rest: `Activate it to switch to settings v12; it's discarded on ${time.at(stagedAt + 86_400)} otherwise.`,
 		});
 	});
 
@@ -347,7 +385,7 @@ describe("app headline (APP §7.4, first match wins)", () => {
 		});
 		expect(appText(sampleFleet(), portal)).toEqual({
 			lead: "Support Portal runs as you asked on 1 device.",
-			rest: "1 service runs an older version than v2.4.0. Status from 3 of 5 devices you can see; 1 is unknown. Your access doesn't cover Support Portal on 1 more device.",
+			rest: "1 service runs an older version than v2.4.0. Status from 3 of 5 devices you can see; 1 hasn't checked in yet and your access doesn't cover Support Portal on 1 more.",
 		});
 		const two = onStudio(
 			placement({
@@ -359,6 +397,39 @@ describe("app headline (APP §7.4, first match wins)", () => {
 		);
 		expect(appText(two, app(APP.supportPortal, "Support Portal")).lead).toBe(
 			"Support Portal runs as you asked on 2 devices.",
+		);
+	});
+
+	test("the one coverage sentence in every combination (APP §6.3)", () => {
+		const text = (params: Record<string, number>) =>
+			headlinePartCopy(
+				t,
+				{
+					code: "app.coverage",
+					params: {
+						app: "CRM Sync",
+						readable: 3,
+						total: 9,
+						unknown: 0,
+						never: 0,
+						noAccess: 0,
+						...params,
+					},
+				},
+				time,
+			);
+		const status = "Status from 3 of 9 devices you can see";
+		expect(text({})).toBe(`${status}.`);
+		expect(text({ unknown: 2 })).toBe(`${status}; 2 are unknown.`);
+		expect(text({ never: 2 })).toBe(`${status}; 2 haven't checked in yet.`);
+		expect(text({ noAccess: 2 })).toBe(
+			`${status}; your access doesn't cover CRM Sync on 2 more.`,
+		);
+		expect(text({ unknown: 1, noAccess: 1 })).toBe(
+			`${status}; 1 is unknown and your access doesn't cover CRM Sync on 1 more.`,
+		);
+		expect(text({ unknown: 2, never: 1, noAccess: 3 })).toBe(
+			`${status}; 2 are unknown, 1 hasn't checked in yet and your access doesn't cover CRM Sync on 3 more.`,
 		);
 	});
 });

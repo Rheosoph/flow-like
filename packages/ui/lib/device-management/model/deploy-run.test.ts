@@ -227,11 +227,46 @@ describe("orders", () => {
 	test("all at once starts every device; a failure holds nothing that already runs", () => {
 		const started = play(init("all"), [start()]);
 		expect(activeTargets(started)).toEqual(["a", "b", "c"]);
-		const ended = play(started, [fail("a"), done("b"), done("c")]);
+		const failed = play(started, [fail("a")]);
+		expect([failed.status, rows(failed)]).toEqual([
+			"running",
+			"a:failed b:active c:active",
+		]);
+		const ended = play(failed, [done("b"), done("c")]);
 		expect([ended.status, rows(ended)]).toEqual([
 			"finished",
 			"a:failed b:done c:done",
 		]);
+	});
+
+	test("a retried device that fails again holds the rest only once nothing else runs", () => {
+		const both = play(init(), [
+			start(),
+			fail("a"),
+			all("continue"),
+			act("retry", "a"),
+		]);
+		expect(rows(both)).toBe("a:active b:active c:waiting");
+		const again = play(both, [fail("a")]);
+		expect([again.status, again.holdBy, rows(again)]).toEqual([
+			"running",
+			"a",
+			"a:failed b:active c:held",
+		]);
+		const held = play(again, [done("b")]);
+		expect([held.status, rows(held)]).toEqual([
+			"held",
+			"a:failed b:done c:held",
+		]);
+	});
+
+	test("a failure in a phase the row doesn't list keeps the phase it had reached", () => {
+		const run = play(init(), [
+			start(),
+			{ type: "phase", target: "a", phase: "create", at: at() },
+			fail("a", "switch"),
+		]);
+		expect(run.rows[0]).toMatchObject({ state: "failed", phase: 2 });
 	});
 
 	test("first device, then the rest", () => {

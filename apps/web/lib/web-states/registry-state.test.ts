@@ -172,4 +172,32 @@ describe("web widget sandbox", () => {
 			"malformed access token",
 		);
 	});
+
+	test("an API that answered an access request has the route, so a later bare 404 or 405 rejects instead of loading anonymously", async () => {
+		const request = { packageId: "com.example.sales", packageVersion: "1.2.0" };
+		const state = registry();
+		const bare = (status: number) =>
+			new ApiResponseError({ status, message: "Not Found" });
+
+		mocks.apiPost.mockResolvedValueOnce({ access: "a/b", expiresIn: 60 });
+		await expect(state.getWidgetAccess(request)).rejects.toThrow();
+		mocks.apiPost.mockRejectedValueOnce(bare(404));
+		await expect(state.getWidgetAccess(request)).resolves.toMatchObject({
+			access: null,
+		});
+
+		mocks.apiPost.mockResolvedValueOnce({ access: ACCESS, expiresIn: 43_200 });
+		await expect(state.getWidgetAccess(request)).resolves.toMatchObject({
+			access: ACCESS,
+		});
+		for (const status of [404, 405]) {
+			const hiccup = bare(status);
+			mocks.apiPost.mockRejectedValueOnce(hiccup);
+			await expect(state.getWidgetAccess(request)).rejects.toBe(hiccup);
+		}
+		mocks.apiPost.mockRejectedValueOnce(bare(404));
+		await expect(registry().getWidgetAccess(request)).resolves.toMatchObject({
+			access: null,
+		});
+	});
 });

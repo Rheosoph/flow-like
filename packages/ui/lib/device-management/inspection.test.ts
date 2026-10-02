@@ -337,6 +337,45 @@ test("malformed agent facts are dropped without failing the inspection", async (
 	expect(result.tasks).toBeUndefined();
 });
 
+test("replica error flags are validated and a task without its failure counter keeps the task list", async () => {
+	const replica = (slot: number, has_error: unknown) => ({
+		slot,
+		observed_state: "backoff",
+		applied_revision: 1,
+		has_error,
+	});
+	const tasks = [
+		{ name: "fleet_publisher", state: "stopped", since: 1727760000 },
+		{
+			name: "archive_publisher",
+			state: "failing",
+			since: 1727760000,
+			consecutive_failures: 2,
+			category: "hub_refused",
+		},
+	];
+	const result = await readDeviceInspection(
+		page({
+			tasks,
+			placements: [
+				{
+					...row("status-only"),
+					desired_replicas: 2,
+					max_replicas: 2,
+					has_error: true,
+					replicas: [replica(0, true), replica(1, "yes")],
+				},
+			],
+		}),
+		"device",
+	);
+	expect<unknown>(result.placements[0].replicas).toEqual([
+		replica(0, true),
+		{ slot: 1, observed_state: "backoff", applied_revision: 1 },
+	]);
+	expect<unknown>(result.tasks).toEqual(tasks);
+});
+
 test("page progress reports reads and an estimate from the previous count", async () => {
 	const progress: [number, number | null][] = [];
 	await readDeviceInspection(

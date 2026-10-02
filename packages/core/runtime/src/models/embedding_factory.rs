@@ -381,6 +381,7 @@ mod tests {
                 secret_name: None,
                 implementation: Some(RemoteEmbeddingProvider::Internal),
                 model_id: Some("embedding-model".to_string()),
+                ..Default::default()
             }),
         };
 

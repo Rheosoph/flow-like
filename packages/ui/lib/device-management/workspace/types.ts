@@ -2,14 +2,20 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { IApiState } from "../../../state/backend-state/api-state";
 import type { IProfile } from "../../../types";
 import type { FleetMetrics } from "../fleet";
+import type { HubQueryContext } from "../hub/queries";
 import type { RetainedObservation } from "../inventory";
 import type {
+	AccessRequestRecord,
+	AgentLastRead,
+	AttentionMemory,
 	CopyRef,
 	DeviceIdentity,
 	FixAction,
 	Freshness,
 	InspectionPlus,
+	LiveDeviceInput,
 	NavTarget,
+	PlacementStatusPlus,
 	PreflightCode,
 	PreflightId,
 	ServiceView,
@@ -61,10 +67,42 @@ export interface DeviceWorkspace {
 	readonly activity: ActivityTracker;
 	readonly clock: ClockModel;
 	readonly store: WorkspaceStore;
+	/** Hub query context of this scope: `queries.x(workspace.hub, …)` always reads the current api and profile. */
+	readonly hub: HubQueryContext;
+	/** What views read beyond the inspection, for the attention engine. */
+	readonly facts: LiveFactsStore;
+	/** Dwell and snooze memory of the attention engine, kept per scope on this computer. */
+	readonly attention: AttentionMemory;
 	/** Bump the "used" clock for a device (views, user actions). Background polling never calls it. */
 	touch(deviceId: string): void;
 	/** Lock all, close sessions, stop timers. */
 	dispose(): Promise<void>;
+}
+
+/* Facts views report (CA11 `LiveDeviceInput` beyond state and inspection). */
+
+export type LiveFacts = Omit<LiveDeviceInput, "state" | "inspection">;
+
+export interface LiveFactsStore {
+	/** Decrypted facts of one device; gone when its keys lock. */
+	get(deviceId: string): LiveFacts | undefined;
+	/** Replaces the given fields; `placements` and `offlineQueues` merge per placement id. */
+	record(deviceId: string, facts: Partial<LiveFacts>): void;
+	clear(deviceId?: string): void;
+	/** Agent release per device from the last live read; survives locks and reloads (BG8 replaces it). */
+	agentLastRead(): Readonly<Record<string, AgentLastRead | undefined>>;
+	/**
+	 * Access requests made from this computer; survives reloads (BG23 replaces it).
+	 * Request keys without a record get one, a device the hub lists is approved,
+	 * and a record whose keys are gone is dropped.
+	 */
+	accessRequests(): readonly AccessRequestRecord[];
+	/** The access flow adds the device name and owner when it creates a request. */
+	recordAccessRequest(
+		request: Omit<AccessRequestRecord, "approved" | "createdAt"> &
+			Partial<Pick<AccessRequestRecord, "approved" | "createdAt">>,
+	): void;
+	subscribe(listener: () => void): () => void;
 }
 
 /* Key sessions (M-DATA §3.2). */
@@ -90,13 +128,14 @@ export interface KeySessionSnapshot {
 	grantId: string;
 	/** Owner with the invitation handle attached (§3.2.4). */
 	canSign: boolean;
+	/** `unlockedAt`, `lastUsedAt` and `idleLocksAt` are epoch milliseconds of `WorkspaceDeps.now`. */
 	unlockedAt?: number;
 	lastUsedAt?: number;
 	/** Undefined while "keep unlocked" is on. */
 	idleLocksAt?: number;
 	keepUnlocked: boolean;
 	restoredNeedsFreshEndpoint: boolean;
-	/** Greyed "Locked · last read 12:03". */
+	/** Greyed "Locked · last read 12:03"; `readAt` is unix seconds. */
 	lockedSummary?: { readAt: number; services: ServiceSummary[] };
 	lastError?: KeyError;
 }
@@ -255,6 +294,10 @@ export interface KeySessionManager {
 	/** Verified at unlock; reused by fleet and live. */
 	receipt(deviceId: string): DeviceReceipt | undefined;
 	signer(deviceId: string): OwnerSigner | undefined;
+	/** IA §6.4.1 per-user setting "Ask for my password again for access changes"; off by default. */
+	askPasswordForAccessChanges(): boolean;
+	/** Turning it on drops every held owner key in this window, so `canSign` turns false. */
+	setAskPasswordForAccessChanges(ask: boolean): void;
 }
 
 /* Live sessions (M-DATA §3.3). */
@@ -405,10 +448,16 @@ export interface LiveStreams {
 
 /* Encrypted snapshots (M-DATA §3.4). */
 
+/** A status snapshot's rows: the retained shape plus the agent facts a snapshot may carry (plan §3.4.2). */
+export type StatusObservation = RetainedObservation &
+	Partial<
+		Pick<InspectionPlus, "agent" | "host" | "tasks" | "hostOperation">
+	> & { placements: PlacementStatusPlus[] };
+
 export interface FleetDeviceState {
 	deviceId: string;
 	status?: {
-		observations: RetainedObservation[];
+		observations: StatusObservation[];
 		observedAt: number;
 		bootId: string | null;
 		sequence: number;
@@ -435,6 +484,10 @@ export interface FleetSnapshotReader {
 	/** Demand: polls while keys are unlocked. */
 	watch(deviceId: string): () => void;
 	refresh(deviceId: string): Promise<void>;
+	/** "Renew": sign a new 365-day reader declaration now. Rejects without unlocked keys. */
+	renew(deviceId: string): Promise<void>;
+	/** "Stop receiving": remove this computer's reader on the hub; status reads "No access" until `renew`. */
+	stopReceiving(deviceId: string): Promise<void>;
 	coverage(projectId?: string): {
 		readable: number;
 		locked: number;

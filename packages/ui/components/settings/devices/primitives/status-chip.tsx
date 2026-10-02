@@ -157,7 +157,7 @@ export function PresenceChip({
 }>) {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
-	const ago = since === undefined ? "" : time.ago(since);
+	const ago = since === undefined ? "" : time.ago(Math.min(since, time.nowS));
 	const text: Record<PresenceChipKind, string> = {
 		online:
 			since === undefined

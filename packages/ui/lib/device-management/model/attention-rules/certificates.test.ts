@@ -75,6 +75,11 @@ describe("expiry", () => {
 		const [item] = evaluate("certificate_expiring", input);
 		expect(item.severity).toBe("info");
 		expect(item.copy.params?.renewsAt).toBe(SAMPLE_NOW + DAY);
+		// A renewal that was due and didn't happen is not "will renew automatically".
+		edgeLive(input).issuer.next_renewal_at = SAMPLE_NOW - 60;
+		const [overdue] = evaluate("certificate_expiring", { ...input });
+		expect(overdue.severity).toBe("warning");
+		expect(overdue.copy.params?.renewsAt).toBeUndefined();
 	});
 
 	test("expired: Critical when a service uses it, Warning otherwise (hub-only certificates have no name)", () => {

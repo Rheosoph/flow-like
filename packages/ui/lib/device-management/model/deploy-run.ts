@@ -178,19 +178,23 @@ const onFail = (
 	state: DeployRunState,
 	event: Extract<DeployRunEvent, { type: "fail" }>,
 ): DeployRunState => {
-	const failed = patchRow(state, event.target, (row) => ({
-		...row,
-		state: "failed",
-		error: event.error,
-		phase: Math.max(0, row.phases.indexOf(event.error.phase)),
-		at: event.at,
-		finishedAt: event.at,
-	}));
+	const failed = patchRow(state, event.target, (row) => {
+		const index = row.phases.indexOf(event.error.phase);
+		return {
+			...row,
+			state: "failed",
+			error: event.error,
+			phase: index < 0 ? row.phase : index,
+			at: event.at,
+			finishedAt: event.at,
+		};
+	});
 	if (!state.stopOnFail) return schedule(failed, event.at);
+	// Rows that already run go on; `finish` holds the run once only held rows are left.
 	return finish(
 		{
 			...failed,
-			status: "held",
+			status: "running",
 			holdBy: event.target,
 			rows: failed.rows.map((row) =>
 				row.state === "waiting" ? { ...row, state: "held" } : row,

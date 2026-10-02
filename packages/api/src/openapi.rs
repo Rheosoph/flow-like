@@ -597,6 +597,8 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 3] {
         crate::teams::lookup::members,
         crate::routes::app::mail::executor_send_mail,
         crate::routes::app::mail::executor_reply_mail,
+        crate::routes::execution::widgets::get_app_widgets,
+        crate::routes::execution::widgets::get_app_package_widgets,
         crate::routes::execution::progress::poll_status,
         crate::routes::execution::progress::get_run_status,
         crate::routes::execution::cancel::cancel_run,
@@ -756,6 +758,7 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 3] {
         crate::routes::course::app_refs::upsert_app_ref,
         crate::routes::course::app_refs::delete_app_ref,
         crate::routes::course::shared_app::open_shared_app,
+        crate::routes::course::shared_app::sync_shared_app_packages,
         crate::routes::course::translate::translate,
         crate::routes::course::enrollment::enroll,
         crate::routes::course::enrollment::get_my_enrollments,
@@ -1255,6 +1258,7 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 3] {
         crate::routes::course::weekly::CurrentWeekly,
         crate::routes::course::shared_app::OpenSharedAppResponse,
         crate::routes::course::shared_app::OpenSharedAppQuery,
+        crate::routes::course::shared_app::SharedAppPackagesResponse,
         crate::routes::course::translate::TranslateQuery,
         crate::routes::course::translate::TranslateResponse,
         // Telemetry
@@ -1697,6 +1701,21 @@ mod tests {
                 ))
                 .is_some(),
                 "{path} documents no Retry-After header"
+            );
+        }
+    }
+
+    #[test]
+    fn executor_widget_paths_are_documented() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        for path in [
+            "/execution/apps/{app_id}/widgets",
+            "/execution/apps/{app_id}/package-widgets",
+        ] {
+            assert!(
+                spec.pointer(&format!("/paths/{}/get", path.replace('/', "~1")))
+                    .is_some(),
+                "missing OpenAPI operation get {path}"
             );
         }
     }

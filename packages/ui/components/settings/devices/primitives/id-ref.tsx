@@ -61,7 +61,7 @@ export function IdRef({
 				aria-expanded={isShort ? undefined : revealed}
 				onClick={() => setRevealed((current) => !current)}
 				className={cx(
-					"min-w-0 cursor-pointer rounded-sm border border-hairline bg-surface-sunken px-1.5 py-px text-left font-mono text-xs text-ink-2 hover:border-border-strong",
+					"min-w-0 cursor-pointer rounded-sm border border-hairline bg-surface-sunken px-1.5 py-px text-left font-mono text-xs text-ink-2 hover:border-border-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
 					revealed
 						? "wrap-normal break-normal whitespace-normal"
 						: "truncate whitespace-nowrap",

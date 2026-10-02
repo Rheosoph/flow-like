@@ -16,6 +16,7 @@ import {
 	isMissingOnHub,
 	listAccountBackups,
 	listAppDevicePlacements,
+	listCertificateNoticeMutes,
 	listCertificateNotices,
 	listEnrollments,
 	muteCertificateNotices,
@@ -301,33 +302,24 @@ describe("hub endpoint clients", () => {
 						},
 					],
 				},
-				"GET devices/d1/management/my-access": {
-					device_id: "d1",
-					role: "owner",
-					owner_id: "me",
-					policy_version: 1,
-					applied_version: 1,
-					applied: true,
-					grants: [],
-				},
 			}),
 		);
 		const summary = await getResourceSummary(api, profile);
-		expect(summary.kind === "ok" && summary.data.devices[0].approvals[0]).toEqual(
-			{
-				grant_id: "g",
-				placement_id: "p",
-				app_id: null,
-				status: "active",
-				expires_at: 10,
-				effective_expires_at: 10,
-				effective_limit: "approval",
-				online_access: null,
-				online_write_blocked: null,
-				payer_is_me: true,
-				approver_is_me: false,
-			},
-		);
+		expect(
+			summary.kind === "ok" && summary.data.devices[0].approvals[0],
+		).toEqual({
+			grant_id: "g",
+			placement_id: "p",
+			app_id: null,
+			status: "active",
+			expires_at: 10,
+			effective_expires_at: 10,
+			effective_limit: "approval",
+			online_access: null,
+			online_write_blocked: null,
+			payer_is_me: true,
+			approver_is_me: false,
+		});
 		const placements = await listAppDevicePlacements(api, profile, "app");
 		expect(placements.kind === "ok" && placements.data.placements[0]).toEqual({
 			device_id: "d1",
@@ -349,8 +341,61 @@ describe("hub endpoint clients", () => {
 			billing: null,
 			instances: { active: 0, newest_lease_expires_at: null },
 		});
+	});
+
+	test("my-access without a rules expiry reads it as null", async () => {
+		const { api } = fakeApi(
+			routes({
+				"GET devices/d1/management/my-access": {
+					device_id: "d1",
+					role: "owner",
+					owner_id: "me",
+					policy_version: 1,
+					applied_version: 1,
+					applied: true,
+					grants: [],
+				},
+			}),
+		);
 		const access = await getMyAccess(api, profile, "d1");
 		expect(access.kind === "ok" && access.data.policy_expires_at).toBeNull();
+	});
+
+	test("the caller's mutes read back after a reload; a hub without the route is missing_on_hub", async () => {
+		const { api, calls } = fakeApi((method, path) =>
+			method === "GET" && path === "devices/a%2Fb/certificate-notices/mute"
+				? [
+						{ certificate_id: CERT, until: 1_790_000_000 },
+						{ certificate_id: null },
+					]
+				: refusal(405),
+		);
+		expect(await listCertificateNoticeMutes(api, profile, "a/b")).toEqual({
+			kind: "ok",
+			data: [
+				{ certificate_id: CERT, until: 1_790_000_000 },
+				{ certificate_id: null, until: null },
+			],
+		});
+		expect(calls).toEqual([["GET", "devices/a%2Fb/certificate-notices/mute"]]);
+		expect(await listCertificateNoticeMutes(api, profile, "other")).toEqual({
+			kind: "missing_on_hub",
+		});
+	});
+
+	test("a 429 keeps how long the hub asked to wait when the API error carries it", () => {
+		const limited = Object.assign(refusal(429, "TOO_MANY_REQUESTS"), {
+			retryAfter: 540,
+		});
+		expect(toHubError(limited, "device")).toMatchObject({
+			code: "rate_limited",
+			retryAfterS: 540,
+		});
+		expect(toHubError(refusal(429), "device").retryAfterS).toBeUndefined();
+		expect(
+			toHubError(Object.assign(refusal(429), { retryAfter: "soon" }), "device")
+				.retryAfterS,
+		).toBeUndefined();
 	});
 
 	test("my-access drops unknown capabilities and refuses another device's answer", async () => {

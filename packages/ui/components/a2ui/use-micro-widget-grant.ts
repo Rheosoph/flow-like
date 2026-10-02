@@ -50,6 +50,7 @@ import {
 	capabilityPolicy,
 	isEmptyPolicy,
 	isPolicyChangedError,
+	isWidgetAccessRefusedError,
 	isWidgetGrantUnavailableError,
 	isWidgetRuntimeDescribeUnsupportedError,
 	maxWidgetSourceLevel,
@@ -67,8 +68,12 @@ import {
 
 /** Grants and sandbox access count as expired this long before they expire. */
 export const MICRO_WIDGET_GRANT_REFRESH_MARGIN_MS = 5 * 60_000;
-/** A mount re-mints an expired grant, or replaces an expired access token, on frame load at most this often. */
+/** A mount re-mints an expired grant on frame load, and replaces an expired access token, at most this often. A mounted frame checks its access token on the same interval. */
 export const MICRO_WIDGET_REMINT_INTERVAL_MS = 60_000;
+/** A sandbox access request that failed without a refusal is asked again after each of these; then the failure stands. */
+export const MICRO_WIDGET_ACCESS_RETRY_DELAYS_MS: readonly number[] = [
+	2_000, 5_000, 15_000,
+];
 /** Minted grants kept on this page, least recently used first out. */
 export const MICRO_WIDGET_GRANT_CACHE_LIMIT = 256;
 /** An empty first extraction waits this long for the first props patch. */
@@ -226,6 +231,8 @@ export interface MicroWidgetGrantActions {
 	dismissNotice: (kind: MicroWidgetGrantNoticeKind) => void;
 	/** Call from the iframe `load` handler: re-mints a grant that is past its deadline. */
 	onFrameLoad: () => void;
+	/** Call before the running frame is given a new document: true when its grant is past its deadline. The grant is then minted again and rebuilds the frame, so the caller leaves the frame alone. */
+	renewGrant: () => boolean;
 	/** Call when the frame's widget said `hello`; later document swaps are rate limited. */
 	onFrameHello: () => void;
 }
@@ -242,6 +249,7 @@ export interface MicroWidgetGrant extends MicroWidgetGrantActions {
 interface CachedGrant {
 	grant: string | null;
 	runtime: string | null;
+	/** Wall-clock milliseconds, like every grant deadline. */
 	deadline: number;
 	packageId: string;
 	widgetId: string;
@@ -256,7 +264,7 @@ let forgetRevision = 0;
 /** Sandbox access token of a package version, or null when its sandbox loads anonymously. */
 export interface MicroWidgetAccess {
 	access: string | null;
-	/** Wall-clock milliseconds from which a frame that loads again replaces the token. */
+	/** Wall-clock milliseconds from which a mounted frame replaces the token. */
 	deadline: number;
 }
 
@@ -446,23 +454,27 @@ export function microWidgetFrameSrc(
 }
 
 export interface MicroWidgetGrantClock {
-	/** Monotonic milliseconds. */
+	/** Wall-clock milliseconds: grant and access deadlines are compared with it. */
 	now: () => number;
+	/** Monotonic milliseconds on the time base of the timers: elapsed time is measured with it. */
+	monotonic: () => number;
 	setTimeout: (callback: () => void, ms: number) => unknown;
 	clearTimeout: (handle: unknown) => void;
 }
 
+/**
+ * Grants and access tokens expire on the server's wall clock, which keeps
+ * running while the device sleeps; `performance.now()` may not. Waits are
+ * measured on `performance.now()` all the same: like the timers it is never
+ * corrected, so a step of the wall clock neither ends nor stretches them.
+ */
 const DEFAULT_CLOCK: MicroWidgetGrantClock = {
-	now: () =>
+	now: () => Date.now(),
+	monotonic: () =>
 		typeof performance !== "undefined" ? performance.now() : Date.now(),
 	setTimeout: (callback, ms) => setTimeout(callback, ms),
 	clearTimeout: (handle) =>
 		clearTimeout(handle as ReturnType<typeof setTimeout>),
-};
-
-/** Access tokens expire on the server's wall clock, which keeps running while the device sleeps; `performance.now()` may not. */
-const WALL_CLOCK: Pick<MicroWidgetGrantClock, "now"> = {
-	now: () => Date.now(),
 };
 
 export interface MicroWidgetAccessTarget {
@@ -500,12 +512,12 @@ export function forgetMicroWidgetAccess(
  * Every request of a frame checks its token again, so a new frame reuses a
  * cached token only while at least half of its lifetime is left, and
  * anonymous access while it has the refresh margin left. Rejects when the
- * viewer has no access.
+ * viewer has no access or the request failed; neither is cached.
  */
 export function loadMicroWidgetAccess(
 	registry: IRegistryState | null,
 	target: MicroWidgetAccessTarget,
-	clock: Pick<MicroWidgetGrantClock, "now"> = WALL_CLOCK,
+	clock: Pick<MicroWidgetGrantClock, "now"> = DEFAULT_CLOCK,
 ): Promise<MicroWidgetAccess> {
 	const getAccess = registryMethod(registry, "getWidgetAccess");
 	if (!getAccess) {
@@ -555,6 +567,44 @@ export function loadMicroWidgetAccess(
 	return request;
 }
 
+/**
+ * Asks for the sandbox access of a frame until the backend rules on it. A
+ * refusal fails at once. Any other failure is asked again after each of
+ * `MICRO_WIDGET_ACCESS_RETRY_DELAYS_MS` and fails once they are used up.
+ * Returns the cancel: neither callback runs after it and no timer is left.
+ */
+export function requestMicroWidgetAccess(
+	registry: IRegistryState | null,
+	target: MicroWidgetAccessTarget,
+	clock: MicroWidgetGrantClock,
+	onAccess: (access: MicroWidgetAccess) => void,
+	onFailure: (error: unknown) => void,
+): () => void {
+	let live = true;
+	let timer: unknown = null;
+	const ask = (failures: number) => {
+		timer = null;
+		loadMicroWidgetAccess(registry, target, clock).then(
+			(access) => {
+				if (live) onAccess(access);
+			},
+			(error) => {
+				if (!live) return;
+				const delay = isWidgetAccessRefusedError(error)
+					? undefined
+					: MICRO_WIDGET_ACCESS_RETRY_DELAYS_MS[failures];
+				if (delay === undefined) onFailure(error);
+				else timer = clock.setTimeout(() => ask(failures + 1), delay);
+			},
+		);
+	};
+	ask(0);
+	return () => {
+		live = false;
+		if (timer !== null) clock.clearTimeout(timer);
+	};
+}
+
 export type MicroWidgetFrameAccessState =
 	| { status: "loading" }
 	| { status: "ready"; access: string | null }
@@ -588,19 +638,47 @@ interface SettledFrameAccess {
 	token: FrameAccessToken | null;
 }
 
+function readyFrameAccess(
+	key: string,
+	target: MicroWidgetAccessTarget,
+	{ access, deadline }: MicroWidgetAccess,
+): SettledFrameAccess {
+	return {
+		key,
+		state: { status: "ready", access },
+		token: access === null ? null : { target, access, deadline },
+	};
+}
+
+function failedFrameAccess(key: string, error: unknown): SettledFrameAccess {
+	return {
+		key,
+		state: { status: "error", detail: errorMessage(error) },
+		token: null,
+	};
+}
+
 /**
- * Sandbox access of a web grant frame, settled per built frame. A healthy
- * frame keeps the token it was built with, because a new token is a new
- * document and the widget would lose its state. A frame that loads again once
- * its token is past the deadline (a host move reloads it) is rebuilt with a
- * fresh one, at most once per `MICRO_WIDGET_REMINT_INTERVAL_MS`. Legacy frames
- * and disabled hosts load anonymously.
+ * Sandbox access of a web grant frame, settled per built frame. Every later
+ * request of the frame (lazy chunks, images, fonts) is checked against its
+ * token, so a mounted frame replaces a token past its deadline, at most once
+ * per `MICRO_WIDGET_REMINT_INTERVAL_MS`. While the page is visible it checks
+ * at that interval and when the page becomes visible again (timers stall
+ * while the device sleeps), and keeps running until the new token arrived. A
+ * frame that loads again past the deadline is rebuilt at once. A new token is
+ * a new document, so the frame reloads once per token life and the widget
+ * loses its state then. A grant past its deadline is renewed for that
+ * document (`renewGrant`, the grant's action), so it never loads at baseline
+ * first. While a frame is built, a request that fails without a refusal is
+ * asked again (`requestMicroWidgetAccess`) and the frame stays loading. Legacy
+ * frames and disabled hosts load anonymously.
  */
 export function useMicroWidgetFrameAccess(
 	frame: MicroWidgetFrameMount | null,
 	appId: string | null | undefined,
 	enabled: boolean,
-	clock: Pick<MicroWidgetGrantClock, "now"> = WALL_CLOCK,
+	renewGrant: () => boolean,
+	clock: MicroWidgetGrantClock = DEFAULT_CLOCK,
 ): MicroWidgetFrameAccess {
 	const backend = useBackend();
 	const registry =
@@ -627,24 +705,13 @@ export function useMicroWidgetFrameAccess(
 			string | null,
 		];
 		const target = { packageId, packageVersion, appId: targetAppId };
-		let live = true;
-		const settle = (
-			state: MicroWidgetFrameAccessState,
-			token: FrameAccessToken | null,
-		) => {
-			if (live) setSettled({ key: frameKey, state, token });
-		};
-		loadMicroWidgetAccess(registry, target, clock).then(
-			({ access, deadline }) =>
-				settle(
-					{ status: "ready", access },
-					access === null ? null : { target, access, deadline },
-				),
-			(error) => settle({ status: "error", detail: errorMessage(error) }, null),
+		return requestMicroWidgetAccess(
+			registry,
+			target,
+			clock,
+			(access) => setSettled(readyFrameAccess(frameKey, target, access)),
+			(error) => setSettled(failedFrameAccess(frameKey, error)),
 		);
-		return () => {
-			live = false;
-		};
 	}, [frameKey, registry, clock]);
 
 	const shown = frameKey !== null && settled?.key === frameKey ? settled : null;
@@ -652,21 +719,81 @@ export function useMicroWidgetFrameAccess(
 	shownToken.current = shown?.token ?? null;
 	const lastRefresh = useRef<number | null>(null);
 
-	const onFrameLoad = useCallback(() => {
+	/** The shown token once it is past its deadline, at most once per remint interval; later frames then ask for a fresh one. */
+	const takeExpiredToken = useCallback((): FrameAccessToken | null => {
 		const token = shownToken.current;
-		if (!token) return;
+		if (!token) return null;
 		const now = clock.now();
-		if (now < token.deadline) return;
+		if (now < token.deadline) return null;
 		if (
 			lastRefresh.current !== null &&
 			now - lastRefresh.current < MICRO_WIDGET_REMINT_INTERVAL_MS
 		) {
-			return;
+			return null;
 		}
 		lastRefresh.current = now;
 		forgetMicroWidgetAccess(token.target, token.access);
-		setRefreshes((count) => count + 1);
+		return token;
 	}, [clock]);
+
+	const rebuild = useCallback(() => setRefreshes((count) => count + 1), []);
+
+	const onFrameLoad = useCallback(() => {
+		if (takeExpiredToken()) rebuild();
+	}, [takeExpiredToken, rebuild]);
+
+	// The running frame is swapped once its replacement arrived; a failed request leaves it for
+	// the next check. A refusal ends it only when the backend's next ruling is a refusal too: the
+	// API also refuses a viewer whose sign-in is still being renewed after sleep.
+	const hasToken = shown !== null && shown.token !== null;
+	useEffect(() => {
+		if (!hasToken) return;
+		let cancel: (() => void) | null = null;
+		let refused = false;
+		const check = () => {
+			if (cancel || document.visibilityState === "hidden") return;
+			const token = takeExpiredToken();
+			if (!token) return;
+			// An answer applies only while the frame still shows the token it replaces.
+			const settle = (next: (key: string) => SettledFrameAccess) =>
+				setSettled((current) =>
+					current?.token === token ? next(current.key) : current,
+				);
+			cancel = requestMicroWidgetAccess(
+				registry,
+				token.target,
+				clock,
+				(access) => {
+					cancel = null;
+					refused = false;
+					// Swapped in under a grant past its deadline, the token would load a baseline document
+					// first. The renewed grant rebuilds the frame instead, with this token from the cache.
+					if (renewGrant()) return;
+					settle((key) => readyFrameAccess(key, token.target, access));
+				},
+				(error) => {
+					cancel = null;
+					if (!isWidgetAccessRefusedError(error)) return;
+					if (refused) settle((key) => failedFrameAccess(key, error));
+					refused = true;
+				},
+			);
+		};
+		let timer: unknown;
+		const arm = () => {
+			timer = clock.setTimeout(() => {
+				check();
+				arm();
+			}, MICRO_WIDGET_REMINT_INTERVAL_MS);
+		};
+		arm();
+		document.addEventListener("visibilitychange", check);
+		return () => {
+			cancel?.();
+			clock.clearTimeout(timer);
+			document.removeEventListener("visibilitychange", check);
+		};
+	}, [hasToken, registry, clock, takeExpiredToken, renewGrant]);
 
 	const onFrameFailed = useCallback(() => {
 		const token = shownToken.current;
@@ -724,6 +851,8 @@ type MintState = (
 	| { kind: "failed"; detail: string }
 ) & { forgotten: number };
 
+type GrantedMint = Extract<MintState, { kind: "granted" }>;
+
 interface Displayed {
 	candidate: Candidate;
 	mintKey: string;
@@ -737,14 +866,19 @@ type RuntimeStage = "idle" | "grace" | "describing" | "done";
 type RuntimeDescribeMode = "mount" | "update" | "retry";
 
 interface Backoff {
+	/** Monotonic milliseconds. */
 	until: number;
 	delay: number;
 }
 
-function nextBackoff(previous: Backoff | null, now: number): Backoff {
-	const delay = previous
+function nextBackoffDelay(previous: { delay: number } | null): number {
+	return previous
 		? Math.min(previous.delay * 2, MICRO_WIDGET_RUNTIME_MAX_BACKOFF_MS)
 		: MICRO_WIDGET_RUNTIME_BACKOFF_MS;
+}
+
+function nextBackoff(previous: Backoff | null, now: number): Backoff {
+	const delay = nextBackoffDelay(previous);
 	return { until: now + delay, delay };
 }
 
@@ -845,10 +979,16 @@ export class MicroWidgetGrantController {
 	private queued: Displayed | null = null;
 	private helloSeen = false;
 	private lastSwapAt = Number.NEGATIVE_INFINITY;
-	private lastRemint: number | null = null;
+	/** Both clocks' readings at the last re-mint on a frame load. */
+	private lastRemint: { wall: number; monotonic: number } | null = null;
 	private baselineRequested = false;
 	private dismissedNotices = new Set<MicroWidgetGrantNoticeKind>();
-	private bannerDismissal: (Backoff & { sources: Set<string> }) | null = null;
+	/** `over` once its timer fired; the delay stays to double the next dismissal. */
+	private bannerDismissal: {
+		delay: number;
+		sources: Set<string>;
+		over: boolean;
+	} | null = null;
 
 	private graceTimer: unknown = null;
 	private debounceTimer: unknown = null;
@@ -885,6 +1025,7 @@ export class MicroWidgetGrantController {
 				this.emit();
 			},
 			onFrameLoad: () => this.onFrameLoad(),
+			renewGrant: () => this.renewGrant(),
 			onFrameHello: () => {
 				this.helloSeen = true;
 			},
@@ -1209,7 +1350,7 @@ export class MicroWidgetGrantController {
 			!this.runtimeDisabled &&
 			declared.engine?.runtimeSources !== false &&
 			registryMethod(inputs.registry, "describeWidgetPolicy") !== null &&
-			(this.backoff === null || this.clock.now() >= this.backoff.until) &&
+			(this.backoff === null || this.clock.monotonic() >= this.backoff.until) &&
 			!this.muted(declared)
 		);
 	}
@@ -1296,7 +1437,7 @@ export class MicroWidgetGrantController {
 	}
 
 	private scheduleUpdate(): void {
-		const now = this.clock.now();
+		const now = this.clock.monotonic();
 		this.burstStart ??= now;
 		this.debounceTimer = this.clearTimer(this.debounceTimer);
 		const delay = Math.max(
@@ -1410,9 +1551,19 @@ export class MicroWidgetGrantController {
 			this.candidate = next;
 			return;
 		}
+		const replaced = this.candidate;
 		this.candidate = next ?? this.declaredCandidate();
 		this.stage = "done";
-		if (this.dirty) {
+		// A retry describes the request of the frame whose mint was refused.
+		// Sources that waited for review belonged to another request, which this
+		// one replaced: the props are read again so that they come back.
+		const waiting =
+			mode === "retry" &&
+			replaced !== null &&
+			this.candidate !== null &&
+			widgetRuntimeRequestKey(replaced.request) !==
+				widgetRuntimeRequestKey(this.candidate.request);
+		if (this.dirty || waiting) {
 			this.dirty = false;
 			this.scheduleUpdate();
 		}
@@ -1442,7 +1593,7 @@ export class MicroWidgetGrantController {
 		}
 		switch (runtime.status) {
 			case "unavailable":
-				this.backoff = nextBackoff(this.backoff, this.clock.now());
+				this.backoff = nextBackoff(this.backoff, this.clock.monotonic());
 				this.runtimeUnavailable = true;
 				this.settleRuntime(null, mode);
 				return;
@@ -1477,7 +1628,7 @@ export class MicroWidgetGrantController {
 			this.disableRuntime(mode !== "update");
 			return;
 		}
-		this.backoff = nextBackoff(this.backoff, this.clock.now());
+		this.backoff = nextBackoff(this.backoff, this.clock.monotonic());
 		this.runtimeUnavailable = true;
 		this.settleRuntime(null, mode);
 	}
@@ -1519,11 +1670,13 @@ export class MicroWidgetGrantController {
 		if (evaluation.status === "granted") {
 			this.frozen = null;
 			this.reviewing = false;
-			if (this.conflictedMint === this.mintKey(candidate)) return;
-			const mint = this.ensureMint(candidate);
-			if (mint.kind === "granted") this.offerFrame(candidate, mint);
+			this.mintFrame(candidate);
 			return;
 		}
+		// The frame keeps running under its own grant while new sources wait for review, so that grant is
+		// minted again once it was dropped. A frame queued behind it is newer and replaces it anyway.
+		const shown = evaluation.declaredCovered ? this.displayed : null;
+		if (shown && !this.queued) this.mintFrame(shown.candidate);
 		if (evaluation.status === "blocked") {
 			this.frozen = null;
 			this.reviewing = false;
@@ -1533,15 +1686,24 @@ export class MicroWidgetGrantController {
 			this.frozen = null;
 			this.includeRuntime = null;
 		}
-		const running = this.displayed !== null && evaluation.declaredCovered;
-		if (running && !this.reviewing) {
+		if (shown && !this.reviewing) {
 			this.frozen = null;
 			return;
 		}
 		this.frozen ??= candidate;
 	}
 
-	private ensureMint(candidate: Candidate): MintState {
+	private mintFrame(candidate: Candidate): void {
+		if (this.conflictedMint === this.mintKey(candidate)) return;
+		const mint = this.ensureMint(candidate);
+		if (mint.kind === "granted") this.offerFrame(candidate, mint);
+	}
+
+	/** `kept`: the grant of the running frame this mint renews. It stays when the mint fails. */
+	private ensureMint(
+		candidate: Candidate,
+		kept: GrantedMint | null = null,
+	): MintState {
 		const inputs = this.inputs as MicroWidgetGrantControllerInputs;
 		const { descriptor } = candidate;
 		const key = this.mintKey(candidate);
@@ -1636,6 +1798,8 @@ export class MicroWidgetGrantController {
 					} else if (widgetRuntimeSourcesErrorCode(error) && withRuntime) {
 						this.mints.delete(key);
 						this.disableRuntime(true);
+					} else if (kept) {
+						this.mints.set(key, kept);
 					} else if (isWidgetGrantUnavailableError(error)) {
 						this.mints.set(key, { kind: "unavailable", forgotten });
 					} else {
@@ -1668,10 +1832,7 @@ export class MicroWidgetGrantController {
 		this.redescribeDeclared(candidate.descriptor.policyDigest);
 	}
 
-	private offerFrame(
-		candidate: Candidate,
-		mint: Extract<MintState, { kind: "granted" }>,
-	): void {
+	private offerFrame(candidate: Candidate, mint: GrantedMint): void {
 		const next: Displayed = {
 			candidate,
 			mintKey: this.mintKey(candidate),
@@ -1680,7 +1841,7 @@ export class MicroWidgetGrantController {
 			runtime: mint.runtime,
 			deadline: mint.deadline,
 		};
-		const now = this.clock.now();
+		const now = this.clock.monotonic();
 		if (!this.displayed || this.displayed.frameKey === next.frameKey) {
 			if (!this.displayed) this.markSwap(now);
 			this.displayed = next;
@@ -1709,7 +1870,7 @@ export class MicroWidgetGrantController {
 				this.queued = null;
 				if (queued) {
 					this.displayed = queued;
-					this.markSwap(this.clock.now());
+					this.markSwap(this.clock.monotonic());
 				}
 				this.reconcile();
 			},
@@ -1742,18 +1903,46 @@ export class MicroWidgetGrantController {
 	private onFrameLoad(): void {
 		const shown = this.displayed;
 		if (!shown || shown.grant === null) return;
-		const now = this.clock.now();
-		if (now < shown.deadline) return;
+		const wall = this.clock.now();
+		if (wall < shown.deadline) return;
+		const monotonic = this.clock.monotonic();
+		// Both clocks must say the interval has not passed: the monotonic one
+		// stands still while the device sleeps, and a grant minted before the
+		// sleep is past its deadline after it.
+		const last = this.lastRemint;
 		if (
-			this.lastRemint !== null &&
-			now - this.lastRemint < MICRO_WIDGET_REMINT_INTERVAL_MS
+			last !== null &&
+			monotonic - last.monotonic < MICRO_WIDGET_REMINT_INTERVAL_MS &&
+			wall - last.wall < MICRO_WIDGET_REMINT_INTERVAL_MS
 		) {
 			return;
 		}
-		this.lastRemint = now;
+		this.lastRemint = { wall, monotonic };
 		grantCache.delete(shown.mintKey);
 		this.mints.delete(shown.mintKey);
 		this.reconcile();
+	}
+
+	/**
+	 * True while the running frame's grant is past its deadline: the grant is
+	 * minted again and the new one rebuilds the frame. The running document does
+	 * not need its grant, so unlike on frame load a mint that fails leaves the
+	 * frame as it is, and the next call mints again.
+	 */
+	private renewGrant(): boolean {
+		const shown = this.displayed;
+		const state = this.snapshot.state;
+		if (!shown || state.status !== "ready" || state.frame.grant === null) {
+			return false;
+		}
+		if (this.clock.now() < shown.deadline) return false;
+		const mint = this.mints.get(shown.mintKey);
+		if (mint?.kind === "granted") {
+			grantCache.delete(shown.mintKey);
+			this.mints.delete(shown.mintKey);
+			this.ensureMint(shown.candidate, mint);
+		}
+		return true;
 	}
 
 	private promptCandidate(): {
@@ -1890,13 +2079,19 @@ export class MicroWidgetGrantController {
 	private dismissRuntimeRequest(): void {
 		const request = this.snapshot.runtimeRequest;
 		if (!request) return;
-		const backoff = nextBackoff(this.bannerDismissal, this.clock.now());
-		this.bannerDismissal = { ...backoff, sources: new Set(request.sources) };
+		const dismissal = {
+			delay: nextBackoffDelay(this.bannerDismissal),
+			sources: new Set(request.sources),
+			over: false,
+		};
+		this.bannerDismissal = dismissal;
 		this.bannerTimer = this.clearTimer(this.bannerTimer);
+		// The timer ends the dismissal: a clock compared when it fires may read a moment short, and nothing would ask again.
 		this.bannerTimer = this.clock.setTimeout(() => {
 			this.bannerTimer = null;
+			dismissal.over = true;
 			this.reconcile();
-		}, backoff.delay);
+		}, dismissal.delay);
 		this.emit();
 	}
 
@@ -2023,6 +2218,18 @@ export class MicroWidgetGrantController {
 		});
 	}
 
+	/** What shows in place of the frame when the mint of the candidate's grant ended without one. */
+	private unminted(candidate: Candidate): MicroWidgetGrantState | null {
+		const mint = this.mints.get(this.mintKey(candidate));
+		if (mint?.kind === "unavailable") {
+			return this.baselineFrame(candidate.descriptor, "unavailable");
+		}
+		if (mint?.kind === "failed") {
+			return { status: "error", reason: "mint_failed", detail: mint.detail };
+		}
+		return null;
+	}
+
 	private computeLegacy(
 		inputs: MicroWidgetGrantControllerInputs,
 		detail: string | null,
@@ -2090,7 +2297,7 @@ export class MicroWidgetGrantController {
 		const dismissal = this.bannerDismissal;
 		if (
 			dismissal &&
-			this.clock.now() < dismissal.until &&
+			!dismissal.over &&
 			sources.every((source) => dismissal.sources.has(source))
 		) {
 			return null;
@@ -2150,35 +2357,22 @@ export class MicroWidgetGrantController {
 		};
 		const evaluation = this.evaluate(candidate);
 		if (evaluation.status === "granted") {
-			const mint = this.mints.get(this.mintKey(candidate));
-			if (mint?.kind === "unavailable") {
-				return {
-					state: this.baselineFrame(descriptor, "unavailable"),
-					consent: "granted",
-					...idle,
-				};
-			}
-			if (mint?.kind === "failed") {
-				return {
-					state: {
-						status: "error",
-						reason: "mint_failed",
-						detail: mint.detail,
-					},
-					consent: "granted",
-					...idle,
-				};
-			}
 			return {
-				state: this.displayed
-					? this.displayedFrame(this.displayed)
-					: { status: "minting", subject },
+				state:
+					this.unminted(candidate) ??
+					(this.displayed
+						? this.displayedFrame(this.displayed)
+						: { status: "minting", subject }),
 				consent: "granted",
 				...idle,
 			};
 		}
 		const current = this.promptCandidate();
 		if (this.displayed && evaluation.declaredCovered) {
+			const unminted = this.unminted(this.displayed.candidate);
+			if (unminted) {
+				return { state: unminted, consent: evaluation.status, ...idle };
+			}
 			return {
 				state: this.displayedFrame(this.displayed),
 				consent: evaluation.status,

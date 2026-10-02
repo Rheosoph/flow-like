@@ -4,15 +4,12 @@ import {
 	type FleetMetrics,
 	type FleetRead,
 	type FleetStream,
+	type StatusObservation,
 	readFleet,
 	registerFleetReader,
 	removeFleetReader,
 } from "../fleet";
-import {
-	type RetainedObservation,
-	SnapshotIntegrityError,
-	readSavedInventory,
-} from "../inventory";
+import { SnapshotIntegrityError, readSavedInventory } from "../inventory";
 import { classify } from "../model/freshness";
 import type {
 	Freshness,
@@ -106,7 +103,7 @@ interface ReadState {
 }
 interface StreamEntry {
 	stream: FleetStream;
-	observation?: RetainedObservation;
+	observation?: StatusObservation;
 	metric?: FleetMetrics;
 }
 type KeyMode = "none" | "locked" | "unlocked";

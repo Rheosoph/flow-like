@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { paymentPromptRef } from "./payment-events";
 import {
+	AWAITING_PAYMENT_STATES,
 	amountInput,
+	awaitingPayment,
 	parseEuroAmount,
 	paymentUrl,
 	pendingOrder,
@@ -61,5 +63,23 @@ describe("payment navigation", () => {
 		expect(pendingOrder("CANCEL_PENDING")).toBe(true);
 		expect(pendingOrder("COMPLETED")).toBe(false);
 		expect(pendingOrder("CANCELED")).toBe(false);
+	});
+	it("counts an order as awaiting payment only while it can still be paid", () => {
+		expect(awaitingPayment("OPEN")).toBe(true);
+		expect(awaitingPayment("PROCESSING")).toBe(true);
+		// The checkout dialog only polls orders `pendingOrder` accepts, so a
+		// state added to one list alone would wait without ever being polled.
+		for (const status of AWAITING_PAYMENT_STATES)
+			expect(pendingOrder(status)).toBe(true);
+		for (const status of [
+			"CANCEL_PENDING",
+			"CANCEL_REQUESTED",
+			"REFUND_PENDING",
+			"PAID",
+			"CANCELED",
+			"EXPIRED",
+			"FAILED",
+		])
+			expect(awaitingPayment(status)).toBe(false);
 	});
 });

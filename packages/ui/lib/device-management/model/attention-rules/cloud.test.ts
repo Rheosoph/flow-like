@@ -78,6 +78,22 @@ describe("approvals", () => {
 		});
 	});
 
+	test("without the summary, the per-device lists carry the tighter end and the storage block (E15)", () => {
+		const input = { ...sampleFleet(), resourceSummary: undefined };
+		const grant = edgeResources(input).grants[0];
+		grant.effective_expires_at = SAMPLE_NOW + 86_400;
+		grant.effective_limit = "access_rules";
+		grant.online_write_blocked = "storage_full";
+		expect(
+			evaluate("cloud_access_ending", { ...input })[0]?.copy.params,
+		).toMatchObject({ expiresAt: SAMPLE_NOW + 86_400 });
+		expect(evaluate("online_files_read_only", { ...input })).toHaveLength(1);
+		grant.effective_expires_at = SAMPLE_NOW - 1;
+		expect(
+			evaluate("cloud_access_invalid", { ...input })[0]?.copy.params,
+		).toMatchObject({ reason: "expired" });
+	});
+
 	test("read-only online files need BG33 on the summary", () => {
 		const input = sampleFleet();
 		expect(evaluate("online_files_read_only", input)).toEqual([]);

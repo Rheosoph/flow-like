@@ -10,9 +10,13 @@
 //! The payload carries a stable `signature` hash so callers can detect drift
 //! when revalidating and react (rerun / cancel / prompt) on divergence.
 
-use crate::{error::ApiError, state::AppState};
+use crate::{
+    cache::{CacheBackendHandle, best_effort},
+    error::ApiError,
+    state::AppState,
+};
 use flow_like::flow::{
-    board::{Board, ExecutionMode},
+    board::{Board, ExecutionMode, format},
     compiled::{
         PrerunManifest, decode_manifest, draft_manifest_path, draft_page_manifest_path,
         draft_source_path, encode_manifest, legacy_manifest_path, manifest_path,
@@ -26,7 +30,7 @@ use flow_like_storage::{
     object_store::{Error as StoreError, GetOptions, ObjectStore, PutPayload},
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use utoipa::ToSchema;
 
 /// A runtime-configured variable that needs a value before execution.
@@ -703,6 +707,182 @@ mod draft_manifest_cache_tests {
         hasher.finalize().to_hex().to_string()
     }
 
+    #[tokio::test]
+    async fn shared_preflight_checks_source_existence_format_and_authority_lifecycle() {
+        use super::{
+            BOARD_PREFLIGHT_NAMESPACE, BOARD_PREFLIGHT_TTL, BoardPreflightMetadata,
+            board_preflight_key, load_cached_board_prerun_manifest,
+        };
+        use crate::cache::{CacheBackendHandle, best_effort};
+        use axum::response::IntoResponse;
+        use flow_like::flow::board::format;
+
+        for version in [None, Some((1, 2, 3))] {
+            let store = InMemory::new();
+            let cache = CacheBackendHandle::memory_for_test();
+            let root = Path::from("apps").join("app");
+            let source = Board::proto_path(&root, "board", version);
+            // A cache hit must use HEAD only. These bytes cannot decode as a Board.
+            let written = store.put(&source, "source revision".into()).await.unwrap();
+            let e_tag = written.e_tag.unwrap();
+            let key =
+                board_preflight_key("store-a", &[0; 32], "app", "board", version, &e_tag).unwrap();
+            best_effort::set(
+                &cache,
+                BOARD_PREFLIGHT_NAMESPACE,
+                &key,
+                &BoardPreflightMetadata { required_format: 2 },
+                BOARD_PREFLIGHT_TTL,
+            )
+            .await;
+
+            let board = Board::new_detached(Some("board".into()), root.clone());
+            let manifest = PrerunManifest::from_board(&board);
+            let path = match version {
+                Some(version) => manifest_path(&root, "board", version),
+                None => draft_manifest_path("app", "board", &e_tag),
+            };
+            assert!(persist_prerun_manifest(&store, &path, &manifest).await);
+            let fresh_handle =
+                CacheBackendHandle::from_store_for_test(cache.store().await.unwrap());
+            let local = moka::sync::Cache::builder().max_capacity(4).build();
+
+            let incompatible = format::with_supported_version(
+                1,
+                load_cached_board_prerun_manifest(
+                    &fresh_handle,
+                    &local,
+                    &store,
+                    "store-a",
+                    &[0; 32],
+                    "app",
+                    "board",
+                    version,
+                ),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                incompatible.into_response().status(),
+                axum::http::StatusCode::UPGRADE_REQUIRED
+            );
+
+            let hit = format::with_supported_version(
+                2,
+                load_cached_board_prerun_manifest(
+                    &fresh_handle,
+                    &local,
+                    &store,
+                    "store-a",
+                    &[0; 32],
+                    "app",
+                    "board",
+                    version,
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(hit.as_ref(), &manifest);
+
+            // Lifecycle deletion must be repaired before warm authority is returned.
+            store.delete(&path).await.unwrap();
+            assert!(
+                load_cached_board_prerun_manifest(
+                    &fresh_handle,
+                    &local,
+                    &store,
+                    "store-a",
+                    &[0; 32],
+                    "app",
+                    "board",
+                    version,
+                )
+                .await
+                .unwrap()
+                .is_some()
+            );
+            assert!(store.head(&path).await.is_ok());
+
+            store.delete(&source).await.unwrap();
+            let missing = load_cached_board_prerun_manifest(
+                &fresh_handle,
+                &local,
+                &store,
+                "store-a",
+                &[0; 32],
+                "app",
+                "board",
+                version,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                missing.into_response().status(),
+                axum::http::StatusCode::NOT_FOUND
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_preflight_revalidates_changed_sources_and_registry() {
+        use super::{
+            BOARD_PREFLIGHT_NAMESPACE, BOARD_PREFLIGHT_TTL, BoardPreflightMetadata,
+            board_preflight_key, load_cached_board_prerun_manifest,
+        };
+        use crate::cache::{CacheBackendHandle, best_effort};
+
+        let store = InMemory::new();
+        let cache = CacheBackendHandle::memory_for_test();
+        let root = Path::from("apps").join("app");
+        let source = Board::proto_path(&root, "board", None);
+        let e_tag = store
+            .put(&source, "first".into())
+            .await
+            .unwrap()
+            .e_tag
+            .unwrap();
+        let key = board_preflight_key("store-a", &[0; 32], "app", "board", None, &e_tag).unwrap();
+        best_effort::set(
+            &cache,
+            BOARD_PREFLIGHT_NAMESPACE,
+            &key,
+            &BoardPreflightMetadata { required_format: 1 },
+            BOARD_PREFLIGHT_TTL,
+        )
+        .await;
+        let local = moka::sync::Cache::builder().max_capacity(4).build();
+        let board = Board::new_detached(Some("board".into()), root);
+        let manifest = PrerunManifest::from_board(&board);
+        let path = draft_manifest_path("app", "board", &e_tag);
+        assert!(persist_prerun_manifest(&store, &path, &manifest).await);
+        assert!(
+            load_cached_board_prerun_manifest(
+                &cache, &local, &store, "store-a", &[1; 32], "app", "board", None,
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+
+        store.put(&source, "changed".into()).await.unwrap();
+        assert!(
+            load_cached_board_prerun_manifest(
+                &cache, &local, &store, "store-a", &[0; 32], "app", "board", None,
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+
+        assert_ne!(
+            key,
+            board_preflight_key("store-a", &[0; 32], "app", "board", Some((1, 2, 3)), &e_tag)
+                .unwrap(),
+        );
+        assert!(board_preflight_key("store-a", &[0; 32], "app", "board", None, "").is_none());
+    }
+
     #[test]
     fn page_cache_revision_is_independent_of_json_object_order() {
         assert_eq!(
@@ -1106,6 +1286,213 @@ mod draft_manifest_cache_tests {
     }
 }
 
+const BOARD_PREFLIGHT_NAMESPACE: &str = "board-preflight-v1";
+const BOARD_PREFLIGHT_TTL: Duration = Duration::from_secs(60 * 60);
+
+#[derive(Serialize, Deserialize)]
+struct BoardPreflightMetadata {
+    required_format: u32,
+}
+
+fn board_preflight_key(
+    storage_scope: &str,
+    registry_fingerprint: &[u8; 32],
+    app_id: &str,
+    board_id: &str,
+    version: Option<(u32, u32, u32)>,
+    e_tag: &str,
+) -> Option<String> {
+    if e_tag.trim().is_empty() {
+        return None;
+    }
+    let identity = serde_json::json!([
+        storage_scope,
+        registry_fingerprint,
+        format::CURRENT_BOARD_FORMAT_VERSION,
+        app_id,
+        board_id,
+        version,
+        e_tag,
+    ]);
+    Some(
+        blake3::hash(identity.to_string().as_bytes())
+            .to_hex()
+            .to_string(),
+    )
+}
+
+/// A source HEAD is required even when both metadata and manifest are cached.
+/// Deleting a board therefore revokes preflight access to its old artifacts.
+#[allow(clippy::too_many_arguments)]
+async fn load_cached_board_prerun_manifest(
+    cache: &CacheBackendHandle,
+    manifest_cache: &moka::sync::Cache<String, Arc<PrerunManifest>>,
+    meta_store: &dyn ObjectStore,
+    storage_scope: &str,
+    registry_fingerprint: &[u8; 32],
+    app_id: &str,
+    board_id: &str,
+    version: Option<(u32, u32, u32)>,
+) -> Result<Option<Arc<PrerunManifest>>, ApiError> {
+    let storage_root = Path::from("apps").join(app_id.to_string());
+    let source_path = Board::proto_path(&storage_root, board_id, version);
+    let head = meta_store
+        .head(&source_path)
+        .await
+        .map_err(|error| match error {
+            StoreError::NotFound { .. } => {
+                ApiError::not_found(format!("Board {board_id} not found"))
+            }
+            other => ApiError::from(other),
+        })?;
+    let e_tag = head.e_tag.as_deref().unwrap_or_default();
+    let Some(key) = board_preflight_key(
+        storage_scope,
+        registry_fingerprint,
+        app_id,
+        board_id,
+        version,
+        e_tag,
+    ) else {
+        return Ok(None);
+    };
+    let Some(metadata) =
+        best_effort::get::<BoardPreflightMetadata>(cache, BOARD_PREFLIGHT_NAMESPACE, &key).await
+    else {
+        return Ok(None);
+    };
+    if metadata.required_format < format::LEGACY_BOARD_FORMAT_VERSION {
+        return Ok(None);
+    }
+    format::ensure_supported(metadata.required_format)?;
+
+    match version {
+        Some(version) => {
+            load_cached_version_manifest(manifest_cache, meta_store, app_id, board_id, version)
+                .await
+        }
+        None => {
+            load_etag_prerun_manifest(manifest_cache, meta_store, app_id, board_id, e_tag).await
+        }
+    }
+}
+
+/// Board preflight retains source existence and negotiated format checks while
+/// reusing the compact manifest across Lambda instances. Metadata is disposable;
+/// every cache miss follows the normal board validation and hydration path.
+pub async fn load_board_prerun_manifest(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+    version: Option<(u32, u32, u32)>,
+) -> Result<Arc<PrerunManifest>, ApiError> {
+    let meta_store = state.meta_bucket.as_generic();
+    let registry_fingerprint = state.registry.fingerprint();
+    let storage_scope = state.storage_identity.meta.cache_scope();
+    if let Some(storage_scope) = storage_scope.as_deref()
+        && let Some(manifest) = load_cached_board_prerun_manifest(
+            &state.cache,
+            &state.prerun_manifest_cache,
+            meta_store.as_ref(),
+            storage_scope,
+            &registry_fingerprint,
+            app_id,
+            board_id,
+            version,
+        )
+        .await?
+    {
+        return Ok(manifest);
+    }
+
+    let cached = state
+        .master_board_shared(app_id, board_id, state, version)
+        .await?;
+    let manifest = match version {
+        Some(version) => {
+            match load_cached_version_manifest(
+                &state.prerun_manifest_cache,
+                meta_store.as_ref(),
+                app_id,
+                board_id,
+                version,
+            )
+            .await?
+            {
+                Some(manifest) => manifest,
+                None => {
+                    let manifest = Arc::new(PrerunManifest::from_board(&cached.board));
+                    let storage_root = Path::from("apps").join(app_id.to_string());
+                    let path = manifest_path(&storage_root, board_id, version);
+                    persist_prerun_manifest_required(meta_store.as_ref(), &path, &manifest).await?;
+                    state.prerun_manifest_cache.insert(
+                        version_manifest_cache_key(app_id, board_id, version),
+                        manifest.clone(),
+                    );
+                    manifest
+                }
+            }
+        }
+        None if cached.e_tag.trim().is_empty() => {
+            draft_prerun_manifest_for_cached_board(state, app_id, board_id, &cached)
+        }
+        None => ensure_draft_prerun_manifest(state, app_id, board_id, &cached).await?,
+    };
+
+    // A writer may race the source HEAD. Use the revision actually loaded and
+    // validated, so the newer Board cannot populate an older revision's key.
+    if let Some(storage_scope) = storage_scope.as_deref()
+        && let Some(key) = board_preflight_key(
+            storage_scope,
+            &registry_fingerprint,
+            app_id,
+            board_id,
+            version,
+            &cached.e_tag,
+        )
+    {
+        best_effort::set(
+            &state.cache,
+            BOARD_PREFLIGHT_NAMESPACE,
+            &key,
+            &BoardPreflightMetadata {
+                required_format: cached.board.required_format_version(),
+            },
+            BOARD_PREFLIGHT_TTL,
+        )
+        .await;
+    }
+    Ok(manifest)
+}
+
+async fn load_cached_version_manifest(
+    cache: &moka::sync::Cache<String, Arc<PrerunManifest>>,
+    meta_store: &dyn ObjectStore,
+    app_id: &str,
+    board_id: &str,
+    version: (u32, u32, u32),
+) -> Result<Option<Arc<PrerunManifest>>, ApiError> {
+    let storage_root = Path::from("apps").join(app_id.to_string());
+    let cache_key = version_manifest_cache_key(app_id, board_id, version);
+    let path = manifest_path(&storage_root, board_id, version);
+    if let Some(hit) = cache.get(&cache_key) {
+        if hit.page_events.is_empty() {
+            ensure_cached_manifest_shared(meta_store, &path, &hit).await?;
+            return Ok(Some(hit));
+        }
+        cache.invalidate(&cache_key);
+    }
+    let legacy_path = legacy_manifest_path(&storage_root, board_id, version);
+    let Some(PersistedVersionManifest::Current(manifest)) =
+        read_version_manifest(meta_store, &path, &legacy_path).await
+    else {
+        return Ok(None);
+    };
+    let manifest = Arc::new(manifest);
+    cache.insert(cache_key, manifest.clone());
+    Ok(Some(manifest))
+}
+
 /// Resolve the prerun manifest of `(app, board, version|draft)`.
 ///
 /// Versions are immutable, so their manifest is memoised in process and
@@ -1158,35 +1545,29 @@ pub async fn load_prerun_manifest(
         return ensure_draft_prerun_manifest(state, app_id, board_id, &cached).await;
     };
 
-    let cache_key = version_manifest_cache_key(app_id, board_id, version);
-    let path = manifest_path(&storage_root, board_id, version);
-    let legacy_path = legacy_manifest_path(&storage_root, board_id, version);
-    if let Some(hit) = state.prerun_manifest_cache.get(&cache_key) {
-        if hit.page_events.is_empty() {
-            ensure_cached_manifest_shared(meta_store.as_ref(), &path, &hit).await?;
-            return Ok(hit);
-        }
-        state.prerun_manifest_cache.invalidate(&cache_key);
+    if let Some(manifest) = load_cached_version_manifest(
+        &state.prerun_manifest_cache,
+        meta_store.as_ref(),
+        app_id,
+        board_id,
+        version,
+    )
+    .await?
+    {
+        return Ok(manifest);
     }
-
-    let manifest = match read_version_manifest(meta_store.as_ref(), &path, &legacy_path).await {
-        Some(PersistedVersionManifest::Current(manifest)) => Arc::new(manifest),
-        Some(PersistedVersionManifest::Legacy) | None => {
-            // A legacy artifact proves this version has been analyzed before,
-            // but v1/v2 does not contain the complete entry-node authority.
-            // Re-derive v3 from the immutable Board and leave the legacy key
-            // untouched for old Lambdas during a rolling deployment.
-            let cached = state
-                .master_board_shared(app_id, board_id, state, Some(version))
-                .await?;
-            let manifest = Arc::new(PrerunManifest::from_board(&cached.board));
-            persist_prerun_manifest_required(meta_store.as_ref(), &path, &manifest).await?;
-            manifest
-        }
-    };
-    state
-        .prerun_manifest_cache
-        .insert(cache_key, manifest.clone());
+    // Legacy artifacts lack complete entry-node authority. Re-derive the
+    // current format and retain legacy objects during rolling deployments.
+    let cached = state
+        .master_board_shared(app_id, board_id, state, Some(version))
+        .await?;
+    let manifest = Arc::new(PrerunManifest::from_board(&cached.board));
+    let path = manifest_path(&storage_root, board_id, version);
+    persist_prerun_manifest_required(meta_store.as_ref(), &path, &manifest).await?;
+    state.prerun_manifest_cache.insert(
+        version_manifest_cache_key(app_id, board_id, version),
+        manifest.clone(),
+    );
     Ok(manifest)
 }
 

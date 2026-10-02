@@ -356,6 +356,27 @@ export interface DeviceIdentityPinRecord extends DeviceIdentityPin {
 	enrollmentId: string;
 }
 
+function pinRecord(enrollmentId: string | undefined, value: unknown) {
+	const pin = value as Partial<DeviceIdentityPin> | undefined;
+	if (!enrollmentId || typeof pin?.identity !== "string") return undefined;
+	return typeof pin.pinnedAt === "number"
+		? { enrollmentId, identity: pin.identity, pinnedAt: pin.pinnedAt }
+		: undefined;
+}
+
+/** The pins among the rows of `keys`, per device and newest first. */
+function pinsByDevice(keys: string[], values: unknown[]) {
+	const result = new Map<string, DeviceIdentityPinRecord[]>();
+	for (const [index, key] of keys.entries()) {
+		const [, deviceId, kind, enrollmentId] = keyParts(key);
+		const pin = kind === "identity" && pinRecord(enrollmentId, values[index]);
+		if (pin) result.set(deviceId, [...(result.get(deviceId) ?? []), pin]);
+	}
+	for (const pins of result.values())
+		pins.sort((left, right) => right.pinnedAt - left.pinnedAt);
+	return result;
+}
+
 /** The comparable form a pin stores; equal keys mean the same device identity. */
 export function deviceIdentityKey(identity: DeviceReceipt["identity"]): string {
 	return JSON.stringify([
@@ -433,18 +454,22 @@ export async function readDeviceIdentityPins(
 	scope: DeviceAccountScope,
 	deviceId: string,
 ): Promise<DeviceIdentityPinRecord[]> {
-	const [keys, values] = await readRange<DeviceIdentityPin>(
+	const [keys, values] = await readRange<unknown>(
 		"vaults",
 		prefixRange(accountStorageKey(scope), deviceId, "identity"),
 	);
-	return values
-		.map((pin, index) => ({
-			enrollmentId: keyParts(keys[index])[3] ?? "",
-			identity: pin.identity,
-			pinnedAt: pin.pinnedAt,
-		}))
-		.filter((pin) => pin.enrollmentId && typeof pin.identity === "string")
-		.sort((left, right) => right.pinnedAt - left.pinnedAt);
+	return pinsByDevice(keys, values).get(deviceId) ?? [];
+}
+
+/** Every pin of this scope in one read, per device and newest first. */
+export async function listDeviceIdentityPins(
+	scope: DeviceAccountScope,
+): Promise<Map<string, DeviceIdentityPinRecord[]>> {
+	const [keys, values] = await readRange<unknown>(
+		"vaults",
+		accountRange(scope),
+	);
+	return pinsByDevice(keys, values);
 }
 
 /** Without an enrollment id every pin of the device is forgotten. */

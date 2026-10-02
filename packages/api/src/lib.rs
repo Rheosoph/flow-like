@@ -1,3 +1,9 @@
+// The fork engine reads Lance datasets inside axum handlers. Proving those
+// handler futures `Send` takes rustc close to its default 128-step budget,
+// and past it when a router that reaches the engine is type-checked on its
+// own, as an incremental build does after a route is added to it.
+#![recursion_limit = "256"]
+
 use std::sync::Arc;
 
 use axum::{

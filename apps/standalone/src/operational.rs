@@ -19,7 +19,7 @@ pub(crate) fn fleet_snapshot(
         FleetKind::Status => status_snapshot(
             state_dir,
             scope,
-            telemetry.store.device_id(),
+            &telemetry.store,
             boot_id,
             now,
             &placements,
@@ -69,11 +69,12 @@ pub(crate) fn fleet_snapshot(
 }
 
 /// Every row sheds detail together until the snapshot fits. Device-scope readers also
-/// receive the agent release, host facts and unhealthy background tasks.
+/// receive the agent release, host facts, unhealthy background tasks and the host
+/// operation in progress.
 fn status_snapshot(
     state_dir: &std::path::Path,
     scope: &flow_like_device_protocol::ManagementScope,
-    device_id: &str,
+    store: &crate::state::StateStore,
     boot_id: &str,
     now: i64,
     placements: &[crate::state::PlacementRecord],
@@ -81,14 +82,17 @@ fn status_snapshot(
     use crate::diagnostics::{DETAILS, Rows, global};
     let rows = Rows::snapshot(global(), state_dir);
     let observed_at = now.checked_mul(1000).context("Fleet timestamp overflow")?;
+    let device_scope = matches!(scope, flow_like_device_protocol::ManagementScope::Device);
+    let host_operation = device_scope
+        .then(|| crate::management::snapshot_host_operation(store))
+        .transpose()?;
     let mut snapshot = Value::Null;
     for detail in DETAILS {
-        snapshot = json!({"device_id":device_id,"boot_id":boot_id,"observed_at":observed_at,
+        snapshot = json!({"device_id":store.device_id(),"boot_id":boot_id,"observed_at":observed_at,
             "placements":placements.iter().map(|record| rows.placement(record, false, detail)).collect::<Vec<_>>()});
-        if let (flow_like_device_protocol::ManagementScope::Device, Value::Object(object)) =
-            (scope, &mut snapshot)
-        {
+        if let (Some(host_operation), Value::Object(object)) = (&host_operation, &mut snapshot) {
             object.extend(global().device_facts(state_dir, true));
+            object.insert("host_operation".into(), host_operation.clone());
         }
         if serde_json::to_vec(&snapshot)?.len()
             <= flow_like_device_protocol::MAX_FLEET_PLAINTEXT - 1024
@@ -911,14 +915,34 @@ mod tests {
             placement_status["placements"][0]["events"][0]["event_id"],
             "http"
         );
-        let device_facts =
-            |snapshot: &Value| ["agent", "host", "tasks"].map(|fact| snapshot.get(fact).is_some());
-        assert_eq!(device_facts(&status), [false; 3]);
-        assert_eq!(device_facts(&placement_status), [false; 3]);
+        assert_eq!(device_facts(&status), [false; 5]);
+        assert_eq!(device_facts(&placement_status), [false; 5]);
         Ok(())
     }
 
-    /// 64 worst-case placements, read as a Status snapshot for `scope`.
+    fn device_facts(snapshot: &Value) -> [bool; 5] {
+        ["agent", "host", "tasks", "host_operation", "network"]
+            .map(|fact| snapshot.get(fact).is_some())
+    }
+
+    #[test]
+    fn device_status_snapshots_add_device_facts_but_never_the_network() -> Result<()> {
+        use flow_like_device_protocol::{FleetKind, ManagementScope};
+        let (dir, _, _) = fixture()?;
+        let device = fleet_snapshot(
+            dir.path(),
+            &ManagementScope::Device,
+            FleetKind::Status,
+            "boot",
+            100,
+        )?;
+        assert_eq!(device_facts(&device), [true, true, true, true, false]);
+        assert!(device["host_operation"].is_null());
+        assert_eq!(device["placements"][0]["offline_writes"]["scopes"], 0);
+        Ok(())
+    }
+
+    /// 64 worst-case placements and a host operation, read as a Status snapshot for `scope`.
     fn worst_case_status(
         prefix: &str,
         scope: &flow_like_device_protocol::ManagementScope,
@@ -926,6 +950,7 @@ mod tests {
         use crate::diagnostics::{global, test_support::*};
         let dir = tempfile::tempdir()?;
         let mut state = StateStore::open(&dir.path().join("management.sqlite"))?;
+        worst_case_host_operation(&state)?;
         for index in 0..64 {
             let id = worst_case_id(&format!("{prefix}-{index:02}"));
             worst_case_placement(&mut state, dir.path(), global(), &id)?;
@@ -939,7 +964,13 @@ mod tests {
         )?;
         let encoded = snapshot.to_string();
         assert!(encoded.len() <= flow_like_device_protocol::MAX_FLEET_PLAINTEXT - 1024);
-        assert_eq!(snapshot["placements"].as_array().unwrap().len(), 64);
+        let placements = snapshot["placements"].as_array().unwrap();
+        assert_eq!(placements.len(), 64);
+        assert!(
+            placements
+                .iter()
+                .all(|row| row["offline_writes"] == worst_case_offline_writes())
+        );
         let volatile = [
             "last_error",
             "retry_in_seconds",
@@ -947,6 +978,7 @@ mod tests {
             "variable-value",
         ];
         assert!(!volatile.iter().any(|field| encoded.contains(field)));
+        assert!(snapshot.get("network").is_none());
         Ok(snapshot)
     }
 
@@ -969,6 +1001,13 @@ mod tests {
                 .iter()
                 .any(|task| task["name"] == "worst_case_snapshot_task")
         );
+        // A snapshot has many readers, so it says who started the operation without `you`.
+        let operation = &device["host_operation"];
+        assert_eq!(operation["kind"], "update_agent");
+        assert_eq!(operation["state"], "requesting");
+        assert_eq!(operation["issued_by"], "another_person");
+        assert_eq!(operation["operation_id"].as_str().unwrap().len(), 128);
+        assert!(!device.to_string().contains(&"u".repeat(128)));
         Ok(())
     }
 
@@ -980,7 +1019,7 @@ mod tests {
                 project_id: "p".repeat(128),
             },
         )?;
-        for device_fact in ["agent", "host", "tasks"] {
+        for device_fact in ["agent", "host", "tasks", "host_operation"] {
             assert!(project.get(device_fact).is_none(), "{device_fact}");
         }
         Ok(())

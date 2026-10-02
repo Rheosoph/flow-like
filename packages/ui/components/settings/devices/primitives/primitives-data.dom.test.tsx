@@ -9,6 +9,7 @@ import {
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ComponentProps, ReactNode } from "react";
+import { formatTimeOfDay } from "../../../../lib/date";
 import {
 	allByRole,
 	byRole,
@@ -16,6 +17,7 @@ import {
 	click,
 	clickByText,
 	fire,
+	inPortal,
 	installDom,
 	queryByRole,
 	settle,
@@ -91,6 +93,10 @@ const texts = (root: ParentNode, selector: string) =>
 
 const attrs = (root: ParentNode, selector: string, name: string) =>
 	Array.from(root.querySelectorAll(selector), (el) => el.getAttribute(name));
+
+function classesOf(el: Element | null | undefined) {
+	return el?.className ?? "";
+}
 
 afterEach(dom.cleanup);
 afterAll(dom.restore);
@@ -262,6 +268,46 @@ function UpdateEverywhere() {
 	);
 }
 
+const DEPLOY_PHASES = [
+	"Creating cloud access",
+	"Setting the spending limit",
+	"Uploading definitions and packages",
+	"Checking events on the device",
+	"Installing app version v0.4.0",
+	"Creating visitor-checkin",
+	"Saving 2 secrets",
+	"Starting instance #0",
+];
+
+function DeployToTwo() {
+	return (
+		<At>
+			<FleetRollout
+				title="Deploy Visitor check-in to 2 devices"
+				rows={[
+					fleetRow("edge-berlin-01", "active", {
+						phases: DEPLOY_PHASES,
+						step: 3,
+					}),
+					fleetRow("studio-mac-mini", "failed", {
+						phases: DEPLOY_PHASES,
+						step: 2,
+						reason: "the device stopped answering",
+						actions: <DvButton size="xs">Retry this device</DvButton>,
+					}),
+				]}
+			/>
+		</At>
+	);
+}
+
+function columnPlan(row: Element) {
+	const plan = row.className
+		.split(" ")
+		.find((name) => name.startsWith("grid-cols-["));
+	return plan ?? "";
+}
+
 describe("rollouts", () => {
 	test("single rollout counts down with the injected area clock", async () => {
 		const { rerender, container } = await dom.render(
@@ -358,6 +404,21 @@ describe("rollouts", () => {
 			"Failed while Uploading: The device refused it. Nothing changed on d-c.",
 			"Waiting: d-a failed. Continue with the rest or stop here.",
 		]);
+	});
+
+	test("fleet rollout: rows share one column plan and eight phases fit the step column", async () => {
+		const { container } = await dom.render(<DeployToTwo />);
+		const rows = Array.from(container.querySelectorAll("li[data-device]"));
+		const plans = rows.map(columnPlan);
+		expect(plans[0]).toStartWith("grid-cols-[");
+		expect(plans[0]).not.toContain("auto");
+		expect(plans[1]).toBe(plans[0]);
+		const bars = attrs(rows[0], "[data-s]", "class");
+		expect(bars).toHaveLength(8);
+		for (const bar of bars) {
+			expect(bar).toContain("flex-1");
+			expect(bar).not.toContain("w-4.5");
+		}
 	});
 
 	test("fleet rollout renders every APP §7.8 row state", async () => {
@@ -502,17 +563,43 @@ describe("attention list", () => {
 			</At>,
 		);
 		const list = container.querySelector("[data-tier=soon] ul");
-		expect(list?.className).toContain("@container/attn");
+		expect(classesOf(list)).toContain("@container/attn");
 		const item = container.querySelector("[data-attention=a2]");
-		expect(item?.className).toContain(
+		expect(classesOf(item)).toContain(
 			"@max-[560px]/attn:grid-cols-[18px_minmax(0,1fr)]",
 		);
 		const actions = item?.lastElementChild;
-		expect(actions?.className).toContain("@max-[560px]/attn:col-start-2");
-		expect(actions?.className).toContain("@max-[560px]/attn:justify-start");
+		expect(classesOf(actions)).toContain("@max-[560px]/attn:col-start-2");
+		expect(classesOf(actions)).toContain("@max-[560px]/attn:justify-start");
 		const gated = actions?.firstElementChild;
-		expect(gated?.className).toContain("@max-[560px]/attn:items-start");
-		expect(gated?.className).toContain("@max-[560px]/attn:text-left");
+		expect(classesOf(gated)).toContain("@max-[560px]/attn:items-start");
+		expect(classesOf(gated)).toContain("@max-[560px]/attn:text-left");
+	});
+
+	test("the snooze menu is a neutral menu (no coral highlight) and snoozes the item", async () => {
+		let snoozed = 0;
+		const notice: AttentionEntry = {
+			...ATTENTION_ITEMS[2],
+			onSnooze: () => {
+				snoozed += 1;
+			},
+		};
+		await dom.render(
+			<At>
+				<AttentionList items={[notice]} />
+			</At>,
+		);
+		await click(byRole("button", "More for this item"));
+		await settle();
+		const menu = inPortal("menu");
+		expect(menu.className).toContain("border-border-strong");
+		expect(menu.className).toContain("backdrop-blur-none");
+		const item = byRole("menuitem", "Snooze for 7 days", menu);
+		expect(item.className).toContain("focus:bg-row-hover");
+		expect(item.className).not.toContain("accent");
+		await click(item);
+		await settle();
+		expect(snoozed).toBe(1);
 	});
 
 	test("technical keys only with the developer preference", async () => {
@@ -706,6 +793,44 @@ describe("summary pieces", () => {
 		);
 		const tip = container.querySelector("[data-spark-tip]");
 		expect(tip?.textContent).toEndWith(" · 23.4 %");
+	});
+
+	test("sparkline: a gap keeps the later points at their own place and time", async () => {
+		const { container } = await dom.render(
+			<At>
+				<Metric
+					label="CPU"
+					value="30.0"
+					spark={{
+						series: [10, Number.NaN, Number.NaN, 30],
+						label: "CPU",
+						min: 0,
+						max: 100,
+						format: percent,
+						startAt: NOW_S - 180,
+						stepSec: 60,
+					}}
+				/>
+			</At>,
+		);
+		const spark = container.querySelector("[data-sparkline]") as HTMLElement;
+		const line = spark.querySelectorAll("svg path")[1]?.getAttribute("d") ?? "";
+		expect(line).toStartWith("M0.0,");
+		expect(line).toContain("L240.0,");
+		Object.defineProperty(spark, "getBoundingClientRect", { value: sparkRect });
+		const view = spark.ownerDocument
+			.defaultView as unknown as typeof globalThis;
+		await fire(
+			spark,
+			new view.PointerEvent("pointermove", { bubbles: true, clientX: 240 }),
+		);
+		const readAt = formatTimeOfDay(NOW_S * 1000, {
+			locale: "en",
+			seconds: false,
+		});
+		expect(container.querySelector("[data-spark-tip]")?.textContent).toBe(
+			`${readAt} · 30.0 %`,
+		);
 	});
 
 	test("meters state their numbers; progress bars are labelled", async () => {
@@ -1216,6 +1341,9 @@ describe("wizard and tray", () => {
 		);
 		const current = container.querySelector("[aria-current=step]");
 		expect(current?.textContent).toContain("Device password");
+		expect(current?.className).toContain("data-[s=current]:min-w-fit");
+		const label = current?.querySelector("[title]");
+		expect(label?.getAttribute("title")).toBe("Device password");
 		expect(container.textContent).toContain("Step 3 of 4 · Device password");
 		expect(container.querySelectorAll("[data-dv-primary]")).toHaveLength(1);
 		expect(container.textContent).toContain("Platform · 2 to fix");
@@ -1563,6 +1691,36 @@ describe("service rows and app pieces", () => {
 			"invoice-extractor",
 		);
 		byRole("button", "Activate…");
+	});
+
+	test("matrix cells say why a device's status for the app is unknown (every kind the app model produces)", async () => {
+		const { container } = await dom.render(
+			<At>
+				<MatrixCell state="unknown" why="nokeys" />
+				<MatrixCell state="unknown" why="offline" since={NOW_S - 3 * 3600} />
+				<MatrixCell state="unknown" why="offline" />
+				<MatrixCell state="unknown" why="notloaded" />
+				<MatrixCell state="unknown" why="error" />
+			</At>,
+		);
+		expect(attrs(container, "[data-matrix-cell]", "data-why")).toEqual([
+			"nokeys",
+			"offline",
+			"offline",
+			"notloaded",
+			"error",
+		]);
+		const since = formatTimeOfDay((NOW_S - 3 * 3600) * 1000, {
+			locale: "en",
+			seconds: false,
+		});
+		expect(texts(container, "[data-matrix-cell]")).toEqual([
+			"No keys on this computer",
+			`No status since ${since}`,
+			"No status: the device is offline",
+			"Not loaded yet",
+			"Couldn't read its status",
+		]);
 	});
 
 	test("diff rows: added, changed with old → new, removed struck", async () => {

@@ -100,15 +100,32 @@ export function confirmReady(
 	return rules[options.strength ?? "none"]();
 }
 
-export function ConfirmSheet({
-	open,
-	options,
-	onResolve,
-}: Readonly<{
+interface ConfirmSheetProps {
 	open: boolean;
 	options: ConfirmOptions;
 	onResolve(result: ConfirmResult): void;
-}>) {
+}
+
+/**
+ * Every opening is its own session: ticks, typed text, the busy state and a
+ * shown error never carry over when a screen keeps one sheet mounted and
+ * toggles `open`.
+ */
+export function ConfirmSheet(props: Readonly<ConfirmSheetProps>) {
+	const [session, setSession] = useState(0);
+	const [wasOpen, setWasOpen] = useState(props.open);
+	if (props.open !== wasOpen) {
+		setWasOpen(props.open);
+		if (props.open) setSession(session + 1);
+	}
+	return <ConfirmSheetSession key={session} {...props} />;
+}
+
+function ConfirmSheetSession({
+	open,
+	options,
+	onResolve,
+}: Readonly<ConfirmSheetProps>) {
 	const { t } = useTranslation("devices");
 	const strength = options.strength ?? "none";
 	const [step, setStep] = useState<1 | 2>(1);

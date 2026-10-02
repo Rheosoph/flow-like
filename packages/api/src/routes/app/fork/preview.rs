@@ -6,7 +6,7 @@ use crate::{
     state::AppState,
     utils::fork::{
         ForkPolicy,
-        packages::{self, BlockedPackage},
+        packages::{self, BlockedPackage, PinSplit, RepinnedPackage},
         preview::{
             ForkSizeBreakdown, RemoteTokenSite, compute_fork_size_breakdown,
             detect_remote_token_sites,
@@ -86,10 +86,14 @@ pub struct ForkPreviewResponse {
     /// Reason `user_can_fork` is false, when applicable. Empty string
     /// when the caller is allowed.
     pub disallow_reason: String,
-    /// Packages the source pins that the caller doesn't hold, so the fork
-    /// would drop them. Buying or requesting access before forking keeps
-    /// them. Empty when the caller can't fork or the fork exceeds the caps.
+    /// Packages the source pins that the fork would drop: the caller doesn't
+    /// hold them, or no version of them can be downloaded. Buying or
+    /// requesting access before forking keeps the ones that allow it. Empty
+    /// when the caller can't fork or the fork exceeds the caps.
     pub blocked_packages: Vec<BlockedPackage>,
+    /// Packages the fork pins at another version than the source, because
+    /// the pinned one isn't published. Empty under the same conditions.
+    pub repinned_packages: Vec<RepinnedPackage>,
 }
 
 /// Pre-fork dry run. Returns the size + count totals, detected
@@ -153,8 +157,7 @@ pub async fn get_fork_preview(
     let within_limits =
         selected_size_bytes <= max_size_bytes && selected_object_count <= max_file_count;
 
-    let blocked_packages =
-        blocked_packages(&state, &user, &app_id, user_can_fork, within_limits).await?;
+    let pins = package_pins(&state, &user, &app_id, user_can_fork, within_limits).await?;
 
     Ok(Json(ForkPreviewResponse {
         source_app_id: app_id,
@@ -172,26 +175,26 @@ pub async fn get_fork_preview(
         allow_forking: app_row.allow_forking,
         user_can_fork,
         disallow_reason,
-        blocked_packages,
+        blocked_packages: pins.blocked,
+        repinned_packages: pins.repinned,
     }))
 }
 
 /// Only a caller who can actually fork learns which packages the source pins;
 /// offering to buy one for a fork that can't happen would sell nothing.
-async fn blocked_packages(
+async fn package_pins(
     state: &AppState,
     user: &AppUser,
     app_id: &str,
     user_can_fork: bool,
     within_limits: bool,
-) -> Result<Vec<BlockedPackage>, ApiError> {
+) -> Result<PinSplit, ApiError> {
     if !(user_can_fork && within_limits) {
-        return Ok(Vec::new());
+        return Ok(PinSplit::default());
     }
     let pins = app_package::Entity::find()
         .filter(app_package::Column::AppId.eq(app_id))
         .all(&state.db)
         .await?;
-    let (_, blocked) = packages::split_pins(&state.db, user.sub().ok().as_deref(), &pins).await?;
-    Ok(blocked)
+    packages::split_pins(&state.db, user.sub().ok().as_deref(), &pins).await
 }

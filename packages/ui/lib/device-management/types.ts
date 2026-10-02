@@ -183,8 +183,41 @@ export interface BrowserController {
 		snapshot: ProtectedSnapshot,
 		checkpoint: Checkpoint,
 	): BrowserMlsEndpoint;
+	/**
+	 * Held owner key. Bundles built before it lack these five methods, so check
+	 * `typeof controller.attachInvitation === "function"` before relying on them.
+	 * The key is cleared by `detachInvitation`, `close` and `free`.
+	 */
+	attachInvitation?(password: Uint8Array, invitationVault: Uint8Array): void;
+	detachInvitation?(): void;
+	signManagementPolicyHeld?(policy: ManagementPolicy): string;
+	signTelemetryRosterHeld?(roster: TelemetryRoster): string;
+	signArchiveRosterHeld?(roster: ArchiveRoster): string;
 	close(): void;
 	free(): void;
+}
+/** A controller whose bundle can hold the owner's invitation key for signing. */
+export type HeldSignerController = BrowserController &
+	Required<
+		Pick<
+			BrowserController,
+			| "attachInvitation"
+			| "detachInvitation"
+			| "signManagementPolicyHeld"
+			| "signTelemetryRosterHeld"
+			| "signArchiveRosterHeld"
+		>
+	>;
+export function supportsHeldSigner(
+	controller: BrowserController,
+): controller is HeldSignerController {
+	return (
+		typeof controller.attachInvitation === "function" &&
+		typeof controller.detachInvitation === "function" &&
+		typeof controller.signManagementPolicyHeld === "function" &&
+		typeof controller.signTelemetryRosterHeld === "function" &&
+		typeof controller.signArchiveRosterHeld === "function"
+	);
 }
 export interface DeviceCrypto {
 	createCertificateAuthorityVault(

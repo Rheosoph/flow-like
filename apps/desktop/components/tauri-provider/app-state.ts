@@ -110,19 +110,33 @@ function normalizeGroups(groups: IGroup[] | undefined): IGroup[] {
 export type RemoteAppPackage = Pick<AppPackage, "packageId" | "version"> &
 	Partial<Pick<AppPackage, "packageName" | "license">>;
 
+/** One sync with the hub. `refused`: the hub does not list the app's pins to this session. */
+interface RemotePinSync {
+	readonly packages: RemoteAppPackage[];
+	readonly refused: boolean;
+}
+
 const REMOTE_PINS_SYNC_MS = 30_000;
 
-const remotePackageSyncs = new Map<string, Promise<RemoteAppPackage[]>>();
+const remotePackageSyncs = new Map<string, Promise<RemotePinSync>>();
 
 /**
  * The hub's pins of an online app, the usable ones mirrored into the local
- * manifest that the native catalog and widget provider read. Concurrent calls
- * for one app share a sync. Empty when offline, signed out or the hub fails.
+ * manifest that the native catalog and widget provider read. Empty when
+ * offline, signed out or the hub fails or refuses.
  */
-export function syncRemoteAppPackages(
+export async function syncRemoteAppPackages(
 	backend: TauriBackend,
 	appId: string,
 ): Promise<RemoteAppPackage[]> {
+	return (await syncRemotePinListing(backend, appId)).packages;
+}
+
+/** Concurrent calls for one app share a sync. */
+function syncRemotePinListing(
+	backend: TauriBackend,
+	appId: string,
+): Promise<RemotePinSync> {
 	const pending = remotePackageSyncs.get(appId);
 	if (pending) return pending;
 	const sync = mirrorRemoteAppPackages(backend, appId).finally(() => {
@@ -135,13 +149,18 @@ export function syncRemoteAppPackages(
 async function mirrorRemoteAppPackages(
 	backend: TauriBackend,
 	appId: string,
-): Promise<RemoteAppPackage[]> {
+): Promise<RemotePinSync> {
 	const { profile, auth, appState } = backend;
-	if (!profile || !auth || !appState.addPackage || !appState.removePackage) {
-		return [];
+	if (
+		!profile ||
+		!auth?.isAuthenticated ||
+		!appState.addPackage ||
+		!appState.removePackage
+	) {
+		return { packages: [], refused: false };
 	}
 	try {
-		if (await backend.isOffline(appId)) return [];
+		if (await backend.isOffline(appId)) return { packages: [], refused: false };
 		const [remotePackages, localPins] = await Promise.all([
 			fetcher<RemoteAppPackage[]>(
 				profile,
@@ -170,13 +189,17 @@ async function mirrorRemoteAppPackages(
 				await appState.removePackage(appId, packageId);
 			}
 		}
-		return remotePackages;
+		return { packages: remotePackages, refused: false };
 	} catch (error) {
+		// Listing the pins needs ReadBoards, so a 403 is what a plain member gets.
+		if ((error as Partial<ApiResponseError>)?.status === 403) {
+			return { packages: [], refused: true };
+		}
 		console.warn(
 			`Failed to sync the hub packages of app ${appId} into its local pins:`,
 			error,
 		);
-		return [];
+		return { packages: [], refused: false };
 	}
 }
 
@@ -1506,27 +1529,31 @@ export class AppState implements IAppState {
 	/**
 	 * The local pins, which the native catalog and widget provider read. For an
 	 * online app they first take what the hub pins, so both sides list the same.
+	 * None when the hub refuses to list them to this session: the device-wide
+	 * local pins were then mirrored under another role or account, and the hub
+	 * still names the pin of a package to every member (`RegistryState.hubPin`).
 	 */
 	async listPackages(appId: string): Promise<Record<string, string>> {
-		await this.syncRemotePins(appId);
+		const { refused } = await this.syncRemotePins(appId);
+		if (refused) return {};
 		return invoke("app_list_packages", { appId });
 	}
 
 	/**
-	 * At most one hub sync per app every `REMOTE_PINS_SYNC_MS`. It is cached
-	 * under the app's packages, so invalidating them, as the Packages page does
-	 * after every pin change, lets the next listing sync at once. The cache
-	 * never pauses offline and is not persisted, so a restart syncs again.
+	 * At most one hub sync per app every `REMOTE_PINS_SYNC_MS`, a refused one
+	 * included. It is cached under the app's packages, so invalidating them, as
+	 * the Packages page does after every pin change, lets the next listing sync
+	 * at once. The cache never pauses offline and is not persisted, so a restart
+	 * syncs again.
 	 */
-	private async syncRemotePins(appId: string): Promise<void> {
+	private async syncRemotePins(appId: string): Promise<RemotePinSync> {
 		const { queryClient, profile, auth } = this.backend;
-		if (!profile || !auth) return;
-		const sync = () => syncRemoteAppPackages(this.backend, appId);
-		if (!queryClient) {
-			await sync();
-			return;
+		if (!profile || !auth?.isAuthenticated) {
+			return { packages: [], refused: false };
 		}
-		await queryClient.fetchQuery({
+		const sync = () => syncRemotePinListing(this.backend, appId);
+		if (!queryClient) return sync();
+		return queryClient.fetchQuery({
 			queryKey: ["app", appId, "packages", "local-pins"],
 			queryFn: sync,
 			staleTime: REMOTE_PINS_SYNC_MS,

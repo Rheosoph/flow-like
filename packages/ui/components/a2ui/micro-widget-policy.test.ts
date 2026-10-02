@@ -12,6 +12,7 @@ import {
 	isPolicyChangedError,
 	isWebWidgetAccess,
 	isWebWidgetGrant,
+	isWidgetAccessRefusedError,
 	isWidgetAccessUnsupportedError,
 	isWidgetGrantUnavailableError,
 	isWidgetRuntimeComponent,
@@ -431,6 +432,45 @@ describe("sandbox access", () => {
 			),
 		).toBe(false);
 		expect(isWidgetAccessUnsupportedError("404")).toBe(false);
+	});
+
+	test("only a verdict of the API counts as refused access", () => {
+		expect(
+			isWidgetAccessRefusedError(
+				new ApiResponseError({
+					status: 403,
+					code: "FORBIDDEN",
+					message: "Forbidden",
+				}),
+			),
+		).toBe(true);
+		expect(isWidgetAccessRefusedError({ status: 403 })).toBe(true);
+		expect(
+			isWidgetAccessRefusedError(
+				new ApiResponseError({
+					status: 404,
+					code: "NOT_FOUND",
+					message: "Package not found",
+				}),
+			),
+		).toBe(true);
+		expect(
+			isWidgetAccessRefusedError(
+				new ApiResponseError({ status: 404, message: "Not Found" }),
+			),
+		).toBe(false);
+		for (const status of [401, 408, 429, 500, 502, 503, 504]) {
+			expect(
+				isWidgetAccessRefusedError(
+					new ApiResponseError({ status, code: "ERROR", message: "failed" }),
+				),
+			).toBe(false);
+		}
+		expect(isWidgetAccessRefusedError(new TypeError("Failed to fetch"))).toBe(
+			false,
+		);
+		expect(isWidgetAccessRefusedError("403 Forbidden")).toBe(false);
+		expect(isWidgetAccessRefusedError(undefined)).toBe(false);
 	});
 });
 

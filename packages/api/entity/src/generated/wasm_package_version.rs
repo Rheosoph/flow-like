@@ -62,6 +62,12 @@ pub struct Model {
     )]
     pub compiled_platforms: Option<crate::json_types::StringList>,
     #[sea_orm(
+        column_name = "compiledArtifactGeneration",
+        column_type = "Text",
+        nullable
+    )]
+    pub compiled_artifact_generation: Option<String>,
+    #[sea_orm(
         column_name = "supportedWasmtimeVersions",
         column_type = "JsonBinary",
         nullable

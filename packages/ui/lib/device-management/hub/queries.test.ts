@@ -347,6 +347,29 @@ describe("queries over a real QueryClient", () => {
 		});
 		expect(typeof armed.queryFn).toBe("function");
 	});
+
+	test("a manifest verified with other release trust is another query, under the same prefix", () => {
+		const { ctx } = context(() => undefined);
+		const trust = {
+			manifestUrl: "https://releases.example.com/manifest.jws",
+			publicKeys: ["k"],
+			minimumSequence: 0,
+		};
+		const key = (config: typeof trust | undefined) =>
+			JSON.stringify(queries.release(ctx, config).queryKey);
+		expect(key(trust)).toBe(key({ ...trust }));
+		for (const changed of [
+			{ ...trust, publicKeys: ["rotated"] },
+			{ ...trust, minimumSequence: 4 },
+			{ ...trust, manifestUrl: "https://other.example.com/manifest.jws" },
+			undefined,
+		])
+			expect(key(changed)).not.toBe(key(trust));
+		const prefix = deviceKeys.release("scope");
+		expect(
+			queries.release(ctx, trust).queryKey.slice(0, prefix.length),
+		).toEqual([...prefix]);
+	});
 });
 
 describe("hub device support (G2)", () => {

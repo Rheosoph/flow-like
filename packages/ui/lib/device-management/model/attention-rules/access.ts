@@ -15,6 +15,7 @@ import {
 	MINUTE_S,
 	attentionCandidate,
 	deviceLabel,
+	deviceListKnown,
 	deviceRoute,
 	fleetFacts,
 	hubSource,
@@ -107,20 +108,22 @@ const sharedEnded: AttentionRuleExt = {
 		const pending = new Set(
 			pendingAccessRequests(input).map((request) => request.deviceId),
 		);
-		const goneFromList = input.accessRequests
-			? input.local.vaults
-					.filter(
-						(vault) =>
-							vault.role === "shared" &&
-							!facts.byId.has(vault.deviceId) &&
-							!pending.has(vault.deviceId),
-					)
-					.map((vault) => ({
-						deviceId: vault.deviceId,
-						since: undefined,
-						source: localSource(input),
-					}))
-			: [];
+		// "Gone from the list" needs the list: an unloaded or unreadable one ends nobody's access.
+		const goneFromList =
+			input.accessRequests && deviceListKnown(input)
+				? input.local.vaults
+						.filter(
+							(vault) =>
+								vault.role === "shared" &&
+								!facts.byId.has(vault.deviceId) &&
+								!pending.has(vault.deviceId),
+						)
+						.map((vault) => ({
+							deviceId: vault.deviceId,
+							since: undefined,
+							source: localSource(input),
+						}))
+				: [];
 		return [...listedEnded, ...goneFromList].map(
 			({ deviceId, since, source }) =>
 				attentionCandidate({

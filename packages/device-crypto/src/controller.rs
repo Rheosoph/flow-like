@@ -91,10 +91,31 @@ impl ControllerSecrets {
     }
 }
 
-/// Dropping this session clears its owned seeds. An invitation key is never part
-/// of an ordinary unlocked controller session.
+/// The owner's invitation seed while a key session holds it for signing.
+#[derive(Default)]
+struct HeldInvitation {
+    seed: [u8; 32],
+    held: bool,
+}
+
+impl HeldInvitation {
+    fn clear(&mut self) {
+        self.seed.zeroize();
+        self.held = false;
+    }
+}
+
+impl Drop for HeldInvitation {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+/// Dropping this session clears its owned seeds. The owner's invitation seed is
+/// part of it only between `attach_invitation` and `detach_invitation`.
 pub struct UnlockedController {
     secrets: ControllerSecrets,
+    invitation: HeldInvitation,
 }
 
 pub fn create_controller_vault(device_id: &str, password: &[u8]) -> Result<ControllerVault> {
@@ -152,7 +173,10 @@ pub fn unlock_controller_vault(
             && secrets.archive_seed != secrets.telemetry_seed,
         "Controller keys must be independent"
     );
-    Ok(UnlockedController { secrets })
+    Ok(UnlockedController {
+        secrets,
+        invitation: HeldInvitation::default(),
+    })
 }
 
 /// Re-encrypt an existing endpoint without rotating its authority or MLS state.
@@ -493,6 +517,73 @@ impl UnlockedController {
     pub(crate) fn telemetry_key(&self) -> SigningKey {
         SigningKey::from_bytes(&self.secrets.telemetry_seed)
     }
+
+    /// Keeps the owner's invitation key in this session, so approvals need no
+    /// second password entry until `detach_invitation` or drop. A failed attach
+    /// leaves the session as it was.
+    pub fn attach_invitation(&mut self, password: &[u8], ciphertext: &[u8]) -> Result<()> {
+        ensure!(
+            !self.secrets.onboarding,
+            "Finish onboarding before holding the owner invitation key"
+        );
+        let plaintext = vault::open(
+            password,
+            &vault::invitation_context(&self.secrets.device_id),
+            ciphertext,
+        )?;
+        ensure!(plaintext.len() == 32, "Invalid invitation vault payload");
+        // Copied straight into its only resting place, which `clear` zeroes.
+        self.invitation.seed.copy_from_slice(&plaintext);
+        self.invitation.held = true;
+        Ok(())
+    }
+
+    pub fn detach_invitation(&mut self) {
+        self.invitation.clear();
+    }
+
+    pub fn holds_invitation(&self) -> bool {
+        self.invitation.held
+    }
+
+    /// The password path binds an approval to its device through the vault
+    /// context; the held key needs the same binding stated explicitly.
+    fn sign_held(
+        &self,
+        device_id: &str,
+        sign: impl FnOnce(&SigningKey) -> flow_like_device_protocol::Result<String>,
+    ) -> Result<String> {
+        ensure!(
+            self.invitation.held,
+            "The owner invitation key for device {} is not held in this session",
+            self.secrets.device_id
+        );
+        ensure!(
+            device_id == self.secrets.device_id,
+            "An approval for device {device_id} cannot be signed by the session of device {}",
+            self.secrets.device_id
+        );
+        // Built and dropped in this frame, so the signing key is never moved.
+        let key = SigningKey::from_bytes(&self.invitation.seed);
+        Ok(sign(&key)?)
+    }
+
+    pub fn approve_management_policy(&self, policy: &ManagementPolicy) -> Result<String> {
+        self.sign_held(&policy.device_id, |key| sign_management_policy(policy, key))
+    }
+
+    pub fn approve_telemetry_roster(&self, roster: &TelemetryRoster) -> Result<String> {
+        self.sign_held(&roster.device_id, |key| sign_telemetry_roster(roster, key))
+    }
+
+    pub fn approve_archive_roster(
+        &self,
+        roster: &flow_like_device_protocol::ArchiveRoster,
+    ) -> Result<String> {
+        self.sign_held(&roster.device_id, |key| {
+            flow_like_device_protocol::sign_archive_roster(roster, key)
+        })
+    }
 }
 
 pub struct CertifiedHandshake {
@@ -640,7 +731,264 @@ fn random_id(prefix: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like_device_protocol::{verify_controller_certificate, verify_telemetry_roster};
+    use flow_like_device_protocol::{
+        ArchiveKind, ArchiveRecipient, ArchiveRoster, ManagementCapability, ManagementGrant,
+        ManagementScope, verify_archive_roster, verify_controller_certificate,
+        verify_management_policy, verify_telemetry_roster,
+    };
+
+    fn sample_policy(device_id: &str, controller_key: Ed25519PublicKey) -> ManagementPolicy {
+        ManagementPolicy {
+            version: 1,
+            device_id: device_id.into(),
+            policy_version: 1,
+            previous_policy_digest: None,
+            grants: vec![ManagementGrant {
+                grant_id: "reader".into(),
+                user_id: "colleague".into(),
+                controller_key,
+                scope: ManagementScope::Device,
+                capabilities: vec![ManagementCapability::Status],
+                expires_at: 200,
+                group_id: None,
+                group_version: None,
+            }],
+            issued_at: 100,
+            expires_at: 200,
+        }
+    }
+
+    fn sample_telemetry_roster(device_id: &str, member: TelemetryMember) -> TelemetryRoster {
+        TelemetryRoster {
+            version: 1,
+            device_id: device_id.into(),
+            scope: "device".into(),
+            policy_version: 1,
+            previous_policy_digest: None,
+            management_policy_digest: None,
+            publisher: member.clone(),
+            members: vec![member],
+            issued_at: 100,
+            expires_at: 200,
+        }
+    }
+
+    fn sample_archive_roster(device_id: &str, public_key: [u8; 32]) -> ArchiveRoster {
+        ArchiveRoster {
+            version: 1,
+            device_id: device_id.into(),
+            scope: "device".into(),
+            project_id: None,
+            kind: ArchiveKind::Logs,
+            policy_version: 1,
+            previous_policy_digest: None,
+            management_policy_digest: None,
+            recipients: vec![ArchiveRecipient {
+                recipient_id: "owner".into(),
+                user_id: "owner".into(),
+                public_key,
+            }],
+            issued_at: 100,
+            expires_at: 200,
+        }
+    }
+
+    #[test]
+    fn held_invitation_key_signs_exactly_like_the_password_path() {
+        let password = b"a memorable local password";
+        let sealed = create_controller_vault("device", password).unwrap();
+        let invitation = create_invitation_vault("device", password).unwrap();
+        let mut controller = unlock_controller_vault("device", password, &sealed.vault).unwrap();
+        let public = sealed.public_bundle.clone();
+        let policy = sample_policy("device", public.controller_key.clone());
+        let telemetry = sample_telemetry_roster("device", public.telemetry_member.clone());
+        let archive = sample_archive_roster("device", public.archive_key);
+        controller
+            .attach_invitation(password, &invitation.vault)
+            .unwrap();
+
+        let signed = controller.approve_management_policy(&policy).unwrap();
+        assert_eq!(
+            signed,
+            approve_management_policy(&policy, password, &invitation.vault).unwrap()
+        );
+        assert_eq!(
+            verify_management_policy(&signed, &invitation.public_key, 100).unwrap(),
+            policy
+        );
+        assert!(verify_management_policy(&signed, &public.controller_key, 100).is_err());
+
+        let signed = controller.approve_telemetry_roster(&telemetry).unwrap();
+        assert_eq!(
+            signed,
+            approve_telemetry_roster(&telemetry, password, &invitation.vault).unwrap()
+        );
+        assert_eq!(
+            verify_telemetry_roster(&signed, &invitation.public_key, 100).unwrap(),
+            telemetry
+        );
+
+        let signed = controller.approve_archive_roster(&archive).unwrap();
+        assert_eq!(
+            signed,
+            approve_archive_roster(&archive, password, &invitation.vault).unwrap()
+        );
+        assert_eq!(
+            verify_archive_roster(&signed, &invitation.public_key, 100).unwrap(),
+            archive
+        );
+    }
+
+    #[test]
+    fn the_held_invitation_key_needs_this_devices_vault_and_signs_only_for_this_device() {
+        let password = b"a memorable local password";
+        let sealed = create_controller_vault("device", password).unwrap();
+        let invitation = create_invitation_vault("device", password).unwrap();
+        let mut controller = unlock_controller_vault("device", password, &sealed.vault).unwrap();
+        let public = sealed.public_bundle.clone();
+        let policy = sample_policy("device", public.controller_key.clone());
+
+        assert!(!controller.holds_invitation());
+        let error = controller.approve_management_policy(&policy).unwrap_err();
+        assert!(error.to_string().contains("not held"), "{error}");
+
+        let foreign = create_invitation_vault("other-device", password).unwrap();
+        for (secret, ciphertext) in [
+            (b"wrong password".as_slice(), invitation.vault.as_slice()),
+            (password.as_slice(), sealed.vault.as_slice()),
+            (password.as_slice(), foreign.vault.as_slice()),
+        ] {
+            assert!(controller.attach_invitation(secret, ciphertext).is_err());
+            assert!(!controller.holds_invitation());
+        }
+
+        controller
+            .attach_invitation(password, &invitation.vault)
+            .unwrap();
+        assert!(controller.holds_invitation());
+        assert!(controller.approve_management_policy(&policy).is_ok());
+
+        let other = "other-device";
+        let error = controller
+            .approve_management_policy(&sample_policy(other, public.controller_key))
+            .unwrap_err();
+        assert!(error.to_string().contains(other), "{error}");
+        assert!(
+            controller
+                .approve_telemetry_roster(&sample_telemetry_roster(other, public.telemetry_member))
+                .is_err()
+        );
+        assert!(
+            controller
+                .approve_archive_roster(&sample_archive_roster(other, public.archive_key))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn detaching_zeroes_the_held_invitation_key_and_a_failed_attach_keeps_the_session() {
+        let password = b"a memorable local password";
+        let sealed = create_controller_vault("device", password).unwrap();
+        let invitation = create_invitation_vault("device", password).unwrap();
+        let mut controller = unlock_controller_vault("device", password, &sealed.vault).unwrap();
+        let policy = sample_policy("device", sealed.public_bundle.controller_key.clone());
+
+        controller
+            .attach_invitation(password, &invitation.vault)
+            .unwrap();
+        assert_ne!(controller.invitation.seed, [0; 32]);
+        let signed = controller.approve_management_policy(&policy).unwrap();
+
+        assert!(
+            controller
+                .attach_invitation(b"wrong password", &invitation.vault)
+                .is_err()
+        );
+        assert_eq!(
+            controller.approve_management_policy(&policy).unwrap(),
+            signed
+        );
+
+        // Rotating the endpoint keeps the owner's authority.
+        controller.fresh_endpoint_vault(password).unwrap();
+        assert_eq!(
+            controller.approve_management_policy(&policy).unwrap(),
+            signed
+        );
+
+        controller.detach_invitation();
+        assert!(!controller.holds_invitation());
+        assert_eq!(controller.invitation.seed, [0; 32]);
+        assert!(controller.approve_management_policy(&policy).is_err());
+        controller.detach_invitation();
+
+        controller
+            .attach_invitation(password, &invitation.vault)
+            .unwrap();
+        assert_eq!(
+            controller.approve_management_policy(&policy).unwrap(),
+            signed
+        );
+
+        // Dropping the session runs the same clearing step.
+        let mut held = HeldInvitation {
+            seed: [7; 32],
+            held: true,
+        };
+        held.clear();
+        assert_eq!(held.seed, [0; 32]);
+        assert!(!held.held);
+    }
+
+    #[test]
+    fn a_provisional_controller_holds_the_invitation_key_only_after_onboarding() {
+        let password = b"a memorable local password";
+        let vaults = create_onboarding_vaults(password).unwrap();
+        let temporary = vaults.controller.public_bundle.device_id.clone();
+        let mut controller =
+            unlock_controller_vault(&temporary, password, &vaults.controller.vault).unwrap();
+        let error = controller
+            .attach_invitation(password, &vaults.invitation.vault)
+            .unwrap_err();
+        assert!(error.to_string().contains("onboarding"), "{error}");
+        assert!(!controller.holds_invitation());
+
+        let manifest = flow_like_device_protocol::OnboardingManifest {
+            version: 1,
+            enrollment_id: "enrollment".into(),
+            device_id: "registered-device".into(),
+            owner_id: "owner".into(),
+            name: "test device".into(),
+            api_base_url: "https://example.com/api/v1".into(),
+            bootstrap_key: SigningKey::generate().public_key(),
+            controller_key: vaults.controller.public_bundle.controller_key.clone(),
+            owner_invitation_key: vaults.invitation.public_key.clone(),
+            issued_at: 100,
+            expires_at: 200,
+        };
+        let complete = controller
+            .complete_onboarding(&manifest, password, &vaults.invitation.vault)
+            .unwrap();
+        // The provisional envelope is bound to the temporary device id.
+        assert!(
+            controller
+                .attach_invitation(password, &vaults.invitation.vault)
+                .is_err()
+        );
+        controller
+            .attach_invitation(password, &complete.invitation_vault)
+            .unwrap();
+        let policy = sample_policy("registered-device", manifest.controller_key.clone());
+        assert_eq!(
+            verify_management_policy(
+                &controller.approve_management_policy(&policy).unwrap(),
+                &manifest.owner_invitation_key,
+                100
+            )
+            .unwrap(),
+            policy
+        );
+    }
 
     #[test]
     fn password_change_keeps_authority_and_opens_the_same_mls_snapshot() {

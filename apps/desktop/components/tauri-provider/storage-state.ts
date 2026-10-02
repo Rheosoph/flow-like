@@ -3,6 +3,7 @@ import {
 	type BulkUploadProgressCallback,
 	type IBulkUploadResult,
 	type IStorageItem,
+	type IStorageListOptions,
 	type IStorageState,
 	type IStorageUploadOptions,
 	assertBulkUploadSucceeded,
@@ -109,6 +110,7 @@ export class StorageState implements IStorageState {
 	async listStorageItems(
 		appId: string,
 		prefix: string,
+		options?: IStorageListOptions,
 	): Promise<IStorageItem[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -132,7 +134,7 @@ export class StorageState implements IStorageState {
 
 		const items = await fetcher<IStorageItem[]>(
 			this.backend.profile,
-			`apps/${appId}/data/list`,
+			`apps/${appId}/data/list${options?.refresh ? "?refresh=true" : ""}`,
 			{
 				method: "POST",
 				body: JSON.stringify({
@@ -147,6 +149,7 @@ export class StorageState implements IStorageState {
 	async listStorageItemsUser(
 		appId: string,
 		prefix: string,
+		options?: IStorageListOptions,
 	): Promise<IStorageItem[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -170,7 +173,7 @@ export class StorageState implements IStorageState {
 
 		const items = await fetcher<IStorageItem[]>(
 			this.backend.profile,
-			`apps/${appId}/data/user/list`,
+			`apps/${appId}/data/user/list${options?.refresh ? "?refresh=true" : ""}`,
 			{
 				method: "POST",
 				body: JSON.stringify({

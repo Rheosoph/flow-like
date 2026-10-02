@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	invoke: vi.fn(),
@@ -179,6 +179,10 @@ describe("project package licences before a local run", () => {
 		mocks.invoke.mockReset();
 	});
 
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	test("installs usable pins through the project licence and skips expired ones", async () => {
 		const { state, appState, registryState } = licensedBackend({
 			"pkg-expired": "3.0.0",
@@ -213,6 +217,125 @@ describe("project package licences before a local run", () => {
 			appId: "app-1",
 		});
 		expect(appState.listPackages).not.toHaveBeenCalled();
+	});
+
+	test("a widgets-only copy of the pinned version is installed again for the flows", async () => {
+		const { state, registryState } = licensedBackend();
+		registryState.getInstalledPackages.mockResolvedValue([
+			{
+				id: "pkg-active",
+				version: "1.0.0",
+				manifest: { metadata: { nodes_withheld: true } },
+			},
+			{ id: "pkg-lapsed", version: "2.0.0", manifest: { metadata: {} } },
+		]);
+
+		await state.ensureRemoteAppPackagesInstalled("app-1", [
+			pin("pkg-active", "1.0.0", "active"),
+			pin("pkg-lapsed", "2.0.0", "lapsed"),
+		]);
+
+		expect(registryState.installPackage.mock.calls).toEqual([
+			["pkg-active", "1.0.0", undefined, "app-1"],
+		]);
+	});
+
+	/** The reinstall memory is module state, so every test below uses its own package. */
+	function keptBack(packageId: string, version = "1.0.0") {
+		const { state, registryState } = licensedBackend();
+		registryState.getInstalledPackages.mockResolvedValue([
+			{
+				id: packageId,
+				version,
+				manifest: { metadata: { nodes_withheld: true } },
+			},
+		]);
+		const pins = [pin(packageId, version, "active")];
+		return {
+			installs: registryState.installPackage,
+			ensure: (options?: { forceReload?: boolean }) =>
+				state.ensureRemoteAppPackagesInstalled("app-1", pins, options),
+		};
+	}
+
+	test("a registry that keeps answering with a widgets-only copy is asked again only after five minutes", async () => {
+		const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+		const { installs, ensure } = keptBack("pkg-kept-back");
+
+		await ensure();
+		await ensure();
+		now.mockReturnValue(1_000_000 + 5 * 60_000 - 1);
+		await ensure();
+		expect(installs).toHaveBeenCalledTimes(1);
+
+		now.mockReturnValue(1_000_000 + 5 * 60_000);
+		await ensure();
+		expect(installs).toHaveBeenCalledTimes(2);
+	});
+
+	test("catalog reads at the same time install a widgets-only copy once", async () => {
+		const { installs, ensure } = keptBack("pkg-read-twice");
+
+		await Promise.all([ensure(), ensure()]);
+		expect(installs).toHaveBeenCalledTimes(1);
+	});
+
+	test("a widgets-only copy of the version a pin moved to is installed at once", async () => {
+		await keptBack("pkg-moved").ensure();
+		const moved = keptBack("pkg-moved", "2.0.0");
+
+		await moved.ensure();
+		await moved.ensure();
+		expect(moved.installs.mock.calls).toEqual([
+			["pkg-moved", "2.0.0", undefined, "app-1"],
+		]);
+	});
+
+	test("a run installs a widgets-only copy whatever was installed before", async () => {
+		const { installs, ensure } = keptBack("pkg-run");
+
+		await ensure();
+		await ensure({ forceReload: true });
+		await ensure({ forceReload: true });
+		expect(installs).toHaveBeenCalledTimes(3);
+	});
+
+	test("a widgets-only copy of the pin beside a complete active version is asked for once, a complete one is made active", async () => {
+		const { state, registryState } = licensedBackend();
+		const complete = { wasm_path: "node.wasm", metadata: {} };
+		registryState.getInstalledPackages.mockResolvedValue([
+			{
+				id: "pkg-beside",
+				version: "1.0.0",
+				manifest: complete,
+				versions: {
+					"1.0.0": { version: "1.0.0", manifest: complete },
+					"2.0.0": {
+						version: "2.0.0",
+						manifest: { metadata: { nodes_withheld: true } },
+					},
+				},
+			},
+			{
+				id: "pkg-held",
+				version: "1.0.0",
+				manifest: complete,
+				versions: { "2.0.0": { version: "2.0.0", manifest: complete } },
+			},
+		]);
+		const pins = [
+			pin("pkg-beside", "2.0.0", "active"),
+			pin("pkg-held", "2.0.0", "active"),
+		];
+
+		await state.ensureRemoteAppPackagesInstalled("app-1", pins);
+		await state.ensureRemoteAppPackagesInstalled("app-1", pins);
+
+		expect(registryState.installPackage.mock.calls).toEqual([
+			["pkg-beside", "2.0.0", undefined, "app-1"],
+			["pkg-held", "2.0.0", undefined, "app-1"],
+			["pkg-held", "2.0.0", undefined, "app-1"],
+		]);
 	});
 
 	test("refuses a local run of a board that uses an expired package", async () => {

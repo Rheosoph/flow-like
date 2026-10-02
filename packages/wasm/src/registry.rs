@@ -166,6 +166,10 @@ pub struct PackageSummary {
     pub capabilities: Vec<String>,
 }
 
+/// The registry Flow-Like runs. Precompiled artifacts are loaded only from
+/// it: they are native code that runs without the sandbox's validation.
+pub const OFFICIAL_REGISTRY_URL: &str = "https://api.flow-like.com/api/v1/registry";
+
 /// Registry configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryConfig {
@@ -204,7 +208,7 @@ fn default_true() -> bool {
 impl Default for RegistryConfig {
     fn default() -> Self {
         Self {
-            default_registry: "https://api.flow-like.com/api/v1/registry".to_string(),
+            default_registry: OFFICIAL_REGISTRY_URL.to_string(),
             additional_registries: Vec::new(),
             local_paths: Vec::new(),
             cache_dir: dirs_next::cache_dir()

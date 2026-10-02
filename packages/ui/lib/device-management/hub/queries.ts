@@ -25,6 +25,7 @@ import {
 	hubReadWith,
 	listAccountBackups,
 	listAppDevicePlacements,
+	listCertificateNoticeMutes,
 	listCertificateNotices,
 	listEnrollments,
 	readCertificateInventory,
@@ -48,6 +49,8 @@ export const deviceKeys = {
 	certInventoryAll: (s: string) => ["devices", s, "cert-inventory"] as const,
 	certNotices: (s: string, id: string, certificateId?: string) =>
 		["devices", s, "cert-notices", id, certificateId ?? "*"] as const,
+	certNoticeMutes: (s: string, id: string) =>
+		["devices", s, "cert-notice-mutes", id] as const,
 	resources: (s: string, id: string) =>
 		["devices", s, "resources", id] as const,
 	resourceSummary: (s: string) => ["devices", s, "resource-summary"] as const,
@@ -284,6 +287,12 @@ export const queries = {
 				listCertificateNotices(ctx.api, ctx.profile, deviceId, certificateId),
 			...deviceQueryDefaults(HUB_CADENCE.certNotices),
 		}),
+	certNoticeMutes: (ctx: HubQueryContext, deviceId: string) =>
+		queryOptions({
+			queryKey: deviceKeys.certNoticeMutes(ctx.scopeKey, deviceId),
+			queryFn: () => listCertificateNoticeMutes(ctx.api, ctx.profile, deviceId),
+			...deviceQueryDefaults(HUB_CADENCE.certNotices),
+		}),
 	resources: (ctx: HubQueryContext, deviceId: string) =>
 		queryOptions({
 			queryKey: deviceKeys.resources(ctx.scopeKey, deviceId),
@@ -358,10 +367,20 @@ export const queries = {
 				),
 			...deviceQueryDefaults(HUB_CADENCE.appPlacements),
 		}),
-	/** Verified release manifest (N10, `agent_update_available`); idle without release trust. */
+	/**
+	 * Verified release manifest (N10, `agent_update_available`); idle without
+	 * release trust. The trust it is verified with is part of the key, under
+	 * `deviceKeys.release`: a manifest checked against old keys never answers
+	 * for new ones.
+	 */
 	release: (ctx: HubQueryContext, config: ReleaseConfig | undefined) =>
 		queryOptions({
-			queryKey: deviceKeys.release(ctx.scopeKey),
+			queryKey: [
+				...deviceKeys.release(ctx.scopeKey),
+				config
+					? [config.manifestUrl, config.minimumSequence, ...config.publicKeys]
+					: null,
+			] as const,
 			queryFn: config
 				? ({ signal }) =>
 						hubReadWith("account", "GET release manifest", () =>

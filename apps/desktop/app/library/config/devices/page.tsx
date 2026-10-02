@@ -1,9 +1,15 @@
 "use client";
 
-import { DevicesPage } from "@flow-like/flow-like-ui/components/settings/devices/devices-page";
-import { useSearchParams } from "next/navigation";
+import {
+	DevicesArea,
+	DevicesAreaSkeleton,
+} from "@flow-like/flow-like-ui/components/settings/devices";
+import { Suspense } from "react";
 
 export default function Page() {
-	const projectId = useSearchParams().get("id");
-	return projectId ? <DevicesPage projectId={projectId} /> : null;
+	return (
+		<Suspense fallback={<DevicesAreaSkeleton scope="app" />}>
+			<DevicesArea scope="app" />
+		</Suspense>
+	);
 }

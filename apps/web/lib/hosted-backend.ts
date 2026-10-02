@@ -8,6 +8,11 @@ import {
 } from "@flow-like/flow-like-ui/components/a2ui/micro-widget-policy";
 import { getApiOrigin, getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import {
+	HUB_REFRESH_TIMEOUT_MS,
+	requestTimeoutMs,
+	withRequestDeadline,
+} from "@flow-like/flow-like-ui/lib/request-deadline";
+import {
 	serializePageTrigger,
 	withCurrentManifestRevision,
 } from "@flow-like/flow-like-ui/lib/schema/flow/page-trigger";
@@ -70,6 +75,8 @@ export class HostedHttpError extends Error {
 	constructor(
 		public readonly status: number,
 		message: string,
+		/** The API's error code, on widget registry requests. Absent when something else answered: a proxy, or an API without the route. */
+		public readonly code?: string,
 	) {
 		super(message);
 	}
@@ -117,6 +124,16 @@ export function hostedErrorMessage(status: number, body: string): string {
 		: `Request failed (${status})`;
 }
 
+/** The `code` of the API's error envelope; undefined for a body the API did not write. */
+export function hostedErrorCode(body: string): string | undefined {
+	let code: unknown;
+	try {
+		const parsed = JSON.parse(body);
+		code = parsed?.error?.code ?? parsed?.code;
+	} catch {}
+	return typeof code === "string" && code.trim() ? code.trim() : undefined;
+}
+
 type HostedRequest = ReturnType<typeof createHostedRequest>;
 
 function scopedState<T extends object>(methods: Partial<T>): T {
@@ -138,23 +155,37 @@ const anonymous: HostedAccessToken = () => undefined;
 
 /** A sign-in interface sends its viewer's token, so project members reach the private packages the project pins. */
 function publicWidgetRegistry(accessToken: HostedAccessToken): IRegistryState {
-	const send = async (path: string, body: unknown) => {
-		const headers = new Headers({ "Content-Type": "application/json" });
-		const token = accessToken();
-		if (token) headers.set("Authorization", `Bearer ${token}`);
-		const response = await fetch(getApiUrl(undefined, path), {
-			method: "POST",
-			credentials: "omit",
-			headers,
-			body: JSON.stringify(body),
-		});
-		if (!response.ok)
-			throw new HostedHttpError(
-				response.status,
-				"The widget is not available for public hosting.",
-			);
-		return response.json();
-	};
+	// A request that never settles would hold the frame, and every later check of its token, for good.
+	const send = (
+		path: string,
+		body: unknown,
+		timeoutMs = requestTimeoutMs(path, "POST"),
+	) =>
+		withRequestDeadline(
+			path,
+			async ({ signal }) => {
+				const headers = new Headers({ "Content-Type": "application/json" });
+				const token = accessToken();
+				if (token) headers.set("Authorization", `Bearer ${token}`);
+				const response = await fetch(getApiUrl(undefined, path), {
+					method: "POST",
+					credentials: "omit",
+					headers,
+					body: JSON.stringify(body),
+					signal,
+				});
+				if (!response.ok)
+					throw new HostedHttpError(
+						response.status,
+						"The widget is not available for public hosting.",
+						hostedErrorCode(await response.text().catch(() => "")),
+					);
+				return response.json();
+			},
+			{ timeoutMs },
+		);
+	// An API that answered an access request has the route: a bare 404 or 405 after that is a proxy's.
+	let accessAnswered = false;
 	return scopedState<IRegistryState>({
 		describeWidgetPolicy: async (request) =>
 			parseWidgetPolicyDescriptor(
@@ -190,14 +221,18 @@ function publicWidgetRegistry(accessToken: HostedAccessToken): IRegistryState {
 			),
 		getWidgetAccess: async (request) => {
 			try {
-				return parseWidgetAccessResponse(
+				// Asked again when it fails, unlike describe and mint, so it gives up early.
+				const access = parseWidgetAccessResponse(
 					await send(
 						`registry/package/${encodeURIComponent(request.packageId)}/widget-access`,
 						{ version: request.packageVersion, appId: request.appId },
+						HUB_REFRESH_TIMEOUT_MS,
 					),
 				);
+				accessAnswered = true;
+				return access;
 			} catch (error) {
-				if (isWidgetAccessUnsupportedError(error)) {
+				if (!accessAnswered && isWidgetAccessUnsupportedError(error)) {
 					return { ...ANONYMOUS_WIDGET_ACCESS };
 				}
 				throw error;

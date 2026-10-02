@@ -340,6 +340,24 @@ pub enum ManagementCommand {
         #[serde(default)]
         acknowledge_uncertain: bool,
     },
+    /// Queued writes of one authorization scope without their payloads. `terminal` lists
+    /// applied, skipped and superseded writes, newest first; `after_sequence` is the
+    /// previous page's `next` in both directions.
+    OfflineQueueOperations {
+        placement_id: String,
+        scope: String,
+        #[serde(default)]
+        after_sequence: Option<u64>,
+        #[serde(default = "default_offline_operations_limit")]
+        limit: u16,
+        #[serde(default)]
+        terminal: bool,
+    },
+    OfflineQueueLookup {
+        placement_id: String,
+        scope: String,
+        queued_operation_id: String,
+    },
     Inspect,
     InspectPage {
         after: Option<String>,
@@ -352,6 +370,16 @@ pub enum ManagementCommand {
     Operation {
         operation_id: String,
     },
+    /// Journaled operations of every principal, newest first. `after` is the previous
+    /// page's `next`.
+    Operations {
+        #[serde(default)]
+        after: Option<String>,
+        #[serde(default = "default_operations_limit")]
+        limit: u8,
+    },
+    /// The reboot or agent update that is in progress, whoever started it.
+    HostOperation,
     #[serde(alias = "placement_config")]
     PlacementConfiguration {
         placement_id: String,
@@ -382,6 +410,15 @@ pub enum ManagementCommand {
     },
     Rollout {
         rollout_id: String,
+    },
+    /// Current and finished updates of one placement, newest first. `before` is the
+    /// previous page's `next`.
+    RolloutHistory {
+        placement_id: String,
+        #[serde(default)]
+        before: Option<String>,
+        #[serde(default = "default_rollout_history_limit")]
+        limit: u8,
     },
     Scale {
         placement_id: String,
@@ -415,6 +452,13 @@ pub enum ManagementCommand {
     },
     Metrics {
         placement_id: Option<String>,
+    },
+    /// Retained samples after record `after`, reduced on the device to the named fields.
+    MetricsHistory {
+        placement_id: Option<String>,
+        after: u64,
+        limit: u16,
+        fields: Vec<String>,
     },
     ProjectMetrics {
         project_id: String,
@@ -490,6 +534,18 @@ fn default_inspect_page_limit() -> u16 {
 
 fn default_certificate_page_limit() -> u16 {
     4
+}
+
+fn default_offline_operations_limit() -> u16 {
+    20
+}
+
+fn default_operations_limit() -> u8 {
+    20
+}
+
+fn default_rollout_history_limit() -> u8 {
+    8
 }
 
 fn default_rollout_stabilization() -> u32 {
@@ -790,6 +846,85 @@ mod tests {
             matches!(legacy, ManagementCommand::PlacementConfiguration { placement_id } if placement_id == "api")
         );
     }
+
+    #[test]
+    fn read_commands_round_trip_with_their_wire_names_and_defaults() {
+        use serde_json::json;
+        let command = |value: serde_json::Value| {
+            serde_json::from_value::<ManagementCommand>(value).map(|command| {
+                let encoded = serde_json::to_value(&command).unwrap();
+                (command, encoded)
+            })
+        };
+        let (host, encoded) = command(json!({"type":"host_operation"})).unwrap();
+        assert!(matches!(host, ManagementCommand::HostOperation));
+        assert_eq!(encoded, json!({"type":"host_operation"}));
+
+        let (history, encoded) =
+            command(json!({"type":"rollout_history","placement_id":"api"})).unwrap();
+        assert!(matches!(
+            history,
+            ManagementCommand::RolloutHistory {
+                before: None,
+                limit: 8,
+                ..
+            }
+        ));
+        assert_eq!(
+            encoded,
+            json!({"type":"rollout_history","placement_id":"api","before":null,"limit":8})
+        );
+        let paged =
+            json!({"type":"rollout_history","placement_id":"api","before":"rollout-7","limit":16});
+        assert_eq!(command(paged.clone()).unwrap().1, paged);
+
+        let (operations, encoded) = command(json!({"type":"operations"})).unwrap();
+        assert!(matches!(
+            operations,
+            ManagementCommand::Operations {
+                after: None,
+                limit: 20
+            }
+        ));
+        assert_eq!(
+            encoded,
+            json!({"type":"operations","after":null,"limit":20})
+        );
+
+        let metrics = json!({"type":"metrics_history","placement_id":null,"after":7,"limit":256,"fields":["cpu_percent"]});
+        assert_eq!(command(metrics.clone()).unwrap().1, metrics);
+        assert!(
+            command(json!({"type":"metrics_history","placement_id":"api","after":0,"limit":1}))
+                .is_err()
+        );
+
+        let (queued, encoded) =
+            command(json!({"type":"offline_queue_operations","placement_id":"api","scope":"a"}))
+                .unwrap();
+        assert!(matches!(
+            queued,
+            ManagementCommand::OfflineQueueOperations {
+                after_sequence: None,
+                limit: 20,
+                terminal: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            encoded,
+            json!({"type":"offline_queue_operations","placement_id":"api","scope":"a","after_sequence":null,"limit":20,"terminal":false})
+        );
+        let lookup = json!({"type":"offline_queue_lookup","placement_id":"api","scope":"a","queued_operation_id":"write-1"});
+        assert_eq!(command(lookup.clone()).unwrap().1, lookup);
+
+        for unknown in [
+            json!({"type":"operations","kind":"stop"}),
+            json!({"type":"rollout_histories","placement_id":"api"}),
+        ] {
+            assert!(command(unknown).is_err());
+        }
+    }
+
     #[test]
     fn roster_pins_signer_members_and_expiry() {
         let owner = SigningKey::generate();

@@ -243,6 +243,152 @@ impl Controller {
         self.command(serde_json::from_value(command)?).await
     }
 
+    /// One history page of placement `api` as `(rollout, state)` rows, and its cursor.
+    async fn rollout_history(
+        &mut self,
+        before: Option<&str>,
+        limit: u8,
+    ) -> Result<(Vec<(String, String)>, Value)> {
+        let page = self
+            .wire(json!({"type":"rollout_history","placement_id":"api","before":before,"limit":limit}))
+            .await?
+            .result;
+        ensure!(!page.to_string().contains("secret_overrides"));
+        let text = |row: &Value, key: &str| row[key].as_str().unwrap_or_default().to_owned();
+        let rows = page["rollouts"].as_array().context("rollout history")?;
+        let rows = rows
+            .iter()
+            .map(|row| (text(row, "rollout_id"), text(row, "state")))
+            .collect();
+        Ok((rows, page["next"].clone()))
+    }
+
+    /// History pages newest first, with a cursor only while older rollouts remain.
+    async fn assert_rollout_pages(&mut self, newest_first: &[(String, &str)]) -> Result<()> {
+        let staged: Vec<_> = newest_first
+            .iter()
+            .map(|(id, state)| (id.clone(), (*state).to_owned()))
+            .collect();
+        let second = staged[1].0.as_str();
+        let all = self.rollout_history(None, 8).await?;
+        ensure!(all == (staged.clone(), Value::Null));
+        let newest = self.rollout_history(None, 2).await?;
+        ensure!(newest == (staged[..2].to_vec(), json!(second)));
+        let older = self.rollout_history(Some(second), 16).await?;
+        ensure!(older == (staged[2..].to_vec(), Value::Null));
+        Ok(())
+    }
+
+    /// The owner sees every journaled operation, each staged rollout among them.
+    async fn assert_owner_journal(&mut self, staged: &[(String, &str)]) -> Result<()> {
+        let listed = self.wire(json!({"type":"operations","limit":50})).await?;
+        let journal = listed.result["operations"]
+            .as_array()
+            .context("operation list")?;
+        ensure!(journal.iter().all(|operation| {
+            operation["actor"]["role"] == "owner"
+                && operation["kind"].is_null()
+                && operation["accepted_at"].as_i64().is_some_and(|at| at > 0)
+        }));
+        ensure!(staged.iter().all(|(id, _)| {
+            journal
+                .iter()
+                .any(|operation| operation["operation_id"] == *id)
+        }));
+        Ok(())
+    }
+
+    /// Feature flags and the device facts they announce.
+    async fn assert_console_facts(&mut self) -> Result<()> {
+        let inspected = self
+            .wire(json!({"type":"inspect_page","after":null,"limit":2}))
+            .await?
+            .result;
+        let flags = [
+            "offline_summary",
+            "host_operation",
+            "network_interfaces",
+            "rollout_history",
+            "operations",
+            "metrics_history",
+            "offline_lookup",
+            "reader_bindings",
+            "acme_failure_detail",
+            "archive_status",
+            "artifact_capacity",
+        ];
+        ensure!(flags.iter().all(|flag| inspected["features"][flag] == 1));
+        ensure!(inspected["host_operation"].is_null());
+        ensure!(inspected["network"]["interfaces"].is_array());
+        ensure!(inspected["placements"][0]["offline_writes"]["pending_count"] == 0);
+        let operation = self.wire(json!({"type":"host_operation"})).await?;
+        ensure!(operation.result == json!({"operation":null}));
+        Ok(())
+    }
+
+    /// Sampled history of placement `api`, and a queue scope it never had.
+    async fn assert_history_reads(&mut self) -> Result<()> {
+        let samples = self
+            .wire(json!({"type":"metrics_history","placement_id":"api","after":0,"limit":256,"fields":["running_replicas","memory_bytes"]}))
+            .await?;
+        let points = samples.result["points"]
+            .as_array()
+            .context("metric points")?;
+        let triple = |point: &Value| point.as_array().is_some_and(|point| point.len() == 3);
+        ensure!(!points.is_empty() && points.iter().all(triple));
+        let no_queue = self.request(serde_json::from_value(json!({
+            "type":"offline_queue_operations","placement_id":"api","scope":"0".repeat(64)
+        }))?)?;
+        let refused = self.transmit(&no_queue).await?;
+        ensure!(refused.state == "rejected" && refused.result["code"] == "invalid");
+        Ok(())
+    }
+
+    /// Revisions of project `project` on the device: those placement `api` runs from, and
+    /// those nothing uses.
+    async fn retained_revisions(&mut self) -> Result<(Vec<Value>, Vec<Value>)> {
+        let usage = json!({"type":"artifact","request":{"kind":"usage","project_id":"project"}});
+        let used = self.wire(usage).await?.result;
+        let rows = used["revisions"].as_array().context("retained revisions")?;
+        ensure!(used["next"].is_null() && used["project"]["revisions"]["used"] == rows.len());
+        let digests = |users: Value| -> Vec<Value> {
+            let listed = rows
+                .iter()
+                .filter(|row| row["referenced_by"] == users && row["rollout"] == false);
+            listed.map(|row| row["revision"].clone()).collect()
+        };
+        Ok((digests(json!(["api"])), digests(json!([]))))
+    }
+
+    /// Removal of the listed revisions of project `project`, as the device answers it.
+    async fn prune(&mut self, revisions: &[Value]) -> Result<ManagementResponse> {
+        let prune = json!({"kind":"prune","project_id":"project","revisions":revisions});
+        let command = serde_json::from_value(json!({"type":"artifact","request":prune}))?;
+        let request = self.request(command)?;
+        self.transmit(&request).await
+    }
+
+    /// Only revisions that no service runs from leave the device.
+    async fn assert_capacity(&mut self) -> Result<()> {
+        let (kept, unused) = self.retained_revisions().await?;
+        ensure!(kept.len() == 1 && !unused.is_empty());
+        let refused = self.prune(&[kept[0].clone(), unused[0].clone()]).await?;
+        ensure!(refused.state == "rejected" && refused.result["code"] == "revision_conflict");
+        let removed = self.prune(&unused).await?;
+        ensure!(removed.state == "completed" && removed.result["pruned"] == json!(unused));
+        ensure!(self.retained_revisions().await? == (kept, Vec::new()));
+        Ok(())
+    }
+
+    /// The reads behind the device console, over this encrypted session.
+    async fn assert_console_reads(&mut self, newest_first: &[(String, &str)]) -> Result<()> {
+        self.assert_rollout_pages(newest_first).await?;
+        self.assert_owner_journal(newest_first).await?;
+        self.assert_console_facts().await?;
+        self.assert_history_reads().await?;
+        self.assert_capacity().await
+    }
+
     async fn stage(
         &mut self,
         config: &PlacementConfig,
@@ -1446,6 +1592,17 @@ async fn workflow_rollout_preserves_secrets_and_mutable_data_across_recovery() -
     );
     assert_eq!(stopped.running_replicas, 0);
     fixture.assert_preserved(&recovered, &marker)?;
+
+    // The console's history reads, through the same encrypted session as the commands above.
+    let newest_first = [
+        (cancelled_rollout, "cancelled"),
+        (recovered_rollout, "healthy"),
+        (failed_rollout, "rolled_back"),
+        (missing_secret_rollout, "failed"),
+        (invalid_rollout, "failed"),
+        (rollout, "healthy"),
+    ];
+    controller.assert_console_reads(&newest_first).await?;
     agent.stop().await?;
     Ok(())
 }

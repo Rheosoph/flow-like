@@ -18,6 +18,7 @@ import {
 	Slider,
 	Textarea,
 } from "@flow-like/flow-like-ui";
+import { HostedEmbeddingConfiguration } from "@flow-like/flow-like-ui/components/bits/hosted-embedding-configuration";
 import { useTranslation } from "@flow-like/locales";
 import { X } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
@@ -55,6 +56,10 @@ export function EmbeddingConfiguration({
 
 	return (
 		<div className="space-y-6 w-full max-w-screen-lg">
+			<HostedEmbeddingConfiguration
+				parameters={parameters}
+				onChange={(updates) => updateParameters(updates)}
+			/>
 			<Card className="w-full">
 				<CardHeader>
 					<CardTitle>{t("modelProvider", "Model Provider")}</CardTitle>
@@ -162,7 +167,7 @@ export function EmbeddingConfiguration({
 								<Slider
 									id="input-length"
 									min={50}
-									max={8192}
+									max={Math.max(8192, parameters.input_length)}
 									step={100}
 									value={[parameters.input_length]}
 									onValueChange={(value) =>
@@ -173,12 +178,16 @@ export function EmbeddingConfiguration({
 								<Input
 									type="number"
 									min={50}
-									max={8192}
+									max={4_294_967_295}
 									step={100}
 									value={parameters.input_length}
 									onChange={(e) => {
 										const value = Number.parseInt(e.target.value);
-										if (!Number.isNaN(value) && value >= 100 && value <= 8192) {
+										if (
+											!Number.isNaN(value) &&
+											value >= 100 &&
+											value <= 4_294_967_295
+										) {
 											updateParameters({ input_length: value });
 										}
 									}}

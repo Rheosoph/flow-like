@@ -39,11 +39,11 @@ function UndoValue({ undo }: Readonly<{ undo: UndoRow }>) {
 		<>
 			<span
 				className={cx(
-					"inline-flex items-center gap-1 font-semibold",
+					"inline-flex items-baseline gap-1 font-semibold",
 					undo.reversible ? "text-good" : "text-critical",
 				)}
 			>
-				<Icon aria-hidden className="size-3.5" />
+				<Icon aria-hidden className="size-3.5 shrink-0 translate-y-0.5" />
 				{undo.reversible
 					? t("common.conseq.undoYes", "Yes.")
 					: t("common.conseq.undoNo", "No, this is permanent.")}

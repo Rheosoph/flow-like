@@ -1,4 +1,9 @@
-use crate::{certificate_requests, certificates, state::StateStore, vault};
+use crate::{
+    certificate_requests, certificates,
+    diagnostics::{Renewal, RenewalFailure},
+    state::StateStore,
+    vault,
+};
 use anyhow::{Context, Result, ensure};
 use flow_like_device_crypto::certificate_authority::{self, SignedCertificateChain};
 use flow_like_device_protocol::{
@@ -83,13 +88,23 @@ pub(crate) fn create_request(
     )
 }
 
-pub(crate) fn list(store: &StateStore) -> Result<Vec<CertificateIssuerMetadata>> {
-    let encoded = store.connection.prepare("SELECT metadata_json FROM certificate_issuers WHERE metadata_json IS NOT NULL ORDER BY certificate_id")?
-        .query_map([], |row| row.get::<_, String>(0))?.collect::<std::result::Result<Vec<_>, _>>()?;
+/// Every renewal authority with its count of consecutive failed renewals.
+pub(crate) fn list_with_failures(
+    store: &StateStore,
+) -> Result<Vec<(CertificateIssuerMetadata, u32)>> {
+    let encoded = store.connection.prepare("SELECT metadata_json,failures FROM certificate_issuers WHERE metadata_json IS NOT NULL ORDER BY certificate_id")?
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get(1)?)))?.collect::<std::result::Result<Vec<(String, u32)>, _>>()?;
     encoded
         .iter()
-        .map(|item| serde_json::from_str(item).map_err(Into::into))
+        .map(|(item, failures)| Ok((serde_json::from_str(item)?, *failures)))
         .collect()
+}
+
+pub(crate) fn list(store: &StateStore) -> Result<Vec<CertificateIssuerMetadata>> {
+    Ok(list_with_failures(store)?
+        .into_iter()
+        .map(|(policy, _)| policy)
+        .collect())
 }
 
 pub(crate) fn metadata(
@@ -281,6 +296,43 @@ fn renew(
     Ok(())
 }
 
+/// Undoes the failed renewal, counts it and schedules the next attempt. Renewal is local,
+/// so anything but an ended authority is a fault of the device.
+fn record_failure(store: &StateStore, certificate_id: &str, now: i64) -> Result<RenewalFailure> {
+    store
+        .connection
+        .execute_batch("ROLLBACK TO certificate_renewal; RELEASE certificate_renewal")?;
+    let mut policy = metadata(store, certificate_id)?;
+    let failures: u32 = store.connection.query_row(
+        "SELECT failures FROM certificate_issuers WHERE certificate_id=?1",
+        [certificate_id],
+        |r| r.get(0),
+    )?;
+    let failures = failures.saturating_add(1).min(16);
+    let (failure, text) = if policy.not_after <= now + 3600 {
+        (
+            RenewalFailure::AuthorityExpired,
+            "Issuing authority has expired or expires within one hour. Install a new delegation.",
+        )
+    } else {
+        (
+            RenewalFailure::Internal,
+            "Automatic certificate renewal failed. Check the issuing authority and device state.",
+        )
+    };
+    policy.last_error = Some(text.into());
+    policy.next_renewal_at = now.saturating_add((60_i64 << failures.min(6)).min(3600));
+    store.connection.execute(
+        "UPDATE certificate_issuers SET metadata_json=?2,failures=?3 WHERE certificate_id=?1",
+        params![
+            policy.certificate_id,
+            serde_json::to_string(&policy)?,
+            failures
+        ],
+    )?;
+    Ok(failure)
+}
+
 pub fn renew_due(root: &Path, now: i64) -> Result<usize> {
     let store = StateStore::open(&root.join("management.sqlite"))?;
     let candidates = list(&store)?;
@@ -302,30 +354,21 @@ pub fn renew_due(root: &Path, now: i64) -> Result<usize> {
         store
             .connection
             .execute_batch("SAVEPOINT certificate_renewal")?;
-        match renew(&store, root, &mut policy, now) {
+        let failure = match renew(&store, root, &mut policy, now) {
             Ok(()) => {
                 store
                     .connection
                     .execute_batch("RELEASE certificate_renewal")?;
                 renewed += 1;
+                None
             }
-            Err(_) => {
-                store.connection.execute_batch(
-                    "ROLLBACK TO certificate_renewal; RELEASE certificate_renewal",
-                )?;
-                policy = metadata(&store, &policy.certificate_id)?;
-                let failures: u32 = store.connection.query_row(
-                    "SELECT failures FROM certificate_issuers WHERE certificate_id=?1",
-                    [&policy.certificate_id],
-                    |r| r.get(0),
-                )?;
-                let failures = failures.saturating_add(1).min(16);
-                policy.last_error = Some(if policy.not_after <= now + 3600 { "Issuing authority has expired or expires within one hour. Install a new delegation." } else { "Automatic certificate renewal failed. Check the issuing authority and device state." }.into());
-                policy.next_renewal_at = now.saturating_add((60_i64 << failures.min(6)).min(3600));
-                store.connection.execute("UPDATE certificate_issuers SET metadata_json=?2,failures=?3 WHERE certificate_id=?1", params![policy.certificate_id, serde_json::to_string(&policy)?, failures])?;
-            }
-        }
+            Err(_) => Some(record_failure(&store, &policy.certificate_id, now)?),
+        };
         transaction.commit()?;
+        if let Some(failure) = failure {
+            let registry = crate::diagnostics::global();
+            registry.set_renewal_failure(root, Renewal::Issuer, &policy.certificate_id, failure);
+        }
     }
     store.connection.execute(
         "DELETE FROM certificate_requests WHERE expires_at<=?1",
@@ -524,18 +567,46 @@ mod tests {
         let path = certificates::material_path(&root, &file)?;
         let bytes = vault::read_private(&path)?;
         std::fs::write(&path, b"damaged")?;
+        assert_eq!(failure(&store, &root, &id), (0, None));
         assert_eq!(renew_due(&root, now)?, 0);
         assert_eq!(certificates::metadata(&store, &id)?, original);
         let failed = metadata(&store, &id)?;
         assert!(failed.last_error.is_some());
         assert!(failed.next_renewal_at >= now + 60);
+        let internal = (1, Some(RenewalFailure::Internal));
+        assert_eq!(failure(&store, &root, &id), internal);
         assert_eq!(renew_due(&root, now + 1)?, 0);
         std::fs::write(&path, &bytes)?;
         assert_eq!(renew_due(&root, failed.next_renewal_at)?, 1);
         let recovered = metadata(&store, &id)?;
         assert!(recovered.last_error.is_none());
+        assert_eq!(failure(&store, &root, &id).0, 0);
         assert_eq!(certificates::metadata(&store, &id)?.revision, 2);
         Ok(())
+    }
+
+    /// The count of consecutive failed renewals and the remembered cause of the last one.
+    fn failure(store: &StateStore, root: &Path, id: &str) -> (u32, Option<RenewalFailure>) {
+        let registry = crate::diagnostics::global();
+        (
+            list_with_failures(store).unwrap()[0].1,
+            registry.renewal_failure(root, Renewal::Issuer, id),
+        )
+    }
+
+    #[test]
+    fn an_ended_authority_is_remembered_as_the_cause_of_a_failed_renewal() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = crate::supervisor::prepare_state_dir(temp.path()).unwrap();
+        let store = StateStore::open(&root.join("management.sqlite")).unwrap();
+        let now = crate::enrollment::unix_time().unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        initial(&store, &root, &id, now).unwrap();
+        let policy = delegate(&store, &root, &id, 1, &authority(now).unwrap(), now).unwrap();
+        assert_eq!(renew_due(&root, policy.not_after).unwrap(), 0);
+        let ended = (1, Some(RenewalFailure::AuthorityExpired));
+        assert_eq!(failure(&store, &root, &id), ended);
+        assert!(metadata(&store, &id).unwrap().last_error.is_some());
     }
 
     #[test]

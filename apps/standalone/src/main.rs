@@ -561,7 +561,7 @@ async fn main() -> Result<()> {
                     boot_id.clone(),
                 );
                 background.push(diagnostics.spawn_monitored(
-                    "management_transport",
+                    diagnostics::MANAGEMENT_TRANSPORT,
                     &cancel,
                     flow_like_standalone::transport::run(
                         device.clone(),
@@ -637,7 +637,7 @@ async fn main() -> Result<()> {
                 let boot = boot_id.clone();
                 let stop = cancel.clone();
                 background.push(
-                    diagnostics.spawn_monitored("reboot_watcher", &cancel, async move {
+                    diagnostics.spawn_monitored(diagnostics::REBOOT_WATCHER, &cancel, async move {
                         flow_like_standalone::host::watch_reboot(&root, &boot, stop).await
                     }),
                 );
@@ -649,7 +649,7 @@ async fn main() -> Result<()> {
                 let id = device.manifest().device_id.clone();
                 let stop = cancel.clone();
                 background.push(diagnostics.spawn_monitored(
-                    "update_watcher",
+                    diagnostics::UPDATE_WATCHER,
                     &cancel,
                     async move {
                         flow_like_standalone::host::watch_update(&root, &id, &boot, &run, stop)

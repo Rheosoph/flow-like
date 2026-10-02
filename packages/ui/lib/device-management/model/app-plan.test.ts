@@ -208,15 +208,19 @@ describe("APP §5.5 resulting picture per app", () => {
 				row.deviceId,
 				row.unknown?.kind,
 			]),
-		).toEqual([
-			["lab-gpu-02", "locked"],
-			["cold-storage-nas", "never"],
-		]);
+		).toEqual([["lab-gpu-02", "locked"]]);
+		expect(
+			result.everywhereElse.never.map((row) => [
+				row.deviceId,
+				row.unknown?.kind,
+			]),
+		).toEqual([["cold-storage-nas", "never"]]);
 		expect(result.coverage).toEqual({
 			total: 5,
 			readable: 3,
 			unknown: 2,
 			locked: ["lab-gpu-02"],
+			never: ["cold-storage-nas"],
 		});
 	});
 });
@@ -263,20 +267,19 @@ describe("unknown never means not deployed", () => {
 		});
 	});
 
-	test("locked and never-checked-in devices are unknown, never in Not deployed", () => {
+	test("a locked device is unknown; one that never checked in is neither unknown nor Not deployed", () => {
 		const result = view("app_invoice_ai");
 		expect(result.groups.map((group) => [group.deviceId, group.rank])).toEqual([
 			["edge-berlin-01", 2],
-			["cold-storage-nas", 3],
 			["lab-gpu-02", 3],
 		]);
 		expect(
 			result.everywhereElse.notDeployed.map((row) => row.deviceId),
 		).toEqual(["studio-mac-mini", "warehouse-pi"]);
-		expect(result.versions[0].unknownOn).toEqual([
+		expect(result.everywhereElse.never.map((row) => row.deviceId)).toEqual([
 			"cold-storage-nas",
-			"lab-gpu-02",
 		]);
+		expect(result.versions[0].unknownOn).toEqual(["lab-gpu-02"]);
 	});
 
 	test("every device locked has no service and nothing readable", () => {
@@ -299,6 +302,48 @@ describe("unknown never means not deployed", () => {
 				"studio-mac-mini",
 				"warehouse-pi",
 			],
+			never: ["cold-storage-nas"],
+		});
+	});
+
+	test("devices that never checked in or are shared for another app don't ask for an unlock", () => {
+		const [edge, lab, , , cold] = sampleDevices();
+		const noAccess: AppDeviceInput = {
+			...lab,
+			services: { state: "noaccess" },
+		};
+		for (const devices of [[cold], [noAccess], [cold, noAccess]])
+			expect(view("app_visitor_checkin", { devices }).layout).toBe("never");
+		const locked: AppDeviceInput = { ...edge, services: { state: "locked" } };
+		expect(
+			view("app_visitor_checkin", { devices: [cold, locked] }).layout,
+		).toBe("all_unknown");
+	});
+
+	test("a device that never checked in is a column only when asked for, as Not served with its gate", () => {
+		const gate: GateFailure = {
+			ok: false,
+			gate: "G8",
+			kind: "live",
+			hide: false,
+			copy: { code: "never_connected_needs_live" },
+		};
+		const devices = sampleDevices();
+		devices[4] = { ...devices[4], deployGate: gate };
+		const result = view("app_invoice_ai", {
+			devices,
+			focus: ["cold-storage-nas"],
+		});
+		expect(result.events.cols).toEqual([
+			"edge-berlin-01",
+			"lab-gpu-02",
+			"cold-storage-nas",
+		]);
+		expect(result.events.rows[0].cells["cold-storage-nas"]).toEqual({
+			deviceId: "cold-storage-nas",
+			serviceIds: [],
+			state: "not_served",
+			gate,
 		});
 	});
 
@@ -325,6 +370,17 @@ describe("unknown never means not deployed", () => {
 				[{ services: { state: "noaccess" } }, "noaccess"],
 				[
 					{
+						relationship: "cloud_approval",
+						keyState: "none",
+						services: {
+							state: "notloaded",
+							reason: { code: "no_keys_here" },
+						},
+					},
+					"noaccess",
+				],
+				[
+					{
 						presence: { kind: "offline", since: 5 },
 						services: { state: "notloaded" },
 					},
@@ -346,11 +402,7 @@ describe("By event matrix (APP §2.10)", () => {
 		const locked = view("app_invoice_ai");
 		const cell = (result: AppView, event: string, device: string) =>
 			result.events.rows.find((row) => row.eventId === event)?.cells[device];
-		expect(locked.events.cols).toEqual([
-			"edge-berlin-01",
-			"cold-storage-nas",
-			"lab-gpu-02",
-		]);
+		expect(locked.events.cols).toEqual(["edge-berlin-01", "lab-gpu-02"]);
 		expect(cell(locked, "evt_extract_http", "edge-berlin-01")).toMatchObject({
 			state: "served",
 			serviceIds: ["invoice-extractor"],
@@ -441,6 +493,31 @@ describe("By event matrix (APP §2.10)", () => {
 		]);
 	});
 
+	test("a conflict at the head of a write queue ranks the service as 'writes need you'", () => {
+		const devices = sampleDevices();
+		devices[2] = {
+			...devices[2],
+			services: [
+				{
+					...SERVICES.fieldNotes,
+					offlineWrites: {
+						pending: 2,
+						quarantined: false,
+						head: {
+							queued_operation_id: "op-1",
+							sequence: 4,
+							operation_kind: "table_upsert",
+							state: "conflict",
+							created_at: 1,
+							attempts: 1,
+						} as never,
+					},
+				},
+			],
+		};
+		expect(view("app_field_notes", { devices }).services[0].rank).toBe(1);
+	});
+
 	test("a staged rollout marks the cell and ranks the service as updating", () => {
 		const devices = sampleDevices();
 		devices[0] = {
@@ -480,11 +557,7 @@ describe("By event matrix (APP §2.10)", () => {
 			devices,
 			focus: ["studio-mac-mini"],
 		});
-		expect(result.events.cols).toEqual([
-			"cold-storage-nas",
-			"lab-gpu-02",
-			"studio-mac-mini",
-		]);
+		expect(result.events.cols).toEqual(["lab-gpu-02", "studio-mac-mini"]);
 		expect(result.events.rows[0].cells["lab-gpu-02"]?.state).toBe("no_access");
 		expect(result.events.rows[0].cells["studio-mac-mini"]).toMatchObject({
 			state: "not_served",

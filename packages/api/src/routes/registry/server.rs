@@ -17,6 +17,7 @@ use crate::entity::{
     wasm_package_version,
 };
 use flow_like::a2ui::micro_widget::{PackageWidgetRef, PackageWidgetSource};
+use flow_like::state::FlowLikeState;
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::ObjectStoreExt;
 use flow_like_storage::object_store::PutPayload;
@@ -48,6 +49,146 @@ pub const WASM_COMPILED_PATH: &str = "wasm-compiled";
 pub const WIDGET_BUNDLES_PATH: &str = "widget-bundles";
 /// CDN path prefix for unpacked widget bundle entries
 pub const WIDGET_ASSETS_PATH: &str = "widget-assets";
+
+const CHECKSUM_CACHE_NAMESPACE: &str = "compiled-wasm-checksums-v1";
+
+async fn compiled_checksum(
+    store: &dyn flow_like_storage::object_store::ObjectStore,
+    path: &Path,
+    cache: &crate::cache::CacheBackendHandle,
+    identity: Option<(&str, &str)>,
+) -> flow_like_types::Result<String> {
+    // Only new, generation-scoped artifacts are reusable. Legacy paths can be
+    // overwritten by an older compiler and keep their authoritative GET.
+    let key = identity.map(|(generation, scope)| {
+        blake3::hash(
+            serde_json::json!([scope, generation, path.as_ref()])
+                .to_string()
+                .as_bytes(),
+        )
+        .to_hex()
+        .to_string()
+    });
+    if let Some(key) = &key
+        && let Some(checksum) =
+            crate::cache::best_effort::get::<String>(cache, CHECKSUM_CACHE_NAMESPACE, key).await
+        && valid_compiled_checksum(&checksum)
+    {
+        return Ok(checksum);
+    }
+    let bytes = store.get(path).await?.bytes().await?;
+    let checksum = std::str::from_utf8(&bytes)?.trim().to_owned();
+    if !valid_compiled_checksum(&checksum) {
+        return Err(flow_like_types::anyhow!(
+            "invalid compiled WASM blake3 checksum"
+        ));
+    }
+    if let Some(key) = &key {
+        crate::cache::best_effort::set(
+            cache,
+            CHECKSUM_CACHE_NAMESPACE,
+            key,
+            &checksum,
+            Duration::from_secs(7 * 24 * 60 * 60),
+        )
+        .await;
+    }
+    Ok(checksum)
+}
+
+fn valid_compiled_checksum(checksum: &str) -> bool {
+    checksum.len() == 64 && checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod checksum_cache_tests {
+    use super::*;
+    use flow_like_storage::object_store::{ObjectStore, memory::InMemory};
+
+    #[flow_like_types::tokio::test]
+    async fn generations_share_checksums_and_isolate_recompiles_and_stores() {
+        let store = InMemory::new();
+        let cache = crate::cache::CacheBackendHandle::memory_for_test();
+        let first = Path::from("wasm-compiled/p/1/generations/first/linux.cwasm.b3");
+        let second = Path::from("wasm-compiled/p/1/generations/second/linux.cwasm.b3");
+        store
+            .put(&first, "a".repeat(64).into_bytes().into())
+            .await
+            .unwrap();
+        store
+            .put(&second, "b".repeat(64).into_bytes().into())
+            .await
+            .unwrap();
+        assert_eq!(
+            compiled_checksum(&store, &first, &cache, Some(("first", "store-a")))
+                .await
+                .unwrap(),
+            "a".repeat(64)
+        );
+        store.delete(&first).await.unwrap();
+        // The cached checksum needs no second object read for this generation.
+        assert_eq!(
+            compiled_checksum(&store, &first, &cache, Some(("first", "store-a")))
+                .await
+                .unwrap(),
+            "a".repeat(64)
+        );
+        assert!(
+            compiled_checksum(&store, &first, &cache, Some(("first", "store-b")))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            compiled_checksum(&store, &second, &cache, Some(("second", "store-a")))
+                .await
+                .unwrap(),
+            "b".repeat(64)
+        );
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn legacy_paths_remain_fresh_and_invalid_checksums_are_not_cached() {
+        let store = InMemory::new();
+        let cache = crate::cache::CacheBackendHandle::memory_for_test();
+        let path = Path::from("legacy.cwasm.b3");
+        store
+            .put(&path, "a".repeat(64).into_bytes().into())
+            .await
+            .unwrap();
+        assert_eq!(
+            compiled_checksum(&store, &path, &cache, None)
+                .await
+                .unwrap(),
+            "a".repeat(64)
+        );
+        store
+            .put(&path, "b".repeat(64).into_bytes().into())
+            .await
+            .unwrap();
+        assert_eq!(
+            compiled_checksum(&store, &path, &cache, None)
+                .await
+                .unwrap(),
+            "b".repeat(64)
+        );
+        store.put(&path, b"invalid".to_vec().into()).await.unwrap();
+        assert!(
+            compiled_checksum(&store, &path, &cache, Some(("generation", "scope")))
+                .await
+                .is_err()
+        );
+        store
+            .put(&path, "c".repeat(64).into_bytes().into())
+            .await
+            .unwrap();
+        assert_eq!(
+            compiled_checksum(&store, &path, &cache, Some(("generation", "scope")))
+                .await
+                .unwrap(),
+            "c".repeat(64)
+        );
+    }
+}
 
 /// Whether a (server-built) manifest ships a WASM node artifact.
 /// Widgets-only packages declare widgets but carry no (or an empty) wasm path/hash.
@@ -770,8 +911,8 @@ impl ServerRegistry {
         Ok(url.to_string())
     }
 
-    /// Generate a presigned GET URL for a compiled `.cwasm` artifact and read
-    /// its blake3 checksum directly from storage.
+    /// Generate a presigned GET URL for a compiled `.cwasm` artifact and resolve
+    /// its blake3 checksum. Published generations can reuse a cached checksum.
     ///
     /// Returns `(cwasm_url, cwasm_checksum)`.
     ///
@@ -783,30 +924,30 @@ impl ServerRegistry {
         package_id: &str,
         version: &str,
         target_platform: &str,
+        generation: Option<&str>,
+        cache: &crate::cache::CacheBackendHandle,
+        storage_scope: Option<&str>,
     ) -> flow_like_types::Result<(String, String)> {
         let target_platform = normalize_target_platform_key(target_platform);
-        let base = Path::from(WASM_COMPILED_PATH)
-            .join(package_id)
-            .join(version);
-
-        let cwasm_path = base.clone().join(format!("{}.cwasm", target_platform));
-        let checksum_path = base.join(format!("{}.cwasm.b3", target_platform));
+        let (cwasm_path, checksum_path) = crate::compilation::dispatch::compiled_artifact_paths(
+            package_id,
+            version,
+            &target_platform,
+            generation,
+        );
 
         let cwasm_url = self
             .meta_bucket
             .sign("GET", &cwasm_path, Duration::from_secs(3600))
             .await?;
 
-        let checksum_bytes = self
-            .meta_bucket
-            .as_generic()
-            .get(&checksum_path)
-            .await?
-            .bytes()
-            .await?;
-        let cwasm_checksum = String::from_utf8(checksum_bytes.to_vec())
-            .map(|s| s.trim().to_string())
-            .map_err(|e| flow_like_types::anyhow!("invalid checksum encoding: {}", e))?;
+        let cwasm_checksum = compiled_checksum(
+            self.meta_bucket.as_generic().as_ref(),
+            &checksum_path,
+            cache,
+            generation.zip(storage_scope),
+        )
+        .await?;
 
         Ok((cwasm_url.to_string(), cwasm_checksum))
     }
@@ -1407,6 +1548,7 @@ impl ServerRegistry {
             rating_count: pkg.rating_count,
             rating_sum: pkg.rating_sum,
             current_user_permission: None,
+            pinned_version: None,
         })
     }
 
@@ -1833,7 +1975,8 @@ impl ServerRegistry {
     ///
     /// The last element tells whether the resolved version ships a widget
     /// bundle; it is `None` when that version is not among the viewer's listed
-    /// versions.
+    /// versions. The whole answer is `None` when the viewer asked for a
+    /// version that is not listed for them.
     ///
     /// The caller is responsible for enforcing access control and deciding
     /// whether non-active packages should be reachable for the provided viewer.
@@ -1842,14 +1985,15 @@ impl ServerRegistry {
         pkg: wasm_package::Model,
         version: Option<&str>,
         viewer_can_manage: bool,
-    ) -> flow_like_types::Result<(Option<String>, PackageManifest, String, Option<bool>)> {
+    ) -> flow_like_types::Result<Option<(Option<String>, PackageManifest, String, Option<bool>)>>
+    {
         let mut entry = self.entry_for_viewer(pkg, viewer_can_manage).await?;
 
         let version_str = if let Some(v) = version {
-            entry
-                .get_version(v)
-                .map(|v| v.version.clone())
-                .ok_or_else(|| flow_like_types::anyhow!("Version not found: {}", v))?
+            let Some(listed) = entry.get_version(v) else {
+                return Ok(None);
+            };
+            listed.version.clone()
         } else {
             entry
                 .latest_version()
@@ -1868,7 +2012,12 @@ impl ServerRegistry {
             .get_version(&version_str)
             .map(|listed| listed.widget_bundle_hash.is_some());
 
-        Ok((download_url, entry.manifest, version_str, has_widget_bundle))
+        Ok(Some((
+            download_url,
+            entry.manifest,
+            version_str,
+            has_widget_bundle,
+        )))
     }
 
     /// Download package WASM binary directly (for backward compatibility)
@@ -2198,6 +2347,7 @@ impl ServerRegistry {
                 WasmCompilationStatus::Compiled
             }),
             compiled_platforms: Set(Some(Default::default())),
+            compiled_artifact_generation: Set(None),
             supported_wasmtime_versions: Set(Some(Default::default())),
             compilation_error: Set(None),
             duplicate_of_package_id: Set(dup_pkg_id),
@@ -2888,39 +3038,72 @@ fn package_widget_refs_from_version(
     Ok(widget_refs)
 }
 
-#[flow_like_types::async_trait]
-impl PackageWidgetSource for ServerRegistry {
-    async fn list_widgets(
+/// Bundle hash and stored widget list of a package version.
+type StoredWidgets = (Option<String>, serde_json::Value);
+
+/// The widget columns of exactly these pins (`package_id -> version`), in the
+/// order [`ServerRegistry::stored_widgets`] reads them. Nothing else of a
+/// version row is selected: it also holds every node definition of the
+/// version, and a board update asks once per widget node it re-derives.
+fn stored_widgets_select(
+    packages: &std::collections::HashMap<String, String>,
+) -> sea_orm::Select<wasm_package_version::Entity> {
+    let mut pinned = sea_orm::Condition::any();
+    for (package_id, version) in packages {
+        pinned = pinned.add(
+            sea_orm::Condition::all()
+                .add(wasm_package_version::Column::PackageId.eq(package_id))
+                .add(wasm_package_version::Column::Version.eq(version)),
+        );
+    }
+
+    wasm_package_version::Entity::find()
+        .filter(pinned)
+        .select_only()
+        .columns([
+            wasm_package_version::Column::PackageId,
+            wasm_package_version::Column::Version,
+            wasm_package_version::Column::WidgetBundleHash,
+            wasm_package_version::Column::Widgets,
+        ])
+}
+
+impl ServerRegistry {
+    /// What each of these pins stores about its widgets, by pin.
+    async fn stored_widgets(
         &self,
         packages: &std::collections::HashMap<String, String>,
-    ) -> flow_like_types::Result<Vec<PackageWidgetRef>> {
+    ) -> Result<std::collections::HashMap<(String, String), StoredWidgets>, sea_orm::DbErr> {
+        Ok(stored_widgets_select(packages)
+            .into_tuple::<(String, String, Option<String>, serde_json::Value)>()
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(|(package_id, version, bundle_hash, widgets)| {
+                ((package_id, version), (bundle_hash, widgets))
+            })
+            .collect())
+    }
+
+    /// Widget entries of exactly these pins (`package_id -> version`). A pin
+    /// whose version row or widget list cannot be read is skipped, so one
+    /// broken package does not take the widgets of the others with it. Only
+    /// the database can fail this, and the error stays typed so a route
+    /// answers a lost connection as such.
+    pub async fn pinned_widgets(
+        &self,
+        packages: &std::collections::HashMap<String, String>,
+    ) -> Result<Vec<PackageWidgetRef>, sea_orm::DbErr> {
         if packages.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut pinned = sea_orm::Condition::any();
-        for (package_id, version) in packages {
-            pinned = pinned.add(
-                sea_orm::Condition::all()
-                    .add(wasm_package_version::Column::PackageId.eq(package_id))
-                    .add(wasm_package_version::Column::Version.eq(version)),
-            );
-        }
-
-        let mut versions_by_pin: std::collections::HashMap<
-            (String, String),
-            wasm_package_version::Model,
-        > = wasm_package_version::Entity::find()
-            .filter(pinned)
-            .all(&self.db)
-            .await?
-            .into_iter()
-            .map(|record| ((record.package_id.clone(), record.version.clone()), record))
-            .collect();
+        let mut versions_by_pin = self.stored_widgets(packages).await?;
 
         let mut widgets = Vec::new();
         for (package_id, version) in packages {
-            let Some(record) = versions_by_pin.remove(&(package_id.clone(), version.clone()))
+            let Some((bundle_hash, stored)) =
+                versions_by_pin.remove(&(package_id.clone(), version.clone()))
             else {
                 tracing::warn!(
                     package_id,
@@ -2933,8 +3116,8 @@ impl PackageWidgetSource for ServerRegistry {
             match package_widget_refs_from_version(
                 package_id,
                 version,
-                record.widget_bundle_hash.as_deref(),
-                record.widgets,
+                bundle_hash.as_deref(),
+                stored,
             ) {
                 Ok(package_widgets) => widgets.extend(package_widgets),
                 Err(error) => tracing::warn!(
@@ -2954,6 +3137,29 @@ impl PackageWidgetSource for ServerRegistry {
         });
 
         Ok(widgets)
+    }
+
+    /// Widget entries of the packages `app_id` pins. The hub keeps a project's
+    /// pins in its database; its copy of the app manifest is not kept in step.
+    /// A pin whose licence expired no longer lists its widgets.
+    pub async fn app_widgets(&self, app_id: &str) -> Result<Vec<PackageWidgetRef>, sea_orm::DbErr> {
+        let pins = crate::package_license::usable_app_pins(&self.db, app_id).await?;
+        let packages: std::collections::HashMap<String, String> = pins
+            .into_iter()
+            .map(|pin| (pin.package_id, pin.version))
+            .collect();
+        self.pinned_widgets(&packages).await
+    }
+}
+
+#[flow_like_types::async_trait]
+impl PackageWidgetSource for ServerRegistry {
+    async fn list_widgets(
+        &self,
+        app_id: &str,
+        _state: Arc<FlowLikeState>,
+    ) -> flow_like_types::Result<Vec<PackageWidgetRef>> {
+        Ok(self.app_widgets(app_id).await?)
     }
 }
 
@@ -3080,6 +3286,155 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("com.example.widgets"));
         assert!(message.contains("1.2.3"));
+    }
+
+    #[test]
+    fn the_widget_columns_of_a_pin_are_selected_in_the_order_they_are_read() {
+        let pin =
+            std::collections::HashMap::from([("com.example.w".to_string(), "1.0.0".to_string())]);
+        let sql = stored_widgets_select(&pin)
+            .build(sea_orm::DatabaseBackend::Postgres)
+            .to_string();
+
+        assert_eq!(
+            sql,
+            r#"SELECT "WasmPackageVersion"."packageId", "WasmPackageVersion"."version", "WasmPackageVersion"."widgetBundleHash", "WasmPackageVersion"."widgets" FROM "public"."WasmPackageVersion" WHERE "WasmPackageVersion"."packageId" = 'com.example.w' AND "WasmPackageVersion"."version" = '1.0.0'"#
+        );
+    }
+
+    #[test]
+    fn several_pins_are_matched_one_or_the_other_each_with_its_own_version() {
+        let pin = |package: &str, version: &str| {
+            format!(
+                r#"("WasmPackageVersion"."packageId" = '{package}' AND "WasmPackageVersion"."version" = '{version}')"#
+            )
+        };
+        let pins = std::collections::HashMap::from([
+            ("com.example.a".to_string(), "1.0.0".to_string()),
+            ("com.example.b".to_string(), "2.0.0".to_string()),
+        ]);
+        let sql = stored_widgets_select(&pins)
+            .build(sea_orm::DatabaseBackend::Postgres)
+            .to_string();
+
+        // A map has no order, so either pin may come first.
+        let (_, filter) = sql.split_once(" WHERE ").expect("the query is filtered");
+        let (a, b) = (pin("com.example.a", "1.0.0"), pin("com.example.b", "2.0.0"));
+        assert!(
+            filter == format!("{a} OR {b}") || filter == format!("{b} OR {a}"),
+            "{filter}"
+        );
+    }
+
+    fn listed_packages(widgets: &[PackageWidgetRef]) -> Vec<&str> {
+        widgets
+            .iter()
+            .map(|widget| widget.package_id.as_str())
+            .collect()
+    }
+
+    fn kpi_card() -> serde_json::Value {
+        serde_json::json!({
+            "id": "kpi-card",
+            "name": "KPI Card",
+            "description": "Shows one metric",
+            "contract": {
+                "id": "kpi-card",
+                "inputs": { "title": { "type": "string", "default": "Hello" } },
+                "futureContractField": true
+            }
+        })
+    }
+
+    /// `pw-active` is pinned at 1.0.0 while 2.0.0 ships another widget and
+    /// `pw-missing` at a version without a row; the other pins of `pw-app`
+    /// differ in the state of their licence only.
+    async fn seed_widget_pins(db: &DatabaseConnection, pinned: &serde_json::Value) {
+        use crate::package_license::GRACE_DAYS;
+        use sea_orm::ConnectionTrait;
+        let other = serde_json::json!({
+            "id": "trend-chart",
+            "name": "Trend Chart",
+            "contract": { "id": "trend-chart" }
+        });
+        let (expired, in_grace) = (GRACE_DAYS + 1, GRACE_DAYS - 1);
+        db.execute_unprepared(&format!(r#"
+DELETE FROM "AppPackage" WHERE id LIKE 'pw-%';
+DELETE FROM "WasmPackageVersion" WHERE id LIKE 'pw-%';
+DELETE FROM "WasmPackage" WHERE id LIKE 'pw-%';
+DELETE FROM "App" WHERE id LIKE 'pw-%';
+INSERT INTO "App" (id,"updatedAt") VALUES ('pw-app',now()),('pw-other-app',now()),('pw-empty-app',now());
+INSERT INTO "WasmPackage" (id,name,description,version,"wasmPath","wasmHash","wasmSize",nodes,permissions,visibility,status,price,"updatedAt") VALUES
+ ('pw-active','Active','','2.0.0','p','h',1,'[]','{{}}','PRIVATE','ACTIVE',0,now()),
+ ('pw-expired','Expired','','1.0.0','p','h',1,'[]','{{}}','PRIVATE','ACTIVE',0,now()),
+ ('pw-grace','Grace','','1.0.0','p','h',1,'[]','{{}}','PRIVATE','ACTIVE',0,now()),
+ ('pw-reconciling','Reconciling','','1.0.0','p','h',1,'[]','{{}}','PRIVATE','ACTIVE',0,now()),
+ ('pw-foreign','Foreign','','1.0.0','p','h',1,'[]','{{}}','PRIVATE','ACTIVE',0,now()),
+ ('pw-missing','Missing','','1.0.0','p','h',1,'[]','{{}}','PRIVATE','ACTIVE',0,now());
+INSERT INTO "WasmPackageVersion" (id,"packageId",version,"wasmPath","wasmHash","wasmSize","widgetBundleHash",widgets) VALUES
+ ('pw-v-active-1','pw-active','1.0.0','p','h',1,'pw-hash-1','[{pinned}]'),
+ ('pw-v-active-2','pw-active','2.0.0','p','h',1,'pw-hash-2','[{other}]'),
+ ('pw-v-expired','pw-expired','1.0.0','p','h',1,'pw-hash-other','[{other}]'),
+ ('pw-v-grace','pw-grace','1.0.0','p','h',1,'pw-hash-other','[{other}]'),
+ ('pw-v-reconciling','pw-reconciling','1.0.0','p','h',1,'pw-hash-other','[{other}]'),
+ ('pw-v-foreign','pw-foreign','1.0.0','p','h',1,'pw-hash-other','[{other}]'),
+ ('pw-v-missing','pw-missing','1.0.0','p','h',1,'pw-hash-other','[{other}]');
+INSERT INTO "AppPackage" (id,"appId","packageId",version,stale,"staleSince") VALUES
+ ('pw-pin-active','pw-app','pw-active','1.0.0',false,NULL),
+ ('pw-pin-expired','pw-app','pw-expired','1.0.0',true,now()-interval '{expired} days'),
+ ('pw-pin-grace','pw-app','pw-grace','1.0.0',true,now()-interval '{in_grace} days'),
+ ('pw-pin-reconciling','pw-app','pw-reconciling','1.0.0',true,NULL),
+ ('pw-pin-missing','pw-app','pw-missing','9.9.9',false,NULL),
+ ('pw-pin-foreign','pw-other-app','pw-foreign','1.0.0',false,NULL);
+"#)).await.expect("database must carry the full schema");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires PACKAGE_LICENSE_TEST_DATABASE_URL pointing at a database with the full PostgreSQL schema"]
+    async fn an_app_lists_the_widgets_of_its_usable_pins_against_a_real_schema() {
+        use flow_like::{state::FlowLikeConfig, utils::http::HTTPClient};
+        use flow_like_storage::object_store::memory::InMemory;
+        let url = std::env::var("PACKAGE_LICENSE_TEST_DATABASE_URL")
+            .expect("PACKAGE_LICENSE_TEST_DATABASE_URL must point at a disposable database");
+        let db = sea_orm::Database::connect(url).await.unwrap();
+        let pinned = kpi_card();
+        seed_widget_pins(&db, &pinned).await;
+
+        let store = Arc::new(FlowLikeStore::Memory(Arc::new(InMemory::new())));
+        let registry = ServerRegistry::new(db, store.clone(), store);
+
+        let listed = registry.app_widgets("pw-app").await.unwrap();
+        assert_eq!(
+            listed_packages(&listed),
+            ["pw-active", "pw-grace", "pw-reconciling"]
+        );
+        let active = &listed[0];
+        assert_eq!(active.package_version, "1.0.0");
+        assert_eq!(active.widget_id, "kpi-card");
+        assert_eq!(active.name, "KPI Card");
+        assert_eq!(active.description, "Shows one metric");
+        assert_eq!(active.bundle_hash.as_deref(), Some("pw-hash-1"));
+        assert_eq!(active.contract, pinned["contract"]);
+
+        let foreign = registry.app_widgets("pw-other-app").await.unwrap();
+        assert_eq!(listed_packages(&foreign), ["pw-foreign"]);
+        for app_id in ["pw-empty-app", "pw-unknown-app"] {
+            assert!(
+                registry.app_widgets(app_id).await.unwrap().is_empty(),
+                "{app_id}"
+            );
+        }
+
+        // A state without stores cannot load an app manifest: the hub answers
+        // the trait from its database alone.
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let through_trait = PackageWidgetSource::list_widgets(&registry, "pw-app", state)
+            .await
+            .unwrap();
+        assert_eq!(listed_packages(&through_trait), listed_packages(&listed));
     }
 
     #[test]

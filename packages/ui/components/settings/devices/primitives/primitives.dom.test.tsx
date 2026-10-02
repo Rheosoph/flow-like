@@ -339,6 +339,38 @@ describe("freshness stamp", () => {
 		]);
 	});
 
+	test("an observation ahead of the area clock (device clock skew) reads as now, never as a time to come", async () => {
+		const { container } = await dom.render(
+			<At>
+				<stamp.FreshnessStamp
+					source="snap"
+					age="current"
+					observedAt={NOW_S + 40}
+					skewSec={40}
+				/>
+				<stamp.FreshnessStamp source="live" age="live" observedAt={NOW_S + 5} />
+			</At>,
+		);
+		const texts = Array.from(
+			container.querySelectorAll("[data-stamp] [data-glyph] + span"),
+			(el) => el.textContent,
+		);
+		expect(texts).toEqual(["Current · now", "read now · every 15 s"]);
+		const title = container
+			.querySelector("[data-stamp]")
+			?.getAttribute("title");
+		expect(title).toContain("The device clock differs from the hub by 40 s.");
+	});
+
+	test("a check-in a moment ahead of the area clock reads as now", async () => {
+		const { container } = await dom.render(
+			<At>
+				<chips.PresenceChip kind="online" since={NOW_S + 2} short />
+			</At>,
+		);
+		expect(container.textContent).toBe("Online · now");
+	});
+
 	test("baseSource and sameSource pick and compare row stamps", () => {
 		const hub = { source: "hub", age: "current" } as const;
 		const live = { source: "live", age: "live" } as const;
@@ -674,6 +706,46 @@ describe("confirm", () => {
 		await unmount();
 		await settle();
 		expect(second).toEqual([{ ok: false }]);
+	});
+
+	test("a sheet a screen opens itself starts clean every time it opens", async () => {
+		const options: ConfirmOptions = {
+			title: "Remove support-bot?",
+			rows: BASE_ROWS,
+			strength: "typed",
+			typed: "support-bot",
+			confirmLabel: "Remove support-bot",
+			onConfirm: async () => {},
+		};
+		const resolved: ConfirmResult[] = [];
+		const view = (open: boolean) => (
+			<confirm.ConfirmSheet
+				open={open}
+				options={options}
+				onResolve={(result) => resolved.push(result)}
+			/>
+		);
+		const mounted = await dom.render(view(true));
+		await settle();
+		const first = inPortal("alertdialog");
+		await typeInto(
+			byRole("textbox", "Type support-bot to confirm", first),
+			"support-bot",
+		);
+		await click(byRole("button", "Remove support-bot", first));
+		await settle();
+		expect(resolved).toHaveLength(1);
+		await mounted.rerender(view(false));
+		await settle();
+		expect(queryByRole("alertdialog")).toBeNull();
+		await mounted.rerender(view(true));
+		await settle();
+		const second = inPortal("alertdialog");
+		const input = byRole("textbox", "Type support-bot to confirm", second);
+		const button = byRole("button", "Remove support-bot", second);
+		expect((input as HTMLInputElement).value).toBe("");
+		expect(button.getAttribute("aria-busy")).toBeNull();
+		expect(button.getAttribute("aria-disabled")).toBe("true");
 	});
 });
 
@@ -1055,6 +1127,38 @@ describe("form fields", () => {
 		);
 	});
 
+	test("a label with inline markup stays one sentence, not a row of flex pieces", async () => {
+		const { container } = await dom.render(
+			<>
+				<forms.Field
+					id="f-typed"
+					label={
+						<>
+							Type <b>edge-berlin-01</b> to confirm
+						</>
+					}
+				>
+					<forms.DvInput />
+				</forms.Field>
+				<forms.CheckField id="f-ack" checked={false} onCheckedChange={() => {}}>
+					I saved the backup for <b>edge-berlin-01</b>
+				</forms.CheckField>
+				<forms.SwitchField id="f-sw" checked onCheckedChange={() => {}}>
+					Back up <b>edge-berlin-01</b> to my account
+				</forms.SwitchField>
+			</>,
+		);
+		const labels = Array.from(container.querySelectorAll("label"));
+		expect(labels).toHaveLength(3);
+		for (const label of labels) {
+			expect(label.childNodes).toHaveLength(1);
+			expect(label.firstElementChild?.querySelector("b")?.textContent).toBe(
+				"edge-berlin-01",
+			);
+		}
+		expect(byRole("textbox", "Type edge-berlin-01 to confirm")).toBeDefined();
+	});
+
 	test("secret input: show/hide and a UTF-8 byte count", async () => {
 		const values: string[] = [];
 		const { rerender } = await dom.render(
@@ -1087,9 +1191,11 @@ describe("form fields", () => {
 		expect(count?.className).toContain("text-critical");
 		await click(byRole("button", "Show password"));
 		expect(input.type).toBe("text");
-		expect(byRole("button", "Hide password").getAttribute("aria-pressed")).toBe(
-			"true",
-		);
+		const hide = byRole("button", "Hide password");
+		expect(hide.hasAttribute("aria-pressed")).toBe(false);
+		await click(hide);
+		expect(input.type).toBe("password");
+		expect(byRole("button", "Show password")).toBeDefined();
 	});
 
 	test("list editor adds and removes rows; choice cards and checks pick values", async () => {
@@ -1230,6 +1336,33 @@ describe("enum labels", () => {
 			"Both are end-to-end encrypted.",
 		);
 		expect(labels.enumLabel(t, "preset", "device_admin")).toBe("Device admin");
+	});
+
+	test("a family's labels are built once per t; labels with params are always rebuilt", () => {
+		let calls = 0;
+		const translate = t as unknown as (...args: unknown[]) => string;
+		const counting = ((key: string, fallback: string, params?: object) => {
+			calls += 1;
+			return translate(key, fallback, params);
+		}) as unknown as DevicesT;
+		expect(labels.enumLabel(counting, "capability", "status")).toBe(
+			"View status",
+		);
+		const built = calls;
+		expect(built).toBeGreaterThan(0);
+		expect(labels.enumLabel(counting, "capability", "logs")).toBe("Read logs");
+		labels.enumExplain(counting, "capability", "deploy");
+		expect(calls).toBe(built);
+		expect(labels.enumTable(counting, "capability")).toBe(
+			labels.enumTable(counting, "capability"),
+		);
+		expect(
+			labels.enumLabel(counting, "backup", "in_sync", { revision: 3 }),
+		).toBe("Backed up (v3)");
+		expect(
+			labels.enumLabel(counting, "backup", "in_sync", { revision: 4 }),
+		).toBe("Backed up (v4)");
+		expect(labels.enumLabel(t, "capability", "status")).toBe("View status");
 	});
 
 	test("a wire value this client doesn't know reads Unknown instead of throwing (R3)", () => {

@@ -62,6 +62,8 @@ async fn authoritative_enrollment_and_replay() {
     let db = Database::connect(options).await.unwrap();
     for statement in [
         include_str!("../../../prisma/migrations/20260921120000_standalone_devices/migration.sql"),
+        include_str!("../../../prisma/migrations/20260921140000_instance_resources/migration.sql"),
+        include_str!("../../../prisma/migrations/20260922120000_device_management/migration.sql"),
         include_str!("../../../prisma/migrations/20261001120000_device_console/migration.sql"),
     ]
     .into_iter()
@@ -226,10 +228,29 @@ async fn authoritative_enrollment_and_replay() {
     ))
     .await
     .unwrap();
-    let inventory = repository.list("owner").await.unwrap();
+    crate::backend_jwt::init_for_tests();
+    let policy = flow_like::hub::StandaloneConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    let context = super::super::DeviceContext {
+        db: &db,
+        dialect: DbDialect::Postgres,
+        config: &policy,
+        domain: "api.example",
+        secure: true,
+    };
+    let inventory = super::super::view::list(&context, "owner").await.unwrap();
     assert_eq!(inventory.len(), 1000);
     assert_eq!(inventory[0].device_id, manifest.device_id);
     assert_eq!(inventory[0].status, DeviceRegistrationStatus::Active);
+    assert_eq!(
+        super::super::view::visible_devices(&context, "owner")
+            .await
+            .unwrap()
+            .len(),
+        1000
+    );
 
     // Replay protection is in the database shared by all API replicas.
     let uses = join_all((0..8).map(|_| {
@@ -318,10 +339,39 @@ async fn authoritative_enrollment_and_replay() {
             .status(),
         axum::http::StatusCode::NOT_FOUND
     );
+    let revoked_at = || async {
+        db.query_one_raw(sql(
+            r#"SELECT "revokedAt" FROM "ManagedDevice" WHERE id = $1"#,
+            [manifest.device_id.clone().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<Option<i64>>("", "revokedAt")
+        .unwrap()
+    };
+    assert_eq!(revoked_at().await, None);
     repository
         .revoke("owner", &manifest.device_id)
         .await
         .unwrap();
+    assert!(revoked_at().await.is_some_and(|at| at >= now));
+    // A repeated revocation finds nothing to revoke and keeps the recorded time.
+    db.execute_raw(sql(
+        r#"UPDATE "ManagedDevice" SET "revokedAt" = 1 WHERE id = $1"#,
+        [manifest.device_id.clone().into()],
+    ))
+    .await
+    .unwrap();
+    assert_eq!(
+        repository
+            .revoke("owner", &manifest.device_id)
+            .await
+            .unwrap_err()
+            .status(),
+        axum::http::StatusCode::NOT_FOUND
+    );
+    assert_eq!(revoked_at().await, Some(1));
     assert!(
         repository
             .authorize_proof(
@@ -475,6 +525,17 @@ async fn authoritative_enrollment_and_replay() {
             .public_message()
             .is_some_and(|message| message.contains("4 per day"))
     );
+    // The usage view reads these counts, so it shows the allowance as spent.
+    assert_eq!(
+        enrollment_counts(&db, "churn", chrono::Utc::now().timestamp())
+            .await
+            .unwrap(),
+        EnrollmentCounts {
+            pending: 0,
+            active_devices: 0,
+            last_day: daily_enrollment_limit(1, 1),
+        }
+    );
     let lapsed = now - ABANDONED_ENROLLMENT_GRACE_SECONDS - 1;
     db.execute_raw(sql(
         r#"UPDATE "DeviceEnrollment" SET "expiresAt" = $1, "createdAt" = $1 WHERE "ownerId" = 'churn'"#,
@@ -514,6 +575,16 @@ async fn authoritative_enrollment_and_replay() {
         .create_enrollment(&template("churn"), "churn-after-prune", 1, 1)
         .await
         .unwrap();
+    assert_eq!(
+        enrollment_counts(&db, "churn", chrono::Utc::now().timestamp())
+            .await
+            .unwrap(),
+        EnrollmentCounts {
+            pending: 1,
+            active_devices: 0,
+            last_day: 1,
+        }
+    );
 
     db.execute_unprepared(r#"UPDATE "User" SET status = 'SUSPENDED' WHERE id = 'owner'"#)
         .await
@@ -531,6 +602,43 @@ async fn authoritative_enrollment_and_replay() {
         .await
         .unwrap();
     admin.close().await.unwrap();
+}
+
+#[test]
+fn a_package_is_refused_at_each_limit_the_usage_view_reports() {
+    let counts = |pending, active_devices, last_day| EnrollmentCounts {
+        pending,
+        active_devices,
+        last_day,
+    };
+    assert_eq!(daily_enrollment_limit(6, 2), 16);
+    assert!(counts(1, 4, 15).admit(6, 2).is_ok());
+    for (refused, reason) in [
+        (counts(2, 0, 2), "limit reached"),
+        (counts(1, 5, 1), "limit reached"),
+        (counts(0, 0, 16), "limited to 16 per day; 16 were created"),
+    ] {
+        let error = refused.admit(6, 2).unwrap_err();
+        assert_eq!(error.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        assert!(
+            error
+                .public_message()
+                .is_some_and(|message| message.contains(reason)),
+            "{refused:?}"
+        );
+    }
+}
+
+#[test]
+fn rejection_codes_are_stored_and_served_under_one_name() {
+    for code in [
+        AuthRejectionCode::ClockSkew,
+        AuthRejectionCode::RevokedCredential,
+    ] {
+        assert_eq!(AuthRejectionCode::parse(code.as_str()), Some(code));
+        assert_eq!(serde_json::to_value(code).unwrap(), code.as_str());
+    }
+    assert_eq!(AuthRejectionCode::parse("reason_of_a_newer_hub"), None);
 }
 
 #[test]

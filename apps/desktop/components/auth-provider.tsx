@@ -619,7 +619,10 @@ function AuthInner({ hub }: Readonly<{ hub: string }>) {
 
 			await Promise.allSettled([
 				...(signedIn
-					? [invalidateInfinite(backend.teamState.getInvites, [])]
+					? [
+							invalidateInfinite(backend.teamState.getInvites, []),
+							invalidate(backend.registryState.listMyInvitations, []),
+						]
 					: []),
 				invalidate(backend.userState.getNotifications, []),
 				invalidateInfinite(backend.userState.listNotifications, [

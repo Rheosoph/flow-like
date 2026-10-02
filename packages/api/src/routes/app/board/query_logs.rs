@@ -140,22 +140,96 @@ pub(crate) async fn open_run_log_table(
             ApiError::internal_error(anyhow!("Failed to open log database: {}", e))
         })?;
 
-    // A run row is created before its executor has emitted the first log. If
-    // setup fails (for example, because a pinned board object is missing), no
-    // per-run table is ever created. Treat that state like an empty log stream
-    // instead of turning an otherwise inspectable run into a 500 response.
-    let table_names = db.table_names().execute().await.map_err(|e| {
-        tracing::error!(error = %e, path = %base_path, "Failed to list run tables");
-        ApiError::internal_error(anyhow!("Failed to list run tables: {}", e))
-    })?;
-    if !table_names.iter().any(|name| name == run_id) {
-        tracing::debug!(run_id = %run_id, "Run has no log table yet");
-        return Ok(None);
+    open_run_log_table_in_db(&db, run_id).await
+}
+
+async fn open_run_log_table_in_db(
+    db: &flow_like_storage::lancedb::Connection,
+    run_id: &str,
+) -> Result<Option<flow_like_storage::lancedb::Table>, ApiError> {
+    // A run can exist before its first log is flushed. Open its table directly
+    // so querying one run does not list every run in the board's log database.
+    // LanceDB 0.31 unwraps name validation when deriving the table URI.
+    let result = match flow_like_storage::lancedb::utils::validate_table_name(run_id) {
+        Ok(()) => db.open_table(run_id).execute().await,
+        Err(error) => Err(error),
+    };
+    match result {
+        Ok(table) => Ok(Some(table)),
+        Err(flow_like_storage::lancedb::Error::TableNotFound { .. }) => {
+            tracing::debug!(run_id = %run_id, "Run has no log table yet");
+            Ok(None)
+        }
+        Err(error) => {
+            tracing::error!(error = %error, run_id = %run_id, "Failed to open run table");
+            Err(ApiError::internal_error(anyhow!(
+                "Failed to open run table: {}",
+                error
+            )))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::http::StatusCode;
+    use flow_like_storage::{
+        arrow_schema::{DataType, Field, Schema},
+        lancedb,
+    };
+
+    use super::open_run_log_table_in_db;
+
+    #[tokio::test]
+    async fn opens_existing_run_log_table() {
+        let db = lancedb::connect("memory://query-existing-run-logs")
+            .execute()
+            .await
+            .expect("in-memory log database");
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "message",
+            DataType::Utf8,
+            false,
+        )]));
+        db.create_empty_table("run-1", schema)
+            .execute()
+            .await
+            .expect("run log table is created");
+
+        let table = open_run_log_table_in_db(&db, "run-1")
+            .await
+            .expect("run log table opens")
+            .expect("existing table is returned");
+        assert_eq!(table.name(), "run-1");
     }
 
-    let table = db.open_table(run_id).execute().await.map_err(|e| {
-        tracing::error!(error = %e, run_id = %run_id, "Failed to open run table");
-        ApiError::internal_error(anyhow!("Failed to open run table: {}", e))
-    })?;
-    Ok(Some(table))
+    #[tokio::test]
+    async fn missing_run_log_table_is_an_empty_log_stream() {
+        let db = lancedb::connect("memory://query-missing-run-logs")
+            .execute()
+            .await
+            .expect("in-memory log database");
+
+        assert!(
+            open_run_log_table_in_db(&db, "run-without-logs")
+                .await
+                .expect("missing logs are allowed")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_table_errors_are_not_treated_as_missing_logs() {
+        let db = lancedb::connect("memory://query-invalid-run-logs")
+            .execute()
+            .await
+            .expect("in-memory log database");
+
+        let error = open_run_log_table_in_db(&db, "invalid/run")
+            .await
+            .expect_err("invalid table names must not look like missing logs");
+        assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

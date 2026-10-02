@@ -2,7 +2,7 @@
 
 import { Trans, useTranslation } from "@flow-like/locales";
 import { CircleDashed } from "lucide-react";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { cx } from "./tone";
 
 export interface CoverageLineProps {
@@ -63,21 +63,26 @@ export function CoverageLine({
 				className,
 			)}
 		>
-			<CircleDashed aria-hidden className="size-4 text-muted-foreground" />
-			<span>
-				<Trans
-					t={t}
-					i18nKey="view.coverage.text"
-					defaults="Status from <1>{{readable, number}} of {{total, number}}</1> devices you can see"
-					values={{ readable, total }}
-					components={{ 1: <b className="font-semibold text-foreground" /> }}
+			<span className="flex max-w-full min-w-0 items-start gap-2.5">
+				<CircleDashed
+					aria-hidden
+					className="mt-px size-4 shrink-0 text-muted-foreground"
 				/>
-			</span>
-			{tail.map((part) => (
-				<span key={part} className="-ml-1">
-					{part}
+				<span className="min-w-0">
+					<Trans
+						t={t}
+						i18nKey="view.coverage.text"
+						defaults="Status from <1>{{readable, number}} of {{total, number}}</1> devices you can see"
+						values={{ readable, total }}
+						components={{
+							1: <b className="font-semibold text-foreground" />,
+						}}
+					/>
+					{tail.map((part) => (
+						<Fragment key={part}> {part}</Fragment>
+					))}
 				</span>
-			))}
+			</span>
 			<span
 				role="img"
 				aria-label={bar}

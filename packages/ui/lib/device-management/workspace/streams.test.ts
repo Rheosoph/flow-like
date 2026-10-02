@@ -38,6 +38,15 @@ function record(sequence: number, data: Record<string, unknown> = {}) {
 	};
 }
 
+/** One page of a log that holds lines 1 to `newest`, 100 lines after the cursor. */
+function logPage(command: Record<string, unknown>, newest: number) {
+	const after = Number(command.after);
+	const records = Array.from({ length: 100 }, (_, index) =>
+		record(after + index + 1),
+	).filter((row) => row.sequence <= newest);
+	return completed({ records, next: records.at(-1)?.sequence ?? after });
+}
+
 class FakeLive {
 	nowMs = 1_700_000_000_000;
 	states = new Map<string, LiveState>();
@@ -177,6 +186,11 @@ function setup(
 
 function collect<T>(states: StreamState<T>[]) {
 	return (state: StreamState<T>) => states.push(state);
+}
+
+/** Sequence numbers of the lines the newest state shows. */
+function linesOf(states: StreamState<RecordStream>[]) {
+	return (states.at(-1)?.data?.records ?? []).map((row) => row.sequence);
 }
 
 describe("polling", () => {
@@ -433,48 +447,63 @@ describe("logs and messages", () => {
 		expect(paused.at(-1)?.behind).toBe(4);
 	});
 
+	test("a viewer that pauses before the first lines arrive still gets them", async () => {
+		const { live, streams } = setup();
+		live.set(live.live());
+		let sequence = 0;
+		live.handler = () => {
+			sequence += 2;
+			return completed({
+				records: [record(sequence - 1), record(sequence)],
+				next: sequence,
+			});
+		};
+		const paused: StreamState<RecordStream>[] = [];
+		streams.subscribe(
+			DEVICE,
+			{ kind: "logs", placementId: "p", follow: false },
+			collect(paused),
+		);
+		expect(paused.at(-1)?.data).toBeUndefined();
+		await live.advance(10_000);
+		expect(paused.at(-1)?.data?.records.map((row) => row.sequence)).toEqual([
+			1, 2,
+		]);
+		expect(paused.at(-1)?.behind).toBe(4);
+	});
+
 	test("the buffer keeps the newest records and loadOlder re-reads a trimmed page", async () => {
 		const { live, streams } = setup();
 		live.set(live.live());
-		live.handler = (command) => {
-			const after = Number(command.after);
-			const records = Array.from({ length: 100 }, (_, index) =>
-				record(after + index + 1),
-			).filter((row) => row.sequence <= 650);
-			return completed({ records, next: records.at(-1)?.sequence ?? after });
-		};
+		live.handler = (command) => logPage(command, 650);
 		const states: StreamState<RecordStream>[] = [];
 		const spec = { kind: "logs", placementId: null, follow: true } as const;
 		streams.subscribe(DEVICE, spec, collect(states));
 		await live.advance(0);
-		const records = states.at(-1)?.data?.records ?? [];
-		expect(records).toHaveLength(RECORD_BUFFER);
-		expect(records[0].sequence).toBe(151);
+		expect(linesOf(states)).toHaveLength(RECORD_BUFFER);
+		expect(linesOf(states)[0]).toBe(151);
 		await streams.loadOlder(DEVICE, spec);
 		expect(live.sent.at(-1)?.command).toMatchObject({ after: 100 });
-		const older = states.at(-1)?.data?.records ?? [];
-		expect(older[0].sequence).toBe(101);
-		expect(older).toHaveLength(550);
+		expect(linesOf(states)[0]).toBe(101);
+		expect(linesOf(states)).toHaveLength(550);
 		await live.advance(5_000);
-		expect(states.at(-1)?.data?.records).toHaveLength(550);
+		expect(linesOf(states)).toHaveLength(550);
 		await streams.loadOlder(DEVICE, spec);
 		expect(live.sent.at(-1)?.command).toMatchObject({ after: 0 });
-		expect(states.at(-1)?.data?.records[0].sequence).toBe(1);
-		expect(states.at(-1)?.data?.records).toHaveLength(650);
+		expect(linesOf(states)[0]).toBe(1);
+		expect(linesOf(states)).toHaveLength(650);
 	});
 
 	test("older lines reach a paused viewer's own lines", async () => {
 		const { live, streams } = setup();
 		live.set(live.live());
 		let newest = 650;
-		live.handler = (command) => {
-			const after = Number(command.after);
-			const records = Array.from({ length: 100 }, (_, index) =>
-				record(after + index + 1),
-			).filter((row) => row.sequence <= newest);
-			return completed({ records, next: records.at(-1)?.sequence ?? after });
-		};
-		const following = { kind: "logs", placementId: null, follow: true } as const;
+		live.handler = (command) => logPage(command, newest);
+		const following = {
+			kind: "logs",
+			placementId: null,
+			follow: true,
+		} as const;
 		const paused = { ...following, follow: false } as const;
 		streams.subscribe(DEVICE, following, () => {});
 		await live.advance(0);
@@ -502,39 +531,32 @@ describe("logs and messages", () => {
 		});
 		let gated = false;
 		live.handler = async (command) => {
-			const after = Number(command.after);
-			if (gated && after === 100) await gate;
-			const records = Array.from({ length: 100 }, (_, index) =>
-				record(after + index + 1),
-			).filter((row) => row.sequence <= newest);
-			return completed({ records, next: records.at(-1)?.sequence ?? after });
+			if (gated && command.after === 100) await gate;
+			return logPage(command, newest);
 		};
 		const states: StreamState<RecordStream>[] = [];
 		const spec = { kind: "logs", placementId: null, follow: true } as const;
 		streams.subscribe(DEVICE, spec, collect(states));
 		await live.advance(0);
 		await streams.loadOlder(DEVICE, spec);
-		expect(states.at(-1)?.data?.records).toHaveLength(450);
+		expect(linesOf(states)).toHaveLength(450);
 
 		newest = 460;
 		await live.advance(5_000);
-		expect(states.at(-1)?.data?.records).toHaveLength(460);
-		expect(states.at(-1)?.data?.records[0].sequence).toBe(1);
+		expect(linesOf(states)).toHaveLength(460);
+		expect(linesOf(states)[0]).toBe(1);
 
 		newest = 620;
 		await live.advance(5_000);
-		const slid = states.at(-1)?.data?.records ?? [];
-		expect(slid).toHaveLength(RECORD_BUFFER);
-		expect(slid[0].sequence).toBe(121);
+		expect(linesOf(states)).toHaveLength(RECORD_BUFFER);
+		expect(linesOf(states)[0]).toBe(121);
 		gated = true;
 		const loading = streams.loadOlder(DEVICE, spec);
 		newest = 630;
 		await live.advance(5_000);
 		release();
 		await loading;
-		const sequences = (states.at(-1)?.data?.records ?? []).map(
-			(row) => row.sequence,
-		);
+		const sequences = linesOf(states);
 		expect(sequences.at(-1)).toBe(630);
 		expect(
 			sequences.every((value, index) => value === sequences[0] + index),
@@ -617,6 +639,41 @@ describe("connect auto-load and group metrics", () => {
 		live.set(live.live());
 		await live.advance(60_000);
 		expect(live.sent).toHaveLength(3);
+	});
+
+	test("the connect auto-load follows the session's own read, whatever the two clocks say", async () => {
+		const { live } = setup();
+		live.handler = (command) =>
+			completed({ placement_id: command.placement_id, queues: [], next: null });
+		const read = (placement: string, readAt: number) => {
+			live.inspections.set(DEVICE, {
+				value: {
+					device_id: DEVICE,
+					boot_id: "boot",
+					features: {},
+					placements: [
+						{ id: placement } as InspectionPlus["placements"][number],
+					],
+				},
+				readAt,
+			});
+			live.set(live.state(DEVICE));
+		};
+		const hubS = Math.floor(live.nowMs / 1000) - 120;
+		live.set(live.live());
+		read("a", hubS);
+		await live.advance(0);
+		expect(live.sent.map((row) => row.command.placement_id)).toEqual(["a"]);
+
+		live.set(live.live(Math.floor(live.nowMs / 1000) + 255));
+		await live.advance(0);
+		expect(live.sent).toHaveLength(1);
+		read("b", hubS + 255);
+		await live.advance(0);
+		expect(live.sent.map((row) => row.command.placement_id)).toEqual([
+			"a",
+			"b",
+		]);
 	});
 
 	test("group metrics run as an exclusive section and keep the last sample", async () => {

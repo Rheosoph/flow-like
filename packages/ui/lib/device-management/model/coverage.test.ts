@@ -23,6 +23,7 @@ function expectConsistent(result: Coverage, appId?: string) {
 	expect(result.locked.length + result.noKeys.length).toBeLessThanOrEqual(
 		result.unknown.length,
 	);
+	for (const id of result.never) expect(result.unknown).toContain(id);
 	if (appId)
 		expect(result.deployed.length + result.notDeployed.length).toBe(
 			result.readable,
@@ -63,6 +64,7 @@ describe("fleet scope (N1)", () => {
 			live: 2,
 			snapshot: 1,
 			unknown: [ID.lab, ID.cold],
+			never: [ID.cold],
 			locked: [ID.lab, ID.cold],
 			noKeys: [],
 			noAccess: [],
@@ -97,6 +99,18 @@ describe("fleet scope (N1)", () => {
 		expectConsistent(result);
 	});
 
+	test("a device you only approved cloud access for is unknown, not 'no keys here'", () => {
+		const input = sampleFleet();
+		const partner = input.devices.find((row) => row.device_id === ID.partner);
+		if (!partner) throw new Error("fixture: partner");
+		partner.status = "active";
+		partner.relationship = "cloud_approval";
+		const result = coverage(input);
+		expect(result.unknown).toContain(ID.partner);
+		expect(result.noKeys).toEqual([]);
+		expectConsistent(result);
+	});
+
 	test("unlocking a device makes it readable", () => {
 		const input = sampleFleet();
 		const lab = input.keys.find((entry) => entry.deviceId === ID.lab);
@@ -112,6 +126,23 @@ describe("fleet scope (N1)", () => {
 		expect(result.readable).toBe(4);
 		expect(result.snapshot).toBe(2);
 		expect(result.locked).toEqual([ID.cold]);
+		expectConsistent(result);
+	});
+
+	test("a device that never checked in is counted on its own, whatever its keys", () => {
+		const input = sampleFleet();
+		input.keys = input.keys.filter((entry) => entry.deviceId !== ID.cold);
+		input.local.vaults = input.local.vaults.filter(
+			(entry) => entry.deviceId !== ID.cold,
+		);
+		expect(coverage(input).never).toEqual([ID.cold]);
+		const checkedIn = sampleFleet();
+		const cold = checkedIn.devices.find((row) => row.device_id === ID.cold);
+		if (!cold) throw new Error("fixture: cold");
+		cold.last_seen_at = checkedIn.now - 30;
+		const result = coverage(checkedIn);
+		expect(result.never).toEqual([]);
+		expect(result.unknown).toEqual([ID.lab, ID.cold]);
 		expectConsistent(result);
 	});
 

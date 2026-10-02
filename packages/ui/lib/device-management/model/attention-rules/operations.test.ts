@@ -128,9 +128,9 @@ describe("tracked operations", () => {
 		noHandle.activity = noHandle.activity.map((item) =>
 			item.kind === "upload" ? { ...item, resume: undefined } : item,
 		);
-		expect(
-			evaluate("upload_paused", noHandle)[0]?.copy.params?.until,
-		).toBe(1_790_841_600);
+		expect(evaluate("upload_paused", noHandle)[0]?.copy.params?.until).toBe(
+			1_790_841_600,
+		);
 		input.activity = input.activity.map((item) => ({
 			...item,
 			dismissed: true,

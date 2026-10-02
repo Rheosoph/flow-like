@@ -12,9 +12,11 @@ import type {
 } from "../model/types";
 import { saveAccountRecovery } from "../recovery";
 import {
+	type DeviceAccountScope,
 	DeviceLockHeldError,
 	DeviceLockUnsupportedError,
 	type LocalDeviceVault,
+	accountStorageKey,
 	acquireDeviceLock,
 	assertVaultAuthority,
 	deviceApiBase,
@@ -23,7 +25,13 @@ import {
 	readDeviceVault,
 	replaceRestoredVault,
 } from "../storage";
-import type { BrowserController, DeviceCrypto, DeviceReceipt } from "../types";
+import {
+	type BrowserController,
+	type DeviceCrypto,
+	type DeviceReceipt,
+	type HeldSignerController,
+	supportsHeldSigner,
+} from "../types";
 import type {
 	ActivityTracker,
 	FleetPort,
@@ -55,11 +63,49 @@ export class KeySessionError extends Error {
 	}
 }
 
-/** The invitation key is not held in memory yet (W2-SIGNER), so owner signatures need the password. */
+/**
+ * This key session does not hold the invitation key (the user asked to be
+ * prompted again, or the crypto bundle predates it), so the signature needs
+ * the password.
+ */
 export class OwnerPasswordRequiredError extends Error {
 	constructor() {
 		super("Enter the device password to sign this access change.");
 		this.name = "OwnerPasswordRequiredError";
+	}
+}
+
+const ASK_PASSWORD_KEY = "flow-like/devices/ask-password-for-access-changes/";
+
+/** "Ask for my password again for access changes" (IA §6.4.1): per account on this computer, off by default. */
+export function readAskPasswordForAccessChanges(
+	scope: DeviceAccountScope,
+): boolean {
+	try {
+		return (
+			globalThis.localStorage?.getItem(
+				ASK_PASSWORD_KEY + accountStorageKey(scope),
+			) === "1"
+		);
+	} catch {
+		return false;
+	}
+}
+
+/** False when this browser refused to store the choice. */
+export function writeAskPasswordForAccessChanges(
+	scope: DeviceAccountScope,
+	ask: boolean,
+): boolean {
+	try {
+		const storage = globalThis.localStorage;
+		if (!storage) return false;
+		const key = ASK_PASSWORD_KEY + accountStorageKey(scope);
+		if (ask) storage.setItem(key, "1");
+		else storage.removeItem(key);
+		return true;
+	} catch {
+		return false;
 	}
 }
 
@@ -96,6 +142,8 @@ export interface KeySessionIo {
 	replaceRestoredVault: typeof replaceRestoredVault;
 	pinDeviceIdentity: typeof pinDeviceIdentity;
 	saveAccountRecovery: typeof saveAccountRecovery;
+	readAskPassword: typeof readAskPasswordForAccessChanges;
+	writeAskPassword: typeof writeAskPasswordForAccessChanges;
 	setTimer(run: () => void, ms: number): unknown;
 	clearTimer(handle: unknown): void;
 	onPageHide(listener: () => void): () => void;
@@ -108,6 +156,8 @@ const DEFAULT_IO: KeySessionIo = {
 	replaceRestoredVault,
 	pinDeviceIdentity,
 	saveAccountRecovery,
+	readAskPassword: readAskPasswordForAccessChanges,
+	writeAskPassword: writeAskPasswordForAccessChanges,
 	setTimer: (run, ms) => setTimeout(run, ms),
 	clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 	onPageHide(listener) {
@@ -120,6 +170,10 @@ const DEFAULT_IO: KeySessionIo = {
 export type KeySessionRuntime = KeySessionManager & {
 	/** Views, user calls and active operations count as use for the idle lock. */
 	touch(deviceId: string): void;
+	/** "Ask for my password again for access changes" (IA §6.4.1); off by default. */
+	askPasswordForAccessChanges(): boolean;
+	/** Turning it on drops every invitation key this window holds, at once. */
+	setAskPasswordForAccessChanges(ask: boolean): void;
 	/** Lock all and stop listening for page hide. */
 	dispose(): void;
 };
@@ -129,6 +183,8 @@ interface Session {
 	state: Exclude<KeyState, "none" | "stale">;
 	vault?: LocalDeviceVault;
 	controller?: BrowserController;
+	/** The controller holds the owner's invitation key, so signatures need no password. */
+	signerHeld: boolean;
 	receipt?: DeviceReceipt;
 	release?: () => void;
 	lockToken?: object;
@@ -175,6 +231,7 @@ interface UnlockRun {
 	step: UnlockStepId;
 	/** Opened but not yet committed; closed and freed on any failure. */
 	controller?: BrowserController;
+	signerHeld: boolean;
 }
 
 const MANY_OUTCOMES = new Set<KeyError["code"]>([
@@ -183,9 +240,11 @@ const MANY_OUTCOMES = new Set<KeyError["code"]>([
 	"held_elsewhere",
 ]);
 
+/** `free` drops the controller with everything it holds, even when an earlier step throws. */
 function closeController(controller: BrowserController | undefined) {
 	if (!controller) return;
 	try {
+		controller.detachInvitation?.();
 		controller.close();
 	} finally {
 		controller.free();
@@ -256,11 +315,18 @@ export function createKeySessionManager(
 	let cache = new Map<string, KeySessionSnapshot>();
 	let cachedList: KeySessionSnapshot[] | undefined;
 	let cachedFor: LocalSummary | undefined;
+	/** A choice this browser could not store still holds for this window. */
+	let unsavedAsk: boolean | undefined;
 
 	function emit() {
 		cache = new Map();
 		cachedList = undefined;
 		for (const listener of listeners) listener();
+	}
+
+	/** Read at every use, so a change made in another window applies to the next signature. */
+	function askPassword(): boolean {
+		return unsavedAsk ?? io.readAskPassword(deps.scope);
 	}
 
 	function session(deviceId: string): Session {
@@ -269,6 +335,7 @@ export function createKeySessionManager(
 			value = {
 				deviceId,
 				state: "locked",
+				signerHeld: false,
 				keepUnlocked: false,
 				generation: 0,
 				leases: Promise.resolve(),
@@ -281,6 +348,10 @@ export function createKeySessionManager(
 	function unlocked(deviceId: string): Session | undefined {
 		const value = sessions.get(deviceId);
 		return value?.state === "unlocked" && value.controller ? value : undefined;
+	}
+
+	function holdsSigner(deviceId: string): boolean {
+		return unlocked(deviceId)?.signerHeld === true;
 	}
 
 	function reloadLocal() {
@@ -310,12 +381,13 @@ export function createKeySessionManager(
 		const restored =
 			value?.vault?.requiresFreshEndpoint ?? local?.requiresFreshEndpoint;
 		const locksAt = value && idleLocksAt(value, state);
+		const canSign = holdsSigner(deviceId);
 		return {
 			deviceId,
 			state,
 			role: grantId === "owner" ? "owner" : "shared",
 			grantId,
-			canSign: false,
+			canSign,
 			unlockedAt: value?.unlockedAt,
 			lastUsedAt: value?.lastUsedAt,
 			idleLocksAt: locksAt,
@@ -416,6 +488,7 @@ export function createKeySessionManager(
 		if (hadKeys) ports.live.close(value.deviceId);
 		closeController(value.controller);
 		value.controller = undefined;
+		value.signerHeld = false;
 		value.receipt = undefined;
 		value.vault = undefined;
 		value.unlocking = undefined;
@@ -564,6 +637,37 @@ export function createKeySessionManager(
 		});
 	}
 
+	/**
+	 * Owners hold their invitation key from unlock on, unless they asked to be
+	 * prompted again. A failed attach keeps the unlock; the signer then asks
+	 * for the password.
+	 */
+	async function holdSignerAtUnlock(
+		controller: BrowserController,
+		vault: LocalDeviceVault,
+		password: string,
+	): Promise<boolean> {
+		const invitation = vault.invitationVault;
+		const holder = supportsHeldSigner(controller) ? controller : undefined;
+		if (vault.grantId !== "owner" || !invitation || !holder || askPassword())
+			return false;
+		return withPassword(password, (bytes) => {
+			try {
+				holder.attachInvitation(bytes, invitation);
+				return true;
+			} catch {
+				return false;
+			}
+		});
+	}
+
+	function dropSigner(value: Session): boolean {
+		if (!value.signerHeld) return false;
+		value.signerHeld = false;
+		value.controller?.detachInvitation?.();
+		return true;
+	}
+
 	async function backupWithPassword(
 		value: Session,
 		password: string,
@@ -639,14 +743,23 @@ export function createKeySessionManager(
 		const progress = reporter(run);
 		const alive = aliveCheck(run);
 		progress("unlocking_keys", "active");
-		const stored = await io
-			.readDeviceVault(deps.scope, value.deviceId)
-			.catch((error: unknown) => {
-				throw storageError(error);
-			});
-		if (!stored) throw new KeySessionError({ code: "no_vault" });
+		const readVault = async () => {
+			const stored = await io
+				.readDeviceVault(deps.scope, value.deviceId)
+				.catch((error: unknown) => {
+					throw storageError(error);
+				});
+			if (!stored) throw new KeySessionError({ code: "no_vault" });
+			return stored;
+		};
+		// A device without keys takes no lock, and this read lets a lock this
+		// window released a moment ago drain before it is requested again.
+		await readVault();
 		alive();
 		if (run.lockedHere) await holdLock(value, false);
+		alive();
+		// Until the lock is held, another window may still rewrap or rotate the vault.
+		const stored = await readVault();
 		alive();
 		const crypto = await deps.crypto().catch(() => {
 			throw new KeySessionError({ code: "crypto_unavailable" });
@@ -667,6 +780,12 @@ export function createKeySessionManager(
 			alive,
 		);
 		alive();
+		run.signerHeld = await holdSignerAtUnlock(
+			opened.controller,
+			opened.vault,
+			password,
+		);
+		alive();
 		progress("checking_identity", "done");
 		return { crypto, vault: opened.vault, receipt };
 	}
@@ -679,6 +798,7 @@ export function createKeySessionManager(
 		const { value, options } = run;
 		value.controller = run.controller;
 		run.controller = undefined;
+		value.signerHeld = run.signerHeld;
 		value.vault = vault;
 		value.receipt = receipt;
 		value.state = "unlocked";
@@ -735,6 +855,7 @@ export function createKeySessionManager(
 			lockedHere: !value.release,
 			options,
 			step: "unlocking_keys",
+			signerHeld: false,
 		};
 		value.state = "unlocking";
 		value.lastError = undefined;
@@ -796,36 +917,89 @@ export function createKeySessionManager(
 		}
 	}
 
+	function heldSigner(value: Session): HeldSignerController | undefined {
+		const controller = value.controller;
+		return value.signerHeld && controller && supportsHeldSigner(controller)
+			? controller
+			: undefined;
+	}
+
+	/**
+	 * A typed password also starts holding the key, so later changes in this
+	 * key session ask for nothing. Throws on a wrong password.
+	 */
+	function holdSignerFromPassword(
+		value: Session,
+		generation: number,
+		bytes: Uint8Array,
+		invitation: Uint8Array,
+	): HeldSignerController | undefined {
+		const controller = value.controller;
+		if (
+			value.generation !== generation ||
+			!controller ||
+			!supportsHeldSigner(controller)
+		)
+			return undefined;
+		controller.attachInvitation(bytes, invitation);
+		value.signerHeld = true;
+		emit();
+		return controller;
+	}
+
 	function signer(deviceId: string): OwnerSigner {
 		const sign = async (
 			password: string | undefined,
-			apply: (
+			held: (controller: HeldSignerController) => string,
+			typed: (
 				crypto: DeviceCrypto,
 				bytes: Uint8Array,
 				invitation: Uint8Array,
 			) => string,
 		) => {
-			const invitation = unlocked(deviceId)?.vault?.invitationVault;
-			if (!invitation) throw new KeySessionError({ code: "no_vault" });
+			const value = unlocked(deviceId);
+			const invitation = value?.vault?.invitationVault;
+			if (!value || !invitation)
+				throw new KeySessionError({ code: "no_vault" });
+			const ask = askPassword();
+			if (ask && dropSigner(value)) emit();
+			const holder = heldSigner(value);
+			if (holder) {
+				touch(deviceId);
+				return held(holder);
+			}
 			if (password === undefined) throw new OwnerPasswordRequiredError();
+			const generation = value.generation;
 			const crypto = await deps.crypto();
 			touch(deviceId);
-			return withPassword(password, (bytes) =>
-				apply(crypto, bytes, invitation),
-			);
+			return withPassword(password, (bytes) => {
+				const attached = ask
+					? undefined
+					: holdSignerFromPassword(value, generation, bytes, invitation);
+				return attached ? held(attached) : typed(crypto, bytes, invitation);
+			});
 		};
 		return {
 			signPolicy: (policy, password) =>
-				sign(password, (crypto, bytes, invitation) =>
-					crypto.signManagementPolicy(policy, bytes, invitation),
+				sign(
+					password,
+					(controller) => controller.signManagementPolicyHeld(policy),
+					(crypto, bytes, invitation) =>
+						crypto.signManagementPolicy(policy, bytes, invitation),
 				),
 			signTelemetryRoster: (roster, password) =>
-				sign(password, (crypto, bytes, invitation) =>
-					crypto.signTelemetryRoster(roster, bytes, invitation),
+				sign(
+					password,
+					(controller) => controller.signTelemetryRosterHeld(roster),
+					(crypto, bytes, invitation) =>
+						crypto.signTelemetryRoster(roster, bytes, invitation),
 				),
 			signArchiveRoster: (roster, password) =>
-				sign(password, (crypto, bytes, invitation) =>
-					crypto.signArchiveRoster(roster, bytes, invitation),
+				sign(
+					password,
+					(controller) => controller.signArchiveRosterHeld(roster),
+					(crypto, bytes, invitation) =>
+						crypto.signArchiveRoster(roster, bytes, invitation),
 				),
 		};
 	}
@@ -1026,6 +1200,12 @@ export function createKeySessionManager(
 				: undefined;
 		},
 		touch,
+		askPasswordForAccessChanges: askPassword,
+		setAskPasswordForAccessChanges(ask) {
+			unsavedAsk = io.writeAskPassword(deps.scope, ask) ? undefined : ask;
+			if (ask) for (const value of sessions.values()) dropSigner(value);
+			emit();
+		},
 		dispose() {
 			stopPageHide();
 			manager.lockAll();

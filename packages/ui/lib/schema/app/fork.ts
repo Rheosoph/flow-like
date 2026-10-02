@@ -88,8 +88,20 @@ export interface IForkPreviewResponse {
 	allow_forking: boolean;
 	user_can_fork: boolean;
 	disallow_reason: string;
-	/** Packages the fork drops because the caller doesn't hold them. Empty when the fork can't happen; absent on hubs that predate it. */
+	/** Packages the fork drops: the caller doesn't hold them, or no version of them can be downloaded. Empty when the fork can't happen; absent on hubs that predate it. */
 	blocked_packages?: IBlockedPackage[];
+	/** Packages the fork pins at another version than the source. Same conditions. */
+	repinned_packages?: IRepinnedPackage[];
+}
+
+/** A package the fork carries at another version, because the pinned one isn't published. */
+export interface IRepinnedPackage {
+	package_id: string;
+	name: string;
+	/** The version the source app pins. */
+	pinned_version: string;
+	/** The newest published version, which the fork pins. */
+	version: string;
 }
 
 export type IPackageBlock =

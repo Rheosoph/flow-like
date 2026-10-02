@@ -388,6 +388,8 @@ export type ReplicaStatus = NonNullable<PlacementStatus["replicas"]>[number];
 export interface ReplicaStatusPlus extends ReplicaStatus {
 	process_id?: number | null;
 	last_error?: string | null;
+	/** Sent instead of `last_error` to Status-only readers and in status snapshots. */
+	has_error?: boolean;
 	restarts?: ReplicaRestarts;
 }
 
@@ -405,10 +407,13 @@ export interface PlacementStatusPlus extends Omit<PlacementStatus, "replicas"> {
 }
 
 export interface TaskHealth {
+	/** snake_case and open-ended (`fleet_publisher`, `management_transport`, …). */
 	name: string;
+	/** `stopped`: the task ended, failed for good or panicked. */
 	state: "ok" | "failing" | "stopped";
 	since: number;
-	consecutive_failures: number;
+	/** Absent in status snapshots (it would change on every failed pass). */
+	consecutive_failures?: number;
 	category?:
 		| "hub_unreachable"
 		| "hub_refused"
@@ -1290,9 +1295,39 @@ export interface PendingSetup {
 	local: boolean;
 }
 
+/** The agent's installed release (`agent.release_version`, never its constant crate version) from the last live read, kept on this computer (BG8 replaces it). */
+export interface AgentLastRead {
+	version: string;
+	/** `agent.release_sequence`, when the agent reported it. */
+	sequence?: number | null;
+	/** Unix seconds. */
+	at: number;
+}
+
+/** An access request made from this computer (real state: BG23). */
+export interface AccessRequestRecord {
+	deviceId: string;
+	deviceName?: string;
+	ownerId?: string;
+	/** Unix seconds. */
+	createdAt: number;
+	approved: boolean;
+}
+
+/** Placement configuration facts from the last live configuration read. */
+export interface PlacementConfigFacts {
+	host?: string;
+	port?: number;
+	tlsCertificateId?: string | null;
+	offlineWrites?: { maxAgeS: number; maxBytes: number };
+	resourceGrantId?: string | null;
+}
+
 export interface LiveDeviceInput {
 	state: LiveState;
 	inspection?: LiveInspection;
+	/** Keyed by placement id. */
+	placements?: Record<string, PlacementConfigFacts>;
 	/** Keyed by placement id. */
 	offlineQueues?: Record<string, OfflineQueueStatus[]>;
 	certificates?: CertificateInventory;
@@ -1343,6 +1378,10 @@ export interface AttentionInput {
 	policies: Record<string, PolicyView & { policy?: ManagementPolicy }>;
 	authorities: LocalCertificateAuthority[];
 	activity: ActivityItem[];
+	agentLastRead?: Record<string, AgentLastRead | undefined>;
+	accessRequests?: AccessRequestRecord[];
+	/** `GET /devices` answered: an empty `devices` then means "none", not "not known yet". */
+	devicesLoaded?: boolean;
 }
 
 export interface AttentionRule {

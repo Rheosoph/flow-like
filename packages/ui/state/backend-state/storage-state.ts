@@ -6,9 +6,22 @@ export interface IStorageUploadOptions {
 	readonly signal?: AbortSignal;
 }
 
+export interface IStorageListOptions {
+	/** Bypass the server listing cache after a mutation or explicit refresh. */
+	readonly refresh?: boolean;
+}
+
 export interface IStorageState {
-	listStorageItems(appId: string, prefix: string): Promise<IStorageItem[]>;
-	listStorageItemsUser(appId: string, prefix: string): Promise<IStorageItem[]>;
+	listStorageItems(
+		appId: string,
+		prefix: string,
+		options?: IStorageListOptions,
+	): Promise<IStorageItem[]>;
+	listStorageItemsUser(
+		appId: string,
+		prefix: string,
+		options?: IStorageListOptions,
+	): Promise<IStorageItem[]>;
 	deleteStorageItems(appId: string, prefixes: string[]): Promise<void>;
 	deleteStorageItemsUser(appId: string, prefixes: string[]): Promise<void>;
 	downloadStorageItems(

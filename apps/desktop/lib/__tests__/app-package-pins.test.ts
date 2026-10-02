@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	invoke: vi.fn(),
@@ -22,7 +22,11 @@ vi.mock("../apps-db", () => ({
 	},
 }));
 
-import { AppState } from "../../components/tauri-provider/app-state";
+import {
+	AppState,
+	syncRemoteAppPackages,
+} from "../../components/tauri-provider/app-state";
+import { ApiResponseError } from "../api-error";
 
 const HUB_PINS = [
 	{ packageId: "pkg-active", version: "1.0.0" },
@@ -37,10 +41,7 @@ const HUB_PINS = [
 function localPins(initial: Record<string, string>) {
 	const pins = { ...initial };
 	mocks.invoke.mockImplementation(
-		async (
-			command: string,
-			args: { packageId?: string; version?: string },
-		) => {
+		async (command: string, args: { packageId?: string; version?: string }) => {
 			if (command === "app_list_packages") return { ...pins };
 			if (command === "app_add_package" && args.packageId && args.version) {
 				pins[args.packageId] = args.version;
@@ -54,23 +55,33 @@ function localPins(initial: Record<string, string>) {
 	return pins;
 }
 
-function appState({
+function backend({
 	signedIn = true,
+	signedOut = false,
 	offline = false,
 	queryClient = undefined as QueryClient | undefined,
 } = {}) {
-	const backend: Record<string, unknown> = {
+	const host: Record<string, unknown> = {
 		profile: signedIn ? { id: "profile-1", hub: "hub.example" } : undefined,
-		auth: signedIn
-			? { isAuthenticated: true, user: { access_token: "token" } }
-			: undefined,
+		auth: !signedIn
+			? undefined
+			: signedOut
+				? { isAuthenticated: false }
+				: { isAuthenticated: true, user: { access_token: "token" } },
 		isOffline: vi.fn().mockResolvedValue(offline),
 		queryClient,
 	};
-	const state = new AppState(backend as never);
-	backend.appState = state;
-	return state;
+	const state = new AppState(host as never);
+	host.appState = state;
+	return { host, state };
 }
+
+const appState = (options?: Parameters<typeof backend>[0]) =>
+	backend(options).state;
+
+/** What `GET apps/{id}/packages` answers a member whose role lacks ReadBoards. */
+const refusedListing = () =>
+	new ApiResponseError({ status: 403, message: "Forbidden" });
 
 const writes = () =>
 	mocks.invoke.mock.calls.filter(
@@ -81,6 +92,10 @@ describe("desktop project package pins", () => {
 	beforeEach(() => {
 		mocks.invoke.mockReset();
 		mocks.fetcher.mockReset();
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
 	});
 
 	test("an online project's local pins take what the hub pins, without expired licences", async () => {
@@ -122,6 +137,9 @@ describe("desktop project package pins", () => {
 		await expect(
 			appState({ signedIn: false }).listPackages("app-1"),
 		).resolves.toEqual(local);
+		await expect(
+			appState({ signedOut: true }).listPackages("app-1"),
+		).resolves.toEqual(local);
 		expect(mocks.fetcher).not.toHaveBeenCalled();
 
 		mocks.fetcher.mockRejectedValue(new Error("hub unavailable"));
@@ -132,6 +150,67 @@ describe("desktop project package pins", () => {
 		expect(writes()).toEqual([]);
 		expect(warn).toHaveBeenCalledTimes(2);
 		warn.mockRestore();
+	});
+
+	test("a hub that refuses to list the pins leaves this session none of the mirrored ones", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+		const pins = localPins({ "pkg-active": "0.9.0" });
+		mocks.fetcher.mockRejectedValue(refusedListing());
+		const queryClient = new QueryClient();
+		const state = appState({ queryClient });
+
+		await expect(state.listPackages("app-1")).resolves.toEqual({});
+		now.mockReturnValue(1_000_000 + 30_000 - 1);
+		await expect(state.listPackages("app-1")).resolves.toEqual({});
+		expect(mocks.fetcher).toHaveBeenCalledTimes(1);
+		expect(writes()).toEqual([]);
+		expect(pins).toEqual({ "pkg-active": "0.9.0" });
+		expect(warn).not.toHaveBeenCalled();
+
+		now.mockReturnValue(1_000_000 + 30_000);
+		mocks.fetcher.mockResolvedValue(HUB_PINS);
+		await expect(state.listPackages("app-1")).resolves.toEqual({
+			"pkg-active": "1.0.0",
+		});
+		expect(mocks.fetcher).toHaveBeenCalledTimes(2);
+		queryClient.clear();
+	});
+
+	test("a refusal without a query cache leaves none either", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		localPins({ "pkg-active": "0.9.0" });
+		mocks.fetcher.mockRejectedValue(refusedListing());
+
+		await expect(appState().listPackages("app-1")).resolves.toEqual({});
+		expect(writes()).toEqual([]);
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	test.each([401, 404, 500])(
+		"a %i from the pin listing is a failure that keeps the local pins",
+		async (status) => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const local = { "pkg-local": "0.1.0" };
+			localPins(local);
+			mocks.fetcher.mockRejectedValue(
+				new ApiResponseError({ status, message: "refused" }),
+			);
+
+			await expect(appState().listPackages("app-1")).resolves.toEqual(local);
+			expect(writes()).toEqual([]);
+			expect(warn).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	test("a run gets no pins to install from a hub that refuses to list them", async () => {
+		localPins({ "pkg-active": "0.9.0" });
+		mocks.fetcher.mockRejectedValue(refusedListing());
+
+		await expect(
+			syncRemoteAppPackages(backend().host as never, "app-1"),
+		).resolves.toEqual([]);
+		expect(writes()).toEqual([]);
 	});
 
 	test("listings at the same time share one hub sync", async () => {

@@ -51,6 +51,8 @@ class EmbeddingsMixin(HTTPClient):
             embeddings=data.get("embeddings", []),
             usage=_parse_usage(data.get("usage", {})),
             raw=data,
+            usage_estimated=data.get("usage_estimated"),
+            usage_available=data.get("usage_available"),
         )
 
     async def aembed(
@@ -74,6 +76,8 @@ class EmbeddingsMixin(HTTPClient):
             embeddings=data.get("embeddings", []),
             usage=_parse_usage(data.get("usage", {})),
             raw=data,
+            usage_estimated=data.get("usage_estimated"),
+            usage_available=data.get("usage_available"),
         )
 
 

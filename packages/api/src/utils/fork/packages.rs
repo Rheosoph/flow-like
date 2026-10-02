@@ -3,14 +3,18 @@ use crate::{
     entity::{
         app_package,
         sea_orm_active_enums::{WasmPackageStatus, WasmPackageVisibility},
-        wasm_package, wasm_package_join_queue, wasm_package_user,
+        wasm_package, wasm_package_join_queue, wasm_package_user, wasm_package_version,
     },
     error::ApiError,
     package_license,
+    permission::wasm_package_permission::WasmPackagePermission,
 };
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect};
+use sea_orm::{
+    ColumnTrait, Condition, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
+    QuerySelect, Select,
+};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use utoipa::ToSchema;
 
 /// Why the forker can't take a package the source app pins into their copy.
@@ -33,7 +37,8 @@ pub enum PackageBlock {
     Revoked,
 }
 
-/// A package the fork drops because the forker doesn't hold it.
+/// A package the fork drops: the forker doesn't hold it, or holds it without
+/// a version they can download.
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct BlockedPackage {
     pub package_id: String,
@@ -68,26 +73,95 @@ impl BlockedPackage {
     }
 }
 
-/// Splits the source app's pins into the ones the forker holds and the ones
-/// the fork drops. Holding follows the project licence rule
+/// A held package the fork pins at another version, because the forker can't
+/// download the one the source app pins.
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct RepinnedPackage {
+    pub package_id: String,
+    pub name: String,
+    /// The version the source app pins.
+    pub pinned_version: String,
+    /// The newest version the forker can download, which the fork pins.
+    pub version: String,
+}
+
+impl RepinnedPackage {
+    pub fn warning(&self) -> String {
+        let Self {
+            name,
+            pinned_version,
+            version,
+            ..
+        } = self;
+        format!(
+            "{name} {pinned_version} isn't published, so your copy uses {version}. Flows built for {pinned_version} may need their nodes updated."
+        )
+    }
+}
+
+/// What a fork does with the source app's pins.
+#[derive(Debug, Default)]
+pub struct PinSplit {
+    /// The pins the fork carries, each at a version the forker can download.
+    pub held: Vec<app_package::Model>,
+    pub blocked: Vec<BlockedPackage>,
+    pub repinned: Vec<RepinnedPackage>,
+}
+
+/// Splits the source app's pins into the ones the fork carries and the ones
+/// it drops. Holding follows the project licence rule
 /// ([`package_license::user_holds`]): free public packages are held by
 /// everyone, everything else needs a non-zero `WasmPackageUser` row. A
 /// package that isn't active is held only through such a row, because the
 /// registry serves it to nobody else. An anonymous forker (`None`) holds only
 /// active free public packages.
+///
+/// A held pin keeps its version only when the forker can download it. A
+/// version that was never approved is served to the package's managers alone,
+/// so everyone else gets the newest version they can download, and the
+/// package is dropped when there is none.
 pub async fn split_pins<C: ConnectionTrait>(
     db: &C,
     user_sub: Option<&str>,
     pins: &[app_package::Model],
-) -> Result<(Vec<app_package::Model>, Vec<BlockedPackage>), ApiError> {
-    let blocked = blocked_packages(db, user_sub, pins).await?;
-    let blocked_ids: HashSet<&str> = blocked.iter().map(|b| b.package_id.as_str()).collect();
-    let held = pins
+) -> Result<PinSplit, ApiError> {
+    let pins: BTreeMap<&str, &app_package::Model> = pins
         .iter()
-        .filter(|pin| !blocked_ids.contains(pin.package_id.as_str()))
-        .cloned()
+        .map(|pin| (pin.package_id.as_str(), pin))
         .collect();
-    Ok((held, blocked))
+    if pins.is_empty() {
+        return Ok(PinSplit::default());
+    }
+    let package_ids: Vec<String> = pins.keys().map(|id| id.to_string()).collect();
+
+    let (packages, access, pending, pinned) = flow_like_types::tokio::try_join!(
+        registry_rows(db, &package_ids),
+        access_permissions(db, user_sub, &package_ids),
+        pending_request_ids(db, user_sub, &package_ids),
+        pinned_version_statuses(db, pins.values().copied()),
+    )?;
+
+    let mut split = PinSplit::default();
+    let mut stuck = Vec::new();
+    for (package_id, pin) in pins {
+        let package = packages.get(package_id);
+        let permission = access.get(package_id).copied();
+        let pending = pending.contains(package_id);
+        if let Some(blocked) = classify(package_id.to_string(), package, permission, pending) {
+            split.blocked.push(blocked);
+            continue;
+        }
+        let Some(package) = package else { continue };
+        let sees_all = sees_all_versions(package, permission);
+        let status = pinned.get(&(pin.package_id.clone(), pin.version.clone()));
+        if can_download(sees_all, status) {
+            split.held.push(pin.clone());
+        } else {
+            stuck.push((pin, package, sees_all));
+        }
+    }
+    repin(db, &stuck, &mut split).await?;
+    Ok(split)
 }
 
 /// The manifest's `package_id -> version` map for a set of pins.
@@ -97,36 +171,85 @@ pub fn pin_map(pins: &[app_package::Model]) -> HashMap<String, String> {
         .collect()
 }
 
-async fn blocked_packages<C: ConnectionTrait>(
-    db: &C,
-    user_sub: Option<&str>,
-    pins: &[app_package::Model],
-) -> Result<Vec<BlockedPackage>, ApiError> {
-    let package_ids: Vec<String> = pins
+/// The source pins a copy made earlier does not have.
+pub fn missing_pins(
+    source: &[app_package::Model],
+    copy: &[app_package::Model],
+) -> Vec<app_package::Model> {
+    let pinned: HashSet<&str> = copy.iter().map(|pin| pin.package_id.as_str()).collect();
+    source
         .iter()
-        .map(|pin| pin.package_id.clone())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    if package_ids.is_empty() {
-        return Ok(Vec::new());
+        .filter(|pin| !pinned.contains(pin.package_id.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Moves each held pin the forker can't download to the newest version they
+/// can, or drops the package when no version qualifies.
+async fn repin<C: ConnectionTrait>(
+    db: &C,
+    stuck: &[(&app_package::Model, &wasm_package::Model, bool)],
+    split: &mut PinSplit,
+) -> Result<(), ApiError> {
+    if stuck.is_empty() {
+        return Ok(());
     }
+    let package_ids = stuck.iter().map(|(pin, ..)| pin.package_id.clone());
+    let newest = newest_versions(db, package_ids).await?;
+    for (pin, package, sees_all) in stuck {
+        let versions = newest.get(&pin.package_id).map(Vec::as_slice);
+        match fallback_version(*sees_all, versions.unwrap_or_default()) {
+            Some(version) => {
+                split.repinned.push(RepinnedPackage {
+                    package_id: pin.package_id.clone(),
+                    name: package.name.clone(),
+                    pinned_version: pin.version.clone(),
+                    version: version.to_string(),
+                });
+                split.held.push(app_package::Model {
+                    version: version.to_string(),
+                    ..(*pin).clone()
+                });
+            }
+            None => split.blocked.push(BlockedPackage {
+                package_id: pin.package_id.clone(),
+                name: package.name.clone(),
+                block: PackageBlock::Unavailable,
+                price: 0,
+                request_pending: false,
+            }),
+        }
+    }
+    Ok(())
+}
 
-    let (packages, access, pending) = flow_like_types::tokio::try_join!(
-        registry_rows(db, &package_ids),
-        access_permissions(db, user_sub, &package_ids),
-        pending_request_ids(db, user_sub, &package_ids),
-    )?;
-
-    Ok(package_ids
-        .into_iter()
-        .filter_map(|package_id| {
-            let package = packages.get(&package_id);
-            let permission = access.get(&package_id).copied();
-            let pending = pending.contains(&package_id);
-            classify(package_id, package, permission, pending)
+/// Whether the registry serves the forker every version of a package and not
+/// only the approved ones: its owner and maintainers get them, and so does
+/// anyone holding a private package.
+fn sees_all_versions(package: &wasm_package::Model, permission: Option<i64>) -> bool {
+    package.visibility == WasmPackageVisibility::Private
+        || permission.is_some_and(|bits| {
+            WasmPackagePermission::from_bits_truncate(bits)
+                .has_permission(WasmPackagePermission::Maintainer)
         })
-        .collect())
+}
+
+/// Whether the forker can download the version a pin names. A version without
+/// a row can't be downloaded by anyone.
+fn can_download(sees_all: bool, pinned: Option<&WasmPackageStatus>) -> bool {
+    match pinned {
+        Some(WasmPackageStatus::Active) => true,
+        Some(_) => sees_all,
+        None => false,
+    }
+}
+
+/// The newest version the forker can download, from rows ordered newest first.
+fn fallback_version(sees_all: bool, newest_first: &[VersionStatus]) -> Option<&str> {
+    newest_first
+        .iter()
+        .find(|row| sees_all || row.status == WasmPackageStatus::Active)
+        .map(|row| row.version.as_str())
 }
 
 /// `permission` is the forker's `WasmPackageUser` permission bits, `None`
@@ -243,6 +366,68 @@ async fn pending_request_ids<C: ConnectionTrait>(
         .all(db)
         .await?;
     Ok(pending.into_iter().collect())
+}
+
+/// A version row without its node and widget blobs.
+#[derive(Debug, FromQueryResult)]
+struct VersionStatus {
+    package_id: String,
+    version: String,
+    status: WasmPackageStatus,
+}
+
+fn version_statuses() -> Select<wasm_package_version::Entity> {
+    use wasm_package_version::Column;
+    wasm_package_version::Entity::find()
+        .select_only()
+        .column_as(Column::PackageId, "package_id")
+        .column_as(Column::Version, "version")
+        .column_as(Column::Status, "status")
+}
+
+/// The status of exactly the versions the pins name. A pin whose version has
+/// no row is absent.
+async fn pinned_version_statuses<'a, C: ConnectionTrait>(
+    db: &C,
+    pins: impl Iterator<Item = &'a app_package::Model>,
+) -> Result<HashMap<(String, String), WasmPackageStatus>, ApiError> {
+    use wasm_package_version::Column;
+    let named = pins.fold(Condition::any(), |named, pin| {
+        named.add(
+            Condition::all()
+                .add(Column::PackageId.eq(&pin.package_id))
+                .add(Column::Version.eq(&pin.version)),
+        )
+    });
+    let rows = version_statuses()
+        .filter(named)
+        .into_model::<VersionStatus>()
+        .all(db)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| ((row.package_id, row.version), row.status))
+        .collect())
+}
+
+/// Every version of those packages that was not yanked, newest first.
+async fn newest_versions<C: ConnectionTrait>(
+    db: &C,
+    package_ids: impl Iterator<Item = String>,
+) -> Result<HashMap<String, Vec<VersionStatus>>, ApiError> {
+    use wasm_package_version::Column;
+    let rows = version_statuses()
+        .filter(Column::PackageId.is_in(package_ids))
+        .filter(Column::Yanked.eq(false))
+        .order_by_desc(Column::PublishedAt)
+        .into_model::<VersionStatus>()
+        .all(db)
+        .await?;
+    let mut newest: HashMap<String, Vec<VersionStatus>> = HashMap::new();
+    for row in rows {
+        newest.entry(row.package_id.clone()).or_default().push(row);
+    }
+    Ok(newest)
 }
 
 #[cfg(test)]
@@ -405,5 +590,109 @@ mod tests {
         assert!(matches!(item.kind, SkippedKind::Package));
         assert_eq!(item.source_id, "chart-kit");
         assert_eq!(item.reason, "Chart Kit is a paid package you don't own");
+    }
+
+    fn pin(app_id: &str, package_id: &str) -> app_package::Model {
+        app_package::Model {
+            id: format!("{app_id}:{package_id}"),
+            app_id: app_id.to_string(),
+            membership_id: None,
+            package_id: package_id.to_string(),
+            version: "1.0.0".to_string(),
+            added_at: chrono::Utc::now().fixed_offset(),
+            auto_update: true,
+            stale: false,
+            stale_since: None,
+        }
+    }
+
+    #[test]
+    fn missing_pins_are_the_source_pins_the_copy_lacks() {
+        let source = [pin("template", "chart-kit"), pin("template", "geo-tools")];
+        let copy = [pin("copy", "geo-tools"), pin("copy", "own-addition")];
+        let missing = missing_pins(&source, &copy);
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].package_id, "chart-kit");
+        assert!(missing_pins(&source, &source).is_empty());
+    }
+
+    const OWNER: i64 = 0b0001;
+    const MAINTAINER: i64 = 0b0010;
+
+    fn version(version: &str, status: WasmPackageStatus) -> VersionStatus {
+        VersionStatus {
+            package_id: "chart-kit".to_string(),
+            version: version.to_string(),
+            status,
+        }
+    }
+
+    #[test]
+    fn only_managers_and_private_packages_see_unapproved_versions() {
+        let public = package(
+            WasmPackageVisibility::Public,
+            499,
+            WasmPackageStatus::Active,
+        );
+        assert!(!sees_all_versions(&public, None));
+        assert!(!sees_all_versions(&public, Some(BUYER)));
+        assert!(sees_all_versions(&public, Some(OWNER)));
+        assert!(sees_all_versions(&public, Some(MAINTAINER | BUYER)));
+
+        let private = package(WasmPackageVisibility::Private, 0, WasmPackageStatus::Active);
+        assert!(sees_all_versions(&private, Some(BUYER)));
+    }
+
+    #[test]
+    fn a_pinned_version_must_be_approved_unless_the_forker_sees_all() {
+        assert!(can_download(false, Some(&WasmPackageStatus::Active)));
+        assert!(can_download(true, Some(&WasmPackageStatus::Active)));
+        for status in [
+            WasmPackageStatus::PendingReview,
+            WasmPackageStatus::Rejected,
+        ] {
+            assert!(!can_download(false, Some(&status)));
+            assert!(can_download(true, Some(&status)));
+        }
+    }
+
+    #[test]
+    fn a_version_without_a_row_is_downloadable_by_nobody() {
+        assert!(!can_download(false, None));
+        assert!(!can_download(true, None));
+    }
+
+    #[test]
+    fn the_fallback_is_the_newest_approved_version() {
+        let newest_first = [
+            version("2.0.0", WasmPackageStatus::PendingReview),
+            version("1.5.0", WasmPackageStatus::Rejected),
+            version("1.4.0", WasmPackageStatus::Active),
+            version("1.3.0", WasmPackageStatus::Active),
+        ];
+        assert_eq!(fallback_version(false, &newest_first), Some("1.4.0"));
+        assert_eq!(fallback_version(true, &newest_first), Some("2.0.0"));
+    }
+
+    #[test]
+    fn a_package_without_an_approved_version_has_no_fallback() {
+        let unapproved = [version("0.1.0", WasmPackageStatus::PendingReview)];
+        assert_eq!(fallback_version(false, &unapproved), None);
+        assert_eq!(fallback_version(false, &[]), None);
+        assert_eq!(fallback_version(true, &[]), None);
+    }
+
+    #[test]
+    fn a_repinned_package_warns_with_both_versions() {
+        let repinned = RepinnedPackage {
+            package_id: "chart-kit".to_string(),
+            name: "Chart Kit".to_string(),
+            pinned_version: "2.0.0".to_string(),
+            version: "1.4.0".to_string(),
+        };
+        assert_eq!(
+            repinned.warning(),
+            "Chart Kit 2.0.0 isn't published, so your copy uses 1.4.0. Flows built for 2.0.0 may need their nodes updated."
+        );
     }
 }

@@ -44,7 +44,11 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../../ui/select";
-import { ForkBlockedPackages } from "./fork-blocked-packages";
+import {
+	ForkBlockedPackages,
+	ForkRepinnedPackages,
+	usePendingCheckouts,
+} from "./fork-blocked-packages";
 
 /**
  * The two response shapes the server returns from `/fork` (online → online)
@@ -116,6 +120,136 @@ export interface ForkAppDialogProps {
 
 type DialogStage = "loading" | "preview" | "submitting" | "done" | "error";
 
+/**
+ * The fork preview and the dialog stage it drives. Every preview request, the
+ * full load as well as a refresh, takes the next number, and only the newest
+ * one may apply its response.
+ */
+function useForkPreview(
+	open: boolean,
+	target: IForkPreviewTarget,
+	loadPreview: () => Promise<IForkPreviewResponse>,
+) {
+	const [stage, setStage] = useState<DialogStage>("loading");
+	const [preview, setPreview] = useState<IForkPreviewResponse | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	const latestRequest = useRef(0);
+	const loadPreviewRef = useRef(loadPreview);
+
+	useEffect(() => {
+		loadPreviewRef.current = loadPreview;
+	}, [loadPreview]);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `target` reloads the preview even when a host keeps `loadPreview` stable across targets.
+	useEffect(() => {
+		const request = ++latestRequest.current;
+		setStage("loading");
+		if (!open) {
+			// Reset whenever the dialog closes so the next open is fresh.
+			setPreview(null);
+			setError(null);
+			return;
+		}
+		loadPreview()
+			.then((p) => {
+				if (request !== latestRequest.current) return;
+				if (!isRecord(p)) {
+					setError(null);
+					setStage("error");
+					return;
+				}
+				setPreview(p);
+				setStage("preview");
+			})
+			.catch((err: unknown) => {
+				if (request !== latestRequest.current) return;
+				setError(err instanceof Error ? err.message : null);
+				setStage("error");
+			});
+		return () => {
+			latestRequest.current += 1;
+		};
+	}, [open, loadPreview, target]);
+
+	/** Reloads the preview in place after the forker bought or was granted a package. */
+	const refreshPreview = useCallback(async () => {
+		const request = ++latestRequest.current;
+		// Read through the ref: a row from before a target switch must still
+		// reload the current target.
+		const next = await loadPreviewRef.current().catch((err: unknown) => {
+			console.warn("Failed to refresh the fork preview:", err);
+			return null;
+		});
+		if (request !== latestRequest.current) return;
+		if (isRecord(next)) {
+			setPreview(next);
+		} else {
+			// The load-error screen must not show a message left by a failed fork.
+			setError(null);
+		}
+		setStage((current) => {
+			if (current !== "loading") return current;
+			return isRecord(next) ? "preview" : "error";
+		});
+	}, []);
+
+	return {
+		stage,
+		setStage,
+		preview,
+		setPreview,
+		error,
+		setError,
+		refreshPreview,
+	};
+}
+
+/**
+ * What the preview says about the source app's packages, and the purchases
+ * that are still open until the dialog closes.
+ */
+function useForkPackages(preview: IForkPreviewResponse | null, open: boolean) {
+	const {
+		pendingCheckouts,
+		handleCheckoutPendingChange,
+		forgetPendingCheckouts,
+	} = usePendingCheckouts();
+
+	useEffect(() => {
+		if (!open) forgetPendingCheckouts();
+	}, [open, forgetPendingCheckouts]);
+
+	// Offering a purchase only makes sense for a fork that can actually happen.
+	const forkable = !!preview?.user_can_fork && preview.within_limits;
+	const blockedPackages = useMemo(
+		() => (forkable ? asArray(preview?.blocked_packages) : []),
+		[preview, forkable],
+	);
+	const repinnedPackages = useMemo(
+		() => (forkable ? asArray(preview?.repinned_packages) : []),
+		[preview, forkable],
+	);
+	// Only a package that can still be bought has a payment to wait for; one
+	// that turned unavailable meanwhile keeps its entry until the dialog closes.
+	const pendingCheckoutNames = useMemo(
+		() =>
+			blockedPackages
+				.filter(
+					(pkg) => pkg.block === "paid" && pendingCheckouts.has(pkg.package_id),
+				)
+				.map((pkg) => pkg.name),
+		[blockedPackages, pendingCheckouts],
+	);
+
+	return {
+		blockedPackages,
+		repinnedPackages,
+		pendingCheckouts,
+		pendingCheckoutNames,
+		handleCheckoutPendingChange,
+	};
+}
+
 export function ForkAppDialog({
 	appId,
 	appName,
@@ -129,17 +263,25 @@ export function ForkAppDialog({
 	onForkStarted,
 }: Readonly<ForkAppDialogProps>) {
 	const { t } = useTranslation("settings");
-	const [stage, setStage] = useState<DialogStage>("loading");
-	const [preview, setPreview] = useState<IForkPreviewResponse | null>(null);
+	const {
+		stage,
+		setStage,
+		preview,
+		setPreview,
+		error,
+		setError,
+		refreshPreview,
+	} = useForkPreview(open, target, loadPreview);
 	const [token, setToken] = useState("");
 	const [showPatSelector, setShowPatSelector] = useState(false);
-	const [error, setError] = useState<string | null>(null);
 	const [response, setResponse] = useState<IBeginForkResponse | null>(null);
-	const [pendingCheckouts, setPendingCheckouts] = useState<ReadonlySet<string>>(
-		() => new Set(),
-	);
-	const previewRequest = useRef(0);
-	const loadPreviewRef = useRef(loadPreview);
+	const {
+		blockedPackages,
+		repinnedPackages,
+		pendingCheckouts,
+		pendingCheckoutNames,
+		handleCheckoutPendingChange,
+	} = useForkPackages(preview, open);
 	const options =
 		targetOptions && targetOptions.length > 0
 			? targetOptions
@@ -148,91 +290,17 @@ export function ForkAppDialog({
 		options.find((option) => option.value === target) ??
 		DEFAULT_FORK_TARGET_OPTIONS[target];
 
+	// Reset whenever the dialog closes so the next open is fresh.
 	useEffect(() => {
-		loadPreviewRef.current = loadPreview;
-	}, [loadPreview]);
+		if (open) return;
+		setToken("");
+		setShowPatSelector(false);
+		setResponse(null);
+	}, [open]);
 
-	// Every preview request, full load or refresh, takes the next number; only
-	// the newest one may apply its response.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: `target` reloads the preview even when a host keeps `loadPreview` stable across targets.
-	useEffect(() => {
-		const request = ++previewRequest.current;
-		if (!open) {
-			// Reset whenever the dialog closes so the next open is fresh.
-			setStage("loading");
-			setPreview(null);
-			setToken("");
-			setShowPatSelector(false);
-			setError(null);
-			setResponse(null);
-			return;
-		}
-		setStage("loading");
-		loadPreview()
-			.then((p) => {
-				if (request !== previewRequest.current) return;
-				if (!isRecord(p)) {
-					setError(null);
-					setStage("error");
-					return;
-				}
-				setPreview(p);
-				setStage("preview");
-			})
-			.catch((err: unknown) => {
-				if (request !== previewRequest.current) return;
-				setError(err instanceof Error ? err.message : null);
-				setStage("error");
-			});
-		return () => {
-			previewRequest.current += 1;
-		};
-	}, [open, loadPreview, target]);
-
-	/** Reloads the preview in place after the forker bought or was granted a package. */
-	const refreshPreview = useCallback(async () => {
-		const request = ++previewRequest.current;
-		const next = await loadPreviewRef.current().catch((err: unknown) => {
-			console.warn("Failed to refresh the fork preview:", err);
-			return null;
-		});
-		if (request !== previewRequest.current) return;
-		if (isRecord(next)) setPreview(next);
-		setStage((current) => {
-			if (current !== "loading") return current;
-			return isRecord(next) ? "preview" : "error";
-		});
-	}, []);
 	const handlePackageAccessChanged = useCallback(
 		() => void refreshPreview(),
 		[refreshPreview],
-	);
-	const handleCheckoutPendingChange = useCallback(
-		(packageId: string, pending: boolean) => {
-			setPendingCheckouts((current) => {
-				if (current.has(packageId) === pending) return current;
-				const next = new Set(current);
-				if (pending) next.add(packageId);
-				else next.delete(packageId);
-				return next;
-			});
-		},
-		[],
-	);
-	// Offering a purchase only makes sense for a fork that can actually happen.
-	const blockedPackages = useMemo(
-		() =>
-			preview?.user_can_fork && preview.within_limits
-				? asArray(preview.blocked_packages)
-				: [],
-		[preview],
-	);
-	const pendingCheckoutNames = useMemo(
-		() =>
-			blockedPackages
-				.filter((pkg) => pendingCheckouts.has(pkg.package_id))
-				.map((pkg) => pkg.name),
-		[blockedPackages, pendingCheckouts],
 	);
 
 	const replaceableSites = useMemo(() => {
@@ -264,7 +332,7 @@ export function ForkAppDialog({
 			setStage("loading");
 			onTargetChange?.(value);
 		},
-		[target, stage, onTargetChange],
+		[target, stage, onTargetChange, setPreview, setError, setStage],
 	);
 
 	const handleFork = useCallback(async () => {
@@ -306,7 +374,16 @@ export function ForkAppDialog({
 			setStage("preview");
 			toast.error(message);
 		}
-	}, [preview, tokenRequired, token, beginFork, onForkStarted, t]);
+	}, [
+		preview,
+		tokenRequired,
+		token,
+		beginFork,
+		onForkStarted,
+		t,
+		setStage,
+		setError,
+	]);
 
 	const skipped = asArray(response?.report?.skipped);
 	const warnings = asArray(response?.report?.warnings);
@@ -391,8 +468,13 @@ export function ForkAppDialog({
 								packages={blockedPackages}
 								onAccessChanged={handlePackageAccessChanged}
 								onCheckoutPendingChange={handleCheckoutPendingChange}
+								pendingCheckouts={pendingCheckouts}
 								disabled={stage === "submitting"}
 							/>
+						)}
+
+						{repinnedPackages.length > 0 && (
+							<ForkRepinnedPackages packages={repinnedPackages} />
 						)}
 
 						{!preview.allow_forking && (

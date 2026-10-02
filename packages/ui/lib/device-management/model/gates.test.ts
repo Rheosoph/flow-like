@@ -444,7 +444,8 @@ describe("gate ladder", () => {
 			need: ["deploy"],
 		});
 		expect(
-			evaluateGate("activate_staged", recipient(["deploy", "start"], staged)).ok,
+			evaluateGate("activate_staged", recipient(["deploy", "start"], staged))
+				.ok,
 		).toBe(true);
 	});
 
@@ -914,62 +915,52 @@ describe("gate ladder", () => {
 		).toBe(true);
 	});
 
-	test("setup checks readiness, release trust and hub quotas", () => {
-		const limits = {
-			max_devices: 10,
-			max_pending_enrollments: 10,
-			enrollment_ttl_seconds: 86_400,
-			max_enrollments_per_day: 20,
-			max_account_backups: 10,
-		};
-		const usage = {
-			active_devices: 10,
-			revoked_devices: 0,
-			pending_enrollments: 0,
-			enrollments_last_24h: 0,
-			account_backups: 0,
-		};
-		expect(
-			failure(
-				evaluateGate(
-					"setup_device",
-					ctx({ hub: { state: "on", limits, usage } }),
-				),
-			).copy,
-		).toEqual({
+	const SETUP_LIMITS = {
+		max_devices: 10,
+		max_pending_enrollments: 10,
+		enrollment_ttl_seconds: 86_400,
+		max_enrollments_per_day: 20,
+		max_account_backups: 10,
+	};
+	const SETUP_USAGE = {
+		active_devices: 10,
+		revoked_devices: 0,
+		pending_enrollments: 0,
+		enrollments_last_24h: 0,
+		account_backups: 0,
+	};
+	const setupWith = (usage: Partial<typeof SETUP_USAGE>) =>
+		evaluateGate(
+			"setup_device",
+			ctx({
+				hub: {
+					state: "on",
+					limits: SETUP_LIMITS,
+					usage: { ...SETUP_USAGE, ...usage },
+				},
+			}),
+		);
+
+	test("setup checks the hub's device quota, counting setups that haven't started", () => {
+		expect(failure(setupWith({})).copy).toEqual({
 			code: "device_limit_reached",
 			params: { used: 10, max: 10, pending: 0 },
 		});
 		expect(
-			failure(
-				evaluateGate(
-					"setup_device",
-					ctx({
-						hub: {
-							state: "on",
-							limits,
-							usage: { ...usage, active_devices: 8, pending_enrollments: 2 },
-						},
-					}),
-				),
-			).copy,
+			failure(setupWith({ active_devices: 8, pending_enrollments: 2 })).copy,
 		).toEqual({
 			code: "device_limit_reached",
 			params: { used: 10, max: 10, pending: 2 },
 		});
+		expect(setupWith({ active_devices: 3 }).ok).toBe(true);
+	});
+
+	test("setup checks readiness before quotas", () => {
 		expect(
 			failure(
 				evaluateGate("setup_device", ctx({ extra: { readinessOk: false } })),
 			).copy.code,
 		).toBe("readiness_failing");
-		expect(
-			evaluateGate(
-				"setup_device",
-				ctx({
-					hub: { state: "on", limits, usage: { ...usage, active_devices: 3 } },
-				}),
-			).ok,
-		).toBe(true);
 	});
 
 	test("evaluateGates returns one result per requested action", () => {

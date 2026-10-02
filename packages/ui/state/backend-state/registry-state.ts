@@ -11,7 +11,9 @@ import type {
 	CachedPackage,
 	InstalledPackage,
 	PackageCommentsResponse,
+	PackageInvitation,
 	PackageUpdate,
+	PackageUser,
 	RequestAccessParams,
 	RequestAccessResponse,
 	SearchFilters,
@@ -65,6 +67,9 @@ export interface IRegistryState {
 	listAccessRequests(packageId: string): Promise<AccessRequest[]>;
 	acceptAccessRequest(packageId: string, requestId: string): Promise<void>;
 	rejectAccessRequest(packageId: string, requestId: string): Promise<void>;
+	listMyInvitations(): Promise<PackageInvitation[]>;
+	acceptInvitation(invitationId: string): Promise<PackageUser>;
+	rejectInvitation(invitationId: string): Promise<void>;
 	setAuthToken?(token: string | null): Promise<void>;
 	getPackageComments(
 		packageId: string,

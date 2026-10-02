@@ -38,6 +38,59 @@ function partContext(
 	};
 }
 
+/**
+ * The one coverage sentence (APP §6.3): "Status from 3 of 5 devices you can see;
+ * 1 is unknown, 1 hasn't checked in yet and your access doesn't cover {app} on 1 more."
+ */
+function coverageSentence(c: PartContext): string {
+	const readable = c.num("readable");
+	const total = c.num("total");
+	const states = [
+		c.num("unknown") > 0
+			? c.t("devices:headline.app.coverageUnknown", {
+					count: c.num("unknown"),
+					defaultValue_one: "{{count, number}} is unknown",
+					defaultValue_other: "{{count, number}} are unknown",
+				})
+			: "",
+		c.num("never") > 0
+			? c.t("devices:headline.app.coverageNever", {
+					count: c.num("never"),
+					defaultValue_one: "{{count, number}} hasn't checked in yet",
+					defaultValue_other: "{{count, number}} haven't checked in yet",
+				})
+			: "",
+	]
+		.filter(Boolean)
+		.join(c.t("devices:headline.app.coverageComma", ", "));
+	const access =
+		c.num("noAccess") > 0
+			? c.t(
+					"devices:headline.app.coverageNoAccess",
+					"your access doesn't cover {{app}} on {{more, number}} more",
+					{ app: c.str("app"), more: c.num("noAccess") },
+				)
+			: "";
+	const rest =
+		states && access
+			? c.t("devices:headline.app.coverageAnd", "{{states}} and {{access}}", {
+					states,
+					access,
+				})
+			: states || access;
+	return rest
+		? c.t(
+				"devices:headline.app.coverageWith",
+				"Status from {{readable, number}} of {{total, number}} devices you can see; {{rest}}.",
+				{ readable, total, rest },
+			)
+		: c.t(
+				"devices:headline.app.coverage",
+				"Status from {{readable, number}} of {{total, number}} devices you can see.",
+				{ readable, total },
+			);
+}
+
 /** One entry per headline code (SPEC §6.4, APP §7.4). */
 const PARTS = {
 	"fleet.critical": (c) =>
@@ -293,30 +346,13 @@ const PARTS = {
 			defaultValue_other:
 				"{{count, number}} services run an older version than {{version}}.",
 		}),
-	"app.coverage": (c) =>
-		c.num("unknown") > 0
-			? c.t("devices:headline.app.coverageUnknown", {
-					readable: c.num("readable"),
-					total: c.num("total"),
-					count: c.num("unknown"),
-					defaultValue_one:
-						"Status from {{readable, number}} of {{total, number}} devices you can see; {{count, number}} is unknown.",
-					defaultValue_other:
-						"Status from {{readable, number}} of {{total, number}} devices you can see; {{count, number}} are unknown.",
-				})
-			: c.t(
-					"devices:headline.app.coverage",
-					"Status from {{readable, number}} of {{total, number}} devices you can see.",
-					{ readable: c.num("readable"), total: c.num("total") },
-				),
-	"app.no_access": (c) =>
-		c.t("devices:headline.app.noAccess", {
-			app: c.str("app"),
+	"app.coverage": coverageSentence,
+	"app.not_checked_in": (c) =>
+		c.t("devices:headline.app.notCheckedIn", {
+			names: c.names("names", NAME_CAP),
 			count: c.num("count"),
-			defaultValue_one:
-				"Your access doesn't cover {{app}} on {{count, number}} more device.",
-			defaultValue_other:
-				"Your access doesn't cover {{app}} on {{count, number}} more devices.",
+			defaultValue_one: "{{names}} hasn't checked in yet.",
+			defaultValue_other: "{{names}} haven't checked in yet.",
 		}),
 } satisfies Record<HeadlineCode, (c: PartContext) => string>;
 

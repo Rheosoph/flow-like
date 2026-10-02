@@ -13,6 +13,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 pub mod internal;
 
 pub mod ai_act;
+mod artifact_cache;
 pub mod analytics;
 pub mod api;
 pub mod audit;
@@ -63,6 +64,10 @@ pub fn routes() -> Router<AppState> {
                 .delete(internal::delete_app::delete_app),
         )
         .route("/{app_id}/device-metadata", get(device_metadata::export))
+        .route(
+            "/{app_id}/device-placements",
+            get(crate::instances::app_placements::device_placements),
+        )
         .route("/{app_id}/detail", get(internal::get_detail::get_detail))
         .route(
             "/{app_id}/visibility",

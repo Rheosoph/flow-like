@@ -206,6 +206,13 @@ export interface ZonedDateTimeOptions {
 	timeZone?: string;
 }
 
+/**
+ * The zoned helpers below read 24-hour in every locale ("13:59:58", never
+ * "01:59:58 PM"): their callers set them in fixed-width time columns and in
+ * sentences written as "since 11:00".
+ */
+const CLOCK_24H = { hourCycle: "h23" } as const;
+
 const zonedDateTimeFormatters = new Map<string, Intl.DateTimeFormat>();
 function zonedDateTimeFormatter(
 	withYear: boolean,
@@ -222,6 +229,7 @@ function zonedDateTimeFormatter(
 			hour: "2-digit",
 			minute: "2-digit",
 			second: "2-digit",
+			...CLOCK_24H,
 			timeZoneName: "short",
 			timeZone,
 		});
@@ -259,6 +267,7 @@ export function formatTimeOfDay(
 			hour: "2-digit",
 			minute: "2-digit",
 			second: seconds ? "2-digit" : undefined,
+			...CLOCK_24H,
 			timeZone: options.timeZone,
 		});
 		timeOfDayFormatters.set(key, formatter);
@@ -305,6 +314,7 @@ export function formatMoment(
 			year: withYear ? "numeric" : undefined,
 			hour: "2-digit",
 			minute: "2-digit",
+			...CLOCK_24H,
 			timeZone: options.timeZone,
 		});
 		momentFormatters.set(key, formatter);

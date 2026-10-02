@@ -60,8 +60,8 @@ import { PackageUpdatesBanner } from "./app-packages/package-updates-banner";
 import { PackageWidgetsSection } from "./app-packages/package-widgets-section";
 import { LICENSE_WARNING_BADGE_CLASS } from "./app-packages/parts";
 import {
-	APP_PACKAGE_MANIFEST_KEY,
 	type PackageManifestView,
+	invalidateAppPackageQueries,
 	usePackageManifests,
 } from "./app-packages/use-package-manifests";
 import { PackageSearchDialog } from "./package-search-dialog";
@@ -265,16 +265,10 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		return map;
 	}, [updates.data]);
 
-	const invalidatePackageQueries = useCallback(() => {
-		queryClient.invalidateQueries({ queryKey: ["app", appId, "packages"] });
-		queryClient.invalidateQueries({
-			queryKey: ["app", appId, "package-updates"],
-		});
-		queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes", appId] });
-		queryClient.invalidateQueries({ queryKey: ["getCatalog", appId] });
-		queryClient.invalidateQueries({ queryKey: ["app-package-widgets", appId] });
-		queryClient.invalidateQueries({ queryKey: [APP_PACKAGE_MANIFEST_KEY] });
-	}, [queryClient, appId]);
+	const invalidatePackageQueries = useCallback(
+		() => invalidateAppPackageQueries(queryClient, appId),
+		[queryClient, appId],
+	);
 
 	const addPackage = useMutation({
 		mutationFn: async (req: AddAppPackageRequest) => {

@@ -52,6 +52,9 @@ pub struct CompilerClaims {
     pub package_id: String,
     pub version: String,
     pub payload_hash: String,
+    /// Optional publication generation authorized by the API. Legacy jobs omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_generation: Option<String>,
     pub callback_url: String,
     #[serde(rename = "typ")]
     pub token_type: String,

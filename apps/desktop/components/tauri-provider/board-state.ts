@@ -89,7 +89,10 @@ import {
 	type IFlowScriptApplyFailureReport,
 	flowScriptApplyOutcome,
 } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
-import { isExpiredPin } from "@flow-like/flow-like-ui/lib/package-license";
+import {
+	isExpiredPin,
+	isWidgetsOnlyCopy,
+} from "@flow-like/flow-like-ui/lib/package-license";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { timeRunStep } from "@flow-like/flow-like-ui/lib/run-timing";
 import {
@@ -533,6 +536,27 @@ const assertNoExpiredPackagesUsed = (
 	);
 };
 
+/**
+ * Every install refreshes the catalog, which installs the app's packages
+ * again: a registry that keeps answering with a widgets-only copy is asked for
+ * the whole package once in this long instead of without end.
+ */
+const WIDGETS_ONLY_REINSTALL_MS = 5 * 60_000;
+/** When the whole package was last asked for in place of a widgets-only copy, per `{packageId}@{version}`. */
+const widgetsOnlyReinstalls = new Map<string, number>();
+
+/** Whether a pin's widgets-only copy is due for another install, which this remembers. */
+const claimWidgetsOnlyReinstall = (pkg: RemoteAppPackage): boolean => {
+	const key = `${pkg.packageId}@${pkg.version}`;
+	const last = widgetsOnlyReinstalls.get(key);
+	const now = Date.now();
+	if (last !== undefined && now - last < WIDGETS_ONLY_REINSTALL_MS) {
+		return false;
+	}
+	widgetsOnlyReinstalls.set(key, now);
+	return true;
+};
+
 export class BoardState implements IBoardState {
 	private readonly offlineSyncDrains = new Map<
 		string,
@@ -778,16 +802,29 @@ export class BoardState implements IBoardState {
 				"packages.install.list_installed",
 				() => this.backend.registryState.getInstalledPackages(),
 			);
-			const installedVersionMap = new Map(
-				installedPackages.map((pkg) => [pkg.id, pkg.version]),
-			);
+			const installed = new Map(installedPackages.map((pkg) => [pkg.id, pkg]));
+			// A widgets-only copy holds no nodes: whoever lists the project's pins
+			// may run its flows, so the registry now sends the whole package. The
+			// native client files such a copy beside a complete active copy of
+			// another version, so the pin's copy is judged wherever it is held.
+			const needsInstall = (pkg: RemoteAppPackage): boolean => {
+				const local = installed.get(pkg.packageId);
+				if (!local) return true;
+				const versions = local.versions;
+				const held =
+					local.version === pkg.version
+						? local
+						: versions && Object.hasOwn(versions, pkg.version)
+							? versions[pkg.version]
+							: undefined;
+				if (held && isWidgetsOnlyCopy(held)) {
+					return claimWidgetsOnlyReinstall(pkg);
+				}
+				return local.version !== pkg.version;
+			};
 
 			const installTasks = packages
-				.filter(
-					(pkg) =>
-						options.forceReload ||
-						installedVersionMap.get(pkg.packageId) !== pkg.version,
-				)
+				.filter((pkg) => options.forceReload || needsInstall(pkg))
 				.map((pkg) =>
 					timeRunStep(`packages.install.${pkg.packageId}`, () =>
 						this.backend.registryState.installPackage(

@@ -357,44 +357,52 @@ interface FleetRowProps {
 	sentence: ReactNode;
 }
 
+/*
+ * One column plan for every row, with no content-sized track, so devices,
+ * services, steps and sentences line up down the list whatever a row's
+ * actions are. The step bars share a fixed column, so six to eight deploy
+ * phases fit as well as four. Below 820 px of list width the sentence and the
+ * actions move under the first line; below 520 px the service does too.
+ */
+const ROW =
+	"grid grid-cols-[minmax(0,160px)_minmax(0,150px)_150px_minmax(220px,1fr)_minmax(0,240px)] items-center gap-x-3 gap-y-1.5 border-t border-hairline px-3 py-2 text-ui first:border-t-0 @max-[820px]/rf:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px] @max-[520px]/rf:grid-cols-[minmax(0,1fr)_120px]";
+const ROW_DEVICE =
+	"truncate font-mono @max-[520px]/rf:col-start-1 @max-[520px]/rf:row-start-1";
+const ROW_SERVICE =
+	"truncate font-mono @max-[520px]/rf:col-span-full @max-[520px]/rf:empty:hidden";
+const ROW_STEPS =
+	"flex gap-0.5 @max-[820px]/rf:col-start-3 @max-[820px]/rf:row-start-1 @max-[520px]/rf:col-start-2";
+const ROW_SENTENCE =
+	"inline-flex min-w-0 items-start gap-1 text-xs @max-[820px]/rf:col-span-full";
+const ROW_ACTIONS =
+	"flex flex-wrap justify-end gap-1.5 @max-[820px]/rf:col-span-full @max-[820px]/rf:justify-start @max-[820px]/rf:empty:hidden";
+
 function FleetRow({ row, sentence }: Readonly<FleetRowProps>) {
 	const Icon = ROW_ICON[row.state];
 	return (
 		<li
 			data-device={row.device}
 			data-state={row.state}
-			className={cx(
-				"grid grid-cols-[minmax(120px,1.1fr)_minmax(120px,1.1fr)_84px_minmax(0,2fr)_auto] items-center gap-3 border-t border-hairline px-3 py-2 text-ui first:border-t-0",
-				"@max-[720px]/rf:grid-cols-[minmax(0,1fr)_auto] @max-[720px]/rf:gap-y-1.5",
-				MUTED.includes(row.state) && "text-muted-foreground",
-			)}
+			className={cx(ROW, MUTED.includes(row.state) && "text-muted-foreground")}
 		>
-			<span className="truncate font-mono" title={row.device}>
+			<span className={ROW_DEVICE} title={row.device}>
 				{row.device}
 			</span>
-			<span
-				className="truncate font-mono @max-[720px]/rf:order-3"
-				title={row.service}
-			>
-				{row.service ?? ""}
+			<span className={ROW_SERVICE} title={row.service}>
+				{row.service}
 			</span>
-			<span aria-hidden className="flex gap-0.75 @max-[720px]/rf:order-2">
+			<span aria-hidden className={ROW_STEPS}>
 				{row.phases.map((phase, phaseIndex) => (
 					<StepBar
 						// biome-ignore lint/suspicious/noArrayIndexKey: phases are positional
 						key={phaseIndex}
 						title={phase}
 						state={miniState(row, phaseIndex)}
-						className="w-4.5"
+						className="min-w-2 flex-1"
 					/>
 				))}
 			</span>
-			<span
-				className={cx(
-					"inline-flex min-w-0 items-start gap-1 text-xs @max-[720px]/rf:order-4 @max-[720px]/rf:col-span-full",
-					ROW_TEXT[row.state],
-				)}
-			>
+			<span className={cx(ROW_SENTENCE, ROW_TEXT[row.state])}>
 				<Icon
 					aria-hidden
 					className={cx(
@@ -404,9 +412,7 @@ function FleetRow({ row, sentence }: Readonly<FleetRowProps>) {
 				/>
 				<span className="min-w-0">{sentence}</span>
 			</span>
-			<span className="flex flex-wrap justify-end gap-1.5 @max-[720px]/rf:order-5 @max-[720px]/rf:col-span-full @max-[720px]/rf:justify-start">
-				{row.actions}
-			</span>
+			<span className={ROW_ACTIONS}>{row.actions}</span>
 		</li>
 	);
 }

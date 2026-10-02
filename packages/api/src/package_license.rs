@@ -22,25 +22,25 @@ use sea_orm::{
 use serde::Serialize;
 use utoipa::ToSchema;
 
+use crate::cache::{PlatformCache, Reservation};
 use crate::entity::sea_orm_active_enums::{NotificationType, WasmPackageVisibility};
 use crate::entity::{
     app_package, membership, meta, notification, role, wasm_package, wasm_package_user,
     wasm_package_version,
 };
 use crate::error::ApiError;
-use crate::middleware::jwt::AppUser;
+use crate::middleware::jwt::{AppPermissionResponse, AppUser};
 use crate::permission::role_permission::RolePermissions;
 use crate::push_notifications::{DispatchNotificationInput, dispatch_notification_idempotent};
 use crate::state::AppState;
 
 pub const GRACE_DAYS: i64 = 30;
 const SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
-const SWEEP_APP_LIMIT: u64 = 200;
+const SWEEP_PAGE: u64 = 200;
+const SWEEP_MAX_PAGES: usize = 25;
 static LAST_SWEEP_MS: AtomicI64 = AtomicI64::new(0);
-/// Last app id of a full sweep page; the next sweep continues after it.
-static SWEEP_CURSOR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-/// Pins that expired longer ago than this have had every reminder.
-const SWEEP_AFTER_EXPIRY_DAYS: i64 = 7;
+/// A pin that expired longer ago than this has had every reminder.
+const REMINDER_DAYS_AFTER_EXPIRY: i64 = 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -109,6 +109,21 @@ pub fn usable_pins(now: DateTime<Utc>) -> Condition {
         .add(app_package::Column::Stale.eq(false))
         .add(app_package::Column::StaleSince.is_null())
         .add(app_package::Column::StaleSince.gt((now - grace()).fixed_offset()))
+}
+
+fn usable_app_pins_at(app_id: &str, now: DateTime<Utc>) -> sea_orm::Select<app_package::Entity> {
+    app_package::Entity::find()
+        .filter(app_package::Column::AppId.eq(app_id))
+        .filter(usable_pins(now))
+}
+
+/// The pins of `app_id` that may still be used: licensed, or lapsed within the
+/// grace period.
+pub async fn usable_app_pins<C: ConnectionTrait>(
+    db: &C,
+    app_id: &str,
+) -> Result<Vec<app_package::Model>, sea_orm::DbErr> {
+    usable_app_pins_at(app_id, Utc::now()).all(db).await
 }
 
 /// Whether `user_id` holds `package`: free public packages are held by
@@ -472,20 +487,24 @@ async fn notify_stage(
     }
     let app = app_name(state, app_id).await;
     let (title, description) = notice(stage, package_name, &app, stale_since.to_utc() + grace());
+    let cache = state.cache.platform().await.ok();
+    let in_inbox = |id: String| async move {
+        notification::Entity::find_by_id(id)
+            .one(&state.db)
+            .await
+            .map(|row| row.is_some())
+    };
     for user_id in recipients {
         let id = format!(
             "package-license:{pin_id}:{}:{}:{user_id}",
             stale_since.timestamp_millis(),
             stage.key()
         );
-        if notification::Entity::find_by_id(&id)
-            .one(&state.db)
-            .await?
-            .is_some()
-        {
+        let arrived = in_inbox(id.clone()).await?;
+        if !reminder_due(cache.as_ref(), &id, arrived).await {
             continue;
         }
-        dispatch_notification_idempotent(
+        let dispatched = dispatch_notification_idempotent(
             state,
             &id,
             DispatchNotificationInput {
@@ -501,9 +520,69 @@ async fn notify_stage(
                 source_node_id: None,
             },
         )
-        .await?;
+        .await;
+        // The inbox row is written before the push, so it tells whether the
+        // reminder arrived when the dispatch reports an error.
+        let delivered = dispatched.is_ok() || in_inbox(id.clone()).await.unwrap_or(false);
+        settle_reminder(cache.as_ref(), &id, delivered).await;
+        dispatched?;
     }
     Ok(())
+}
+
+const REMINDER_NAMESPACE: &str = "package-license-reminder";
+/// How long a reminder is held while it is being sent. Shorter than the pause
+/// between two sweeps, so one that was cut off mid-send is tried by the next.
+const REMINDER_LEASE: Duration = Duration::from_secs(10 * 60);
+/// How long a delivered reminder stays on record: longer than any stage lasts,
+/// the 7 days after expiry being the longest.
+const REMINDER_RECORD_TTL: Duration = Duration::from_secs(8 * 24 * 60 * 60);
+
+/// Whether the reminder `id` went out before or is being sent right now;
+/// otherwise this call holds it for `REMINDER_LEASE`. The inbox row is the
+/// recipient's to delete, so it cannot be the only record of a reminder:
+/// without this one, every sweep after a delete sends it again. A cache that
+/// cannot be reached answers "no", so no reminder is lost to it.
+async fn reminder_taken(cache: Option<&PlatformCache>, id: &str) -> bool {
+    let Some(cache) = cache else {
+        return false;
+    };
+    matches!(
+        cache
+            .try_insert(REMINDER_NAMESPACE, id, &false, REMINDER_LEASE)
+            .await,
+        Ok(Reservation::Held(_))
+    )
+}
+
+/// Whether the reminder `id` still has to be sent; the caller then holds it.
+/// One that is in the inbox without a record gets its record here: the send
+/// was cut off after the row was written, or the record could not be stored,
+/// and nothing else would write it before the recipient deletes the row.
+async fn reminder_due(cache: Option<&PlatformCache>, id: &str, in_inbox: bool) -> bool {
+    let taken = reminder_taken(cache, id).await;
+    if in_inbox && !taken {
+        settle_reminder(cache, id, true).await;
+    }
+    !in_inbox && !taken
+}
+
+/// Keeps a delivered reminder on record for its stage, or frees one that did
+/// not arrive so the next sweep sends it.
+async fn settle_reminder(cache: Option<&PlatformCache>, id: &str, delivered: bool) {
+    let Some(cache) = cache else {
+        return;
+    };
+    let settled = if delivered {
+        cache
+            .set(REMINDER_NAMESPACE, id, &true, REMINDER_RECORD_TTL)
+            .await
+    } else {
+        cache.delete(REMINDER_NAMESPACE, id).await.map(|_| ())
+    };
+    if let Err(error) = settled {
+        tracing::warn!(error = %error, id, delivered, "Package licence reminder record was not updated");
+    }
 }
 
 pub async fn notify_lapses(state: &AppState, lapses: &[Lapse]) {
@@ -525,8 +604,8 @@ pub async fn notify_lapses(state: &AppState, lapses: &[Lapse]) {
 
 /// Reconcile projects a hook may have missed (a holder removed by a raw
 /// delete leaves `membershipId` null) and send the week, day and expiry
-/// reminders for lapsed pins. Bounded per call and paged by app id, so every
-/// project is reached however many there are; runs at most hourly per process.
+/// reminders for lapsed pins. One call pages through every such project by app
+/// id, so none waits behind the others; runs at most hourly per process.
 pub async fn sweep(state: &AppState) -> Result<u64, ApiError> {
     let now = Utc::now();
     let last = LAST_SWEEP_MS.load(Ordering::Relaxed);
@@ -542,70 +621,69 @@ pub async fn sweep(state: &AppState) -> Result<u64, ApiError> {
     {
         return Ok(0);
     }
-    let reminders_due_since =
-        (now - grace() - chrono::Duration::days(SWEEP_AFTER_EXPIRY_DAYS)).fixed_offset();
-    let mut query = app_package::Entity::find()
-        .select_only()
-        .column(app_package::Column::AppId)
-        .filter(
-            Condition::any()
-                .add(
-                    Condition::all()
-                        .add(app_package::Column::Stale.eq(true))
-                        .add(
-                            Condition::any()
-                                .add(app_package::Column::StaleSince.is_null())
-                                .add(app_package::Column::StaleSince.gt(reminders_due_since)),
-                        ),
-                )
-                .add(
-                    Condition::all()
-                        .add(app_package::Column::Stale.eq(false))
-                        .add(app_package::Column::MembershipId.is_null()),
-                ),
-        )
-        .distinct()
-        .order_by_asc(app_package::Column::AppId)
-        .limit(SWEEP_APP_LIMIT);
-    let cursor = SWEEP_CURSOR.lock().ok().and_then(|cursor| cursor.clone());
-    if let Some(cursor) = cursor {
-        query = query.filter(app_package::Column::AppId.gt(cursor));
-    }
-    let app_ids: Vec<String> = query.into_tuple().all(&state.db).await?;
-    if let Ok(mut cursor) = SWEEP_CURSOR.lock() {
-        *cursor = if app_ids.len() as u64 == SWEEP_APP_LIMIT {
-            app_ids.last().cloned()
-        } else {
-            None
-        };
-    }
     let mut reminded = 0;
-    for app_id in &app_ids {
-        refresh_app(state, app_id).await;
-        let lapsed = app_package::Entity::find()
-            .filter(app_package::Column::AppId.eq(app_id))
-            .filter(app_package::Column::Stale.eq(true))
-            .filter(app_package::Column::StaleSince.is_not_null())
-            .all(&state.db)
-            .await?;
-        for pin in lapsed {
-            let Some(since) = pin.stale_since else {
-                continue;
-            };
-            let stage = Stage::at(since, now);
-            if stage == Stage::Lapsed {
-                continue;
-            }
-            let name = wasm_package::Entity::find_by_id(&pin.package_id)
-                .one(&state.db)
-                .await?
-                .map(|package| package.name)
-                .unwrap_or_else(|| pin.package_id.clone());
-            if let Err(error) = notify_stage(state, app_id, &pin.id, &name, since, stage).await {
-                tracing::warn!(error = %error, app_id, pin_id = %pin.id, "Package licence reminder failed");
-            } else {
-                reminded += 1;
-            }
+    let mut after: Option<String> = None;
+    for _ in 0..SWEEP_MAX_PAGES {
+        let mut page = app_package::Entity::find()
+            .select_only()
+            .column(app_package::Column::AppId)
+            .filter(
+                Condition::any()
+                    .add(app_package::Column::Stale.eq(true))
+                    .add(app_package::Column::MembershipId.is_null()),
+            )
+            .distinct()
+            .order_by_asc(app_package::Column::AppId)
+            .limit(SWEEP_PAGE);
+        if let Some(after) = after.as_deref() {
+            page = page.filter(app_package::Column::AppId.gt(after));
+        }
+        let app_ids: Vec<String> = page.into_tuple().all(&state.db).await?;
+        for app_id in &app_ids {
+            refresh_app(state, app_id).await;
+            reminded += remind_app(state, app_id, now).await?;
+        }
+        if (app_ids.len() as u64) < SWEEP_PAGE {
+            return Ok(reminded);
+        }
+        after = app_ids.last().cloned();
+    }
+    tracing::warn!(
+        pages = SWEEP_MAX_PAGES,
+        after = ?after,
+        "Package licence sweep reached its page limit; projects after this id were not swept"
+    );
+    Ok(reminded)
+}
+
+/// Send the reminders that are due for the lapsed pins of one project.
+async fn remind_app(state: &AppState, app_id: &str, now: DateTime<Utc>) -> Result<u64, ApiError> {
+    let reminders_due_since =
+        (now - grace() - chrono::Duration::days(REMINDER_DAYS_AFTER_EXPIRY)).fixed_offset();
+    let lapsed = app_package::Entity::find()
+        .filter(app_package::Column::AppId.eq(app_id))
+        .filter(app_package::Column::Stale.eq(true))
+        .filter(app_package::Column::StaleSince.gt(reminders_due_since))
+        .all(&state.db)
+        .await?;
+    let mut reminded = 0;
+    for pin in lapsed {
+        let Some(since) = pin.stale_since else {
+            continue;
+        };
+        let stage = Stage::at(since, now);
+        if stage == Stage::Lapsed {
+            continue;
+        }
+        let name = wasm_package::Entity::find_by_id(&pin.package_id)
+            .one(&state.db)
+            .await?
+            .map(|package| package.name)
+            .unwrap_or_else(|| pin.package_id.clone());
+        if let Err(error) = notify_stage(state, app_id, &pin.id, &name, since, stage).await {
+            tracing::warn!(error = %error, app_id, pin_id = %pin.id, "Package licence reminder failed");
+        } else {
+            reminded += 1;
         }
     }
     Ok(reminded)
@@ -697,6 +775,20 @@ pub async fn caller_pin(
     member_pin(&state.db, &user_id, app_id, package_id).await
 }
 
+/// Whether the caller can read the project's boards, and so run them on
+/// their own device. That is what a package's node binary and node list are
+/// for; members without it only load the package's widgets on the project's
+/// pages. A "no" from the cached role is confirmed against the database: it
+/// answers with the widgets-only view instead of an error, so nothing else
+/// would tell a just-promoted member to ask again.
+pub async fn reads_project_boards(state: &AppState, user: &AppUser, app_id: &str) -> bool {
+    let reads = |permission: Result<AppPermissionResponse, ApiError>| {
+        permission.is_ok_and(|permission| permission.has_permission(RolePermissions::ReadBoards))
+    };
+    reads(user.app_permission(app_id, state).await)
+        || reads(user.app_permission_fresh(app_id, state).await)
+}
+
 /// The version of `package_id` the caller may use through `app_id`.
 pub async fn member_pinned_version(
     state: &AppState,
@@ -770,6 +862,23 @@ mod tests {
     }
 
     #[test]
+    fn usable_pins_are_asked_for_one_app_and_leave_out_expired_licences() {
+        use sea_orm::{DatabaseBackend, QueryTrait};
+        let now = DateTime::parse_from_rfc3339("2026-10-02T00:00:00Z")
+            .unwrap()
+            .to_utc();
+        let sql = usable_app_pins_at("app-1", now)
+            .build(DatabaseBackend::Postgres)
+            .to_string();
+
+        let (_, filter) = sql.split_once(" WHERE ").expect("the query is filtered");
+        assert_eq!(
+            filter,
+            r#""AppPackage"."appId" = 'app-1' AND ("AppPackage"."stale" = FALSE OR "AppPackage"."staleSince" IS NULL OR "AppPackage"."staleSince" > '2026-09-02 00:00:00.000000 +00:00')"#
+        );
+    }
+
+    #[test]
     fn reminders_follow_the_remaining_grace() {
         let now = Utc::now();
         let since = |left_hours: i64| {
@@ -780,6 +889,71 @@ mod tests {
         assert!(Stage::at(since(24 * 7), now) == Stage::Week);
         assert!(Stage::at(since(24), now) == Stage::Day);
         assert!(Stage::at(since(0), now) == Stage::Expired);
+    }
+
+    #[tokio::test]
+    async fn a_reminder_is_leased_while_it_is_sent_and_recorded_once_it_arrived() {
+        let (store, cache) = crate::cache::memory_platform_cache();
+        // Entries expire on the wall clock; the store's own clock starts at 0.
+        store.advance(Utc::now().timestamp_millis());
+        let cache = Some(&cache);
+        let past_the_lease = REMINDER_LEASE.as_millis() as i64 + 60_000;
+
+        // Before the store's clock moves on: a lease taken later is already
+        // behind it and would be free whether or not it was released.
+        assert!(!reminder_taken(cache, "failed").await);
+        settle_reminder(cache, "failed", false).await;
+        assert!(
+            !reminder_taken(cache, "failed").await,
+            "a reminder that did not arrive is free for the next sweep"
+        );
+
+        assert!(!reminder_taken(cache, "cut-off").await);
+        assert!(reminder_taken(cache, "cut-off").await);
+        store.advance(past_the_lease);
+        assert!(
+            !reminder_taken(cache, "cut-off").await,
+            "a send that was cut off is tried again by the next sweep"
+        );
+
+        assert!(!reminder_taken(cache, "arrived").await);
+        settle_reminder(cache, "arrived", true).await;
+        store.advance(past_the_lease);
+        assert!(
+            reminder_taken(cache, "arrived").await,
+            "a delivered reminder stays on record after its inbox row is deleted"
+        );
+        store.advance(REMINDER_RECORD_TTL.as_millis() as i64);
+        assert!(!reminder_taken(cache, "arrived").await);
+
+        assert!(!reminder_taken(None, "no cache").await);
+        assert!(!reminder_taken(None, "no cache").await);
+    }
+
+    #[tokio::test]
+    async fn a_reminder_in_the_inbox_without_a_record_gets_one() {
+        let (store, cache) = crate::cache::memory_platform_cache();
+        store.advance(Utc::now().timestamp_millis());
+        let cache = Some(&cache);
+        let past_the_lease = REMINDER_LEASE.as_millis() as i64 + 60_000;
+
+        assert!(reminder_due(cache, "fresh", false).await);
+        assert!(
+            !reminder_due(cache, "fresh", false).await,
+            "another sweep is sending it"
+        );
+
+        // The send was cut off after the inbox row was written: only the row is left.
+        assert!(!reminder_due(cache, "cut-off", true).await);
+        store.advance(past_the_lease);
+        assert!(
+            !reminder_due(cache, "cut-off", false).await,
+            "deleting the row later must not send it again"
+        );
+        assert!(!reminder_due(cache, "cut-off", true).await);
+
+        assert!(!reminder_due(None, "no cache", true).await);
+        assert!(reminder_due(None, "no cache", false).await);
     }
 
     async fn load_pin(db: &sea_orm::DatabaseConnection, package: &str) -> app_package::Model {

@@ -35,8 +35,10 @@ use axum::{
 pub use server::ServerRegistry;
 
 /// Check that the caller has at least the given `WasmPackagePermission` on a
-/// package. Uses the in-memory permission cache (120 s TTL) to avoid repeated
-/// DB look-ups. Returns the resolved `WasmPackagePermission` on success.
+/// package. A grant is read from the in-memory permission cache (120 s TTL);
+/// a caller without one is looked up in the DB every time, because access can
+/// be granted on another API process. Returns the resolved
+/// `WasmPackagePermission` on success.
 ///
 /// Usage:
 /// ```ignore

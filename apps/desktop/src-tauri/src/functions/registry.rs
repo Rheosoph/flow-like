@@ -11,6 +11,7 @@ use crate::{
 use flow_like::a2ui::micro_widget::{PackageWidgetRef, PackageWidgetSource};
 use flow_like::flow::node::NodeLogic;
 use flow_like::hub::{Hub, HubWidgetStorage};
+use flow_like::state::FlowLikeState;
 use flow_like_types::sync::Mutex;
 use flow_like_wasm::widget_policy::{
     PlatformStorageScope, WIDGET_POLICY_SOURCE_LOCAL, WidgetPolicyDescriptor, WidgetPolicySubject,
@@ -25,7 +26,6 @@ use flow_like_wasm::{
 };
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::AppHandle;
@@ -43,12 +43,13 @@ pub struct RegistryWidgetSource(pub Arc<Mutex<Option<RegistryClient>>>);
 impl PackageWidgetSource for RegistryWidgetSource {
     async fn list_widgets(
         &self,
-        packages: &HashMap<String, String>,
+        app_id: &str,
+        state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Vec<PackageWidgetRef>> {
         // Clone out of the guard: the lock must not be held across the lookup.
         let client = { self.0.lock().await.clone() };
         match client {
-            Some(client) => client.list_widgets(packages).await,
+            Some(client) => client.list_widgets(app_id, state).await,
             None => Ok(Vec::new()),
         }
     }
@@ -64,7 +65,7 @@ pub(crate) fn wasm_registry_cache_dir(project_dir: &std::path::Path) -> std::pat
         .join("wasm_registry_cache")
 }
 
-const DEFAULT_REGISTRY_URL: &str = "https://api.flow-like.com/api/v1/registry";
+const DEFAULT_REGISTRY_URL: &str = flow_like_wasm::registry::OFFICIAL_REGISTRY_URL;
 
 /// The registry of a hub; `None` for a profile without one.
 fn hub_registry_url(hub: &str, secure: bool) -> Option<String> {
@@ -102,10 +103,16 @@ async fn get_client_with_token(
     if let Some(t) = token {
         client.set_auth_token(Some(t));
     }
-    if let Some(registry_url) = registry_url {
-        client.set_default_registry(registry_url);
-    }
+    client.set_default_registry(registry_url.unwrap_or_else(|| DEFAULT_REGISTRY_URL.to_string()));
     Ok(client.clone())
+}
+
+/// The registry client of the current profile's hub, for callers outside the
+/// registry commands that talk to the hub.
+pub(crate) async fn registry_client(
+    app_handle: &AppHandle,
+) -> Result<RegistryClient, TauriFunctionError> {
+    get_client_with_token(app_handle, None).await
 }
 
 pub(crate) fn emit_package_status(app_handle: &AppHandle, package_id: &str, status: &str) {
@@ -891,33 +898,34 @@ pub async fn registry_init(
 
     drop(settings_guard);
 
-    // Preserve auth token from existing client (if any) so re-init doesn't
-    // lose the token that was set via pushAuthContext / setAuthToken.
     let state = app_handle
         .try_state::<TauriRegistryState>()
         .ok_or_else(|| anyhow::anyhow!("Registry state not found"))?;
 
-    let existing_token = {
-        let guard = state.0.lock().await;
-        guard.as_ref().and_then(|c| c.auth_token().cloned())
-    };
-
-    let registry_config = RegistryConfig {
-        default_registry,
-        additional_registries: vec![],
-        local_paths: vec![],
-        cache_dir,
-        cache_duration_hours: 24 * 7,
-        auto_update_index: true,
-        allow_unverified: false,
-        auth_token: existing_token,
-    };
-
-    let client = RegistryClient::new(registry_config)?;
-    client.init().await?;
-
     let mut guard = state.0.lock().await;
-    *guard = Some(client);
+    match guard.as_mut() {
+        // Every window initialises the registry. A later one keeps the client
+        // the first created, with its sign-in: an install in flight edits that
+        // client's state, and a second state read from disk would write its
+        // older records back over it.
+        Some(client) if client.cache_dir() == cache_dir => {
+            client.set_default_registry(default_registry);
+        }
+        _ => {
+            let client = RegistryClient::new(RegistryConfig {
+                default_registry,
+                additional_registries: vec![],
+                local_paths: vec![],
+                cache_dir,
+                cache_duration_hours: 24 * 7,
+                auto_update_index: true,
+                allow_unverified: false,
+                auth_token: guard.as_ref().and_then(|c| c.auth_token().cloned()),
+            })?;
+            client.init().await?;
+            *guard = Some(client);
+        }
+    }
     drop(guard);
 
     // Ensure this source is installed synchronously with registry readiness.

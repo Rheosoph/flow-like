@@ -244,6 +244,46 @@ test("the summary lists this scope's vaults, newest pins, backups, authorities a
 	expect(local.summary()).toBe(unchanged);
 });
 
+test("a reload reads every identity pin at once and overlapping reloads share one follow-up", async () => {
+	const { deps, io } = harness();
+	const { readDeviceIdentityPins: _, ...shared } = io;
+	const reads = { vaults: 0, pins: 0 };
+	const local = createLocalInventory(deps, {
+		...shared,
+		async listDeviceVaults(scope) {
+			reads.vaults++;
+			return (await io.listDeviceVaults?.(scope)) ?? [];
+		},
+		async listDeviceIdentityPins() {
+			reads.pins++;
+			return new Map([
+				["dev-a", [pin("second", 10, 2_000), pin("first", 20, 1_000)]],
+				["gone", [pin("old", 30, 500)]],
+			]);
+		},
+	});
+	const settled = await Promise.allSettled([
+		local.reload(),
+		local.reload(),
+		local.reload(),
+		local.reload(),
+	]);
+	expect(settled.map((result) => result.status)).toEqual(
+		Array(4).fill("fulfilled"),
+	);
+	expect(reads).toEqual({ vaults: 2, pins: 2 });
+	expect(
+		local.summary().vaults.map((row) => [row.deviceId, row.identityPinnedAt]),
+	).toEqual([
+		["dev-a", 2_000],
+		["dev-b", undefined],
+	]);
+	expect(local.identityCheck("dev-a", identity(10))).toBe("match");
+	expect(local.identityCheck("gone", identity(30))).toBe("unpinned");
+	await local.reload();
+	expect(reads).toEqual({ vaults: 3, pins: 3 });
+});
+
 test("the identity pre-check compares only against the newest pin", async () => {
 	const { deps, io, calls } = harness();
 	const local = createLocalInventory(deps, io);

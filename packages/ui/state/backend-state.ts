@@ -68,7 +68,10 @@ import type {
 } from "./backend-state/sink-state";
 import type { IStorageState } from "./backend-state/storage-state";
 
-export type { IStorageUploadOptions } from "./backend-state/storage-state";
+export type {
+	IStorageListOptions,
+	IStorageUploadOptions,
+} from "./backend-state/storage-state";
 import type { ITeamState } from "./backend-state/team-state";
 import type { ITemplateState } from "./backend-state/template-state";
 import type { IUsageState } from "./backend-state/usage-state";

@@ -119,11 +119,10 @@ class Env {
 	inspected: string[] = [];
 	observed: unknown[][] = [];
 	grantId = "owner";
-	inventoryWriter: () => Promise<InventoryWriter> = async () => async (
-		inspection,
-	) => {
-		this.written.push(inspection);
-	};
+	inventoryWriter: () => Promise<InventoryWriter> =
+		async () => async (inspection) => {
+			this.written.push(inspection);
+		};
 	private timers: { at: number; run: () => void; id: number }[] = [];
 	private nextId = 0;
 	private keyListeners = new Set<() => void>();
@@ -674,6 +673,36 @@ describe("delivery guarantees", () => {
 		]);
 	});
 
+	test("background work that loses a reply puts nothing in the tray", async () => {
+		const { env, manager } = setup();
+		manager.acquire(DEVICE, "stream");
+		await env.advance(0);
+		env.handler = (command, conn, operationId) => {
+			if (command.type !== "telemetry_receipt")
+				return defaultHandler(command, conn);
+			conn.close();
+			throw new ManagementUnconfirmedError(operationId ?? "op-receipt");
+		};
+		const receipt = { type: "telemetry_receipt" };
+		const failure = (attempt: Promise<unknown>) =>
+			attempt.catch((error: unknown) => error);
+		expect(
+			await failure(
+				manager.exclusive(DEVICE, (call) => call(receipt), { lane: "poll" }),
+			),
+		).toBeInstanceOf(ManagementUnconfirmedError);
+		expect(
+			await failure(manager.call(DEVICE, { lane: "poll" })(receipt)),
+		).toBeInstanceOf(ManagementUnconfirmedError);
+		expect(env.activity.start).toHaveLength(0);
+		expect(
+			await failure(manager.exclusive(DEVICE, (call) => call(receipt))),
+		).toBeInstanceOf(ManagementUnconfirmedError);
+		expect(env.activity.start).toMatchObject([
+			{ kind: "command", state: "unknown", target: { deviceId: DEVICE } },
+		]);
+	});
+
 	test("waitForDeploymentRollout survives one lost reply", async () => {
 		const { env, manager } = setup();
 		manager.acquire(DEVICE, "operation");
@@ -749,6 +778,69 @@ describe("inspection cache and demand", () => {
 		expect(env.conns[0].closed).toBe(true);
 		expect(manager.state(DEVICE)).toEqual({ kind: "idle" });
 		expect(manager.inspection(DEVICE)).toBeDefined();
+	});
+
+	test("a session that expired while nobody needed it is closed and cannot disturb its successor", async () => {
+		const { env, manager } = setup((env) => {
+			env.outcomes = [50, 300];
+		});
+		manager.acquire(DEVICE, "view")();
+		await env.advance(55_000);
+		expect(env.conns[0].open).toBe(false);
+		manager.acquire(DEVICE, "view");
+		await env.advance(0);
+		expect(env.conns).toHaveLength(2);
+		expect(env.conns[0].closed).toBe(true);
+		expect(manager.state(DEVICE).kind).toBe("live");
+		env.conns[0].drop();
+		await env.advance(10_000);
+		expect(manager.state(DEVICE).kind).toBe("live");
+		expect(env.conns).toHaveLength(2);
+	});
+
+	test("a failed read drops the page progress of that read", async () => {
+		const { env, manager } = setup();
+		manager.acquire(DEVICE, "view");
+		await env.advance(0);
+		const row = {
+			id: "placement-1",
+			project_id: "project-1",
+			deployment_id: "deployment-1",
+			revision: "r1",
+			desired_state: "running",
+			observed_state: "running",
+			config_revision: 1,
+			intent_revision: 1,
+			applied_revision: 1,
+			desired_replicas: 1,
+			running_replicas: 1,
+			ready_replicas: 1,
+			max_replicas: 1,
+			replicas: [],
+		};
+		env.handler = (command) =>
+			command.type !== "inspect_page"
+				? completed()
+				: command.after === null
+					? completed({
+							device_id: DEVICE,
+							boot_id: "boot-1",
+							placements: [row],
+							next: row.id,
+						})
+					: {
+							operation_id: "op",
+							state: "rejected",
+							result: { code: "failed", error: "busy disk", retryable: false },
+						};
+		await manager.refreshInspection(DEVICE);
+		const inspection = manager.inspection(DEVICE);
+		expect(inspection?.error).toMatchObject({
+			step: "reading_services",
+			code: "rejected",
+		});
+		expect(inspection?.progress).toBeUndefined();
+		expect(inspection?.value.placements).toEqual([]);
 	});
 
 	test("locking the keys ends the session, clears live data and refuses queued calls", async () => {
@@ -865,9 +957,9 @@ describe("inspection cache and demand", () => {
 		await env.advance(0);
 		expect(states.every((kind) => kind === "idle")).toBe(true);
 		expect(manager.state(DEVICE)).toEqual({ kind: "idle" });
-		expect(manager.steps(DEVICE).every((step) => step.state === "pending")).toBe(
-			true,
-		);
+		expect(
+			manager.steps(DEVICE).every((step) => step.state === "pending"),
+		).toBe(true);
 		expect(env.conns.every((conn) => conn.closed)).toBe(true);
 	});
 

@@ -342,3 +342,131 @@ describe("bit editor persistence", () => {
 		}
 	});
 });
+
+describe("hosted embedding validation", () => {
+	function embedding(parameters: Record<string, unknown>) {
+		return validateBitDraft(
+			{
+				...fixture(),
+				type: IBitTypes.Embedding,
+				parameters: { input_length: 2048, vector_length: 1024, ...parameters },
+			},
+			"admin",
+		);
+	}
+	const remote = {
+		implementation: "CloudflareWorkersAI",
+		model_id: "@cf/qwen/qwen3-embedding-0.6b",
+	};
+	test("external providers require a model and input price while internal keeps its default pricing", () => {
+		expect(embedding({ remote: {} })).toBeNull();
+		expect(embedding({})).toBeNull();
+		expect(embedding({ remote })).toContain("input price");
+		expect(embedding({ remote: { implementation: "OpenAI" } })).toContain(
+			"model or deployment ID",
+		);
+		expect(
+			embedding({ remote, pricing: { input_micro_usd_per_million_tokens: 0 } }),
+		).toBeNull();
+		expect(
+			embedding({
+				remote,
+				pricing: {
+					input_micro_usd_per_million_tokens: 20,
+					output_micro_usd_per_million_tokens: 0,
+				},
+			}),
+		).toBeNull();
+	});
+	test("external model dimensions and input limits must match the hosted contract", () => {
+		const pricing = { input_micro_usd_per_million_tokens: 0 };
+		for (const input_length of [0, -1, 1.5, 4_294_967_296])
+			expect(embedding({ remote, pricing, input_length })).toContain(
+				"Input length",
+			);
+		const cohere = { implementation: "Cohere", model_id: "embed-v4.0" };
+		expect(
+			embedding({ remote: cohere, pricing, vector_length: 768 }),
+		).toContain("256, 512, 1024, 1536");
+		expect(
+			embedding({
+				remote: cohere,
+				pricing,
+				vector_length: 1024,
+				input_length: 128000,
+			}),
+		).toBeNull();
+		expect(
+			embedding({
+				remote: { implementation: "VoyageAI", model_id: "voyage-3.5" },
+				pricing,
+				vector_length: 1536,
+			}),
+		).toContain("vector dimensions");
+		expect(
+			embedding({
+				remote: {
+					implementation: "OpenAI",
+					model_id: "text-embedding-3-small",
+				},
+				pricing,
+				vector_length: 2048,
+			}),
+		).toContain("at most 1536");
+	});
+	test("byte pricing requires a batch limit and cannot coexist with token pricing", () => {
+		const pricing = { input_micro_usd_per_million_bytes: 12 };
+		expect(embedding({ remote, pricing })).toContain("batch byte limit");
+		expect(
+			embedding({ remote, pricing: { ...pricing, max_input_bytes: 4096 } }),
+		).toBeNull();
+		expect(
+			embedding({
+				remote,
+				pricing: {
+					...pricing,
+					max_input_bytes: 4096,
+					input_micro_usd_per_million_tokens: 12,
+				},
+			}),
+		).toContain("exactly one");
+	});
+	test("Cloudflare BGE requires mean pooling to prevent mixing CLS and mean vectors", () => {
+		const pricing = { input_micro_usd_per_million_tokens: 0 };
+		const bge = { ...remote, model_id: "@cf/baai/bge-large-en-v1.5" };
+		for (const pooling of ["CLS", "None", undefined]) {
+			expect(embedding({ remote: bge, pricing, pooling })).toContain(
+				"mean pooling",
+			);
+		}
+		expect(embedding({ remote: bge, pricing, pooling: "Mean" })).toBeNull();
+		expect(
+			embedding({
+				remote: { ...bge, implementation: "Internal" },
+				pooling: "CLS",
+			}),
+		).toBeNull();
+	});
+	test("rejects invalid prices, ambiguous nulls, unsupported endpoints and output charges", () => {
+		for (const pricing of [
+			{ input_micro_usd_per_million_tokens: -1 },
+			{ input_micro_usd_per_million_tokens: null },
+			{ input_micro_usd_per_million_tokens: "0.0000011" },
+			{ input_micro_usd_per_million_tokens: 1.5 },
+			{ input_micro_usd_per_million_tokens: Number.MAX_SAFE_INTEGER + 1 },
+			{ input_micro_usd_per_million_tokens: 0, request_micro_usd: null },
+			{ input_micro_usd_per_million_tokens: 0, max_input_bytes: 0 },
+			{
+				input_micro_usd_per_million_tokens: 0,
+				output_micro_usd_per_million_tokens: 10,
+			},
+		])
+			expect(embedding({ remote, pricing })).not.toBeNull();
+		expect(
+			embedding({
+				remote: { ...remote, endpoint_secret_name: "ENDPOINT" },
+				pricing: { input_micro_usd_per_million_tokens: 0 },
+			}),
+		).toContain("fixed endpoint");
+	});
+});

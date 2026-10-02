@@ -100,6 +100,13 @@ class DeploymentTest(unittest.TestCase):
                 web = config["services"]["web"]["environment"]
                 self.assertEqual(web["FLOW_LIKE_WEB_REDIRECT_URL"], frontend + "/callback")
 
+    def test_bucket_key_auto_default_and_explicit_overrides_reach_api(self):
+        for compose_file in ("docker-compose.yml", "docker-stack.yml"):
+            for value in ("", "true", "false"):
+                with self.subTest(compose_file=compose_file, value=value):
+                    _, config = self.render({"S3_KMS_BUCKET_KEY": value}, compose_file=compose_file)
+                    self.assertEqual(config["services"]["api"]["environment"]["S3_KMS_BUCKET_KEY"], value)
+
     def test_stripe_credentials_survive_setup_and_only_reach_api(self):
         supplied = {key: f"test_{index}" for index, key in enumerate(setup.STRIPE_SETTINGS)}
         self.text = setup.generate((ROOT / ".env.example").read_text(), "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", stripe=supplied)

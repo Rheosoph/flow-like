@@ -1,4 +1,4 @@
-use super::{context, human_owner, management, repository};
+use super::{context, enabled, human_owner, management, repository};
 use crate::{
     db::{RetryPolicy, retry_transaction},
     error::ApiError,
@@ -11,10 +11,14 @@ use axum::{
     routing::{get, post},
 };
 use flow_like_device_protocol::*;
-use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, Value};
-use serde::Deserialize;
+use sea_orm::{ConnectionTrait, DatabaseBackend, FromQueryResult, Statement, Value};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::result::Result;
+
+/// However long a tier keeps history, the hub drops a record after this.
+const MAX_RETENTION_SECONDS: u64 = 31 * 86_400;
+const USAGE_DEVICES: i64 = 1000;
 
 fn sql(query: &str, values: impl IntoIterator<Item = Value>) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Postgres, query, values)
@@ -31,9 +35,134 @@ fn kind(kind: &ArchiveKind) -> &'static str {
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
+        .route("/archive-usage", get(archive_usage))
         .route("/{id}/archives", post(upload).get(list))
         .route("/{id}/archives/{archive}", get(read))
 }
+
+/// Bytes and seconds of history per account tier, as configured.
+type TierLimits = std::collections::BTreeMap<String, (u64, u64)>;
+
+fn tier_limits(state: &AppState) -> TierLimits {
+    state
+        .platform_config
+        .standalone
+        .telemetry_tiers
+        .iter()
+        .map(|(tier, limit)| (tier.clone(), (limit.max_bytes, limit.retention_seconds)))
+        .collect()
+}
+
+/// The bytes a tier keeps and for how many seconds; `None` when it keeps no history.
+fn tier_limit(limits: &TierLimits, tier: &str) -> Option<(u64, u64)> {
+    let (max_bytes, retention_seconds) = limits.get(tier).copied().unwrap_or_default();
+    (max_bytes > 0 && retention_seconds > 0)
+        .then(|| (max_bytes, retention_seconds.min(MAX_RETENTION_SECONDS)))
+}
+
+async fn account_tier<C: ConnectionTrait>(db: &C, owner: &str) -> Result<String, ApiError> {
+    Ok(db
+        .query_one_raw(sql(
+            r#"SELECT tier::text AS tier FROM "User" WHERE id=$1"#,
+            [owner.into()],
+        ))
+        .await?
+        .ok_or(ApiError::FORBIDDEN)?
+        .try_get::<String>("", "tier")?
+        .to_uppercase())
+}
+
+/// Unexpired history of all of an owner's devices: what the quota counts.
+async fn used_bytes<C: ConnectionTrait>(db: &C, owner: &str, now: i64) -> Result<u64, ApiError> {
+    let used = db
+        .query_one_raw(sql(
+            r#"SELECT COALESCE(SUM("sizeBytes"),0)::bigint AS used FROM "DeviceArchive" WHERE "ownerId"=$1 AND "expiresAt">$2"#,
+            [owner.into(), now.into()],
+        ))
+        .await?
+        .ok_or_else(|| ApiError::internal("Missing telemetry quota result"))?
+        .try_get::<i64>("", "used")?;
+    u64::try_from(used)
+        .map_err(|_| ApiError::internal(format!("Telemetry usage of {owner} is negative: {used}")))
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+struct ArchiveUsage {
+    /// The account's plan tier.
+    tier: String,
+    /// Bytes of history the plan keeps across all your devices; 0 when it keeps none.
+    max_bytes: u64,
+    /// Seconds a record is kept; 0 when the plan keeps no history.
+    retention_seconds: u64,
+    used_bytes: u64,
+    /// Devices holding unexpired history, largest first.
+    devices: Vec<ArchiveDeviceUsage>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, FromQueryResult, utoipa::ToSchema)]
+struct ArchiveDeviceUsage {
+    device_id: String,
+    #[schema(minimum = 0)]
+    used_bytes: i64,
+    #[schema(minimum = 0)]
+    segments: i64,
+    oldest_created_at: i64,
+    newest_expires_at: i64,
+}
+
+/// An owner's plan limits and the unexpired history each of their devices holds.
+async fn usage<C: ConnectionTrait>(
+    db: &C,
+    limits: &TierLimits,
+    owner: &str,
+    now: i64,
+) -> Result<ArchiveUsage, ApiError> {
+    let tier = account_tier(db, owner).await?;
+    let (max_bytes, retention_seconds) = tier_limit(limits, &tier).unwrap_or_default();
+    let devices = ArchiveDeviceUsage::find_by_statement(sql(
+        &format!(r#"SELECT "deviceId" AS device_id,SUM("sizeBytes")::bigint AS used_bytes,COUNT(*)::bigint AS segments,MIN("createdAt") AS oldest_created_at,MAX("expiresAt") AS newest_expires_at FROM "DeviceArchive" WHERE "ownerId"=$1 AND "expiresAt">$2 GROUP BY "deviceId" ORDER BY used_bytes DESC,"deviceId" LIMIT {USAGE_DEVICES}"#),
+        [owner.into(), now.into()],
+    ))
+    .all(db)
+    .await?;
+    Ok(ArchiveUsage {
+        tier,
+        max_bytes,
+        retention_seconds,
+        used_bytes: used_bytes(db, owner, now).await?,
+        devices,
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/devices/archive-usage",
+    tag = "devices",
+    description = "Show how much retained device history (logs and metrics) your devices keep on the hub, how much your plan allows and how long records are kept.",
+    responses(
+        (status = 200, description = "Your plan's history limits and the unexpired history per device, largest first", body = ArchiveUsage),
+        (status = 403, description = "Your account or token cannot manage devices"),
+        (status = 503, description = "Devices are not enabled on this hub")
+    ),
+    security(("bearer_auth" = []), ("pat" = []))
+)]
+async fn archive_usage(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+) -> Result<Json<ArchiveUsage>, ApiError> {
+    enabled(&context(&state))?;
+    let owner = human_owner(&state, &user).await?;
+    Ok(Json(
+        usage(
+            &state.db,
+            &tier_limits(&state),
+            &owner,
+            chrono::Utc::now().timestamp(),
+        )
+        .await?,
+    ))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Upload {
@@ -78,16 +207,11 @@ async fn upload(
     let digest = compact_digest(&request.bundle.manifest_jws);
     let response_digest = digest.clone();
     let response_id = manifest.archive_id.clone();
-    let limits = state.platform_config.standalone.telemetry_tiers.clone();
     let epoch = device.status.auth_epoch;
-    let limits = limits
-        .into_iter()
-        .map(|(tier, limit)| (tier, (limit.max_bytes, limit.retention_seconds)))
-        .collect();
     let stored = retain_verified(
         &state.db,
         state.db_dialect,
-        limits,
+        tier_limits(&state),
         id,
         epoch,
         manifest,
@@ -100,10 +224,16 @@ async fn upload(
     ))
 }
 
+/// The account stores no more history. Devices tell the two causes apart by code; the
+/// sentences stay as they are for agents that only know those.
+fn storage_refused(code: &'static str, message: &'static str) -> ApiError {
+    ApiError::coded(axum::http::StatusCode::PAYMENT_REQUIRED, code, message)
+}
+
 async fn retain_verified(
     db: &sea_orm::DatabaseConnection,
     dialect: crate::db::DbDialect,
-    limits: std::collections::BTreeMap<String, (u64, u64)>,
+    limits: TierLimits,
     id: String,
     epoch: u64,
     manifest: ArchiveManifest,
@@ -118,9 +248,8 @@ async fn retain_verified(
             // Every device under one owner conflicts on this row, fencing concurrent quota writes and tier changes.
             let changed=tx.execute_raw(sql(r#"UPDATE "User" SET tier=tier WHERE id=$1 AND status='ACTIVE'"#,[owner.clone().into()])).await?.rows_affected();
             if changed!=1{return Err(ApiError::FORBIDDEN);}
-            let tier=tx.query_one_raw(sql(r#"SELECT tier::text AS tier FROM "User" WHERE id=$1"#,[owner.clone().into()])).await?.ok_or(ApiError::FORBIDDEN)?.try_get::<String>("","tier")?.to_uppercase();
-            let (max_bytes,retention_seconds)=limits.get(&tier).copied().unwrap_or_default();
-            if max_bytes==0 || retention_seconds==0{return Err(ApiError::payment_required("This account tier does not store device telemetry"));}
+            let tier=account_tier(tx,&owner).await?;
+            let Some((max_bytes,retention_seconds))=tier_limit(&limits,&tier) else {return Err(storage_refused("ARCHIVE_TIER_WITHOUT_HISTORY","This account tier does not store device telemetry"));};
             let now=chrono::Utc::now().timestamp();
             // Bound deletion batches for both Postgres and DSQL. Expired rows never count toward quota or reads.
             tx.execute_raw(sql(r#"DELETE FROM "DeviceArchive" WHERE ("deviceId","archiveId") IN (SELECT "deviceId","archiveId" FROM "DeviceArchive" WHERE "ownerId"=$1 AND "expiresAt"<=$2 LIMIT 128)"#,[owner.clone().into(),now.into()])).await?;
@@ -133,11 +262,9 @@ async fn retain_verified(
             let (sequence,previous)=head.map(|r|Ok::<_,ApiError>((r.try_get::<i64>("","sequence")? as u64,Some(r.try_get::<String>("","digest")?)))).transpose()?.unwrap_or((0,None));
             if manifest.sequence==sequence && previous.as_ref()==Some(&digest){return Ok(false);}
             if manifest.sequence!=sequence+1 || manifest.previous_manifest_digest!=previous{return Err(ApiError::conflict("Archive sequence does not extend the retained-history chain"));}
-            let retention=retention_seconds.min(31*86400) as i64;
-            let expires=manifest.created_at.saturating_add(retention);
+            let expires=manifest.created_at.saturating_add(retention_seconds as i64);
             if expires>now {
-                let used=tx.query_one_raw(sql(r#"SELECT COALESCE(SUM("sizeBytes"),0)::bigint AS used FROM "DeviceArchive" WHERE "ownerId"=$1 AND "expiresAt">$2"#,[owner.clone().into(),now.into()])).await?.ok_or_else(||ApiError::internal("Missing telemetry quota result"))?.try_get::<i64>("","used")?;
-                if used<0 || (used as u64).saturating_add(encoded.len() as u64)>max_bytes{return Err(ApiError::payment_required("Device telemetry storage quota reached"));}
+                if used_bytes(tx,&owner,now).await?.saturating_add(encoded.len() as u64)>max_bytes{return Err(storage_refused("ARCHIVE_QUOTA_REACHED","Device telemetry storage quota reached"));}
                 tx.execute_raw(sql(r#"INSERT INTO "DeviceArchive"("deviceId","archiveId","ownerId",scope,kind,sequence,digest,bundle,"sizeBytes","createdAt","expiresAt") VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"#,[id.clone().into(),manifest.archive_id.clone().into(),owner.into(),scope.clone().into(),kind.into(),(manifest.sequence as i64).into(),digest.clone().into(),encoded.clone().into(),(encoded.len() as i64).into(),manifest.created_at.into(),expires.into()])).await?;
             }
             tx.execute_raw(sql(r#"INSERT INTO "DeviceArchiveHead"("deviceId",scope,kind,sequence,digest) VALUES($1,$2,$3,$4,$5) ON CONFLICT("deviceId",scope,kind) DO UPDATE SET sequence=excluded.sequence,digest=excluded.digest"#,[id.into(),scope.into(),kind.into(),(manifest.sequence as i64).into(),digest.into()])).await?;
@@ -592,34 +719,67 @@ mod tests {
         .await
     }
 
+    /// A disposable schema with the device tables and active accounts.
+    struct Scratch {
+        admin: DatabaseConnection,
+        db: DatabaseConnection,
+        schema: String,
+    }
+
+    impl Scratch {
+        /// `accounts` lists `(id, tier)` rows as SQL values.
+        async fn with_accounts(accounts: &str) -> Self {
+            let url = std::env::var("FLOW_LIKE_DEVICE_TEST_DATABASE_URL").unwrap();
+            let admin = Database::connect(&url).await.unwrap();
+            let schema = format!("archive_test_{}", uuid::Uuid::new_v4().simple());
+            admin
+                .execute_unprepared(&format!("CREATE SCHEMA {schema}"))
+                .await
+                .unwrap();
+            let mut url = reqwest::Url::parse(&url).unwrap();
+            url.query_pairs_mut()
+                .append_pair("options", &format!("-c search_path={schema}"));
+            let mut options = ConnectOptions::new(url.to_string());
+            options.max_connections(8).min_connections(1);
+            let db = Database::connect(options).await.unwrap();
+            for migration in [
+                include_str!(
+                    "../../prisma/migrations/20260921120000_standalone_devices/migration.sql"
+                ),
+                include_str!(
+                    "../../prisma/migrations/20260922120000_device_management/migration.sql"
+                ),
+                include_str!(
+                    "../../prisma/migrations/20260922130000_device_archives/migration.sql"
+                ),
+                include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
+            ] {
+                for statement in migration.split(';').filter(|part| !part.trim().is_empty()) {
+                    db.execute_unprepared(statement).await.unwrap();
+                }
+            }
+            db.execute_unprepared(&format!(r#"CREATE TABLE "User"(id TEXT PRIMARY KEY,tier TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'ACTIVE'); INSERT INTO "User"(id,tier) VALUES{accounts}"#)).await.unwrap();
+            Self { admin, db, schema }
+        }
+
+        async fn discard(self) {
+            self.db.close().await.unwrap();
+            self.admin
+                .execute_unprepared(&format!("DROP SCHEMA {} CASCADE", self.schema))
+                .await
+                .unwrap();
+            self.admin.close().await.unwrap();
+        }
+    }
+
     #[tokio::test]
     #[ignore = "requires FLOW_LIKE_DEVICE_TEST_DATABASE_URL pointing to a disposable PostgreSQL server"]
     async fn archive_downloads_fence_revocation_and_expiry_during_database_waits() {
         use std::time::Duration;
-        let url = std::env::var("FLOW_LIKE_DEVICE_TEST_DATABASE_URL").unwrap();
-        let admin = Database::connect(&url).await.unwrap();
-        let schema = format!("archive_reader_test_{}", uuid::Uuid::new_v4().simple());
-        admin
-            .execute_unprepared(&format!("CREATE SCHEMA {schema}"))
-            .await
-            .unwrap();
-        let mut url = reqwest::Url::parse(&url).unwrap();
-        url.query_pairs_mut()
-            .append_pair("options", &format!("-c search_path={schema}"));
-        let mut options = ConnectOptions::new(url.to_string());
-        options.max_connections(8).min_connections(1);
-        let db = Database::connect(options).await.unwrap();
-        for migration in [
-            include_str!("../../prisma/migrations/20260921120000_standalone_devices/migration.sql"),
-            include_str!("../../prisma/migrations/20260922120000_device_management/migration.sql"),
-            include_str!("../../prisma/migrations/20260922130000_device_archives/migration.sql"),
-            include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
-        ] {
-            for statement in migration.split(';').filter(|part| !part.trim().is_empty()) {
-                db.execute_unprepared(statement).await.unwrap();
-            }
-        }
-        db.execute_unprepared(r#"CREATE TABLE "User"(id TEXT PRIMARY KEY,status TEXT NOT NULL,tier TEXT NOT NULL); INSERT INTO "User" VALUES('owner','ACTIVE','PREMIUM'),('reader','ACTIVE','FREE'),('nonrecipient','ACTIVE','FREE')"#).await.unwrap();
+        let scratch =
+            Scratch::with_accounts("('owner','PREMIUM'),('reader','FREE'),('nonrecipient','FREE')")
+                .await;
+        let db = scratch.db.clone();
         let telemetry = device(&db, "shared").await;
         let owner = SigningKey::generate();
         let now = chrono::Utc::now().timestamp();
@@ -773,12 +933,7 @@ mod tests {
             list.await.err().unwrap().status(),
             axum::http::StatusCode::UNAUTHORIZED
         );
-        db.close().await.unwrap();
-        admin
-            .execute_unprepared(&format!("DROP SCHEMA {schema} CASCADE"))
-            .await
-            .unwrap();
-        admin.close().await.unwrap();
+        scratch.discard().await;
     }
     fn manifest(device: &str) -> ArchiveManifest {
         ArchiveManifest {
@@ -821,31 +976,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires FLOW_LIKE_DEVICE_TEST_DATABASE_URL pointing to a disposable PostgreSQL server"]
     async fn archive_quota_chain_expiry_and_revocation_are_transactional() {
-        let url = std::env::var("FLOW_LIKE_DEVICE_TEST_DATABASE_URL").unwrap();
-        let admin = Database::connect(&url).await.unwrap();
-        let schema = format!("archive_test_{}", uuid::Uuid::new_v4().simple());
-        admin
-            .execute_unprepared(&format!("CREATE SCHEMA {schema}"))
-            .await
-            .unwrap();
-        let mut url = reqwest::Url::parse(&url).unwrap();
-        url.query_pairs_mut()
-            .append_pair("options", &format!("-c search_path={schema}"));
-        let mut options = ConnectOptions::new(url.to_string());
-        options.max_connections(8).min_connections(1);
-        let db = Database::connect(options).await.unwrap();
-        for migration in [
-            include_str!("../../prisma/migrations/20260921120000_standalone_devices/migration.sql"),
-            include_str!("../../prisma/migrations/20260922130000_device_archives/migration.sql"),
-            include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
-        ] {
-            for statement in migration.split(';') {
-                if !statement.trim().is_empty() {
-                    db.execute_unprepared(statement).await.unwrap();
-                }
-            }
-        }
-        db.execute_unprepared(r#"CREATE TABLE "User"(id TEXT PRIMARY KEY,status TEXT NOT NULL,tier TEXT NOT NULL); INSERT INTO "User" VALUES('owner','ACTIVE','PREMIUM')"#).await.unwrap();
+        let scratch = Scratch::with_accounts("('owner','PREMIUM')").await;
+        let db = scratch.db.clone();
         device(&db, "one").await;
         device(&db, "two").await;
         let one = manifest("one");
@@ -880,12 +1012,13 @@ mod tests {
         next.sequence = 2;
         next.previous_manifest_digest = Some(digest.into());
         next.archive_id = uuid::Uuid::new_v4().to_string();
+        let refused = retain(&db, next.clone(), "next").await.unwrap_err();
         assert_eq!(
-            retain(&db, next.clone(), "next")
-                .await
-                .unwrap_err()
-                .status(),
-            axum::http::StatusCode::PAYMENT_REQUIRED
+            (refused.status(), refused.public_code()),
+            (
+                axum::http::StatusCode::PAYMENT_REQUIRED,
+                "ARCHIVE_TIER_WITHOUT_HISTORY"
+            )
         );
         db.execute_unprepared(
             r#"UPDATE "User" SET tier='PREMIUM'; UPDATE "DeviceArchive" SET "expiresAt"=0"#,
@@ -908,11 +1041,153 @@ mod tests {
             retain(&db, next, "revoked").await.unwrap_err().status(),
             axum::http::StatusCode::UNAUTHORIZED
         );
-        db.close().await.unwrap();
-        admin
-            .execute_unprepared(&format!("DROP SCHEMA {schema} CASCADE"))
-            .await
-            .unwrap();
-        admin.close().await.unwrap();
+        scratch.discard().await;
+    }
+
+    #[test]
+    fn a_tier_keeps_history_only_with_both_limits_and_never_past_the_hub_maximum() {
+        let limits: TierLimits = [
+            ("PRO".into(), (1024, 3600)),
+            ("LONG".into(), (1024, 40 * 86_400)),
+            ("NO_BYTES".into(), (0, 3600)),
+            ("NO_TIME".into(), (1024, 0)),
+        ]
+        .into();
+        assert_eq!(tier_limit(&limits, "PRO"), Some((1024, 3600)));
+        assert_eq!(
+            tier_limit(&limits, "LONG"),
+            Some((1024, MAX_RETENTION_SECONDS))
+        );
+        for tier in ["NO_BYTES", "NO_TIME", "FREE"] {
+            assert_eq!(tier_limit(&limits, tier), None, "{tier}");
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires FLOW_LIKE_DEVICE_TEST_DATABASE_URL pointing to a disposable PostgreSQL server"]
+    async fn archive_usage_counts_unexpired_history_per_device_against_the_plan() {
+        let scratch = Scratch::with_accounts("('owner','premium'),('other','FREE')").await;
+        let db = scratch.db.clone();
+        let limits: TierLimits = [("PREMIUM".into(), (200_000, 40 * 86_400))].into();
+        let now = chrono::Utc::now().timestamp();
+        let plan = |used_bytes, devices| ArchiveUsage {
+            tier: "PREMIUM".into(),
+            max_bytes: 200_000,
+            retention_seconds: MAX_RETENTION_SECONDS,
+            used_bytes,
+            devices,
+        };
+        let held = |device: &str, segments, oldest, newest: i64| ArchiveDeviceUsage {
+            device_id: device.into(),
+            used_bytes: segments * 60_000,
+            segments,
+            oldest_created_at: oldest,
+            newest_expires_at: newest + MAX_RETENTION_SECONDS as i64,
+        };
+        assert_eq!(
+            usage(&db, &limits, "owner", now).await.unwrap(),
+            plan(0, vec![])
+        );
+
+        device(&db, "one").await;
+        device(&db, "two").await;
+        let segment = |device: &str, sequence: u64, created_at| ArchiveManifest {
+            sequence,
+            previous_manifest_digest: (sequence > 1).then(|| format!("{device}-{}", sequence - 1)),
+            created_at,
+            ..manifest(device)
+        };
+        let store = |manifest: ArchiveManifest| {
+            let digest = format!("{}-{}", manifest.device_id, manifest.sequence);
+            retain_verified(
+                &db,
+                DbDialect::Postgres,
+                limits.clone(),
+                manifest.device_id.clone(),
+                1,
+                manifest,
+                "x".repeat(60_000),
+                digest,
+            )
+        };
+        for manifest in [
+            segment("one", 1, now - 100),
+            segment("one", 2, now - 50),
+            segment("two", 1, now - 10),
+        ] {
+            assert!(store(manifest).await.unwrap());
+        }
+        assert_eq!(
+            usage(&db, &limits, "owner", now).await.unwrap(),
+            plan(
+                180_000,
+                vec![
+                    held("one", 2, now - 100, now - 50),
+                    held("two", 1, now - 10, now - 10)
+                ]
+            )
+        );
+        // The usage is the sum the quota enforces: full now, room once a segment expires.
+        let refused = store(segment("two", 2, now - 5)).await.unwrap_err();
+        assert_eq!(
+            (refused.status(), refused.public_code()),
+            (
+                axum::http::StatusCode::PAYMENT_REQUIRED,
+                "ARCHIVE_QUOTA_REACHED"
+            )
+        );
+        db.execute_raw(sql(
+            r#"UPDATE "DeviceArchive" SET "expiresAt"=$1 WHERE "deviceId"='one' AND sequence=1"#,
+            [now.into()],
+        ))
+        .await
+        .unwrap();
+        db.execute_raw(sql(
+            r#"INSERT INTO "DeviceArchive"("deviceId","archiveId","ownerId",scope,kind,sequence,digest,bundle,"sizeBytes","createdAt","expiresAt") VALUES('foreign','segment','other','device','logs',1,'digest','x',999,$1,$2)"#,
+            [(now - 1).into(), (now + 1).into()],
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            usage(&db, &limits, "owner", now).await.unwrap(),
+            plan(
+                120_000,
+                vec![
+                    held("one", 1, now - 50, now - 50),
+                    held("two", 1, now - 10, now - 10)
+                ]
+            )
+        );
+        assert!(store(segment("two", 2, now - 5)).await.unwrap());
+        assert_eq!(
+            usage(&db, &limits, "owner", now).await.unwrap().used_bytes,
+            180_000
+        );
+
+        // A tier without history still shows what it holds until that expires.
+        assert_eq!(
+            usage(&db, &limits, "other", now).await.unwrap(),
+            ArchiveUsage {
+                tier: "FREE".into(),
+                max_bytes: 0,
+                retention_seconds: 0,
+                used_bytes: 999,
+                devices: vec![ArchiveDeviceUsage {
+                    device_id: "foreign".into(),
+                    used_bytes: 999,
+                    segments: 1,
+                    oldest_created_at: now - 1,
+                    newest_expires_at: now + 1,
+                }],
+            }
+        );
+        assert_eq!(
+            usage(&db, &limits, "nobody", now)
+                .await
+                .unwrap_err()
+                .status(),
+            axum::http::StatusCode::FORBIDDEN
+        );
+        scratch.discard().await;
     }
 }

@@ -190,7 +190,10 @@ function renewsOnItsOwn(certificate: CertificateFacts, now: number) {
 	if (renewalProblem(certificate, now)) return undefined;
 	const { issuer, acme } = certificate;
 	const at = issuer?.next_renewal_at ?? acme?.next_attempt_at;
-	return at !== undefined && at < certificate.notAfter ? at : undefined;
+	// An attempt that is already overdue promises nothing: the item stays a Warning.
+	return at !== undefined && at > now && at < certificate.notAfter
+		? at
+		: undefined;
 }
 
 function certificateParams(certificate: CertificateFacts): CopyParams {

@@ -14,6 +14,7 @@ use std::{
 const MAX_OPERATION_BYTES: usize = flow_like_device_protocol::MAX_OFFLINE_REPLAY_HTTP_BYTES;
 const RECORD_OVERHEAD: u64 = 4096;
 const NON_TERMINAL: &str = "state NOT IN ('applied','skipped','superseded')";
+const TERMINAL: &str = "state IN ('applied','skipped','superseded')";
 pub(crate) const CLOSED: &str = "Offline changes for this project were removed from this device";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -208,6 +209,19 @@ pub struct OperationLookup {
     pub error_code: Option<String>,
 }
 
+/// What a recurring summary needs from a queue. Unlike [`OutboxStatus`] it is read without
+/// loading an operation, so no payload enters the reader's memory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueueTotals {
+    pub pending_count: u64,
+    pub pending_bytes: u64,
+    pub oldest_at: Option<i64>,
+    pub quarantined: bool,
+    /// A queued operation is blocked, in conflict or of unknown outcome.
+    pub needs_operator: bool,
+    pub mirror_error: bool,
+}
+
 /// A lazy snapshot's cloud root, the local version it was taken at and its cloud files.
 #[cfg(feature = "runtime")]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -289,6 +303,87 @@ const SELECT_SUMMARY: &str = "SELECT sequence,operation_id,resource,json_extract
 const LANE_HEADS: &str = "sequence IN (SELECT MIN(sequence) FROM operations WHERE state NOT IN ('applied','skipped','superseded') GROUP BY resource)";
 const GLOBAL_HEAD: &str = "sequence=(SELECT MIN(sequence) FROM operations WHERE state NOT IN ('applied','skipped','superseded'))";
 const NEEDS_OPERATOR: &str = "state IN ('blocked','conflict','outcome_unknown')";
+
+fn listing_limit(limit: u32) -> Result<()> {
+    ensure!(
+        (1..=256).contains(&limit),
+        "Invalid offline listing page size"
+    );
+    Ok(())
+}
+
+/// A sequence beyond SQLite's range bounds nothing, so it saturates.
+fn sequence_bound(sequence: u64) -> i64 {
+    i64::try_from(sequence).unwrap_or(i64::MAX)
+}
+
+fn operations_after(
+    db: &Connection,
+    after_sequence: Option<u64>,
+    limit: u32,
+) -> Result<Vec<OperationSummary>> {
+    listing_limit(limit)?;
+    let mut statement = db.prepare(&format!(
+        "{SELECT_SUMMARY} WHERE {NON_TERMINAL} AND sequence>?1 ORDER BY sequence LIMIT ?2"
+    ))?;
+    Ok(statement
+        .query_map(
+            params![sequence_bound(after_sequence.unwrap_or(0)), limit],
+            summary,
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn terminal_before(
+    db: &Connection,
+    before_sequence: Option<u64>,
+    limit: u32,
+) -> Result<Vec<OperationSummary>> {
+    listing_limit(limit)?;
+    let mut statement = db.prepare(&format!(
+        "{SELECT_SUMMARY} WHERE {TERMINAL} AND sequence<?1 ORDER BY sequence DESC LIMIT ?2"
+    ))?;
+    Ok(statement
+        .query_map(
+            params![sequence_bound(before_sequence.unwrap_or(u64::MAX)), limit],
+            summary,
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn lookup(db: &Connection, operation_id: &str) -> Result<Option<OperationLookup>> {
+    Ok(db
+        .query_row(
+            "SELECT state,superseded_by,error,error_code FROM operations WHERE operation_id=?1",
+            [operation_id],
+            |row| {
+                Ok(OperationLookup {
+                    state: row.get(0)?,
+                    superseded_by: row.get(1)?,
+                    error: row.get(2)?,
+                    error_code: row.get(3)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+fn totals_of(db: &Connection) -> Result<QueueTotals> {
+    Ok(db.query_row(
+        &format!("SELECT COUNT(*),COALESCE(SUM(bytes),0),MIN(first_queued_at),COALESCE(MAX({NEEDS_OPERATOR}),0),EXISTS(SELECT 1 FROM settings WHERE key='quarantined'),EXISTS(SELECT 1 FROM settings WHERE key LIKE 'mirror_error:%') FROM operations WHERE {NON_TERMINAL}"),
+        [],
+        |row| {
+            Ok(QueueTotals {
+                pending_count: row.get(0)?,
+                pending_bytes: row.get(1)?,
+                oldest_at: row.get(2)?,
+                needs_operator: row.get(3)?,
+                quarantined: row.get(4)?,
+                mirror_error: row.get(5)?,
+            })
+        },
+    )?)
+}
 
 fn status_of(db: &Connection, scope: String) -> Result<OutboxStatus> {
     let (pending_count,pending_bytes,oldest_at) = db.query_row("SELECT COUNT(*),COALESCE(SUM(bytes),0),MIN(first_queued_at) FROM operations WHERE state NOT IN ('applied','skipped','superseded')", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
@@ -1197,34 +1292,19 @@ impl Outbox {
         after_sequence: Option<u64>,
         limit: u32,
     ) -> Result<Vec<OperationSummary>> {
-        ensure!(
-            (1..=256).contains(&limit),
-            "Invalid offline listing page size"
-        );
-        let db = self.lock()?;
-        let mut statement = db.prepare(&format!(
-            "{SELECT_SUMMARY} WHERE {NON_TERMINAL} AND sequence>?1 ORDER BY sequence LIMIT ?2"
-        ))?;
-        Ok(statement
-            .query_map(params![after_sequence.unwrap_or(0), limit], summary)?
-            .collect::<rusqlite::Result<Vec<_>>>()?)
+        operations_after(&*self.lock()?, after_sequence, limit)
+    }
+    /// Applied, skipped and superseded tombstones, newest first. They hold no payload and
+    /// only the newest 1024 sequences are kept.
+    pub fn list_terminal(
+        &self,
+        before_sequence: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<OperationSummary>> {
+        terminal_before(&*self.lock()?, before_sequence, limit)
     }
     pub fn operation_state(&self, operation_id: &str) -> Result<Option<OperationLookup>> {
-        Ok(self
-            .lock()?
-            .query_row(
-                "SELECT state,superseded_by,error,error_code FROM operations WHERE operation_id=?1",
-                [operation_id],
-                |row| {
-                    Ok(OperationLookup {
-                        state: row.get(0)?,
-                        superseded_by: row.get(1)?,
-                        error: row.get(2)?,
-                        error_code: row.get(3)?,
-                    })
-                },
-            )
-            .optional()?)
+        lookup(&*self.lock()?, operation_id)
     }
     pub fn pending_for(&self, resource: &str) -> Result<Vec<QueuedOperation>> {
         let db = self.lock()?;
@@ -1549,6 +1629,28 @@ impl OutboxReader {
                     r.get(0)
                 })?;
         status_of(&self.db, scope)
+    }
+    pub fn totals(&self) -> Result<QueueTotals> {
+        totals_of(&self.db)
+    }
+    /// See [`Outbox::list_operations`].
+    pub fn list_operations(
+        &self,
+        after_sequence: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<OperationSummary>> {
+        operations_after(&self.db, after_sequence, limit)
+    }
+    /// See [`Outbox::list_terminal`].
+    pub fn list_terminal(
+        &self,
+        before_sequence: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<OperationSummary>> {
+        terminal_before(&self.db, before_sequence, limit)
+    }
+    pub fn operation_state(&self, operation_id: &str) -> Result<Option<OperationLookup>> {
+        lookup(&self.db, operation_id)
     }
 }
 
@@ -1995,6 +2097,150 @@ mod tests {
             None
         );
         assert!(queue.operation_state("missing").unwrap().is_none());
+    }
+
+    /// An applied, a skipped and a superseded write followed by a pending one; returns
+    /// their IDs in that order.
+    fn tombstones(queue: &Outbox) -> [String; 4] {
+        queue
+            .initialize_resource("table", &json!({"version": 1}), Some(1))
+            .unwrap();
+        let write = |secret: &str, key: Option<&str>, at: i64| {
+            let payload =
+                json!({"mutation": {"kind": "table_upsert", "rows": [{"secret": secret}]}});
+            queue.enqueue("table", payload, key, at).unwrap()
+        };
+        let applied = write("row-applied", None, 100);
+        queue.mark_local(&applied.operation_id, 2).unwrap();
+        queue
+            .prepare_attempt(&applied.operation_id, &applied.payload)
+            .unwrap();
+        let revision = json!({"version": 2});
+        queue
+            .acknowledge(&applied.operation_id, &revision, &json!({"applied": true}))
+            .unwrap();
+        let skipped = write("row-skipped", None, 101).operation_id;
+        let reason = "Discarded by the owner";
+        queue.request_skip(&skipped, reason, false).unwrap();
+        queue
+            .complete_skip(&skipped, reason, None, "main", None)
+            .unwrap();
+        let superseded = write("row-superseded", Some("id:1"), 102).operation_id;
+        let pending = write("row-pending", Some("id:1"), 103).operation_id;
+        [applied.operation_id, skipped, superseded, pending]
+    }
+
+    fn operation_ids(page: &[OperationSummary]) -> Vec<&str> {
+        page.iter()
+            .map(|operation| operation.operation_id.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn list_terminal_pages_tombstones_newest_first_without_payloads() {
+        let root = tempfile::tempdir().unwrap();
+        let queue = open(root.path());
+        let [applied, skipped, superseded, pending] = tombstones(&queue);
+        let newest = queue.list_terminal(None, 2).unwrap();
+        assert_eq!(operation_ids(&newest), [&superseded, &skipped]);
+        assert_eq!(newest[0].state, "superseded");
+        assert_eq!(newest[1].state, "skipped");
+        assert_eq!(newest[1].error.as_deref(), Some("Discarded by the owner"));
+        let oldest = queue.list_terminal(Some(newest[1].sequence), 256).unwrap();
+        assert_eq!(operation_ids(&oldest), [&applied]);
+        assert_eq!(oldest[0].state, "applied");
+        let before_oldest = queue.list_terminal(Some(oldest[0].sequence), 256);
+        assert!(before_oldest.unwrap().is_empty());
+        for tombstone in newest.iter().chain(&oldest) {
+            assert_eq!(tombstone.bytes, 0);
+            assert_eq!(tombstone.mutation_kind, None);
+        }
+        let listed = serde_json::to_string(&(&newest, &oldest)).unwrap();
+        assert!(!listed.contains("row-"));
+        let replaced = queue.operation_state(&superseded).unwrap().unwrap();
+        assert_eq!(replaced.superseded_by.as_ref(), Some(&pending));
+        let open = queue.list_operations(None, 256).unwrap();
+        assert_eq!(operation_ids(&open), [&pending]);
+        assert_eq!(queue.list_terminal(Some(u64::MAX), 256).unwrap().len(), 3);
+        let beyond = queue.list_operations(Some(u64::MAX), 256);
+        assert!(beyond.unwrap().is_empty());
+        assert!(queue.list_terminal(None, 0).is_err());
+        assert!(queue.list_terminal(None, 257).is_err());
+    }
+
+    #[test]
+    fn read_only_queues_list_the_same_operations_without_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let queue = open(root.path());
+        let [_, skipped, ..] = tombstones(&queue);
+        let scope_root = queue.root().to_path_buf();
+        let files = listing(&scope_root);
+        let reader = Outbox::open_read_only(&scope_root).unwrap().unwrap();
+        assert_eq!(
+            reader.list_terminal(None, 2).unwrap(),
+            queue.list_terminal(None, 2).unwrap()
+        );
+        assert_eq!(
+            reader.list_operations(None, 256).unwrap(),
+            queue.list_operations(None, 256).unwrap()
+        );
+        assert_eq!(
+            reader.operation_state(&skipped).unwrap(),
+            queue.operation_state(&skipped).unwrap()
+        );
+        assert_eq!(
+            reader.operation_state(&skipped).unwrap().unwrap().state,
+            "skipped"
+        );
+        assert!(reader.operation_state("missing").unwrap().is_none());
+        drop(reader);
+        assert_eq!(listing(&scope_root), files);
+    }
+
+    #[test]
+    fn totals_agree_with_status_without_loading_operations() {
+        let root = tempfile::tempdir().unwrap();
+        let queue = open(root.path());
+        let totals = || {
+            let reader = Outbox::open_read_only(queue.root()).unwrap().unwrap();
+            reader.totals().unwrap()
+        };
+        let empty = QueueTotals {
+            pending_count: 0,
+            pending_bytes: 0,
+            oldest_at: None,
+            quarantined: false,
+            needs_operator: false,
+            mirror_error: false,
+        };
+        assert_eq!(totals(), empty);
+        tombstones(&queue);
+        let later = queue.enqueue("other", json!(2), None, 50).unwrap();
+        let status = queue.status().unwrap();
+        let healthy = QueueTotals {
+            pending_count: 2,
+            pending_bytes: status.pending_bytes,
+            oldest_at: status.oldest_at,
+            ..empty
+        };
+        assert_eq!(totals(), healthy);
+        queue
+            .block(
+                &later.operation_id,
+                "outcome_unknown",
+                "Lost acknowledgement",
+            )
+            .unwrap();
+        queue.mirror_error("table", Some("Unavailable")).unwrap();
+        queue.quarantine("Cloud access was revoked").unwrap();
+        assert!(queue.status().unwrap().blocked.is_some());
+        let waiting = QueueTotals {
+            quarantined: true,
+            needs_operator: true,
+            mirror_error: true,
+            ..healthy
+        };
+        assert_eq!(totals(), waiting);
     }
 
     #[test]

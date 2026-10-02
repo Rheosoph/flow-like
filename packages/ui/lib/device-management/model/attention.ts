@@ -12,6 +12,7 @@ import {
 	DAY_S,
 	type DeviceFacts,
 	type FleetFacts,
+	deviceListKnown,
 	fleetFacts,
 	subjectDevice,
 } from "./device-view";
@@ -33,44 +34,16 @@ export {
 	rollupHealth,
 } from "./device-view";
 
-/* Inputs W1-ATTN needs beyond CA11 (requested for the contract; all optional). */
+/* CA11 carries every input W1-ATTN first declared here; the names stay for the files that import them. */
 
-/** The agent's installed release (`agent.release_version`, never its constant crate version) from the last live read, kept on this computer. */
-export interface AgentLastRead {
-	version: string;
-	/** `agent.release_sequence`, when the agent reported it. */
-	sequence?: number | null;
-	at: number;
-}
+export type {
+	AccessRequestRecord,
+	AgentLastRead,
+	PlacementConfigFacts,
+} from "./types";
 
-/** An access request created on this computer (IA §6.5 access/keys; real state: BG23). */
-export interface AccessRequestRecord {
-	deviceId: string;
-	deviceName?: string;
-	ownerId?: string;
-	createdAt: number;
-	approved: boolean;
-}
-
-/** Placement configuration facts from the last live configuration read. */
-export interface PlacementConfigFacts {
-	host?: string;
-	port?: number;
-	tlsCertificateId?: string | null;
-	offlineWrites?: { maxAgeS: number; maxBytes: number };
-	resourceGrantId?: string | null;
-}
-
-export interface LiveDeviceInputExt extends LiveDeviceInput {
-	/** Keyed by placement id. */
-	placements?: Record<string, PlacementConfigFacts>;
-}
-
-export interface AttentionInputExt extends AttentionInput {
-	live: Record<string, LiveDeviceInputExt>;
-	agentLastRead?: Record<string, AgentLastRead | undefined>;
-	accessRequests?: AccessRequestRecord[];
-}
+export type LiveDeviceInputExt = LiveDeviceInput;
+export type AttentionInputExt = AttentionInput;
 
 export type AttentionCandidateExt = AttentionCandidate & {
 	/** When the condition started, if the data says so (earlier than the first sighting). */
@@ -367,12 +340,11 @@ const pruneMemory = (
 	input: AttentionInputExt,
 ) => {
 	const { now } = input;
-	const cleared =
-		input.devices.length === 0
-			? []
-			: Object.keys(memory.firstSeen).filter(
-					(id) => !current.has(id) && !stillUnknown(id, input, memory),
-				);
+	const cleared = !deviceListKnown(input)
+		? []
+		: Object.keys(memory.firstSeen).filter(
+				(id) => !current.has(id) && !stillUnknown(id, input, memory),
+			);
 	const woken = Object.keys(memory.snoozed).filter(
 		(id) => (memory.snoozed[id] ?? 0) <= now,
 	);

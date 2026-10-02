@@ -767,6 +767,15 @@ fn env_flag(var: &str) -> bool {
 }
 
 #[cfg(feature = "aws")]
+fn kms_bucket_key_enabled(value: Option<&str>) -> bool {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
+        .unwrap_or(true)
+}
+
+#[cfg(feature = "aws")]
 fn non_empty_env(var: &str) -> Option<String> {
     std::env::var(var)
         .ok()
@@ -796,7 +805,9 @@ fn bucket_configs() -> &'static BucketConfigs {
         // how a deployment satisfies a bucket policy that refuses writes
         // arriving without `x-amz-server-side-encryption`.
         let kms = KmsKeys::configured();
-        let kms_bucket_key = env_flag("S3_KMS_BUCKET_KEY");
+        // Bucket Keys reduce KMS requests when an explicit key adds SSE-KMS headers.
+        // Stores without an explicit key keep their bucket's encryption defaults.
+        let kms_bucket_key = kms_bucket_key_enabled(non_empty_env("S3_KMS_BUCKET_KEY").as_deref());
         let use_path_style = env_flag("AWS_USE_PATH_STYLE");
         let public_endpoint =
             non_empty_env("S3_PUBLIC_ENDPOINT").or_else(|| non_empty_env("AWS_ENDPOINT"));
@@ -1074,6 +1085,22 @@ fn with_kms_session_permissions(
 
 #[cfg(feature = "aws")]
 impl AwsRuntimeCredentials {
+    async fn store_config(&self) -> Result<FlowLikeConfig> {
+        use flow_like::credentials::StoreType;
+        use flow_like_types::tokio;
+
+        let shared = SharedCredentials::Aws(self.internal_shared_credentials());
+        let (meta_store, content_store, log_store) = tokio::join!(
+            shared.to_store_type(StoreType::Meta),
+            shared.to_store_type(StoreType::Content),
+            shared.to_store_type(StoreType::Logs),
+        );
+        let mut config = FlowLikeConfig::with_default_store(content_store?);
+        config.register_app_meta_store(meta_store?);
+        config.register_log_store(log_store?);
+        Ok(config)
+    }
+
     fn internal_shared_credentials(&self) -> AwsSharedCredentials {
         let mut shared = self.aws_shared_credentials();
         if let Some(endpoint) = non_empty_env("S3_INTERNAL_ENDPOINT") {
@@ -1138,32 +1165,8 @@ impl RuntimeCredentialsTrait for AwsRuntimeCredentials {
         level = "debug"
     )]
     async fn to_state(&self, state: AppState) -> Result<FlowLikeState> {
-        let (meta_store, content_store) = {
-            use flow_like_types::tokio;
-
-            tokio::join!(
-                async {
-                    SharedCredentials::Aws(self.internal_shared_credentials())
-                        .to_store(true)
-                        .await
-                },
-                async {
-                    SharedCredentials::Aws(self.internal_shared_credentials())
-                        .to_store(false)
-                        .await
-                },
-            )
-        };
         let http_client = HTTPClient::new_without_refetch();
-
-        let meta_store = meta_store?;
-        let content_store = content_store?;
-
-        let mut config = {
-            let mut cfg = FlowLikeConfig::with_default_store(content_store);
-            cfg.register_app_meta_store(meta_store.clone());
-            cfg
-        };
+        let mut config = self.store_config().await?;
 
         let (content_bucket, logs_bucket, key, secret, token) = (
             self.content_bucket.clone(),
@@ -1880,6 +1883,36 @@ mod tests {
     use flow_like_types::tokio;
 
     #[test]
+    fn kms_bucket_keys_default_on_for_explicit_keys_and_preserve_opt_out() {
+        for value in [
+            None,
+            Some(""),
+            Some(" "),
+            Some("true"),
+            Some("TRUE"),
+            Some("1"),
+        ] {
+            let config = BucketConfig {
+                kms_key_arn: Some("arn:aws:kms:eu-central-1:123456789012:key/test".into()),
+                kms_bucket_key: kms_bucket_key_enabled(value),
+                ..Default::default()
+            };
+            assert!(
+                sse_kms_storage_options(Some(&config))
+                    .contains(&("aws_sse_bucket_key_enabled".into(), "true".into()))
+            );
+        }
+        for value in ["false", "FALSE", "0"] {
+            assert!(!kms_bucket_key_enabled(Some(value)));
+        }
+        let no_key = BucketConfig {
+            kms_bucket_key: kms_bucket_key_enabled(None),
+            ..Default::default()
+        };
+        assert!(sse_kms_storage_options(Some(&no_key)).is_empty());
+    }
+
+    #[test]
     fn sts_provider_and_lifetime_are_explicit() {
         assert_eq!(
             "rustfs".parse::<S3StsProvider>().unwrap(),
@@ -2070,6 +2103,26 @@ mod tests {
             expiration: None,
             content_path_prefix: None,
             user_content_path_prefix: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn state_routes_log_sidecars_separately_from_content_and_scratch() {
+        let config = test_aws_runtime_credentials()
+            .store_config()
+            .await
+            .expect("stores build without network requests");
+
+        for (store, expected_bucket) in [
+            (config.stores.app_meta_store, "meta-secret"),
+            (config.stores.app_storage_store, "content-data"),
+            (config.stores.temporary_store, "content-data"),
+            (config.stores.log_store, "logs"),
+        ] {
+            assert_eq!(
+                store.expect("store is registered").as_generic().to_string(),
+                format!("AmazonS3({expected_bucket})")
+            );
         }
     }
 

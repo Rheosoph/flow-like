@@ -7,7 +7,7 @@ import {
 } from "../artifacts";
 import { readCertificateRequests } from "../certificate-issuance";
 import { readDeploymentRollout } from "../deployment";
-import type { CopyRef, NavTarget } from "../model/types";
+import type { NavTarget } from "../model/types";
 import { accountStorageKey } from "../storage";
 import type { ManagementCall } from "../telemetry";
 import { type PolicyView, managementRejection } from "../types";
@@ -16,6 +16,7 @@ import type {
 	ActivityDetailCode,
 	ActivityItem,
 	ActivityKind,
+	ActivityRun,
 	ActivityState,
 	ActivityTracker,
 	HubPort,
@@ -36,30 +37,9 @@ export type ActivityStart = Omit<
 	"id" | "startedAt" | "updatedAt"
 >;
 
-/** One deploy across several devices: one item per target, restored after a reload by its id (`useDeployRun` `resumeId`). */
-export interface ActivityRun {
-	id: string;
-	title: CopyRef<string>;
-	/** In target order. */
-	itemIds: string[];
-	oneAtATime: boolean;
-	stopOnFail: boolean;
-	startedAt: number;
-	updatedAt: number;
-}
-
-export interface ActivityRunTracker extends ActivityTracker {
-	startRun(run: {
-		title: CopyRef<string>;
-		oneAtATime: boolean;
-		stopOnFail: boolean;
-		items: ActivityStart[];
-	}): ActivityRun;
-	run(runId: string): ActivityRun | undefined;
-	/** Every item of the run still kept, dismissed ones included, in target order. */
-	runItems(runId: string): ActivityItem[];
-	runs(): ActivityRun[];
-}
+export type { ActivityRun };
+/** The run API is part of the `ActivityTracker` contract; kept under its first name for importers. */
+export type ActivityRunTracker = ActivityTracker;
 
 export const ACTIVITY_STORAGE_PREFIX = "flow-like.device-activity.";
 const MAX_ITEMS = 100;
@@ -698,7 +678,7 @@ function storageKeyFor(deps: WorkspaceDeps): string | undefined {
 export function createActivityTracker(
 	deps: WorkspaceDeps,
 	ports: ResumePorts,
-): ActivityRunTracker {
+): ActivityTracker {
 	const now = deps.now ?? Date.now;
 	const storageKey = storageKeyFor(deps);
 	/** Items started or updated by this tracker: a flow on this page drives them. */
@@ -832,7 +812,7 @@ export function createActivityTracker(
 		);
 	}
 
-	const tracker: ActivityRunTracker = {
+	const tracker: ActivityTracker = {
 		list() {
 			cache ??= stored.items
 				.filter((item) => !item.dismissed)

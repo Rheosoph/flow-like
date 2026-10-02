@@ -21,6 +21,8 @@ pub(crate) mod resources;
 
 const LOG_RECORD_BYTES: usize = 4096;
 const METRIC_RECORD_BYTES: usize = 8 * 1024;
+/// Points of one history page; the rest of an encrypted reply is left for its envelope.
+const METRIC_HISTORY_BYTES: usize = crate::crypto::noise::MAX_PLAINTEXT - 1024;
 const LOG_LINE_BYTES: usize = 2048;
 const STREAM_LINES_PER_SECOND: u32 = 100;
 const PLACEMENT_LINES_PER_SECOND: u32 = 200;
@@ -563,6 +565,78 @@ impl TelemetryStore {
         self.latest(placement, "metrics")
     }
 
+    /// Samples after record `after`, each reduced to `[unix seconds, value per field]`, so a
+    /// page of small points replaces records of up to 8 KiB. `next` is the record to
+    /// continue after while newer samples remain; a value the sample lacks is null.
+    pub(crate) fn metrics_history(
+        &self,
+        placement: Option<&str>,
+        after: u64,
+        limit: u16,
+        fields: &[String],
+    ) -> Result<Value> {
+        let after = i64::try_from(after).unwrap_or(i64::MAX);
+        let (points, next) = self.metric_points(placement, after, usize::from(limit), fields)?;
+        let evicted_through: Option<i64> = self
+            .store
+            .connection
+            .query_row(
+                "SELECT evicted_through FROM telemetry_evictions WHERE scope=COALESCE(?1,'device') AND kind='metrics'",
+                [placement],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(json!({
+            "fields": fields,
+            "points": points,
+            "next": next,
+            "evicted_through": evicted_through.filter(|through| *through > after),
+        }))
+    }
+
+    /// At most `limit` points that fit one encrypted reply, and the record to continue after
+    /// when samples remain beyond them.
+    fn metric_points(
+        &self,
+        placement: Option<&str>,
+        after: i64,
+        limit: usize,
+        fields: &[String],
+    ) -> Result<(Vec<Value>, Option<i64>)> {
+        let cipher = self.cipher()?;
+        let mut points = Vec::new();
+        let (mut bytes, mut last) = (0usize, None);
+        for (sequence, created_at, sealed) in self.sealed_metrics(placement, after, limit + 1)? {
+            if points.len() == limit {
+                return Ok((points, last));
+            }
+            let sample =
+                self.open_record(&cipher, sequence, placement, "metrics", created_at, &sealed)?;
+            let point = metric_point(&serde_json::from_slice(&sample)?, created_at, fields);
+            bytes += point.to_string().len() + 1;
+            if bytes > METRIC_HISTORY_BYTES {
+                return Ok((points, last));
+            }
+            last = Some(sequence);
+            points.push(point);
+        }
+        Ok((points, None))
+    }
+
+    /// Sealed metric records after `after`, oldest first, as (record, unix seconds, bytes).
+    fn sealed_metrics(
+        &self,
+        placement: Option<&str>,
+        after: i64,
+        limit: usize,
+    ) -> Result<Vec<(i64, i64, Vec<u8>)>> {
+        let mut statement = self.store.connection.prepare("SELECT sequence,created_at,ciphertext FROM telemetry_records WHERE placement_id IS ?1 AND kind='metrics' AND sequence>?2 ORDER BY sequence LIMIT ?3")?;
+        let rows = statement.query_map(params![placement, after, limit], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     fn latest(&self, placement: Option<&str>, kind: &str) -> Result<Value> {
         let sequence: Option<i64> = self.store.connection.query_row(
             "SELECT MAX(sequence) FROM telemetry_records WHERE placement_id IS ?1 AND kind=?2",
@@ -653,6 +727,62 @@ pub(crate) async fn back_off(cancel: &CancellationToken, base: Duration, failure
         _ = cancel.cancelled() => false,
         _ = tokio::time::sleep(delay) => true,
     }
+}
+
+/// Numeric sample values a client may read as history; the names are those the sampler
+/// writes below. The device-management client keeps the same two lists.
+const DEVICE_METRIC_FIELDS: &[&str] = &[
+    "cpu_percent",
+    "memory_used_bytes",
+    "memory_total_bytes",
+    "agent_cpu_percent_of_one_core",
+    "agent_memory_bytes",
+    "ready_replicas",
+    "desired_replicas",
+    "placements",
+];
+const PLACEMENT_METRIC_FIELDS: &[&str] = &[
+    "cpu_percent",
+    "memory_bytes",
+    "running_replicas",
+    "desired_replicas",
+    "processes_observed",
+];
+const MAX_METRIC_HISTORY_FIELDS: usize = 8;
+
+/// `[unix seconds, value per field]`; a value the sample lacks is null.
+fn metric_point(sample: &Value, created_at: i64, fields: &[String]) -> Value {
+    let values = fields.iter().map(|field| match &sample[field.as_str()] {
+        number @ Value::Number(_) => number.clone(),
+        _ => Value::Null,
+    });
+    std::iter::once(json!(created_at)).chain(values).collect()
+}
+
+/// One to eight distinct fields of the device's or a placement's samples.
+pub(crate) fn validate_metric_fields(placement: bool, fields: &[String]) -> Result<()> {
+    let allowed = if placement {
+        PLACEMENT_METRIC_FIELDS
+    } else {
+        DEVICE_METRIC_FIELDS
+    };
+    ensure!(
+        (1..=MAX_METRIC_HISTORY_FIELDS).contains(&fields.len()),
+        "Metric history needs between 1 and {MAX_METRIC_HISTORY_FIELDS} fields"
+    );
+    for (index, field) in fields.iter().enumerate() {
+        ensure!(
+            allowed.contains(&field.as_str()),
+            "Metric history field {} is not one of {}",
+            index + 1,
+            allowed.join(", ")
+        );
+        ensure!(
+            !fields[..index].contains(field),
+            "Metric history field {field} is requested twice"
+        );
+    }
+    Ok(())
 }
 
 pub async fn sample(state_dir: PathBuf, cancel: CancellationToken) -> Result<()> {
@@ -1225,6 +1355,122 @@ mod tests {
         );
         Ok(())
     }
+    fn fields(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn metric_history_projects_fields_pages_and_reports_evictions_within_one_reply() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let store = TelemetryStore::open(&dir.path().canonicalize()?)?;
+        assert_eq!(
+            store.metrics_history(None, 0, 256, &fields(&["cpu_percent"]))?,
+            json!({"fields":["cpu_percent"],"points":[],"next":null,"evicted_through":null})
+        );
+        let mut sequences = Vec::new();
+        for index in 0..5u32 {
+            sequences.push(store.append(
+                Some("api"),
+                "metrics",
+                &json!({"cpu_percent":f64::from(index) + 0.5,"memory_bytes":1000 + index,"running_replicas":null,"desired_replicas":"two","replicas":[{"slot":0}],"project_id":"private-project"}),
+            )?);
+            store.append(None, "metrics", &json!({"cpu_percent":99.0,"placements":1}))?;
+            store.append(Some("other"), "metrics", &json!({"cpu_percent":77.0}))?;
+        }
+        let wanted = fields(PLACEMENT_METRIC_FIELDS);
+        let first = store.metrics_history(Some("api"), 0, 2, &wanted)?;
+        assert_eq!(first["fields"], json!(PLACEMENT_METRIC_FIELDS));
+        let points = first["points"].as_array().unwrap();
+        assert_eq!(points.len(), 2);
+        assert!(points[0][0].as_i64().unwrap() > 1_600_000_000);
+        assert_eq!(
+            points[0].as_array().unwrap()[1..],
+            [
+                json!(0.5),
+                json!(1000),
+                Value::Null,
+                Value::Null,
+                Value::Null
+            ]
+        );
+        assert_eq!(first["next"], sequences[1]);
+        assert!(first["evicted_through"].is_null());
+        for private in ["private-project", "replicas\":[", "two"] {
+            assert!(!first.to_string().contains(private), "{private}");
+        }
+        let rest = store.metrics_history(Some("api"), sequences[1], 3, &wanted)?;
+        assert_eq!(rest["points"].as_array().unwrap().len(), 3);
+        assert_eq!(rest["points"][2][2], 1004);
+        assert!(rest["next"].is_null());
+        assert_eq!(
+            store.metrics_history(Some("api"), u64::MAX, 3, &wanted)?["points"],
+            json!([])
+        );
+        let host = store.metrics_history(None, 0, 256, &fields(&["placements", "cpu_percent"]))?;
+        let points = host["points"].as_array().unwrap();
+        assert_eq!(points.len(), 5);
+        assert!(points.iter().all(|point| point[1] == 1 && point[2] == 99.0));
+
+        store.evict(
+            "placement_id IS ?1 AND kind='metrics' AND sequence<=?2",
+            params!["api", sequences[1]],
+        )?;
+        let gap = store.metrics_history(Some("api"), 0, 256, &wanted)?;
+        assert_eq!(gap["evicted_through"], sequences[1]);
+        assert_eq!(gap["points"].as_array().unwrap().len(), 3);
+        for caught_up in [
+            store.metrics_history(Some("api"), sequences[1], 256, &wanted)?,
+            store.metrics_history(Some("other"), 0, 256, &wanted)?,
+            store.metrics_history(None, 0, 256, &fields(&["cpu_percent"]))?,
+        ] {
+            assert!(caught_up["evicted_through"].is_null());
+        }
+
+        let wide = json!({"cpu_percent":1.2345678901234567e-300_f64,"memory_used_bytes":u64::MAX,"memory_total_bytes":u64::MAX,"agent_cpu_percent_of_one_core":1.2345678901234567e-300_f64,"agent_memory_bytes":u64::MAX,"ready_replicas":u64::MAX,"desired_replicas":u64::MAX,"placements":u64::MAX});
+        for _ in 0..100 {
+            store.append(None, "metrics", &wide)?;
+        }
+        let every = fields(DEVICE_METRIC_FIELDS);
+        let (mut after, mut read, mut pages) = (0, 0, 0);
+        loop {
+            let page = store.metrics_history(None, after, 256, &every)?;
+            assert!(serde_json::to_vec(&page)?.len() <= crate::crypto::noise::MAX_PLAINTEXT - 512);
+            read += page["points"].as_array().unwrap().len();
+            pages += 1;
+            match page["next"].as_u64() {
+                Some(next) => after = next,
+                None => break,
+            }
+        }
+        assert_eq!(read, 105);
+        assert!(pages > 1);
+        Ok(())
+    }
+
+    #[test]
+    fn metric_history_fields_come_from_the_scope_allowlist() {
+        assert!(validate_metric_fields(false, &fields(DEVICE_METRIC_FIELDS)).is_ok());
+        assert!(validate_metric_fields(true, &fields(PLACEMENT_METRIC_FIELDS)).is_ok());
+        for (placement, invalid) in [
+            (false, vec![]),
+            (false, vec!["memory_bytes"]),
+            (true, vec!["memory_used_bytes"]),
+            (true, vec!["usage"]),
+            (false, vec!["cpu_percent", "placements", "cpu_percent"]),
+            (false, vec!["cpu_percent"; 9]),
+        ] {
+            assert!(
+                validate_metric_fields(placement, &fields(&invalid)).is_err(),
+                "{invalid:?}"
+            );
+        }
+        let unknown = validate_metric_fields(false, &fields(&["private-request-value"]))
+            .unwrap_err()
+            .to_string();
+        assert!(!unknown.contains("private-request-value"));
+        assert!(unknown.contains("field 1") && unknown.contains("memory_used_bytes"));
+    }
+
     #[test]
     fn usage_summary_exposes_partial_coverage_and_process_lifetime_totals() {
         assert_eq!(usage_summary(&[], 2)["runtime_messages"], Value::Null);

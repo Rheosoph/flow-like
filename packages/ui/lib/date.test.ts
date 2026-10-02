@@ -128,6 +128,35 @@ describe("formatTimeOfDay", () => {
 			}),
 		).toBe("11:59");
 	});
+
+	test("reads 24-hour in locales whose default clock is 12-hour", () => {
+		const at = Date.parse("2026-09-30T11:59:58Z");
+		const berlin = { timeZone: "Europe/Berlin" };
+		expect(formatTimeOfDay(at, { ...berlin, locale: "en" })).toBe("13:59:58");
+		expect(formatTimeOfDay(at, { ...berlin, locale: "ko" })).toBe("13:59:58");
+		expect(
+			formatTimeOfDay(Date.parse("2026-09-30T00:30:00Z"), {
+				locale: "en",
+				timeZone: "UTC",
+				seconds: false,
+			}),
+		).toBe("00:30");
+		const now = Date.parse("2026-09-30T12:10:00Z");
+		const yesterday = formatMoment(at - 86_400_000, {
+			...berlin,
+			now,
+			locale: "en",
+		});
+		expect(yesterday).toContain("13:59");
+		expect(yesterday).not.toMatch(/[AP]M/);
+		const absolute = formatAbsoluteDateTimeZoned(at, {
+			...berlin,
+			now,
+			locale: "en",
+		});
+		expect(absolute).toContain("13:59:58");
+		expect(absolute).not.toMatch(/[AP]M/);
+	});
 });
 
 describe("formatMoment", () => {

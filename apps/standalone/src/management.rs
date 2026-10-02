@@ -154,6 +154,16 @@ pub(crate) fn rejection_code(error: &anyhow::Error) -> RejectionCode {
             {
                 return Some(RejectionCode::Busy);
             }
+            use crate::project_artifacts::{ArtifactLimitExceeded, PruneRefused};
+            if cause.is::<ArtifactLimitExceeded>() {
+                return Some(RejectionCode::Limit);
+            }
+            if let Some(refused) = cause.downcast_ref::<PruneRefused>() {
+                return Some(match refused {
+                    PruneRefused::Busy(_) => RejectionCode::Busy,
+                    PruneRefused::InUse(_) => RejectionCode::RevisionConflict,
+                });
+            }
             cause
                 .downcast_ref::<ProtocolError>()
                 .map(|_| RejectionCode::Invalid)
@@ -759,6 +769,123 @@ fn placement_scope(
     Ok((record, project))
 }
 
+/// A read result, refused when it would not fit one encrypted reply.
+fn completed(request: &ManagementRequest, what: &str, result: Value) -> Result<ManagementResponse> {
+    let response = ManagementResponse {
+        operation_id: request.operation_id.clone(),
+        state: "completed".into(),
+        result,
+    };
+    refuse_unless(
+        serde_json::to_vec(&response)?.len() <= noise::MAX_PLAINTEXT,
+        RejectionCode::Limit,
+        format!("{what} exceeds the encrypted message limit"),
+    )?;
+    Ok(response)
+}
+
+/// One page of a listing read with one row more than `limit`: the leading rows that also
+/// fit one encrypted reply next to its envelope, and whether rows remain after them.
+fn page(mut rows: Vec<Value>, limit: usize, what: &str) -> Result<(Vec<Value>, bool)> {
+    let mut more = rows.len() > limit;
+    rows.truncate(limit);
+    let (mut bytes, mut fitting) = (0usize, 0usize);
+    for row in &rows {
+        bytes += serde_json::to_vec(row)?.len() + 1;
+        if bytes > noise::MAX_PLAINTEXT - 1024 {
+            break;
+        }
+        fitting += 1;
+    }
+    more |= fitting < rows.len();
+    rows.truncate(fitting);
+    refuse_unless(
+        !rows.is_empty() || !more,
+        RejectionCode::Limit,
+        format!("One row of {what} exceeds the encrypted message limit"),
+    )?;
+    Ok((rows, more))
+}
+
+/// The cursor a client sends back for the rows after this page.
+fn next_cursor(rows: &[Value], more: bool, key: &str) -> Value {
+    rows.last()
+        .filter(|_| more)
+        .map_or(Value::Null, |row| row[key].clone())
+}
+
+/// One page of renewal policies in certificate order. Each row adds the count of consecutive
+/// failed attempts and, while this agent still knows it, the cause of the last one; the
+/// stored policies stay as older agents read them.
+fn renewal_page<T: serde::Serialize>(
+    request: &ManagementRequest,
+    state_dir: &Path,
+    renewal: crate::diagnostics::Renewal,
+    policies: Vec<(T, u32)>,
+    (after, limit): (Option<&str>, u16),
+    list: &str,
+) -> Result<ManagementResponse> {
+    let limit = usize::from(limit);
+    let mut rows = Vec::new();
+    for (policy, failures) in policies {
+        let mut row = serde_json::to_value(policy)?;
+        let certificate_id = row["certificate_id"]
+            .as_str()
+            .context("Renewal policy has no certificate")?
+            .to_owned();
+        if after.is_some_and(|after| certificate_id.as_str() <= after) {
+            continue;
+        }
+        row["failures"] = json!(failures);
+        let cause = (failures > 0)
+            .then(|| {
+                crate::diagnostics::global().renewal_failure(state_dir, renewal, &certificate_id)
+            })
+            .flatten();
+        if let Some(cause) = cause {
+            row["error_category"] = json!(cause.as_str());
+        }
+        rows.push(row);
+        if rows.len() > limit {
+            break;
+        }
+    }
+    let (rows, more) = page(rows, limit, "renewal policies")?;
+    let next = next_cursor(&rows, more, "certificate_id");
+    completed(
+        request,
+        "Renewal policies",
+        json!({list: rows, "next": next}),
+    )
+}
+
+/// One authorization scope's queued writes, for a reader with Status on the placement.
+fn offline_queue(
+    store: &StateStore,
+    authority: &Authority,
+    state_dir: &Path,
+    placement_id: &str,
+    scope: &str,
+) -> Result<crate::outbox::OutboxReader> {
+    let (_, project_id) = placement_scope(store, placement_id)?;
+    authority.require(
+        ManagementCapability::Status,
+        Some(&project_id),
+        Some(placement_id),
+    )?;
+    refuse_unless(
+        crate::outbox::is_scope(scope),
+        RejectionCode::Invalid,
+        "Invalid offline authorization scope",
+    )?;
+    crate::outbox::reader(state_dir, placement_id, scope)?.ok_or_else(|| {
+        refusal(
+            RejectionCode::Invalid,
+            format!("Unknown offline authorization scope {scope}"),
+        )
+    })
+}
+
 fn known_rollout(store: &StateStore, rollout_id: &str) -> Result<crate::rollout::RolloutRecord> {
     store.rollout(rollout_id)?.ok_or_else(|| {
         refusal(
@@ -844,6 +971,36 @@ fn previous_operation(
         .transpose()
 }
 
+/// Journal rows of every principal, newest first, continuing after operation `after`; a
+/// cursor whose row was pruned has nothing older left. Rejected commands and reads are
+/// never journaled, and `kind` stays null until the journal records the command.
+fn journaled_operations(store: &StateStore, after: Option<&str>, limit: u32) -> Result<Vec<Value>> {
+    let mut query = store.connection.prepare(
+        "SELECT m.operation_id,m.principal,m.project_id,m.placement_id,m.accepted_at,json_extract(m.result_json,'$.state') FROM management_operations m
+            WHERE ?1 IS NULL OR EXISTS(SELECT 1 FROM management_operations c WHERE c.operation_id=?1
+                AND (m.accepted_at<c.accepted_at OR (m.accepted_at=c.accepted_at AND m.operation_id>c.operation_id)))
+            ORDER BY m.accepted_at DESC,m.operation_id LIMIT ?2",
+    )?;
+    let operations = query.query_map(params![after, limit], |row| {
+        let principal: String = row.get(1)?;
+        let state: Option<String> = row.get(5)?;
+        let state = state.filter(|state| {
+            (1..=32).contains(&state.len())
+                && state.bytes().all(|c| c.is_ascii_lowercase() || c == b'_')
+        });
+        Ok(json!({
+            "operation_id":row.get::<_, String>(0)?,
+            "kind":null,
+            "actor":Actor::parse(&principal).json(),
+            "project_id":row.get::<_, Option<String>>(2)?,
+            "placement_id":row.get::<_, Option<String>>(3)?,
+            "accepted_at":row.get::<_, i64>(4)?,
+            "state":state.unwrap_or_else(|| "unknown".into()),
+        }))
+    })?;
+    Ok(operations.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 fn execute_artifact(
     store: &StateStore,
     authority: &Authority,
@@ -855,11 +1012,147 @@ fn execute_artifact(
     let ManagementCommand::Artifact { request: artifact } = &request.command else {
         anyhow::bail!("Invalid artifact command")
     };
-    authority.require(
-        ManagementCapability::Deploy,
-        Some(artifact.project_id()),
-        None,
+    match artifact {
+        ArtifactRequest::Usage { project_id, after } => artifact_usage(
+            store,
+            authority,
+            request,
+            service,
+            (project_id.as_deref(), after.as_deref()),
+            now,
+        ),
+        ArtifactRequest::Prune {
+            project_id,
+            revisions,
+        } => prune_artifacts(
+            store,
+            authority,
+            request,
+            service,
+            (project_id, revisions),
+            now,
+        ),
+        transfer => execute_transfer(store, authority, request, transfer, service, now),
+    }
+}
+
+/// Retained revisions listed per reply; fewer when their references need the room.
+const ARTIFACT_REVISION_PAGE: usize = 96;
+
+/// Bytes, entries and revisions in use next to their budgets, counted the way the next
+/// upload is admitted. Device totals need device-wide Deploy; a project's totals and its
+/// retained revisions need Deploy on that project.
+fn artifact_usage(
+    store: &StateStore,
+    authority: &Authority,
+    request: &ManagementRequest,
+    service: &ManagementService,
+    (project_id, after): (Option<&str>, Option<&str>),
+    now: i64,
+) -> Result<ManagementResponse> {
+    use crate::project_artifacts as artifacts;
+    let device = authority.permits(ManagementCapability::Deploy, None, None);
+    let project =
+        project_id.filter(|id| authority.permits(ManagementCapability::Deploy, Some(id), None));
+    refuse_unless(
+        device || project.is_some(),
+        RejectionCode::Unauthorized,
+        "Management capability Deploy denied",
     )?;
+    if let Some(after) = after {
+        validate_artifact_digest(after)?;
+    }
+    let root = &service.state_dir;
+    let used = artifacts::usage(store, root, project)?;
+    // Counting files can outlast a grant; the answer is fenced like every other read.
+    let guard = authority.read_guard(service.device.manifest(), request, now, None, None);
+    authorized_read(store, guard, || {
+        let (budget, revisions) = used.project.unzip();
+        let rows = match project {
+            Some(project) => {
+                let listed: Vec<_> = revisions
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|(revision, _)| after.is_none_or(|after| revision.as_str() > after))
+                    .take(ARTIFACT_REVISION_PAGE + 1)
+                    .collect();
+                artifacts::revision_uses(store, root, project, &listed)?
+                    .iter()
+                    .map(serde_json::to_value)
+                    .collect::<serde_json::Result<Vec<_>>>()?
+            }
+            None => Vec::new(),
+        };
+        let (rows, more) = page(rows, ARTIFACT_REVISION_PAGE, "retained revisions")?;
+        let next = next_cursor(&rows, more, "revision");
+        completed(
+            request,
+            "Artifact storage use",
+            json!({"device":device.then_some(used.device),"project":budget,"revisions":rows,"next":next}),
+        )
+    })
+}
+
+/// Removes exactly the listed revisions of one project. The reference check, the removal
+/// and the journal row share one write transaction: nothing can pin a revision in
+/// between, and a refused request leaves no trace.
+fn prune_artifacts(
+    store: &StateStore,
+    authority: &Authority,
+    request: &ManagementRequest,
+    service: &ManagementService,
+    (project_id, revisions): (&str, &[String]),
+    now: i64,
+) -> Result<ManagementResponse> {
+    authority.require(ManagementCapability::Deploy, Some(project_id), None)?;
+    let digest = compact_digest(&serde_json::to_string(request)?);
+    let prune =
+        crate::project_artifacts::Prune::prepare(&service.state_dir, project_id, revisions)?;
+    store.connection.execute_batch("BEGIN IMMEDIATE")?;
+    let removal = (|| -> Result<ManagementResponse> {
+        authority.require_current(store, service.device.manifest(), now)?;
+        if let Some(previous) =
+            previous_operation(&store.connection, &request.operation_id, &digest, authority)?
+        {
+            return Ok(previous);
+        }
+        reserve_journal_entry(&store.connection, authority, now)?;
+        let (pruned, freed_bytes) = prune.remove(store, now)?;
+        let response = ManagementResponse {
+            operation_id: request.operation_id.clone(),
+            state: "completed".into(),
+            result: json!({"project_id":project_id,"pruned":pruned,"freed_bytes":freed_bytes}),
+        };
+        store.connection.execute("INSERT INTO management_operations(operation_id,request_digest,principal,project_id,accepted_at,result_json) VALUES(?1,?2,?3,?4,?5,?6)",params![request.operation_id,digest,authority.principal,project_id,now,serde_json::to_string(&response)?])?;
+        Ok(response)
+    })();
+    let finished = match removal {
+        Ok(response) => store
+            .connection
+            .execute_batch("COMMIT")
+            .map(|()| response)
+            .map_err(anyhow::Error::from),
+        Err(error) => {
+            let _ = store.connection.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    };
+    prune.discard();
+    finished
+}
+
+fn execute_transfer(
+    store: &StateStore,
+    authority: &Authority,
+    request: &ManagementRequest,
+    artifact: &ArtifactRequest,
+    service: &ManagementService,
+    now: i64,
+) -> Result<ManagementResponse> {
+    let project_id = artifact
+        .project_id()
+        .context("Artifact transfer names no project")?;
+    authority.require(ManagementCapability::Deploy, Some(project_id), None)?;
     let digest = compact_digest(&serde_json::to_string(request)?);
     if artifact.journaled() {
         match previous_operation(&store.connection, &request.operation_id, &digest, authority)? {
@@ -870,9 +1163,9 @@ fn execute_artifact(
                 let pending = ManagementResponse {
                     operation_id: request.operation_id.clone(),
                     state: "pending".into(),
-                    result: json!({"project_id":artifact.project_id()}),
+                    result: json!({"project_id":project_id}),
                 };
-                let inserted=store.connection.execute("INSERT INTO management_operations(operation_id,request_digest,principal,project_id,accepted_at,result_json) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(operation_id) DO NOTHING",params![request.operation_id,digest,authority.principal,artifact.project_id(),now,serde_json::to_string(&pending)?])?;
+                let inserted=store.connection.execute("INSERT INTO management_operations(operation_id,request_digest,principal,project_id,accepted_at,result_json) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(operation_id) DO NOTHING",params![request.operation_id,digest,authority.principal,project_id,now,serde_json::to_string(&pending)?])?;
                 refuse_unless(
                     inserted == 1,
                     RejectionCode::Busy,
@@ -977,6 +1270,9 @@ fn execute_artifact(
                 ));
             }
         }
+        ArtifactRequest::Usage { .. } | ArtifactRequest::Prune { .. } => {
+            anyhow::bail!("Invalid artifact transfer command")
+        }
     };
     let response = ManagementResponse {
         operation_id: request.operation_id.clone(),
@@ -999,15 +1295,89 @@ fn host_isolation_mode(capabilities: &crate::isolation::Capabilities) -> &'stati
     }
 }
 
+/// Who issued a journaled operation, read back from its principal: `<owner>:owner` or
+/// `<user>:<grant>:<controller key thumbprint>`.
+struct Actor<'a> {
+    owner: bool,
+    user_id: Option<&'a str>,
+    grant_id: Option<&'a str>,
+}
+
+impl<'a> Actor<'a> {
+    fn parse(principal: &'a str) -> Self {
+        if let Some(user_id) = principal.strip_suffix(":owner") {
+            return Self {
+                owner: true,
+                user_id: Some(user_id),
+                grant_id: None,
+            };
+        }
+        let mut parts = principal.rsplitn(3, ':').skip(1);
+        let (grant_id, user_id) = (parts.next(), parts.next());
+        Self {
+            owner: false,
+            user_id,
+            grant_id: user_id.and(grant_id),
+        }
+    }
+
+    /// The same account, whichever of its grants or controller keys issued the operation.
+    fn is(&self, viewer: &Authority) -> bool {
+        match &viewer.grant {
+            None => self.owner,
+            Some(grant) => !self.owner && self.user_id == Some(grant.user_id.as_str()),
+        }
+    }
+
+    fn json(&self) -> Value {
+        fn id(value: Option<&str>) -> Option<&str> {
+            value.filter(|id| validate_management_id(id).is_ok())
+        }
+        json!({
+            "role": if self.owner { "owner" } else { "grant" },
+            "user_id": id(self.user_id),
+            "grant_id": id(self.grant_id),
+        })
+    }
+}
+
+/// The reboot or agent update in progress, or null. Readers learn whether they, the owner or
+/// someone else started it, never who that was. A snapshot has many readers and no `viewer`.
+fn host_operation(store: &StateStore, viewer: Option<&Authority>) -> Result<Value> {
+    let Some(operation) = crate::host::active_operation(store)? else {
+        return Ok(Value::Null);
+    };
+    let issuer = operation.principal.as_deref().map(Actor::parse);
+    let issued_by = match (&issuer, viewer) {
+        (Some(issuer), Some(viewer)) if issuer.is(viewer) => "you",
+        (Some(issuer), _) if issuer.owner => "owner",
+        _ => "another_person",
+    };
+    Ok(json!({
+        "operation_id": operation.operation_id,
+        "kind": operation.kind,
+        "state": operation.state,
+        "created_at": operation.created_at,
+        "issued_by": issued_by,
+    }))
+}
+
+pub(crate) fn snapshot_host_operation(store: &StateStore) -> Result<Value> {
+    host_operation(store, None)
+}
+
 /// `host_isolation` tells a granting owner whether project deployments run sandboxed
 /// ("required"), may choose to ("optional"), or run as the agent's OS account ("none").
+/// `network` is the first fact a reply gives up when it would not fit.
 fn inspection_result(
+    store: &StateStore,
     authority: &Authority,
     manifest: &OnboardingManifest,
     boot_id: &str,
     state_dir: &Path,
     placements: Vec<Value>,
-) -> Value {
+    network: bool,
+) -> Result<Value> {
     let device_status = authority.permits(ManagementCapability::Status, None, None);
     let isolation = device_status.then(|| crate::isolation::capabilities(state_dir));
     let mut result = json!({
@@ -1026,14 +1396,24 @@ fn inspection_result(
         "placements":placements
     });
     if device_status && let Value::Object(object) = &mut result {
-        object.extend(crate::diagnostics::global().device_facts(state_dir, false));
+        let diagnostics = crate::diagnostics::global();
+        object.extend(diagnostics.device_facts(state_dir, false));
+        object.insert(
+            "host_operation".into(),
+            host_operation(store, Some(authority))?,
+        );
+        if network {
+            object.insert("network".into(), diagnostics.network());
+        }
     }
-    result
+    Ok(result)
 }
 
-/// A reply that fits one encrypted message: a two-row page first drops to one row,
-/// then the row sheds detail. `page` carries the cursor of a paged read.
+/// The first of `inspection_attempts` that fits one encrypted message. `page` carries the
+/// cursor of a paged read.
+#[allow(clippy::too_many_arguments)]
 fn fitted_inspection(
+    store: &StateStore,
     authority: &Authority,
     manifest: &OnboardingManifest,
     boot_id: &str,
@@ -1042,7 +1422,7 @@ fn fitted_inspection(
     records: &[crate::state::PlacementRecord],
     page: Option<Option<String>>,
 ) -> Result<ManagementResponse> {
-    use crate::diagnostics::{DETAILS, Detail, Rows};
+    use crate::diagnostics::{Detail, Rows};
     let rows = Rows::new(crate::diagnostics::global(), state_dir, false);
     let error_text: Vec<bool> = records
         .iter()
@@ -1054,33 +1434,35 @@ fn fitted_inspection(
             )
         })
         .collect();
-    let build = |count: usize, detail: Detail, next: Option<&str>| {
+    let build = |count: usize, detail: Detail, next: Option<&str>, network: bool| {
         let placements = records[..count]
             .iter()
             .zip(&error_text)
             .map(|(record, error_text)| rows.placement(record, *error_text, detail))
             .collect();
-        let mut result = inspection_result(authority, manifest, boot_id, state_dir, placements);
+        let mut result = inspection_result(
+            store, authority, manifest, boot_id, state_dir, placements, network,
+        )?;
         if page.is_some() {
             result["next"] = json!(next);
         }
-        ManagementResponse {
+        Ok::<_, anyhow::Error>(ManagementResponse {
             operation_id: operation_id.to_owned(),
             state: "completed".into(),
             result,
-        }
+        })
     };
     let next = page.clone().flatten();
-    let mut attempts = Vec::new();
-    if page.is_some() && records.len() > 1 {
-        attempts.push((records.len(), Detail::Full, next.as_deref()));
-        let first = records.first().map(|record| record.id.as_str());
-        attempts.extend(DETAILS.map(|detail| (1, detail, first)));
-    } else {
-        attempts.extend(DETAILS.map(|detail| (records.len(), detail, next.as_deref())));
-    }
-    for (count, detail, next) in attempts {
-        let response = build(count, detail, next);
+    let lists_network = authority.permits(ManagementCapability::Status, None, None);
+    for (count, detail, network) in
+        inspection_attempts(records.len(), page.is_some(), lists_network)
+    {
+        let next = if count == records.len() {
+            next.as_deref()
+        } else {
+            records.first().map(|record| record.id.as_str())
+        };
+        let response = build(count, detail, next, network)?;
         if serde_json::to_vec(&response)?.len() <= noise::MAX_PLAINTEXT {
             return Ok(response);
         }
@@ -1089,6 +1471,31 @@ fn fitted_inspection(
         RejectionCode::Limit,
         "Inspection exceeds the encrypted message limit even at minimal detail",
     ))
+}
+
+/// The replies to try, as (rows, row detail, with network interfaces). Clients take device
+/// facts from the first page, so a full page becomes one row before the interfaces are left
+/// out, and the interfaces are left out before a row loses detail.
+fn inspection_attempts(
+    rows: usize,
+    paged: bool,
+    lists_network: bool,
+) -> Vec<(usize, crate::diagnostics::Detail, bool)> {
+    use crate::diagnostics::{DETAILS, Detail};
+    let mut attempts = Vec::new();
+    let rows = if paged && rows > 1 {
+        attempts.push((rows, Detail::Full, lists_network));
+        1
+    } else {
+        rows
+    };
+    for detail in DETAILS {
+        attempts.push((rows, detail, lists_network));
+        if lists_network {
+            attempts.push((rows, detail, false));
+        }
+    }
+    attempts
 }
 
 fn execute_telemetry_group(
@@ -1201,6 +1608,7 @@ fn execute_telemetry_group(
             scope,
             *offset,
             *limit,
+            authority.grant.is_none(),
             authority.read_guard(
                 service.device.manifest(),
                 request,
@@ -1281,37 +1689,14 @@ fn execute(
                 authority.read_guard(manifest, request, now, None, None),
                 || {
                     authority.require_owner("Only the device owner can manage ACME renewal")?;
-                    let mut policies = Vec::new();
-                    let mut next = None;
-                    for policy in crate::acme::list(store)? {
-                        if after
-                            .as_deref()
-                            .is_some_and(|after| policy.certificate_id.as_str() <= after)
-                        {
-                            continue;
-                        }
-                        if policies.len() >= usize::from(*limit) {
-                            next = policies
-                                .last()
-                                .map(|item: &AcmeCertificateMetadata| item.certificate_id.clone());
-                            break;
-                        }
-                        policies.push(policy);
-                        if serde_json::to_vec(&policies)?.len() > noise::MAX_PLAINTEXT - 1024 {
-                            policies.pop();
-                            ensure!(
-                                !policies.is_empty(),
-                                "ACME policy exceeds the encrypted response limit"
-                            );
-                            next = policies.last().map(|item| item.certificate_id.clone());
-                            break;
-                        }
-                    }
-                    Ok(ManagementResponse {
-                        operation_id: request.operation_id.clone(),
-                        state: "completed".into(),
-                        result: json!({"policies":policies,"next":next}),
-                    })
+                    renewal_page(
+                        request,
+                        state_dir,
+                        crate::diagnostics::Renewal::Acme,
+                        crate::acme::list_with_failures(store)?,
+                        (after.as_deref(), *limit),
+                        "policies",
+                    )
                 },
             );
         }
@@ -1331,37 +1716,14 @@ fn execute(
                     authority.require_owner(
                         "Only the device owner can manage certificate renewal authorities",
                     )?;
-                    let mut issuers = Vec::new();
-                    let mut next = None;
-                    for item in crate::certificate_issuers::list(store)? {
-                        if after
-                            .as_deref()
-                            .is_some_and(|after| item.certificate_id.as_str() <= after)
-                        {
-                            continue;
-                        }
-                        if issuers.len() >= usize::from(*limit) {
-                            next = issuers.last().map(|item: &CertificateIssuerMetadata| {
-                                item.certificate_id.clone()
-                            });
-                            break;
-                        }
-                        issuers.push(item);
-                        if serde_json::to_vec(&issuers)?.len() > noise::MAX_PLAINTEXT - 1024 {
-                            issuers.pop();
-                            ensure!(
-                                !issuers.is_empty(),
-                                "Certificate issuer exceeds the encrypted response limit"
-                            );
-                            next = issuers.last().map(|item| item.certificate_id.clone());
-                            break;
-                        }
-                    }
-                    Ok(ManagementResponse {
-                        operation_id: request.operation_id.clone(),
-                        state: "completed".into(),
-                        result: json!({"issuers":issuers,"next":next}),
-                    })
+                    renewal_page(
+                        request,
+                        state_dir,
+                        crate::diagnostics::Renewal::Issuer,
+                        crate::certificate_issuers::list_with_failures(store)?,
+                        (after.as_deref(), *limit),
+                        "issuers",
+                    )
                 },
             );
         }
@@ -1610,6 +1972,7 @@ fn execute(
             guard(&transaction)?;
             transaction.commit()?;
             return fitted_inspection(
+                store,
                 authority,
                 manifest,
                 boot_id,
@@ -1642,6 +2005,7 @@ fn execute(
                         "Status access denied",
                     )?;
                     fitted_inspection(
+                        store,
                         authority,
                         manifest,
                         boot_id,
@@ -1763,9 +2127,16 @@ fn execute(
                             store, scope, kind, *sequence, *offset, *limit,
                         )?,
                         ManagementCommand::ArchiveRosterRead { offset, limit, .. } => {
-                            crate::archives::read_roster_from_store(
+                            let mut roster = crate::archives::read_roster_from_store(
                                 store, scope, kind, *offset, *limit,
-                            )?
+                            )?;
+                            let status = (roster["available"] == true)
+                                .then(|| crate::archives::status(state_dir, scope, kind))
+                                .flatten();
+                            if let Some(status) = status {
+                                roster["status"] = status;
+                            }
+                            roster
                         }
                         _ => unreachable!(),
                     };
@@ -1893,6 +2264,190 @@ fn execute(
                         state: "completed".into(),
                         result,
                     })
+                },
+            );
+        }
+        ManagementCommand::HostOperation => {
+            return authorized_read(
+                store,
+                authority.read_guard(manifest, request, now, None, None),
+                || {
+                    authority.require(ManagementCapability::Status, None, None)?;
+                    completed(
+                        request,
+                        "The device operation",
+                        json!({"operation":host_operation(store, Some(authority))?}),
+                    )
+                },
+            );
+        }
+        ManagementCommand::RolloutHistory {
+            placement_id,
+            before,
+            limit,
+        } => {
+            refuse_unless(
+                (1..=16).contains(limit),
+                RejectionCode::Invalid,
+                "Rollout history page limit must be between 1 and 16",
+            )?;
+            if let Some(before) = before {
+                validate_management_id(before).reject_as(RejectionCode::Invalid)?;
+            }
+            return authorized_read(
+                store,
+                authority.read_guard(manifest, request, now, None, None),
+                || {
+                    let (_, project_id) = placement_scope(store, placement_id)?;
+                    authority.require(
+                        ManagementCapability::Status,
+                        Some(&project_id),
+                        Some(placement_id),
+                    )?;
+                    let rollouts = store
+                        .rollout_history(placement_id, before.as_deref(), u32::from(*limit) + 1)?
+                        .iter()
+                        .map(crate::rollout::RolloutRecord::status)
+                        .collect();
+                    let (rollouts, more) = page(rollouts, usize::from(*limit), "rollout history")?;
+                    let next = next_cursor(&rollouts, more, "rollout_id");
+                    completed(
+                        request,
+                        "Rollout history",
+                        json!({"placement_id":placement_id,"rollouts":rollouts,"next":next}),
+                    )
+                },
+            );
+        }
+        ManagementCommand::Operations { after, limit } => {
+            refuse_unless(
+                (1..=50).contains(limit),
+                RejectionCode::Invalid,
+                "Operation list page limit must be between 1 and 50",
+            )?;
+            if let Some(after) = after {
+                validate_management_id(after).reject_as(RejectionCode::Invalid)?;
+            }
+            return authorized_read(
+                store,
+                authority.read_guard(manifest, request, now, None, None),
+                || {
+                    authority.require_owner(
+                        "Only the device owner can list the operations of every person",
+                    )?;
+                    let (operations, more) = page(
+                        journaled_operations(store, after.as_deref(), u32::from(*limit) + 1)?,
+                        usize::from(*limit),
+                        "the operation list",
+                    )?;
+                    let next = next_cursor(&operations, more, "operation_id");
+                    completed(
+                        request,
+                        "The operation list",
+                        json!({"operations":operations,"next":next}),
+                    )
+                },
+            );
+        }
+        ManagementCommand::MetricsHistory {
+            placement_id,
+            after,
+            limit,
+            fields,
+        } => {
+            refuse_unless(
+                (1..=256).contains(limit),
+                RejectionCode::Invalid,
+                "Metric history page limit must be between 1 and 256",
+            )?;
+            crate::telemetry::validate_metric_fields(placement_id.is_some(), fields)
+                .reject_as(RejectionCode::Invalid)?;
+            let telemetry = crate::telemetry::TelemetryStore::open(state_dir)?;
+            return authorized_read(
+                store,
+                authority.read_guard(manifest, request, now, None, None),
+                || {
+                    let project = placement_id
+                        .as_ref()
+                        .map(|id| placement_scope(store, id).map(|(_, project)| project))
+                        .transpose()?;
+                    authority.require(
+                        ManagementCapability::Metrics,
+                        project.as_deref(),
+                        placement_id.as_deref(),
+                    )?;
+                    completed(
+                        request,
+                        "Metric history",
+                        telemetry.metrics_history(
+                            placement_id.as_deref(),
+                            *after,
+                            *limit,
+                            fields,
+                        )?,
+                    )
+                },
+            );
+        }
+        ManagementCommand::OfflineQueueOperations {
+            placement_id,
+            scope,
+            after_sequence,
+            limit,
+            terminal,
+        } => {
+            refuse_unless(
+                (1..=50).contains(limit),
+                RejectionCode::Invalid,
+                "Queued write page limit must be between 1 and 50",
+            )?;
+            return authorized_read(
+                store,
+                authority.read_guard(manifest, request, now, None, None),
+                || {
+                    let queue = offline_queue(store, authority, state_dir, placement_id, scope)?;
+                    let read = u32::from(*limit) + 1;
+                    let operations = if *terminal {
+                        queue.list_terminal(*after_sequence, read)?
+                    } else {
+                        queue.list_operations(*after_sequence, read)?
+                    }
+                    .into_iter()
+                    .map(|mut operation| {
+                        operation.error = operation.error.map(bounded_text);
+                        serde_json::to_value(operation)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                    let (operations, more) =
+                        page(operations, usize::from(*limit), "queued writes")?;
+                    let next = next_cursor(&operations, more, "sequence");
+                    completed(
+                        request,
+                        "The queued write list",
+                        json!({"operations":operations,"next":next}),
+                    )
+                },
+            );
+        }
+        ManagementCommand::OfflineQueueLookup {
+            placement_id,
+            scope,
+            queued_operation_id,
+        } => {
+            validate_management_id(queued_operation_id).reject_as(RejectionCode::Invalid)?;
+            return authorized_read(
+                store,
+                authority.read_guard(manifest, request, now, None, None),
+                || {
+                    let queue = offline_queue(store, authority, state_dir, placement_id, scope)?;
+                    let mut lookup = queue.operation_state(queued_operation_id)?.ok_or_else(|| {
+                        refusal(
+                            RejectionCode::Invalid,
+                            format!("Unknown queued write {queued_operation_id}; it was never queued in this scope or its record expired"),
+                        )
+                    })?;
+                    lookup.error = lookup.error.map(bounded_text);
+                    completed(request, "The queued write", serde_json::to_value(lookup)?)
                 },
             );
         }
@@ -3265,6 +3820,28 @@ mod tests {
                 .contains("future_command")
         );
         assert!(!reply.to_string().contains("private-request-value"));
+        // A field a later agent adds to a command this one knows degrades the same way.
+        let extended = json!({"operation_id":"from-newer-controller-2","device_id":"device","issued_at":now,"expires_at":now+60,"command":{"type":"operations","limit":20,"kind":"private-filter-value"}});
+        let reply = connection
+            .receive(&session.encrypt(&serde_json::to_vec(&extended)?)?)
+            .await?;
+        let reply: Value = serde_json::from_slice(&session.decrypt(&reply)?)?;
+        assert_eq!(reply["operation_id"], "from-newer-controller-2");
+        assert_eq!(reply["result"]["code"], "unsupported");
+        assert!(
+            reply["result"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("unknown field `kind`")
+        );
+        assert!(!reply.to_string().contains("private-filter-value"));
+        let current = json!({"operation_id":"host-operation","device_id":"device","issued_at":now,"expires_at":now+60,"command":{"type":"host_operation"}});
+        let reply = connection
+            .receive(&session.encrypt(&serde_json::to_vec(&current)?)?)
+            .await?;
+        let reply: Value = serde_json::from_slice(&session.decrypt(&reply)?)?;
+        assert_eq!(reply["state"], "completed");
+        assert_eq!(reply["result"], json!({"operation":null}));
         let inspect = ManagementRequest {
             operation_id: "inspect-after-unsupported".into(),
             device_id: "device".into(),
@@ -3845,10 +4422,31 @@ mod tests {
             .map(|response| response.result)
         };
         let owned = inspect(&owner(&manifest))?;
-        for flag in ["placement_diagnostics", "task_health", "placement_events"] {
+        for flag in [
+            "placement_diagnostics",
+            "task_health",
+            "placement_events",
+            "offline_summary",
+            "host_operation",
+            "network_interfaces",
+            "rollout_history",
+            "operations",
+            "metrics_history",
+            "offline_lookup",
+            "reader_bindings",
+            "acme_failure_detail",
+            "archive_status",
+            "artifact_capacity",
+        ] {
             assert_eq!(owned["features"][flag], 1, "{flag}");
         }
         let row = &owned["placements"][0];
+        assert_eq!(
+            row["offline_writes"],
+            json!({"scopes":0,"pending_count":0,"pending_bytes":0,"oldest_at":null,"quarantined_scopes":0,"needs_attention":0,"mirror_error":false})
+        );
+        assert!(owned["host_operation"].is_null());
+        assert!(owned["network"]["interfaces"].is_array());
         assert_eq!(row["last_error"], "Cannot open <state>/projects/api");
         assert_eq!(
             row["replicas"][0]["last_error"],
@@ -3872,29 +4470,74 @@ mod tests {
         assert_eq!(row["replicas"][0]["has_error"], true);
         for project_reader in [&with_logs, &status_only] {
             assert_eq!(project_reader["features"]["task_health"], 1);
-            for device_fact in ["agent", "host", "tasks"] {
+            for device_fact in ["agent", "host", "tasks", "host_operation", "network"] {
                 assert!(project_reader.get(device_fact).is_none(), "{device_fact}");
             }
+            assert_eq!(
+                project_reader["placements"][0]["offline_writes"]["scopes"],
+                0
+            );
         }
         let device_reader = inspect(&device)?;
         assert!(device_reader["placements"][0].get("last_error").is_none());
         assert!(device_reader["agent"].is_object());
         assert!(device_reader["tasks"].is_array());
+        assert!(
+            device_reader
+                .get("host_operation")
+                .is_some_and(Value::is_null)
+        );
+        assert!(device_reader["network"]["interfaces"].is_array());
         Ok(())
     }
 
     #[test]
     fn worst_case_inspection_rows_fit_one_encrypted_message() -> Result<()> {
-        use crate::diagnostics::test_support::{worst_case_id, worst_case_placement};
+        use crate::diagnostics::test_support::{
+            worst_case_host_operation, worst_case_id, worst_case_network,
+            worst_case_offline_writes, worst_case_placement,
+        };
         let temp = tempfile::tempdir()?;
         let root = temp.path().canonicalize()?;
         let mut store = StateStore::open(&root.join("management.sqlite"))?;
         let manifest = manifest(&SigningKey::generate());
+        let owner = owner(&manifest);
+        let host_operation = worst_case_host_operation(&store)?;
+        let host_operation = json!({"operation_id":host_operation,"kind":"update_agent","state":"requesting","created_at":i64::MAX,"issued_by":"another_person"});
+        crate::diagnostics::global().insert_network(worst_case_network());
+        let page = ManagementCommand::InspectPage {
+            after: None,
+            limit: 2,
+        };
+        {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path().canonicalize()?;
+            let mut store = StateStore::open(&root.join("management.sqlite"))?;
+            worst_case_host_operation(&store)?;
+            for id in ["ordinary-a", "ordinary-b"] {
+                let mut config = placement(&root)?;
+                config["id"] = json!(id);
+                store.upsert_placement(id, &config, crate::state::DesiredState::Running)?;
+            }
+            let ordinary = execute(
+                &mut store,
+                &owner,
+                &request("inspect-ordinary", page.clone()),
+                &manifest,
+                "boot",
+                &root,
+                101,
+            )?;
+            assert!(serde_json::to_vec(&ordinary)?.len() <= noise::MAX_PLAINTEXT);
+            assert_eq!(ordinary.result["placements"].as_array().unwrap().len(), 2);
+            assert_eq!(ordinary.result["network"], worst_case_network());
+            assert_eq!(ordinary.result["host_operation"], host_operation);
+        }
+
         let ids = ["worst-inspect-a", "worst-inspect-b"].map(worst_case_id);
         for id in &ids {
             worst_case_placement(&mut store, &root, crate::diagnostics::global(), id)?;
         }
-        let owner = owner(&manifest);
         let mut inspect = |after: Option<&String>| {
             execute(
                 &mut store,
@@ -3928,6 +4571,17 @@ mod tests {
                 .starts_with("<state>/projects failed")
         );
         assert_eq!(rows[0]["events_truncated"], true);
+        assert_eq!(rows[0]["offline_writes"], worst_case_offline_writes());
+        assert_eq!(first.result["host_operation"], host_operation);
+        // The row kept its diagnostics; the interfaces are listed exactly when they also fit.
+        let size = serde_json::to_vec(&first)?.len();
+        let listed = first.result.get("network").is_some();
+        let with_interfaces = if listed {
+            size
+        } else {
+            size + worst_case_network().to_string().len() + r#""network":,"#.len()
+        };
+        assert_eq!(listed, with_interfaces <= noise::MAX_PLAINTEXT);
         let second = inspect(Some(&ids[0]))?;
         assert!(serde_json::to_vec(&second)?.len() <= noise::MAX_PLAINTEXT);
         assert_eq!(second.result["placements"][0]["id"], ids[1]);
@@ -3948,6 +4602,1276 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(rejection_code(&unpaged), RejectionCode::Limit);
+        crate::diagnostics::global().forget_network();
+        Ok(())
+    }
+
+    #[test]
+    fn inspection_gives_up_a_second_row_then_the_interfaces_then_row_detail() {
+        use crate::diagnostics::Detail::{Full, Minimal, NoEvents, NoReplicaText};
+        assert_eq!(
+            inspection_attempts(2, true, true),
+            [
+                (2, Full, true),
+                (1, Full, true),
+                (1, Full, false),
+                (1, NoReplicaText, true),
+                (1, NoReplicaText, false),
+                (1, NoEvents, true),
+                (1, NoEvents, false),
+                (1, Minimal, true),
+                (1, Minimal, false),
+            ]
+        );
+        assert_eq!(
+            inspection_attempts(2, true, false),
+            [
+                (2, Full, false),
+                (1, Full, false),
+                (1, NoReplicaText, false),
+                (1, NoEvents, false),
+                (1, Minimal, false),
+            ]
+        );
+        assert_eq!(inspection_attempts(1, true, false).len(), 4);
+        assert_eq!(
+            inspection_attempts(5, false, true)[..3],
+            [(5, Full, true), (5, Full, false), (5, NoReplicaText, true)]
+        );
+    }
+
+    /// A grantee as a live session names it in the journal: user, grant and key.
+    fn grantee(
+        user: &str,
+        grant: &str,
+        scope: ManagementScope,
+        capabilities: &[ManagementCapability],
+    ) -> Result<Authority> {
+        let key = SigningKey::generate().public_key();
+        Ok(Authority {
+            principal: format!("{user}:{grant}:{}", key.thumbprint()?),
+            key: key.clone(),
+            grant: Some(ManagementGrant {
+                grant_id: grant.into(),
+                user_id: user.into(),
+                controller_key: key,
+                scope,
+                capabilities: capabilities.to_vec(),
+                expires_at: 1000,
+                group_id: None,
+                group_version: None,
+            }),
+        })
+    }
+
+    fn project_scope() -> ManagementScope {
+        ManagementScope::Project {
+            project_id: "project".into(),
+        }
+    }
+
+    fn placement_scope_of(placement_id: &str) -> ManagementScope {
+        ManagementScope::Placement {
+            project_id: "project".into(),
+            placement_id: placement_id.into(),
+        }
+    }
+
+    struct Device {
+        _temp: tempfile::TempDir,
+        root: PathBuf,
+        store: StateStore,
+        signing: SigningKey,
+        manifest: OnboardingManifest,
+        owner: Authority,
+    }
+
+    impl Device {
+        fn new() -> Result<Self> {
+            let temp = tempfile::tempdir()?;
+            let root = crate::supervisor::prepare_state_dir(temp.path())?;
+            let store = StateStore::open(&root.join("management.sqlite"))?;
+            let signing = SigningKey::generate();
+            let manifest = manifest(&signing);
+            let owner = owner(&manifest);
+            Ok(Self {
+                _temp: temp,
+                root,
+                store,
+                signing,
+                manifest,
+                owner,
+            })
+        }
+
+        fn share(&self, grantees: &[&Authority]) -> Result<()> {
+            accept_grants(&self.store, &self.signing, grantees, 100, 1000)
+        }
+
+        fn placement(&mut self, id: &str) -> Result<PlacementConfig> {
+            let mut config = placement(&self.root)?;
+            config["id"] = json!(id);
+            self.store
+                .upsert_placement(id, &config, crate::state::DesiredState::Running)?;
+            Ok(serde_json::from_value(config)?)
+        }
+
+        fn read(
+            &mut self,
+            authority: &Authority,
+            command: ManagementCommand,
+        ) -> Result<ManagementResponse> {
+            execute(
+                &mut self.store,
+                authority,
+                &request("read", command),
+                &self.manifest,
+                "boot",
+                &self.root,
+                101,
+            )
+        }
+
+        fn refused(&mut self, authority: &Authority, command: ManagementCommand) -> RejectionCode {
+            rejection_code(&self.read(authority, command).unwrap_err())
+        }
+
+        fn service(&self) -> Arc<ManagementService> {
+            ManagementService::new(
+                self.root.clone(),
+                Arc::new(
+                    DeviceSession::test_session(
+                        "https://example.test/api/v1".into(),
+                        "device".into(),
+                        SigningKey::generate(),
+                    )
+                    .test_with_invitation_key(self.signing.public_key()),
+                ),
+                "boot".into(),
+            )
+        }
+
+        /// An artifact request in the form a controller sends it.
+        fn artifact(
+            &self,
+            authority: &Authority,
+            operation_id: &str,
+            artifact: Value,
+        ) -> Result<ManagementResponse> {
+            let command = serde_json::from_value(json!({"type":"artifact","request":artifact}))?;
+            execute_artifact(
+                &self.store,
+                authority,
+                &request(operation_id, command),
+                &self.service(),
+                101,
+            )
+        }
+
+        /// Imports a one-file project revision and returns its digest and directory.
+        fn revision(&self, project: &str, content: &[u8]) -> Result<(String, String)> {
+            let source = tempfile::tempdir()?;
+            let home = source.path().join("apps").join(project);
+            std::fs::create_dir_all(&home)?;
+            std::fs::write(home.join("manifest.app"), content)?;
+            let imported = crate::project_artifacts::import_local(
+                &self.store,
+                &self.root,
+                project,
+                source.path(),
+            )?;
+            Ok((
+                imported.descriptor.manifest_sha256,
+                imported.project_path.context("Missing imported revision")?,
+            ))
+        }
+
+        fn journal(
+            &self,
+            id: &str,
+            principal: &str,
+            accepted_at: i64,
+            state: &str,
+            placement: Option<&str>,
+        ) -> Result<()> {
+            let result =
+                json!({"operation_id":id,"state":state,"result":{"detail":"journal-result"}});
+            self.store.connection.execute(
+                "INSERT INTO management_operations(operation_id,request_digest,principal,project_id,placement_id,accepted_at,result_json) VALUES(?1,'digest',?2,?3,?4,?5,?6)",
+                params![id, principal, placement.map(|_| "project"), placement, accepted_at, result.to_string()],
+            )?;
+            Ok(())
+        }
+
+        fn begin_reboot(&self, id: &str, principal: &str) -> Result<()> {
+            self.store
+                .connection
+                .execute("DELETE FROM host_operations", [])?;
+            self.store.connection.execute(
+                "INSERT INTO host_operations(operation_id,kind,boot_id,state,created_at) VALUES(?1,'reboot','boot','pending',100)",
+                [id],
+            )?;
+            self.journal(id, principal, 100, "accepted", None)
+        }
+    }
+
+    #[test]
+    fn journal_principals_read_back_as_owner_or_grant() {
+        let actor = |principal: &str| Actor::parse(principal).json();
+        assert_eq!(
+            actor("owner-user:owner"),
+            json!({"role":"owner","user_id":"owner-user","grant_id":null})
+        );
+        assert_eq!(
+            actor("usr_jonas:laptop:thumbprint"),
+            json!({"role":"grant","user_id":"usr_jonas","grant_id":"laptop"})
+        );
+        assert_eq!(
+            actor("tenant:usr_jonas:laptop:thumbprint"),
+            json!({"role":"grant","user_id":"tenant:usr_jonas","grant_id":"laptop"})
+        );
+        for malformed in ["legacy", "reader:reader", ""] {
+            assert_eq!(
+                actor(malformed),
+                json!({"role":"grant","user_id":null,"grant_id":null}),
+                "{malformed}"
+            );
+        }
+        assert_eq!(
+            actor("auth0|user:owner"),
+            json!({"role":"owner","user_id":null,"grant_id":null})
+        );
+    }
+
+    #[test]
+    fn host_operations_tell_readers_who_started_them_without_naming_anyone() -> Result<()> {
+        use ManagementCapability::{Logs, Reboot, Status};
+        let mut device = Device::new()?;
+        let owner = device.owner.clone();
+        let jonas = grantee(
+            "usr_jonas",
+            "laptop",
+            ManagementScope::Device,
+            &[Status, Reboot],
+        )?;
+        let jonas_desktop = grantee("usr_jonas", "desktop", ManagementScope::Device, &[Status])?;
+        let mira = grantee("usr_mira", "mira", ManagementScope::Device, &[Status])?;
+        let logs = grantee("usr_logs", "logs", ManagementScope::Device, &[Logs])?;
+        let project = grantee("usr_project", "project", project_scope(), &[Status])?;
+        let placement = grantee("usr_placement", "one", placement_scope_of("api"), &[Status])?;
+        device.share(&[&jonas, &jonas_desktop, &mira, &logs, &project, &placement])?;
+        device.placement("api")?;
+        let running = |device: &mut Device, authority: &Authority| {
+            device
+                .read(authority, ManagementCommand::HostOperation)
+                .map(|response| response.result["operation"].clone())
+        };
+        assert!(running(&mut device, &owner)?.is_null());
+
+        device.begin_reboot("reboot-by-owner", &owner.principal)?;
+        assert_eq!(
+            running(&mut device, &owner)?,
+            json!({"operation_id":"reboot-by-owner","kind":"reboot","state":"pending","created_at":100,"issued_by":"you"})
+        );
+        assert_eq!(running(&mut device, &mira)?["issued_by"], "owner");
+        for narrower in [&logs, &project, &placement] {
+            assert_eq!(
+                device.refused(narrower, ManagementCommand::HostOperation),
+                RejectionCode::Unauthorized
+            );
+        }
+        assert_eq!(
+            snapshot_host_operation(&device.store)?["issued_by"],
+            "owner"
+        );
+
+        device.begin_reboot("reboot-by-jonas", &jonas.principal)?;
+        for (reader, issued_by) in [
+            (&jonas, "you"),
+            (&jonas_desktop, "you"),
+            (&owner, "another_person"),
+            (&mira, "another_person"),
+        ] {
+            let operation = running(&mut device, reader)?;
+            assert_eq!(operation["issued_by"], issued_by, "{}", reader.principal);
+            assert_eq!(operation.as_object().unwrap().len(), 5);
+            for private in ["usr_jonas", "laptop", &jonas.key.thumbprint()?] {
+                assert!(!operation.to_string().contains(private), "{private}");
+            }
+        }
+        let snapshot = snapshot_host_operation(&device.store)?;
+        assert_eq!(snapshot["issued_by"], "another_person");
+        assert!(!snapshot.to_string().contains("usr_jonas"));
+
+        let page = ManagementCommand::InspectPage {
+            after: None,
+            limit: 2,
+        };
+        let inspected = device.read(&mira, page.clone())?.result;
+        assert_eq!(inspected["host_operation"], running(&mut device, &mira)?);
+        assert!(
+            device
+                .read(&project, page)?
+                .result
+                .get("host_operation")
+                .is_none()
+        );
+
+        device.store.connection.execute(
+            "DELETE FROM management_operations WHERE operation_id='reboot-by-jonas'",
+            [],
+        )?;
+        assert_eq!(running(&mut device, &jonas)?["issued_by"], "another_person");
+        device
+            .store
+            .connection
+            .execute("UPDATE host_operations SET state='completed'", [])?;
+        assert!(running(&mut device, &owner)?.is_null());
+        assert!(snapshot_host_operation(&device.store)?.is_null());
+        Ok(())
+    }
+
+    #[test]
+    fn rollout_history_pages_newest_first_within_the_readers_placements() -> Result<()> {
+        use ManagementCapability::{Deploy, Status};
+        let mut device = Device::new()?;
+        let owner = device.owner.clone();
+        let mut candidate = device.placement("api")?;
+        let mut worker = device.placement("worker")?;
+        candidate.revision = "release-2".into();
+        worker.revision = "release-2".into();
+        for index in 0..20 {
+            device.store.stage_rollout(
+                &format!("rollout-{index:02}"),
+                &candidate,
+                1,
+                2,
+                30,
+                100 + index / 2,
+            )?;
+            device.store.cancel_rollout("api", 200)?;
+        }
+        device
+            .store
+            .stage_rollout("worker-rollout", &worker, 1, 2, 30, 300)?;
+        let history = |before: Option<&str>, limit| ManagementCommand::RolloutHistory {
+            placement_id: "api".into(),
+            before: before.map(str::to_owned),
+            limit,
+        };
+        let ids = |response: &ManagementResponse| {
+            response.result["rollouts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|rollout| rollout["rollout_id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let expected = |range: std::ops::RangeInclusive<u32>| -> Vec<String> {
+            range
+                .rev()
+                .map(|index| format!("rollout-{index:02}"))
+                .collect()
+        };
+        let first = device.read(&owner, history(None, 8))?;
+        assert_eq!(first.result["placement_id"], "api");
+        assert_eq!(ids(&first), expected(12..=19));
+        assert_eq!(first.result["next"], "rollout-12");
+        assert_eq!(first.result["rollouts"][0]["state"], "cancelled");
+        assert_eq!(first.result["rollouts"][0]["failure_code"], "stopped");
+        for config in ["public-listen-port", "candidate_config", "project_path"] {
+            assert!(!first.result.to_string().contains(config), "{config}");
+        }
+        let second = device.read(&owner, history(Some("rollout-12"), 8))?;
+        assert_eq!(ids(&second), expected(4..=11));
+        assert_eq!(second.result["next"], "rollout-04");
+        let last = device.read(&owner, history(Some("rollout-04"), 8))?;
+        assert_eq!(ids(&last), expected(0..=3));
+        assert!(last.result["next"].is_null());
+        let widest = device.read(&owner, history(None, 16))?;
+        assert_eq!(ids(&widest), expected(4..=19));
+        assert!(serde_json::to_vec(&widest)?.len() <= noise::MAX_PLAINTEXT);
+        let defaults =
+            serde_json::from_value(json!({"type":"rollout_history","placement_id":"api"}))?;
+        assert_eq!(ids(&device.read(&owner, defaults)?).len(), 8);
+        for gone in ["rollout-99", "worker-rollout"] {
+            let empty = device.read(&owner, history(Some(gone), 8))?;
+            assert_eq!(empty.result["rollouts"], json!([]), "{gone}");
+            assert!(empty.result["next"].is_null());
+        }
+        for limit in [0, 17] {
+            assert_eq!(
+                device.refused(&owner, history(None, limit)),
+                RejectionCode::Invalid
+            );
+        }
+        assert_eq!(
+            device.refused(&owner, history(Some("not/an/id"), 8)),
+            RejectionCode::Invalid
+        );
+
+        let one = grantee("usr_one", "one", placement_scope_of("api"), &[Status])?;
+        let deployer = grantee("usr_deploy", "deploy", placement_scope_of("api"), &[Deploy])?;
+        let elsewhere = grantee("usr_else", "else", placement_scope_of("worker"), &[Status])?;
+        device.share(&[&one, &deployer, &elsewhere])?;
+        assert_eq!(
+            ids(&device.read(&one, history(None, 8))?),
+            expected(12..=19)
+        );
+        for outsider in [&deployer, &elsewhere] {
+            assert_eq!(
+                device.refused(outsider, history(None, 8)),
+                RejectionCode::Unauthorized
+            );
+        }
+        let worker_history = ManagementCommand::RolloutHistory {
+            placement_id: "worker".into(),
+            before: None,
+            limit: 8,
+        };
+        assert_eq!(
+            device.refused(&one, worker_history.clone()),
+            RejectionCode::Unauthorized
+        );
+        assert_eq!(
+            ids(&device.read(&elsewhere, worker_history)?),
+            ["worker-rollout"]
+        );
+        let missing = ManagementCommand::RolloutHistory {
+            placement_id: "missing".into(),
+            before: None,
+            limit: 8,
+        };
+        assert_eq!(
+            device.refused(&owner, missing),
+            RejectionCode::RevisionConflict
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn only_the_owner_lists_operations_of_every_person() -> Result<()> {
+        let mut device = Device::new()?;
+        let owner = device.owner.clone();
+        let jonas = grantee(
+            "usr_jonas",
+            "laptop",
+            ManagementScope::Device,
+            &[
+                ManagementCapability::Status,
+                ManagementCapability::Logs,
+                ManagementCapability::Deploy,
+                ManagementCapability::Reboot,
+            ],
+        )?;
+        device.share(&[&jonas])?;
+        let list = |after: Option<&str>, limit| ManagementCommand::Operations {
+            after: after.map(str::to_owned),
+            limit,
+        };
+        assert_eq!(
+            device.read(&owner, list(None, 20))?.result,
+            json!({"operations":[],"next":null})
+        );
+        device.journal("op-b", &jonas.principal, 300, "completed", Some("api"))?;
+        device.journal("op-a", &owner.principal, 300, "accepted", Some("api"))?;
+        device.journal("op-c", &jonas.principal, 200, "failed", None)?;
+        device.journal("op-d", "reader:reader", 100, "Not a state", None)?;
+        let all = device.read(&owner, list(None, 20))?;
+        let grant = json!({"role":"grant","user_id":"usr_jonas","grant_id":"laptop"});
+        assert_eq!(
+            all.result,
+            json!({"operations":[
+                {"operation_id":"op-a","kind":null,"actor":{"role":"owner","user_id":"owner-user","grant_id":null},"project_id":"project","placement_id":"api","accepted_at":300,"state":"accepted"},
+                {"operation_id":"op-b","kind":null,"actor":grant,"project_id":"project","placement_id":"api","accepted_at":300,"state":"completed"},
+                {"operation_id":"op-c","kind":null,"actor":grant,"project_id":null,"placement_id":null,"accepted_at":200,"state":"failed"},
+                {"operation_id":"op-d","kind":null,"actor":{"role":"grant","user_id":null,"grant_id":null},"project_id":null,"placement_id":null,"accepted_at":100,"state":"unknown"},
+            ],"next":null})
+        );
+        for private in ["journal-result", "digest", &jonas.key.thumbprint()?] {
+            assert!(!all.result.to_string().contains(private), "{private}");
+        }
+        let first = device.read(&owner, list(None, 3))?;
+        assert_eq!(first.result["operations"].as_array().unwrap().len(), 3);
+        assert_eq!(first.result["next"], "op-c");
+        let rest = device.read(&owner, list(Some("op-c"), 3))?;
+        assert_eq!(rest.result["operations"][0]["operation_id"], "op-d");
+        assert!(rest.result["next"].is_null());
+        assert_eq!(
+            device.read(&owner, list(Some("op-a"), 1))?.result["operations"][0]["operation_id"],
+            "op-b"
+        );
+        assert_eq!(
+            device.read(&owner, list(Some("pruned"), 20))?.result,
+            json!({"operations":[],"next":null})
+        );
+        let defaults = serde_json::from_value(json!({"type":"operations"}))?;
+        assert_eq!(device.read(&owner, defaults)?.result, all.result);
+
+        assert_eq!(
+            device.refused(&jonas, list(None, 20)),
+            RejectionCode::Unauthorized
+        );
+        for limit in [0, 51] {
+            assert_eq!(
+                device.refused(&owner, list(None, limit)),
+                RejectionCode::Invalid
+            );
+        }
+        assert_eq!(
+            device.refused(&owner, list(Some("not an id"), 20)),
+            RejectionCode::Invalid
+        );
+        // Reads are not journaled, so listing left the journal as it was.
+        let journaled: u64 = device.store.connection.query_row(
+            "SELECT COUNT(*) FROM management_operations",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(journaled, 4);
+
+        for index in 0..50 {
+            device.journal(
+                &format!("{index:02}{}", "o".repeat(126)),
+                &format!("{}:{}:thumbprint", "u".repeat(128), "g".repeat(128)),
+                1000,
+                "completed",
+                None,
+            )?;
+        }
+        device.store.connection.execute(
+            "UPDATE management_operations SET project_id=?1,placement_id=?1 WHERE accepted_at=1000",
+            ["p".repeat(128)],
+        )?;
+        let widest = device.read(&owner, list(None, 50))?;
+        assert!(serde_json::to_vec(&widest)?.len() <= noise::MAX_PLAINTEXT);
+        let fitted = widest.result["operations"].as_array().unwrap();
+        assert!((1..50).contains(&fitted.len()));
+        assert_eq!(
+            widest.result["next"],
+            fitted.last().unwrap()["operation_id"]
+        );
+        let mut listed = fitted.len();
+        let mut after = widest.result["next"].as_str().map(str::to_owned);
+        while let Some(cursor) = after {
+            let page = device.read(&owner, list(Some(cursor.as_str()), 50))?;
+            listed += page.result["operations"].as_array().unwrap().len();
+            after = page.result["next"].as_str().map(str::to_owned);
+        }
+        assert_eq!(listed, 54);
+        Ok(())
+    }
+
+    #[test]
+    fn listing_pages_are_cut_at_the_limit_and_at_one_encrypted_reply() -> Result<()> {
+        let row = |bytes: usize, id: u32| json!({"id":id,"text":"x".repeat(bytes)});
+        let (rows, more) = page(vec![row(10, 1), row(10, 2), row(10, 3)], 2, "rows")?;
+        assert_eq!((rows.len(), more), (2, true));
+        assert_eq!(next_cursor(&rows, more, "id"), 2);
+        let (rows, more) = page(vec![row(10, 1), row(10, 2)], 2, "rows")?;
+        assert_eq!((rows.len(), more), (2, false));
+        assert!(next_cursor(&rows, more, "id").is_null());
+        let (rows, more) = page(Vec::new(), 2, "rows")?;
+        assert!(rows.is_empty() && !more);
+        let (rows, more) = page((1..=4).map(|id| row(6000, id)).collect(), 4, "rows")?;
+        assert_eq!((rows.len(), more), (2, true));
+        assert_eq!(next_cursor(&rows, more, "id"), 2);
+        let oversized = page(vec![row(noise::MAX_PLAINTEXT, 1)], 4, "rows").unwrap_err();
+        assert_eq!(rejection_code(&oversized), RejectionCode::Limit);
+        let request = request("read", ManagementCommand::Inspect);
+        assert!(completed(&request, "Rows", row(6000, 1)).is_ok());
+        let refused = completed(&request, "Rows", row(noise::MAX_PLAINTEXT, 1)).unwrap_err();
+        assert_eq!(rejection_code(&refused), RejectionCode::Limit);
+        Ok(())
+    }
+
+    #[test]
+    fn metrics_history_follows_the_metrics_capability_and_the_field_allowlist() -> Result<()> {
+        use ManagementCapability::{Metrics, Status};
+        let mut device = Device::new()?;
+        let owner = device.owner.clone();
+        device.placement("api")?;
+        let telemetry = crate::telemetry::TelemetryStore::open(&device.root)?;
+        telemetry.append(
+            None,
+            "metrics",
+            &json!({"cpu_percent":12.5,"memory_used_bytes":1024,"placements":1,"network":{"private":"device-network"}}),
+        )?;
+        telemetry.append(
+            Some("api"),
+            "metrics",
+            &json!({"cpu_percent":50.0,"memory_bytes":2048,"project_id":"project","replicas":[{"slot":0}]}),
+        )?;
+        drop(telemetry);
+        let history =
+            |placement: Option<&str>, fields: &[&str], limit| ManagementCommand::MetricsHistory {
+                placement_id: placement.map(str::to_owned),
+                after: 0,
+                limit,
+                fields: fields.iter().map(|field| (*field).to_owned()).collect(),
+            };
+        let host = device
+            .read(
+                &owner,
+                history(
+                    None,
+                    &["cpu_percent", "placements", "agent_memory_bytes"],
+                    256,
+                ),
+            )?
+            .result;
+        assert_eq!(
+            host["fields"],
+            json!(["cpu_percent", "placements", "agent_memory_bytes"])
+        );
+        let point = host["points"][0].as_array().unwrap();
+        assert!(point[0].as_i64().unwrap() > 1_600_000_000);
+        assert_eq!(point[1..], [json!(12.5), json!(1), Value::Null]);
+        assert_eq!(host["points"].as_array().unwrap().len(), 1);
+        assert!(host["next"].is_null() && host["evicted_through"].is_null());
+        assert!(!host.to_string().contains("device-network"));
+
+        let reader = grantee("usr_reader", "metrics", project_scope(), &[Metrics])?;
+        let status = grantee("usr_status", "status", project_scope(), &[Status])?;
+        device.share(&[&reader, &status])?;
+        let service = device
+            .read(
+                &reader,
+                history(Some("api"), &["memory_bytes", "cpu_percent"], 1),
+            )?
+            .result;
+        assert_eq!(
+            service["points"][0].as_array().unwrap()[1..],
+            [json!(2048), json!(50.0)]
+        );
+        assert!(!service.to_string().contains("replicas"));
+        assert_eq!(
+            device.refused(&reader, history(None, &["cpu_percent"], 1)),
+            RejectionCode::Unauthorized
+        );
+        assert_eq!(
+            device.refused(&status, history(Some("api"), &["cpu_percent"], 1)),
+            RejectionCode::Unauthorized
+        );
+        assert_eq!(
+            device.refused(&owner, history(Some("missing"), &["cpu_percent"], 1)),
+            RejectionCode::RevisionConflict
+        );
+        let nine = ["cpu_percent"; 9];
+        for (placement, fields, limit) in [
+            (None, &[][..], 1),
+            (None, &nine[..], 1),
+            (None, &["cpu_percent", "cpu_percent"][..], 1),
+            (None, &["memory_bytes"][..], 1),
+            (None, &["network"][..], 1),
+            (Some("api"), &["memory_used_bytes"][..], 1),
+            (Some("api"), &["replicas"][..], 1),
+            (None, &["cpu_percent"][..], 0),
+            (None, &["cpu_percent"][..], 257),
+        ] {
+            assert_eq!(
+                device.refused(&owner, history(placement, fields, limit)),
+                RejectionCode::Invalid,
+                "{placement:?} {fields:?} {limit}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn queued_write_detail_is_read_per_scope_without_payloads() -> Result<()> {
+        use ManagementCapability::{Logs, Status};
+        let mut device = Device::new()?;
+        let owner = device.owner.clone();
+        device.placement("api")?;
+        device.placement("worker")?;
+        let scope = "a".repeat(64);
+        let queue = crate::outbox::test_support::queue(&device.root, "api", &scope)?;
+        let write = |secret: &str, key: Option<&str>, at: i64| {
+            queue.enqueue(
+                "{\"kind\":\"table\",\"table\":\"notes\"}",
+                json!({"mutation":{"kind":"table_upsert","rows":[{"secret":secret}]}}),
+                key,
+                at,
+            )
+        };
+        let superseded = write("must-not-reach-management-1", Some("id:1"), 100)?;
+        let blocked = write("must-not-reach-management-2", Some("id:1"), 101)?;
+        let pending = [
+            write("must-not-reach-management-3", None, 102)?,
+            write("must-not-reach-management-4", None, 103)?,
+        ];
+        queue.block_with_code(
+            &blocked.operation_id,
+            "blocked",
+            Some("forbidden"),
+            &"e".repeat(2048),
+        )?;
+        let list = |placement: &str, scope: &str, after_sequence, limit, terminal| {
+            ManagementCommand::OfflineQueueOperations {
+                placement_id: placement.into(),
+                scope: scope.into(),
+                after_sequence,
+                limit,
+                terminal,
+            }
+        };
+        let lookup = |scope: &str, id: &str| ManagementCommand::OfflineQueueLookup {
+            placement_id: "api".into(),
+            scope: scope.into(),
+            queued_operation_id: id.into(),
+        };
+        let reader = grantee("usr_reader", "status", placement_scope_of("api"), &[Status])?;
+        let logs = grantee("usr_logs", "logs", placement_scope_of("api"), &[Logs])?;
+        let elsewhere = grantee("usr_else", "else", placement_scope_of("worker"), &[Status])?;
+        device.share(&[&reader, &logs, &elsewhere])?;
+
+        let first = device.read(&reader, list("api", &scope, None, 2, false))?;
+        let open = first.result["operations"].as_array().unwrap();
+        assert_eq!(open.len(), 2);
+        assert_eq!(open[0]["operation_id"], blocked.operation_id);
+        assert_eq!(open[0]["state"], "blocked");
+        assert_eq!(open[0]["mutation_kind"], "table_upsert");
+        assert_eq!(open[0]["error_code"], "forbidden");
+        assert_eq!(open[0]["error"].as_str().unwrap().len(), MAX_REJECTION_TEXT);
+        assert_eq!(open[1]["operation_id"], pending[0].operation_id);
+        assert_eq!(first.result["next"], open[1]["sequence"]);
+        let rest = device.read(
+            &reader,
+            list("api", &scope, first.result["next"].as_u64(), 2, false),
+        )?;
+        assert_eq!(
+            rest.result["operations"][0]["operation_id"],
+            pending[1].operation_id
+        );
+        assert_eq!(rest.result["operations"].as_array().unwrap().len(), 1);
+        assert!(rest.result["next"].is_null());
+        let defaults = serde_json::from_value(
+            json!({"type":"offline_queue_operations","placement_id":"api","scope":scope}),
+        )?;
+        assert_eq!(
+            device.read(&owner, defaults)?.result["operations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+
+        let tombstones = device.read(&reader, list("api", &scope, None, 50, true))?;
+        assert_eq!(
+            tombstones.result,
+            json!({"operations":[{"sequence":superseded.sequence,"operation_id":superseded.operation_id,"resource":"{\"kind\":\"table\",\"table\":\"notes\"}","mutation_kind":null,"state":"superseded","attempts":0,"created_at":100,"bytes":0,"error":null,"error_code":null}],"next":null})
+        );
+        assert_eq!(
+            device
+                .read(&reader, lookup(&scope, &superseded.operation_id))?
+                .result,
+            json!({"state":"superseded","superseded_by":blocked.operation_id,"error":null,"error_code":null})
+        );
+        let found = device.read(&reader, lookup(&scope, &blocked.operation_id))?;
+        assert_eq!(found.result["state"], "blocked");
+        assert_eq!(found.result["error_code"], "forbidden");
+        assert_eq!(
+            found.result["error"].as_str().unwrap().len(),
+            MAX_REJECTION_TEXT
+        );
+        for response in [&first, &rest, &tombstones, &found] {
+            assert!(serde_json::to_vec(response)?.len() <= noise::MAX_PLAINTEXT);
+            assert!(!serde_json::to_string(response)?.contains("must-not-reach-management"));
+        }
+
+        let unknown = "b".repeat(64);
+        for (command, code) in [
+            (
+                list("api", &unknown, None, 20, false),
+                RejectionCode::Invalid,
+            ),
+            (
+                list("api", "../../management", None, 20, false),
+                RejectionCode::Invalid,
+            ),
+            (
+                list("api", &"A".repeat(64), None, 20, true),
+                RejectionCode::Invalid,
+            ),
+            (list("api", &scope, None, 0, false), RejectionCode::Invalid),
+            (list("api", &scope, None, 51, false), RejectionCode::Invalid),
+            (
+                list("missing", &scope, None, 20, false),
+                RejectionCode::RevisionConflict,
+            ),
+            (
+                lookup(&unknown, &blocked.operation_id),
+                RejectionCode::Invalid,
+            ),
+            (lookup(&scope, "never-queued"), RejectionCode::Invalid),
+            (lookup(&scope, "not an id"), RejectionCode::Invalid),
+        ] {
+            assert_eq!(device.refused(&owner, command.clone()), code, "{command:?}");
+        }
+        for outsider in [&logs, &elsewhere] {
+            assert_eq!(
+                device.refused(outsider, list("api", &scope, None, 20, false)),
+                RejectionCode::Unauthorized
+            );
+            assert_eq!(
+                device.refused(outsider, lookup(&scope, &blocked.operation_id)),
+                RejectionCode::Unauthorized
+            );
+        }
+        assert_eq!(
+            device.refused(&reader, list("worker", &scope, None, 20, false)),
+            RejectionCode::Unauthorized
+        );
+        assert!(crate::outbox::reader(&device.root, "api", &unknown)?.is_none());
+        assert!(crate::outbox::reader(&device.root, "worker", &scope)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn only_the_owner_reads_who_relayed_each_shared_metrics_reader() -> Result<()> {
+        let device = Device::new()?;
+        let reader = grantee(
+            "usr_jonas",
+            "laptop",
+            ManagementScope::Device,
+            &[ManagementCapability::Metrics],
+        )?;
+        device.share(&[&reader])?;
+        device.store.connection.execute(
+            "INSERT INTO telemetry_audiences(scope,policy_jws) VALUES('device','signed-roster')",
+            [],
+        )?;
+        let relay = reader.key.thumbprint()?;
+        crate::telemetry_groups::bind_reader(
+            &device.store.connection,
+            "device",
+            "reader-endpoint",
+            &relay,
+        )?;
+        let service = device.service();
+        let roster = |authority: &Authority| {
+            let read = request(
+                "roster",
+                ManagementCommand::TelemetryRosterRead {
+                    scope: "device".into(),
+                    offset: 0,
+                    limit: 4096,
+                },
+            );
+            execute_telemetry_group(&device.store, authority, &read, &service, 101)
+                .map(|response| response.result)
+        };
+        let owned = roster(&device.owner)?;
+        assert_eq!(owned["confirmed_readers"], json!(["reader-endpoint"]));
+        assert_eq!(
+            owned["reader_bindings"],
+            json!([{"endpoint_id":"reader-endpoint","controller_key_thumbprint":relay}])
+        );
+        let shared = roster(&reader)?;
+        assert_eq!(shared["confirmed_readers"], owned["confirmed_readers"]);
+        assert_eq!(shared["chunk"], owned["chunk"]);
+        assert!(shared.get("reader_bindings").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn history_status_follows_the_archive_roster_a_reader_may_read() -> Result<()> {
+        use crate::diagnostics::HistoryPause;
+        let mut device = Device::new()?;
+        let owner = device.owner.clone();
+        device.placement("api")?;
+        device.placement("worker")?;
+        let reader = grantee(
+            "usr_reader",
+            "reader",
+            placement_scope_of("api"),
+            &[ManagementCapability::Logs],
+        )?;
+        device.share(&[&reader])?;
+        for scope in ["api", "worker"] {
+            device.store.connection.execute(
+                "INSERT INTO archive_rosters(scope,kind,policy_jws) VALUES(?1,'log','signed-roster')",
+                [scope],
+            )?;
+        }
+        let roster = |scope: &str, kind: ArchiveKind| ManagementCommand::ArchiveRosterRead {
+            scope: scope.into(),
+            kind,
+            offset: 0,
+            limit: 1024,
+        };
+        let unseen = device
+            .read(&reader, roster("api", ArchiveKind::Logs))?
+            .result;
+        assert!(unseen["available"] == true && unseen.get("status").is_none());
+        let registry = crate::diagnostics::global();
+        registry.set_history_sealing(
+            &device.root,
+            vec![
+                ("api".into(), "log".into(), Ok(())),
+                (
+                    "worker".into(),
+                    "log".into(),
+                    Err(Some(HistoryPause::RosterExpired)),
+                ),
+            ],
+        );
+        let own = device
+            .read(&reader, roster("api", ArchiveKind::Logs))?
+            .result;
+        assert_eq!(own["status"]["state"], "recording");
+        assert!(own["status"]["reason"].is_null() && own["status"]["since"].is_i64());
+        assert_eq!(
+            device.refused(&reader, roster("worker", ArchiveKind::Logs)),
+            RejectionCode::Unauthorized
+        );
+        let other = device
+            .read(&owner, roster("worker", ArchiveKind::Logs))?
+            .result;
+        assert_eq!(
+            (&other["status"]["state"], &other["status"]["reason"]),
+            (&json!("paused"), &json!("roster_expired"))
+        );
+        registry.set_history_storage(&device.root, Some(HistoryPause::TierWithoutHistory));
+        let refused = device
+            .read(&reader, roster("api", ArchiveKind::Logs))?
+            .result;
+        assert_eq!(
+            (&refused["status"]["state"], &refused["status"]["reason"]),
+            (&json!("paused"), &json!("tier_without_history"))
+        );
+        let kept = device
+            .read(&owner, roster("worker", ArchiveKind::Logs))?
+            .result;
+        assert_eq!(kept["status"]["reason"], "roster_expired");
+        assert_eq!(
+            device
+                .read(&owner, roster("api", ArchiveKind::Metrics))?
+                .result,
+            json!({"available":false})
+        );
+        Ok(())
+    }
+
+    /// A device with two revisions of `project`: placement `api` runs from `pinned` and
+    /// nothing uses `unused`. Four people hold grants of different reach.
+    struct Capacity {
+        device: Device,
+        owner: Authority,
+        /// Deploy on the project.
+        deployer: Authority,
+        /// Deploy on the whole device.
+        fleet: Authority,
+        /// Deploy on placement `api` only.
+        placed: Authority,
+        /// Status on the whole device.
+        viewer: Authority,
+        pinned: String,
+        unused: String,
+    }
+
+    impl Capacity {
+        fn new() -> Result<Self> {
+            let mut device = Device::new()?;
+            let deploy = [ManagementCapability::Deploy];
+            let deployer = grantee("usr_deployer", "laptop", project_scope(), &deploy)?;
+            let fleet = grantee("usr_fleet", "fleet", ManagementScope::Device, &deploy)?;
+            let placed = grantee("usr_placed", "placed", placement_scope_of("api"), &deploy)?;
+            let status = [ManagementCapability::Status];
+            let viewer = grantee("usr_viewer", "viewer", ManagementScope::Device, &status)?;
+            device.share(&[&deployer, &fleet, &placed, &viewer])?;
+            let (pinned, path) = device.revision("project", b"hello")?;
+            let (unused, _) = device.revision("project", b"next!")?;
+            let mut config = placement(&device.root)?;
+            config["project_path"] = json!(path);
+            device
+                .store
+                .upsert_placement("api", &config, crate::state::DesiredState::Running)?;
+            Ok(Self {
+                owner: device.owner.clone(),
+                device,
+                deployer,
+                fleet,
+                placed,
+                viewer,
+                pinned,
+                unused,
+            })
+        }
+
+        fn usage(project: Option<&str>) -> Value {
+            json!({"kind":"usage","project_id":project})
+        }
+
+        fn prune(revisions: &[&String]) -> Value {
+            json!({"kind":"prune","project_id":"project","revisions":revisions})
+        }
+
+        /// The start of an upload of a third revision.
+        fn begin() -> Result<Value> {
+            let upload = ProjectArtifactManifest {
+                version: 1,
+                project_id: "project".into(),
+                source: ProjectArtifactSource::Offline,
+                files: vec![ProjectArtifactFile {
+                    path: "apps/project/manifest.app".into(),
+                    size: 5,
+                    sha256: artifact_sha256(b"third"),
+                }],
+                bit_pins: vec![],
+                package_pins: vec![],
+            };
+            Ok(json!({"kind":"begin","descriptor":upload.descriptor()?}))
+        }
+
+        fn refused(&self, authority: &Authority, id: &str, artifact: Value) -> RejectionCode {
+            rejection_code(&self.device.artifact(authority, id, artifact).unwrap_err())
+        }
+
+        /// Who the journal names for an operation on the project, when it has a row.
+        fn journaled(&self, id: &str) -> Result<Option<String>> {
+            Ok(self
+                .device
+                .store
+                .connection
+                .query_row(
+                    "SELECT principal FROM management_operations WHERE operation_id=?1 AND project_id='project'",
+                    [id],
+                    |row| row.get(0),
+                )
+                .optional()?)
+        }
+    }
+
+    #[test]
+    fn storage_use_is_read_within_the_callers_deploy_scope() -> Result<()> {
+        let capacity = Capacity::new()?;
+        let device = &capacity.device;
+        let project = Capacity::usage(Some("project"));
+        let owned = device
+            .artifact(&capacity.owner, "use", project.clone())?
+            .result;
+        let mut expected = [capacity.pinned.clone(), capacity.unused.clone()];
+        expected.sort();
+        let rows = owned["revisions"].as_array().context("Missing revisions")?;
+        let listed: Vec<&str> = rows
+            .iter()
+            .filter_map(|row| row["revision"].as_str())
+            .collect();
+        assert_eq!(listed, expected);
+        for row in rows {
+            let users = if row["revision"] == json!(capacity.pinned) {
+                json!(["api"])
+            } else {
+                json!([])
+            };
+            assert_eq!(row["referenced_by"], users);
+            assert!(row["rollout"] == false && row["bytes"].as_u64() > Some(4096));
+        }
+        assert!(owned["next"].is_null());
+        assert_eq!(owned["project"]["revisions"], json!({"used":2,"max":128}));
+        assert_eq!(owned["device"]["revisions"], json!({"used":2,"max":1024}));
+        let scoped = device.artifact(&capacity.deployer, "use", project)?.result;
+        assert!(scoped["device"].is_null());
+        assert_eq!(scoped["project"], owned["project"]);
+        assert_eq!(scoped["revisions"], owned["revisions"]);
+        let wide = device.artifact(&capacity.fleet, "use", Capacity::usage(None))?;
+        assert_eq!(
+            wide.result,
+            json!({"device":owned["device"],"project":null,"revisions":[],"next":null})
+        );
+        for (authority, project) in [
+            (&capacity.deployer, None),
+            (&capacity.deployer, Some("other")),
+            (&capacity.placed, Some("project")),
+            (&capacity.viewer, Some("project")),
+            (&capacity.viewer, None),
+        ] {
+            assert_eq!(
+                capacity.refused(authority, "use", Capacity::usage(project)),
+                RejectionCode::Unauthorized,
+                "{} {project:?}",
+                authority.principal
+            );
+        }
+        let unpaged = json!({"kind":"usage","project_id":"project","after":"not-a-digest"});
+        assert_eq!(
+            capacity.refused(&capacity.owner, "use", unpaged),
+            RejectionCode::Invalid
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_refused_revision_cleanup_removes_nothing_and_leaves_no_trace() -> Result<()> {
+        let capacity = Capacity::new()?;
+        let (deployer, pinned, unused) = (&capacity.deployer, &capacity.pinned, &capacity.unused);
+        for (authority, id, revisions, refused) in [
+            (
+                &capacity.viewer,
+                "prune-viewer",
+                vec![unused],
+                RejectionCode::Unauthorized,
+            ),
+            (
+                &capacity.placed,
+                "prune-placed",
+                vec![unused],
+                RejectionCode::Unauthorized,
+            ),
+            (deployer, "prune-all", vec![], RejectionCode::Invalid),
+            (
+                deployer,
+                "prune-used",
+                vec![unused, pinned],
+                RejectionCode::RevisionConflict,
+            ),
+        ] {
+            let prune = Capacity::prune(&revisions);
+            assert_eq!(capacity.refused(authority, id, prune), refused, "{id}");
+            assert_eq!(capacity.journaled(id)?, None, "{id}");
+            assert!(capacity.device.store.connection.is_autocommit());
+        }
+        let receiving = uuid::Uuid::new_v4().to_string();
+        capacity
+            .device
+            .artifact(deployer, &receiving, Capacity::begin()?)?;
+        assert_eq!(
+            capacity.refused(deployer, "prune-busy", Capacity::prune(&[unused])),
+            RejectionCode::Busy
+        );
+        assert_eq!(capacity.journaled("prune-busy")?, None);
+        let usage = Capacity::usage(Some("project"));
+        let left = capacity
+            .device
+            .artifact(&capacity.owner, "use", usage)?
+            .result;
+        assert_eq!(left["revisions"].as_array().map(Vec::len), Some(2));
+        Ok(())
+    }
+
+    #[test]
+    fn a_revision_cleanup_is_journaled_once_and_a_full_budget_is_a_limit() -> Result<()> {
+        let mut capacity = Capacity::new()?;
+        let (deployer, unused) = (capacity.deployer.clone(), capacity.unused.clone());
+        let prune = Capacity::prune(&[&unused]);
+        let removed = capacity
+            .device
+            .artifact(&deployer, "prune", prune.clone())?;
+        assert_eq!(removed.state, "completed");
+        assert_eq!(removed.result["project_id"], "project");
+        assert_eq!(removed.result["pruned"], json!([unused]));
+        assert!(removed.result["freed_bytes"].as_u64() > Some(4096));
+        assert_eq!(
+            capacity.journaled("prune")?,
+            Some(deployer.principal.clone())
+        );
+        let replayed = capacity
+            .device
+            .artifact(&deployer, "prune", prune.clone())?;
+        assert_eq!(replayed.result, removed.result);
+        let other = Capacity::prune(&[&capacity.pinned]);
+        assert_eq!(
+            capacity.refused(&deployer, "prune", other),
+            RejectionCode::Invalid
+        );
+        let again = capacity.device.artifact(&deployer, "prune-again", prune)?;
+        assert_eq!(
+            again.result,
+            json!({"project_id":"project","pruned":[],"freed_bytes":0})
+        );
+        let usage = Capacity::usage(Some("project"));
+        let left = capacity
+            .device
+            .artifact(&capacity.owner, "use", usage)?
+            .result;
+        assert_eq!(left["revisions"].as_array().map(Vec::len), Some(1));
+        assert_eq!(left["revisions"][0]["revision"], json!(capacity.pinned));
+        let journal = ManagementCommand::Operations {
+            after: None,
+            limit: 50,
+        };
+        let owner = capacity.owner.clone();
+        let operations = capacity.device.read(&owner, journal)?.result;
+        let cleanup = |operation: &&Value| operation["operation_id"] == "prune";
+        let listed = operations["operations"]
+            .as_array()
+            .context("Missing journal")?;
+        let cleanup = listed
+            .iter()
+            .find(cleanup)
+            .context("Cleanup is not journaled")?;
+        assert_eq!(cleanup["actor"]["grant_id"], "laptop");
+        assert_eq!(cleanup["state"], "completed");
+
+        crate::vault::write_new_private(
+            &capacity.device.root.join("agent.env"),
+            b"FLOW_LIKE_PROJECT_ARTIFACT_REVISIONS=1\n",
+        )?;
+        let full = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            capacity.refused(&deployer, &full, Capacity::begin()?),
+            RejectionCode::Limit
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn retained_revisions_are_listed_in_pages_that_fit_one_reply() -> Result<()> {
+        use std::os::unix::fs::DirBuilderExt;
+        let device = Device::new()?;
+        let home = crate::project_artifacts::managed_project_root(&device.root, "bulk")?;
+        let directory = home.join("revisions");
+        std::fs::DirBuilder::new().mode(0o700).create(&directory)?;
+        let mut revisions = Vec::new();
+        for index in 0..100_u64 {
+            let receipt = ProjectArtifactManifest {
+                version: 1,
+                project_id: "bulk".into(),
+                source: ProjectArtifactSource::Offline,
+                files: vec![ProjectArtifactFile {
+                    path: "apps/bulk/manifest.app".into(),
+                    size: index + 1,
+                    sha256: artifact_sha256(&index.to_le_bytes()),
+                }],
+                bit_pins: vec![],
+                package_pins: vec![],
+            }
+            .canonical_bytes()?;
+            let revision = artifact_sha256(&receipt);
+            crate::vault::write_new_private(
+                &directory.join(format!("{revision}.manifest.json")),
+                &receipt,
+            )?;
+            revisions.push(revision);
+        }
+        revisions.sort();
+        let read = |after: Option<&String>| -> Result<Value> {
+            let response = device.artifact(
+                &device.owner,
+                "use",
+                json!({"kind":"usage","project_id":"bulk","after":after}),
+            )?;
+            assert!(serde_json::to_vec(&response)?.len() <= noise::MAX_PLAINTEXT);
+            Ok(response.result)
+        };
+        let listed = |page: &Value| -> Vec<String> {
+            page["revisions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|row| row["revision"].as_str().map(str::to_owned))
+                .collect()
+        };
+        let first = read(None)?;
+        assert_eq!(first["project"]["revisions"], json!({"used":100,"max":128}));
+        assert_eq!(listed(&first), revisions[..ARTIFACT_REVISION_PAGE]);
+        assert_eq!(first["next"], json!(revisions[ARTIFACT_REVISION_PAGE - 1]));
+        let rest = read(revisions.get(ARTIFACT_REVISION_PAGE - 1))?;
+        assert_eq!(listed(&rest), revisions[ARTIFACT_REVISION_PAGE..]);
+        assert!(rest["next"].is_null());
+        assert!(listed(&read(revisions.last())?).is_empty());
         Ok(())
     }
 
@@ -5680,13 +7604,32 @@ mod tests {
             },
         );
         assert!(execute(&mut store, &shared, &list, &manifest, "boot", &root, now).is_err());
+        let policies = |store: &mut StateStore| -> Result<Value> {
+            Ok(execute(store, &owner, &list, &manifest, "boot", &root, now)?.result)
+        };
+        let quiet = policies(&mut store)?;
+        assert_eq!(quiet["policies"].as_array().map(Vec::len), Some(1));
+        assert!(quiet["next"].is_null());
         assert_eq!(
-            execute(&mut store, &owner, &list, &manifest, "boot", &root, now)?.result["policies"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
+            quiet["policies"][0]["certificate_id"],
+            json!(certificate_id)
         );
+        assert_eq!(quiet["policies"][0]["failures"], 0);
+        assert!(quiet["policies"][0].get("error_category").is_none());
+        crate::diagnostics::global().set_renewal_failure(
+            &root,
+            crate::diagnostics::Renewal::Acme,
+            &certificate_id,
+            crate::diagnostics::RenewalFailure::RateLimited,
+        );
+        let renewed = policies(&mut store)?;
+        assert!(renewed["policies"][0].get("error_category").is_none());
+        store
+            .connection
+            .execute("UPDATE certificate_acme SET failures=3", [])?;
+        let failing = policies(&mut store)?;
+        assert_eq!(failing["policies"][0]["failures"], 3);
+        assert_eq!(failing["policies"][0]["error_category"], "rate_limited");
         let revoke = request(
             "stop-acme",
             ManagementCommand::DeleteAcmeCertificate {

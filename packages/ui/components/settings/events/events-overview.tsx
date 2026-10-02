@@ -4,10 +4,14 @@ import { useTranslation } from "@flow-like/locales";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
 	AlertTriangleIcon,
+	CheckIcon,
+	CircleSlashIcon,
 	ClipboardListIcon,
 	ClockIcon,
 	CodeIcon,
 	CogIcon,
+	CopyIcon,
+	EllipsisIcon,
 	ExternalLinkIcon,
 	FileTextIcon,
 	FormInputIcon,
@@ -33,8 +37,9 @@ import {
 	Trash2Icon,
 	ZapIcon,
 } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { ComponentType } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { IOAuthConsentStore } from "../../../db/oauth-db";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks/use-invoke";
 import { useSearch } from "../../../hooks/use-search-index";
@@ -70,6 +75,24 @@ import {
 import { Input } from "../../ui/input";
 import { useProjectRuns } from "../dashboard/use-project-runs";
 import type { SurfaceRunHealth } from "../dashboard/use-project-runs";
+import {
+	type EventsDevicesHarness,
+	EventsDevicesProvider,
+	useEventsDevices,
+} from "../devices/events/events-devices";
+import {
+	EVENTS_BLOCK_ID,
+	EventsDevicesBanner,
+	OnDevicesStrip,
+} from "../devices/events/on-devices-strip";
+import { RunsOnCell, RunsOnColumnHeader } from "../devices/events/runs-on-cell";
+import {
+	type RunOnDevice,
+	useRunOnDevice,
+} from "../devices/events/use-run-on-device";
+import { Banner } from "../devices/primitives/banner";
+import { DvButton } from "../devices/primitives/dv-button";
+import { useCopy } from "../devices/primitives/use-copy";
 import { PermissionNotice } from "../permission/permission-notice";
 import { type EventStatus, getEventStatus } from "./event-status";
 import { computeEventIssues } from "./use-event-issues";
@@ -149,7 +172,22 @@ export interface EventsOverviewProps {
 	) => Promise<IStoredOAuthToken>;
 	/** Whether the app is local-only, which changes where a sink can run. */
 	isOffline?: boolean;
+	/** Tests and the visual harness: what the device workspace reads instead of the host. */
+	devicesHarness?: EventsDevicesHarness;
 }
+
+/** The list switches its columns on its own width: the config sidebar makes the viewport a poor guide. */
+const ROW_GRID = cn(
+	"grid gap-x-3 pr-3",
+	"grid-cols-[3px_30px_minmax(0,1fr)_28px]",
+	"@min-[600px]/events:grid-cols-[3px_30px_minmax(150px,1fr)_minmax(84px,180px)_minmax(172px,176px)_58px]",
+	"@min-[900px]/events:grid-cols-[3px_30px_minmax(170px,1fr)_minmax(112px,180px)_minmax(160px,200px)_minmax(104px,140px)_156px]",
+	"@min-[1100px]/events:grid-cols-[3px_30px_minmax(180px,1fr)_minmax(130px,200px)_200px_148px_112px_156px]",
+);
+const FROM_600 = "hidden @min-[600px]/events:block";
+const FROM_900 = "hidden @min-[900px]/events:block";
+
+const eventRowId = (eventId: string) => `event-row-${eventId}`;
 
 function eventRequiresSink(
 	eventMapping: IEventMapping,
@@ -178,9 +216,12 @@ export function EventsOverview({
 	onStartOAuth,
 	onRefreshToken,
 	isOffline,
+	devicesHarness,
 }: Readonly<EventsOverviewProps>) {
 	const { t } = useTranslation("settings");
+	const { t: td } = useTranslation("devices");
 	const backend = useBackend();
+	const router = useRouter();
 	const invalidate = useInvalidateInvoke();
 	const queryClient = useQueryClient();
 	const [search, setSearch] = useState("");
@@ -462,136 +503,292 @@ export function EventsOverview({
 		"Your role cannot create, change or delete this project's events.",
 	);
 
+	const openEvent = useCallback(
+		(eventId: string) => {
+			const event = events.find((candidate) => candidate.id === eventId);
+			if (event) onEdit(event);
+		},
+		[events, onEdit],
+	);
+	const navigate = useCallback((href: string) => router.push(href), [router]);
+	const renderTile = useCallback(
+		(eventId: string) => {
+			const row = rows.find((candidate) => candidate.event.id === eventId);
+			return row ? <EventTile icon={row.glyph.icon} small /> : null;
+		},
+		[rows],
+	);
+	const handlers: EventRowHandlers = {
+		appId,
+		boardsMap,
+		isOffline,
+		canEdit,
+		writeDeniedMessage,
+		onEdit,
+		onDelete,
+		onNavigateToNode,
+		onToggleActive: handleToggleActive,
+		onRouteChange: handleRouteChange,
+	};
+
 	return (
-		<div className="flex h-full min-h-0 flex-col gap-3">
-			<div className="flex shrink-0 flex-wrap items-center gap-2">
-				<div className="relative min-w-52 max-w-xs flex-1">
-					<SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-					<Input
-						value={search}
-						onChange={(e) => setSearch(e.target.value)}
-						placeholder={t("searchEvents", "Search events…")}
-						aria-label={t("searchEvents2", "Search events")}
-						className="h-9 pl-8"
+		<EventsDevicesProvider
+			appId={appId}
+			events={events}
+			hub={hub}
+			canReadBoards={canReadBoards}
+			onNavigate={navigate}
+			onOpenEvent={openEvent}
+			renderTile={renderTile}
+			harness={devicesHarness}
+		>
+			<div className="flex h-full min-h-0 flex-col gap-3">
+				<EventDeepLink appId={appId} events={events} />
+				<div className="flex shrink-0 flex-wrap items-center gap-2">
+					<div className="relative min-w-52 max-w-xs flex-1">
+						<SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+						<Input
+							value={search}
+							onChange={(e) => setSearch(e.target.value)}
+							placeholder={t("searchEvents", "Search events…")}
+							aria-label={t("searchEvents2", "Search events")}
+							className="h-9 pl-8"
+						/>
+					</div>
+
+					<StatusFilterBar
+						value={status}
+						counts={statusCounts}
+						onChange={setStatus}
 					/>
+
+					<div className="flex-1" />
+
+					<TypeFilterMenu
+						types={availableTypes}
+						selected={typeFilter}
+						onChange={setTypeFilter}
+					/>
+
+					<Button
+						onClick={onCreateEvent}
+						className="h-9 gap-2"
+						disabled={!canEdit}
+						title={canEdit ? undefined : writeDeniedMessage}
+					>
+						<PlusIcon className="h-4 w-4" />
+						{t("newEvent", "New event")}
+					</Button>
 				</div>
 
-				<StatusFilterBar
-					value={status}
-					counts={statusCounts}
-					onChange={setStatus}
-				/>
+				{!canEdit && (
+					<PermissionNotice
+						tone="readOnly"
+						className="shrink-0"
+						title={t("eventsAreReadonly", "Events are read-only for you")}
+						description={writeDeniedMessage}
+						missing={[RolePermissions.WriteEvents]}
+					/>
+				)}
+				{!canReadBoards && <FlowNamesNotice appId={appId} />}
+				<EventsDevicesBanner className="shrink-0" />
 
-				<div className="flex-1" />
+				{blocked.length > 0 && status !== "attention" && (
+					<AttentionBand rows={blocked} onSelect={onEdit} />
+				)}
 
-				<TypeFilterMenu
-					types={availableTypes}
-					selected={typeFilter}
-					onChange={setTypeFilter}
-				/>
+				<OnDevicesStrip className="shrink-0" />
 
-				<Button
-					onClick={onCreateEvent}
-					className="h-9 gap-2"
-					disabled={!canEdit}
-					title={canEdit ? undefined : writeDeniedMessage}
-				>
-					<PlusIcon className="h-4 w-4" />
-					{t("newEvent", "New event")}
-				</Button>
-			</div>
-
-			{!canEdit && (
-				<PermissionNotice
-					tone="readOnly"
-					className="shrink-0"
-					title={t("eventsAreReadonly", "Events are read-only for you")}
-					description={writeDeniedMessage}
-					missing={[RolePermissions.WriteEvents]}
-				/>
-			)}
-			{!canReadBoards && (
-				<PermissionNotice
-					className="shrink-0"
-					title={t("flowNamesUnavailable", "Flow names unavailable")}
-					description={t(
-						"theFlowColumnStaysEmptyWithoutWorkflowAccess",
-						"Your role cannot read this project's flows, so the flow column and sink status stay blank rather than reporting a flow that isn't there.",
+				<div className="@container/events flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
+					{visible.length === 0 ? (
+						<div className="flex flex-1 flex-col items-center justify-center gap-3 py-12 text-sm text-muted-foreground">
+							{filtersActive
+								? t("noEventMatchesThisSearch", "No event matches this search.")
+								: t("noEventsYet", "No events yet.")}
+							{filtersActive && (
+								<Button
+									variant="outline"
+									size="sm"
+									onClick={() => {
+										setSearch("");
+										setStatus("all");
+										setTypeFilter(new Set());
+									}}
+								>
+									{t("clearFilters", "Clear filters")}
+								</Button>
+							)}
+						</div>
+					) : (
+						<>
+							<EventGroupSection
+								title={t("entryPoints", "Entry points")}
+								blurb={td(
+									"events.section.entryBlurb",
+									"People open these — a chat, a page, a form, a palette command.",
+								)}
+								entryLabel={td("events.column.route", "Route")}
+								rows={entryRows}
+								pendingActive={pendingId}
+								handlers={handlers}
+							/>
+							<EventGroupSection
+								title={td("events.section.triggers", "Triggers")}
+								blurb={td(
+									"events.section.triggerBlurb",
+									"These fire on their own — a request, a schedule, a message, a mailbox.",
+								)}
+								entryLabel={td("events.column.trigger", "Trigger")}
+								rows={triggerRows}
+								pendingActive={pendingId}
+								handlers={handlers}
+							/>
+						</>
 					)}
-					missing={[RolePermissions.ReadBoards]}
+				</div>
+
+				<PatSelectorDialog
+					{...dialogProps.pat}
+					title={t("authorizeThisChange", "Authorize this change")}
+					description={t(
+						"registeringOrRemovingAnEventSinkNeedsAPersonalAccessToken",
+						"Registering or removing an event sink needs a Personal Access Token.",
+					)}
 				/>
-			)}
-
-			{blocked.length > 0 && status !== "attention" && (
-				<AttentionBand rows={blocked} onSelect={onEdit} />
-			)}
-
-			<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
-				{visible.length === 0 ? (
-					<div className="flex flex-1 flex-col items-center justify-center gap-3 py-12 text-sm text-muted-foreground">
-						{filtersActive
-							? t("noEventMatchesThisSearch", "No event matches this search.")
-							: t("noEventsYet", "No events yet.")}
-						{filtersActive && (
-							<Button
-								variant="outline"
-								size="sm"
-								onClick={() => {
-									setSearch("");
-									setStatus("all");
-									setTypeFilter(new Set());
-								}}
-							>
-								{t("clearFilters", "Clear filters")}
-							</Button>
-						)}
-					</div>
-				) : (
-					<>
-						<EventGroupSection
-							title={t("entryPoints", "Entry points")}
-							blurb="People open these — a chat, a page, a form, a palette command."
-							rows={entryRows}
-							boardsMap={boardsMap}
-							isOffline={isOffline}
-							pendingActive={pendingId}
-							canEdit={canEdit}
-							writeDeniedMessage={writeDeniedMessage}
-							onEdit={onEdit}
-							onDelete={onDelete}
-							onNavigateToNode={onNavigateToNode}
-							onToggleActive={handleToggleActive}
-							onRouteChange={handleRouteChange}
-						/>
-						<EventGroupSection
-							title="Triggers"
-							blurb="These fire on their own — a request, a schedule, a message, a mailbox."
-							rows={triggerRows}
-							boardsMap={boardsMap}
-							isOffline={isOffline}
-							pendingActive={pendingId}
-							canEdit={canEdit}
-							writeDeniedMessage={writeDeniedMessage}
-							onEdit={onEdit}
-							onDelete={onDelete}
-							onNavigateToNode={onNavigateToNode}
-							onToggleActive={handleToggleActive}
-							onRouteChange={handleRouteChange}
-						/>
-					</>
-				)}
+				<OAuthConsentDialog {...dialogProps.consent} />
 			</div>
+		</EventsDevicesProvider>
+	);
+}
 
-			<PatSelectorDialog
-				{...dialogProps.pat}
-				title={t("authorizeThisChange", "Authorize this change")}
-				description={t(
-					"registeringOrRemovingAnEventSinkNeedsAPersonalAccessToken",
-					"Registering or removing an event sink needs a Personal Access Token.",
-				)}
+function EventTile({
+	icon,
+	small = false,
+}: Readonly<{ icon: string; small?: boolean }>) {
+	const Icon = TYPE_ICONS[icon] ?? CogIcon;
+	return (
+		<span
+			className={cn(
+				"grid shrink-0 place-items-center rounded-md border bg-muted/50 text-muted-foreground",
+				small ? "size-6" : "size-7.5",
+			)}
+		>
+			<Icon className={small ? "size-3.5" : "size-3.75"} />
+		</span>
+	);
+}
+
+/**
+ * No ReadBoards: flow names, sink status and the Devices column are all
+ * unknown. While that is why Run on a device… is off, this notice is the
+ * reason every gated control points at (APP §4.5).
+ */
+function FlowNamesNotice({ appId }: Readonly<{ appId: string }>) {
+	const { t } = useTranslation("settings");
+	const { t: td } = useTranslation("devices");
+	const backend = useBackend();
+	const { block } = useEventsDevices();
+	const { copied, copy } = useCopy();
+	const meta = useInvoke(
+		backend.appState.getAppMeta,
+		backend.appState,
+		[appId],
+		appId !== "",
+	);
+	const request = td(
+		"events.blind.request",
+		"Hi, could you give me the Read boards permission on {{app}} ({{id}})? I need it to see where its events run on devices and to deploy them. Thanks!",
+		{ app: meta.data?.name ?? appId, id: appId },
+	);
+	return (
+		<div
+			id={block === "blind" ? EVENTS_BLOCK_ID : undefined}
+			className="shrink-0"
+		>
+			<PermissionNotice
+				title={t("flowNamesUnavailable", "Flow names unavailable")}
+				description={`${t(
+					"theFlowColumnStaysEmptyWithoutWorkflowAccess",
+					"Your role cannot read this project's flows, so the flow column and sink status stay blank rather than reporting a flow that isn't there.",
+				)} ${td(
+					"events.blind.devices",
+					"This page also can't tell which devices run its events, and Run on a device… is off. That doesn't mean they run nowhere.",
+				)}`}
+				missing={[RolePermissions.ReadBoards]}
+				action={
+					<DvButton
+						size="sm"
+						icon={copied ? CheckIcon : CopyIcon}
+						className="shrink-0"
+						onClick={() => void copy(request)}
+					>
+						{copied
+							? td("events.blind.copied", "Copied")
+							: td("events.blind.copy", "Copy a request for the owner")}
+					</DvButton>
+				}
 			/>
-			<OAuthConsentDialog {...dialogProps.consent} />
 		</div>
+	);
+}
+
+/**
+ * `event=<id>` (APP §4.1): highlights that row, scrolls to it and opens its
+ * Devices popover. The page's own `eventId=` keeps opening the editor.
+ */
+function EventDeepLink({
+	appId,
+	events,
+}: Readonly<{ appId: string; events: IEvent[] }>) {
+	const { t } = useTranslation("devices");
+	const backend = useBackend();
+	const router = useRouter();
+	const params = useSearchParams();
+	const { showOnDevices } = useEventsDevices();
+	const [missing, setMissing] = useState<string | null>(null);
+	const target = params?.get("event") ?? null;
+	const known = target !== null && events.some((event) => event.id === target);
+	const meta = useInvoke(
+		backend.appState.getAppMeta,
+		backend.appState,
+		[appId],
+		appId !== "" && missing !== null,
+	);
+
+	useEffect(() => {
+		if (!target) return;
+		if (known) {
+			setMissing(null);
+			showOnDevices(target);
+			document
+				.getElementById(eventRowId(target))
+				?.scrollIntoView({ block: "center" });
+			return;
+		}
+		setMissing(target);
+		const next = new URLSearchParams(params?.toString() ?? "");
+		next.delete("event");
+		const query = next.toString();
+		router.replace(`${window.location.pathname}${query ? `?${query}` : ""}`, {
+			scroll: false,
+		});
+	}, [target, known, showOnDevices, params, router]);
+
+	if (!missing) return null;
+	return (
+		<Banner tone="warning" className="shrink-0">
+			{meta.data?.name
+				? t(
+						"events.deepLink.missing",
+						"No event with the ID {{id}} in {{app}}. Showing all its events.",
+						{ id: missing, app: meta.data.name },
+					)
+				: t(
+						"events.deepLink.missingPlain",
+						"No event with the ID {{id}} in this app. Showing all its events.",
+						{ id: missing },
+					)}
+		</Banner>
 	);
 }
 
@@ -630,7 +827,7 @@ function StatusFilterBar({
 	];
 
 	return (
-		<div className="inline-flex items-center gap-0.5 rounded-md border bg-muted/40 p-0.5">
+		<div className="inline-flex max-w-full flex-wrap items-center gap-0.5 rounded-md border bg-muted/40 p-0.5">
 			{options.map((option) => {
 				const active = value === option.key;
 				return (
@@ -680,7 +877,7 @@ function TypeFilterMenu({
 			<DropdownMenuTrigger asChild>
 				<Button variant="outline" className="h-9 gap-2">
 					<ListFilterIcon className="h-4 w-4" />
-					Type
+					{t("eventType", "Event type")}
 					{selected.size > 0 && (
 						<span className="grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
 							{selected.size}
@@ -756,27 +953,10 @@ function AttentionBand({
 	);
 }
 
-function EventGroupSection({
-	title,
-	blurb,
-	rows,
-	boardsMap,
-	isOffline,
-	pendingActive,
-	canEdit,
-	writeDeniedMessage,
-	onEdit,
-	onDelete,
-	onNavigateToNode,
-	onToggleActive,
-	onRouteChange,
-}: Readonly<{
-	title: string;
-	blurb: string;
-	rows: EventRowModel[];
+interface EventRowHandlers {
+	appId: string;
 	boardsMap: Map<string, string>;
 	isOffline?: boolean;
-	pendingActive: string | null;
 	canEdit: boolean;
 	writeDeniedMessage: string;
 	onEdit: (event: IEvent) => void;
@@ -788,6 +968,56 @@ function EventGroupSection({
 		previous: string | undefined,
 		next: string,
 	) => Promise<void>;
+}
+
+interface RowActionProps {
+	row: EventRowModel;
+	/** Its activation change is being saved. */
+	busy: boolean;
+	handlers: EventRowHandlers;
+}
+
+function ColumnHeader({ entryLabel }: Readonly<{ entryLabel: string }>) {
+	const { t } = useTranslation("devices");
+	return (
+		<div
+			aria-hidden
+			className={cn(
+				ROW_GRID,
+				"hidden items-center border-b py-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground @min-[600px]/events:grid",
+			)}
+		>
+			<span />
+			<span />
+			<span>{t("events.column.event", "Event")}</span>
+			<span>{entryLabel}</span>
+			<RunsOnColumnHeader />
+			<span className={FROM_900}>{t("events.column.flow", "Flow")}</span>
+			<span className="hidden @min-[1100px]/events:block">
+				{t("events.column.runs", "Runs · 24 h")}
+			</span>
+			<span className="text-right">
+				{t("events.column.actions", "Actions")}
+			</span>
+		</div>
+	);
+}
+
+function EventGroupSection({
+	title,
+	blurb,
+	entryLabel,
+	rows,
+	pendingActive,
+	handlers,
+}: Readonly<{
+	title: string;
+	blurb: string;
+	/** Head of the route or trigger column. */
+	entryLabel: string;
+	rows: EventRowModel[];
+	pendingActive: string | null;
+	handlers: EventRowHandlers;
 }>) {
 	if (rows.length === 0) return null;
 
@@ -801,24 +1031,190 @@ function EventGroupSection({
 				<span className="text-xs text-muted-foreground">{blurb}</span>
 			</div>
 			<div className="overflow-hidden rounded-md border bg-card">
+				<ColumnHeader entryLabel={entryLabel} />
 				{rows.map((row) => (
 					<EventRow
 						key={row.event.id}
 						row={row}
-						boardsMap={boardsMap}
-						isOffline={isOffline}
 						busy={pendingActive === row.event.id}
-						canEdit={canEdit}
-						writeDeniedMessage={writeDeniedMessage}
-						onEdit={onEdit}
-						onDelete={onDelete}
-						onNavigateToNode={onNavigateToNode}
-						onToggleActive={onToggleActive}
-						onRouteChange={onRouteChange}
+						handlers={handlers}
 					/>
 				))}
 			</div>
 		</section>
+	);
+}
+
+/** APP §4.5: first in the row's actions; off with the reason the Devices cell or the banner shows (R7). */
+function RunOnDeviceButton({
+	run,
+	className,
+}: Readonly<{ run: RunOnDevice; className?: string }>) {
+	const { t } = useTranslation("devices");
+	if (run.off)
+		return (
+			<DvButton
+				variant="ghost"
+				size="sm"
+				iconOnly
+				icon={ServerIcon}
+				aria-disabled
+				aria-describedby={run.off.by}
+				aria-label={t(
+					"events.row.runOff",
+					"{{action}} Unavailable: {{reason}}",
+					{
+						action: run.name,
+						reason: run.off.reason,
+					},
+				)}
+				title={run.off.reason}
+				data-run-on-device="off"
+				className={className}
+			/>
+		);
+	return (
+		<DvButton
+			variant="ghost"
+			size="sm"
+			iconOnly
+			icon={ServerIcon}
+			asChild
+			className={className}
+		>
+			<a
+				{...run.link}
+				aria-label={run.name}
+				title={run.label}
+				data-run-on-device="on"
+			/>
+		</DvButton>
+	);
+}
+
+/** The device items of the row menu: Run on a device… with its reason when off, then the Devices popover. */
+function RowMenuDeviceItems({
+	run,
+	onExplain,
+}: Readonly<{ run: RunOnDevice; onExplain(): void }>) {
+	const { t } = useTranslation("devices");
+	const ExplainIcon = run.eligible ? LayersIcon : CircleSlashIcon;
+	return (
+		<>
+			<DropdownMenuItem
+				disabled={run.off !== null}
+				onSelect={run.open}
+				className="items-start gap-2"
+			>
+				<ServerIcon className="mt-0.5 h-4 w-4" />
+				<span className="flex min-w-0 flex-col">
+					{run.label}
+					{run.off ? (
+						<span className="text-xs text-muted-foreground">
+							{run.off.reason}
+						</span>
+					) : null}
+				</span>
+			</DropdownMenuItem>
+			{run.explains ? (
+				<DropdownMenuItem onSelect={onExplain}>
+					<ExplainIcon className="h-4 w-4" />
+					{run.eligible
+						? t("events.row.where", "Where it runs")
+						: t("events.row.why", "Why it can't run on devices")}
+				</DropdownMenuItem>
+			) : null}
+		</>
+	);
+}
+
+/** The row's own four actions as menu items. */
+function RowMenuOwnItems({ row, busy, handlers }: Readonly<RowActionProps>) {
+	const { t } = useTranslation("settings");
+	const { event } = row;
+	const { canEdit, onToggleActive } = handlers;
+	const ToggleIcon = event.active ? PauseIcon : PlayIcon;
+	return (
+		<>
+			{onToggleActive ? (
+				<DropdownMenuItem
+					disabled={busy || !canEdit}
+					onSelect={() => void onToggleActive(row)}
+				>
+					<ToggleIcon className="h-4 w-4" />
+					{event.active
+						? t("pauseEvent", "Pause event")
+						: t("resumeEvent", "Resume event")}
+				</DropdownMenuItem>
+			) : null}
+			<DropdownMenuItem onSelect={() => handlers.onEdit(event)}>
+				<SettingsIcon className="h-4 w-4" />
+				{t("configureEvent", "Configure event")}
+			</DropdownMenuItem>
+			<DropdownMenuItem
+				onSelect={() => handlers.onNavigateToNode(event, event.node_id)}
+			>
+				<ExternalLinkIcon className="h-4 w-4" />
+				{t("openInFlow", "Open in flow")}
+			</DropdownMenuItem>
+			<DropdownMenuItem
+				disabled={!canEdit}
+				variant="destructive"
+				onSelect={() => handlers.onDelete(event.id)}
+			>
+				<Trash2Icon className="h-4 w-4" />
+				{t("deleteEvent", "Delete event")}
+			</DropdownMenuItem>
+		</>
+	);
+}
+
+/** Below 900 px of list width the row's actions collapse into one menu, Run on a device… first (APP §4.7). */
+function RowMenu({
+	row,
+	run,
+	busy,
+	handlers,
+	className,
+}: Readonly<RowActionProps & { run: RunOnDevice; className?: string }>) {
+	const { t } = useTranslation("devices");
+	/* The popover opens once the menu has closed: opening it earlier loses it to the menu's focus return. */
+	const afterClose = useRef<(() => void) | null>(null);
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<Button
+					variant="ghost"
+					size="sm"
+					className={cn("h-7 w-7 p-0", className)}
+					aria-label={t("events.row.actions", "Actions for {{event}}", {
+						event: row.event.name,
+					})}
+				>
+					<EllipsisIcon className="h-4 w-4" />
+				</Button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent
+				align="end"
+				className="w-64"
+				onCloseAutoFocus={(closing) => {
+					const next = afterClose.current;
+					afterClose.current = null;
+					if (!next) return;
+					closing.preventDefault();
+					next();
+				}}
+			>
+				<RowMenuDeviceItems
+					run={run}
+					onExplain={() => {
+						afterClose.current = run.show;
+					}}
+				/>
+				<DropdownMenuSeparator />
+				<RowMenuOwnItems row={row} busy={busy} handlers={handlers} />
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }
 
@@ -836,205 +1232,275 @@ const DOT: Record<EventStatus, string> = {
 	unknown: "bg-muted-foreground/50",
 };
 
-function EventRow({
-	row,
-	boardsMap,
-	isOffline,
-	busy,
-	canEdit,
-	writeDeniedMessage,
-	onEdit,
-	onDelete,
-	onNavigateToNode,
-	onToggleActive,
-	onRouteChange,
-}: Readonly<{
-	row: EventRowModel;
-	boardsMap: Map<string, string>;
-	isOffline?: boolean;
-	busy: boolean;
-	canEdit: boolean;
-	writeDeniedMessage: string;
-	onEdit: (event: IEvent) => void;
-	onDelete: (eventId: string) => void;
-	onNavigateToNode: (event: IEvent, nodeId: string) => void;
-	onToggleActive?: (row: EventRowModel) => void | Promise<void>;
-	onRouteChange: (
-		eventId: string,
-		previous: string | undefined,
-		next: string,
-	) => Promise<void>;
-}>) {
+/** The row's own four actions as an icon strip, from 900 px of list width. */
+function RowIconActions({ row, busy, handlers }: Readonly<RowActionProps>) {
 	const { t } = useTranslation("settings");
-	const { event, status, topIssue, glyph } = row;
-	const Icon = TYPE_ICONS[glyph.icon] ?? CogIcon;
-	const boardName = boardsMap.get(event.board_id);
-	const version = event.board_version
-		? `v${event.board_version.join(".")}`
-		: "Latest";
-	const runsFailed = row.health?.failed ?? 0;
-	const runsTotal = row.health?.total ?? 0;
+	const { event } = row;
+	const { canEdit, writeDeniedMessage, onToggleActive } = handlers;
 	const toggleActiveLabel = event.active
 		? t("pauseEvent", "Pause event")
 		: t("resumeEvent", "Resume event");
+	const ToggleIcon = busy ? Loader2Icon : event.active ? PauseIcon : PlayIcon;
+	return (
+		<div className="hidden gap-0.5 @min-[900px]/events:flex">
+			{onToggleActive && (
+				<Button
+					variant="ghost"
+					size="sm"
+					className="h-7 w-7 p-0"
+					disabled={busy || !canEdit}
+					title={canEdit ? toggleActiveLabel : writeDeniedMessage}
+					aria-label={toggleActiveLabel}
+					onClick={() => onToggleActive(row)}
+				>
+					<ToggleIcon className={cn("h-4 w-4", busy && "animate-spin")} />
+				</Button>
+			)}
+			<Button
+				variant="ghost"
+				size="sm"
+				className="h-7 w-7 p-0"
+				title={t("configureEvent", "Configure event")}
+				aria-label={t("configureEvent", "Configure event")}
+				onClick={() => handlers.onEdit(event)}
+			>
+				<SettingsIcon className="h-4 w-4" />
+			</Button>
+			<Button
+				variant="ghost"
+				size="sm"
+				className="h-7 w-7 p-0"
+				title={t("openInFlow", "Open in flow")}
+				aria-label={t("openInFlow", "Open in flow")}
+				onClick={() => handlers.onNavigateToNode(event, event.node_id)}
+			>
+				<ExternalLinkIcon className="h-4 w-4" />
+			</Button>
+			<Button
+				variant="ghost"
+				size="sm"
+				className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+				disabled={!canEdit}
+				title={canEdit ? t("delete", "Delete") : writeDeniedMessage}
+				aria-label={t("deleteEvent", "Delete event")}
+				onClick={() => handlers.onDelete(event.id)}
+			>
+				<Trash2Icon className="h-4 w-4" />
+			</Button>
+		</div>
+	);
+}
+
+/** Name, type and sink chips on line 1; the top issue or the description on line 2. */
+function EventNameBlock({
+	row,
+	isOffline,
+	onEdit,
+}: Readonly<
+	Pick<EventRowHandlers, "isOffline" | "onEdit"> & { row: EventRowModel }
+>) {
+	const { t } = useTranslation("settings");
+	const { event, status, topIssue } = row;
+	const chip = "shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium";
+	return (
+		<div className="min-w-0 overflow-hidden">
+			<div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+				<span
+					className={cn("h-1.5 w-1.5 shrink-0 rounded-full", DOT[status])}
+					aria-hidden
+				/>
+				<button
+					type="button"
+					onClick={() => onEdit(event)}
+					className="min-w-0 text-left text-sm font-semibold wrap-anywhere hover:underline"
+				>
+					{event.name}
+				</button>
+				<span className={cn(chip, "bg-secondary text-secondary-foreground")}>
+					{formatEventTypeLabel(event.event_type)}
+				</span>
+				{row.requiresSink && row.sinkActive === false && (
+					<span
+						className={cn(
+							chip,
+							"bg-amber-500/15 text-amber-700 dark:text-amber-400",
+						)}
+					>
+						{t("notRunning", "Not running")}
+					</span>
+				)}
+				{row.requiresSink && row.sinkActive === undefined && (
+					<span className={cn(chip, "bg-muted text-muted-foreground")}>
+						{row.sinkStatusLoading
+							? t("checkingSinkStatus", "Checking status…")
+							: t("sinkStatusUnavailable", "Status unavailable")}
+					</span>
+				)}
+				{row.requiresSink && row.sinkActive && (
+					<span
+						className={cn(
+							chip,
+							"hidden bg-muted text-muted-foreground lg:inline",
+						)}
+					>
+						{isOffline ? "Local" : "Online"}
+					</span>
+				)}
+			</div>
+			<div className="mt-0.5 line-clamp-2 text-xs">
+				{topIssue ? (
+					<span
+						className={cn(
+							topIssue.severity === "blocking"
+								? "text-destructive"
+								: "text-amber-700 dark:text-amber-400",
+						)}
+					>
+						<AlertTriangleIcon className="mr-1 inline h-3 w-3 align-[-1px]" />
+						<span className="font-medium">{topIssue.title}</span>
+						<span className="opacity-80">{` — ${topIssue.detail}`}</span>
+					</span>
+				) : (
+					<span className="text-muted-foreground">{event.description}</span>
+				)}
+			</div>
+		</div>
+	);
+}
+
+/** The route of an entry point (edited in place) or how a trigger fires. */
+function EventEntryCell({
+	row,
+	handlers,
+}: Readonly<{ row: EventRowModel; handlers: EventRowHandlers }>) {
+	const { event, entry } = row;
+	if (row.isRouted)
+		return (
+			<RouteChip
+				path={row.routePath}
+				canEdit={handlers.canEdit}
+				writeDeniedMessage={handlers.writeDeniedMessage}
+				onSave={(next) => handlers.onRouteChange(event.id, row.routePath, next)}
+			/>
+		);
+	if (!entry) return null;
+	return (
+		<span
+			title={entry.title ?? entry.text}
+			className={cn(
+				"inline-block max-w-full truncate rounded border px-1.5 py-0.5 font-mono text-[11.5px] leading-[1.45]",
+				entry.muted
+					? "border-border bg-muted/50 text-muted-foreground"
+					: "border-primary/25 bg-primary/10 text-primary",
+			)}
+		>
+			{entry.text}
+		</span>
+	);
+}
+
+/** A phone row has no route or trigger column: the same fact as one line above the Devices summary (APP §4.7). */
+function EventEntryLine({ row }: Readonly<{ row: EventRowModel }>) {
+	const { t } = useTranslation("settings");
+	const { t: td } = useTranslation("devices");
+	const line = "truncate text-[12.5px]/[17px] text-muted-foreground";
+	if (!row.isRouted)
+		return row.entry ? (
+			<span className={cn(line, "font-mono text-xs")}>{row.entry.text}</span>
+		) : null;
+	return (
+		<span className={line}>
+			{row.routePath ? (
+				<>
+					{td("events.column.route", "Route")}{" "}
+					<span className="font-mono text-xs">{row.routePath}</span>
+				</>
+			) : (
+				t("noRoute", "No route")
+			)}
+		</span>
+	);
+}
+
+function EventRow({ row, busy, handlers }: Readonly<RowActionProps>) {
+	const { t } = useTranslation("settings");
+	const { t: td } = useTranslation("devices");
+	const { event, status, glyph } = row;
+	const run = useRunOnDevice(event.id);
+	const boardName = handlers.boardsMap.get(event.board_id);
+	const version = event.board_version
+		? `v${event.board_version.join(".")}`
+		: t("latest", "Latest");
+	const runsFailed = row.health?.failed ?? 0;
 
 	return (
 		<div
+			id={eventRowId(event.id)}
+			data-event-target={run.targeted || undefined}
 			className={cn(
-				"group grid min-h-12.5 items-center gap-3 border-b py-2 pr-3 last:border-b-0",
-				"grid-cols-[3px_30px_minmax(0,1fr)_126px]",
-				"md:grid-cols-[3px_30px_minmax(0,1fr)_190px_126px]",
-				"xl:grid-cols-[3px_30px_minmax(0,1fr)_200px_148px_122px_126px]",
+				ROW_GRID,
+				"group min-h-12.5 items-start gap-y-0.5 border-b py-2.5 last:border-b-0",
 				"transition-colors hover:bg-muted/50",
+				run.targeted && "bg-row-selected",
 			)}
 		>
-			<div className={cn("h-full self-stretch", STRIPE[status])} aria-hidden />
+			<div
+				className={cn(
+					"row-span-2 -my-2.5 self-stretch @min-[600px]/events:row-span-1",
+					STRIPE[status],
+				)}
+				aria-hidden
+			/>
 
-			<div className="grid size-7.5 place-items-center rounded-md border bg-muted/50 text-muted-foreground">
-				<Icon className="size-3.75" />
+			<EventTile icon={glyph.icon} />
+
+			<EventNameBlock
+				row={row}
+				isOffline={handlers.isOffline}
+				onEdit={handlers.onEdit}
+			/>
+
+			<div className={cn(FROM_600, "min-w-0 overflow-hidden pt-0.5")}>
+				<EventEntryCell row={row} handlers={handlers} />
 			</div>
 
-			<div className="min-w-0 overflow-hidden">
-				<div className="flex items-center gap-2">
-					<span
-						className={cn("h-1.5 w-1.5 shrink-0 rounded-full", DOT[status])}
-						aria-hidden
-					/>
-					<button
-						type="button"
-						onClick={() => onEdit(event)}
-						className="truncate text-left text-sm font-semibold hover:underline"
-					>
-						{event.name}
-					</button>
-					<span className="shrink-0 rounded bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-secondary-foreground">
-						{formatEventTypeLabel(event.event_type)}
-					</span>
-					{row.requiresSink && row.sinkActive === false && (
-						<span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
-							{t("notRunning", "Not running")}
-						</span>
-					)}
-					{row.requiresSink && row.sinkActive === undefined && (
-						<span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
-							{row.sinkStatusLoading
-								? t("checkingSinkStatus", "Checking status…")
-								: t("sinkStatusUnavailable", "Status unavailable")}
-						</span>
-					)}
-					{row.requiresSink && row.sinkActive && (
-						<span className="hidden shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground lg:inline">
-							{isOffline ? "Local" : "Online"}
-						</span>
-					)}
+			<div className="col-start-3 row-start-2 min-w-0 @min-[600px]/events:col-auto @min-[600px]/events:row-auto @min-[600px]/events:pt-0.5">
+				<div className={FROM_600}>
+					<RunsOnCell appId={handlers.appId} eventId={event.id} />
 				</div>
-				<div className="mt-0.5 truncate text-xs">
-					{topIssue ? (
-						<span
-							className={cn(
-								topIssue.severity === "blocking"
-									? "text-destructive"
-									: "text-amber-700 dark:text-amber-400",
-							)}
-						>
-							<AlertTriangleIcon className="mr-1 inline h-3 w-3 align-[-1px]" />
-							<span className="font-medium">{topIssue.title}</span>
-							<span className="opacity-80">{` — ${topIssue.detail}`}</span>
-						</span>
-					) : (
-						<span className="text-muted-foreground">{event.description}</span>
-					)}
+				<div className="flex flex-col gap-0.5 @min-[600px]/events:hidden">
+					<EventEntryLine row={row} />
+					<RunsOnCell appId={handlers.appId} eventId={event.id} compact />
 				</div>
 			</div>
 
-			<div className="hidden min-w-0 overflow-hidden md:block">
-				{row.isRouted ? (
-					<RouteChip
-						path={row.routePath}
-						canEdit={canEdit}
-						writeDeniedMessage={writeDeniedMessage}
-						onSave={(next) => onRouteChange(event.id, row.routePath, next)}
-					/>
-				) : row.entry ? (
-					<span
-						title={row.entry.title ?? row.entry.text}
-						className={cn(
-							"inline-block max-w-full truncate rounded border px-1.5 py-0.5 font-mono text-[11.5px] leading-[1.45]",
-							row.entry.muted
-								? "border-border bg-muted/50 text-muted-foreground"
-								: "border-primary/25 bg-primary/10 text-primary",
-						)}
-					>
-						{row.entry.text}
-					</span>
-				) : null}
-			</div>
-
-			<div className="hidden min-w-0 overflow-hidden xl:block">
+			<div className={cn(FROM_900, "min-w-0 overflow-hidden pt-0.5")}>
 				<div className="truncate text-[13px]">
-					{boardName ?? "Unknown flow"}
+					{boardName ?? td("events.flow.unknown", "Unknown flow")}
 				</div>
 				<div className="truncate font-mono text-[11px] text-muted-foreground">
 					{version}
 				</div>
 			</div>
 
-			<div className="hidden min-w-0 items-center gap-1.5 text-xs tabular-nums text-muted-foreground xl:flex">
+			<div className="hidden min-w-0 items-center gap-1.5 pt-1 text-xs tabular-nums text-muted-foreground @min-[1100px]/events:flex">
 				<RunSparkline trend={row.health?.trend} failed={runsFailed} />
-				{runs24hLabel(runsTotal, runsFailed)}
+				{runs24hLabel(row.health?.total ?? 0, runsFailed)}
 			</div>
 
-			<div className="flex justify-end gap-0.5 opacity-60 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
-				{onToggleActive && (
-					<Button
-						variant="ghost"
-						size="sm"
-						className="h-7 w-7 p-0"
-						disabled={busy || !canEdit}
-						title={canEdit ? toggleActiveLabel : writeDeniedMessage}
-						aria-label={toggleActiveLabel}
-						onClick={() => onToggleActive(row)}
-					>
-						{busy ? (
-							<Loader2Icon className="h-4 w-4 animate-spin" />
-						) : event.active ? (
-							<PauseIcon className="h-4 w-4" />
-						) : (
-							<PlayIcon className="h-4 w-4" />
-						)}
-					</Button>
-				)}
-				<Button
-					variant="ghost"
-					size="sm"
-					className="h-7 w-7 p-0"
-					title="Configure"
-					aria-label={t("configureEvent", "Configure event")}
-					onClick={() => onEdit(event)}
-				>
-					<SettingsIcon className="h-4 w-4" />
-				</Button>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="h-7 w-7 p-0"
-					title={t("openInFlow", "Open in flow")}
-					aria-label={t("openInFlow", "Open in flow")}
-					onClick={() => onNavigateToNode(event, event.node_id)}
-				>
-					<ExternalLinkIcon className="h-4 w-4" />
-				</Button>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
-					disabled={!canEdit}
-					title={canEdit ? t("delete", "Delete") : writeDeniedMessage}
-					aria-label={t("deleteEvent", "Delete event")}
-					onClick={() => onDelete(event.id)}
-				>
-					<Trash2Icon className="h-4 w-4" />
-				</Button>
+			<div className="flex items-center justify-end gap-0.5 opacity-60 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+				<RunOnDeviceButton
+					run={run}
+					className="hidden @min-[600px]/events:inline-flex"
+				/>
+				<RowMenu
+					row={row}
+					run={run}
+					busy={busy}
+					handlers={handlers}
+					className="@min-[900px]/events:hidden"
+				/>
+				<RowIconActions row={row} busy={busy} handlers={handlers} />
 			</div>
 		</div>
 	);

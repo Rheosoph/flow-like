@@ -147,11 +147,12 @@ describe("rollouts", () => {
 		const old = edgeRollout({
 			state: "staged",
 			created_at: SAMPLE_NOW - 3_700,
-			deadline_at: SAMPLE_NOW + 86_400,
+			deadline_at: null,
 		});
-		expect(evaluate("rollout_staged_waiting", old)[0]?.action?.code).toBe(
-			"activate",
-		);
+		const [item] = evaluate("rollout_staged_waiting", old);
+		expect(item?.action?.code).toBe("activate");
+		// A staged update has no deadline yet: the device discards it a day after staging.
+		expect(item?.copy.params?.deadlineAt).toBe(SAMPLE_NOW - 3_700 + 86_400);
 	});
 });
 

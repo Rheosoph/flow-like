@@ -438,7 +438,12 @@ function MicroWidgetFrame({
 		[],
 	);
 
-	const frameAccess = useMicroWidgetFrameAccess(frame, appId, !desktop);
+	const frameAccess = useMicroWidgetFrameAccess(
+		frame,
+		appId,
+		!desktop,
+		grant.renewGrant,
+	);
 	const access = frameAccess.state;
 
 	// No document is fetched until the grant flow and the sandbox access settle; the ready timer waits with them.
@@ -626,6 +631,15 @@ function MicroWidgetFrame({
 		window.addEventListener("message", listener);
 		return () => window.removeEventListener("message", listener);
 	}, [instanceId, nonce]);
+
+	// A changed URL is a new document (a new grant, a replaced access token), and no URL means
+	// the next document is not fetched yet: either way the frame is loading again, so the
+	// skeleton shows and the document gets the ready timeout from the moment it is requested.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: every document starts loading
+	useEffect(() => {
+		readyRef.current = false;
+		setPhase((prev) => (prev === "error" ? prev : "loading"));
+	}, [src]);
 
 	// Ready timeout: once the document URL is known, the widget must complete
 	// the flw/1 handshake within the window or the surface shows an error card.

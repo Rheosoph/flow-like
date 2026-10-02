@@ -16,6 +16,7 @@ import {
 	isLastKnown,
 	localSource,
 	readableServices,
+	rolloutEndsAt,
 	serviceRoute,
 	serviceSubject,
 } from "../device-view";
@@ -176,11 +177,12 @@ function rolloutRule(
 	return perService(key, (input, facts, service) => {
 		const rollout = service.rollout;
 		if (!rollout || !match(rollout, input.now)) return undefined;
+		const endsAt = rolloutEndsAt(rollout);
 		return serviceItem(key, severity, facts, service, {
 			params: {
 				state: rollout.state,
 				...(rollout.failure_code ? { failure: rollout.failure_code } : {}),
-				...(rollout.deadline_at ? { deadlineAt: rollout.deadline_at } : {}),
+				...(endsAt ? { deadlineAt: endsAt } : {}),
 			},
 			action: action(service),
 			since: rollout.updated_at ?? rollout.created_at,

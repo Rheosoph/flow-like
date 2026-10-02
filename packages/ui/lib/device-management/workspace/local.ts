@@ -10,6 +10,7 @@ import {
 	deviceIdentityKey,
 	forgetDeviceIdentityPin,
 	listAccountRecoveryStates,
+	listDeviceIdentityPins,
 	listDeviceVaults,
 	pinnedDeviceIdentity,
 	readCertificateAuthorities,
@@ -27,6 +28,8 @@ import type {
 /** Storage seams; tests replace them, production uses `storage.ts`. */
 export interface LocalInventoryIo {
 	listDeviceVaults: typeof listDeviceVaults;
+	/** One read for every device's pins; used unless only `readDeviceIdentityPins` is replaced. */
+	listDeviceIdentityPins: typeof listDeviceIdentityPins;
 	readDeviceIdentityPins: typeof readDeviceIdentityPins;
 	forgetDeviceIdentityPin: typeof forgetDeviceIdentityPin;
 	deleteDeviceVault: typeof deleteDeviceVault;
@@ -39,6 +42,7 @@ export interface LocalInventoryIo {
 
 const STORAGE_IO: LocalInventoryIo = {
 	listDeviceVaults,
+	listDeviceIdentityPins,
 	readDeviceIdentityPins,
 	forgetDeviceIdentityPin,
 	deleteDeviceVault,
@@ -136,10 +140,14 @@ export function createLocalInventory(
 	overrides: Partial<LocalInventoryIo> = {},
 ): LocalInventory {
 	const io: LocalInventoryIo = { ...STORAGE_IO, ...overrides };
+	const pinsPerDevice =
+		overrides.readDeviceIdentityPins !== undefined &&
+		overrides.listDeviceIdentityPins === undefined;
 	const listeners = new Set<() => void>();
 	const vaults = new Map<string, LocalDeviceVault>();
 	const newestPins = new Map<string, DeviceIdentityPinRecord>();
-	let generation = 0;
+	let loading: Promise<void> | undefined;
+	let queued: Promise<void> | undefined;
 	let cryptoProbe: Promise<void> | undefined;
 	let summary: LocalSummary = {
 		platform: deps.platform,
@@ -169,16 +177,25 @@ export function createLocalInventory(
 			});
 	}
 
-	async function readVaults(): Promise<VaultRow[]> {
-		const rows = await io.listDeviceVaults(deps.scope);
-		const pins = await Promise.all(
-			rows.map((vault) =>
-				io
-					.readDeviceIdentityPins(deps.scope, vault.deviceId)
-					.then((records) => records[0]),
+	async function readPins(rows: LocalDeviceVault[]) {
+		if (!pinsPerDevice) return io.listDeviceIdentityPins(deps.scope);
+		return new Map(
+			await Promise.all(
+				rows.map(
+					async ({ deviceId }) =>
+						[
+							deviceId,
+							await io.readDeviceIdentityPins(deps.scope, deviceId),
+						] as const,
+				),
 			),
 		);
-		return rows.map((vault, index) => ({ vault, pin: pins[index] }));
+	}
+
+	async function readVaults(): Promise<VaultRow[]> {
+		const rows = await io.listDeviceVaults(deps.scope);
+		const pins = await readPins(rows);
+		return rows.map((vault) => ({ vault, pin: pins.get(vault.deviceId)?.[0] }));
 	}
 
 	async function readBackups(rows: Map<string, LocalDeviceVault>) {
@@ -206,8 +223,7 @@ export function createLocalInventory(
 	}
 
 	/** Each source updates on its own; a failed read keeps the previous value and rejects after. */
-	async function reload() {
-		const run = ++generation;
+	async function load() {
 		probeCrypto();
 		const [vaultRows, persistence, authorities] = await Promise.allSettled([
 			readVaults(),
@@ -219,7 +235,6 @@ export function createLocalInventory(
 				? new Map(vaultRows.value.map(({ vault }) => [vault.deviceId, vault]))
 				: new Map(vaults);
 		const [backups] = await Promise.allSettled([readBackups(rows)]);
-		if (run !== generation) return;
 		emit({
 			...browserSupport(),
 			...patchFrom(vaultRows, "vaults", applyVaults),
@@ -233,6 +248,24 @@ export function createLocalInventory(
 			isRejected,
 		);
 		if (failed) throw failed.reason;
+	}
+
+	/** One read at a time; callers that arrive while it runs share a single read after it, so none sees older rows. */
+	function reload(): Promise<void> {
+		if (!loading) {
+			const run = load().finally(() => {
+				if (loading === run) loading = undefined;
+			});
+			loading = run;
+			return run;
+		}
+		queued ??= loading
+			.catch(() => undefined)
+			.then(() => {
+				queued = undefined;
+				return reload();
+			});
+		return queued;
 	}
 
 	/** Best effort: otherwise the hub keeps storing encrypted status for a reader nobody can open; it expires by itself. */

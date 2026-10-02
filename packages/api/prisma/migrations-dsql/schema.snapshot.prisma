@@ -4692,6 +4692,7 @@ model WasmPackageVersion {
 
   compilationStatus         String  @default("PENDING")
   compiledPlatforms         Json?   @default("[]")
+  compiledArtifactGeneration String?
   supportedWasmtimeVersions Json?   @default("[]")
   compilationError          String?
 

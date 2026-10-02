@@ -1,5 +1,10 @@
-use crate::{certificate_requests, certificates, state::StateStore, vault};
-use anyhow::{Context, Result, bail, ensure};
+use crate::{
+    certificate_requests, certificates,
+    diagnostics::{Renewal, RenewalFailure},
+    state::StateStore,
+    vault,
+};
+use anyhow::{Context, Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use flow_like_device_protocol::{AcmeCertificateMetadata, AcmeEnvironment, SecretValue};
 use instant_acme::{
@@ -81,9 +86,91 @@ fn read_record(store: &StateStore, id: &str) -> Result<Record> {
     })
 }
 
+/// Every policy with its count of consecutive failed attempts.
+pub(crate) fn list_with_failures(
+    store: &StateStore,
+) -> Result<Vec<(AcmeCertificateMetadata, u32)>> {
+    store.connection.prepare("SELECT metadata_json,failures FROM certificate_acme WHERE metadata_json IS NOT NULL ORDER BY certificate_id")?
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get(1)?)))?
+        .map(|row| {
+            let (metadata, failures) = row?;
+            Ok((serde_json::from_str(&metadata)?, failures))
+        })
+        .collect()
+}
+
 pub(crate) fn list(store: &StateStore) -> Result<Vec<AcmeCertificateMetadata>> {
-    store.connection.prepare("SELECT metadata_json FROM certificate_acme WHERE metadata_json IS NOT NULL ORDER BY certificate_id")?
-        .query_map([], |row| row.get::<_, String>(0))?.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+    Ok(list_with_failures(store)?
+        .into_iter()
+        .map(|(policy, _)| policy)
+        .collect())
+}
+
+/// A failure whose cause is known where it is raised.
+fn refused(cause: RenewalFailure, message: &'static str) -> anyhow::Error {
+    anyhow!(message).context(cause)
+}
+
+/// Problem documents are matched by type only: their text can name customers.
+fn problem_category(problem: &instant_acme::Problem) -> RenewalFailure {
+    let kind = problem
+        .r#type
+        .as_deref()
+        .and_then(|kind| kind.rsplit(':').next())
+        .unwrap_or_default();
+    match kind {
+        "rateLimited" => RenewalFailure::RateLimited,
+        "dns" | "caa" => RenewalFailure::Dns,
+        "connection" | "tls" => RenewalFailure::Network,
+        _ if problem.status == Some(429) => RenewalFailure::RateLimited,
+        _ => RenewalFailure::CaRejected,
+    }
+}
+
+/// Why an attempt failed, from the typed causes in its chain. An undecodable or missing
+/// answer counts as the network: a proxy or an outage, not a decision of the authority.
+fn failure_category(error: &anyhow::Error) -> RenewalFailure {
+    if let Some(known) = error.downcast_ref::<RenewalFailure>() {
+        return *known;
+    }
+    error
+        .chain()
+        .find_map(|cause| {
+            if cause.is::<tokio::time::error::Elapsed>() {
+                return Some(RenewalFailure::Network);
+            }
+            cause
+                .downcast_ref::<instant_acme::Error>()
+                .map(|error| match error {
+                    instant_acme::Error::Api(problem) => problem_category(problem),
+                    instant_acme::Error::Timeout(_)
+                    | instant_acme::Error::Hyper(_)
+                    | instant_acme::Error::Json(_)
+                    | instant_acme::Error::Other(_) => RenewalFailure::Network,
+                    _ => RenewalFailure::Internal,
+                })
+        })
+        .unwrap_or(RenewalFailure::Internal)
+}
+
+/// The first problem the authority reported for a challenge it would not validate.
+async fn refused_validation(order: &mut instant_acme::Order) -> RenewalFailure {
+    let mut authorizations = order.authorizations();
+    while let Some(Ok(mut authorization)) = authorizations.next().await {
+        let Ok(state) = authorization.refresh().await else {
+            break;
+        };
+        if let Some(problem) = challenge_problem(&state.challenges) {
+            return problem_category(problem);
+        }
+    }
+    RenewalFailure::CaRejected
+}
+
+fn challenge_problem(challenges: &[instant_acme::Challenge]) -> Option<&instant_acme::Problem> {
+    challenges
+        .iter()
+        .find_map(|challenge| challenge.error.as_ref())
 }
 
 /// The caller holds the management transaction. Disabling leaves the current service identity intact.
@@ -255,7 +342,8 @@ async fn attempt_with_builder(
                 "HTTP challenge listener could not start on {}",
                 record.metadata.http_bind
             )
-        })?;
+        })
+        .context(RenewalFailure::PortBind)?;
     let result = tokio::time::timeout(ATTEMPT_TIMEOUT, issue(root, record, builder, &listener))
         .await
         .context("ACME issuance timed out")
@@ -327,7 +415,10 @@ async fn issue(
     if order.state().status == OrderStatus::Invalid {
         record.order_url = None;
         record.key_file = None;
-        bail!("Certificate authority rejected the order");
+        return Err(refused(
+            RenewalFailure::CaRejected,
+            "Certificate authority rejected the order",
+        ));
     }
     if order.state().status == OrderStatus::Pending {
         let mut authorizations = order.authorizations();
@@ -339,7 +430,11 @@ async fn issue(
                 _ => {
                     record.order_url = None;
                     record.key_file = None;
-                    bail!("Certificate authority rejected domain authorization");
+                    return Err(refused(
+                        challenge_problem(&authorization.challenges)
+                            .map_or(RenewalFailure::CaRejected, problem_category),
+                        "Certificate authority rejected domain authorization",
+                    ));
                 }
             }
             let mut challenge = authorization
@@ -353,7 +448,10 @@ async fn issue(
         if order.poll_ready(&RetryPolicy::default()).await? != OrderStatus::Ready {
             record.order_url = None;
             record.key_file = None;
-            bail!("Certificate authority did not validate the domains");
+            return Err(refused(
+                refused_validation(&mut order).await,
+                "Certificate authority did not validate the domains",
+            ));
         }
     }
     let bytes = read_material(
@@ -442,7 +540,9 @@ fn finish(root: &Path, record: &mut Record, chain: &str, key: &str, now: i64) ->
     Ok(())
 }
 
-fn record_failure(root: &Path, record: &mut Record, now: i64) -> Result<()> {
+/// Counts the failed attempt and remembers its cause for owner reads until the agent
+/// restarts. The stored text stays fixed: the error itself can name customers.
+fn record_failure(root: &Path, record: &mut Record, now: i64, error: &anyhow::Error) -> Result<()> {
     let store = StateStore::open(&root.join("management.sqlite"))?;
     let transaction =
         Transaction::new_unchecked(&store.connection, TransactionBehavior::Immediate)?;
@@ -461,6 +561,12 @@ fn record_failure(root: &Path, record: &mut Record, now: i64) -> Result<()> {
     current.metadata.last_error = Some("ACME issuance failed. Check public DNS, inbound port 80, the challenge listener, and access to the certificate authority. Any installed certificate has been retained.".into());
     save_record(&store, &current)?;
     transaction.commit()?;
+    crate::diagnostics::global().set_renewal_failure(
+        root,
+        Renewal::Acme,
+        &record.metadata.certificate_id,
+        failure_category(error),
+    );
     Ok(())
 }
 
@@ -488,9 +594,9 @@ pub async fn run(root: PathBuf, cancel: CancellationToken) -> Result<()> {
                 _ = cancel.cancelled() => return Ok(()),
                 result = attempt(&root, &mut record) => result,
             };
-            if result.is_err() {
+            if let Err(error) = result {
                 // Remote error bodies may contain customer identifiers; expose a bounded local diagnosis.
-                let _ = record_failure(&root, &mut record, crate::enrollment::unix_time()?);
+                let _ = record_failure(&root, &mut record, crate::enrollment::unix_time()?, &error);
             }
             let _ = certificates::collect_unused(&root);
         }
@@ -675,7 +781,98 @@ fn source_network(peer: IpAddr) -> IpAddr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::bail;
     use rcgen::{CertificateParams, ExtendedKeyUsagePurpose, KeyPair};
+    use serde_json::{Value, json};
+
+    fn remembered(root: &Path, id: &str) -> Option<RenewalFailure> {
+        crate::diagnostics::global().renewal_failure(root, Renewal::Acme, id)
+    }
+
+    fn problem(kind: &str, status: u16) -> anyhow::Error {
+        anyhow::Error::new(instant_acme::Error::Api(instant_acme::Problem {
+            r#type: (!kind.is_empty()).then(|| format!("urn:ietf:params:acme:error:{kind}")),
+            detail: Some("customer.example.test".into()),
+            status: Some(status),
+            subproblems: Vec::new(),
+        }))
+        .context("issue certificate")
+    }
+
+    #[test]
+    fn authority_problems_are_classified_by_their_type() {
+        for (kind, status, cause) in [
+            ("dns", 400, RenewalFailure::Dns),
+            ("caa", 403, RenewalFailure::Dns),
+            ("rateLimited", 429, RenewalFailure::RateLimited),
+            ("", 429, RenewalFailure::RateLimited),
+            ("connection", 400, RenewalFailure::Network),
+            ("tls", 400, RenewalFailure::Network),
+            ("unauthorized", 403, RenewalFailure::CaRejected),
+            ("rejectedIdentifier", 400, RenewalFailure::CaRejected),
+            ("serverInternal", 500, RenewalFailure::CaRejected),
+        ] {
+            assert_eq!(failure_category(&problem(kind, status)), cause, "{kind}");
+        }
+        let challenge = |error: Value| -> instant_acme::Challenge {
+            serde_json::from_value(json!({"type":"http-01","url":"https://acme.example.test/challenge","token":"token","status":"invalid","error":error})).unwrap()
+        };
+        let challenges = [
+            challenge(Value::Null),
+            challenge(json!({"type":"urn:ietf:params:acme:error:dns","detail":"NXDOMAIN"})),
+        ];
+        assert_eq!(
+            challenge_problem(&challenges).map(problem_category),
+            Some(RenewalFailure::Dns)
+        );
+        assert!(challenge_problem(&challenges[..1]).is_none());
+    }
+
+    #[tokio::test]
+    async fn local_and_transport_failures_are_classified_from_typed_causes() {
+        let elapsed = tokio::time::timeout(Duration::ZERO, std::future::pending::<()>())
+            .await
+            .unwrap_err();
+        let undecodable = serde_json::from_str::<u8>("<html>").unwrap_err();
+        for (error, cause) in [
+            (
+                anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::AddrInUse))
+                    .context("HTTP challenge listener could not start on 0.0.0.0:80")
+                    .context(RenewalFailure::PortBind),
+                RenewalFailure::PortBind,
+            ),
+            (
+                refused(
+                    RenewalFailure::CaRejected,
+                    "Certificate authority rejected the order",
+                ),
+                RenewalFailure::CaRejected,
+            ),
+            (
+                anyhow::Error::new(elapsed).context("ACME issuance timed out"),
+                RenewalFailure::Network,
+            ),
+            (
+                instant_acme::Error::Timeout(None).into(),
+                RenewalFailure::Network,
+            ),
+            (
+                instant_acme::Error::Other("connection refused".into()).into(),
+                RenewalFailure::Network,
+            ),
+            (
+                instant_acme::Error::Json(undecodable).into(),
+                RenewalFailure::Network,
+            ),
+            (instant_acme::Error::Crypto.into(), RenewalFailure::Internal),
+            (
+                anyhow!("ACME policy changed during issuance"),
+                RenewalFailure::Internal,
+            ),
+        ] {
+            assert_eq!(failure_category(&error), cause, "{error:#}");
+        }
+    }
 
     fn policy(store: &StateStore, id: &str, now: i64) -> Result<AcmeCertificateMetadata> {
         configure(
@@ -794,7 +991,14 @@ mod tests {
         record.key_file = persist(&root, &record, Some(b"private-pending-key"))?;
         record.order_url = Some("https://acme.example.test/order/1".into());
         persist(&root, &record, None)?;
-        record_failure(&root, &mut record, now)?;
+        assert_eq!(remembered(&root, &id), None);
+        let rejected = refused(
+            RenewalFailure::Dns,
+            "Certificate authority rejected the order",
+        );
+        record_failure(&root, &mut record, now, &rejected)?;
+        assert_eq!(remembered(&root, &id), Some(RenewalFailure::Dns));
+        assert_eq!(list_with_failures(&store)?[0].1, 1);
         certificates::collect_unused(&root)?;
         let failed = read_record(&store, &id)?;
         assert_eq!(failed.account_file, record.account_file);
@@ -843,7 +1047,8 @@ mod tests {
         assert!(list(&store)?.is_empty());
         assert!(finish(&root, &mut record, &chain, &key, now).is_err());
         assert!(persist(&root, &record, Some(b"stale-account-key")).is_err());
-        assert!(record_failure(&root, &mut record, now).is_err());
+        assert!(record_failure(&root, &mut record, now, &anyhow!("stale attempt")).is_err());
+        assert_eq!(remembered(&root, &id), None);
         assert_eq!(certificates::metadata(&store, &id)?, imported);
         Ok(())
     }
@@ -1135,8 +1340,9 @@ mod tests {
             &mut record,
             Account::builder_with_http(Box::new(fake.clone())),
         )
-        .await;
-        assert!(failure.is_err());
+        .await
+        .err()
+        .context("The simulated outage did not fail the attempt")?;
         let stored = read_record(&store, &id)?;
         assert!(
             stored.account_file.is_some()
@@ -1149,7 +1355,9 @@ mod tests {
             &stored,
             stored.key_file.as_deref().unwrap(),
         )?)?;
-        record_failure(&root, &mut record, now)?;
+        record_failure(&root, &mut record, now, &failure)?;
+        assert_eq!(remembered(&root, &id), Some(RenewalFailure::Network));
+        assert_eq!(list_with_failures(&store)?[0].1, 1);
         assert!(certificates::metadata(&store, &id).is_err());
         let mut resumed = load_job(&root, &id, stored.metadata.revision)?;
         attempt_with_builder(
@@ -1162,6 +1370,7 @@ mod tests {
         assert_eq!(complete.account_file, account_file);
         assert!(complete.key_file.is_none() && complete.order_url.is_none());
         assert!(complete.metadata.last_error.is_none());
+        assert_eq!(list_with_failures(&store)?[0].1, 0);
         let state = fake.state.lock().await;
         assert_eq!(state.accounts, 1);
         assert_eq!(state.orders, 1);
