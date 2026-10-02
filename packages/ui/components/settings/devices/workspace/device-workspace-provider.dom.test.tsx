@@ -101,6 +101,27 @@ describe("provider gates", () => {
 		expect(view.container.textContent).toBe("custom signed_out");
 	});
 
+	test("passive with a gate renderer learns why there is no workspace", async () => {
+		const reason = (auth: typeof SIGNED_OUT) =>
+			dom.render(
+				<QueryClientProvider client={new QueryClient()}>
+					<hooks.DeviceWorkspaceProvider
+						passive
+						fallback={<span>no devices here</span>}
+						overrides={{ auth, profile: TEST_PROFILE }}
+						renderGate={(gate) => <p>because {gate.kind}</p>}
+					>
+						<span>inside</span>
+					</hooks.DeviceWorkspaceProvider>
+				</QueryClientProvider>,
+			);
+		const signedOut = await reason(SIGNED_OUT);
+		expect(signedOut.container.textContent).toBe("because signed_out");
+		await dom.cleanup();
+		const loading = await reason({ ...SIGNED_OUT, loading: true });
+		expect(loading.container.textContent).toBe("because loading");
+	});
+
 	test("passive without a fallback renders nothing while there is no workspace", async () => {
 		const test = createTestWorkspace();
 		const view = await dom.render(

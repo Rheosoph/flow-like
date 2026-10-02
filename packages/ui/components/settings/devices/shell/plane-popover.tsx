@@ -558,11 +558,14 @@ export interface PlaneDeviceRow {
 	action?: ReactNode;
 }
 
+/* The app's base layer frames every table cell, fills header cells and gives tables outer margins; each is reset here. */
+const TABLE = "my-0 w-full border-collapse text-xs";
 const HEAD_CELL =
-	"border-b border-hairline px-1.5 py-1 text-left text-label font-semibold tracking-[0.06em] text-muted-foreground uppercase";
-const CELL = "px-1.5 py-1.5 align-top";
-const NAME_CELL = "max-w-[18ch] truncate px-1.5 py-1.5 align-top font-mono";
-const AGE_CELL = "px-1.5 py-1.5 align-top whitespace-nowrap tabular-nums";
+	"border-0 border-b border-hairline bg-transparent px-1.5 py-1 text-left text-label font-semibold tracking-[0.06em] text-muted-foreground uppercase";
+const CELL =
+	"border-0 border-t border-hairline bg-transparent px-1.5 py-1.5 align-top";
+const NAME_CELL = cx(CELL, "max-w-[18ch] truncate font-mono");
+const AGE_CELL = cx(CELL, "whitespace-nowrap tabular-nums");
 const DEVICE_LINK =
 	"text-foreground underline decoration-border-strong underline-offset-2";
 
@@ -590,7 +593,7 @@ function PlaneTableRow({
 	};
 	const age = row.at === undefined ? "–" : time.ago(row.at);
 	return (
-		<tr className="border-t border-hairline">
+		<tr>
 			<td className={NAME_CELL}>
 				<a
 					href={devicesHref(route, scope)}
@@ -617,13 +620,13 @@ function PlaneTable({ rows, scope, onOpenDevice }: Readonly<PlaneTableProps>) {
 	const { t } = useTranslation("devices");
 	const empty = rows.length ? null : (
 		<tr>
-			<td colSpan={3} className="px-1.5 py-1.5 text-muted-foreground">
+			<td colSpan={3} className={cx(CELL, "text-muted-foreground")}>
 				{t("chrome.planes.table.empty", "No devices to show here.")}
 			</td>
 		</tr>
 	);
 	return (
-		<table data-plane-table="" className="w-full border-collapse text-xs">
+		<table data-plane-table="" className={TABLE}>
 			<thead>
 				<tr>
 					<th scope="col" className={HEAD_CELL}>
@@ -695,14 +698,14 @@ export function PlaneDetail(props: Readonly<PlaneDetailProps>) {
 			className={root}
 		>
 			<div className="flex flex-col gap-1.5 px-4 pt-3 pb-2.5">
-				<Heading className="flex items-center gap-2 text-ui font-semibold">
+				<Heading className="flex items-center gap-2 text-ui font-semibold tracking-normal">
 					<PlaneDot state={line.state} />
 					<Icon aria-hidden className="size-4 text-muted-foreground" />
 					<span className="min-w-0 flex-1 truncate">{name}</span>
 					<StatusChip tone={PLANE_TONE[line.state]}>{line.word}</StatusChip>
 				</Heading>
-				<p className="font-medium text-foreground">{line.text}</p>
-				<p className="text-ink-2">{explanation}</p>
+				<p className="text-ui font-medium text-foreground">{line.text}</p>
+				<p className="text-ui text-ink-2">{explanation}</p>
 				<p className="text-xs text-muted-foreground">{hint}</p>
 				{actionRow}
 			</div>

@@ -67,7 +67,7 @@ export function DiffRows({
 							<span
 								aria-hidden
 								className={cx(
-									"inline-flex size-4.5 items-center justify-center rounded-sm border font-mono text-xs leading-none font-semibold",
+									"inline-flex size-4.5 items-center justify-center rounded-md border font-mono text-xs leading-none font-semibold",
 									sign.cls,
 								)}
 							>

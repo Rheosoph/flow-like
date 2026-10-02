@@ -20,7 +20,9 @@ const { SAMPLE_IDS, SAMPLE_NOW, SAMPLE_PEOPLE } = await import(
 	"../../../../lib/device-management/model/__fixtures__/sample-fleet"
 );
 const { createFakeWorkspace } = await import("../testing/fake-workspace");
-const { fakeCompact, fakeKeys } = await import("../testing/fake-device-api");
+const { fakeCompact, fakeKeys, readFakeCompact } = await import(
+	"../testing/fake-device-api"
+);
 const { useOverlayStore } = await import("../workspace/overlay-store");
 const { ACCOUNT_SCOPE } = await import("../routing/devices-route");
 const { keyThumbprint } = await import("./use-shared-metrics");
@@ -746,6 +748,123 @@ describe("shared live metrics", () => {
 			);
 			expect(command?.[2].scope).toBe("device");
 			expect(command?.[2].key_packages).toEqual([]);
+		},
+		SLOW,
+	);
+
+	/** Edge with this computer joined to the group and one more reader on the list. */
+	const withSecondReader = (agent: Agent, fake: Fake) => {
+		const controller = fake.workspace.keys.controller(EDGE);
+		if (!controller) throw new Error("edge is unlocked in the seed.");
+		const endpoint = controller.createTelemetry({} as never);
+		const joined = () => ({
+			...endpoint,
+			position: () => ({ joined: true, retired: false, sequence: 4 }),
+		});
+		controller.createTelemetry = joined;
+		controller.openTelemetry = joined;
+		const mine = controller.publicBundle().endpoint_id;
+		agent.setRoster(
+			"telemetry",
+			"device",
+			roster(fake, [mine, "reader-mira-01"]),
+			{ confirmed_readers: [mine] },
+		);
+		agent.handle("telemetry_policy", (command) => ({
+			state: "completed",
+			result: { sequence: command.sequence },
+		}));
+		return mine;
+	};
+
+	test(
+		"Remove…: says what the reader loses first, then signs a list without them; this computer can't be removed",
+		async () => {
+			let mine = "";
+			const view = await open(EDGE, {
+				agentFeatures: {},
+				arrange: (agent, fake) => {
+					mine = withSecondReader(agent, fake);
+				},
+			});
+			const shared = await openShared(view);
+			await until(() => /2 readers/.test(text(shared)));
+			const removes = Array.from(
+				shared.querySelectorAll<HTMLElement>("[data-reader] button"),
+			);
+			expect(removes).toHaveLength(1);
+			expect(removes[0].getAttribute("aria-label")).toBe(
+				"Remove reader-m from the readers",
+			);
+			await click(removes[0]);
+			const sheet = inPortal();
+			expect(text(sheet)).toContain(
+				"reader-m leaves the encrypted group and receives no further samples.",
+			);
+			expect(text(sheet)).toContain(
+				"Add them again from a new reader request.",
+			);
+			expect(sent(view)).not.toContain("telemetry_policy");
+			await click(
+				byRole(
+					"button",
+					"Remove reader-m from the shared metric readers",
+					sheet,
+				),
+			);
+			await until(() => sent(view).includes("telemetry_policy"));
+			const command = view.fake.api.commands.find(
+				([, type]) => type === "telemetry_policy",
+			);
+			const signed = readFakeCompact<{ members: { endpoint_id: string }[] }>(
+				String(command?.[2].policy_jws),
+				view.fake.hub.ownerInvitationKey(EDGE),
+			);
+			expect(signed.members.map((member) => member.endpoint_id)).toEqual([
+				EDGE,
+				mine,
+			]);
+			expect(command?.[2].key_packages).toEqual([]);
+		},
+		SLOW,
+	);
+
+	test(
+		"while the rules aren't applied, Add, Renew and Remove stay visible, share one reason and send nothing",
+		async () => {
+			const view = await open(EDGE, {
+				agentFeatures: {},
+				arrange: (agent, fake) => {
+					withSecondReader(agent, fake);
+					const policy = fake.hub.policies.get(EDGE);
+					if (!policy) throw new Error("The seed has access rules for edge.");
+					policy.appliedVersion = policy.version - 1;
+					policy.appliedDigest = "digest-before";
+				},
+			});
+			const shared = await openShared(view);
+			await until(() => /2 readers/.test(text(shared)));
+			await until(
+				() =>
+					byRole("button", "Renew", shared).getAttribute("aria-disabled") ===
+					"true",
+			);
+			const reasons = shared.querySelectorAll("[data-gate-inline]");
+			expect(reasons).toHaveLength(1);
+			const reasonId = reasons[0].id;
+			for (const name of [
+				"Add readers…",
+				"Renew",
+				"Remove reader-m from the readers",
+			]) {
+				const control = byRole("button", name, shared);
+				expect(control.getAttribute("aria-disabled")).toBe("true");
+				expect(control.getAttribute("aria-describedby")).toBe(reasonId);
+				await click(control);
+			}
+			expect(queryByRole("dialog")).toBeNull();
+			expect(queryByRole("alertdialog")).toBeNull();
+			expect(sent(view)).not.toContain("telemetry_policy");
 		},
 		SLOW,
 	);

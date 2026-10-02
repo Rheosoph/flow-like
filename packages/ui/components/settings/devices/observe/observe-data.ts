@@ -18,10 +18,6 @@ export const OBSERVE_STACK = `flex min-w-0 flex-col gap-4 ${PLAIN_PARAGRAPHS}`;
 export const OBSERVE_COLS =
 	"grid min-w-0 items-start gap-x-6 gap-y-4 @min-[980px]/devices:grid-cols-2";
 
-/** Undoes the app-wide `table`, `th` and `td` rules (margins, cell borders) inside a `DvTable`. */
-export const TABLE_RESET =
-	"my-0 [&_td]:border-x-0 [&_td]:border-b-0 [&_th]:border-x-0 [&_th]:border-t-0";
-
 export type Json = Record<string, unknown>;
 
 export const asRecord = (value: unknown): Json | undefined =>

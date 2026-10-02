@@ -19,7 +19,7 @@ import type {
 	FleetRoute,
 	FleetView,
 } from "../../../../lib/device-management/model/types";
-import { headlineCopy } from "../copy/headline-copy";
+import { headlineCopy, headlineNames } from "../copy/headline-copy";
 import {
 	Annunciator,
 	type AnnunciatorCell,
@@ -604,11 +604,13 @@ function FleetHeadline() {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
 	const { input, items } = useAttentionState();
+	const model = useMemo(() => headline(input, { items }), [input, items]);
 	const sentence = useMemo(
-		() => headlineCopy(t, headline(input, { items }), time),
-		[t, input, items, time],
+		() => headlineCopy(t, model, time),
+		[t, model, time],
 	);
-	return <Headline lead={sentence.lead} rest={sentence.rest} />;
+	const names = useMemo(() => headlineNames(model), [model]);
+	return <Headline lead={sentence.lead} rest={sentence.rest} names={names} />;
 }
 
 function FleetLoaded({

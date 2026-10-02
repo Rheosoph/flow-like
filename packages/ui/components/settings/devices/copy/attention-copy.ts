@@ -14,7 +14,7 @@ export type CopyTime = Pick<AreaTime, "now" | "locale" | "ago" | "at">;
 
 export interface AttentionCopyContext {
 	time?: CopyTime;
-	/** Display name for an account id (people directory); the id otherwise. */
+	/** Display name for an account id (people directory); without one the sentence says "One person" / "the owner". */
 	personName?(userId: string): string | undefined;
 	/** Display name for an app id; the id otherwise. */
 	appName?(appId: string): string | undefined;
@@ -68,8 +68,9 @@ interface SentenceContext {
 	time: CopyTime;
 	device: string;
 	service: string;
-	person: string;
-	personNameOf(userId: string): string;
+	/** The directory name of `params.person`; without one the sentence stays neutral (R3/R15: never the account id). */
+	person: string | undefined;
+	personNameOf(userId: string): string | undefined;
 	app(id: string | number | undefined): string;
 	str(key: string): string | undefined;
 	num(key: string): number;
@@ -129,7 +130,7 @@ const scopeLabel = (
 const nameLookups = (ctx: AttentionCopyContext) => ({
 	app: (id: string | number | undefined) =>
 		id === undefined ? "" : (ctx.appName?.(String(id)) ?? String(id)),
-	personNameOf: (userId: string) => ctx.personName?.(userId) ?? userId,
+	personNameOf: (userId: string) => ctx.personName?.(userId) || undefined,
 });
 
 function sentenceContext(
@@ -152,7 +153,7 @@ function sentenceContext(
 		service:
 			readers.str("service") ??
 			t("devices:attention.thisService", "this service"),
-		person: personId ? personNameOf(personId) : "",
+		person: personId ? personNameOf(personId) : undefined,
 		personNameOf,
 		app,
 		...readers,
@@ -586,16 +587,26 @@ const SENTENCES = {
 			{ device: c.device },
 		),
 	grant_expiring: (c) =>
-		c.t(
-			"devices:attention.grant_expiring.sentence",
-			"{{person}}'s access to {{device}} ends {{in}} ({{time}}).",
-			{
-				person: c.person,
-				device: c.device,
-				in: c.rel("expiresAt"),
-				time: c.when("expiresAt"),
-			},
-		),
+		c.person
+			? c.t(
+					"devices:attention.grant_expiring.sentence",
+					"{{person}}'s access to {{device}} ends {{in}} ({{time}}).",
+					{
+						person: c.person,
+						device: c.device,
+						in: c.rel("expiresAt"),
+						time: c.when("expiresAt"),
+					},
+				)
+			: c.t(
+					"devices:attention.grant_expiring.onePerson",
+					"One person's access to {{device}} ends {{in}} ({{time}}).",
+					{
+						device: c.device,
+						in: c.rel("expiresAt"),
+						time: c.when("expiresAt"),
+					},
+				),
 	sharing_policy_waiting_for_device: (c) =>
 		c.t(
 			"devices:attention.sharing_policy_waiting_for_device.sentence",
@@ -625,12 +636,13 @@ const SENTENCES = {
 			{ device: c.device, used: c.num("used"), max: c.num("max") },
 		),
 	access_request_pending: (c) => {
-		const owner = c.str("owner");
+		const ownerId = c.str("owner");
+		const owner = ownerId ? c.personNameOf(ownerId) : undefined;
 		return owner
 			? c.t(
 					"devices:attention.access_request_pending.sentence",
 					"Waiting for {{owner}} to approve your access to {{device}}.",
-					{ owner: c.personNameOf(owner), device: c.device },
+					{ owner, device: c.device },
 				)
 			: c.t(
 					"devices:attention.access_request_pending.anyOwner",
@@ -639,11 +651,17 @@ const SENTENCES = {
 				);
 	},
 	code_running_access_without_sandbox: (c) =>
-		c.t(
-			"devices:attention.code_running_access_without_sandbox.sentence",
-			"{{person}} can run code on {{device}} with the agent's full access.",
-			{ person: c.person, device: c.device },
-		),
+		c.person
+			? c.t(
+					"devices:attention.code_running_access_without_sandbox.sentence",
+					"{{person}} can run code on {{device}} with the agent's full access.",
+					{ person: c.person, device: c.device },
+				)
+			: c.t(
+					"devices:attention.code_running_access_without_sandbox.onePerson",
+					"One person can run code on {{device}} with the agent's full access.",
+					{ device: c.device },
+				),
 	service_crash_looping: (c) => {
 		const values = {
 			service: c.service,
@@ -1293,6 +1311,14 @@ export function attentionActionLabel(
 	code: AttentionActionCode,
 ): string {
 	return ACTIONS[code](t);
+}
+
+/** The device and service names an item's sentence contains, for `AttentionEntry.names` (set in mono, R15). */
+export function attentionNames(item: AttentionCopyItem): string[] {
+	const { device, service } = item.copy.params ?? {};
+	return [device, service].filter(
+		(name): name is string => typeof name === "string" && name !== "",
+	);
 }
 
 export interface AttentionCopy {

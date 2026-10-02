@@ -1,8 +1,9 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { Layers, LockOpen } from "lucide-react";
+import { Cloud, HardDrive, Layers, Lock, LockOpen } from "lucide-react";
 import {
+	type ReactNode,
 	useCallback,
 	useEffect,
 	useId,
@@ -10,7 +11,10 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { AppView } from "../../../../lib/device-management/model/app-plan";
+import type {
+	AppDeviceGroup,
+	AppView,
+} from "../../../../lib/device-management/model/app-plan";
 import {
 	type DeployPhase,
 	type DeployPlan,
@@ -42,27 +46,29 @@ import { CheckField } from "../primitives/form-fields";
 import { FreshnessStamp } from "../primitives/freshness-stamp";
 import { GateInline } from "../primitives/gate-notice";
 import { InlineResult } from "../primitives/inline-result";
+import { PresenceChip } from "../primitives/status-chip";
 import { cx } from "../primitives/tone";
 import { WizardStepper } from "../primitives/wizard";
 import { useDeviceWorkspace, useOverlay } from "../workspace";
 import {
 	APP_LINKS,
 	LinkButton,
+	PLAIN_CHIP,
 	useAppPage,
 	useDayTime,
 	useDeviceNames,
 	useGateText,
-	useNameList,
 } from "./app-shared";
 import {
-	SENTENCE_NAME_CAP,
 	type UpdateRow,
 	blocksDeploy,
+	pinText,
 	updateBatches,
 	updateRows,
 	versionName,
 } from "./app-view-local";
 import type { AppDevicesData } from "./use-app-devices";
+import { GroupOwner } from "./where-by-device";
 
 const CHECK =
 	"mt-0.5 border-border-strong shadow-none data-[state=checked]:border-foreground data-[state=checked]:bg-foreground data-[state=checked]:text-background focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
@@ -164,6 +170,198 @@ const keyOf = (row: Pick<UpdateRow, "deviceId" | "serviceId">) =>
 type Step = "choose" | "strategy" | "review";
 const STEPS: readonly Step[] = ["choose", "strategy", "review"];
 
+/** "v1.4.0 → v1.5.0 · Extract invoice 1.4.0 → 1.5.0 · keeps settings v12": what the update changes on one service. */
+function useChangeLine(): (row: UpdateRow) => string {
+	const { t } = useTranslation("devices");
+	const { view, data } = useAppPage();
+	return useCallback(
+		(row) => {
+			const newest = view.versions[0];
+			if (!newest) return "";
+			const service = view.services.find(
+				(entry) =>
+					entry.deviceId === row.deviceId && entry.serviceId === row.serviceId,
+			);
+			const pins = new Map(newest.pins.map((pin) => [pin.eventId, pin]));
+			const moved = (service?.events ?? []).flatMap((event) => {
+				const pin = pins.get(event.event_id);
+				const from = pinText(event.event_version);
+				const to = pin ? pinText(pin.eventVersion) : from;
+				return from === to
+					? []
+					: [
+							t("app.updateAll.pinMove", "{{event}} {{from}} → {{to}}", {
+								event: data.eventNames.get(event.event_id) ?? event.event_id,
+								from,
+								to,
+							}),
+						];
+			});
+			return [
+				row.from
+					? t("app.updateAll.fromTo", "{{from}} → {{to}}", {
+							from: versionName(row.from),
+							to: versionName(newest),
+						})
+					: t("app.updateAll.unknownTo", "version unknown → {{to}}", {
+							to: versionName(newest),
+						}),
+				...moved,
+				...(service
+					? [
+							t(
+								"app.updateAll.keepsSettings",
+								"keeps settings v{{version, number}}",
+								{ version: service.view.settings.latest },
+							),
+						]
+					: []),
+			].join(" · ");
+		},
+		[t, view, data.eventNames],
+	);
+}
+
+/** Why a service can't join now: its own update, or the device's deploy gate. */
+function useBlockedReason(): (row: UpdateRow) => ReactNode {
+	const { t } = useTranslation("devices");
+	const { data } = useAppPage();
+	const time = useAreaTime();
+	const gateText = useGateText();
+	return (row) => {
+		if (row.blocked === "staged")
+			return t(
+				"app.updateAll.staged",
+				"An update is staged. Activate or discard it first.",
+			);
+		if (row.blocked === "busy")
+			return row.busyUntil
+				? t(
+						"app.updateAll.busyUntil",
+						"An update is already running. It can join once that finishes (by {{time}}).",
+						{ time: time.clock(row.busyUntil) },
+					)
+				: t(
+						"app.updateAll.busy",
+						"An update is already running. It can join once that finishes.",
+					);
+		const gate = data.deployGates.get(row.deviceId);
+		return blocksDeploy(gate) ? (gateText(gate)?.reason ?? null) : null;
+	};
+}
+
+const GROUP_ROW =
+	"flex items-start gap-2.5 border-t border-hairline px-3 py-2 first:border-t-0";
+
+/** One device of the list: its head row, then its services; a locked device keeps its place and says how to include it. */
+function DeviceServices({
+	group,
+	rows,
+	picked,
+	onToggle,
+}: Readonly<{
+	group: AppDeviceGroup;
+	rows: readonly UpdateRow[];
+	picked: ReadonlySet<string>;
+	onToggle(key: string, on: boolean): void;
+}>) {
+	const { t } = useTranslation("devices");
+	const { view, data } = useAppPage();
+	const overlay = useOverlay();
+	const changeLine = useChangeLine();
+	const blockedReason = useBlockedReason();
+	const device = data.devices.get(group.deviceId);
+	return (
+		<li
+			data-update-group={group.deviceId}
+			className="border-t border-border first:border-t-0"
+		>
+			<p className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-hairline bg-surface-sunken px-3 py-1.5">
+				<span className="font-mono text-ui font-semibold">{group.name}</span>
+				<PresenceChip
+					kind={group.presence.kind}
+					{...(group.presence.since === undefined
+						? {}
+						: { since: group.presence.since })}
+					short
+					className={PLAIN_CHIP}
+				/>
+				{device && group.relationship === "shared" ? (
+					<GroupOwner device={device} />
+				) : null}
+			</p>
+			<ul className="m-0 flex list-none flex-col p-0">
+				{rows.map((row) => {
+					const key = keyOf(row);
+					const blocked = blockedReason(row);
+					return (
+						<li key={key} data-update-row={key} className={GROUP_ROW}>
+							<Checkbox
+								checked={picked.has(key) && !blocked}
+								disabled={!!blocked}
+								onCheckedChange={(next) => onToggle(key, next === true)}
+								aria-label={t(
+									"app.updateAll.select",
+									"Update {{service}} on {{device}}",
+									{ service: row.serviceId, device: group.name },
+								)}
+								className={CHECK}
+							/>
+							<div className="flex min-w-0 flex-col gap-0.5">
+								<p className="font-mono text-ui font-semibold">
+									{row.serviceId}
+								</p>
+								<p className="text-xs text-muted-foreground">
+									{changeLine(row)}
+								</p>
+								{blocked ? (
+									<GateInline kind="busy" className="max-w-[60ch]">
+										{blocked}
+									</GateInline>
+								) : null}
+							</div>
+						</li>
+					);
+				})}
+				{group.unknown?.kind === "locked" ? (
+					<li data-update-locked={group.deviceId} className={GROUP_ROW}>
+						<Checkbox
+							checked={false}
+							disabled
+							aria-label={t(
+								"app.updateAll.lockedSelect",
+								"The services on {{device}} can be ticked once it is unlocked",
+								{ device: group.name },
+							)}
+							className={CHECK}
+						/>
+						<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+							<p className="text-ui">
+								{t(
+									"app.updateAll.lockedTitle",
+									"Which {{app}} services run here isn't readable yet",
+									{ app: view.app.name },
+								)}
+							</p>
+							<p className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+								<Lock aria-hidden className="size-3 shrink-0" />
+								{t("app.updateAll.lockedText", "Locked. Unlock to include it.")}
+							</p>
+						</div>
+						<DvButton
+							size="sm"
+							icon={LockOpen}
+							onClick={() => overlay.openUnlock(group.deviceId)}
+						>
+							{t("app.unknown.unlock", "Unlock…")}
+						</DvButton>
+					</li>
+				) : null}
+			</ul>
+		</li>
+	);
+}
+
 function ChooseStep({
 	rows,
 	picked,
@@ -174,19 +372,22 @@ function ChooseStep({
 	onToggle(key: string, on: boolean): void;
 }>) {
 	const { t } = useTranslation("devices");
-	const { view, data } = useAppPage();
-	const time = useAreaTime();
+	const { view } = useAppPage();
 	const dayTime = useDayTime();
-	const overlay = useOverlay();
-	const deviceName = useDeviceNames();
-	const gateText = useGateText();
-	const nameList = useNameList();
 	const listId = useId();
 	const newest = view.versions[0];
-	const locked = view.groups.filter(
-		(group) => group.unknown?.kind === "locked",
+	const groups = useMemo(
+		() =>
+			view.groups.flatMap((group) => {
+				const own = rows.filter((row) => row.deviceId === group.deviceId);
+				return own.length || group.unknown?.kind === "locked"
+					? [{ group, rows: own }]
+					: [];
+			}),
+		[view.groups, rows],
 	);
 	const ticked = rows.filter((row) => picked.has(keyOf(row)));
+	const ModeIcon = view.app.localOnly ? HardDrive : Cloud;
 	return (
 		<div className="flex flex-col gap-4">
 			<div className="flex flex-col gap-1">
@@ -207,18 +408,30 @@ function ChooseStep({
 						</>
 					) : null}
 				</p>
-				<p className="max-w-[72ch] text-xs text-muted-foreground">
+				<p className="text-xs text-muted-foreground">
+					{t(
+						"app.updateAll.newestOnly",
+						"Only the newest version can be prepared. Devices that have an older one keep it until you update them.",
+					)}
+				</p>
+			</div>
+			<p className="flex items-start gap-2.5 rounded-lg border border-border bg-surface-sunken px-3 py-2.5 text-ui">
+				<ModeIcon
+					aria-hidden
+					className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+				/>
+				<span className="min-w-0">
 					{view.app.localOnly
 						? t(
 								"app.updateAll.modeOffline",
-								"Sends a new copy of the app from this computer to each device. The data on each device is kept. Older versions can't be prepared again.",
+								"Sends a new copy of the app from this computer to each device. The data on each device is kept.",
 							)
 						: t(
 								"app.updateAll.modeOnline",
-								"Re-pins each service to the event and flow versions published now. Data isn't touched. Older versions can't be prepared again.",
+								"Re-pins each service to the event and flow versions published now. Data isn't touched.",
 							)}
-				</p>
-			</div>
+				</span>
+			</p>
 			<p
 				id={listId}
 				className="-mb-2 text-label font-semibold tracking-[0.06em] text-muted-foreground uppercase"
@@ -227,110 +440,18 @@ function ChooseStep({
 			</p>
 			<ul
 				aria-labelledby={listId}
-				className="m-0 flex list-none flex-col rounded-lg border border-border p-0"
+				className="m-0 flex list-none flex-col overflow-hidden rounded-lg border border-border p-0"
 			>
-				{rows.map((row) => {
-					const key = keyOf(row);
-					const gate = data.deployGates.get(row.deviceId);
-					const blocked =
-						row.blocked === "staged"
-							? t(
-									"app.updateAll.staged",
-									"An update is staged. Activate or discard it first.",
-								)
-							: row.blocked === "busy"
-								? row.busyUntil
-									? t(
-											"app.updateAll.busyUntil",
-											"An update is already running. It can join once that finishes (by {{time}}).",
-											{ time: time.clock(row.busyUntil) },
-										)
-									: t(
-											"app.updateAll.busy",
-											"An update is already running. It can join once that finishes.",
-										)
-								: blocksDeploy(gate)
-									? gateText(gate)?.reason
-									: null;
-					return (
-						<li
-							key={key}
-							data-update-row={key}
-							className="flex items-start gap-2.5 border-t border-hairline px-3 py-2 first:border-t-0"
-						>
-							<Checkbox
-								checked={picked.has(key) && !blocked}
-								disabled={!!blocked}
-								onCheckedChange={(next) => onToggle(key, next === true)}
-								aria-label={t(
-									"app.updateAll.select",
-									"Update {{service}} on {{device}}",
-									{ service: row.serviceId, device: deviceName(row.deviceId) },
-								)}
-								className={CHECK}
-							/>
-							<div className="flex min-w-0 flex-col gap-0.5">
-								<p className="text-ui">
-									<span className="font-mono">{deviceName(row.deviceId)}</span>
-									<span aria-hidden className="text-muted-foreground">
-										{" › "}
-									</span>
-									<span className="font-mono font-semibold">
-										{row.serviceId}
-									</span>
-								</p>
-								<p className="text-xs text-muted-foreground">
-									{row.from && newest
-										? t("app.updateAll.fromTo", "{{from}} → {{to}}", {
-												from: versionName(row.from),
-												to: versionName(newest),
-											})
-										: newest
-											? t(
-													"app.updateAll.unknownTo",
-													"version unknown → {{to}}",
-													{ to: versionName(newest) },
-												)
-											: null}
-								</p>
-								{blocked ? (
-									<GateInline kind="busy" className="max-w-[60ch]">
-										{blocked}
-									</GateInline>
-								) : null}
-							</div>
-						</li>
-					);
-				})}
+				{groups.map(({ group, rows: own }) => (
+					<DeviceServices
+						key={group.deviceId}
+						group={group}
+						rows={own}
+						picked={picked}
+						onToggle={onToggle}
+					/>
+				))}
 			</ul>
-			{locked.length ? (
-				<div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
-					<span>
-						{t("app.updateAll.locked", {
-							count: locked.length,
-							names: nameList(
-								locked.map((group) => group.name),
-								SENTENCE_NAME_CAP,
-							),
-							defaultValue_one:
-								"{{names}} is locked: its services aren't listed. Unlock to include it.",
-							defaultValue_other:
-								"{{names}} are locked: their services aren't listed. Unlock to include them.",
-						})}
-					</span>
-					<DvButton
-						size="xs"
-						icon={LockOpen}
-						onClick={() =>
-							locked.length === 1
-								? overlay.openUnlock(locked[0].deviceId)
-								: overlay.openUnlockSeveral()
-						}
-					>
-						{t("app.unknown.unlock", "Unlock…")}
-					</DvButton>
-				</div>
-			) : null}
 			<LinkButton
 				route={APP_LINKS.deploy({
 					mode: "update",

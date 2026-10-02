@@ -248,7 +248,7 @@ describe("unlock sheet", () => {
 		const rows = checkRows();
 		expect(checkStates()).toEqual(Array(8).fill("pass"));
 		expect(rows[0]?.text).toContain("Hub ready");
-		expect(rows[2]?.text).toContain("Your access keys on this computer");
+		expect(rows[2]?.text).toContain("Shared-access keys on this computer");
 		expect(rows[2]?.text).toContain("This computer");
 		expect(rows[4]?.text).toContain("Not unlocked in another window");
 		expect(rows[5]?.text).toContain("Hub + this computer");

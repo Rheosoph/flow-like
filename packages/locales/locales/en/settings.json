@@ -2289,10 +2289,5 @@
 	"confirmComp": "Confirm free access",
 	"grantComp": "Grant complimentary access",
 	"zoomIn": "Zoom in",
-	"zoomOut": "Zoom out",
-	"devices": "Devices",
-	"allDevices": "All devices",
-	"devicesConnectedHub": "Connected hub",
-	"devicesAvailabilityHelp": "Check that you are connected to the intended hub and that its running server has device management enabled, then retry.",
-	"devicesDescription": "Manage devices you own or have access to, their deployments, health, and certificates."
+	"zoomOut": "Zoom out"
 }

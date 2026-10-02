@@ -70,6 +70,8 @@ export interface DevicesRouteApi {
 	/** Link target for anchors (`devicesHref` in this scope, or in `scope`). */
 	href(route: DevicesRoute, scope?: DevicesScope): string;
 	navigate(route: DevicesRoute, options?: NavigateOptions): void;
+	/** Opens a page outside the area (an app's Events page) through the host's router: no page load, so key sessions stay open. */
+	leave(href: string): void;
 	/** Drops one-shot params (`action`, `focus`, `import`, …) from the URL without a history entry. */
 	clearParam(...names: string[]): void;
 	/** Why a deep link could not be opened; set by `resolveWith`. */
@@ -141,6 +143,10 @@ function useRouteController(
 		[],
 	);
 
+	const leave = useCallback((href: string) => {
+		latest.current.router.push(href);
+	}, []);
+
 	const clearParam = useCallback(
 		(...names: string[]) => {
 			const current = latest.current.router;
@@ -178,6 +184,7 @@ function useRouteController(
 			redirecting,
 			href,
 			navigate,
+			leave,
 			clearParam,
 			resolveBanner,
 			dismissResolveBanner,
@@ -189,6 +196,7 @@ function useRouteController(
 			redirecting,
 			href,
 			navigate,
+			leave,
 			clearParam,
 			resolveBanner,
 			dismissResolveBanner,
@@ -294,5 +302,21 @@ export function useRouteLink(): (
 			},
 		}),
 		[href, navigate],
+	);
+}
+
+/** `<a {...hostLink(appEventsHref(appId))}>`: a real link to a page outside the area that a plain click opens without a page load. */
+export function useHostLink(): (href: string) => RouteLinkProps {
+	const { leave } = useDevicesRoute();
+	return useCallback(
+		(href) => ({
+			href,
+			onClick: (event) => {
+				if (!isPlainClick(event)) return;
+				event.preventDefault();
+				leave(href);
+			},
+		}),
+		[leave],
 	);
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { Trans, useTranslation } from "@flow-like/locales";
+import { useTranslation } from "@flow-like/locales";
 import {
 	Boxes,
 	CircleCheck,
@@ -14,12 +14,13 @@ import {
 	TriangleAlert,
 	Users,
 } from "lucide-react";
-import { type ReactNode, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { groupFingerprint } from "../../../../lib/device-management/fingerprint";
 import { keysLocked } from "../../../../lib/device-management/model/device-view";
 import { classify } from "../../../../lib/device-management/model/freshness";
 import { presetOf } from "../../../../lib/device-management/model/permissions";
 import type {
+	AttentionItem,
 	DeviceAuthRejection,
 	DeviceTab,
 	Freshness,
@@ -27,7 +28,12 @@ import type {
 import type { PolicyView } from "../../../../lib/device-management/types";
 import type { ServiceSummary } from "../../../../lib/device-management/workspace/types";
 import { humanFileSize } from "../../../../lib/utils";
+import { attentionCopy } from "../copy/attention-copy";
 import { enumLabel } from "../copy/enum-labels";
+import { bytesParts, bytesText } from "../observe/observe-data";
+import { useRecentTimeline } from "../observe/timeline-block";
+import { useObserveTarget, usePeople } from "../observe/use-observe-target";
+import { diagnoseCommands } from "../overlays/diagnose-sheet";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import { AttentionList } from "../primitives/attention-list";
 import { Block } from "../primitives/block";
@@ -47,7 +53,7 @@ import { PairedPins } from "../primitives/paired-pins";
 import { PersonChip } from "../primitives/person-chip";
 import { RequestedActual } from "../primitives/requested-actual";
 import { LOCKED_DATA_CLASS, StateView } from "../primitives/state-view";
-import { Timeline, type TimelineEntry } from "../primitives/timeline";
+import { Timeline } from "../primitives/timeline";
 import { cx } from "../primitives/tone";
 import { ACCOUNT_SCOPE } from "../routing/devices-route";
 import { useDevicesRoute, useRouteLink } from "../routing/use-devices-route";
@@ -97,11 +103,99 @@ interface BlockProps {
 
 /* 1. On this device. */
 
+type AttentionEntries = ReturnType<typeof useAttentionEntries>;
+
+function accountOf(value: unknown): string | undefined {
+	return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/** The accounts the sentences of these items name: people with access, and owners an access request waits for. */
+function namedAccounts(items: readonly AttentionItem[]) {
+	const all: string[] = [];
+	const owners = new Set<string>();
+	for (const item of items) {
+		const person = accountOf(item.copy.params?.person);
+		const owner = accountOf(item.copy.params?.owner);
+		if (person) all.push(person);
+		if (owner) {
+			all.push(owner);
+			owners.add(owner);
+		}
+	}
+	return { all, owners };
+}
+
+/**
+ * The shared entries name people by account id. Here a sentence carries the
+ * person's display name, and a neutral phrase while that isn't known (R3).
+ */
+function useNamedEntries(
+	items: readonly AttentionItem[],
+	entries: AttentionEntries,
+): AttentionEntries {
+	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	const appName = useAppNames();
+	const accounts = useMemo(() => namedAccounts(items), [items]);
+	const names = usePeople(accounts.all);
+	return useMemo(() => {
+		if (!accounts.all.length) return entries;
+		function personName(id: string): string {
+			const known = names(id);
+			if (known) return known;
+			return accounts.owners.has(id)
+				? t("device.overview.theOwner", "the owner")
+				: t("device.overview.onePerson", "One person");
+		}
+		return entries.map(function named(entry, index) {
+			const item = items[index];
+			if (!item || namedAccounts([item]).all.length === 0) return entry;
+			const copy = attentionCopy(t, item, { time, appName, personName });
+			return { ...entry, sentence: copy.sentence };
+		});
+	}, [entries, items, accounts, names, t, time, appName]);
+}
+
+/** While the device's own status can't be read here, "nothing" only covers what the hub knows (like the verdict). */
+function allClearText(t: DevicesT, page: DevicePage): string {
+	const hubOnly =
+		!page.revoked && !page.consentOnly && !page.services && !page.lockedRows;
+	const device = page.name;
+	if (page.app) {
+		const names = { app: page.app.name, device };
+		return hubOnly
+			? t(
+					"devices:device.overview.attentionEmptyAppHub",
+					"Nothing about {{app}} on {{device}} needs you, as far as the hub knows.",
+					names,
+				)
+			: t(
+					"devices:device.overview.attentionEmptyApp",
+					"Nothing about {{app}} on {{device}} needs you right now.",
+					names,
+				);
+	}
+	return hubOnly
+		? t(
+				"devices:device.overview.attentionEmptyHub",
+				"Nothing on {{device}} needs you, as far as the hub knows.",
+				{ device },
+			)
+		: t(
+				"devices:device.overview.attentionEmpty",
+				"Nothing on {{device}} needs you right now.",
+				{ device },
+			);
+}
+
 function OnThisDevice({ page }: Readonly<{ page: DevicePage }>) {
 	const { t } = useTranslation("devices");
 	const { route, navigate } = useDevicesRoute();
 	const items = page.app ? page.appAttention : page.attention;
-	const entries = useAttentionEntries(items, { onNavigate: navigate });
+	const entries = useNamedEntries(
+		items,
+		useAttentionEntries(items, { onNavigate: navigate }),
+	);
 	const counted = items.filter((item) => item.severity !== "info").length;
 	const hidden = page.app
 		? page.attention.filter((item) => item.severity !== "info").length - counted
@@ -163,19 +257,7 @@ function OnThisDevice({ page }: Readonly<{ page: DevicePage }>) {
 				onShowAll={() => setExpanded(true)}
 				onShowFewer={() => setExpanded(false)}
 				base={base ?? null}
-				emptyText={
-					page.app
-						? t(
-								"device.overview.attentionEmptyApp",
-								"Nothing about {{app}} on {{device}} needs you right now.",
-								{ app: page.app.name, device: page.name },
-							)
-						: t(
-								"device.overview.attentionEmpty",
-								"Nothing on {{device}} needs you right now.",
-								{ device: page.name },
-							)
-				}
+				emptyText={allClearText(t, page)}
 			/>
 		</Block>
 	);
@@ -643,10 +725,12 @@ function ResourceCells({
 			{received === undefined || sent === undefined ? null : (
 				<Metric
 					label={t("device.overview.network", "Network")}
-					value={humanFileSize(received)}
-					unit={t("device.overview.networkUnit", "received · {{sent}} sent", {
-						sent: humanFileSize(sent),
-					})}
+					value={bytesParts(received)[0]}
+					unit={t(
+						"device.overview.networkUnit",
+						"{{unit}} received · {{sent}} sent",
+						{ unit: bytesParts(received)[1], sent: bytesText(sent) },
+					)}
 					note={
 						seconds === undefined
 							? t(
@@ -802,6 +886,7 @@ function RejectionNote({
 			{rejection.code === "revoked_credential"
 				? t("device.diagnose.revokedCredential", {
 						...facts,
+						count: facts.count,
 						defaultValue_one:
 							"The hub refused {{device}}'s last check-in ({{since}}): it used a credential that was revoked. Run the recovery command on the device.",
 						defaultValue_other:
@@ -821,6 +906,7 @@ function clockSkewText(
 	if (skewSeconds === null)
 		return t("devices:device.diagnose.clockSkew", {
 			...facts,
+			count: facts.count,
 			defaultValue_one:
 				"The hub refused {{device}}'s last check-in ({{since}}) because its clock is off. Set the clock on the device.",
 			defaultValue_other:
@@ -830,6 +916,7 @@ function clockSkewText(
 	return skewSeconds > 0
 		? t("devices:device.diagnose.clockAhead", {
 				...facts,
+				count: facts.count,
 				minutes,
 				defaultValue_one:
 					"The hub refused {{device}}'s last check-in ({{since}}) because its clock is about {{minutes, number}} min ahead. Set the clock on the device.",
@@ -838,6 +925,7 @@ function clockSkewText(
 			})
 		: t("devices:device.diagnose.clockBehind", {
 				...facts,
+				count: facts.count,
 				minutes,
 				defaultValue_one:
 					"The hub refused {{device}}'s last check-in ({{since}}) because its clock is about {{minutes, number}} min behind. Set the clock on the device.",
@@ -853,36 +941,6 @@ function DiagnoseOnDevice({ page }: Readonly<{ page: DevicePage }>) {
 	const rejection = row.auth_rejection ?? null;
 	const away = presence.kind === "offline" || presence.kind === "never";
 	if (page.revoked || page.consentOnly || (!away && !rejection)) return null;
-	const commands: [string, string][] = [
-		[
-			"flow-like-standalone status",
-			t(
-				"device.diagnose.status",
-				"Shows the connection state, last contact and each service's last error.",
-			),
-		],
-		[
-			"flow-like-standalone service-status",
-			t(
-				"device.diagnose.serviceStatus",
-				"Shows whether the agent runs as a system service and restarts at boot.",
-			),
-		],
-		[
-			"flow-like-standalone recover-enrollment",
-			t(
-				"device.diagnose.recover",
-				"Use this if status says the hub refused this device.",
-			),
-		],
-		[
-			"./flow-like-standalone install-service",
-			t(
-				"device.diagnose.install",
-				"Installs the agent as a system service so it starts at boot.",
-			),
-		],
-	];
 	return (
 		<Block
 			id="device-diagnose"
@@ -912,7 +970,7 @@ function DiagnoseOnDevice({ page }: Readonly<{ page: DevicePage }>) {
 					"These show what only the device knows: its connection state, last contact and each service's last error.",
 				)}
 			</p>
-			{commands.map(([command, note]) => (
+			{diagnoseCommands(t).map(({ command, note }) => (
 				<CommandBlock key={command} command={command} note={note} />
 			))}
 		</Block>
@@ -1375,157 +1433,19 @@ function AccessSummary({ page, onTab }: Readonly<BlockProps>) {
 	);
 }
 
-/* 8. Recent activity. */
-
-/** A name inside a <Trans> sentence: a component child, never an interpolated value (which <Trans> parses as markup). */
-function ServiceName({ id }: Readonly<{ id: string }>) {
-	return <span className="font-mono">{id}</span>;
-}
-
-interface MessageRecord {
-	sequence: number;
-	timestamp: number;
-	data: Record<string, unknown>;
-}
-
-function messageRecords(data: unknown): MessageRecord[] {
-	const rows = record(data)?.records;
-	if (!Array.isArray(rows)) return [];
-	return rows.flatMap((row) => {
-		const entry = record(row);
-		const body = record(entry?.data);
-		const sequence = amount(entry?.sequence);
-		const timestamp = amount(entry?.timestamp);
-		return body && sequence !== undefined && timestamp !== undefined
-			? [{ sequence, timestamp, data: body }]
-			: [];
-	});
-}
+/* 8. Recent activity: the newest entries of the Activity tab's timeline, whole device. */
 
 function RecentActivity({ page, onTab }: Readonly<BlockProps>) {
 	const { t } = useTranslation("devices");
-	const stream = useLiveStream<unknown>(
-		page.deviceId,
-		page.liveOpen
-			? { kind: "messages", placementId: null, projectId: null, limit: 20 }
-			: null,
-	);
-	const entries = useMemo<TimelineEntry[]>(() => {
-		const commands: Record<string, (service?: string) => ReactNode> = {
-			accepted: (service) =>
-				service ? (
-					<Trans
-						t={t}
-						i18nKey="device.overview.activity.acceptedFor"
-						defaults="A command for <1/> was accepted"
-						components={{ 1: <ServiceName id={service} /> }}
-					/>
-				) : (
-					t("device.overview.activity.accepted", "A command was accepted")
-				),
-			completed: (service) =>
-				service ? (
-					<Trans
-						t={t}
-						i18nKey="device.overview.activity.completedFor"
-						defaults="A command for <1/> finished"
-						components={{ 1: <ServiceName id={service} /> }}
-					/>
-				) : (
-					t("device.overview.activity.completed", "A command finished")
-				),
-			failed: (service) =>
-				service ? (
-					<Trans
-						t={t}
-						i18nKey="device.overview.activity.failedFor"
-						defaults="A command for <1/> failed"
-						components={{ 1: <ServiceName id={service} /> }}
-					/>
-				) : (
-					t("device.overview.activity.failed", "A command failed")
-				),
-			unknown: (service) =>
-				service ? (
-					<Trans
-						t={t}
-						i18nKey="device.overview.activity.unknownFor"
-						defaults="The result of a command for <1/> isn't known"
-						components={{ 1: <ServiceName id={service} /> }}
-					/>
-				) : (
-					t(
-						"device.overview.activity.unknown",
-						"A command's result isn't known",
-					)
-				),
-		};
-		return messageRecords(stream.data)
-			.sort((a, b) => b.sequence - a.sequence)
-			.flatMap((row): TimelineEntry[] => {
-				const { data } = row;
-				const state = typeof data.state === "string" ? data.state : "";
-				const service =
-					typeof data.placement_id === "string" ? data.placement_id : undefined;
-				if (data.kind === "operation") {
-					const text = commands[state];
-					if (!text) return [];
-					return [
-						{
-							id: String(row.sequence),
-							at: row.timestamp,
-							kind: "command",
-							tone:
-								state === "failed"
-									? "critical"
-									: state === "completed"
-										? "good"
-										: "info",
-							text: text(service),
-						},
-					];
-				}
-				if (data.kind !== "replica" || !service) return [];
-				const slot = amount(data.replica_slot) ?? 0;
-				return [
-					{
-						id: String(row.sequence),
-						at: row.timestamp,
-						kind: "instance",
-						tone:
-							state === "failed" || state === "backoff"
-								? "critical"
-								: state === "running"
-									? "good"
-									: "info",
-						text: (
-							<Trans
-								t={t}
-								i18nKey="device.overview.activity.instance"
-								defaults="Instance #{{slot, number}} of <1/>: {{state}}"
-								values={{
-									slot,
-									state: enumLabel(t, "observed", observedRun(state)),
-								}}
-								components={{ 1: <ServiceName id={service} /> }}
-							/>
-						),
-					},
-				];
-			})
-			.slice(0, RECENT_ROWS);
-	}, [stream.data, t]);
-	const locked = keysLocked(page.view.keys);
+	const target = useObserveTarget(page.deviceId, null, page.scope);
+	const recent = useRecentTimeline(target, RECENT_ROWS);
+	const shown = recent.rows.length > 0;
 	return (
 		<Block
 			id="device-recent"
 			icon={History}
 			title={t("device.overview.recent", "Recent activity")}
-			stamp={
-				entries.length ? (
-					<FreshnessStamp {...stampOf(stream.freshness)} />
-				) : null
-			}
+			stamp={shown ? recent.stamp : null}
 			foot={
 				page.tabs.includes("activity") ? (
 					<DvButton variant="link" onClick={() => onTab("activity")}>
@@ -1534,35 +1454,10 @@ function RecentActivity({ page, onTab }: Readonly<BlockProps>) {
 				) : null
 			}
 		>
-			{entries.length ? (
-				<Timeline rows={entries} showFilters={false} />
-			) : locked ? (
-				<StateView
-					kind="locked"
-					title={t("device.overview.recentLocked", "Locked")}
-					text={t(
-						"device.overview.recentLockedText",
-						"Activity is read over the live connection. Unlock to see it.",
-					)}
-				/>
-			) : stream.rejected ? (
-				<StateView
-					kind="noaccess"
-					title={t("device.overview.recentNoAccess", "No access to activity")}
-					text={t(
-						"device.overview.recentNoAccessText",
-						"Activity needs View status on this device.",
-					)}
-				/>
+			{shown ? (
+				<Timeline rows={recent.rows} showFilters={false} />
 			) : (
-				<StateView
-					kind="notloaded"
-					title={t("device.overview.recentNone", "No activity read yet")}
-					text={t(
-						"device.overview.recentNoneText",
-						"Activity comes from the device over a live connection.",
-					)}
-				/>
+				recent.notice
 			)}
 		</Block>
 	);

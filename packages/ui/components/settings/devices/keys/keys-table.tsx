@@ -39,6 +39,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../../../ui/dropdown-menu";
+import { identityName } from "../access/person-name";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import { Block } from "../primitives/block";
 import { DvButton } from "../primitives/dv-button";
@@ -154,11 +155,9 @@ function CloudApprovalSub({ device }: Readonly<{ device: KeyRow["row"] }>) {
 /** Names the owner once the directory knows them. */
 function SharedBy({ ownerId }: Readonly<{ ownerId: string }>) {
 	const { t } = useTranslation("devices");
-	const owner = useUserIdentity(ownerId);
-	return owner.isResolved
-		? t("keys.relationship.sharedBy", "Shared by {{name}}", {
-				name: owner.label,
-			})
+	const name = identityName(useUserIdentity(ownerId), ownerId);
+	return name
+		? t("keys.relationship.sharedBy", "Shared by {{name}}", { name })
 		: t("keys.relationship.shared", "Shared with you");
 }
 
@@ -645,10 +644,12 @@ interface MenuEntry {
 	id: string;
 	label: string;
 	icon: LucideIcon;
-	note?: string;
+	note?: ReactNode;
 	disabled?: boolean;
 	danger?: boolean;
 	separated?: boolean;
+	/** The gate of a key action: while it fails the item is off and says why (R7). */
+	action?: ActionId;
 	run?(): void;
 }
 
@@ -689,12 +690,14 @@ function menuEntries(
 				id: "restore",
 				label: t("keys.menu.restore", "Restore from account backup…"),
 				icon: RotateCcw,
+				action: "account_backup_restore",
 				run: () => flows.open({ kind: "restore", deviceId }),
 			});
 		entries.push({
 			id: "import",
 			label: t("keys.menu.import", "Import backup file…"),
 			icon: FileUp,
+			action: "import_key_file",
 			run: () => flows.open({ kind: "import" }),
 		});
 		if (row.relationship !== "owner")
@@ -727,12 +730,14 @@ function menuEntries(
 			id: "backup",
 			label: t("keys.backup.backUp", "Back up to account"),
 			icon: CloudUpload,
+			action: "account_backup_save",
 			run: () => flows.open({ kind: "backup", deviceId, mode: "save" }),
 		},
 		pending: {
 			id: "backup",
 			label: t("keys.backup.retry", "Retry upload"),
 			icon: RefreshCw,
+			action: "account_backup_save",
 			run: () => flows.retryUpload(row),
 		},
 		synced: {
@@ -752,24 +757,28 @@ function menuEntries(
 			id: "backup",
 			label: t("keys.backup.update", "Update account backup"),
 			icon: CloudUpload,
+			action: "account_backup_save",
 			run: () => flows.open({ kind: "backup", deviceId, mode: "update" }),
 		},
 		{
 			id: "check",
 			label: t("keys.menu.check", "Check account backup…"),
 			icon: ShieldCheck,
+			action: "account_backup_save",
 			run: () => flows.open({ kind: "backup", deviceId, mode: "check" }),
 		},
 		{
 			id: "download",
 			label: t("keys.menu.download", "Download key backup file…"),
 			icon: Download,
+			action: "download_key_file",
 			run: () => flows.open({ kind: "download", deviceId }),
 		},
 		{
 			id: "password",
 			label: t("keys.menu.password", "Change device password…"),
 			icon: KeyRound,
+			action: "change_device_password",
 			run: () => flows.open({ kind: "password", deviceId }),
 		},
 		{
@@ -778,10 +787,49 @@ function menuEntries(
 			icon: Trash2,
 			danger: true,
 			separated: true,
+			action: "delete_local_keys",
 			run: () => flows.deleteKeys(row),
 		},
 	);
 	return entries;
+}
+
+function MenuItem({ entry }: Readonly<{ entry: MenuEntry }>) {
+	const Icon = entry.icon;
+	return (
+		<DropdownMenuItem
+			disabled={entry.disabled}
+			data-menu-item={entry.id}
+			className={cx(
+				MENU_ITEM,
+				entry.danger &&
+					"text-critical focus:text-critical [&_svg]:text-critical!",
+			)}
+			onSelect={() => entry.run?.()}
+		>
+			<Icon aria-hidden className="mt-0.5 size-4 shrink-0" />
+			<span className="min-w-0">
+				{entry.label}
+				{entry.note ? (
+					<span className="block text-xs text-ink-2">{entry.note}</span>
+				) : null}
+			</span>
+		</DropdownMenuItem>
+	);
+}
+
+/** A key action in the menu follows the same gate as its button in the table and on the device's Keys tab. */
+function GatedMenuItem({
+	entry,
+	action,
+	deviceId,
+}: Readonly<{ entry: MenuEntry; action: ActionId; deviceId: string }>) {
+	const gate = useKeyGate(action, deviceId);
+	return (
+		<MenuItem
+			entry={gate ? { ...entry, disabled: true, note: gate.reason } : entry}
+		/>
+	);
 }
 
 function RowMenu({
@@ -814,36 +862,22 @@ function RowMenu({
 				/>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className={MENU_CONTENT}>
-				{entries.map((entry) => {
-					const Icon = entry.icon;
-					return (
-						<div key={entry.id}>
-							{entry.separated ? (
-								<DropdownMenuSeparator className="bg-hairline" />
-							) : null}
-							<DropdownMenuItem
-								disabled={entry.disabled}
-								data-menu-item={entry.id}
-								className={cx(
-									MENU_ITEM,
-									entry.danger &&
-										"text-critical focus:text-critical [&_svg]:text-critical!",
-								)}
-								onSelect={() => entry.run?.()}
-							>
-								<Icon aria-hidden className="mt-0.5 size-4 shrink-0" />
-								<span className="min-w-0">
-									{entry.label}
-									{entry.note ? (
-										<span className="block text-xs text-ink-2">
-											{entry.note}
-										</span>
-									) : null}
-								</span>
-							</DropdownMenuItem>
-						</div>
-					);
-				})}
+				{entries.map((entry) => (
+					<div key={entry.id}>
+						{entry.separated ? (
+							<DropdownMenuSeparator className="bg-hairline" />
+						) : null}
+						{entry.action && !entry.disabled ? (
+							<GatedMenuItem
+								entry={entry}
+								action={entry.action}
+								deviceId={deviceId}
+							/>
+						) : (
+							<MenuItem entry={entry} />
+						)}
+					</div>
+				))}
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);

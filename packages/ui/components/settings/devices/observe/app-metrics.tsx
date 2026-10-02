@@ -45,7 +45,6 @@ import { ConnectButton } from "./live-state";
 import {
 	type Json,
 	PLAIN_PARAGRAPHS,
-	TABLE_RESET,
 	amount,
 	asRecord,
 	bytesParts,
@@ -103,7 +102,8 @@ function useProjectRole(appId: string): ProjectRoleRead {
 				readBoards: permissions.hasPermission(RolePermissions.ReadBoards),
 				admin: permissions.hasPermission(RolePermissions.Admin),
 				executeBoards: permissions.hasPermission(RolePermissions.ExecuteBoards),
-				owner: data.is_owner ?? false,
+				// `is_owner` also holds for an Admin; only the Owner permission names the app's owner.
+				owner: permissions.contains(RolePermissions.Owner),
 			},
 			loading,
 		};
@@ -624,7 +624,6 @@ export function AppMetricsBlock({ appId }: Readonly<{ appId: string }>) {
 		row.sampled === row.running.length && row.sample ? value : dash;
 	const table = rows.length ? (
 		<DvTable
-			className={TABLE_RESET}
 			label={t("devices:observe.app.tableLabel", "App metrics per device")}
 			cols={["20%", "20%", "11%", "12%", "11%", "15%", "11%"]}
 			head={

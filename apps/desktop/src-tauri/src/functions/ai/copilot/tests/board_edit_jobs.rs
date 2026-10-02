@@ -1127,6 +1127,110 @@ fn atomic_graph_fingerprint_survives_storage_order_and_internal_receipts() {
     assert_ne!(persisted_board_graph_fingerprint(&board).unwrap(), expected);
 }
 
+#[test]
+fn atomic_graph_fingerprint_ignores_derived_hashes_in_every_entity_scope() {
+    use super::super::board_commits::{
+        legacy_persisted_board_graph_fingerprint, persisted_board_graph_fingerprint,
+    };
+    use flow_like::flow::{
+        board::{Board, Comment, Layer, LayerType},
+        pin::ValueType,
+        variable::{Variable, VariableType},
+    };
+    use flow_like_types::{FromProto, ToProto};
+
+    let mut board = atomic_readback_test_board();
+    let mut variable = Variable::new("payload", VariableType::Struct, ValueType::Normal);
+    variable.default_value = Some(br#"{"hash":"authored value"}"#.to_vec());
+    board.variables.insert(variable.id.clone(), variable);
+    let comment = Comment::from_proto(flow_like_types::proto::Comment {
+        id: "comment".into(),
+        content: "Keep the completion edge connected.".into(),
+        ..Default::default()
+    });
+    board.comments.insert(comment.id.clone(), comment);
+    let mut layer = Layer::new("layer".into(), "Nested graph".into(), LayerType::Function);
+    layer.nodes = board.nodes.clone();
+    layer.variables = board.variables.clone();
+    layer.comments = board.comments.clone();
+    board.layers.insert(layer.id.clone(), layer);
+
+    let expected = persisted_board_graph_fingerprint(&board).unwrap();
+    let legacy = legacy_persisted_board_graph_fingerprint(&board).unwrap();
+    assert!(expected.starts_with("flowpilot-board-v2:"));
+    assert!(legacy.starts_with("flowpilot-board-v1:"));
+    board.hash();
+    assert_eq!(persisted_board_graph_fingerprint(&board).unwrap(), expected);
+    assert_ne!(
+        legacy_persisted_board_graph_fingerprint(&board).unwrap(),
+        legacy
+    );
+    let loaded = Board::from_proto(board.to_proto());
+    assert_eq!(
+        persisted_board_graph_fingerprint(&loaded).unwrap(),
+        expected
+    );
+
+    board.variables.values_mut().next().unwrap().default_value =
+        Some(br#"{"hash":"changed value"}"#.to_vec());
+    assert_ne!(persisted_board_graph_fingerprint(&board).unwrap(), expected);
+}
+
+#[test]
+fn atomic_graph_fingerprint_detects_connection_changes_even_with_stale_cache_hashes() {
+    use super::super::board_commits::persisted_board_graph_fingerprint;
+    let mut board = atomic_readback_test_board();
+    board.hash();
+    let expected = persisted_board_graph_fingerprint(&board).unwrap();
+    let log = board
+        .nodes
+        .values_mut()
+        .find(|node| node.name == "log_info")
+        .unwrap();
+    log.pins
+        .values_mut()
+        .find(|pin| pin.name == "exec")
+        .unwrap()
+        .depends_on
+        .clear();
+    assert_ne!(persisted_board_graph_fingerprint(&board).unwrap(), expected);
+}
+
+#[test]
+fn atomic_graph_fingerprint_survives_hashes_computed_before_ref_compaction() {
+    use super::super::board_commits::{
+        legacy_persisted_board_graph_fingerprint, persisted_board_graph_fingerprint,
+    };
+    let mut board = atomic_readback_test_board();
+    board.cleanup();
+    board.hash();
+    let expected = persisted_board_graph_fingerprint(&board).unwrap();
+    let legacy = legacy_persisted_board_graph_fingerprint(&board).unwrap();
+
+    // Registry refresh hashes expanded descriptions before cleanup compacts their refs again.
+    for node in board.nodes.values_mut() {
+        if let Some(description) = board.refs.get(&node.description) {
+            node.description = description.clone();
+        }
+        for pin in node.pins.values_mut() {
+            if let Some(description) = board.refs.get(&pin.description) {
+                pin.description = description.clone();
+            }
+            if let Some(schema) = pin.schema.as_ref().and_then(|key| board.refs.get(key)) {
+                pin.schema = Some(schema.clone());
+            }
+        }
+        node.hash();
+    }
+    board.cleanup();
+
+    assert_eq!(persisted_board_graph_fingerprint(&board).unwrap(), expected);
+    assert_ne!(
+        legacy_persisted_board_graph_fingerprint(&board).unwrap(),
+        legacy
+    );
+}
+
 #[tokio::test]
 async fn atomic_graph_readback_reads_saved_object_and_rejects_later_edits() {
     use super::super::board_commits::persisted_board_graph_fingerprint;

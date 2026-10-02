@@ -285,9 +285,10 @@ function capabilityGate({ req, ctx, capsUnknown }: Walk): Failure | null {
 }
 
 function keysGate({ req, ctx }: Walk): Failure | null {
-	if (req.keys !== true) return null;
+	if (req.keys !== true && req.keys !== "stored") return null;
 	const state = ctx.keys?.state ?? "none";
-	if (state !== "none" && state !== "stale") return null;
+	if (state !== "none" && (state !== "stale" || req.keys === "stored"))
+		return null;
 	return fail(
 		"G6",
 		"nokeys",
@@ -875,7 +876,7 @@ export const ACTION_GATES: Readonly<Record<ActionId, ActionGate>> = {
 	discard_staged: live(["deploy"], {
 		checks: [staged(["staged", "validating"])],
 	}),
-	set_secret: live(["deploy"], { checks: [mustBeStopped] }),
+	set_secret: live(["deploy"], { checks: [busyRollout] }),
 	change_tls: certificates(["manage_certificates"], "certificateManagement", {
 		checks: [certificateValid],
 	}),
@@ -892,7 +893,10 @@ export const ACTION_GATES: Readonly<Record<ActionId, ActionGate>> = {
 	}),
 	logs: live(["logs"], { locked: "locked_logs" }),
 	messages: live(["logs"], { locked: "locked_logs" }),
-	check_unconfirmed: live([], { checks: [operationAge] }),
+	check_unconfirmed: live([], {
+		locked: "locked_lookup",
+		checks: [operationAge],
+	}),
 	group_metrics_read: live(["metrics"], {
 		locked: "locked_metrics",
 		checks: [rosterMember],
@@ -1004,13 +1008,9 @@ export const ACTION_GATES: Readonly<Record<ActionId, ActionGate>> = {
 		unlocked: "password",
 	},
 	import_key_file: local({ keys: "creates", unlocked: "password" }),
-	download_key_file: local({
-		keys: true,
-		unlocked: true,
-		locked: "locked_keys",
-	}),
+	download_key_file: local({ keys: true, unlocked: "password" }),
 	change_device_password: local({ keys: true, unlocked: "password" }),
-	delete_local_keys: local({ keys: true }),
+	delete_local_keys: local({ keys: "stored" }),
 	forget_identity: local(),
 };
 

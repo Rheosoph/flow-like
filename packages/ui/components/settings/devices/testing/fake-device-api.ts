@@ -655,6 +655,9 @@ export class FakeAgent {
 	settling = new Set<string>();
 	/** Uploads the device still holds, by transfer id. */
 	transfers = new Map<string, FakeTransfer>();
+	/** Status reads a stopped service still reports `stopping` (a device takes up to 17 s); 0 = stopped at once. */
+	stopReads = 0;
+	private readonly stopping = new Map<string, number>();
 	private readonly handlers = new Map<string, CommandHandler>();
 	private readonly drops: (string | undefined)[] = [];
 	private readonly sockets = new Set<{ remoteClose(): void }>();
@@ -897,9 +900,30 @@ export class FakeAgent {
 
 	/** @internal Inspection rows in the id order agents page them in. */
 	rows(): Record<string, unknown>[] {
-		return [...this.placements]
+		const rows = [...this.placements]
 			.sort((a, b) => (a.id < b.id ? -1 : 1))
 			.map((row) => wirePlacement(row, this.features));
+		this.settleStopping();
+		return rows;
+	}
+
+	/** @internal A stop command: the service reports `stopping` for the next `stopReads` status reads. */
+	beginStopping(row: PlacementStatusPlus): void {
+		if (this.stopReads <= 0) return;
+		row.observed_state = "stopping";
+		this.stopping.set(row.id, this.stopReads);
+	}
+
+	private settleStopping(): void {
+		for (const [id, left] of this.stopping) {
+			const row = this.placement(id);
+			if (!row || row.observed_state !== "stopping") this.stopping.delete(id);
+			else if (left > 1) this.stopping.set(id, left - 1);
+			else {
+				row.observed_state = "stopped";
+				this.stopping.delete(id);
+			}
+		}
 	}
 
 	/** @internal Page-0 facts; an agent without feature flags sends none of the newer ones. */
@@ -1021,6 +1045,7 @@ function lifecycle(running: boolean): CommandHandler {
 		const row = target(agent, command);
 		if (isReply(row)) return row;
 		setRunning(row, running);
+		if (!running) agent.beginStopping(row);
 		return completed({ placement_id: row.id, state: row.observed_state });
 	};
 }
@@ -1038,9 +1063,17 @@ const scale: CommandHandler = (command, { agent }) => {
 	return completed({ placement_id: row.id, replicas });
 };
 
+const REMOVABLE = new Set(["stopped", "failed"]);
+
+/** Like the agent (`state.rs` `remove_placement`): only a service that is asked to stop and has stopped. */
 const remove: CommandHandler = (command, { agent }) => {
 	const row = target(agent, command);
 	if (isReply(row)) return row;
+	if (row.desired_state !== "stopped" || !REMOVABLE.has(row.observed_state))
+		return rejected(
+			"invalid",
+			`placement must be stopped before removal: ${row.id}`,
+		);
 	agent.placements = agent.placements.filter((other) => other !== row);
 	return completed({ placement_id: row.id, removed: true });
 };
@@ -1441,6 +1474,9 @@ const apply: CommandHandler = (command, { agent }) => {
 	if ((existing?.config_revision ?? 0) !== expected)
 		return revisionConflict(id);
 	const revision = expected + 1;
+	// Like the agent: `start` keeps (or sets) the service running, anything else leaves it stopped.
+	const running = command.start === true;
+	const replicas = existing?.desired_replicas ?? 1;
 	const row: PlacementStatusPlus = {
 		...existing,
 		id,
@@ -1449,11 +1485,11 @@ const apply: CommandHandler = (command, { agent }) => {
 		revision: text(config.revision),
 		config_revision: revision,
 		max_replicas: Number(config.max_replicas ?? 1),
-		desired_replicas: existing?.desired_replicas ?? 1,
-		desired_state: "stopped",
-		observed_state: "stopped",
-		running_replicas: 0,
-		ready_replicas: 0,
+		desired_replicas: replicas,
+		desired_state: running ? "running" : "stopped",
+		observed_state: running ? "running" : "stopped",
+		running_replicas: running ? replicas : 0,
+		ready_replicas: running ? replicas : 0,
 		intent_revision: (existing?.intent_revision ?? 0) + 1,
 		applied_revision: existing?.applied_revision ?? null,
 		replicas: undefined,
@@ -2148,6 +2184,23 @@ export class FakeHub {
 		const row = this.rows.get(deviceId);
 		if (!row || row.owner_id !== this.me || (active && row.status !== "active"))
 			throw notFound("Device");
+		return row;
+	}
+
+	/** The owner, or shared access that covers the whole device with View status or Manage certificates. */
+	certificateReader(deviceId: string): DeviceRow {
+		const row = this.visible(deviceId);
+		if (row.owner_id === this.me) return row;
+		const covers = this.myAccess(deviceId).grants.some(
+			(grant) =>
+				grant.scope.kind === "device" &&
+				(grant.capabilities.includes("status") ||
+					grant.capabilities.includes("manage_certificates")),
+		);
+		if (!covers)
+			throw forbidden(
+				"Certificates require device-wide Status or ManageCertificates access",
+			);
 		return row;
 	}
 
@@ -3351,7 +3404,7 @@ function certificateRoutes(hub: FakeHub): Route[] {
 			method: "GET",
 			template: "devices/:id/certificate-inventory",
 			handle: ({ params }) => {
-				hub.visible(params.id);
+				hub.certificateReader(params.id);
 				return (
 					hub.certificates.get(params.id) ?? {
 						revision: 0,
@@ -3424,6 +3477,16 @@ function newGrant(
 	const { placement_id, deployment_id, project_id } = request;
 	if (!placement_id || !deployment_id || !project_id)
 		throw badRequest("Invalid cloud approval request");
+	const now = hub.now();
+	const taken = hub
+		.resourcesOf(deviceId)
+		.grants.some(
+			(row) =>
+				row.placement_id === placement_id &&
+				row.status === "active" &&
+				row.expires_at > now,
+		);
+	if (taken) throw conflict("Placement already has an active resource grant");
 	const grant = {
 		grant_id: crypto.randomUUID(),
 		device_id: deviceId,

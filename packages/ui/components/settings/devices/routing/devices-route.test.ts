@@ -59,6 +59,23 @@ const ROWS: Row[] = [
 		route: { screen: "fleet", view: "services", filter: "locked" },
 	},
 	{
+		name: "N1 services view of one app",
+		href: "/settings/devices?view=services&app=app_invoice_ai&q=gpu",
+		scope: ACCOUNT,
+		route: {
+			screen: "fleet",
+			view: "services",
+			app: "app_invoice_ai",
+			q: "gpu",
+		},
+	},
+	{
+		name: "N1 shared with me",
+		href: "/settings/devices?filter=shared",
+		scope: ACCOUNT,
+		route: { screen: "fleet", view: "devices", filter: "shared" },
+	},
+	{
 		name: "N2 device tab",
 		href: `/settings/devices?device=${DEVICE}&tab=metrics`,
 		scope: ACCOUNT,
@@ -300,6 +317,34 @@ describe("parsing rules", () => {
 		expect(devicesHref(route, ACCOUNT)).toBe(
 			`/settings/devices?flow=deploy&device=${DEVICE}&app=app_crm`,
 		);
+	});
+
+	test("the Services view's app filter: project= is an alias, and the Devices view has none", () => {
+		const { route } = parseDevicesRoute(
+			"view=services&project=app_crm",
+			"account",
+		);
+		expect(route).toStrictEqual({
+			screen: "fleet",
+			view: "services",
+			app: "app_crm",
+		});
+		expect(devicesHref(route, ACCOUNT)).toBe(
+			"/settings/devices?view=services&app=app_crm",
+		);
+		expect(parseDevicesRoute("app=app_crm", "account").route).toStrictEqual({
+			screen: "fleet",
+			view: "devices",
+		});
+		expect(
+			devicesHref(
+				{ screen: "fleet", view: "devices", app: "app_crm" },
+				ACCOUNT,
+			),
+		).toBe("/settings/devices");
+		expect(
+			parseDevicesRoute("view=services&app=not%20an%20id", "account").route,
+		).toStrictEqual({ screen: "fleet", view: "services" });
 	});
 
 	test("app= wins over project=", () => {

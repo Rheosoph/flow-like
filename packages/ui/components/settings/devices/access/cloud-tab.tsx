@@ -9,7 +9,7 @@ import {
 	ApprovalRow,
 } from "../cloud/approval-row";
 import { spendTotals } from "../cloud/cloud-model";
-import { TABLE_RESET, useMoney } from "../cloud/cloud-parts";
+import { useMoney } from "../cloud/cloud-parts";
 import { leaseNote } from "../cloud/leases-table";
 import {
 	type FleetApprovals,
@@ -292,7 +292,6 @@ export function AccessCloudTab({ scope }: Readonly<ScreenProps>) {
 				label={title}
 				cols={APPROVAL_COLUMNS}
 				stackAt={900}
-				className={TABLE_RESET}
 				head={
 					<tr>
 						<Th>{labels.service}</Th>

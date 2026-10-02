@@ -53,14 +53,7 @@ import {
 } from "../workspace/use-device-action";
 import { useCertificateNotices, useDeviceRow } from "../workspace/use-hub";
 import { LIST_CAP } from "./certificates-model";
-import {
-	LINK_BUTTON,
-	OBJECT_LINK,
-	PROSE,
-	TABLE_RESET,
-	dayText,
-	shortId,
-} from "./parts";
+import { LINK_BUTTON, OBJECT_LINK, PROSE, dayText, shortId } from "./parts";
 import { useStillHere } from "./use-certificates";
 
 const COMPACT_CAP = 5;
@@ -562,7 +555,6 @@ function HistoryTable({
 					? ["24%", "18%", "14%", "16%", "28%"]
 					: ["26%", "20%", "22%", "32%"]
 			}
-			className={TABLE_RESET}
 			label={t(
 				"certificates.history.caption",
 				"Reminders the hub sent for {{device}}",

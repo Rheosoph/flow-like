@@ -1,7 +1,6 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useQueries } from "@tanstack/react-query";
 import {
 	type MouseEvent,
 	type ReactNode,
@@ -19,7 +18,6 @@ import {
 	type EventEligibility,
 	eventEligibility,
 } from "../../../../lib/device-management/deployment";
-import { queries } from "../../../../lib/device-management/hub/queries";
 import type { AppView } from "../../../../lib/device-management/model/app-plan";
 import { evaluateGate } from "../../../../lib/device-management/model/gates";
 import type {
@@ -33,7 +31,6 @@ import type {
 import type { IEvent } from "../../../../lib/schema/flow/event";
 import type { IHub } from "../../../../lib/schema/hub/hub";
 import { useBackend, useBackendReady } from "../../../../state/backend-state";
-import { withoutAccess } from "../app/app-view-local";
 import { appCopy } from "../copy/app-copy";
 import { AreaOverlays } from "../overlays/area-overlays";
 import { DvSheet } from "../primitives/dv-sheet";
@@ -52,7 +49,6 @@ import {
 	useCoverage,
 	useDeviceRows,
 	useDeviceViews,
-	useDeviceWorkspace,
 	useFixAction,
 } from "../workspace";
 import { type RunsOnRow, runsOnDeviceNames, runsOnRows } from "./runs-on-model";
@@ -224,24 +220,14 @@ function useLiveReport(appId: string): LiveReport {
 	const gate = useAreaGate();
 	const list = useDeviceRows();
 	const state = useAttentionState();
-	const { hub } = useDeviceWorkspace();
 	const { devices } = state.input;
 	const extras = useMemo(
 		() => ({ focusDeviceIds: devices.map((row) => row.device_id) }),
 		[devices],
 	);
 	const app = useAppView(appId, extras);
-	// What a shared device's access covers tells "no access" from "unknown until unlocked": the hub says it per device.
-	useQueries({
-		queries: devices
-			.filter((row) => row.status === "active" && row.relationship === "shared")
-			.map((row) => queries.myAccess(hub, row.device_id)),
-	});
 	const coverage = useCoverage(appId);
-	const view = useMemo(
-		() => (app.view ? withoutAccess(app.view, coverage.noAccess) : undefined),
-		[app.view, coverage.noAccess],
-	);
+	const { view } = app;
 	const runFix = useFixAction();
 	const canDeploy = useMemo(
 		() =>

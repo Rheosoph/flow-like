@@ -1,12 +1,28 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import type { Freshness } from "../../../../lib/device-management/model/types";
 import type { AttentionEntry } from "../primitives/attention-list";
-import { byRole, click, installDom, queryByRole } from "../testing/dom-harness";
+import {
+	advance,
+	byRole,
+	click,
+	installDom,
+	queryByRole,
+} from "../testing/dom-harness";
+import type { MountDevicesOptions } from "../testing/mount-devices";
 
 const dom = installDom();
-const { ATTENTION_POPOVER_CAP, AttentionPopoverView, stampOf } = await import(
-	"./attention-popover"
+const { cleanupDevices, mountDevices, preloadDevices } = await import(
+	"../testing/mount-devices"
 );
+await preloadDevices();
+const { createFakeWorkspace } = await import("../testing/fake-workspace");
+const {
+	ATTENTION_POPOVER_CAP,
+	AttentionPopoverView,
+	stampOf,
+	useAttentionEntries,
+} = await import("./attention-popover");
+const { useAttention } = await import("../workspace");
 
 function entry(
 	index: number,
@@ -33,7 +49,10 @@ const shownIds = (root: ParentNode) =>
 		return el.getAttribute("data-attention");
 	});
 
-afterEach(dom.cleanup);
+afterEach(async () => {
+	await cleanupDevices();
+	await dom.cleanup();
+});
 afterAll(dom.restore);
 
 describe("attention popover", () => {
@@ -118,6 +137,64 @@ describe("attention popover", () => {
 			"Nothing in Invoice AI needs you right now.",
 		);
 		expect(byRole("button", "All devices' attention")).toBeTruthy();
+	});
+});
+
+describe("attention entries over the workspace", () => {
+	let seenNames: (readonly string[])[] = [];
+
+	function Sentences() {
+		const entries = useAttentionEntries(useAttention(), {
+			onNavigate: () => {},
+		});
+		seenNames = entries.map((item) => item.names ?? []);
+		return (
+			<ul>
+				{entries.map((item) => (
+					<li key={item.id}>{item.sentence}</li>
+				))}
+			</ul>
+		);
+	}
+
+	const expiring = (root: HTMLElement) =>
+		Array.from(root.querySelectorAll("li"), (li) => li.textContent ?? "").find(
+			(sentence) => sentence.includes("access to edge-berlin-01 ends"),
+		);
+
+	test("a person is named from the directory, and neutrally without a name: never by account id", async () => {
+		const unnamed = await mountDevices(<Sentences />);
+		expect(expiring(unnamed.container)).toStartWith("One person's access");
+		expect(seenNames.some((names) => names.includes("edge-berlin-01"))).toBe(
+			true,
+		);
+		expect(seenNames.flat().some((name) => name.startsWith("usr_"))).toBe(
+			false,
+		);
+		expect(unnamed.container.textContent).not.toMatch(/\busr_\w+/);
+		await cleanupDevices();
+
+		const fake = await createFakeWorkspace();
+		const person = async (id: string) => ({ id, name: "Mira Novak" });
+		const named = await mountDevices(<Sentences />, {
+			fake,
+			backend: {
+				userState: {
+					getProfile: async () => fake.profile,
+					getInfo: async () => ({ id: fake.hub.me, dev_mode: false }),
+					updateUser: async () => undefined,
+					lookupUser: person,
+					lookupUsers: async (ids: string[]) => Promise.all(ids.map(person)),
+				},
+			} as unknown as MountDevicesOptions["backend"],
+		});
+		for (
+			let round = 0;
+			round < 40 && !expiring(named.container)?.startsWith("Mira");
+			round++
+		)
+			await advance(25);
+		expect(expiring(named.container)).toStartWith("Mira Novak's access");
 	});
 });
 

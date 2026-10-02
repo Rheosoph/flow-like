@@ -24,6 +24,7 @@ import type {
 	PolicyView,
 } from "../../../../lib/device-management/types";
 import { GrantRowActions } from "../access/change-permissions-sheet";
+import { identityName } from "../access/person-name";
 import { useDeviceAccess } from "../access/use-access";
 import { enumLabel } from "../copy/enum-labels";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
@@ -51,7 +52,6 @@ import {
 	LinkButton,
 	Person,
 	ShowMore,
-	TABLE_RESET,
 	UnknownAction,
 	useAppPage,
 	useCapped,
@@ -224,11 +224,12 @@ const accessLabels = (t: DevicesT) => ({
 function SharedBy({ group }: Readonly<{ group: AppDeviceGroup }>) {
 	const { t } = useTranslation("devices");
 	const { data } = useAppPage();
-	const owner = useUserIdentity(data.devices.get(group.deviceId)?.row.owner_id);
-	if (!owner.isResolved) return null;
+	const ownerId = data.devices.get(group.deviceId)?.row.owner_id;
+	const owner = identityName(useUserIdentity(ownerId), ownerId);
+	if (!owner) return null;
 	return (
 		<CellSub>
-			{t("app.access.sharedBy", "shared by {{owner}}", { owner: owner.label })}
+			{t("app.access.sharedBy", "shared by {{owner}}", { owner })}
 		</CellSub>
 	);
 }
@@ -323,7 +324,7 @@ function AccessRow({ row }: Readonly<{ row: Row }>) {
 	return (
 		<Tr data-grant={row.id}>
 			<Td label={labels.person} kind="name">
-				<Person userId={row.userId} />
+				<Person userId={row.userId} showId />
 				{row.mine ? (
 					<SharedBy group={group} />
 				) : (
@@ -532,7 +533,6 @@ export function AppAccess() {
 						app: view.app.name,
 					})}
 					cols={["19%", "16%", "13%", "20%", "12%", "20%"]}
-					className={TABLE_RESET}
 					head={
 						<tr>
 							<Th>{labels.person}</Th>

@@ -5,7 +5,6 @@ import {
 	type DeviceRow,
 	type DeviceStatus,
 	getDevice,
-	hasRecentDeviceContact,
 	listDevices,
 	normalizeDisplayName,
 	parseDeviceRow,
@@ -68,24 +67,12 @@ function recordingApi(response: (method: string, path: string) => unknown) {
 }
 
 describe("device inventory", () => {
-	test("recent contact expires and revoked or unseen devices are never shown as recent", () => {
-		expect(hasRecentDeviceContact(device, 200_000)).toBe(true);
-		expect(hasRecentDeviceContact(device, 320_000)).toBe(true);
-		expect(hasRecentDeviceContact(device, 320_001)).toBe(false);
-		expect(hasRecentDeviceContact(device, 199_999)).toBe(false);
-		expect(
-			hasRecentDeviceContact({ ...device, status: "revoked" }, 200_000),
-		).toBe(false);
-		expect(
-			hasRecentDeviceContact({ ...device, last_seen_at: null }, 200_000),
-		).toBe(false);
-	});
-
 	test("uses the host authenticated API and encodes revocation IDs as one path segment", async () => {
+		const row: DeviceRow = { ...device, identity };
 		const { api, calls } = recordingApi((method) =>
-			method === "GET" ? [device] : undefined,
+			method === "GET" ? [row] : undefined,
 		);
-		expect(await listDevices(api, profile)).toEqual([device] as DeviceRow[]);
+		expect(await listDevices(api, profile)).toEqual([row]);
 		expect(await revokeDevice(api, profile, "a/b?c#d")).toBeUndefined();
 		expect(calls).toEqual([
 			["GET", "devices"],
@@ -134,6 +121,7 @@ describe("device rows", () => {
 	test("rejects rows whose registry facts or identity are malformed", () => {
 		expect(() => parseDeviceRow({ ...hubRow, status: "paused" })).toThrow();
 		expect(() => parseDeviceRow({ ...hubRow, device_id: "" })).toThrow();
+		expect(() => parseDeviceRow(device)).toThrow();
 		expect(() =>
 			parseDeviceRow({
 				...hubRow,

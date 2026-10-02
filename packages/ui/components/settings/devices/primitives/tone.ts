@@ -73,7 +73,7 @@ export const TONE_SOLID_TEXT: Record<Tone, string> = {
 export const TONE_CHIP: Record<ChipTone, string> = {
 	good: "bg-good-bg text-good border-good-line rounded-full",
 	warning: "bg-warning-bg text-warning border-warning-line rounded-full",
-	critical: "bg-critical-bg text-critical border-critical-line rounded-sm",
+	critical: "bg-critical-bg text-critical border-critical-line rounded-md",
 	info: "bg-info-bg text-info border-info-line rounded-full",
 	unknown:
 		"bg-unknown-bg text-unknown border-unknown-line border-dashed rounded-full",

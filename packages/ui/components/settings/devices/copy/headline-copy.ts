@@ -364,6 +364,23 @@ export function headlinePartCopy(
 	return PARTS[part.code](partContext(t, part, time));
 }
 
+const NAME_PARAMS = ["device", "service"] as const;
+const NAME_LISTS = ["names", "locked"] as const;
+
+const isName = (value: unknown): value is string =>
+	typeof value === "string" && value !== "";
+
+function partNames(part: HeadlineRef): string[] {
+	const params = NAME_PARAMS.map((key) => part.params?.[key]);
+	const lists = NAME_LISTS.flatMap((key) => part.lists?.[key] ?? []);
+	return [...params, ...lists].filter(isName);
+}
+
+/** The device and service names a headline's sentences contain, for `Headline`'s `names` (set in mono, R15). */
+export function headlineNames(headline: Headline): string[] {
+	return [...new Set([headline, ...headline.rest].flatMap(partNames))];
+}
+
 /** `{ lead, rest }` for the `Headline` primitive. */
 export function headlineCopy(
 	t: DevicesT,

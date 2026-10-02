@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	ApiResponseError,
 	UPSTREAM_UNAVAILABLE_CODE,
+	apiResponseError,
 	isMissingResourceError,
 	isTransportFailure,
 	upstreamFailureInSuccess,
@@ -64,6 +65,62 @@ describe("isMissingResourceError", () => {
 			),
 		).toBe(false);
 		expect(isMissingResourceError({ status: 404 })).toBe(false);
+	});
+});
+
+describe("apiResponseError retryAfter", () => {
+	const tooMany = (headers: Record<string, string>, body: unknown) =>
+		apiResponseError(
+			{
+				status: 429,
+				statusText: "Too Many Requests",
+				headers: new Headers(headers),
+			},
+			JSON.stringify(body),
+			"devices/d/certificate-notices/test",
+		);
+	const refusal = {
+		error: { code: "TOO_MANY_REQUESTS", message: "Try again in 540 seconds." },
+	};
+
+	test("the Retry-After header wins over the body", () => {
+		const error = tooMany(
+			{ "Retry-After": "540" },
+			{ ...refusal, retry_after: 600 },
+		);
+		expect(error.retryAfter).toBe(540);
+		expect(error.code).toBe("TOO_MANY_REQUESTS");
+		expect(error.toJSON().retryAfter).toBe(540);
+	});
+
+	test("the body's top-level retry_after is used when the header is hidden", () => {
+		expect(tooMany({}, { ...refusal, retry_after: 540 }).retryAfter).toBe(540);
+	});
+
+	test.each([
+		["no wait at all", {}, refusal],
+		[
+			"an HTTP date",
+			{ "Retry-After": "Fri, 02 Oct 2026 15:00:00 GMT" },
+			refusal,
+		],
+		["a negative body value", {}, { ...refusal, retry_after: -1 }],
+		["a non-numeric body value", {}, { ...refusal, retry_after: "soon" }],
+	])("%s leaves it undefined", (_label, headers, body) => {
+		expect(tooMany(headers, body).retryAfter).toBeUndefined();
+	});
+
+	test("a non-JSON body keeps the header", () => {
+		const error = apiResponseError(
+			{
+				status: 429,
+				statusText: "",
+				headers: new Headers({ "retry-after": "7" }),
+			},
+			"slow down",
+		);
+		expect(error.retryAfter).toBe(7);
+		expect(error.serverMessage).toBe("slow down");
 	});
 });
 

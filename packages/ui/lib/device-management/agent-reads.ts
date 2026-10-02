@@ -465,20 +465,26 @@ export interface ArtifactPruneResult {
 	freed_bytes: number;
 }
 
-const artifactUsageSchema: z.ZodType<ArtifactUsage> = z.object({
-	device: budget.nullable(),
-	project: budget.nullable(),
-	revisions: z
-		.array(
-			z.object({
-				revision: sha256Hex,
-				bytes: count,
-				referenced_by: z.array(managementId).max(256),
-				rollout: z.boolean(),
-			}),
-		)
-		.max(1024),
-});
+/** One reply; `next` is the last revision when more follow (absent on agents that answer in one reply). */
+const artifactUsageSchema: z.ZodType<ArtifactUsage & { next?: string | null }> =
+	z.object({
+		device: budget.nullable(),
+		project: budget.nullable(),
+		revisions: z
+			.array(
+				z.object({
+					revision: sha256Hex,
+					bytes: count,
+					referenced_by: z.array(managementId).max(256),
+					rollout: z.boolean(),
+				}),
+			)
+			.max(1024),
+		next: sha256Hex.nullable().optional(),
+	});
+
+/** A project budget allows at most 16 384 revisions, 171 replies of 96. */
+const ARTIFACT_USAGE_MAX_PAGES = 180;
 
 function projectId(value: string): string {
 	if (
@@ -490,19 +496,45 @@ function projectId(value: string): string {
 	return value;
 }
 
-export function readArtifactUsage(
+/** Follows the device's cursor, so every revision is listed; the budgets are those of the first reply. */
+export async function readArtifactUsage(
 	call: ManagementCall,
 	features: AgentFeatures | undefined,
 	input: { projectId?: string | null } = {},
 ): Promise<AgentRead<ArtifactUsage>> {
 	const project = input.projectId ? projectId(input.projectId) : null;
-	return agentRead(
-		call,
-		features,
-		"artifact_capacity",
-		"app storage usage",
-		{ type: "artifact", request: { kind: "usage", project_id: project } },
-		(result) => artifactUsageSchema.parse(result),
+	let usage: ArtifactUsage | undefined;
+	let after: string | undefined;
+	for (let page = 0; page < ARTIFACT_USAGE_MAX_PAGES; page++) {
+		const read = await agentRead(
+			call,
+			features,
+			"artifact_capacity",
+			"app storage usage",
+			{
+				type: "artifact",
+				request: {
+					kind: "usage",
+					project_id: project,
+					...(after ? { after } : {}),
+				},
+			},
+			(result) => artifactUsageSchema.parse(result),
+		);
+		if (read.kind !== "ok") return read;
+		const { next, ...reply } = read.data;
+		usage = usage
+			? { ...usage, revisions: [...usage.revisions, ...reply.revisions] }
+			: reply;
+		if (!next) return { kind: "ok", data: usage };
+		if (after !== undefined && next <= after)
+			throw new Error(
+				`The device repeated a page of app storage usage (cursor ${next.slice(0, 12)}…). Reconnect and retry.`,
+			);
+		after = next;
+	}
+	throw new Error(
+		`The device listed more than ${ARTIFACT_USAGE_MAX_PAGES} pages of app storage usage. Reconnect and retry.`,
 	);
 }
 

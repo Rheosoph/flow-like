@@ -60,7 +60,10 @@ const PREFLIGHT_COPY = {
 	keys_owner_here: ({ t }) =>
 		t("devices:preflight.keysOwnerHere", "Owner keys on this computer"),
 	keys_shared_here: ({ t }) =>
-		t("devices:preflight.keysSharedHere", "Your access keys on this computer"),
+		t(
+			"devices:preflight.keysSharedHere",
+			"Shared-access keys on this computer",
+		),
 	keys_missing: ({ t }) =>
 		t(
 			"devices:preflight.keysMissing",
@@ -149,7 +152,8 @@ const PREFLIGHT_COPY = {
 			"devices:preflight.checkinNever",
 			"Never checked in. A live connection will likely fail.",
 		),
-	clock_ok: ({ t }) => t("devices:preflight.clockOk", "Clocks agree"),
+	clock_ok: ({ t }) =>
+		t("devices:preflight.clockOk", "This computer and the hub agree"),
 	clock_computer_off: ({ t, p }) =>
 		t(
 			"devices:preflight.clockComputerOff",

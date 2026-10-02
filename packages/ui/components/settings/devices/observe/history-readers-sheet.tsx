@@ -42,6 +42,7 @@ import {
 	MAX_READERS,
 	MAX_RECORDING_S,
 	type SaveFailure,
+	type SaveReadersOutcome,
 	historyResultKey,
 	readerGrantExpiry,
 	useSaveReaders,
@@ -136,6 +137,11 @@ function failureText(
 						device,
 					},
 				),
+		unconfirmed: t(
+			"devices:observe.history.sheet.failUnconfirmed",
+			"{{device}} didn't confirm the new readers list, so it may or may not be in place. Close this and check the row once it has been read again.",
+			{ device },
+		),
 		other: t(
 			"devices:observe.history.sheet.failOther",
 			"The readers list wasn't saved. Nothing changed on {{device}}.",
@@ -143,6 +149,20 @@ function failureText(
 		),
 	};
 	return texts[reason];
+}
+
+/** A run stopped before anything was sent (the action can't run right now) still gets an answer, never silence. */
+function unsavedText(
+	t: DevicesT,
+	outcome: Exclude<
+		SaveReadersOutcome,
+		{ status: "done" | "password_required" }
+	>,
+	device: string,
+): string {
+	if (outcome.status === "failed")
+		return failureText(t, outcome.reason, device, outcome.detail);
+	return failureText(t, "other", device, undefined);
 }
 
 export function HistoryReadersSheet({
@@ -279,6 +299,9 @@ export function HistoryReadersSheet({
 
 	const submit = async () => {
 		if (!picked || busy) return;
+		// The typed password leaves the field with the click, whatever comes of the signature.
+		const secret = needsPassword ? password : undefined;
+		setPassword("");
 		setBusy(true);
 		setFailure(null);
 		try {
@@ -296,7 +319,7 @@ export function HistoryReadersSheet({
 							scope: scope === DEVICE_SCOPE ? target.name : scope,
 						},
 					),
-					...(needsPassword ? { password } : {}),
+					...(secret === undefined ? {} : { password: secret }),
 				});
 				if (outcome.status === "done") continue;
 				if (outcome.status === "password_required") {
@@ -304,13 +327,9 @@ export function HistoryReadersSheet({
 					setAskPassword(true);
 					return;
 				}
-				if (outcome.status === "failed")
-					setFailure(
-						failureText(t, outcome.reason, target.name, outcome.detail),
-					);
+				setFailure(unsavedText(t, outcome, target.name));
 				return;
 			}
-			setPassword("");
 			onClose();
 		} finally {
 			setBusy(false);
@@ -327,7 +346,7 @@ export function HistoryReadersSheet({
 			icon={mode === "change" ? Users : History}
 			title={titles[mode]}
 			sub={t(
-				"devices:observe.history.sheet.sub",
+				"devices:observe.history.sheet.subtitle",
 				"Retained {{kind}} · {{scope}} · {{device}}",
 				{ kind: kindText, scope: scopeText, device: target.name },
 			)}

@@ -4,6 +4,7 @@ import type { AuthContextProps } from "react-oidc-context";
 import type { AppInput } from "../../../../lib/device-management/model/app-plan";
 import {
 	type IBackendState,
+	type IOwnRole,
 	useBackendStore,
 } from "../../../../state/backend-state";
 import type { DevicesHost, NavigationMode } from "../routing/devices-route";
@@ -124,7 +125,35 @@ function appOf(apps: Readonly<Record<string, AppInput>>, appId: string) {
 	return app;
 }
 
-/** The host backend: the fake hub as `apiState`, the profile, and the hub's apps with their events. */
+/** The app record with its own version text and last change, as the real one carries them: the sample's newest version. */
+function appRecord({ id, visibility, versions }: AppInput) {
+	const newest = versions?.[0];
+	const version = newest?.label?.replace(/^v(?=\d)/, "");
+	const changed = newest?.builtAt;
+	return {
+		id,
+		visibility,
+		...(version ? { version } : {}),
+		...(changed
+			? { updated_at: { secs_since_epoch: changed, nanos_since_epoch: 0 } }
+			: {}),
+	};
+}
+
+/** The sample viewer owns the sample apps, as the prototype shows them. */
+const OWNER_ROLE: IOwnRole = {
+	role_id: "role_owner",
+	role_name: "Owner",
+	permissions: 1,
+	is_owner: true,
+	can_leave: false,
+};
+
+/**
+ * The host backend: the fake hub as `apiState`, the profile, the hub's apps
+ * with their events, and the Owner role on every app. Another role, or none
+ * (`roleState: undefined`), goes in through `extra`.
+ */
 export function fakeBackend(
 	fake: FakeWorkspace,
 	apps: Readonly<Record<string, AppInput>> = fake.hub.apps,
@@ -144,10 +173,7 @@ export function fakeBackend(
 					{ id: app.id, visibility: app.visibility },
 					{ name: app.name, description: "" },
 				]),
-			getApp: async (appId: string) => {
-				const { id, visibility } = appOf(apps, appId);
-				return { id, visibility };
-			},
+			getApp: async (appId: string) => appRecord(appOf(apps, appId)),
 			getAppMeta: async (appId: string) => ({
 				name: appOf(apps, appId).name,
 				description: "",
@@ -155,6 +181,9 @@ export function fakeBackend(
 		}),
 		eventState: strict("eventState", {
 			getEvents: async (appId: string) => [...appOf(apps, appId).events],
+		}),
+		roleState: strict("roleState", {
+			getOwnRole: async (_appId: string) => OWNER_ROLE,
 		}),
 		capabilities: () => ({
 			needsSignIn: false,

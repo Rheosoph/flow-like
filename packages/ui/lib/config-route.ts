@@ -21,3 +21,14 @@ export function configRouteFillsHeight(route?: string | null): boolean {
 	if (!route) return false;
 	return route.split("/").some((segment) => FULL_HEIGHT_SEGMENTS.has(segment));
 }
+
+/**
+ * The deploy wizard shows its step next to the "This deploy" summary, which
+ * needs the whole card: the Devices section opens maximized while it runs.
+ */
+export function configRouteOpensMaximized(
+	route?: string | null,
+	flow?: string | null,
+): boolean {
+	return flow === "deploy" && !!route?.split("/").includes("devices");
+}

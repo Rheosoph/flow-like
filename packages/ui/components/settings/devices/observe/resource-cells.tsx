@@ -21,6 +21,9 @@ import {
 } from "./observe-data";
 
 const DASH = "–";
+/** A service has six values: three wide columns with room for the trends, two and one as the area narrows. */
+const SERVICE_GRID =
+	"grid-cols-1 @min-[560px]/devices:grid-cols-2 @min-[1100px]/devices:grid-cols-3";
 
 /** The device's own history when it reaches further back than the samples at hand. */
 const longer = (
@@ -427,7 +430,7 @@ export function ServiceResourceCells({
 		quotaUsed === undefined ? ["", ""] : bytesParts(quotaUsed);
 
 	return (
-		<MetricGrid>
+		<MetricGrid className={SERVICE_GRID}>
 			{cpu === undefined ? (
 				<Unavailable label={labels.cpu} />
 			) : (

@@ -14,6 +14,9 @@ const kit = await import("./device-test-kit");
 const { act } = await import("react");
 const { createFakeWorkspace } = await import("../testing/fake-workspace");
 const { fakeKeys } = await import("../testing/fake-device-api");
+const { groupFingerprint, identityFingerprint } = await import(
+	"../../../../lib/device-management/fingerprint"
+);
 const { sampleFleet } = await import(
 	"../../../../lib/device-management/model/__fixtures__/sample-fleet"
 );
@@ -305,13 +308,28 @@ describe("states", () => {
 		const fake = await createFakeWorkspace(undefined, { unlock: "none" });
 		const row = fake.hub.rows.get(IDS.edge);
 		if (!row) throw new Error("the sample has no edge device");
+		const trusted = groupFingerprint(identityFingerprint(row.identity));
 		row.identity = fakeKeys.identity("someone-else");
+		const reported = groupFingerprint(identityFingerprint(row.identity));
 		const view = await openDevice(IDS.edge, { fake, tab: "settings" });
 		await view.settle();
 		const banner = byRole("alert", undefined, view.container);
 		expect(text(banner)).toContain(
 			"The hub reports different keys for edge-berlin-01 than the ones you trusted on",
 		);
+		// The pin is stored in milliseconds: read as seconds it lands tens of thousands of years ahead.
+		expect(text(banner)).toContain("than the ones you trusted on Mar 14");
+		// Both fingerprints exactly as the device prints them: 16 case-sensitive characters in four groups.
+		expect(trusted).not.toBe(reported);
+		expect(
+			Array.from(banner.querySelectorAll("[data-fingerprint]"), (node) =>
+				node.textContent?.trim(),
+			),
+		).toEqual([trusted, reported]);
+		expect(
+			view.container.querySelector("[data-key-state=blocked]")?.textContent,
+		).toBe("Identity changed");
+		expect(text(view.container)).not.toContain("Browser can't protect keys");
 		expect(text(banner)).toContain(
 			"Management is blocked: no commands, deploys or access changes until you confirm the identity. Revoking still works, because it happens at the hub.",
 		);
@@ -411,6 +429,10 @@ describe("in an app's settings", () => {
 		expect(deploy[0].getAttribute("href")).toContain("mode=new");
 		expect(primaries()).toBe(1);
 		expect(page).toContain("Invoice AI is updating here.");
+		// An older version has no name (no hub history): the sentence says so without a hash.
+		expect(page).toContain(
+			"invoice-extractor runs an older version, 1 behind v1.5.0.",
+		);
 		expect(page).toContain("Elsewhere on edge-berlin-01, 3 items need you.");
 		expect(page).toContain(
 			"Services, and the items and services on Overview, show only this app. The rest, including tabs marked with the device glyph, covers the whole device.",

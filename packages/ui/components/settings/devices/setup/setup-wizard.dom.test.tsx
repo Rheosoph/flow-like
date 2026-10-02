@@ -158,12 +158,20 @@ const storedDrafts = (fake: FakeWorkspace) =>
 		`flow-like.devices.setup.${accountStorageKey(fake.scope)}`,
 	) ?? "";
 
+/** Fingerprints, ids and addresses are data: random base64url can look like a machine word. */
+function copyText(): string {
+	const copy = document.body.cloneNode(true) as HTMLElement;
+	for (const node of copy.querySelectorAll("[data-fingerprint], [data-idref]"))
+		node.remove();
+	return copy.textContent ?? "";
+}
+
 /** Every screen state: one coral at most (R2) and no machine vocabulary (R3). */
 function expectClean() {
 	expect(
 		document.querySelectorAll("[data-dv-primary]").length,
 	).toBeLessThanOrEqual(1);
-	expect(text()).not.toMatch(MACHINE_WORDS);
+	expect(copyText()).not.toMatch(MACHINE_WORDS);
 }
 
 /* Actions. */
@@ -728,6 +736,35 @@ describe("a new setup", () => {
 		expect(back.calls).toHaveLength(0);
 	});
 
+	test("a stopped creation the hub can't cancel no longer reads as creating: the hub still holds the setup", async () => {
+		const slow = slowPrepare();
+		const { fake, navigations, settle } = await mountDevices(
+			<Screen prepare={slow.prepare} />,
+			{ search: "flow=setup" },
+		);
+		await toCreateStep();
+		await next();
+		await settle();
+		expect(text()).toContain("Creating the package for factory-line-4.");
+		fake.api.fail({ method: "DELETE", path: /^devices\/enrollments\// });
+		const before = navigations.length;
+		await clickByText("Exit setup");
+		await clickByText("Stop and cancel setup", inPortal());
+		slow.finish();
+		await settle();
+		expect(
+			fake.api.sent("DELETE", /^devices\/enrollments\//).length,
+		).toBeGreaterThan(0);
+		// The wizard stays: nothing runs, and the reservation is still at the hub.
+		expect(navigations).toHaveLength(before);
+		expect(stepOf()).toBe(4);
+		expect(text()).not.toContain("Creating the package for factory-line-4.");
+		expect(text()).toContain(
+			"The hub still holds the half-made setup. Cancel it before you try again.",
+		);
+		expectClean();
+	});
+
 	test("after a failed creation, a changed choice is what gets created, never the request that failed", async () => {
 		const fake = await createFakeWorkspace();
 		const { calls, settle } = await mountSetup({ fake });
@@ -792,6 +829,9 @@ describe("hub checks", () => {
 		await recheck(fake);
 		await settle();
 		expect(text()).toContain("Signed by");
+		const fingerprint = document.querySelector("[data-fingerprint]");
+		expect(fingerprint?.textContent).toBeTruthy();
+		expect(copyText()).not.toContain(String(fingerprint?.textContent));
 		expect(gated()).toBe(false);
 
 		await toCreateStep();

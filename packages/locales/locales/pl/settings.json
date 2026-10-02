@@ -2353,10 +2353,5 @@
 	"confirmComp": "",
 	"grantComp": "",
 	"zoomIn": "",
-	"zoomOut": "",
-	"devices": "",
-	"allDevices": "",
-	"devicesConnectedHub": "",
-	"devicesAvailabilityHelp": "",
-	"devicesDescription": ""
+	"zoomOut": ""
 }

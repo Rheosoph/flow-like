@@ -17,6 +17,14 @@ const STACK: Record<Exclude<StackAt, false>, string> = {
 	560: "@max-[560px]/tbl:block @max-[560px]/tbl:[&_colgroup]:hidden @max-[560px]/tbl:[&_thead]:hidden @max-[560px]/tbl:[&_tbody]:flex @max-[560px]/tbl:[&_tbody]:flex-col @max-[560px]/tbl:[&_tbody]:gap-2 @max-[560px]/tbl:[&_tbody]:p-3 @max-[560px]/tbl:[&_tr]:flex @max-[560px]/tbl:[&_tr]:flex-col @max-[560px]/tbl:[&_tr]:gap-2 @max-[560px]/tbl:[&_tr]:rounded-lg @max-[560px]/tbl:[&_tr]:border @max-[560px]/tbl:[&_tr]:border-border @max-[560px]/tbl:[&_tr]:bg-card @max-[560px]/tbl:[&_tr]:p-3 @max-[560px]/tbl:[&_tr:hover]:bg-card @max-[560px]/tbl:[&_td]:block @max-[560px]/tbl:[&_td]:border-0 @max-[560px]/tbl:[&_td]:p-0 @max-[560px]/tbl:[&_td:empty]:hidden @max-[560px]/tbl:[&_td[data-label]]:before:mb-0.5 @max-[560px]/tbl:[&_td[data-label]]:before:block @max-[560px]/tbl:[&_td[data-label]]:before:text-label @max-[560px]/tbl:[&_td[data-label]]:before:font-semibold @max-[560px]/tbl:[&_td[data-label]]:before:uppercase @max-[560px]/tbl:[&_td[data-label]]:before:tracking-[0.06em] @max-[560px]/tbl:[&_td[data-label]]:before:text-muted-foreground @max-[560px]/tbl:[&_td[data-label]]:before:content-[attr(data-label)] @max-[560px]/tbl:[&_tr>td:first-child]:before:content-none @max-[560px]/tbl:[&_tr>td[data-cell=act]]:border-t @max-[560px]/tbl:[&_tr>td[data-cell=act]]:border-hairline @max-[560px]/tbl:[&_tr>td[data-cell=act]]:pt-2 @max-[560px]/tbl:[&_tr>td[data-cell=act]]:text-left @max-[560px]/tbl:[&_tr>td[data-cell=act]]:before:content-none @max-[560px]/tbl:[&_tr>td[data-cell=more]]:border-t @max-[560px]/tbl:[&_tr>td[data-cell=more]]:border-hairline @max-[560px]/tbl:[&_tr>td[data-cell=more]]:pt-2 @max-[560px]/tbl:[&_tr>td[data-cell=more]]:text-left @max-[560px]/tbl:[&_tr>td[data-cell=more]]:before:content-none @max-[560px]/tbl:[&_td]:text-left @max-[560px]/tbl:[&_tr>td:first-child]:pl-0 @max-[560px]/tbl:[&_tr>td:last-child]:pr-0 @max-[560px]/tbl:[&_tr[aria-selected=true]]:bg-row-selected @max-[560px]/tbl:[&_tr[aria-selected=true]:hover]:bg-row-selected @max-[560px]/tbl:[&_tr[data-group]]:bg-surface-sunken @max-[560px]/tbl:[&_tr[data-group]]:px-3 @max-[560px]/tbl:[&_tr[data-group]]:py-2 @max-[560px]/tbl:[&_tr[data-group]>td]:bg-transparent @max-[560px]/tbl:[&_tr[data-confirm-row]]:border-0 @max-[560px]/tbl:[&_tr[data-confirm-row]]:bg-transparent @max-[560px]/tbl:[&_tr[data-confirm-row]]:p-0",
 };
 
+/*
+ * The app's base layer gives every `table` outer margins and every cell a full
+ * border. The reset has zero specificity, so a cell's own border utility still
+ * wins. Chips in cells get 4 px corners and may wrap instead of clipping (R10).
+ */
+const TABLE_BASE =
+	"m-0 w-full table-fixed border-collapse text-ui [:where(&_td)]:border-0 [:where(&_th)]:border-0 [&_td_[data-slot=badge]]:h-auto [&_td_[data-slot=badge]]:min-h-5.5 [&_td_[data-slot=badge]]:rounded-md [&_td_[data-slot=badge]]:py-0.5 [&_td_[data-slot=badge]]:whitespace-normal [&_td_[data-slot=badge]>span]:whitespace-normal";
+
 export interface DvTableProps
 	extends Omit<ComponentProps<"table">, "children"> {
 	/** Column plan (SPEC §5): one width per column, e.g. `["18%", "auto", "120px"]`. */
@@ -50,7 +58,7 @@ export function DvTable({
 				aria-label={label}
 				data-stack={stackAt || undefined}
 				className={cx(
-					"w-full table-fixed border-collapse text-ui",
+					TABLE_BASE,
 					stackAt ? STACK[stackAt] : undefined,
 					className,
 				)}
@@ -170,10 +178,18 @@ export interface TdProps extends Omit<ComponentProps<"td">, "children"> {
 	/** Column name shown above the value when the table stacks into cards (SPEC §4.18). */
 	label: string;
 	kind?: CellKind;
+	/** Without a value the cell shows "–" in the table and drops out of the stacked card. */
+	emptyDash?: boolean;
 	children?: ReactNode;
 }
 
-export function Td({ label, kind = "text", className, ...props }: TdProps) {
+export function Td({
+	label,
+	kind = "text",
+	emptyDash = false,
+	className,
+	...props
+}: TdProps) {
 	return (
 		<td
 			data-label={label}
@@ -181,6 +197,7 @@ export function Td({ label, kind = "text", className, ...props }: TdProps) {
 			className={cx(
 				"min-w-0 border-t border-hairline px-3 py-2 align-top first:pl-4 last:pr-4",
 				CELL_KIND[kind],
+				emptyDash && "empty:before:content-['–']",
 				className,
 			)}
 			{...props}

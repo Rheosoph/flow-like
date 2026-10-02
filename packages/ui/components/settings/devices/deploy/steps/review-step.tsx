@@ -104,7 +104,7 @@ import {
 	useLiveTargets,
 	useWizardSlot,
 } from "../use-deploy-run";
-import { HEAD_CHIP, TABLE_RESET } from "./copy-upload-step";
+import { HEAD_CHIP } from "./copy-upload-step";
 
 /* What each target would get comes from `reviewTargets` (APP §3.12); this reads the services the plan updates. */
 
@@ -499,7 +499,6 @@ function PlanTable({
 			label={t("devices:deployShip.plan.title", "Plan")}
 			cols={PLAN_COLS}
 			stackAt={560}
-			className={TABLE_RESET}
 			head={
 				<tr>
 					<Th>{t("devices:deployShip.plan.colDevice", "Device")}</Th>

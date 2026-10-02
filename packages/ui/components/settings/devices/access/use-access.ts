@@ -321,15 +321,14 @@ export interface PersonName {
 export type PersonNames = (userId: string) => PersonName;
 
 function personOf(t: DevicesT, user: UserLookupResult | undefined): PersonName {
-	if (!user) {
-		const name = t("devices:access.person.unknown", "Unknown account");
+	// An account without a name, handle or mail stays unnamed: its id is never a label (R3).
+	const name = user ? userDisplayName(user, "") : "";
+	if (!name)
 		return {
-			name,
+			name: t("devices:access.person.unknown", "Unknown account"),
 			first: t("devices:access.person.them", "them"),
 			known: false,
 		};
-	}
-	const name = userDisplayName(user, user.id);
 	return { name, first: name.split(/\s+/u)[0] ?? name, known: true };
 }
 
@@ -346,7 +345,7 @@ export function usePersonNames(
 	});
 	const users = results.map((result) => result.data);
 	const signature = users
-		.map((user) => (user ? userDisplayName(user, user.id) : ""))
+		.map((user) => (user ? userDisplayName(user, "") : ""))
 		.join("|");
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `signature` stands for the looked-up users
 	return useMemo(() => {

@@ -31,6 +31,7 @@ import {
 	useHubSupport,
 } from "../workspace";
 import type { ReadersEdit, ReadersMode } from "./history-readers-sheet";
+import { LiveDataState } from "./live-state";
 import {
 	type MetricSample,
 	amount,
@@ -486,6 +487,8 @@ function keysState(t: DevicesT, target: ObserveTarget): ReactElement | null {
 			/>
 		);
 	if (target.hasKeys && !target.locked) return null;
+	// A computer without keys can't unlock: it says so and leads to the keys.
+	if (!target.hasKeys) return <LiveDataState target={target} what="history" />;
 	return (
 		<StateView
 			kind="locked"

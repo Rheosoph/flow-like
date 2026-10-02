@@ -2289,10 +2289,5 @@
 	"confirmComp": "Kostenlosen Zugriff bestätigen",
 	"grantComp": "Kostenlosen Zugriff gewähren",
 	"zoomIn": "Vergrößern",
-	"zoomOut": "Verkleinern",
-	"devices": "Geräte",
-	"allDevices": "Alle Geräte",
-	"devicesConnectedHub": "Verbundener Hub",
-	"devicesAvailabilityHelp": "Prüfe, ob du mit dem richtigen Hub verbunden bist und ob auf dessen Server die Geräteverwaltung aktiviert ist, und versuche es dann erneut.",
-	"devicesDescription": "Verwalte Geräte, die dir gehören oder auf die du Zugriff hast, samt Deployments, Zustand und Zertifikaten."
+	"zoomOut": "Verkleinern"
 }

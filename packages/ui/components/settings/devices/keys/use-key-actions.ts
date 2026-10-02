@@ -382,9 +382,9 @@ export function useKeyActions(): KeyActions {
 				});
 				return name;
 			},
-			deleteKeys: async (target, confirm) => {
-				const spec = (action: ActionId): FlowSpec<void> => ({
-					action,
+			deleteKeys: (target, confirm) =>
+				run({
+					action: "delete_local_keys",
 					target,
 					label: t("keys.action.delete", "Delete keys for {{device}}", {
 						device: target.name,
@@ -395,13 +395,7 @@ export function useKeyActions(): KeyActions {
 						await deleteLocalKeys(current, target.deviceId);
 						keyFileLogOf(current).update(target.deviceId, null);
 					},
-				});
-				const outcome = await run(spec("delete_local_keys"));
-				// The delete gate asks for usable keys; unusable ones are exactly what gets deleted here.
-				return !outcome.ok && isUnusableKeysGate(outcome.gate)
-					? run(spec("forget_identity"))
-					: outcome;
-			},
+				}),
 			resetMetricIdentity: (target, password) =>
 				run({
 					action: "reset_metric_reader",
@@ -421,9 +415,6 @@ export function useKeyActions(): KeyActions {
 	);
 }
 
-const isUnusableKeysGate = (gate: GateResult | undefined) =>
-	gate !== undefined && !gate.ok && gate.copy.code === "keys_unusable";
-
 /** R7: a gate result as `GatedAction` takes it; null when the control is allowed. */
 export function gateOf(
 	result: GateResult,
@@ -439,13 +430,7 @@ export function useKeyGate(action: ActionId, deviceId?: string): Gate | null {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
 	const result = useGate(action, deviceId);
-	return useMemo(
-		() =>
-			action === "delete_local_keys" && isUnusableKeysGate(result)
-				? null
-				: gateOf(result, t, time),
-		[action, result, t, time],
-	);
+	return useMemo(() => gateOf(result, t, time), [result, t, time]);
 }
 
 /** Aborts on unmount and when `resetKey` changes, so a late completion reaches nobody. */

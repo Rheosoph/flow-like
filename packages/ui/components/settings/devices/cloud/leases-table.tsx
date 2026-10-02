@@ -6,7 +6,6 @@ import { enumLabel } from "../copy/enum-labels";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import { CellSub, DvTable, Td, Th, Tr } from "../primitives/dv-table";
 import { IdRef } from "../primitives/id-ref";
-import { TABLE_RESET } from "./cloud-parts";
 
 const HALF_DAY_S = 12 * 3600;
 
@@ -24,10 +23,12 @@ function useLeaseTime(): (atS: number) => string {
 		Math.abs(atS - time.nowS) < HALF_DAY_S ? time.clock(atS) : time.at(atS);
 }
 
+/* A plain table inside a block (not `DvTable`): the app's base layer would give it margins and a border on every cell side. */
+const COMPACT_TABLE = "my-0 w-full border-collapse text-xs";
 const COMPACT_CELL =
-	"border-t border-hairline px-1.5 py-[5px] text-left align-top";
+	"border-x-0 border-t border-b-0 border-hairline px-1.5 py-[5px] text-left align-top";
 const COMPACT_HEAD =
-	"px-1.5 py-[5px] text-left text-label font-semibold uppercase tracking-[0.06em] text-muted-foreground";
+	"border-x-0 border-t-0 px-1.5 py-[5px] text-left text-label font-semibold uppercase tracking-[0.06em] text-muted-foreground";
 
 /** The device block's short list: instance, purpose and when the lease ends. */
 function CompactLeases({
@@ -39,7 +40,7 @@ function CompactLeases({
 	return (
 		<table
 			aria-label={t("cloud.leases.label", "Cloud leases")}
-			className={`w-full border-collapse text-xs ${TABLE_RESET}`}
+			className={COMPACT_TABLE}
 		>
 			<thead>
 				<tr>
@@ -101,7 +102,6 @@ export function LeasesTable({
 			label={t("cloud.leases.label", "Cloud leases")}
 			cols={["26%", "22%", "26%", "26%"]}
 			stackAt={560}
-			className={TABLE_RESET}
 			head={
 				<tr>
 					<Th>{labels.instance}</Th>

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { withPassword } from "./crypto";
-import { accountStorageKey, type DeviceAccountScope } from "./storage";
+import { type DeviceAccountScope, accountStorageKey } from "./storage";
 import type { DeviceCrypto } from "./types";
 
 const boundedPem = z.string().min(1).max(16_384);
@@ -182,20 +182,8 @@ export async function renewLocalCertificateAuthority(
 	crypto: DeviceCrypto,
 ): Promise<CertificateAuthorityEnvelope> {
 	try {
-		if (new TextEncoder().encode(backupText).length > 1024 * 1024)
-			throw new Error();
-		const backup = z
-			.object({ version: z.literal(1) })
-			.merge(authorityEnvelopeSchema)
-			.parse(JSON.parse(backupText));
-		if (
-			backup.public_bundle.account_binding !== accountStorageKey(scope) ||
-			backup.public_bundle.authority_id !==
-				authority.public_bundle.authority_id ||
-			backup.public_bundle.root_certificate_pem !==
-				authority.public_bundle.root_certificate_pem
-		)
-			throw new Error();
+		const backup = matchingAuthorityBackup(scope, authority, backupText);
+		if (!backup) throw new Error();
 		const result = await withPassword(password, (bytes) =>
 			crypto.renewCertificateAuthorityVault(
 				accountStorageKey(scope),
@@ -211,5 +199,92 @@ export async function renewLocalCertificateAuthority(
 		throw new Error(
 			"The issuing authority could not be renewed. Choose this authority's encrypted root backup and check its password and root expiry.",
 		);
+	}
+}
+
+export const MAX_AUTHORITY_BACKUP_BYTES = 1024 * 1024;
+
+const authorityBackupSchema = z
+	.object({ version: z.literal(1) })
+	.merge(authorityEnvelopeSchema);
+
+/** The backup, when the text is this authority's backup for this account and hub. */
+function matchingAuthorityBackup(
+	scope: DeviceAccountScope,
+	authority: LocalCertificateAuthority,
+	backupText: string,
+): CertificateAuthorityEnvelope | null {
+	try {
+		if (
+			new TextEncoder().encode(backupText).length > MAX_AUTHORITY_BACKUP_BYTES
+		)
+			return null;
+		const backup = authorityBackupSchema.parse(JSON.parse(backupText));
+		const { public_bundle: saved } = authority;
+		return backup.public_bundle.account_binding === accountStorageKey(scope) &&
+			backup.public_bundle.authority_id === saved.authority_id &&
+			backup.public_bundle.root_certificate_pem === saved.root_certificate_pem
+			? backup
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+/** Whether the password opens the signing key kept on this computer. Nothing changes. */
+export function testCertificateAuthorityPassword(
+	scope: DeviceAccountScope,
+	authority: LocalCertificateAuthority,
+	password: string,
+	crypto: DeviceCrypto,
+): Promise<boolean> {
+	return withPassword(password, (bytes) =>
+		crypto.inspectCertificateAuthorityVault(
+			accountStorageKey(scope),
+			authority.public_bundle.authority_id,
+			bytes,
+			authority.vault,
+		),
+	).then(
+		() => true,
+		() => false,
+	);
+}
+
+/** `backup`: the file isn't this authority's backup. `password`: the keys didn't open. No library text leaves here. */
+export type CertificateAuthorityRewrap =
+	| { ok: true; envelope: CertificateAuthorityEnvelope }
+	| { ok: false; reason: "backup" | "password" };
+
+/**
+ * Seals the signing key and the backup's root key with a new password. Both
+ * keys are needed, so the backup file is part of the change, and the result is
+ * a new backup that opens with the new password.
+ */
+export async function rewrapLocalCertificateAuthority(
+	scope: DeviceAccountScope,
+	authority: LocalCertificateAuthority,
+	backupText: string,
+	passwords: { current: string; next: string },
+	crypto: DeviceCrypto,
+): Promise<CertificateAuthorityRewrap> {
+	const backup = matchingAuthorityBackup(scope, authority, backupText);
+	if (!backup) return { ok: false, reason: "backup" };
+	try {
+		const result = await withPassword(passwords.current, (current) =>
+			withPassword(passwords.next, (next) =>
+				crypto.rewrapCertificateAuthorityVault(
+					accountStorageKey(scope),
+					authority.public_bundle.authority_id,
+					current,
+					next,
+					authority.vault,
+					Uint8Array.from(backup.root_vault),
+				),
+			),
+		);
+		return { ok: true, envelope: authorityEnvelopeSchema.parse(result) };
+	} catch {
+		return { ok: false, reason: "password" };
 	}
 }

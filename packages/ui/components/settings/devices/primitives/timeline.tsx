@@ -154,7 +154,7 @@ function EntryItem({ entry }: Readonly<EntryItemProps>) {
 				<Icon aria-hidden className="size-3.5" />
 			</span>
 			<div className="min-w-0">
-				<p>{entry.text}</p>
+				<p className="text-ui">{entry.text}</p>
 				{entry.meta ? (
 					<p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
 						{entry.meta}

@@ -492,7 +492,7 @@ function useServicePage(
 		serviceId,
 		service,
 		rollout,
-		placement?.offline_writes?.needs_attention,
+		placement?.offline_writes,
 	);
 	const diagnostics: InstanceDiagnostics = diagnosticsOf(
 		input.live[deviceId]?.inspection?.value.features,

@@ -175,6 +175,8 @@ export interface VersionFootInput {
 	mode: AppMode;
 	running: number;
 	total: number;
+	/** Services whose version can't be told (`AppView.newestRuns.unknown`): they may run the newest one. */
+	unknown?: number;
 }
 
 export interface UpdateLineInput {
@@ -196,6 +198,18 @@ function versionFoot(t: DevicesT, input: VersionFootInput) {
 		running: input.running,
 		total: input.total,
 	};
+	if (input.running === 0 && input.unknown)
+		return input.mode === "online"
+			? t(
+					"devices:app.drift.footUnsure",
+					"Newest version {{version}} ({{hash}}), built {{when}}, isn't on any service whose version is known.",
+					params,
+				)
+			: t(
+					"devices:app.drift.footUnsureLocal",
+					"Newest version {{version}} ({{hash}}), changed on this computer {{when}}, isn't on any service whose version is known.",
+					params,
+				);
 	if (input.running === 0)
 		return input.mode === "online"
 			? t(

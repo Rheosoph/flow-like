@@ -38,6 +38,7 @@ import type {
 	DeviceViewModel,
 	GateResult,
 } from "../../../../lib/device-management/model/types";
+import { identityName } from "../access/person-name";
 import { appCopy } from "../copy/app-copy";
 import { VersionCell } from "../primitives/app-chips";
 import {
@@ -90,9 +91,7 @@ import {
 	type MenuEntry,
 	PLAIN_CHIP,
 	Person,
-	STATE_WRAP,
 	ShowMore,
-	TABLE_RESET,
 	UnknownAction,
 	useAppPage,
 	useCapped,
@@ -814,7 +813,6 @@ function ServiceRows({
 				</Td>
 				<Td label={labels.state} kind="name">
 					<RequestedActual
-						className={STATE_WRAP}
 						desired={desiredRun(row.view.desired)}
 						observed={observedRun(row.view.observed)}
 						conv={row.view.conv}
@@ -1089,12 +1087,14 @@ function DeviceGroupRows({
 	);
 }
 
-function GroupOwner({ device }: Readonly<{ device: DeviceViewModel }>) {
-	const owner = useUserIdentity(device.row.owner_id);
+/** "Shared by {owner} · ends …" on a device head, in the page's table and in the Update everywhere list. */
+export function GroupOwner({ device }: Readonly<{ device: DeviceViewModel }>) {
+	const ownerId = device.row.owner_id;
+	const ownerName = identityName(useUserIdentity(ownerId), ownerId);
 	return (
 		<RelationshipChip
 			relationship="shared"
-			{...(owner.isResolved ? { ownerName: owner.label } : {})}
+			{...(ownerName ? { ownerName } : {})}
 			{...(typeof device.row.access_expires_at === "number"
 				? { endsAt: device.row.access_expires_at }
 				: {})}
@@ -1114,24 +1114,6 @@ function FootLine({
 	);
 }
 
-function footUnsure(
-	t: DevicesT,
-	input: { version: string; hash: string; when: string; online: boolean },
-): string {
-	const { online, ...params } = input;
-	return online
-		? t(
-				"devices:app.device.footUnsure",
-				"Newest version {{version}} ({{hash}}), built {{when}}, isn't on any service whose version is known.",
-				params,
-			)
-		: t(
-				"devices:app.device.footUnsureLocal",
-				"Newest version {{version}} ({{hash}}), changed on this computer {{when}}, isn't on any service whose version is known.",
-				params,
-			);
-}
-
 /** The three foot lines of APP §2.9, each only when true. */
 export function WhereFoot() {
 	const { t } = useTranslation("devices");
@@ -1141,28 +1123,20 @@ export function WhereFoot() {
 	const runs = view.newestRuns;
 	const newest = runs?.version;
 	const behind = !!runs && runs.services < runs.of;
-	// A service whose version can't be told may run the newest one: never "isn't running anywhere".
-	const unsure =
-		runs?.services === 0 && view.services.some((row) => !row.version);
 	return (
 		<div data-where-foot="" className="flex w-full flex-col gap-1.5">
 			{newest && runs && behind && newest.builtAt ? (
 				<FootLine icon={CircleArrowUp}>
-					{unsure
-						? footUnsure(t, {
-								version: versionName(newest),
-								hash: newest.short,
-								when: dayTime(newest.builtAt),
-								online: view.app.mode === "online",
-							})
-						: copy.versionFoot({
-								version: versionName(newest),
-								hash: newest.short,
-								when: dayTime(newest.builtAt),
-								mode: view.app.mode,
-								running: runs.services,
-								total: runs.of,
-							})}{" "}
+					{copy.versionFoot({
+						version: versionName(newest),
+						hash: newest.short,
+						when: dayTime(newest.builtAt),
+						mode: view.app.mode,
+						running: runs.services,
+						total: runs.of,
+						// A service whose version can't be told may run the newest one: never "isn't running anywhere".
+						...(runs.unknown ? { unknown: runs.unknown } : {}),
+					})}{" "}
 					{updateAllGate ? null : (
 						<DvButton
 							variant="link"
@@ -1218,7 +1192,6 @@ export function WhereByDevice({
 					app: view.app.name,
 				})}
 				cols={BY_DEVICE_COLS}
-				className={TABLE_RESET}
 				head={
 					<tr>
 						<Th>{t("app.device.colService", "Service")}</Th>

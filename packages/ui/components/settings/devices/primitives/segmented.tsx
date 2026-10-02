@@ -51,7 +51,7 @@ export function Segmented<T extends string>({
 						disabled={option.disabled}
 						onClick={() => onChange(option.value)}
 						className={cx(
-							"inline-flex items-center gap-1.5 rounded-sm font-medium whitespace-nowrap focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50",
+							"inline-flex items-center gap-1.5 rounded-md font-medium whitespace-nowrap focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50",
 							size === "sm" ? "h-5.5 px-2 text-xs" : "h-6.5 px-2.5 text-ui",
 							pressed
 								? "bg-foreground text-background"
@@ -71,6 +71,9 @@ export function Segmented<T extends string>({
 		</fieldset>
 	);
 }
+
+/** Separates label and count in the accessible name ("Expired 1", not "Expired1"); a flex row doesn't paint it. */
+const NAME_GAP = " ";
 
 /** SPEC §4.36 filter chip: a pill toggle. */
 export function FilterChip({
@@ -104,7 +107,10 @@ export function FilterChip({
 			{Icon ? <Icon aria-hidden className="size-3" /> : null}
 			{children}
 			{count !== undefined ? (
-				<span className="font-mono tabular-nums opacity-75">{count}</span>
+				<>
+					{NAME_GAP}
+					<span className="font-mono tabular-nums opacity-75">{count}</span>
+				</>
 			) : null}
 		</button>
 	);

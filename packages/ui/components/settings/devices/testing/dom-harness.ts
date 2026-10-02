@@ -204,11 +204,17 @@ export function installDom(
 			};
 		},
 		async cleanup() {
+			const unmounted = mounted.size > 0;
 			for (const entry of mounted) {
 				await act(async () => entry.unmount());
 				entry.container.remove();
 			}
 			mounted.clear();
+			// Radix FocusScope reports an unmount in a 0 ms timer; it has to fire while this window still is the DOM.
+			if (unmounted)
+				await act(async () => {
+					await new Promise((resolve) => setTimeout(resolve, 0));
+				});
 			win.document.body.innerHTML = "";
 			clipboard.length = 0;
 		},

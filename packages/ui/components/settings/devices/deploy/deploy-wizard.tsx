@@ -50,7 +50,11 @@ import {
 	WizardTitleRow,
 } from "../primitives/wizard";
 import { deployExitHref } from "../routing/devices-href";
-import { useDevicesRoute, useRouteLink } from "../routing/use-devices-route";
+import {
+	useDevicesRoute,
+	useHostLink,
+	useRouteLink,
+} from "../routing/use-devices-route";
 import type { ScreenProps } from "../screen-props";
 import {
 	REVIEW_INDEX,
@@ -73,6 +77,7 @@ import {
 	DeploySummary,
 	DeploySummaryBar,
 	type DeploySummaryInput,
+	canVisit,
 } from "./deploy-summary";
 import type { DeployStepProps, PlanStepProps } from "./step-props";
 import { AccessCostStep } from "./steps/access-cost-step";
@@ -129,33 +134,39 @@ function wizardTitle(t: DevicesT, state: DeployDraftState): ReactNode {
 		const device = entryDevice(state);
 		return device ? (
 			<>
-				{t("deploy.frame.titleTo", "Deploy to")} <Mono>{device.name}</Mono>
+				{t("devices:deploy.frame.titleTo", "Deploy to")}{" "}
+				<Mono>{device.name}</Mono>
 			</>
 		) : (
-			t("deploy.frame.title", "Deploy")
+			t("devices:deploy.frame.title", "Deploy")
 		);
 	}
 	if (draft.entry !== "update")
-		return t("deploy.frame.titleDeploy", "Deploy {{what}}", {
+		return t("devices:deploy.frame.titleDeploy", "Deploy {{what}}", {
 			what: deployedThing(state, plan.app.name),
 		});
 	const one = singleUpdate(state);
 	return one ? (
 		<>
-			{t("deploy.frame.titleUpdate", "Update")} <Mono>{one.service}</Mono>
+			{t("devices:deploy.frame.titleUpdate", "Update")}{" "}
+			<Mono>{one.service}</Mono>
 		</>
 	) : (
-		t("deploy.frame.titleUpdateApp", "Update {{app}}", { app: plan.app.name })
+		t("devices:deploy.frame.titleUpdateApp", "Update {{app}}", {
+			app: plan.app.name,
+		})
 	);
 }
 
 function subTarget(t: DevicesT, state: DeployDraftState): string {
 	const [first] = state.plan.targets;
 	const count = state.plan.targets.length;
-	if (!first) return t("deploy.frame.subNoDevices", "no devices yet");
+	if (!first) return t("devices:deploy.frame.subNoDevices", "no devices yet");
 	return count === 1
-		? t("deploy.frame.subTo", "to {{device}}", { device: first.name })
-		: t("deploy.frame.subDevices", "{{count, number}} devices", { count });
+		? t("devices:deploy.frame.subTo", "to {{device}}", { device: first.name })
+		: t("devices:deploy.frame.subDevices", "{{count, number}} devices", {
+				count,
+			});
 }
 
 function subKind(t: DevicesT, state: DeployDraftState): string {
@@ -164,18 +175,22 @@ function subKind(t: DevicesT, state: DeployDraftState): string {
 	if (draft.entry === "update")
 		return count > 1
 			? t(
-					"deploy.frame.subUpdateMany",
+					"devices:deploy.frame.subUpdateMany",
 					"update of {{count, number}} services",
 					{
 						count,
 					},
 				)
-			: t("deploy.frame.subUpdate", "update");
+			: t("devices:deploy.frame.subUpdate", "update");
 	return plan.services.length > 1
-		? t("deploy.frame.subNewServices", "{{count, number}} new services", {
-				count: plan.services.length,
-			})
-		: t("deploy.frame.subNewService", "new service");
+		? t(
+				"devices:deploy.frame.subNewServices",
+				"{{count, number}} new services",
+				{
+					count: plan.services.length,
+				},
+			)
+		: t("devices:deploy.frame.subNewService", "new service");
 }
 
 /** The line under the title: app · mode · version · targets · new service | update. */
@@ -184,11 +199,11 @@ function wizardSub(t: DevicesT, state: DeployDraftState): string {
 	if (!plan.app || !mode) {
 		const device = entryDevice(state);
 		return device
-			? t("deploy.frame.subPick", "Pick an app for {{device}}", {
+			? t("devices:deploy.frame.subPick", "Pick an app for {{device}}", {
 					device: device.name,
 				})
 			: t(
-					"deploy.frame.subNone",
+					"devices:deploy.frame.subNone",
 					"Install an app version on devices you manage",
 				);
 	}
@@ -196,10 +211,10 @@ function wizardSub(t: DevicesT, state: DeployDraftState): string {
 	return [
 		plan.app.name,
 		mode === "offline"
-			? t("deploy.frame.subOffline", "offline copy")
-			: t("deploy.frame.subOnline", "runs online"),
+			? t("devices:deploy.frame.subOffline", "offline copy")
+			: t("devices:deploy.frame.subOnline", "runs online"),
 		keeps
-			? t("deploy.frame.subKeeps", "keeps each service's version")
+			? t("devices:deploy.frame.subKeeps", "keeps each service's version")
 			: versionLabel,
 		subTarget(t, state),
 		subKind(t, state),
@@ -213,26 +228,26 @@ function modeSentence(t: DevicesT, state: DeployDraftState): string {
 	const update = draft.entry === "update";
 	if (update && draft.version === "keep")
 		return t(
-			"deploy.frame.modeKeep",
+			"devices:deploy.frame.modeKeep",
 			"Only settings or events change; nothing is uploaded.",
 		);
 	if (mode === "offline")
 		return update
 			? t(
-					"deploy.frame.modeOfflineUpdate",
+					"devices:deploy.frame.modeOfflineUpdate",
 					"It's a local-only app, so the update sends a new copy of the app from this computer. The data on the device stays as it is.",
 				)
 			: t(
-					"deploy.frame.modeOffline",
+					"devices:deploy.frame.modeOffline",
 					"It's a local-only app, so each device gets an offline copy of the app and its data from this computer.",
 				);
 	return update
 		? t(
-				"deploy.frame.modeOnlineUpdate",
+				"devices:deploy.frame.modeOnlineUpdate",
 				"It's an online app, so the update re-pins each service to what's published now. Its data stays in the cloud.",
 			)
 		: t(
-				"deploy.frame.modeOnline",
+				"devices:deploy.frame.modeOnline",
 				"It's an online app, so each device runs the version you deploy and keeps its data in the cloud.",
 			);
 }
@@ -241,10 +256,10 @@ function modeSentence(t: DevicesT, state: DeployDraftState): string {
 function pickLead(t: DevicesT, state: DeployDraftState): string {
 	const device = entryDevice(state);
 	return device
-		? t("deploy.frame.leadPick", "Choose an app for {{device}}.", {
+		? t("devices:deploy.frame.leadPick", "Choose an app for {{device}}.", {
 				device: device.name,
 			})
-		: t("deploy.frame.leadPickAny", "Choose an app to deploy.");
+		: t("devices:deploy.frame.leadPickAny", "Choose an app to deploy.");
 }
 
 /** One service on one device, when the update names exactly that. */
@@ -264,17 +279,17 @@ function updateLead(t: DevicesT, state: DeployDraftState, app: string): string {
 	if (one)
 		return keep
 			? t(
-					"deploy.frame.leadChangeOne",
+					"devices:deploy.frame.leadChangeOne",
 					"Change {{service}}'s settings or events on {{device}}.",
 					one,
 				)
 			: t(
-					"deploy.frame.leadUpdateOne",
+					"devices:deploy.frame.leadUpdateOne",
 					"Update {{service}} on {{device}} to the newest version.",
 					one,
 				);
 	return keep
-		? t("deploy.frame.leadChangeMany", {
+		? t("devices:deploy.frame.leadChangeMany", {
 				app,
 				count,
 				defaultValue_one:
@@ -282,7 +297,7 @@ function updateLead(t: DevicesT, state: DeployDraftState, app: string): string {
 				defaultValue_other:
 					"Change settings or events of {{app}} on {{count, number}} devices.",
 			})
-		: t("deploy.frame.leadUpdateMany", {
+		: t("devices:deploy.frame.leadUpdateMany", {
 				app,
 				count,
 				defaultValue_one:
@@ -299,19 +314,19 @@ function deployLead(t: DevicesT, state: DeployDraftState, app: string): string {
 	const what = deployedThing(state, app);
 	if (!first)
 		return t(
-			"deploy.frame.leadNone",
+			"devices:deploy.frame.leadNone",
 			"Deploy {{what}}: pick what runs, then where.",
 			{ what },
 		);
 	if (count > 1)
 		return t(
-			"deploy.frame.leadMany",
+			"devices:deploy.frame.leadMany",
 			"Deploy {{what}} to {{count, number}} devices.",
 			{ what, count },
 		);
 	const [service] = first.services;
 	return t(
-		"deploy.frame.leadOne",
+		"devices:deploy.frame.leadOne",
 		"Deploy {{what}} to {{device}} as {{service}}.",
 		{
 			what,
@@ -337,7 +352,7 @@ function restSentences(
 	const { plan, draft, app } = state;
 	if (!plan.app || !app)
 		return t(
-			"deploy.frame.restPick",
+			"devices:deploy.frame.restPick",
 			"Its mode and its events decide what can run where. Nothing changes on any device until you deploy.",
 		);
 	const count = plan.targets.length;
@@ -349,7 +364,7 @@ function restSentences(
 		if (draft.scope === "app")
 			parts.push(
 				t(
-					"deploy.frame.restEvents",
+					"devices:deploy.frame.restEvents",
 					"{{count, number}} of its {{total, number}} events can run on a device.",
 					{ count: able, total: all },
 				),
@@ -358,18 +373,22 @@ function restSentences(
 	const gated = plan.targets.filter((target) => target.gate);
 	if (gated.length && count > 1)
 		parts.push(
-			t("deploy.frame.restGated", "{{devices}} can't take it right now.", {
-				devices: gated.map((target) => target.name).join(", "),
-			}),
+			t(
+				"devices:deploy.frame.restGated",
+				"{{devices}} can't take it right now.",
+				{
+					devices: gated.map((target) => target.name).join(", "),
+				},
+			),
 		);
 	parts.push(
 		count === 1
 			? t(
-					"deploy.frame.restOne",
+					"devices:deploy.frame.restOne",
 					"Nothing changes on the device until you deploy on step 7.",
 				)
 			: t(
-					"deploy.frame.restMany",
+					"devices:deploy.frame.restMany",
 					"Nothing changes on any device until you deploy on step 7.",
 				),
 	);
@@ -387,12 +406,12 @@ function PlanningHeadline({
 		return (
 			<Headline
 				lead={t(
-					"deploy.frame.leadLocalWeb",
+					"devices:deploy.frame.leadLocalWeb",
 					"{{app}} can't be deployed from the browser.",
 					{ app: plan.app.name },
 				)}
 				rest={t(
-					"deploy.frame.restLocalWeb",
+					"devices:deploy.frame.restLocalWeb",
 					"It's a local-only app: only the desktop app on the computer that has it can prepare its offline copy. Nothing changes on any device.",
 				)}
 			/>
@@ -401,12 +420,12 @@ function PlanningHeadline({
 		return (
 			<Headline
 				lead={t(
-					"deploy.frame.leadGated",
+					"devices:deploy.frame.leadGated",
 					"{{device}} can't take this deploy right now.",
 					{ device: first.name },
 				)}
 				rest={t(
-					"deploy.frame.restGatedOne",
+					"devices:deploy.frame.restGatedOne",
 					"Your choices are kept, and nothing changes on the device.",
 				)}
 			/>
@@ -432,48 +451,40 @@ function Crumbs({
 	const link = useRouteLink();
 	const [deviceId] = route.deviceIds;
 	const device = state.devices.find((row) => row.id === deviceId);
-	// In an app the top bar already reads "Devices › Deploy"; only the way back to Events is said here.
-	if (scope.kind === "app" && route.from !== "events") return null;
-	const crumbs: { label: ReactNode; props: { href: string } }[] =
-		scope.kind === "app"
+	// In an app the top bar carries the crumbs: "Devices › Deploy", or "Events › Deploy" for a deploy that started there.
+	if (scope.kind === "app") return null;
+	const crumbs: { label: ReactNode; props: { href: string } }[] = [
+		{
+			label: t("devices:deploy.frame.crumbDevices", "Devices"),
+			props: link({ screen: "fleet", view: "devices" }),
+		},
+		...(device && route.deviceIds.length === 1
 			? [
 					{
-						label: t("deploy.frame.crumbEvents", "Events"),
-						props: { href: deployExitHref(route, scope) },
+						label: <Mono>{device.name}</Mono>,
+						props: link({
+							screen: "device",
+							deviceId: device.id,
+							tab: "services",
+						}),
 					},
 				]
-			: [
+			: []),
+		...(device && route.serviceId
+			? [
 					{
-						label: t("deploy.frame.crumbDevices", "Devices"),
-						props: link({ screen: "fleet", view: "devices" }),
+						label: <Mono>{route.serviceId}</Mono>,
+						props: link({
+							screen: "service",
+							deviceId: device.id,
+							serviceId: route.serviceId,
+						}),
 					},
-					...(device && route.deviceIds.length === 1
-						? [
-								{
-									label: <Mono>{device.name}</Mono>,
-									props: link({
-										screen: "device",
-										deviceId: device.id,
-										tab: "services",
-									}),
-								},
-							]
-						: []),
-					...(device && route.serviceId
-						? [
-								{
-									label: <Mono>{route.serviceId}</Mono>,
-									props: link({
-										screen: "service",
-										deviceId: device.id,
-										serviceId: route.serviceId,
-									}),
-								},
-							]
-						: []),
-				];
+				]
+			: []),
+	];
 	return (
-		<Breadcrumb aria-label={t("deploy.frame.breadcrumb", "Breadcrumb")}>
+		<Breadcrumb aria-label={t("devices:deploy.frame.breadcrumb", "Breadcrumb")}>
 			<BreadcrumbList className="gap-1 text-xs sm:gap-1">
 				{crumbs.map((crumb, index) => (
 					// biome-ignore lint/suspicious/noArrayIndexKey: crumbs are positional
@@ -488,7 +499,7 @@ function Crumbs({
 				))}
 				<BreadcrumbItem>
 					<BreadcrumbPage className="text-ink-2">
-						{t("deploy.frame.crumbDeploy", "Deploy")}
+						{t("devices:deploy.frame.crumbDeploy", "Deploy")}
 					</BreadcrumbPage>
 				</BreadcrumbItem>
 			</BreadcrumbList>
@@ -536,7 +547,7 @@ function TargetGates({
 							key={device.id}
 							kind={whereGateKind(gate)}
 							title={t(
-								"deploy.frame.gateTitle",
+								"devices:deploy.frame.gateTitle",
 								"You can't deploy to {{device}} right now.",
 								{ device: device.name },
 							)}
@@ -545,11 +556,11 @@ function TargetGates({
 									{whereGateText(t, gate, device.name, time)}{" "}
 									{plan.targets.length > 1
 										? t(
-												"deploy.frame.gateOthers",
+												"devices:deploy.frame.gateOthers",
 												"The other devices aren't affected.",
 											)
 										: t(
-												"deploy.frame.gateLook",
+												"devices:deploy.frame.gateLook",
 												"You can look through the steps, but Deploy stays unavailable until this is fixed.",
 											)}
 								</>
@@ -568,7 +579,7 @@ function TargetGates({
 										icon={Server}
 										onClick={() => goTo("where")}
 									>
-										{t("deploy.frame.changeDevices", "Change devices")}
+										{t("devices:deploy.frame.changeDevices", "Change devices")}
 									</DvButton>
 								</>
 							}
@@ -597,7 +608,7 @@ function StagedBanner({
 			tone="warning"
 			icon={Hourglass}
 			title={t(
-				"deploy.frame.stagedTitle",
+				"devices:deploy.frame.stagedTitle",
 				"An update is already staged for {{service}} on {{device}}.",
 				{ service, device: device.name },
 			)}
@@ -608,13 +619,13 @@ function StagedBanner({
 			}
 		>
 			{t(
-				"deploy.frame.stagedText",
+				"devices:deploy.frame.stagedText",
 				"The device holds one update per service at a time, so activate or discard it before you deploy.",
 			)}{" "}
 			{by === undefined
 				? null
 				: t(
-						"deploy.frame.stagedBy",
+						"devices:deploy.frame.stagedBy",
 						"If nobody activates it, the device discards it at {{time}}.",
 						{ time: time.abs(by) },
 					)}
@@ -642,7 +653,7 @@ function gatedBlocking(
 	const device = state.devices.find((row) => row.id === issue.deviceId);
 	return issue.code === "target_gated" && device?.gate
 		? {
-				text: t("deploy.frame.gatedReason", "{{device}}: {{reason}}", {
+				text: t("devices:deploy.frame.gatedReason", "{{device}}: {{reason}}", {
 					device: device.name,
 					reason: whereGateText(t, device.gate, device.name, time),
 				}),
@@ -661,7 +672,7 @@ function whatBlocking({ t, state }: BlockingContext): Blocking | null {
 function howBlocking({ t, state, prepare }: BlockingContext): Blocking | null {
 	if (prepare.state === "running")
 		return {
-			text: t("deploy.frame.preparing", "Preparing on this computer…"),
+			text: t("devices:deploy.frame.preparing", "Preparing on this computer…"),
 			busy: true,
 		};
 	return prepare.failure
@@ -674,7 +685,7 @@ function settingsBlocking({ t, state }: BlockingContext): Blocking | null {
 	const count = state.unresolved.length;
 	if (!count) return null;
 	return {
-		text: t("deploy.frame.unresolved", {
+		text: t("devices:deploy.frame.unresolved", {
 			count,
 			defaultValue_one:
 				"A stored value no longer fits this update. Replace or remove it.",
@@ -698,15 +709,19 @@ function whereBlocking({ t, state }: BlockingContext): Blocking | null {
 	return gaveUp
 		? {
 				text: t(
-					"deploy.frame.cantConnect",
+					"devices:deploy.frame.cantConnect",
 					"Couldn't connect to {{device}}. Deploying needs a live connection.",
 					{ device: waiting.name },
 				),
 			}
 		: {
-				text: t("deploy.frame.connecting", "Connecting to {{device}}…", {
-					device: waiting.name,
-				}),
+				text: t(
+					"devices:deploy.frame.connecting",
+					"Connecting to {{device}}…",
+					{
+						device: waiting.name,
+					},
+				),
 				busy: true,
 			};
 }
@@ -716,7 +731,7 @@ function endpointBlocking({ t, state }: BlockingContext): Blocking | null {
 	return limitsOutOfRange(state.plan)
 		? {
 				text: t(
-					"deploy.frame.limits",
+					"devices:deploy.frame.limits",
 					"Set limits the device accepts: CPU above 0, memory of at least 64 MiB, 16 to 65,536 processes and at least 16 MiB of disk.",
 				),
 			}
@@ -779,7 +794,7 @@ function ReviewHold({
 		<GateNotice
 			kind="policy"
 			title={t(
-				"deploy.frame.holdTitle",
+				"devices:deploy.frame.holdTitle",
 				"{{step}} needs your attention first.",
 				{
 					step,
@@ -788,16 +803,12 @@ function ReviewHold({
 			text={text}
 			actions={
 				<DvButton size="sm" onClick={onOpen}>
-					{t("deploy.frame.holdOpen", "Go to {{step}}", { step })}
+					{t("devices:deploy.frame.holdOpen", "Go to {{step}}", { step })}
 				</DvButton>
 			}
 		/>
 	);
 }
-
-/** The stepper spans both columns, each step as wide as its label; where eight labels don't fit on one line they wrap instead of ending in "…". */
-const STEPPER =
-	"max-w-[1124px] [&_li]:basis-auto @max-[1100px]/dwiz:[&_li>span:last-child]:leading-[15px] @max-[1100px]/dwiz:[&_li>span:last-child]:whitespace-normal";
 
 /** Phone foot (APP §3.17): the primary on its own row, Back and Discard… side by side under it. */
 const PHONE_BACK = "@max-[480px]/wfoot:order-2 @max-[480px]/wfoot:flex-1";
@@ -822,7 +833,7 @@ function FootButtons({
 		<div className="flex flex-wrap items-center gap-2 @max-[480px]/wfoot:contents">
 			{onBack ? (
 				<DvButton icon={ChevronLeft} onClick={onBack} className={PHONE_BACK}>
-					{t("deploy.frame.back", "Back")}
+					{t("devices:deploy.frame.back", "Back")}
 				</DvButton>
 			) : null}
 			{primarySlot ? (
@@ -839,7 +850,7 @@ function FootButtons({
 					onClick={onNext}
 					className="@max-[480px]/wfoot:order-1 @max-[480px]/wfoot:basis-full"
 				>
-					{t("deploy.frame.continue", "Continue")}
+					{t("devices:deploy.frame.continue", "Continue")}
 					<ChevronRight aria-hidden className="size-4" />
 				</DvButton>
 			) : null}
@@ -959,23 +970,23 @@ function ResumedBanner({
 			tone="info"
 			icon={History}
 			title={t(
-				"deploy.frame.resumed",
+				"devices:deploy.frame.resumed",
 				"Picked up where you left off: {{step}}.",
 				{ step },
 			)}
 			actions={
 				<>
 					<DvButton size="sm" variant="ghost" onClick={onStartOver}>
-						{t("deploy.frame.startOver", "Start over…")}
+						{t("devices:deploy.frame.startOver", "Start over…")}
 					</DvButton>
 					<DvButton size="sm" variant="ghost" onClick={onDismiss}>
-						{t("deploy.frame.dismiss", "Dismiss")}
+						{t("devices:deploy.frame.dismiss", "Dismiss")}
 					</DvButton>
 				</>
 			}
 		>
 			{t(
-				"deploy.frame.resumedText",
+				"devices:deploy.frame.resumedText",
 				"Your choices were kept in this window. Secrets and access tokens are never kept, so enter them again.",
 			)}
 		</Banner>
@@ -989,11 +1000,11 @@ function LocalWebNotice({ app }: Readonly<{ app: string }>) {
 		<GateNotice
 			kind="platform"
 			title={t(
-				"deploy.frame.localWebTitle",
+				"devices:deploy.frame.localWebTitle",
 				"Local-only apps deploy from the desktop app.",
 			)}
 			text={t(
-				"deploy.frame.localWeb",
+				"devices:deploy.frame.localWeb",
 				"{{app}} exists only on the computer that created it, so the browser can't prepare its offline copy. You can look through the steps; Deploy stays unavailable here.",
 				{ app },
 			)}
@@ -1058,7 +1069,7 @@ function WizardFooter({
 							onClick={onDiscard}
 							className={PHONE_DISCARD}
 						>
-							{t("deploy.frame.discard", "Discard…")}
+							{t("devices:deploy.frame.discard", "Discard…")}
 						</DvButton>
 						<span className="hidden flex-1 @max-[720px]/wfoot:block @max-[480px]/wfoot:hidden" />
 					</>
@@ -1082,6 +1093,7 @@ function Wizard({
 }: Readonly<{ route: DeployRoute; scope: DevicesScope }>) {
 	const { t } = useTranslation("devices");
 	const { navigate } = useDevicesRoute();
+	const hostLink = useHostLink();
 	const body = useRef<HTMLDivElement>(null);
 	const state = useDeployDraft(route, scope);
 	const { plan, check, mode } = state;
@@ -1178,9 +1190,9 @@ function Wizard({
 		state,
 		prepare,
 	};
-	const exit = t("deploy.frame.exit", "Exit deploy");
+	const exit = t("devices:deploy.frame.exit", "Exit deploy");
 	const exitTitle = t(
-		"deploy.frame.exitTitle",
+		"devices:deploy.frame.exitTitle",
 		"Your choices stay in this window, so you can come back and continue.",
 	);
 
@@ -1196,11 +1208,10 @@ function Wizard({
 					exitLabel={exit}
 					exitTitle={exitTitle}
 					{...(route.from === "events"
-						? { exitHref: deployExitHref(route, scope) }
+						? { exitLink: hostLink(deployExitHref(route, scope)) }
 						: { onExit: () => navigate(exitRoute(route, scope)) })}
 					title={wizardTitle(t, state)}
 					sub={wizardSub(t, state)}
-					className="@max-[720px]/dwiz:flex-col @max-[720px]/dwiz:items-start @max-[720px]/dwiz:gap-2"
 				/>
 			</header>
 			{running ? (
@@ -1209,17 +1220,26 @@ function Wizard({
 				<PlanningHeadline state={state} stepIndex={index} />
 			)}
 			<WizardStepper
-				label={t("deploy.frame.steps", "Deploy steps")}
+				label={t("devices:deploy.frame.steps", "Deploy steps")}
 				steps={steps.map((id) => stepLabel(t, id, limitsOnly))}
+				titles={steps.map((id) => stepTitle(t, id, limitsOnly))}
 				current={index}
-				className={STEPPER}
+				// A prefilled step ahead (the app of an app's page, the devices of the entry) is already done.
+				done={steps.map((id, at) => at < index || prefilled.has(id))}
+				reachable={steps.map((id) => canVisit(summary, id))}
+				onSelect={(at) => {
+					const target = steps[at];
+					if (target) goTo(target);
+				}}
+				fit
+				className="max-w-[1124px]"
 			/>
 			<div className="grid max-w-[1124px] grid-cols-[minmax(0,760px)_minmax(280px,340px)] items-start gap-x-6 gap-y-4 @max-[960px]/dwiz:grid-cols-1">
 				<div className="flex min-w-0 flex-col gap-4">
 					{state.resumed && !running ? (
 						<ResumedBanner
 							step={t(
-								"deploy.frame.resumedStep",
+								"devices:deploy.frame.resumedStep",
 								"step {{n, number}} of {{total, number}} · {{step}}",
 								{
 									n: index + 1,
@@ -1236,7 +1256,10 @@ function Wizard({
 					) : state.error ? (
 						<StateView
 							kind="error"
-							title={t("deploy.frame.appError", "Couldn't load this app")}
+							title={t(
+								"devices:deploy.frame.appError",
+								"Couldn't load this app",
+							)}
 							text={state.error.message}
 						/>
 					) : (

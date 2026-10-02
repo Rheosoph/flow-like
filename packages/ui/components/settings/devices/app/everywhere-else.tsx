@@ -16,6 +16,7 @@ import { type ReactNode, useMemo, useState } from "react";
 import { useUserIdentity } from "../../../../hooks/use-user-lookup";
 import type { EverywhereRow } from "../../../../lib/device-management/model/app-plan";
 import { Checkbox } from "../../../ui/checkbox";
+import { identityName } from "../access/person-name";
 import { useAreaTime } from "../primitives/area-context";
 import { Block } from "../primitives/block";
 import { DvButton } from "../primitives/dv-button";
@@ -241,14 +242,14 @@ function Owner({
 }>) {
 	const { data } = useAppPage();
 	const device = data.devices.get(row.deviceId);
-	const owner = useUserIdentity(
-		device?.relationship === "shared" ? device.row.owner_id : undefined,
-	);
+	const ownerId =
+		device?.relationship === "shared" ? device.row.owner_id : undefined;
+	const owner = useUserIdentity(ownerId);
 	const endsAt =
 		typeof device?.row.access_expires_at === "number"
 			? device.row.access_expires_at
 			: undefined;
-	return render(owner.isResolved ? owner.label : undefined, endsAt);
+	return render(identityName(owner, ownerId), endsAt);
 }
 
 /** "Shared by Mira Novak · ends in 14 h" for a device shared with the viewer. */

@@ -247,9 +247,14 @@ describe("FleetServicesTable filters", () => {
 	});
 
 	test("the App filter narrows to one app, says how it runs and links to its Devices page", async () => {
-		const { container } = await mountServices();
+		const { container, navigations } = await mountServices();
 		await pickApp("Invoice AI · 1 service");
 		expect(serviceIds(container)).toEqual(["invoice-extractor"]);
+		// The filter is in the URL: a reload or a shared link keeps it.
+		expect(navigations.at(-1)).toEqual({
+			mode: "replace",
+			href: "/settings/devices?view=services&app=app_invoice_ai",
+		});
 		const bar = block(container).querySelector(
 			'[data-app-context="app_invoice_ai"]',
 		) as HTMLElement;
@@ -266,6 +271,17 @@ describe("FleetServicesTable filters", () => {
 		await click(byRole("button", "Show all apps", bar));
 		expect(serviceIds(container).length).toBe(5);
 		expect(block(container).querySelector("[data-app-context]")).toBeNull();
+		expect(navigations.at(-1)?.href).toBe("/settings/devices?view=services");
+	});
+
+	test("app=<id> in the link opens the Services view on that app", async () => {
+		const { container } = await mountServices({
+			search: "view=services&app=app_invoice_ai",
+		});
+		expect(serviceIds(container)).toEqual(["invoice-extractor"]);
+		expect(
+			block(container).querySelector('[data-app-context="app_invoice_ai"]'),
+		).not.toBeNull();
 	});
 
 	test("an app that runs nowhere readable explains why and how it would run", async () => {

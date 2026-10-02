@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { type ReactNode, useRef, useState } from "react";
+import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import {
 	ConsequencePreview,
 	type ConsequenceRows,
@@ -27,6 +27,29 @@ export interface InlineConfirmProps {
 	className?: string;
 }
 
+/**
+ * The question takes the focus when it appears (keyboard and screen reader are
+ * where it is asked) and hands it back to the control that opened it when it
+ * goes, unless the person has moved on meanwhile.
+ */
+function useConfirmFocus() {
+	const region = useRef<HTMLElement>(null);
+	useLayoutEffect(() => {
+		const node = region.current;
+		const opener = document.activeElement;
+		node?.querySelector("button")?.focus();
+		return () => {
+			if (
+				node?.contains(document.activeElement) &&
+				opener instanceof HTMLElement &&
+				opener.isConnected
+			)
+				opener.focus();
+		};
+	}, []);
+	return region;
+}
+
 /** SPEC §4.6 inline form for Start/Stop/Restart/scale in tables and on N3; replaced by an InlineResult after it runs. */
 export function InlineConfirm({
 	label,
@@ -43,6 +66,7 @@ export function InlineConfirm({
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const inFlight = useRef(false);
+	const region = useConfirmFocus();
 
 	const submit = async () => {
 		if (inFlight.current) return;
@@ -61,6 +85,7 @@ export function InlineConfirm({
 
 	return (
 		<section
+			ref={region}
 			aria-label={label}
 			data-inline-confirm=""
 			className={cx(

@@ -18,6 +18,7 @@ import {
 import type {
 	AttentionItem,
 	DeviceViewModel,
+	OfflineWritesSummary,
 	PlacementConfigFacts,
 	ServiceView,
 } from "../../../../lib/device-management/model/types";
@@ -598,13 +599,28 @@ export interface ServiceDiagnosis {
 	endpoint: PlacementConfigFacts | undefined;
 }
 
+/**
+ * Whether the service buffers writes, as far as this computer can tell: its
+ * settings were read here and say so, or the device holds queues for it. The
+ * agent's summary exists for every service, so its mere presence says nothing.
+ */
+function buffersWrites(
+	endpoint: PlacementConfigFacts | undefined,
+	queues: readonly OfflineQueueStatus[] = [],
+	scopes = 0,
+) {
+	const settings = endpoint ? endpoint.offlineWrites : undefined;
+	return settings !== undefined || queues.length > 0 || scopes > 0;
+}
+
 /** The page's conclusion (SPEC §6.4 N3) and the facts the diagnosis block lists under it. */
 export function useServiceDiagnosis(
 	device: DeviceViewModel,
 	serviceId: string,
 	service: ServiceView | undefined,
 	rollout: DeploymentRolloutStatus | undefined,
-	needsAttention: number | undefined,
+	/** The agent's summary of the service's buffered writes, when it reports one. */
+	summary: Pick<OfflineWritesSummary, "needs_attention" | "scopes"> | undefined,
 ): ServiceDiagnosis {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
@@ -616,11 +632,16 @@ export function useServiceDiagnosis(
 	const live = input.live[deviceId];
 	const liveQueues = live?.offlineQueues?.[serviceId];
 	const endpoint = live?.placements?.[serviceId];
-	const queues = useMemo(
-		() =>
-			service ? queueFacts(service, liveQueues, needsAttention) : undefined,
-		[service, liveQueues, needsAttention],
-	);
+	const needsAttention = summary?.needs_attention;
+	const scopes = summary?.scopes;
+	const queues = useMemo(() => {
+		if (!service) return undefined;
+		const facts = queueFacts(service, liveQueues, needsAttention);
+		// A service that doesn't buffer has nothing to be "up to date" with.
+		const used =
+			buffersWrites(endpoint, liveQueues, scopes) || (facts?.waiting ?? 0) > 0;
+		return used ? facts : undefined;
+	}, [service, liveQueues, needsAttention, scopes, endpoint]);
 	const cloudInvalid = attention.some(
 		(item) => item.key === "cloud_access_invalid",
 	);

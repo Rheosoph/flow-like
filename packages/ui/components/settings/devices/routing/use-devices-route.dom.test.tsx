@@ -15,6 +15,7 @@ const {
 	DevicesRouteBoundary,
 	MemoryDevicesRoute,
 	useDevicesRoute,
+	useHostLink,
 	useRouteLink,
 } = await import("./use-devices-route");
 
@@ -297,6 +298,51 @@ describe("useRouteLink", () => {
 			metaKey: true,
 		}) as unknown as Event;
 		await fire(anchor, event);
+		expect(navigations).toEqual([]);
+		expect(event.defaultPrevented).toBe(false);
+	});
+});
+
+describe("useHostLink", () => {
+	const EVENTS = `/library/config/events?id=${APP}`;
+
+	function Link() {
+		const hostLink = useHostLink();
+		return <a {...hostLink(EVENTS)}>Events</a>;
+	}
+
+	async function mountLink() {
+		const navigations: MemoryNavigation[] = [];
+		await dom.render(
+			<MemoryDevicesRoute
+				host="app"
+				initialSearch={`id=${APP}`}
+				onNavigate={(entry) => navigations.push(entry)}
+			>
+				<Link />
+				<Probe />
+			</MemoryDevicesRoute>,
+		);
+		return navigations;
+	}
+
+	test("a page outside the area opens through the host's router, and the area's own route stays", async () => {
+		const navigations = await mountLink();
+		const anchor = byRole("link", "Events");
+		expect(anchor.getAttribute("href")).toBe(EVENTS);
+		await click(anchor);
+		expect(navigations).toEqual([{ mode: "push", href: EVENTS }]);
+		expect(api.route).toEqual({ screen: "app-devices", by: "device" });
+	});
+
+	test("leaves a modified click to the browser", async () => {
+		const navigations = await mountLink();
+		const event = new dom.window.MouseEvent("click", {
+			bubbles: true,
+			cancelable: true,
+			ctrlKey: true,
+		}) as unknown as Event;
+		await fire(byRole("link", "Events"), event);
 		expect(navigations).toEqual([]);
 		expect(event.defaultPrevented).toBe(false);
 	});

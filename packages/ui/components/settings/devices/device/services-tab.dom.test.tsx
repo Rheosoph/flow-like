@@ -65,7 +65,10 @@ describe("services table", () => {
 		expect(invoice).toContain("Write buffering · up to date");
 		expect(invoice).toContain("127.0.0.1:8081");
 		expect(invoice).toContain("0 of 1 ready");
-		expect(invoice).toContain("App version unknown");
+		// An older version has no name (the hub keeps no version history): its hash, the drift and the way to the newest.
+		expect(invoice).toContain("491e8acf1 behind");
+		expect(invoice).toContain("Update to v1.5.0: after this update finishes");
+		expect(invoice).not.toContain("App version unknown");
 		expect(invoice).toContain("Settings v12");
 		expect(invoice).toContain("running v11 · applying");
 		expect(invoice).toContain("Switching over");
@@ -74,6 +77,10 @@ describe("services table", () => {
 		expect(support).toContain("Support Portal· Offline copy");
 		expect(support).toContain("Serves Support chat · Support API");
 		expect(support).toContain("2 of 2 ready");
+		expect(support).toContain("71c6216b1 behind");
+		expect(
+			byRole("link", "Update to v2.4.0…", row(view, "support-bot")),
+		).toBeTruthy();
 		expect(support).toContain("No update running");
 		expect(text(view.container)).toContain(
 			"Requested is what you asked for; actual is what the device reports.",

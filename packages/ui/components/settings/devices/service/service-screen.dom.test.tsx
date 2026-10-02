@@ -124,7 +124,9 @@ describe("header and verdict", () => {
 		);
 		expect(page).toContain("Offline copy · data lives only on edge-berlin-01");
 		expect(page).toContain("Support chat");
-		expect(page).not.toContain("How to update");
+		// Its copy is one app version behind: an older version has no name, so the hash carries the drift.
+		expect(page).toContain("App version71c6216b1 behind");
+		expect(byRole("link", "How to update", view.container)).toBeTruthy();
 		expect(page).not.toMatch(MACHINE);
 	});
 
@@ -150,6 +152,22 @@ describe("header and verdict", () => {
 		expect(where.getAttribute("href")).toContain(`focus=${EDGE}`);
 		expect(page).not.toContain("Also on edge-berlin-01");
 		expect(primaries()).toBeLessThanOrEqual(1);
+	});
+});
+
+describe("diagnosis", () => {
+	const status = (view: View) =>
+		view.container.querySelector("[data-service-status]") as HTMLElement;
+
+	test("write buffering is reported for a service that buffers, and not claimed for one that doesn't", async () => {
+		const copy = await open(EDGE, "nightly-sync");
+		expect(text(status(copy))).toContain("Requested Stopped, actual Stopped");
+		expect(text(status(copy))).not.toContain("Write buffering");
+		await copy.unmount();
+		const buffering = await open(EDGE, "invoice-extractor");
+		expect(text(status(buffering))).toContain(
+			"Write buffering up to date · 0 waiting",
+		);
 	});
 });
 
@@ -280,6 +298,10 @@ describe("action bar", () => {
 		expect(text(confirm)).toContain("Stop support-bot?");
 		expect(text(confirm)).toContain("The service stops answering");
 		expect(writes(view)).toEqual([]);
+		// The question takes the focus, so the keyboard and a screen reader are where it is.
+		expect(document.activeElement).toBe(
+			byRole("button", "Stop support-bot", confirm),
+		);
 		await click(byRole("button", "Stop support-bot", confirm));
 		await view.settle();
 		expect(writes(view)).toEqual(["stop"]);
@@ -304,10 +326,12 @@ describe("action bar", () => {
 
 	test("Cancel in the inline confirm sends nothing", async () => {
 		const view = await open(EDGE, "support-bot");
-		await click(byRole("button", "Restart…", actions(view) as HTMLElement));
+		const restart = byRole("button", "Restart…", actions(view) as HTMLElement);
+		await click(restart);
 		await click(byRole("button", "Cancel", view.container));
 		expect(writes(view)).toEqual([]);
 		expect(view.container.querySelector("[data-inline-confirm]")).toBeNull();
+		expect(document.activeElement).toBe(restart);
 	});
 
 	test("a stopped service offers Start, which starts it after the inline confirm", async () => {
@@ -315,6 +339,10 @@ describe("action bar", () => {
 		const bar = actions(view) as HTMLElement;
 		expect(queryByRole("button", "Stop…", bar)).toBeNull();
 		expect(text(view.container)).toContain("Stopped, as you asked.");
+		// Its settings weren't read here; the app's events say why it can't run more than one instance.
+		expect(text(bar)).toContain(
+			"This service runs one instance: its background event runs once per device.",
+		);
 		await click(byRole("button", "Start", bar));
 		await click(byRole("button", "Start nightly-sync", view.container));
 		await view.settle();
@@ -360,7 +388,10 @@ describe("action bar", () => {
 		expect(
 			items.some((item) => item.startsWith("Where Support Portal runs")),
 		).toBe(true);
-		expect(items.some((item) => item.startsWith("Update…"))).toBe(true);
+		// The copy is one version behind, so the entry names where the update leads.
+		expect(items.some((item) => item.startsWith("Update to v2.4.0…"))).toBe(
+			true,
+		);
 		expect(items.some((item) => item.startsWith("Add an event…"))).toBe(true);
 		const remove = byRole("menuitem", /Remove service…/, menu);
 		expect(text(remove)).toContain("In Configuration › Danger zone");
@@ -375,7 +406,7 @@ describe("action bar", () => {
 		await click(
 			byRole("button", "More actions for support-bot", view.container),
 		);
-		await click(byRole("menuitem", /^Update…/, inPortal("menu")));
+		await click(byRole("menuitem", /^Update to v2\.4\.0…/, inPortal("menu")));
 		await view.settle();
 		const href = view.navigations.at(-1)?.href ?? "";
 		expect(href).toContain("flow=deploy");

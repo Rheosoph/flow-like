@@ -705,7 +705,12 @@ function onlineEvent(event: IEvent): DeploymentEvent {
 		eligible: rule.eligible,
 	});
 }
-function boardVariables(
+/**
+ * The variables a board and its layers let a device set (exposed, or set at run
+ * time). Throws on one a placement cannot configure and on two layers that
+ * define the same variable differently.
+ */
+export function boardVariables(
 	board: Pick<IBoard, "variables" | "layers">,
 ): DeploymentVariable[] {
 	return mergeVariables(

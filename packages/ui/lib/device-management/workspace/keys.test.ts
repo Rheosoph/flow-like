@@ -335,7 +335,7 @@ function harness(
 			role: row.grantId === "owner" ? "owner" : "shared",
 			grantId: row.grantId,
 			requiresFreshEndpoint: Boolean(row.requiresFreshEndpoint),
-			identityPinnedAt: 500,
+			identityPinnedAt: 500_999,
 			identityFingerprint: identityFingerprint(identity(20)),
 		})),
 		backups: {},
@@ -716,6 +716,44 @@ test("late decrypted results after lock are discarded and the controller is clos
 	expect(h.keys.snapshot("dev").lastError).toBeUndefined();
 });
 
+test("a hub failure at the identity read stays on the session and the unlock rejects with the hub's error", async () => {
+	const h = harness();
+	const refused = Object.assign(new Error("[HTTP_503] hub down"), {
+		status: 503,
+	});
+	h.setIdentityFetch(async () => {
+		throw refused;
+	});
+	const failed: string[] = [];
+	const error = await h.keys
+		.unlock("dev", PASSWORD, {
+			onProgress: (step) => {
+				if (step.state === "failed")
+					failed.push(`${step.id}:${step.detail?.code}`);
+			},
+		})
+		.catch((cause: unknown) => cause);
+	expect(error).toBe(refused);
+	expect(failed).toEqual(["checking_identity:http_error"]);
+	expect(h.keys.snapshot("dev")).toMatchObject({
+		state: "locked",
+		lastError: { code: "hub", status: 503 },
+	});
+	expect(h.opened[0].state).toEqual({ closed: 1, freed: 1 });
+
+	h.setIdentityFetch(async () => {
+		throw new TypeError("Failed to fetch");
+	});
+	await h.keys.unlock("dev", PASSWORD).catch(() => undefined);
+	expect(h.keys.snapshot("dev").lastError).toEqual({ code: "hub" });
+
+	h.setIdentityFetch(async (deviceId) => receipt(deviceId));
+	await h.keys.unlock("dev", PASSWORD);
+	expect(h.keys.snapshot("dev")).toMatchObject({ state: "unlocked" });
+	expect(h.keys.snapshot("dev").lastError).toBeUndefined();
+	h.keys.lockAll();
+});
+
 test("a restored vault gets a fresh endpoint at first unlock with the re-approval note", async () => {
 	const h = harness([vault("dev", { restored: true })]);
 	expect(h.keys.snapshot("dev").restoredNeedsFreshEndpoint).toBe(true);
@@ -750,6 +788,7 @@ test("an identity mismatch is a hard block before and after the password", async
 	const preflight = await h.keys.preflight("dev");
 	const d7 = preflight.rows.find((row) => row.id === "D7");
 	expect(d7?.status).toBe("block");
+	expect(d7?.copy.params?.since).toBe(500);
 	expect(preflight.passwordEnabled).toBe(false);
 	expect(h.keys.snapshot("dev")).toMatchObject({
 		state: "blocked",

@@ -56,7 +56,7 @@ class DecisionExportTests(unittest.TestCase):
             vocab_size=64, hidden_size=32, intermediate_size=48,
             num_hidden_layers=3, num_attention_heads=4, max_position_embeddings=512,
             layer_types=["full_attention", "sliding_attention", "sliding_attention"],
-            local_attention=8, pad_token_id=0, bos_token_id=1, eos_token_id=2,
+            local_attention=128, pad_token_id=0, bos_token_id=1, eos_token_id=2,
             cls_token_id=1, sep_token_id=2,
         )
         config._attn_implementation = "eager"
@@ -67,7 +67,8 @@ class DecisionExportTests(unittest.TestCase):
                   torch.tensor([[3, 5], [3, 5]]))
         inputs[0][1, 15:] = 0
         inputs[1][1, 15:] = 0
-        changed = (torch.randint(1, 64, (1, 28)), torch.ones((1, 28), dtype=torch.int64),
+        # Export below the local window, then evaluate a sequence that crosses it.
+        changed = (torch.randint(1, 64, (1, 148)), torch.ones((1, 148), dtype=torch.int64),
                    torch.tensor([[3, 6, 8]]))
         names = ["input_ids", "attention_mask", "label_positions"]
         axes = {"input_ids": {0: "batch", 1: "sequence"},

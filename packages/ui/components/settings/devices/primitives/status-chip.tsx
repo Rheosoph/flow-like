@@ -10,6 +10,7 @@ import {
 	CloudDownload,
 	CloudOff,
 	CloudUpload,
+	Fingerprint,
 	KeyRound,
 	LoaderCircle,
 	Lock,
@@ -37,6 +38,8 @@ export interface StatusChipProps
 	/** A non-Lucide leading glyph (presence shape). Wins over `icon`. */
 	glyph?: ReactNode;
 	spin?: boolean;
+	/** A long label takes a second line instead of being cut (narrow columns); the chip gets 4 px corners. */
+	wrap?: boolean;
 	children: ReactNode;
 }
 
@@ -46,6 +49,7 @@ export function StatusChip({
 	icon: Icon,
 	glyph,
 	spin = false,
+	wrap = false,
 	className,
 	children,
 	...props
@@ -57,6 +61,8 @@ export function StatusChip({
 			className={cx(
 				"h-5.5 max-w-full gap-1.25 border px-2 py-0 align-middle text-xs font-medium [&>svg]:size-3.25",
 				TONE_CHIP[tone],
+				wrap &&
+					"h-auto min-h-5.5 items-start rounded-md py-0.5 whitespace-normal [&>svg]:mt-0.5",
 				className,
 			)}
 			{...props}
@@ -65,7 +71,7 @@ export function StatusChip({
 				(Icon ? (
 					<Icon aria-hidden className={spin ? "animate-spin" : undefined} />
 				) : null)}
-			<span className="min-w-0 truncate">{children}</span>
+			<span className={wrap ? "min-w-0" : "min-w-0 truncate"}>{children}</span>
 		</Badge>
 	);
 }
@@ -219,7 +225,7 @@ const KEY_LOOK: Record<KeyChipState, ChipLook> = {
 	unlocking: { tone: "info", icon: LoaderCircle, spin: true },
 	unlocked: { tone: "info", icon: LockOpen },
 	held_elsewhere: { tone: "locked", icon: AppWindow },
-	blocked: { tone: "warning", icon: TriangleAlert },
+	blocked: { tone: "critical", icon: Fingerprint },
 	locked: { tone: "locked", icon: Lock },
 	stale: { tone: "outline", icon: KeyRound },
 	none: { tone: "outline", icon: KeyRound },
@@ -274,8 +280,13 @@ export function KeyChip({
 		held_elsewhere: {
 			text: t("enum.lockHolder.anotherWindow", "Unlocked in another window"),
 		},
+		// The key manager blocks a session only when the hub reports another identity than the trusted one.
 		blocked: {
-			text: t("enum.lockHolder.unsupported", "Browser can't protect keys"),
+			text: t("common.key.identityChanged", "Identity changed"),
+			title: t(
+				"common.key.identityChangedTitle",
+				"The hub reports other keys than the ones trusted on this computer. The keys here stay closed until you confirm the identity.",
+			),
 		},
 		locked: {
 			text: t("enum.vaultState.locked", "Locked"),

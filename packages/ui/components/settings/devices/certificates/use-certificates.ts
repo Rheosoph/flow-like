@@ -3,15 +3,13 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import { AuthContext } from "react-oidc-context";
-import { z } from "zod";
 import { useUserIdentity } from "../../../../hooks/use-user-lookup";
 import {
 	type CertificateAuthorityEnvelope,
 	type LocalCertificateAuthority,
-	authorityEnvelopeSchema,
+	MAX_AUTHORITY_BACKUP_BYTES,
 } from "../../../../lib/device-management/certificate-authority";
 import type { PublicCertificateInventory } from "../../../../lib/device-management/certificates";
-import { withPassword } from "../../../../lib/device-management/crypto";
 import {
 	type HubError,
 	toHubError,
@@ -23,13 +21,13 @@ import {
 import type { Freshness } from "../../../../lib/device-management/model/types";
 import {
 	type DeviceAccountScope,
-	accountStorageKey,
 	addCertificateAuthority,
 	readCertificateAuthorities,
 	removeCertificateAuthority,
 	replaceCertificateAuthority,
 } from "../../../../lib/device-management/storage";
 import type { DeviceCrypto } from "../../../../lib/device-management/types";
+import { identityName } from "../access/person-name";
 import { useAreaTime } from "../primitives/area-context";
 import { useDeviceWorkspace } from "../workspace/device-workspace-provider";
 import { useAttentionInput } from "../workspace/use-attention";
@@ -46,7 +44,6 @@ import {
 
 /** Older hub: devices whose certificate report is read one by one (BG28 interim). */
 export const PER_DEVICE_READ_CAP = 50;
-export const MAX_BACKUP_BYTES = 1024 * 1024;
 /** Day counts and expiry states don't need the 1 s clock. */
 const CLOCK_STEP_S = 30;
 
@@ -287,91 +284,9 @@ export function localAuthority(
 	};
 }
 
-const backupSchema = z
-	.object({ version: z.literal(1) })
-	.merge(authorityEnvelopeSchema);
-
-/** Whether the password opens the signing key kept on this computer. Nothing changes. */
-export function testAuthorityPassword(
-	scope: DeviceAccountScope,
-	authority: LocalCertificateAuthority,
-	password: string,
-	crypto: DeviceCrypto,
-): Promise<boolean> {
-	return withPassword(password, (bytes) =>
-		crypto.inspectCertificateAuthorityVault(
-			accountStorageKey(scope),
-			authority.public_bundle.authority_id,
-			bytes,
-			authority.vault,
-		),
-	).then(
-		() => true,
-		() => false,
-	);
-}
-
-function matchingBackup(
-	scope: DeviceAccountScope,
-	authority: LocalCertificateAuthority,
-	backupText: string,
-) {
-	try {
-		if (new TextEncoder().encode(backupText).length > MAX_BACKUP_BYTES)
-			return null;
-		const backup = backupSchema.parse(JSON.parse(backupText));
-		const { public_bundle: saved } = authority;
-		return backup.public_bundle.account_binding === accountStorageKey(scope) &&
-			backup.public_bundle.authority_id === saved.authority_id &&
-			backup.public_bundle.root_certificate_pem === saved.root_certificate_pem
-			? backup
-			: null;
-	} catch {
-		return null;
-	}
-}
-
-/** `backup`: the file isn't this authority's backup. `password`: the keys didn't open. No library text leaves here. */
-export type RewrapResult =
-	| { ok: true; envelope: CertificateAuthorityEnvelope }
-	| { ok: false; reason: "backup" | "password" };
-
-/**
- * Seals the signing key and the backup's root key with a new password. Both
- * keys are needed, so the backup file is part of the change, and the result is
- * a new backup that opens with the new password.
- */
-export async function rewrapAuthority(
-	scope: DeviceAccountScope,
-	authority: LocalCertificateAuthority,
-	backupText: string,
-	passwords: { current: string; next: string },
-	crypto: DeviceCrypto,
-): Promise<RewrapResult> {
-	const backup = matchingBackup(scope, authority, backupText);
-	if (!backup) return { ok: false, reason: "backup" };
-	try {
-		const result = await withPassword(passwords.current, (current) =>
-			withPassword(passwords.next, (next) =>
-				crypto.rewrapCertificateAuthorityVault(
-					accountStorageKey(scope),
-					authority.public_bundle.authority_id,
-					current,
-					next,
-					authority.vault,
-					Uint8Array.from(backup.root_vault),
-				),
-			),
-		);
-		return { ok: true, envelope: authorityEnvelopeSchema.parse(result) };
-	} catch {
-		return { ok: false, reason: "password" };
-	}
-}
-
 /** The file's text, or null when it is larger than an authority backup can be. */
 export async function readBackupFile(file: File): Promise<string | null> {
-	if (file.size > MAX_BACKUP_BYTES) return null;
+	if (file.size > MAX_AUTHORITY_BACKUP_BYTES) return null;
 	return file.text();
 }
 
@@ -419,9 +334,8 @@ export interface Person {
 /** A person through the app's batched account lookup. */
 export function usePerson(userId: string | undefined): Person {
 	const identity = useUserIdentity(userId);
-	return identity.isResolved
-		? { name: identity.label, avatarUrl: identity.avatarUrl }
-		: {};
+	const name = identityName(identity, userId);
+	return name ? { name, avatarUrl: identity.avatarUrl } : {};
 }
 
 /** The signed-in person's name as the host's sign-in knows it. */

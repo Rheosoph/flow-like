@@ -57,6 +57,7 @@ export {
 	type PlaneSegment,
 	type PlaneSegmentId,
 	type PlaneStatus,
+	type PolicyVerification,
 	buildAttentionInput,
 	useAttention,
 	useAttentionCounts,
@@ -135,6 +136,7 @@ export {
 	useLocalSummary,
 	usePreflight,
 } from "./use-keys";
+export { type PersonNames, usePersonNames } from "./use-people";
 export {
 	type LiveSessionView,
 	type LiveStreamView,

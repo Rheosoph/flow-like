@@ -174,8 +174,11 @@ function ReachSentence({
 				components={{ 1: waitingLinks }}
 			/>
 		);
+	const person = names(soon.userId);
 	const values = {
-		name: names(soon.userId).name,
+		name: person.known
+			? person.name
+			: t("access.headline.onePerson", "One person"),
 		time: time.at(soon.expiresAt),
 	};
 	const soonLink = (

@@ -335,6 +335,42 @@ describe("fake hub", () => {
 		]);
 	});
 
+	test("a placement holds one active cloud approval: a second one is a conflict until the first is revoked", async () => {
+		const api = fakeDeviceApi();
+		const grants = `devices/${edge}/resource-grants`;
+		const approve = (deploymentId: string) =>
+			api.fetch<{ grant_id: string }>(api.profile, grants, {
+				method: "POST",
+				body: JSON.stringify({
+					placement_id: "visitor-check-in",
+					deployment_id: deploymentId,
+					project_id: SAMPLE_APPS.invoiceAi,
+				}),
+			});
+		const first = await approve("00000000-0000-4000-8000-0000000000d1");
+		await expect(
+			approve("00000000-0000-4000-8000-0000000000d2"),
+		).rejects.toMatchObject({ status: 409 });
+		await api.fetch(api.profile, `${grants}/${first.grant_id}`, {
+			method: "DELETE",
+		});
+		const second = await approve("00000000-0000-4000-8000-0000000000d2");
+		expect(second.grant_id).not.toBe(first.grant_id);
+	});
+
+	test("a device's certificate report needs the owner or whole-device access", async () => {
+		const api = fakeDeviceApi();
+		const report = (deviceId: string) =>
+			outcome(() =>
+				api.fetch(api.profile, `devices/${deviceId}/certificate-inventory`, {
+					method: "GET",
+				}),
+			);
+		expect(await report(edge)).toBe("ok");
+		// lab-gpu-02 is shared for one app only.
+		expect(await report(lab)).toBe("coded 403");
+	});
+
 	test("certificate reminders can be muted, listed and tested once per ten minutes", async () => {
 		const api = fakeDeviceApi();
 		const { profile } = api;
@@ -561,6 +597,48 @@ describe("fake agent", () => {
 		).toBe(true);
 		expect(api.commands.map(([, type]) => type)).toContain("restart");
 	});
+
+	test("a quick update honours `start`; a service is removed only once it is asked to stop and has stopped", async () => {
+		fake = await createFakeWorkspace(sampleFleet(), { unlock: [edge] });
+		const { workspace, api } = fake;
+		const agent = api.agent(edge);
+		const call = workspace.live.call(edge);
+		const row = () => agent.placement("support-bot");
+		const states = () => [row()?.desired_state, row()?.observed_state];
+		const { project_id, deployment_id, revision } = seeded(row());
+		const config = { id: "support-bot", project_id, deployment_id, revision };
+		const apply = (expected_revision: number, start: boolean) =>
+			call({ type: "apply", config, expected_revision, start });
+
+		expect((await apply(7, true)).state).toBe("completed");
+		expect(states()).toEqual(["running", "running"]);
+		expect((await apply(8, false)).state).toBe("completed");
+		expect(states()).toEqual(["stopped", "stopped"]);
+		expect((await apply(9, true)).state).toBe("completed");
+
+		const service = { placement_id: "support-bot", expected_revision: 10 };
+		const early = await call({ type: "remove", ...service });
+		expect(managementRejection(early)?.error).toContain(
+			"must be stopped before removal",
+		);
+
+		agent.stopReads = 2;
+		expect((await call({ type: "stop", ...service })).state).toBe("completed");
+		expect(states()).toEqual(["stopped", "stopping"]);
+		const stillStopping = await call({ type: "remove", ...service });
+		expect(managementRejection(stillStopping)?.code).toBe("invalid");
+		let reads = 0;
+		while (row()?.observed_state === "stopping" && reads < 6) {
+			await workspace.live.refreshInspection(edge);
+			reads += 1;
+		}
+		expect(reads).toBeGreaterThan(0);
+		expect(states()).toEqual(["stopped", "stopped"]);
+		expect((await call({ type: "remove", ...service })).state).toBe(
+			"completed",
+		);
+		expect(row()).toBeUndefined();
+	});
 });
 
 describe("fake workspace", () => {
@@ -739,6 +817,84 @@ describe("mountDevices", () => {
 			"PUT",
 			"PUT",
 		]);
+
+		// Renewing a certificate happens on the device; renewing a person's access is a page to go to.
+		const renewals = (seen.items ?? []).filter(
+			(item) => item.action?.code === "renew",
+		);
+		const offlineCertificate = renewals.find(
+			(item) =>
+				item.subject.kind === "certificate" &&
+				item.subject.deviceId === warehouse,
+		);
+		expect(offlineCertificate?.key).toBe("certificate_expired");
+		expect(offlineCertificate?.action?.gate).toMatchObject({ ok: false });
+		const access = renewals.find((item) => item.key === "grant_expiring");
+		expect(access?.subject.kind).not.toBe("certificate");
+		expect(access?.action?.gate).toBeUndefined();
+	});
+
+	test("a hub copy of the access rules reads verified, pending or rejected", async () => {
+		const { usePolicy } = await import("../workspace/use-hub");
+		const { useAttentionState } = await import("../workspace/use-attention");
+		type Read = ReturnType<typeof usePolicy>;
+		const seen: {
+			view?: Read["data"];
+			state?: ReturnType<typeof useAttentionState>["policyState"];
+		} = {};
+		function Probe() {
+			const read = usePolicy(edge);
+			seen.view = read.data;
+			seen.state = useAttentionState().policyState;
+			return createElement("output", null, read.verification ?? "unread");
+		}
+		const view = await mountDevices(createElement(Probe));
+		for (
+			let round = 0;
+			round < 40 && view.container.textContent !== "verified";
+			round++
+		)
+			await view.settle();
+		expect(view.container.textContent).toBe("verified");
+
+		const copy = seen.view as NonNullable<Read["data"]>;
+		const state = seen.state as NonNullable<typeof seen.state>;
+		const forged = {
+			...copy,
+			policy_jws: `${copy.policy_jws}x`,
+			digest: "forged",
+		};
+		expect(state(edge, forged)).toBe("rejected");
+		expect(state(lab, copy)).toBe("pending");
+		expect(
+			state(edge, { ...copy, policy_jws: null, version: 0, digest: null }),
+		).toBe("pending");
+	});
+
+	test("the app view knows what a shared device's access covers before any unlock", async () => {
+		const { useAppView } = await import("../workspace/use-app");
+		type View = NonNullable<ReturnType<typeof useAppView>["view"]>;
+		const seen: Record<string, View | undefined> = {};
+		function Probe() {
+			seen.covered = useAppView(SAMPLE_APPS.invoiceAi).view;
+			seen.other = useAppView(SAMPLE_APPS.supportPortal).view;
+			return createElement("output", null, seen.other ? "read" : "loading");
+		}
+		const view = await mountDevices(createElement(Probe), { unlock: "none" });
+		expect(view.container.textContent).toBe("read");
+		const asked = view.fake.api.calls
+			.map(([method, path]) => `${method} ${path}`)
+			.filter((call) => call.endsWith("/my-access"));
+		expect(asked).toEqual([`GET devices/${lab}/management/my-access`]);
+
+		const idsOf = (rows: readonly { deviceId: string }[]) =>
+			rows.map((row) => row.deviceId);
+		// lab-gpu-02 is shared for Invoice AI only: for another app it says nothing, locked or not.
+		const other = seen.other as View;
+		expect(idsOf(other.everywhereElse.noAccess)).toContain(lab);
+		expect(idsOf(other.everywhereElse.unknown)).not.toContain(lab);
+		const covered = seen.covered as View;
+		expect(idsOf(covered.everywhereElse.noAccess)).not.toContain(lab);
 	});
 
 	test("on an old hub the hooks report what is missing and still render", async () => {
@@ -835,6 +991,55 @@ describe("mountDevices", () => {
 		expect(view.container.textContent).toBe("bound");
 		expect(bound).toBe(view.fake.workspace);
 		expect(view.fake.workspace.keys.snapshot(warehouse).state).toBe("unlocked");
+	});
+
+	test("the viewer owns every app unless the test gives another role, or none", async () => {
+		const { useBackendStore } = await import("../../../../state/backend-state");
+		const { useAppPermissions } = await import(
+			"../../../../hooks/use-app-permissions"
+		);
+		const backend = () => useBackendStore.getState().backend as IBackendState;
+		const seen: { isOwner?: boolean } = {};
+		function RoleProbe() {
+			seen.isOwner = useAppPermissions(APPS.app_invoice_ai.id).isOwner;
+			return createElement("output", null, "role");
+		}
+		const owner = await mountDevices(createElement(RoleProbe), {
+			unlock: "none",
+		});
+		expect(await backend().roleState.getOwnRole("any_app")).toEqual({
+			role_id: "role_owner",
+			role_name: "Owner",
+			permissions: 1,
+			is_owner: true,
+			can_leave: false,
+		});
+		expect(seen.isOwner).toBe(true);
+		await owner.unmount();
+
+		const member = {
+			role_id: "role_member",
+			role_name: "Member",
+			permissions: 0,
+			is_owner: false,
+			can_leave: true,
+		};
+		const other = await mountDevices(createElement("output"), {
+			unlock: "none",
+			backend: {
+				roleState: {
+					getOwnRole: async () => member,
+				} as unknown as IBackendState["roleState"],
+			},
+		});
+		expect(await backend().roleState.getOwnRole("any_app")).toBe(member);
+		await other.unmount();
+
+		await mountDevices(createElement("output"), {
+			unlock: "none",
+			backend: { roleState: undefined },
+		});
+		expect(backend().roleState).toBeUndefined();
 	});
 
 	test("the apps given to the mount are the apps the hub exports", async () => {

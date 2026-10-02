@@ -19,7 +19,9 @@ const { READER_REQUEST_KIND, parseReaderRequest, readerRequestOf } =
 	await import("./reader-request");
 const { historyPause, timelineFacts } = await import("./timeline-model");
 const { historyRows } = await import("./history-settings");
-const { readerGrantExpiry, recordingOf } = await import("./use-history");
+const { readerGrantExpiry, recordingOf, unsavedOutcome } = await import(
+	"./use-history"
+);
 const { METRICS_REQUEST_KIND, keyThumbprint, parseMetricsRequest } =
 	await import("./use-shared-metrics");
 
@@ -416,6 +418,27 @@ describe("readers lists", () => {
 				NOW,
 			),
 		).toBeUndefined();
+	});
+
+	test("a signature that didn't go through: no reply is never reported as nothing changed", () => {
+		const error = new Error("timeout");
+		expect(unsavedOutcome({ status: "unknown", error }, false)).toEqual({
+			status: "failed",
+			reason: "unconfirmed",
+		});
+		expect(unsavedOutcome({ status: "cancelled" }, false)).toEqual({
+			status: "stopped",
+		});
+		expect(
+			unsavedOutcome(
+				{
+					status: "failed",
+					failure: { code: "unknown" } as never,
+					error: new Error("Incorrect password or damaged vault"),
+				},
+				true,
+			),
+		).toEqual({ status: "failed", reason: "wrong_password" });
 	});
 });
 

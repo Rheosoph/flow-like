@@ -33,6 +33,9 @@ export const AREA_MAIN_SELECTOR = "[data-area-main]";
 /** A page marks its own filter field with `data-devices-filter`; `/` focuses it instead of the rail filter (SPEC §3.4). */
 export const PAGE_FILTER_SELECTOR = "[data-area-main] [data-devices-filter]";
 
+/** The app's base layer gives every `p` a 28 px line; inside the area a paragraph follows its container unless it sets its own. */
+const PLAIN_PARAGRAPHS = "[:where(&_p)]:leading-[inherit]";
+
 /**
  * SPEC §3.1 inside Flow-Like's content column (M-UI §3.3): top bar, rail, one
  * page scroller, tray and status bar, with no `position: fixed` anywhere.
@@ -46,6 +49,7 @@ export function AreaShell(props: Readonly<AreaShellProps>) {
 			data-frame={frame}
 			className={cx(
 				"@container/devices relative flex min-h-0 w-full flex-col overflow-hidden text-foreground",
+				PLAIN_PARAGRAPHS,
 				FRAME[frame],
 			)}
 		>
@@ -80,7 +84,7 @@ function AreaPage({
 			tabIndex={-1}
 			className="min-w-0 flex-1 overflow-y-auto outline-none"
 		>
-			<div className="mx-auto flex w-full max-w-370 flex-col gap-4 px-6 pt-5 pb-8 @max-[720px]/devices:px-4">
+			<div className="mx-auto flex w-full max-w-370 flex-col gap-6 px-6 pt-5 pb-8 @max-[720px]/devices:px-4">
 				{banners}
 				{children}
 			</div>

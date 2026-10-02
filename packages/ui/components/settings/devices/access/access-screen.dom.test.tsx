@@ -158,6 +158,22 @@ describe("Access › People", () => {
 		expect(container.textContent).not.toMatch(MACHINE_WORDS);
 	});
 
+	test("an account the directory knows without a name is unnamed, never labelled with its account id", async () => {
+		const { container } = await mount({ people: { ...PEOPLE, [MIRA]: "" } });
+		const edge = section(container, SAMPLE_IDS.edge);
+		expect(edge.textContent).toContain("Jonas Weber");
+		const unknown = edge.querySelector("[data-person-unknown]") as HTMLElement;
+		// The id is the technical second line, not the name.
+		expect(unknown.firstElementChild?.textContent).toBe("?Unknown account");
+		expect(unknown.lastElementChild?.textContent).toBe(MIRA);
+		expect(edge.querySelector("[data-person]")?.textContent).not.toContain(
+			"usr_",
+		);
+		expect(container.querySelector("[data-headline]")?.textContent).toContain(
+			"One person's access to edge-berlin-01 ends at",
+		);
+	});
+
 	test("the permissions cell shows the preset and a count; the list opens on demand", async () => {
 		const { container } = await mount();
 		const cell = section(container, SAMPLE_IDS.edge).querySelectorAll(
@@ -714,6 +730,73 @@ describe("Access › Add people", () => {
 		await click(byRole("button", "Save access rules", inPortal("dialog")));
 		await mounted.settle();
 		expect(policyPuts(fake)).toHaveLength(1);
+	});
+
+	test("a device that stops requiring a sandbox after its save failed asks for trust before the retry signs", async () => {
+		const mounted = await mount();
+		const { fake } = mounted;
+		const isolate = async (deviceId: string, value: "required" | "none") => {
+			fake.agent(deviceId).facts.host_isolation = value;
+			await act(async () => {
+				await fake.workspace.live.refreshInspection(deviceId);
+			});
+			await mounted.settle();
+		};
+		const putsFor = (deviceId: string) =>
+			policyPuts(fake).filter(([, path]) => path.includes(deviceId));
+		await isolate(SAMPLE_IDS.studio, "required");
+
+		let sheet = await openWizard(mounted);
+		await chooseDevice(sheet, SAMPLE_IDS.edge);
+		await chooseDevice(inPortal("dialog"), SAMPLE_IDS.studio);
+		await click(next(inPortal("dialog")));
+		await importFile(mounted, requestFile(SAMPLE_IDS.edge, ANNA, "anna-edge"));
+		await importFile(
+			mounted,
+			requestFile(SAMPLE_IDS.studio, ANNA, "anna-studio"),
+		);
+		await click(next(inPortal("dialog")));
+		await click(byRole("button", "Deployer", inPortal("dialog")));
+		await click(next(inPortal("dialog")));
+		// Both devices require a sandbox: no trust step.
+		expect(inPortal("dialog").textContent).toContain("Step 4 of 5 · Review");
+
+		fake.api.fail(
+			{
+				method: "PUT",
+				path: new RegExp(`${SAMPLE_IDS.edge}/management/policy$`),
+			},
+			undefined,
+			1,
+		);
+		await click(byRole("button", "Save access rules", inPortal("dialog")));
+		await mounted.settle();
+		expect(putsFor(SAMPLE_IDS.studio)).toHaveLength(1);
+		const attempts = putsFor(SAMPLE_IDS.edge).length;
+		expect(policyOf(fake, SAMPLE_IDS.edge).policy_version).toBe(5);
+
+		await isolate(SAMPLE_IDS.edge, "none");
+		sheet = inPortal("dialog");
+		await click(byRole("button", "Try again for 1 device", sheet));
+		await mounted.settle();
+		expect(putsFor(SAMPLE_IDS.edge)).toHaveLength(attempts);
+		sheet = inPortal("dialog");
+		expect(sheet.textContent).toContain("Step 4 of 6 · Trust");
+		// What is saved stays saved: the steps before the confirmation are closed.
+		expect(queryByRole("button", "Back", sheet)).toBeNull();
+		await click(
+			byRole(
+				"checkbox",
+				"I understand Anna can run code on edge-berlin-01 with the agent's full access.",
+				sheet,
+			),
+		);
+		await click(next(inPortal("dialog")));
+		await click(byRole("button", "Save access rules", inPortal("dialog")));
+		await mounted.settle();
+		expect(putsFor(SAMPLE_IDS.edge)).toHaveLength(attempts + 1);
+		expect(policyOf(fake, SAMPLE_IDS.edge).policy_version).toBe(6);
+		expect(putsFor(SAMPLE_IDS.studio)).toHaveLength(1);
 	});
 
 	test("narrower scopes can't hold device-wide permissions, and say why", async () => {

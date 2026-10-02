@@ -22,7 +22,7 @@ export interface ChainLink {
 const ICON_LOOK: Record<ChainState, string> = {
 	good: "rounded-full border-good-line bg-good-bg text-good",
 	warning: "rounded-full border-warning-line bg-warning-bg text-warning",
-	critical: "rounded-sm border-critical-line bg-critical-bg text-critical",
+	critical: "rounded-md border-critical-line bg-critical-bg text-critical",
 	locked: "rounded-full border-locked-line bg-locked-bg text-locked",
 	unknown:
 		"rounded-full border-dashed border-border-strong bg-card text-muted-foreground",

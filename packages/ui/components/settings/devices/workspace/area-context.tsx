@@ -111,12 +111,17 @@ function useAreaClock(workspace: DeviceWorkspace, tickMs: number | false) {
 const toHubSeconds = (workspace: DeviceWorkspace, localMs: number) =>
 	Math.floor((localMs - (workspace.clock.hubOffsetS ?? 0) * 1000) / 1000);
 
-/** R5: while `GET /devices` fails after a good read, every Hub stamp says so. */
+/**
+ * R5: while `GET /devices` fails after a good read, every Hub stamp says so.
+ * A hub that is off, unreachable or still being checked refuses the list as
+ * part of that state; its gate and the Hub status screen name it, so it is
+ * not a failed refresh.
+ */
 function hubFreshnessOf(
-	{ rows, workspace }: AttentionState,
+	{ rows, workspace, input }: AttentionState,
 	t: DevicesT,
 ): HubFreshnessState {
-	if (!rows.error) return { failing: false };
+	if (!rows.error || input.hub.state !== "on") return { failing: false };
 	const error = toHubError(rows.error);
 	const retryInMs = pollInterval(HUB_CADENCE.list.intervalMs || 30_000, {
 		data: rows.data,

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import {
+	advance,
 	allByRole,
 	byRole,
 	click,
@@ -11,6 +12,7 @@ import type { DeviceView } from "./device-test-kit";
 const dom = installDom();
 const kit = await import("./device-test-kit");
 const { createFakeWorkspace } = await import("../testing/fake-workspace");
+const { fakeKeys } = await import("../testing/fake-device-api");
 const { sampleFleet } = await import(
 	"../../../../lib/device-management/model/__fixtures__/sample-fleet"
 );
@@ -105,16 +107,58 @@ describe("On this device", () => {
 		expect(text(view.container)).not.toMatch(MACHINE);
 	});
 
-	test("nothing open reads as an all-clear with the hub's stamp, never as empty", async () => {
+	test("nothing open on a locked device is an all-clear only as far as the hub knows, never empty", async () => {
 		const view = await openDevice(IDS.lab);
 		const attention = block(view, "attention");
 		expect(text(attention)).toContain(
-			"Nothing on lab-gpu-02 needs you right now.",
+			"Nothing on lab-gpu-02 needs you, as far as the hub knows.",
 		);
+		expect(text(attention)).not.toContain("needs you right now");
 		expect(
 			attention.querySelector('[data-stamp][data-src="hub"]'),
 		).not.toBeNull();
 		expect(attention.querySelector("[data-kind=empty]")).toBeNull();
+	});
+
+	test("nothing open on a device that is read here is a plain all-clear", async () => {
+		const seed = sampleFleet();
+		const view = await openDevice(IDS.edge, { seed, app: APPS.supportPortal });
+		expect(text(block(view, "attention"))).toContain(
+			"Nothing about Support Portal on edge-berlin-01 needs you right now.",
+		);
+	});
+
+	test("a person is named, or neutrally while the directory has no name: never by account id", async () => {
+		const view = await openDevice(IDS.edge);
+		const unnamed = text(block(view, "attention"));
+		expect(unnamed).toContain("One person's access to edge-berlin-01 ends");
+		expect(unnamed).not.toMatch(/\busr_\w+/);
+		await kit.resetDevices();
+
+		const fake = await createFakeWorkspace();
+		const person = async (id: string) => ({ id, name: "Mira Novak" });
+		const named = await openDevice(IDS.edge, {
+			fake,
+			backend: {
+				userState: {
+					getProfile: async () => fake.profile,
+					getInfo: async () => ({ id: fake.hub.me, dev_mode: false }),
+					updateUser: async () => undefined,
+					lookupUser: person,
+					lookupUsers: async (ids: string[]) => Promise.all(ids.map(person)),
+				} as never,
+			},
+		});
+		for (
+			let round = 0;
+			round < 40 &&
+			!text(block(named, "attention")).includes("Mira Novak's access");
+			round++
+		)
+			await advance(25);
+		expect(text(block(named, "attention"))).toContain(
+			"Mira Novak's access to edge-berlin-01 ends",
+		);
 	});
 
 	test("in an app: only that app's items, and a way to the whole device", async () => {
@@ -198,6 +242,7 @@ describe("Resources", () => {
 		);
 		expect(metrics[1]).toContain("Memory5.7of 16.0 GiB36 % used");
 		expect(metrics[2]).toContain("Agent's data disk281GiB free of 477");
+		expect(metrics[3]).toContain("Network1.2MiB received · 822.0 KiB sent");
 		expect(metrics[3]).toContain("not a billing figure");
 		expect(resources.querySelectorAll("[data-sparkline]").length).toBe(4);
 		expect(
@@ -298,6 +343,25 @@ describe("Trust, registration, certificates and access", () => {
 		expect(lastNavigation(view)?.[1]).toContain("tab=keys");
 	});
 
+	test("a changed identity: the chain says the keys stay closed for it, not that the browser is at fault", async () => {
+		const fake = await createFakeWorkspace(undefined, { unlock: "none" });
+		const row = fake.hub.rows.get(IDS.edge);
+		if (!row) throw new Error("the sample has no edge device");
+		row.identity = fakeKeys.identity("someone-else");
+		const view = await openDevice(IDS.edge, { fake });
+		await view.settle();
+		const trust = text(block(view, "trust"));
+		expect(trust).toContain(
+			"Owner keys · closed until the identity is confirmed",
+		);
+		expect(trust).toContain(
+			"Doesn't match the keys you trusted. Management is blocked.",
+		);
+		expect(text(view.container).toLowerCase()).not.toContain(
+			"browser can't protect keys",
+		);
+	});
+
 	test("registration facts: when, last check-in with what it proves, owner, ID and the advanced details", async () => {
 		const view = await openDevice(IDS.edge);
 		const registration = block(view, "registration");
@@ -359,7 +423,12 @@ describe("Recent activity", () => {
 		const agent = fake.agent(IDS.edge);
 		agent.record(
 			"messages:device",
-			{ kind: "operation", state: "completed", placement_id: "support-bot" },
+			{
+				kind: "operation",
+				state: "completed",
+				placement_id: "support-bot",
+				source_id: "a98f44f5-f313-4376-a86c-9b8c14a8161c",
+			},
 			"message",
 		);
 		agent.record(
@@ -369,30 +438,48 @@ describe("Recent activity", () => {
 				state: "starting",
 				placement_id: "invoice-extractor",
 				replica_slot: 0,
+				config_revision: 12,
 			},
 			"message",
 		);
 		await fake.unlock(IDS.edge, { connectLive: true });
 		const view = await openDevice(IDS.edge, { fake });
-		await view.settle();
 		const recent = block(view, "recent");
+		for (
+			let round = 0;
+			round < 40 && !text(recent).includes("Instance #0");
+			round++
+		)
+			await advance(25);
 		const page = text(recent);
-		expect(page).toContain("Instance #0 of invoice-extractor: Starting");
-		expect(page).toContain("A command for support-bot finished");
+		// The same sentences as the Activity tab's timeline, with the service as a link.
+		expect(page).toContain(
+			"Instance #0 of invoice-extractor is starting with settings v12.",
+		);
+		expect(page).toContain("A command for support-bot finished.");
 		expect(page.indexOf("Instance #0")).toBeLessThan(
 			page.indexOf("A command for support-bot"),
 		);
+		expect(
+			byRole("link", "invoice-extractor", recent).getAttribute("href"),
+		).toContain("service=invoice-extractor");
+		const entries = recent.querySelectorAll("[data-timeline] li[data-kind]");
+		expect(entries.length).toBeGreaterThanOrEqual(2);
+		expect(entries.length).toBeLessThanOrEqual(5);
+		expect(page).not.toMatch(MACHINE);
 		await click(byRole("button", "All activity", recent));
 		expect(lastNavigation(view)?.[1]).toContain("tab=activity");
 	});
 
-	test("locked: says activity needs the live connection", async () => {
+	test("locked: says so with the way to unlock, and reads nothing", async () => {
 		const view = await openDevice(IDS.edge, { unlock: "none" });
 		const recent = block(view, "recent");
 		expect(recent.querySelector("[data-kind=locked]")).not.toBeNull();
 		expect(text(recent)).toContain(
-			"Activity is read over the live connection. Unlock to see it.",
+			"Activity is cleared when you lock. Unlock to read it again.",
 		);
+		expect(recent.querySelector("[data-kind=empty]")).toBeNull();
+		expect(kit.commandTypes(view)).toEqual([]);
 	});
 });
 

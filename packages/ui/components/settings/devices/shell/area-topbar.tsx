@@ -3,7 +3,11 @@
 import { useTranslation } from "@flow-like/locales";
 import { PanelLeft, Search, Server } from "lucide-react";
 import { Fragment, type ReactNode } from "react";
-import type { DevicesRoute } from "../../../../lib/device-management/model/types";
+import type {
+	DeployRoute,
+	DevicesRoute,
+	DevicesScope,
+} from "../../../../lib/device-management/model/types";
 import {
 	Breadcrumb,
 	BreadcrumbItem,
@@ -15,13 +19,20 @@ import {
 import { DvButton } from "../primitives/dv-button";
 import { Kbd } from "../primitives/kbd";
 import { cx } from "../primitives/tone";
-import { useDevicesRoute, useRouteLink } from "../routing/use-devices-route";
+import { deployExitHref } from "../routing/devices-href";
+import {
+	useDevicesRoute,
+	useHostLink,
+	useRouteLink,
+} from "../routing/use-devices-route";
 import { AreaNav } from "./area-nav";
 
 export interface TopbarCrumb {
 	label: string;
 	/** Absent on the current page. */
 	route?: DevicesRoute;
+	/** A page outside the area (the app's Events page), instead of `route`. */
+	href?: string;
 }
 
 export interface AreaTopbarProps {
@@ -40,14 +51,34 @@ export interface AreaTopbarProps {
 const FLEET: DevicesRoute = { screen: "fleet", view: "devices" };
 const APP_HOME: DevicesRoute = { screen: "app-devices", by: "device" };
 
+/** A deploy that started on the Events page goes back there: "Events › Deploy". */
+function deployOrigin(
+	route: DeployRoute,
+	events: string | undefined,
+	scope: DevicesScope | undefined,
+): TopbarCrumb | undefined {
+	if (route.from !== "events" || !events || scope?.kind !== "app")
+		return undefined;
+	return { label: events, href: deployExitHref(route, scope) };
+}
+
 /** The app page's path: "Devices › edge-berlin-01 › invoice-extractor". The last crumb is the current page. */
 export function appCrumbs(
 	route: DevicesRoute,
-	labels: Readonly<{ devices: string; device: string; deploy: string }>,
+	labels: Readonly<{
+		devices: string;
+		device: string;
+		deploy: string;
+		events?: string;
+	}>,
+	scope?: DevicesScope,
 ) {
 	const home: TopbarCrumb = { label: labels.devices, route: APP_HOME };
 	if (route.screen === "device") return [home, { label: labels.device }];
-	if (route.screen === "deploy") return [home, { label: labels.deploy }];
+	if (route.screen === "deploy") {
+		const origin = deployOrigin(route, labels.events, scope) ?? home;
+		return [origin, { label: labels.deploy }];
+	}
 	if (route.screen !== "service") return [home];
 	const device: TopbarCrumb = {
 		label: labels.device,
@@ -93,44 +124,53 @@ function TopbarCrumbs({
 }: Readonly<{ crumbs: readonly TopbarCrumb[] }>) {
 	const { t } = useTranslation("devices");
 	const link = useRouteLink();
+	const hostLink = useHostLink();
 	const last = crumbs.length - 1;
+	const target = (crumb: TopbarCrumb, index: number) => {
+		if (index === last) return undefined;
+		if (crumb.route) return link(crumb.route);
+		return crumb.href ? hostLink(crumb.href) : undefined;
+	};
 	return (
 		<Breadcrumb
 			aria-label={t("shell.topbar.breadcrumb", "Breadcrumb")}
 			className="min-w-0"
 		>
 			<BreadcrumbList className="flex-nowrap gap-1 text-[13px]/[18px] sm:gap-1">
-				{crumbs.map((crumb, index) => (
-					<Fragment key={`${index}:${crumb.label}`}>
-						{index > 0 ? (
-							<BreadcrumbSeparator
+				{crumbs.map((crumb, index) => {
+					const props = target(crumb, index);
+					return (
+						<Fragment key={`${index}:${crumb.label}`}>
+							{index > 0 ? (
+								<BreadcrumbSeparator
+									className={cx(
+										"shrink-0 text-border-strong [&>svg]:size-3",
+										index < last && NARROW_HIDDEN,
+									)}
+								/>
+							) : null}
+							<BreadcrumbItem
 								className={cx(
-									"shrink-0 text-border-strong [&>svg]:size-3",
-									index < last && NARROW_HIDDEN,
+									index === 0 || index < last - 1 ? "shrink-0" : "min-w-0",
+									index < last - 1 && NARROW_HIDDEN,
 								)}
-							/>
-						) : null}
-						<BreadcrumbItem
-							className={cx(
-								index === 0 || index < last - 1 ? "shrink-0" : "min-w-0",
-								index < last - 1 && NARROW_HIDDEN,
-							)}
-						>
-							{index === last || !crumb.route ? (
-								<BreadcrumbPage className="truncate font-semibold">
-									{crumb.label}
-								</BreadcrumbPage>
-							) : (
-								<BreadcrumbLink
-									{...link(crumb.route)}
-									className="truncate hover:underline"
-								>
-									{crumb.label}
-								</BreadcrumbLink>
-							)}
-						</BreadcrumbItem>
-					</Fragment>
-				))}
+							>
+								{props ? (
+									<BreadcrumbLink
+										{...props}
+										className="truncate hover:underline"
+									>
+										{crumb.label}
+									</BreadcrumbLink>
+								) : (
+									<BreadcrumbPage className="truncate font-semibold">
+										{crumb.label}
+									</BreadcrumbPage>
+								)}
+							</BreadcrumbItem>
+						</Fragment>
+					);
+				})}
 			</BreadcrumbList>
 		</Breadcrumb>
 	);

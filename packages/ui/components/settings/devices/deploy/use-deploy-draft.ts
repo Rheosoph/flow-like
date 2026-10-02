@@ -8,6 +8,7 @@ import {
 	type AppMode,
 	appMode,
 } from "../../../../lib/device-management/model/app-plan";
+import { versionLabel as versionLabelOf } from "../../../../lib/device-management/model/app-versions";
 import {
 	type DeployDraft,
 	type DeployPlan,
@@ -639,7 +640,7 @@ export function useDeployDraft(
 	}, [saved, route, devices, change]);
 
 	const error = appRead.error;
-	const versionLabel = appRecord.data?.version ?? undefined;
+	const versionLabel = versionLabelOf(appRecord.data?.version) ?? undefined;
 	return {
 		key,
 		loading: !!appId && !app && !error,

@@ -19,7 +19,14 @@ import {
 	Square,
 	Trash2,
 } from "lucide-react";
-import { type ReactNode, useId, useState } from "react";
+import {
+	type ReactNode,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { deviceName } from "../../../../lib/device-management/model/device-view";
 import type {
 	DeviceViewModel,
@@ -118,6 +125,58 @@ function MenuRow({
 	);
 }
 
+/**
+ * A service without a web endpoint runs once per device. The settings read on
+ * this computer say so; before they were read, the app's events do.
+ */
+function runsAlone(
+	endpoint: PlacementConfigFacts | undefined,
+	app: ServiceApp,
+) {
+	if (endpoint) return !endpoint.host;
+	const { view, events } = app;
+	if (!view || !events) return false;
+	const known = [...view.events.rows, ...view.events.ineligible];
+	return events.some(
+		(event) =>
+			known.find((row) => row.eventId === event.id)?.eligibility.hosted ===
+			false,
+	);
+}
+
+const confirmKey = (confirming: Confirming | null) => {
+	if (!confirming) return "";
+	return typeof confirming === "string"
+		? confirming
+		: `scale-${confirming.scale}`;
+};
+
+/**
+ * The inline confirm takes the focus when it opens and hands it back to the
+ * control that opened it, so the keyboard and a screen reader are where the
+ * question is. `key` names the open confirm; "" when none is open.
+ */
+function useConfirmFocus(key: string) {
+	const region = useRef<HTMLDivElement>(null);
+	const opener = useRef<HTMLElement | null>(null);
+	const previous = useRef("");
+	useEffect(() => {
+		if (key) region.current?.querySelector("button")?.focus();
+		else if (previous.current && opener.current?.isConnected)
+			opener.current.focus();
+		previous.current = key;
+	}, [key]);
+	return useMemo(
+		() => ({
+			region,
+			from(element: HTMLElement) {
+				opener.current = element;
+			},
+		}),
+		[],
+	);
+}
+
 /** SPEC §5.3 action bar: Start / Restart… / Stop…, instances, the service page and the overflow menu. */
 export function ServiceActions({
 	device,
@@ -150,6 +209,7 @@ export function ServiceActions({
 	});
 	const [confirming, setConfirming] = useState<Confirming | null>(null);
 	const reasonId = useId();
+	const focus = useConfirmFocus(confirmKey(confirming));
 
 	const staged = service.rollout?.state === "staged";
 	const inline = (gate: GateResult, menu = false) => {
@@ -176,25 +236,6 @@ export function ServiceActions({
 		service.conv === "failed_stopped";
 	const { requested, ready, max } = service.instances;
 
-	const shown = crashed
-		? [commands.start.gate]
-		: [commands.restart.gate, commands.stop.gate];
-	const reasons = [
-		...new Map(
-			shown.flatMap((gate) =>
-				gate.ok ? [] : [[inline(gate) ?? "", gate] as const],
-			),
-		).values(),
-	];
-	const fix = reasons.find((gate) => gate.fix?.kind === "connect")?.fix;
-	/** The id of the visible reason line of a gated command, for `aria-describedby`. */
-	const reasonOf = (gate: GateResult) => {
-		const index = gate.ok
-			? -1
-			: reasons.findIndex((reason) => inline(reason) === inline(gate));
-		return index < 0 ? undefined : `${reasonId}-${index}`;
-	};
-
 	const commandButton = (
 		command: ServiceCommand,
 		kind: "start" | "stop" | "restart",
@@ -207,11 +248,32 @@ export function ServiceActions({
 			aria-disabled={command.gate.ok ? undefined : true}
 			aria-describedby={reasonOf(command.gate)}
 			data-command={kind}
-			onClick={() => setConfirming(kind)}
+			onClick={(event) => {
+				focus.from(event.currentTarget);
+				setConfirming(kind);
+			}}
 		>
 			{label}
 		</DvButton>
 	);
+
+	const shown = crashed
+		? [commands.start.gate]
+		: [commands.restart.gate, commands.stop.gate];
+	const reasons = [
+		...new Map(
+			shown.flatMap((gate) =>
+				gate.ok ? [] : [[inline(gate) ?? "", gate] as const],
+			),
+		).values(),
+	];
+	const fix = reasons.find((gate) => gate.fix?.kind === "connect")?.fix;
+	const reasonTexts = reasons.map((gate) => inline(gate));
+	/** The id of the visible reason line of a gated command, for `aria-describedby`; a passing gate has none. */
+	function reasonOf(gate: GateResult) {
+		const index = reasonTexts.indexOf(inline(gate));
+		return index < 0 ? undefined : `${reasonId}-${index}`;
+	}
 	const hint =
 		crashed && commands.start.gate.ok
 			? service.conv === "crash_looping"
@@ -258,7 +320,7 @@ export function ServiceActions({
 					"service.actions.oneBuffering",
 					"This service runs one instance because write buffering is on.",
 				)
-			: endpoint && !endpoint.host
+			: runsAlone(endpoint, app)
 				? t(
 						"service.actions.oneBackground",
 						"This service runs one instance: its background event runs once per device.",
@@ -405,7 +467,10 @@ export function ServiceActions({
 										aria-disabled={
 											scaleGate || requested <= 1 ? true : undefined
 										}
-										onClick={() => scaleTo(requested - 1)}
+										onClick={(event) => {
+											focus.from(event.currentTarget);
+											scaleTo(requested - 1);
+										}}
 									/>
 									<output
 										aria-live="polite"
@@ -652,21 +717,23 @@ export function ServiceActions({
 				</div>
 			</section>
 			{pendingConfirm && confirming ? (
-				<InlineConfirm
-					label={t("service.actions.confirm", "Confirm {{action}}", {
-						action: pendingConfirm.label,
-					})}
-					title={pendingConfirm.title}
-					sub={pendingConfirm.sub}
-					rows={pendingConfirm.rows}
-					confirmLabel={pendingConfirm.label}
-					tone={pendingConfirm.tone}
-					onConfirm={async () => {
-						await pendingConfirm.run({ confirmed: true });
-						setConfirming(null);
-					}}
-					onCancel={() => setConfirming(null)}
-				/>
+				<div ref={focus.region}>
+					<InlineConfirm
+						label={t("service.actions.confirm", "Confirm {{action}}", {
+							action: pendingConfirm.label,
+						})}
+						title={pendingConfirm.title}
+						sub={pendingConfirm.sub}
+						rows={pendingConfirm.rows}
+						confirmLabel={pendingConfirm.label}
+						tone={pendingConfirm.tone}
+						onConfirm={async () => {
+							await pendingConfirm.run({ confirmed: true });
+							setConfirming(null);
+						}}
+						onCancel={() => setConfirming(null)}
+					/>
+				</div>
 			) : null}
 			{results.map((result) => (
 				<InlineResult

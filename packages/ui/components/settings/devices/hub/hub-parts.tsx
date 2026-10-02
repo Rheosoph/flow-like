@@ -33,14 +33,6 @@ export function Tech({ children }: Readonly<{ children: ReactNode }>) {
 }
 
 /**
- * The app's base layer gives every `table` a margin and every cell a full
- * border; inside a block only the row hairlines of the table primitive remain.
- * A chip in a cell has 4 px corners.
- */
-export const TABLE_RESET =
-	"my-0 [&_td]:border-x-0 [&_td]:border-b-0 [&_th]:border-x-0 [&_th]:border-t-0 [&_td_[data-slot=badge]]:rounded-md";
-
-/**
  * While devices are off the device list can't be read, which the area counts
  * as a failing hub. This page's blocks read other routes, so each states the
  * age of its own read instead.

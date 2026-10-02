@@ -326,6 +326,8 @@ describe("rail model", () => {
 		expect(matching("shared")).toEqual(["lab-gpu-02", "partner-edge"]);
 		expect(matching("locked")).toEqual(["cold-storage-nas", "lab-gpu-02"]);
 		expect(matching("all", "offline")).toEqual(["warehouse-pi"]);
+		expect(matching("all", "shared")).toEqual(["lab-gpu-02", "partner-edge"]);
+		expect(matching("mine", "shared")).toEqual([]);
 		expect(matching("mine", "critical")).toHaveLength(1);
 	});
 

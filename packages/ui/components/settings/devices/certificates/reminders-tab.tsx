@@ -43,7 +43,6 @@ import {
 	LABEL,
 	LINK,
 	PROSE,
-	TABLE_RESET,
 	certificateTitle,
 	dayText,
 	shortId,
@@ -419,7 +418,6 @@ function UpcomingBlock({ read }: Readonly<{ read: CertificateFleetRead }>) {
 			) : upcoming.length ? (
 				<DvTable
 					cols={["24%", "20%", "30%", "26%"]}
-					className={TABLE_RESET}
 					label={t(
 						"certificates.upcoming.caption",
 						"Expected reminders per certificate",

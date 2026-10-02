@@ -98,42 +98,68 @@ function moneyFormatter(locale: string, currency: string): Intl.NumberFormat {
 	return formatter;
 }
 
-/** Spending: used + reserved against the limit, amounts in currency units. */
+/**
+ * Spending: used + reserved against the limit, amounts in currency units. A
+ * zero reserve isn't mentioned. The caption runs at the width of the whole
+ * element, so `meterClassName` can keep the bar short without wrapping it.
+ */
 export function SpendMeter({
 	used,
 	reserved,
 	limit,
 	currency = "EUR",
+	tail,
 	className,
+	meterClassName,
 }: Readonly<{
 	used: number;
 	reserved: number;
 	limit: number;
 	currency?: string;
+	/** Appended to the amounts ("paid by you · ends 5 Oct"). */
+	tail?: string;
 	className?: string;
+	meterClassName?: string;
 }>) {
 	const { t, i18n } = useTranslation("devices");
 	const money = moneyFormatter(i18n?.language ?? "en", currency);
 	const share = (value: number) => (limit > 0 ? (value / limit) * 100 : 0);
-	const text = t(
-		"view.meter.spend",
-		"{{used}} used · {{reserved}} reserved · {{limit}} limit",
-		{
-			used: money.format(used),
-			reserved: money.format(reserved),
-			limit: money.format(limit),
-		},
-	);
+	const values = {
+		used: money.format(used),
+		reserved: money.format(reserved),
+		limit: money.format(limit),
+	};
+	const text =
+		reserved > 0
+			? t(
+					"view.meter.spend",
+					"{{used}} used · {{reserved}} reserved · {{limit}} limit",
+					values,
+				)
+			: t(
+					"view.meter.spendNoReserve",
+					"{{used}} used · {{limit}} limit",
+					values,
+				);
 	return (
-		<Meter
-			label={text}
-			caption={text}
-			className={className}
-			segments={[
-				{ value: share(used), tone: "neutral" },
-				{ value: share(reserved), tone: "reserved" },
-			]}
-		/>
+		<span className={cx("flex min-w-10 flex-col", className)}>
+			<Meter
+				label={text}
+				className={meterClassName}
+				segments={[
+					{ value: share(used), tone: "neutral" },
+					{ value: share(reserved), tone: "reserved" },
+				]}
+			/>
+			<span className="mt-1 text-xs tabular-nums text-muted-foreground">
+				{tail
+					? t("view.meter.spendTail", "{{amounts}} · {{tail}}", {
+							amounts: text,
+							tail,
+						})
+					: text}
+			</span>
+		</span>
 	);
 }
 

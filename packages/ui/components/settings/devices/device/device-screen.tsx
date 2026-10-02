@@ -11,14 +11,15 @@ import {
 	WifiOff,
 } from "lucide-react";
 import { type ReactNode, useCallback, useMemo } from "react";
+import { groupFingerprint } from "../../../../lib/device-management/fingerprint";
 import type { DeviceTab } from "../../../../lib/device-management/model/types";
 import { liveErrorCode } from "../../../../lib/device-management/workspace/errors";
 import { TabsContent } from "../../../ui/tabs";
 import { errorCopy } from "../copy/error-copy";
+import { pinSeconds } from "../overlays/unlock-sheet";
 import { useAreaTime } from "../primitives/area-context";
 import { Banner } from "../primitives/banner";
 import { DvButton } from "../primitives/dv-button";
-import { IdRef } from "../primitives/id-ref";
 import { LockedDataBanner, StateView } from "../primitives/state-view";
 import { cx } from "../primitives/tone";
 import { type UnderlineTab, UnderlineTabs } from "../primitives/underline-tabs";
@@ -130,6 +131,26 @@ function useDeviceTabs(page: DevicePage): UnderlineTab<DeviceTab>[] {
 	}, [t, page.tabs, page.attention, page.appAttention, page.app]);
 }
 
+/** A fingerprint exactly as the device prints it: case and every character matter when it is compared. */
+function Fingerprint({
+	label,
+	value,
+}: Readonly<{ label: string; value: string }>) {
+	const { t } = useTranslation("devices");
+	return (
+		<span className="inline-flex flex-wrap items-baseline gap-x-1.5">
+			<span className="text-xs text-muted-foreground">{label}</span>
+			{value ? (
+				<span data-fingerprint="" className="font-mono whitespace-nowrap">
+					{groupFingerprint(value)}
+				</span>
+			) : (
+				<span>{t("device.identity.unknown", "Not known")}</span>
+			)}
+		</span>
+	);
+}
+
 function IdentityBanner({ page }: Readonly<{ page: DevicePage }>) {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
@@ -139,11 +160,22 @@ function IdentityBanner({ page }: Readonly<{ page: DevicePage }>) {
 	return (
 		<Banner
 			tone="critical"
-			title={t(
-				"device.identity.title",
-				"The hub reports different keys for {{device}} than the ones you trusted on {{date}}.",
-				{ device: page.name, date: time.at(identity.pinnedAt) },
-			)}
+			title={
+				identity.pinnedAt
+					? t(
+							"device.identity.title",
+							"The hub reports different keys for {{device}} than the ones you trusted on {{date}}.",
+							{
+								device: page.name,
+								date: time.at(pinSeconds(identity.pinnedAt)),
+							},
+						)
+					: t(
+							"device.identity.titleNoDate",
+							"The hub reports different keys for {{device}} than the ones you trusted.",
+							{ device: page.name },
+						)
+			}
 			actions={
 				<DvButton size="sm" onClick={() => overlay.openUnlock(page.deviceId)}>
 					{t("device.identity.review", "Review identity…")}
@@ -156,24 +188,14 @@ function IdentityBanner({ page }: Readonly<{ page: DevicePage }>) {
 					"The device may have been set up again, or someone may be impersonating it. Management is blocked: no commands, deploys or access changes until you confirm the identity. Revoking still works, because it happens at the hub.",
 				)}
 			</p>
-			<p className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-ui">
-				<IdRef
-					id={identity.fingerprint}
-					group4
+			<p className="mt-1.5 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-ui">
+				<Fingerprint
 					label={t("device.identity.trusted", "Trusted here")}
-					copyLabel={t(
-						"device.identity.copyTrusted",
-						"Copy trusted fingerprint",
-					)}
+					value={identity.fingerprint}
 				/>
-				<IdRef
-					id={identity.reported}
-					group4
+				<Fingerprint
 					label={t("device.identity.reported", "Hub reports")}
-					copyLabel={t(
-						"device.identity.copyReported",
-						"Copy reported fingerprint",
-					)}
+					value={identity.reported}
 				/>
 			</p>
 		</Banner>

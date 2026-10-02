@@ -21,6 +21,7 @@ import {
 	listEnrollments,
 	muteCertificateNotices,
 	parseHubStandalone,
+	readCertificateInventory,
 	readHubStandalone,
 	sendTestCertificateNotice,
 	toHubError,
@@ -259,6 +260,44 @@ describe("hub endpoint clients", () => {
 			summary.kind === "ok" &&
 				summary.data.devices[0].approvals[0].online_write_blocked,
 		).toBeNull();
+	});
+
+	test("a device's certificate inventory is typed, and its failures are coded", async () => {
+		const row = {
+			certificate_id: CERT,
+			revision: 2,
+			fingerprint_sha256: "a".repeat(64),
+			not_after: 200,
+		};
+		const { api, calls } = fakeApi(() => ({
+			revision: 3,
+			certificates: [row],
+			ignored: true,
+		}));
+		expect(await readCertificateInventory(api, profile, "a/b")).toEqual({
+			revision: 3,
+			updated_at: null,
+			certificates: [row],
+		});
+		expect(calls).toEqual([["GET", "devices/a%2Fb/certificate-inventory"]]);
+		expect(
+			await hubError(
+				readCertificateInventory(
+					fakeApi(() => refusal(403)).api,
+					profile,
+					"edge",
+				),
+			),
+		).toMatchObject({ code: "forbidden", gate: "G4" });
+		expect(
+			await hubError(
+				readCertificateInventory(
+					fakeApi(() => ({ revision: -1 })).api,
+					profile,
+					"edge",
+				),
+			),
+		).toMatchObject({ code: "invalid_response" });
 	});
 
 	test("an omitted optional reads like null, and an approval without effective bounds keeps its own", async () => {

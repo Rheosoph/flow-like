@@ -223,7 +223,7 @@ const IA_MATRIX: Record<ActionId, Row> = {
 		unlocked: "password",
 	},
 	import_key_file: p4("creates", "password"),
-	download_key_file: p4("●", "●"),
+	download_key_file: p4("●", "password"),
 	change_device_password: p4("●", "password"),
 	delete_local_keys: p4("●", "–"),
 	forget_identity: p4("–", "–"),
@@ -494,6 +494,49 @@ describe("gate ladder", () => {
 		).toBe("keys_unusable");
 	});
 
+	test("keys that can't be used any more can still be deleted", () => {
+		const withKeys = (state: KeySessionSnapshot["state"]) =>
+			evaluateGate("delete_local_keys", ctx({ keys: keys({ state }) }));
+		expect(withKeys("stale").ok).toBe(true);
+		expect(withKeys("locked").ok).toBe(true);
+		expect(failure(withKeys("none")).copy.code).toBe("no_keys_here");
+		expect(
+			failure(
+				evaluateGate(
+					"download_key_file",
+					ctx({ keys: keys({ state: "stale" }) }),
+				),
+			).copy.code,
+		).toBe("keys_unusable");
+	});
+
+	test("the key backup file asks for the password itself, so a locked device is no reason", () => {
+		const download = (patch: Partial<KeySessionSnapshot>) =>
+			evaluateGate("download_key_file", ctx({ keys: keys(patch) }));
+		expect(download({ state: "locked" }).ok).toBe(true);
+		expect(failure(download({ state: "blocked" })).copy.code).toBe(
+			"identity_blocked",
+		);
+		expect(failure(download({ state: "held_elsewhere" })).copy.code).toBe(
+			"held_elsewhere",
+		);
+	});
+
+	test("a secret can change while the service runs, but not during an update", () => {
+		expect(
+			evaluateGate("set_secret", ctx({ extra: { desiredState: "running" } }))
+				.ok,
+		).toBe(true);
+		expect(
+			failure(
+				evaluateGate(
+					"set_secret",
+					ctx({ extra: { desiredState: "running", activeRollout: true } }),
+				),
+			).kind,
+		).toBe("busy");
+	});
+
 	test("lock holder, identity block and browser support explain G7", () => {
 		const code = (patch: Partial<KeySessionSnapshot>) =>
 			failure(evaluateGate("logs", ctx({ keys: keys(patch) }))).copy.code;
@@ -504,6 +547,14 @@ describe("gate ladder", () => {
 			code({ state: "locked", lastError: { code: "lock_unsupported" } }),
 		).toBe("lock_unsupported");
 		expect(code({ state: "locked" })).toBe("locked_logs");
+		expect(
+			failure(
+				evaluateGate(
+					"check_unconfirmed",
+					ctx({ keys: keys({ state: "locked" }) }),
+				),
+			).copy.code,
+		).toBe("locked_lookup");
 		expect(
 			failure(
 				evaluateGate(
@@ -829,7 +880,7 @@ describe("gate ladder", () => {
 	});
 
 	const PRECONDITIONS: [ActionId, GateContext["extra"], GateReason][] = [
-		["set_secret", { desiredState: "running" }, "service_must_be_stopped"],
+		["set_secret", { activeRollout: true }, "rollout_in_progress"],
 		["remove_service", { desiredState: "running" }, "service_must_be_stopped"],
 		[
 			"update_with_checks",

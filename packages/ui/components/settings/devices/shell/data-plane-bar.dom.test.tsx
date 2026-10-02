@@ -23,7 +23,9 @@ const { cleanupDevices, mountDevices, preloadDevices } = await import(
 );
 await preloadDevices();
 const area = await import("../primitives/area-context");
-const { DataPlaneBar, DataPlaneBarView } = await import("./data-plane-bar");
+const { DataPlaneBar, DataPlaneBarView, fitPlaneBar } = await import(
+	"./data-plane-bar"
+);
 const { useOverlayStore } = await import("../workspace");
 
 const ACCOUNT: DevicesScope = { kind: "account" };
@@ -132,6 +134,69 @@ const planeIds = (root: ParentNode) =>
 		return el.getAttribute("data-plane");
 	});
 
+const SEGMENT_PX = { name: 60, icon: 19, tight: 6, text: 100 };
+const CLOCK_PX = 120;
+const WORST_PX = 200;
+
+/** happy-dom lays nothing out: the widths the bar's CSS gives its children. */
+function layOut(bar: HTMLElement, width: number) {
+	const on = (flag: string) => bar.hasAttribute(`data-fit-${flag}`);
+	const segmentWidth = (segment: Element) =>
+		SEGMENT_PX.name +
+		(on("icons") ? 0 : SEGMENT_PX.icon) -
+		(on("tight") ? SEGMENT_PX.tight : 0) +
+		(segment.hasAttribute("data-terse") ? 0 : SEGMENT_PX.text);
+	const widthOf = (child: Element) => {
+		if (child.hasAttribute("data-plane-worst")) {
+			return on("worst") ? WORST_PX : 0;
+		}
+		if (child.hasAttribute("data-plane")) {
+			return on("worst") ? 0 : segmentWidth(child);
+		}
+		return on("clock") ? 0 : CLOCK_PX;
+	};
+	Object.defineProperty(bar, "clientWidth", {
+		configurable: true,
+		value: width,
+	});
+	for (const child of Array.from(bar.children)) {
+		Object.defineProperty(child, "offsetWidth", {
+			configurable: true,
+			get: () => widthOf(child),
+		});
+	}
+}
+
+const fitFlags = (bar: HTMLElement) =>
+	bar
+		.getAttributeNames()
+		.filter((name) => name.startsWith("data-fit-"))
+		.map((name) => name.slice("data-fit-".length))
+		.sort();
+
+const terseIds = (bar: HTMLElement) =>
+	Array.from(bar.querySelectorAll("[data-plane][data-terse]"), (el) => {
+		return el.getAttribute("data-plane");
+	});
+
+async function renderBar(segments: PlaneLine[]) {
+	const opened: (PlaneSegmentId | undefined)[] = [];
+	const ui = () => (
+		<At>
+			<DataPlaneBarView
+				segments={segments}
+				renderPlane={noPlane}
+				onOpenAll={(plane) => {
+					opened.push(plane);
+				}}
+			/>
+		</At>
+	);
+	const rendered = await dom.render(ui());
+	const bar = rendered.container.querySelector("footer") as HTMLElement;
+	return { bar, opened, refit: () => rendered.rerender(ui()) };
+}
+
 async function renderCompact(segments: PlaneLine[]) {
 	const opened: (PlaneSegmentId | undefined)[] = [];
 	const openAll = (plane: PlaneSegmentId | undefined) => {
@@ -230,6 +295,100 @@ describe("data-plane bar", () => {
 		expect(hub.querySelector("[data-dot=err]")).not.toBeNull();
 		expect(hub.textContent).toContain("couldn't refresh since 13:59:58");
 		expect(hub.querySelector(".text-critical")).not.toBeNull();
+	});
+
+	test("segments keep their content width: nothing in them can ellipsize", async () => {
+		const { bar } = await renderBar(LINES);
+		const segments = Array.from(bar.querySelectorAll("[data-plane]"));
+		expect(segments).toHaveLength(6);
+		for (const segment of segments) {
+			expect(segment.className).toContain("shrink-0");
+			expect(segment.className).not.toContain("min-w-0");
+			expect(segment.querySelector(".truncate, .min-w-0")).toBeNull();
+		}
+		expect(fitFlags(bar)).toEqual([]);
+		expect(terseIds(bar)).toEqual([]);
+	});
+
+	test("too narrow: icons, then padding, then the text of calm planes in a fixed order", async () => {
+		const { bar } = await renderBar(LINES);
+		layOut(bar, 1214);
+		expect(fitPlaneBar(bar)).toBe(0);
+		expect(fitFlags(bar)).toEqual([]);
+
+		layOut(bar, 1100);
+		expect(fitPlaneBar(bar)).toBe(1);
+		expect(fitFlags(bar)).toEqual(["icons"]);
+		expect(terseIds(bar)).toEqual([]);
+
+		layOut(bar, 1000);
+		expect(fitPlaneBar(bar)).toBe(3);
+		expect(fitFlags(bar)).toEqual(["icons", "tight"]);
+		expect(terseIds(bar)).toEqual(["live"]);
+
+		layOut(bar, 800);
+		fitPlaneBar(bar);
+		expect(terseIds(bar)).toEqual(["live", "device", "certificates"]);
+
+		layOut(bar, 700);
+		fitPlaneBar(bar);
+		expect(terseIds(bar)).toEqual(["status", "live", "device", "certificates"]);
+		expect(fitFlags(bar)).toEqual(["icons", "tight"]);
+		const live = bar.querySelector("[data-plane=live]") as HTMLElement;
+		expect(live.textContent).toBe("Live2 connections");
+		expect(live.querySelector("span:last-child")?.className).toContain(
+			"group-data-[terse]/plane:sr-only",
+		);
+	});
+
+	test("a plane that needs attention keeps its text; the clock goes before it does", async () => {
+		const { bar } = await renderBar(FAILING);
+		layOut(bar, 480);
+		expect(fitPlaneBar(bar)).toBe(9);
+		expect(fitFlags(bar)).toEqual(["clock", "icons", "tight"]);
+		expect(terseIds(bar)).toEqual([
+			"status",
+			"live",
+			"local",
+			"device",
+			"certificates",
+		]);
+	});
+
+	test("a fuller form comes back only with room to spare, so a ticking age can't flip it", async () => {
+		const { bar } = await renderBar(LINES);
+		layOut(bar, 1100);
+		const level = fitPlaneBar(bar);
+		expect(level).toBe(1);
+		layOut(bar, 1220);
+		expect(fitPlaneBar(bar, level)).toBe(1);
+		expect(fitFlags(bar)).toEqual(["icons"]);
+		layOut(bar, 1254);
+		expect(fitPlaneBar(bar, level)).toBe(0);
+		expect(fitFlags(bar)).toEqual([]);
+	});
+
+	test("nothing fits: the one Data sources button stands in, and leaves again when there is room", async () => {
+		const { bar, opened, refit } = await renderBar(FAILING);
+		expect(queryByRole("button", /Data sources/)).toBeNull();
+		layOut(bar, 300);
+		await refit();
+		expect(fitFlags(bar)).toEqual(["clock", "icons", "tight", "worst"]);
+		expect(planeIds(bar)).toHaveLength(6);
+		const button = byRole("button", /Data sources/);
+		expect(button.className).toContain(
+			"hidden group-data-[fit-worst]/planes:inline-flex",
+		);
+		expect(button.textContent).toContain(
+			"Hub: couldn't refresh since 13:59:58",
+		);
+		await click(button);
+		expect(opened).toEqual(["hub"]);
+
+		layOut(bar, 1300);
+		await refit();
+		expect(fitFlags(bar)).toEqual([]);
+		expect(queryByRole("button", /Data sources/)).toBeNull();
 	});
 
 	test("phone: one button names the worst plane and opens the list of all six", async () => {
@@ -356,6 +515,16 @@ describe("data-plane bar over the workspace", () => {
 			kind: "plane",
 			plane: "hub",
 		});
+	});
+
+	test("under 900 px the six segments give way to the one button too", async () => {
+		const { mounted } = await mountBar({ widthBucket: "narrow" });
+		expect(segmentTexts(mounted.container)).toEqual([]);
+		expect(byRole("button", /Data sources/).textContent).toContain(
+			"all current",
+		);
+		const bar = mounted.container.querySelector("footer") as HTMLElement;
+		expect(bar.hasAttribute("data-compact")).toBe(true);
 	});
 
 	test("browser keys the browser may delete show as a warning on This computer", async () => {

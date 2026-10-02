@@ -213,6 +213,24 @@ describe("host operations", () => {
 		).toBe(true);
 	});
 
+	test("no verified release in hand: Update agent… is disabled with the reason, never a click into nothing", async () => {
+		const seed = settledSeed("0.9.2");
+		seed.latestRelease = undefined;
+		const view = await open(IDS.edge, { seed });
+		const agent = layer(view, "agent");
+		expect(text(agent)).toContain(
+			"Latest verified releaseCouldn't be read from the hub",
+		);
+		const update = byRole("button", "Update agent…", agent);
+		expect(update.getAttribute("aria-disabled")).toBe("true");
+		expect(text(agent)).toContain(
+			"The latest verified release couldn't be read from the hub. Check for an agent update again.",
+		);
+		await click(update);
+		expect(queryByRole("alertdialog")).toBeNull();
+		expect(commandTypes(view)).not.toContain("update_agent");
+	});
+
 	test("the device's last operation shows whoever started it", async () => {
 		const view = await open(IDS.edge);
 		const line = layer(view, "agent").querySelector<HTMLElement>(

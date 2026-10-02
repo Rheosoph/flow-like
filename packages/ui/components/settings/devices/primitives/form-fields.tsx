@@ -25,6 +25,13 @@ import { Checkbox } from "../../../ui/checkbox";
 import { Input } from "../../../ui/input";
 import { Label } from "../../../ui/label";
 import { RadioGroup, RadioGroupItem } from "../../../ui/radio-group";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "../../../ui/select";
 import { Switch } from "../../../ui/switch";
 import { Textarea } from "../../../ui/textarea";
 import { DvButton } from "./dv-button";
@@ -32,8 +39,12 @@ import { cx } from "./tone";
 
 /* SPEC §4.35. Every control has a stable `id`; validation is inline; byte limits count UTF-8 bytes. */
 
+/*
+ * The shadcn bases carry `outline-none`, which also sets the outline style to
+ * none; `outline-solid` brings the 2 px focus ring back (SPEC §4.35).
+ */
 const CONTROL =
-	"rounded-lg border-input bg-card px-2.5 text-[13px]/[18px] shadow-none md:text-[13px]/[18px] hover:border-border-strong focus-visible:border-input focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-ring aria-invalid:border-critical-line aria-invalid:ring-0 dark:bg-card disabled:opacity-60";
+	"rounded-lg border-input bg-card px-2.5 text-[13px]/[18px] shadow-none md:text-[13px]/[18px] hover:border-border-strong focus-visible:border-input focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-ring focus-visible:outline-solid aria-invalid:border-critical-line aria-invalid:ring-0 dark:bg-card disabled:opacity-60";
 
 export function utf8Bytes(value: string): number {
 	return new TextEncoder().encode(value).length;
@@ -259,6 +270,80 @@ export function InputWithUnit({
 	);
 }
 
+export interface DvSelectOption<T extends string> {
+	value: T;
+	label: ReactNode;
+	disabled?: boolean;
+}
+
+export interface DvSelectProps<T extends string> {
+	/** `Field` fills `id`, `aria-describedby` and `aria-invalid`. */
+	id?: string;
+	value: T | undefined;
+	onValueChange(value: T): void;
+	options: readonly DvSelectOption<T>[];
+	placeholder?: string;
+	disabled?: boolean;
+	/** `sm` is the 28 px select of block tool rows. */
+	size?: "md" | "sm";
+	mono?: boolean;
+	className?: string;
+	"aria-label"?: string;
+	"aria-describedby"?: string;
+	"aria-invalid"?: boolean;
+}
+
+/** The shadcn Select dressed like `DvInput`: flat popover, neutral highlight, the area's focus ring. */
+export function DvSelect<T extends string>({
+	value,
+	onValueChange,
+	options,
+	placeholder,
+	disabled,
+	size = "md",
+	mono = false,
+	className,
+	...trigger
+}: Readonly<DvSelectProps<T>>) {
+	return (
+		<Select
+			value={value ?? ""}
+			onValueChange={(next) => onValueChange(next as T)}
+			disabled={disabled}
+		>
+			<SelectTrigger
+				data-slot="dv-select"
+				size={size === "sm" ? "sm" : "default"}
+				className={cx(
+					CONTROL,
+					"w-full data-[size=default]:h-8.5 data-[size=sm]:h-7 dark:hover:bg-card",
+					size === "sm" && "w-fit",
+					mono && "font-mono",
+					className,
+				)}
+				{...trigger}
+			>
+				<SelectValue placeholder={placeholder} />
+			</SelectTrigger>
+			<SelectContent className="border-border-strong bg-popover shadow-none backdrop-blur-none">
+				{options.map((option) => (
+					<SelectItem
+						key={option.value}
+						value={option.value}
+						disabled={option.disabled}
+						className={cx(
+							"text-[13px]/[18px] focus:bg-row-hover focus:text-foreground",
+							mono && "font-mono",
+						)}
+					>
+						{option.label}
+					</SelectItem>
+				))}
+			</SelectContent>
+		</Select>
+	);
+}
+
 /** Editable list of single-line values (origins, names). */
 export function ListEditor({
 	id,
@@ -403,6 +488,8 @@ export interface ChoiceOption<T extends string> {
 	hint?: ReactNode;
 	icon?: LucideIcon;
 	disabled?: boolean;
+	/** Shown inside the card while it is the selected one (the fields that belong to this choice). */
+	detail?: ReactNode;
 }
 
 /** Radio cards (platform, mode). */
@@ -434,38 +521,54 @@ export function ChoiceCards<T extends string>({
 				{options.map((option) => {
 					const optionId = `${id}-${option.value}`;
 					const Icon = option.icon;
+					const checked = value === option.value;
 					return (
-						<label
+						<div
 							key={option.value}
-							htmlFor={optionId}
-							data-checked={value === option.value || undefined}
+							data-checked={checked || undefined}
 							className={cx(
-								"flex cursor-pointer items-start gap-2.5 rounded-lg border border-border bg-card px-3 py-2.5 hover:border-border-strong has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-ring",
-								value === option.value && "border-foreground bg-row-selected",
-								option.disabled && "cursor-not-allowed opacity-60",
+								"rounded-lg border border-border bg-card hover:border-border-strong has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-ring",
+								checked && "border-foreground bg-row-selected",
+								option.disabled && "opacity-60",
 							)}
 						>
-							<RadioGroupItem
-								id={optionId}
-								value={option.value}
-								disabled={option.disabled}
-								className="mt-0.5 border-border-strong text-foreground shadow-none focus-visible:ring-0 [&_svg]:fill-foreground"
-							/>
-							{Icon ? (
-								<Icon
-									aria-hidden
-									className="mt-0.5 size-4 text-muted-foreground"
+							<label
+								htmlFor={optionId}
+								className={cx(
+									"flex cursor-pointer items-start gap-2.5 px-3 py-2.5",
+									option.disabled && "cursor-not-allowed",
+								)}
+							>
+								<RadioGroupItem
+									id={optionId}
+									value={option.value}
+									disabled={option.disabled}
+									className="mt-0.5 border-border-strong text-foreground shadow-none focus-visible:ring-0 [&_svg]:fill-foreground"
 								/>
-							) : null}
-							<span className="flex min-w-0 flex-col gap-0.5">
-								<span className="text-ui font-semibold">{option.title}</span>
-								{option.hint ? (
-									<span className="text-xs text-muted-foreground">
-										{option.hint}
-									</span>
+								{Icon ? (
+									<Icon
+										aria-hidden
+										className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+									/>
 								) : null}
-							</span>
-						</label>
+								<span className="flex min-w-0 flex-col gap-0.5">
+									<span className="text-ui font-semibold">{option.title}</span>
+									{option.hint ? (
+										<span className="text-xs text-muted-foreground">
+											{option.hint}
+										</span>
+									) : null}
+								</span>
+							</label>
+							{checked && option.detail ? (
+								<div
+									data-choice-detail=""
+									className={cx("pr-3 pb-3", Icon ? "pl-16" : "pl-9.5")}
+								>
+									{option.detail}
+								</div>
+							) : null}
+						</div>
 					);
 				})}
 			</RadioGroup>
@@ -474,7 +577,7 @@ export function ChoiceCards<T extends string>({
 }
 
 const CHECKED_NEUTRAL =
-	"shadow-none data-[state=checked]:border-foreground data-[state=checked]:bg-foreground data-[state=checked]:text-background dark:data-[state=checked]:bg-foreground focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+	"shadow-none data-[state=checked]:border-foreground data-[state=checked]:bg-foreground data-[state=checked]:text-background dark:data-[state=checked]:bg-foreground focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring focus-visible:outline-solid";
 
 /** Checkbox with its label (acknowledgements, "I saved the backup file"). Never coral (R2). */
 export function CheckField({
@@ -533,7 +636,7 @@ export function SwitchField({
 				checked={checked}
 				disabled={disabled}
 				onCheckedChange={onCheckedChange}
-				className="mt-px shadow-none data-[state=checked]:bg-foreground focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring dark:data-[state=checked]:**:data-[slot=switch-thumb]:bg-background"
+				className="mt-px shadow-none data-[state=checked]:bg-foreground focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring focus-visible:outline-solid dark:data-[state=checked]:**:data-[slot=switch-thumb]:bg-background"
 			/>
 			<Label htmlFor={id} className="text-[13px]/[18px] font-normal">
 				<span className="min-w-0">{children}</span>

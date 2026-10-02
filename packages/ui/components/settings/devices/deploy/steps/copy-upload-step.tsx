@@ -90,10 +90,6 @@ import {
 
 type Bundle = DeployPrepared | null;
 
-/** The app's base layer puts margins on every table and a border on every cell; `DvTable` doesn't undo them yet. */
-export const TABLE_RESET =
-	"my-0 [&_td]:border-x-0 [&_td]:border-b-0 [&_th]:border-x-0 [&_th]:border-t-0";
-
 /** A block head's count when it carries words ("2 devices"); `Block.count` takes a number. */
 export const HEAD_CHIP =
 	"inline-flex h-5 items-center rounded-full bg-muted px-1.5 font-mono text-xs font-medium whitespace-nowrap tabular-nums text-ink-2";
@@ -529,7 +525,6 @@ function UploadsTable({ rows, controls }: Readonly<TableProps>) {
 			label={t("deployShip.copy.uploads", "Uploads")}
 			cols={UPLOAD_COLS}
 			stackAt={560}
-			className={TABLE_RESET}
 			head={head}
 		>
 			{rows.map((row) => (

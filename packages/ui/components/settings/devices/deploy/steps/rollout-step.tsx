@@ -68,7 +68,11 @@ import type { ChipTone } from "../../primitives/tone";
 import { useCopy } from "../../primitives/use-copy";
 import { WizardFoot, WizardStepHeader } from "../../primitives/wizard";
 import { deployExitHref } from "../../routing/devices-href";
-import { useDevicesRoute, useRouteLink } from "../../routing/use-devices-route";
+import {
+	useDevicesRoute,
+	useHostLink,
+	useRouteLink,
+} from "../../routing/use-devices-route";
 import { useActivityTray } from "../../shell/activity-tray";
 import { useDeviceWorkspace, useOverlay } from "../../workspace";
 import type { DeployStepProps } from "../step-props";
@@ -1236,6 +1240,7 @@ function OpenInDevices({
 function DoneButtons(props: Readonly<FootProps>) {
 	const { t } = useTranslation("devices");
 	const link = useRouteLink();
+	const hostLink = useHostLink();
 	const { navigate } = useDevicesRoute();
 	const { navigation, state } = props;
 	const [only] = state.rows;
@@ -1260,7 +1265,7 @@ function DoneButtons(props: Readonly<FootProps>) {
 				{t("deployShip.rollout.deployMore", "Deploy to more devices…")}
 			</DvButton>
 			<DvButton className={PHONE_OTHER} asChild>
-				<a href={deployExitHref(navigation.route, navigation.scope)}>
+				<a {...hostLink(deployExitHref(navigation.route, navigation.scope))}>
 					{t("deployShip.rollout.exit", "Exit deploy")}
 				</a>
 			</DvButton>

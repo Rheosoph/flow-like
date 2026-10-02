@@ -783,9 +783,7 @@ const BUILDERS: { [F in EnumFamily]: Builder<F> } = {
 		held_elsewhere: row(
 			t("devices:enum.lockHolder.anotherWindow", "Unlocked in another window"),
 		),
-		blocked: row(
-			t("devices:enum.lockHolder.unsupported", "Browser can't protect keys"),
-		),
+		blocked: row(t("devices:common.key.identityChanged", "Identity changed")),
 	}),
 	lockHolder: (t) => ({
 		free: row(t("devices:enum.lockHolder.free", "Not in use")),

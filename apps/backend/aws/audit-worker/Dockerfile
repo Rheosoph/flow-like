@@ -13,6 +13,7 @@ RUN yum update -y && \
         binutils \
         clang \
         git \
+        lld \
         glib2-devel \
         gtk3-devel \
         openssl-devel \
@@ -28,7 +29,7 @@ RUN yum update -y && \
     yum clean all
 
 ENV PATH="/root/.cargo/bin:${PATH}"
-ARG CARGO_BUILD_JOBS
+ARG CARGO_BUILD_JOBS=1
 
 COPY . .
 
@@ -37,6 +38,7 @@ RUN --mount=type=cache,id=flow-like-rust-beta-2026-09-27-amazonlinux2023-arm64-r
     --mount=type=cache,id=flow-like-rust-beta-2026-09-27-amazonlinux2023-arm64-git,target=/root/.cargo/git,sharing=locked \
     --mount=type=cache,id=flow-like-rust-beta-2026-09-27-amazonlinux2023-arm64-target,target=/app/target,sharing=locked \
     if [ -n "${CARGO_BUILD_JOBS:-}" ]; then export CARGO_BUILD_JOBS; fi && \
+    export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-Clink-arg=-fuse-ld=lld" && \
     cargo build --locked --profile lambda --manifest-path apps/backend/aws/audit-worker/Cargo.toml && \
     cp target/lambda/aws-audit-worker /tmp/bootstrap && \
     strip --strip-all /tmp/bootstrap

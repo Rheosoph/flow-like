@@ -78,7 +78,6 @@ import {
 	LINK,
 	LINK_BUTTON,
 	OBJECT_LINK,
-	TABLE_RESET,
 	dayText,
 	shortId,
 	spanText,
@@ -1347,7 +1346,6 @@ export function ExpiryTab({
 			<>
 				<DvTable
 					cols={COLS}
-					className={TABLE_RESET}
 					label={t(
 						"certificates.expiry.caption",
 						"Certificates on your devices, most urgent first",

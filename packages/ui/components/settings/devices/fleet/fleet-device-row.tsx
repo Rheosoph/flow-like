@@ -42,6 +42,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../../../ui/dropdown-menu";
+import { identityName } from "../access/person-name";
 import { formatMoney } from "../copy/attention-copy";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import {
@@ -667,7 +668,7 @@ function OwnedByOther({ view }: Readonly<{ view: DeviceViewModel }>) {
 	return (
 		<RelationshipChip
 			relationship={view.relationship}
-			ownerName={owner.isResolved ? owner.label : undefined}
+			ownerName={identityName(owner, view.row.owner_id)}
 			endsAt={view.relationship === "shared" && ends != null ? ends : undefined}
 			className={PLAIN_TEXT}
 		/>

@@ -27,7 +27,7 @@ import { CellSub, DvTable, Td, Th, Tr } from "../primitives/dv-table";
 import { FreshnessStamp } from "../primitives/freshness-stamp";
 import { LOCKED_DATA_CLASS, StateView } from "../primitives/state-view";
 import { StatusChip } from "../primitives/status-chip";
-import { type ChipTone, cx } from "../primitives/tone";
+import type { ChipTone } from "../primitives/tone";
 import { stampOf } from "../shell/attention-popover";
 import {
 	useAttentionState,
@@ -192,10 +192,6 @@ const ABSENT = "–";
  * `old_agent`, or unknown while `not_live` (a snapshot never carries the text).
  */
 export type InstanceDiagnostics = "reported" | "old_agent" | "not_live";
-
-/** The app's base stylesheet gives every table outer margins and full cell borders; the area's tables only rule rows. */
-const TABLE_RESET =
-	"my-0 [&_td]:border-x-0 [&_td]:border-b-0 [&_th]:border-x-0 [&_th]:border-t-0";
 
 /** SPEC §5.3 Status › Instances: one row per instance; stacked into cards on a phone. */
 export function InstancesTable({
@@ -416,7 +412,7 @@ export function InstancesTable({
 					service: service.serviceId,
 				})}
 				cols={["5%", "21%", "9%", "9%", "8%", "9%", "10%", "13%", "16%"]}
-				className={cx(TABLE_RESET, lockedData && LOCKED_DATA_CLASS)}
+				className={lockedData ? LOCKED_DATA_CLASS : undefined}
 				head={
 					<tr>
 						<Th>#</Th>

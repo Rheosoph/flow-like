@@ -16,6 +16,7 @@ const { cleanupDevices, mountDevices, preloadDevices } = await import(
 await preloadDevices();
 const { useOverlayStore } = await import("../workspace/overlay-store");
 const { createFakeWorkspace } = await import("../testing/fake-workspace");
+const { fakeKeys } = await import("../testing/fake-device-api");
 const { AreaOverlays } = await import("./area-overlays");
 
 const { lab, cold, edge, warehouse } = SAMPLE_IDS;
@@ -272,6 +273,25 @@ describe("diagnose sheet", () => {
 		);
 		expect(queryByRole("alert", undefined, sheet())).toBeNull();
 		expect(mostRepeats(fake.api.calls.slice(before))).toBeLessThanOrEqual(1);
+	});
+
+	test("keys closed for a changed identity say so, not that the browser is at fault", async () => {
+		const fake = await createFakeWorkspace(undefined, { unlock: "none" });
+		const row = fake.hub.rows.get(edge);
+		if (!row) throw new Error("the sample has no edge device");
+		row.identity = fakeKeys.identity("someone-else");
+		const mounted = await mountDevices(<div />, { overlays: true, fake });
+		await act(async () => {
+			await fake.workspace.keys.preflight(edge);
+		});
+		await showDiagnose(mounted, edge);
+		const keys = sourceRow("Owner keys here");
+		expect(keys?.state).toBe("fail");
+		expect(keys?.text).toContain(
+			"closed: the hub reports other keys for this device than the ones trusted here.",
+		);
+		expect(sheetText()).not.toContain("Browser can't protect keys");
+		expect(sheetText()).not.toMatch(MACHINE_WORDS);
 	});
 
 	test("a locked device offers Unlock, which replaces the sheet", async () => {

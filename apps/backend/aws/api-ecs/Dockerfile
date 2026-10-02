@@ -13,9 +13,10 @@ ARG TARGETARCH
 # older EC2 capacity, e.g. TARGET_CPU_ARM64=generic for Graviton1 (A1).
 ARG TARGET_CPU_ARM64=neoverse-n1
 ARG TARGET_CPU_AMD64=x86-64-v2
-ARG CARGO_BUILD_JOBS
+ARG CARGO_BUILD_JOBS=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        libprotobuf-dev \
         libssl-dev \
         lld \
         pkg-config \

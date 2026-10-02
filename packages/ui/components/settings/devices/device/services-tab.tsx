@@ -25,10 +25,12 @@ import {
 	type MouseEvent,
 	type ReactNode,
 	useCallback,
+	useId,
 	useRef,
 	useState,
 } from "react";
 import type { AppServiceRow } from "../../../../lib/device-management/model/app-plan";
+import { versionName } from "../../../../lib/device-management/model/app-versions";
 import {
 	fleetFacts,
 	isLastKnown,
@@ -48,7 +50,7 @@ import type {
 import { appCopy } from "../copy/app-copy";
 import { formatMoney } from "../copy/attention-copy";
 import { enumLabel } from "../copy/enum-labels";
-import { MODE_ICON, VersionCell } from "../primitives/app-chips";
+import { DriftChip, MODE_ICON, VersionCell } from "../primitives/app-chips";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import { Block } from "../primitives/block";
 import { DvButton } from "../primitives/dv-button";
@@ -106,13 +108,6 @@ import {
 const LINK =
 	"underline decoration-border-strong underline-offset-2 hover:decoration-current";
 
-/*
- * The app's base styles give every table outer margins and borders on all four
- * sides of each cell; the area's tables rule rows only. Local reset until the
- * table primitive does it (requests by W3-N1 and W3-N3RUN to W4-SWITCH).
- */
-export const TABLE_RESET =
-	"my-0 [&_td]:border-x-0 [&_td]:border-b-0 [&_th]:border-x-0 [&_th]:border-t-0";
 /** R11: a device with many services shows this many, then "Show more". */
 const ROWS_STEP = 50;
 /** SPEC §5.2 column plan, with room for "0 of 1 ready" in mono and the update chip. */
@@ -847,20 +842,22 @@ function uploadText(
 			);
 }
 
-/** The label of the update staged on the device; undefined when it isn't one of the app's known versions. */
+/** The name of the update staged on the device; undefined when it isn't one of the app's known versions. */
 function stagedLabelOf(
 	row: AppServiceRow | undefined,
 	read: AppViewRead,
 ): string | undefined {
 	if (!row?.staged || row.lastChange?.kind !== "update") return undefined;
 	const hash = row.lastChange.hash;
-	return (
-		read.view?.versions.find((version) => version.hash === hash)?.label ??
-		undefined
-	);
+	const staged = read.view?.versions.find((version) => version.hash === hash);
+	return staged ? versionName(staged) : undefined;
 }
 
-/** Label, short hash and drift; the hash alone says so in words (APP §7.5). */
+/**
+ * Label, short hash and drift (APP §7.5). An older version has no name (the
+ * hub keeps no version history), so its hash stands in with the drift; only a
+ * version the app's list doesn't know says so in words.
+ */
 function VersionLabel({
 	row,
 	service,
@@ -871,17 +868,17 @@ function VersionLabel({
 	staged: string | undefined;
 }>) {
 	const { t } = useTranslation("devices");
-	const hash = row?.version?.hash ?? service.appVersion?.hash;
-	const label = row?.version?.label;
-	if (label)
+	const version = row?.version;
+	if (version?.label)
 		return (
 			<VersionCell
-				label={label}
-				hash={hash}
+				label={version.label}
+				hash={version.hash}
 				behind={row?.behind ?? null}
 				staged={staged}
 			/>
 		);
+	const hash = version?.hash ?? service.appVersion?.hash;
 	return (
 		<span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
 			{hash ? (
@@ -890,9 +887,13 @@ function VersionLabel({
 					copyLabel={t("device.services.copyHash", "Copy app version hash")}
 				/>
 			) : null}
-			<span className="text-xs text-muted-foreground">
-				{t("device.services.appVersionUnknown", "App version unknown")}
-			</span>
+			{version ? (
+				<DriftChip behind={row?.behind ?? null} staged={staged} />
+			) : (
+				<span className="text-xs text-muted-foreground">
+					{t("device.services.appVersionUnknown", "App version unknown")}
+				</span>
+			)}
 		</span>
 	);
 }
@@ -944,15 +945,15 @@ function SettingsLine({ service }: Readonly<{ service: ServiceView }>) {
 	);
 }
 
-/** The newest version when this service runs an older, labelled one and no upload is under way. */
+/** The newest version when this service runs an older one of the app's list and no upload is under way. */
 function updateTargetOf(
 	row: AppServiceRow | undefined,
 	read: AppViewRead,
 	uploading: boolean,
 ): string | null {
-	const newest = read.view?.howRuns.newest?.label;
-	const behind = row?.version?.label ? (row.behind ?? 0) : 0;
-	return newest && behind > 0 && !uploading ? newest : null;
+	const newest = read.view?.howRuns.newest;
+	const behind = row?.version ? (row.behind ?? 0) : 0;
+	return newest && behind > 0 && !uploading ? versionName(newest) : null;
 }
 
 function VersionsCell(context: Readonly<RowContext>) {
@@ -1074,6 +1075,7 @@ function ServiceActions({
 	const time = useAreaTime();
 	const commands = useServiceCommands(page.deviceId, service.serviceId);
 	const results = useInlineResults(commands.resultKey);
+	const reasonId = useId();
 	const start = service.desired === "stopped" || START_STATES.has(service.conv);
 	const shown: ServiceCommand[] = start
 		? [commands.start]
@@ -1108,6 +1110,7 @@ function ServiceActions({
 							icon={COMMAND_ICON[id]}
 							busy={command.pending}
 							aria-disabled={gates[index] ? true : undefined}
+							aria-describedby={gates[index] ? reasonId : undefined}
 							title={command.label}
 							onClick={() =>
 								command.strength === "none"
@@ -1124,7 +1127,9 @@ function ServiceActions({
 				</DvButton>
 			</span>
 			{firstGate ? (
-				<GateInline kind={firstGate.kind}>{firstGate.reason}</GateInline>
+				<GateInline kind={firstGate.kind} id={reasonId}>
+					{firstGate.reason}
+				</GateInline>
 			) : service.conv === "crash_looping" ? (
 				<span className="text-xs text-muted-foreground">
 					{t(
@@ -1511,7 +1516,6 @@ export function DeviceServicesTab({
 					<div onClick={delegate.onClick}>
 						<DvTable
 							cols={bucket === "wide" ? SERVICE_COLS : SERVICE_COLS_MEDIUM}
-							className={TABLE_RESET}
 							head={<ServiceRowHead />}
 							label={t("device.services.tableLabel", "Services on {{device}}", {
 								device: page.name,

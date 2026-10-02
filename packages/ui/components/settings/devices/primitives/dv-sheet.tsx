@@ -2,7 +2,13 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { ArrowLeft, type LucideIcon, X } from "lucide-react";
-import { type ReactNode, useCallback, useMemo, useState } from "react";
+import {
+	type ReactNode,
+	type RefObject,
+	useCallback,
+	useMemo,
+	useState,
+} from "react";
 import {
 	Dialog,
 	DialogContent,
@@ -32,6 +38,8 @@ export interface DvSheetProps {
 	role?: "dialog" | "alertdialog";
 	/** Outside clicks close the sheet (Esc always does). Off for confirms. */
 	closeOnOutside?: boolean;
+	/** Takes the focus when the sheet opens (the field to type in); the first control otherwise. */
+	initialFocus?: RefObject<HTMLElement | null>;
 	className?: string;
 	bodyClassName?: string;
 	children?: ReactNode;
@@ -61,6 +69,7 @@ export function DvSheet({
 	onBack,
 	role = "dialog",
 	closeOnOutside = true,
+	initialFocus,
 	className,
 	bodyClassName,
 	children,
@@ -75,6 +84,16 @@ export function DvSheet({
 				overlayClassName="bg-scrim backdrop-blur-none"
 				onInteractOutside={
 					closeOnOutside ? undefined : (event) => event.preventDefault()
+				}
+				onOpenAutoFocus={
+					initialFocus
+						? (event) => {
+								const target = initialFocus.current;
+								if (!target) return;
+								event.preventDefault();
+								target.focus();
+							}
+						: undefined
 				}
 				{...(sub ? {} : { "aria-describedby": undefined })}
 				className={cx(
@@ -134,11 +153,13 @@ export function DvSheet({
 				{hasFoot ? (
 					<div
 						className={cx(
-							"sticky bottom-0 flex flex-wrap items-center gap-2 border-t border-hairline bg-surface-sunken px-5 py-3 text-xs text-muted-foreground",
+							"sticky bottom-0 flex flex-wrap items-center justify-end gap-2 border-t border-hairline bg-surface-sunken px-5 py-3 text-xs text-muted-foreground",
 							PHONE_SAFE_FOOT,
 						)}
 					>
-						<span className="min-w-[12ch] flex-1">{footNote}</span>
+						<span className="min-w-[12ch] flex-1 max-[560px]:basis-full max-[560px]:empty:hidden">
+							{footNote}
+						</span>
 						{foot}
 					</div>
 				) : null}

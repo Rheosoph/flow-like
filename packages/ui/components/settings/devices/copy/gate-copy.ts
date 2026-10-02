@@ -70,6 +70,21 @@ interface GateCopyContext extends CopyContext {
 const bytes = (value: string | number | undefined) =>
 	typeof value === "number" ? humanFileSize(value) : "";
 
+/**
+ * "Start needs a live connection." when the gate names what is gated
+ * (`params.action`, with `params.actions` = how many it names for "Restart and
+ * Stop need …"); undefined when it doesn't.
+ */
+function actionNeedsLive({ t, p }: CopyContext): string | undefined {
+	if (typeof p.action !== "string" || !p.action) return undefined;
+	return t("devices:gate.actionNeedsLive", {
+		action: p.action,
+		count: typeof p.actions === "number" ? p.actions : 1,
+		defaultValue_one: "{{action}} needs a live connection.",
+		defaultValue_other: "{{action}} need a live connection.",
+	});
+}
+
 /** One entry per gate reason (SPEC §6.3 gate copy, IA §3.3). */
 const GATE_COPY = {
 	desktop_only: ({ t }) =>
@@ -180,6 +195,10 @@ const GATE_COPY = {
 		t("devices:gate.lockedChange", "Unlock {{device}} to change settings.", {
 			device,
 		}),
+	locked_lookup: ({ t, device }) =>
+		t("devices:gate.lockedLookup", "Unlock {{device}} to look up a command.", {
+			device,
+		}),
 	locked_access: ({ t, device }) =>
 		t(
 			"devices:gate.lockedAccess",
@@ -241,8 +260,21 @@ const GATE_COPY = {
 			"The device may have been set up again, or someone may be impersonating it. Compare the fingerprint on the device before you continue.",
 		),
 	],
-	offline_needs_live: ({ t, device, at }) =>
-		at("since")
+	offline_needs_live: (c) => {
+		const { t, device, at } = c;
+		const needs = actionNeedsLive(c);
+		if (needs)
+			return at("since")
+				? t(
+						"devices:gate.offlineSinceAction",
+						"{{device}} has been offline since {{since}}. {{needs}}",
+						{ device, since: at("since"), needs },
+					)
+				: t("devices:gate.offlineAction", "{{device}} is offline. {{needs}}", {
+						device,
+						needs,
+					});
+		return at("since")
 			? t(
 					"devices:gate.offlineNeedsLiveSince",
 					"{{device}} has been offline since {{since}}. This needs a live connection.",
@@ -252,13 +284,23 @@ const GATE_COPY = {
 					"devices:gate.offlineNeedsLive",
 					"{{device}} is offline. This needs a live connection.",
 					{ device },
-				),
-	never_connected_needs_live: ({ t, device }) =>
-		t(
-			"devices:gate.neverConnectedNeedsLive",
-			"{{device}} hasn't checked in yet. This needs a live connection.",
-			{ device },
-		),
+				);
+	},
+	never_connected_needs_live: (c) => {
+		const { t, device } = c;
+		const needs = actionNeedsLive(c);
+		return needs
+			? t(
+					"devices:gate.neverConnectedAction",
+					"{{device}} hasn't checked in yet. {{needs}}",
+					{ device, needs },
+				)
+			: t(
+					"devices:gate.neverConnectedNeedsLive",
+					"{{device}} hasn't checked in yet. This needs a live connection.",
+					{ device },
+				);
+	},
 	connect_first: ({ t, device }) =>
 		t("devices:gate.connectFirst", "Connect live to {{device}} first.", {
 			device,

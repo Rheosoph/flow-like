@@ -120,6 +120,8 @@ export interface SetupCreate {
 	): Promise<CreatedResult | undefined>;
 	/** Stops a running creation; the hub reservation is released by the run itself. */
 	abort(): void;
+	/** The stopped run's setup could not be cancelled at the hub: nothing runs any more, and the hub still holds it. */
+	cancelFailed(): void;
 	/** What the hub registered in the current run, read at call time (state may lag behind an abort). */
 	registered(): Registration | undefined;
 	/** Forgets the run, its password and its files. */
@@ -453,6 +455,23 @@ export function useSetupCreate(prepare: PrepareSetup): SetupCreate {
 
 	const abort = useCallback(() => active.current?.controller.abort(), []);
 
+	const cancelFailed = useCallback(() => {
+		if (active.current || !alive.current) return;
+		const kept = registration.current;
+		// An aborted run publishes nothing, so its last state still says "running".
+		setRun((current) =>
+			current.status === "running"
+				? {
+						status: "failed",
+						phase: current.phase,
+						doneAt: current.doneAt,
+						...(kept ? { registration: kept } : {}),
+						failure: { kind: "cancel_failed", phase: current.phase },
+					}
+				: current,
+		);
+	}, []);
+
 	const reset = useCallback(() => {
 		active.current?.controller.abort();
 		held.current = undefined;
@@ -477,10 +496,22 @@ export function useSetupCreate(prepare: PrepareSetup): SetupCreate {
 			start: execute,
 			retry,
 			abort,
+			cancelFailed,
 			registered,
 			reset,
 			settled,
 		}),
-		[run, built, canRetry, execute, retry, abort, registered, reset, settled],
+		[
+			run,
+			built,
+			canRetry,
+			execute,
+			retry,
+			abort,
+			cancelFailed,
+			registered,
+			reset,
+			settled,
+		],
 	);
 }

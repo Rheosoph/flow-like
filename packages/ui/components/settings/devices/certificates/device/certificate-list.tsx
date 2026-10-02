@@ -49,7 +49,6 @@ import {
 	MENU_CONTENT,
 	MENU_ITEM,
 	Names,
-	TABLE_RESET,
 	certificateResultKey,
 	failureSummary,
 	gateView,
@@ -803,7 +802,6 @@ export function CertificateList({
 	return (
 		<DvTable
 			cols={COLS}
-			className={TABLE_RESET}
 			label={t("deviceCertificates.list.label", "Certificates on {{device}}", {
 				device: certs.name,
 			})}

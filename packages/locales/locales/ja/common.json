@@ -161,6 +161,7 @@
 	"apiSurfaceHint": "",
 	"app": "アプリ",
 	"appConfigurationAndEnvironmentVariables": "アプリの設定と環境変数",
+	"appDevicesDescription": "",
 	"appExportedSuccessfully": "アプリをエクスポートしました!",
 	"appImportedSuccessfully": "アプリをインポートしました!",
 	"appliedOnRun": "実行時に適用",

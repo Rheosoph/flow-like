@@ -18,6 +18,7 @@ import type {
 	DeviceTab,
 } from "../../../../lib/device-management/model/types";
 import { enumLabel } from "../copy/enum-labels";
+import { pinSeconds } from "../overlays/unlock-sheet";
 import { useAreaTime } from "../primitives/area-context";
 import { Block } from "../primitives/block";
 import { DvButton } from "../primitives/dv-button";
@@ -44,7 +45,10 @@ function useKeysLink(page: DevicePage): ChainLink {
 	const { input } = useAttentionState();
 	const { keys } = page.view;
 	const kind = enumLabel(t, "vaultKind", keys.role);
-	const state = enumLabel(t, "keyState", keys.state);
+	// A session is blocked only by a changed identity; the shared label for that state speaks of the browser.
+	const state = page.identity
+		? t("device.trust.keysBlocked", "closed until the identity is confirmed")
+		: enumLabel(t, "keyState", keys.state);
 	const revision = input.accountBackups[page.deviceId]?.revision ?? 0;
 	const notBackedUp = page.attention.some(
 		(item) => item.key === "keys_not_backed_up_to_account",
@@ -170,7 +174,7 @@ function useIdentityLink(page: DevicePage): ChainLink {
 					join: t(
 						"device.trust.identityJoin",
 						"you trusted this device's keys on {{date}}",
-						{ date: time.at(vault.identityPinnedAt) },
+						{ date: time.at(pinSeconds(vault.identityPinnedAt)) },
 					),
 				}),
 	};

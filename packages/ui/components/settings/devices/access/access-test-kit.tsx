@@ -28,7 +28,7 @@ export const PEOPLE: Readonly<Record<string, string>> = {
 export const MACHINE_WORDS = /\b[a-z]+_[a-z_]+\b|\bG\d{1,2}\b|\bD\d\b/;
 
 export interface MountAccessOptions extends MountDevicesOptions {
-	/** Account id → display name; the sample people by default. */
+	/** Account id → display name; the sample people by default. An empty name is an account the directory knows without one. */
 	people?: Readonly<Record<string, string>>;
 }
 
@@ -36,10 +36,15 @@ function userState(
 	fake: FakeWorkspace,
 	people: Readonly<Record<string, string>>,
 ): IBackendState["userState"] {
-	const lookup = (id: string): IUserLookup | undefined =>
-		people[id]
-			? { id, name: people[id], created_at: "2026-01-01T00:00:00Z" }
-			: undefined;
+	const lookup = (id: string): IUserLookup | undefined => {
+		const name = people[id];
+		if (name === undefined) return undefined;
+		return {
+			id,
+			...(name ? { name } : {}),
+			created_at: "2026-01-01T00:00:00Z",
+		};
+	};
 	return {
 		getProfile: async () => fake.profile,
 		getInfo: async () => ({ id: fake.hub.me, dev_mode: false }),

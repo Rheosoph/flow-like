@@ -222,6 +222,11 @@ describe("tray model", () => {
 			expect(title).not.toContain("_");
 		}
 		expect(activityTitle(t, ITEMS[3])).toBe("Stop");
+		const quick = item("q", {
+			kind: "command",
+			label: { code: "command", params: { command: "apply" } },
+		});
+		expect(activityTitle(t, quick)).toBe("Quick update");
 		expect(activityTarget(ITEMS[0])).toBe("edge-berlin-01 › invoice-extractor");
 		expect(
 			activityTarget(
@@ -543,6 +548,51 @@ describe("activity over the workspace", () => {
 			connectLive: true,
 		});
 		expect(mounted.fake.api.commands).toHaveLength(commands);
+	});
+
+	test("a finished item raises a toast unless its page, or the Rollout step of its own run, shows it", async () => {
+		const { toast } = await import("sonner");
+		const edge = SAMPLE_IDS.edge;
+		const rollout: DevicesRoute = {
+			screen: "deploy",
+			deviceIds: [edge, SAMPLE_IDS.studio],
+			appId: "app_visitor_checkin",
+			step: "rollout",
+		};
+		const raised = async (
+			route: DevicesRoute | undefined,
+			deviceId: string = edge,
+		) => {
+			const mounted = await mountDevices(
+				<ActivityTray scope={ACCOUNT} onNavigate={() => {}} route={route} />,
+			);
+			const { activity } = mounted.fake.workspace;
+			const before = toast.getHistory().length;
+			await act(async () => {
+				const id = activity.start({
+					kind: "safe_update",
+					target: { deviceId, serviceId: "check-in-page" },
+					state: "active",
+					label: { code: "safe_update" },
+					startedBy: "you",
+					actions: [],
+					href: rollout,
+				});
+				activity.finish(id, "done", { code: "done" });
+			});
+			const count = toast.getHistory().length - before;
+			await cleanupDevices();
+			return count;
+		};
+		expect(await raised(undefined)).toBe(1);
+		expect(await raised({ screen: "fleet", view: "devices" })).toBe(1);
+		expect(await raised(rollout)).toBe(0);
+		expect(await raised({ ...rollout, step: "review" })).toBe(1);
+		expect(await raised({ ...rollout, appId: "app_crm_sync" })).toBe(1);
+		expect(await raised(rollout, SAMPLE_IDS.warehouse)).toBe(1);
+		expect(
+			await raised({ screen: "device", deviceId: edge, tab: "services" }),
+		).toBe(0);
 	});
 
 	test("phone: the tray is a modal sheet", async () => {

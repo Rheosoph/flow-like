@@ -99,9 +99,13 @@ function compact<T extends object>(value: T): T {
 }
 
 function parseFleet(params: ParamReader): FleetRoute {
+	const services = params.get("view") === "services";
 	return compact<FleetRoute>({
 		screen: "fleet",
-		view: params.get("view") === "services" ? "services" : "devices",
+		view: services ? "services" : "devices",
+		app: services
+			? (idParam(params, "app") ?? idParam(params, "project"))
+			: undefined,
 		filter: oneOf(FLEET_FILTERS, params.get("filter")),
 		q: textParam(params, "q"),
 		focus: params.get("focus") === "attention" ? "attention" : undefined,
@@ -238,6 +242,7 @@ const QUERY_ENTRIES: {
 } = {
 	fleet: (route) => [
 		["view", route.view === "services" ? "services" : undefined],
+		["app", route.view === "services" ? route.app : undefined],
 		["filter", route.filter],
 		["q", route.q?.trim()],
 		["focus", route.focus],

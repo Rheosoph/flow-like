@@ -1,16 +1,12 @@
 "use client";
 
-import { useQueries } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 import { useInvoke } from "../../../../hooks/use-invoke";
-import { queries } from "../../../../lib/device-management/hub/queries";
 import type {
-	AppEventInput,
 	AppInput,
 	AppView,
 	AppVisibility,
 } from "../../../../lib/device-management/model/app-plan";
-import { fleetFacts } from "../../../../lib/device-management/model/device-view";
 import { evaluateGate } from "../../../../lib/device-management/model/gates";
 import {
 	type Headline,
@@ -18,15 +14,11 @@ import {
 } from "../../../../lib/device-management/model/headline";
 import type {
 	AppDevicePlacements,
-	AttentionInput,
 	DeviceViewModel,
 	GateFailure,
-	ServiceView,
 } from "../../../../lib/device-management/model/types";
 import type { ActivityItem } from "../../../../lib/device-management/workspace/types";
 import { RolePermissions } from "../../../../lib/permission/role-permission";
-import type { IApp } from "../../../../lib/schema/app/app";
-import type { IEvent } from "../../../../lib/schema/flow/event";
 import { useBackend } from "../../../../state/backend-state";
 import type { IOwnRole } from "../../../../state/backend-state/types";
 import {
@@ -50,10 +42,6 @@ import {
 	changesOf,
 	headlineApp,
 	openRunIds,
-	refineView,
-	revisionsSent,
-	versionInputs,
-	withoutAccess,
 } from "./app-view-local";
 
 export interface AppRole {
@@ -97,42 +85,11 @@ export function useAppRole(appId: string): AppRole {
 			known: !!data,
 			canReadFlows:
 				permissions?.hasPermission(RolePermissions.ReadBoards) ?? true,
-			isOwner: data?.is_owner ?? false,
+			// `is_owner` also holds for an Admin; only the Owner permission names the app's owner.
+			isOwner: permissions?.contains(RolePermissions.Owner) ?? false,
 			...(data?.role_name ? { roleName: data.role_name } : {}),
 		};
 	}, [role.data, role.isLoading, getOwnRole]);
-}
-
-const systemSeconds = (
-	time: IApp["updated_at"] | null | undefined,
-): number | null =>
-	typeof time?.secs_since_epoch === "number" && time.secs_since_epoch > 0
-		? time.secs_since_epoch
-		: null;
-
-/** What decides whether an event can run on a device, and at which versions. */
-function eventInput(event: IEvent): AppEventInput {
-	const { id, name, active, event_type, canary, variants } = event;
-	const { default_page_id, event_version, board_version } = event;
-	return {
-		id,
-		name,
-		active,
-		event_type,
-		canary,
-		variants,
-		default_page_id,
-		event_version,
-		board_version,
-	};
-}
-
-function appServices(input: AttentionInput, appId: string): ServiceView[] {
-	return fleetFacts(input).devices.flatMap((device) =>
-		device.active && Array.isArray(device.services)
-			? device.services.filter((service) => service.projectId === appId)
-			: [],
-	);
 }
 
 export interface AppDevicesData {
@@ -219,23 +176,6 @@ export function useAppDevices(
 		() => new Map(views.map((view) => [view.row.device_id, view])),
 		[views],
 	);
-	// What a shared device's access covers decides "no access" against "unknown": the hub says it per device.
-	const sharedIds = useMemo(
-		() =>
-			allowed
-				? input.devices
-						.filter(
-							(row) => row.status === "active" && row.relationship === "shared",
-						)
-						.map((row) => row.device_id)
-				: [],
-		[allowed, input.devices],
-	);
-	useQueries({
-		queries: sharedIds.map((deviceId) =>
-			queries.myAccess(workspace.hub, deviceId),
-		),
-	});
 	const coverage = useCoverage(appId);
 	const deployGates = useMemo(() => {
 		const gates = new Map<string, GateFailure>();
@@ -250,38 +190,19 @@ export function useAppDevices(
 		return gates;
 	}, [input.devices, state, appId]);
 
-	const label = (app.data as IApp | undefined)?.version ?? null;
-	const changedAt = systemSeconds((app.data as IApp | undefined)?.updated_at);
-	const versions = useMemo(() => {
-		if (!events.data) return undefined;
-		return versionInputs({
-			label,
-			changedAt,
-			events: events.data.map(eventInput),
-			services: appServices(input, appId),
-			sentAt: revisionsSent(activity, appId),
-		});
-	}, [events.data, label, changedAt, input, appId, activity]);
 	const changes = useMemo(
 		() => changesOf(activity, appId, input.me),
 		[activity, appId, input.me],
 	);
-	const focus = useMemo(
-		() => (focusDeviceId ? [focusDeviceId] : undefined),
-		[focusDeviceId],
+	const extras = useMemo(
+		() => ({
+			changes,
+			...(focusDeviceId ? { focusDeviceIds: [focusDeviceId] } : {}),
+		}),
+		[changes, focusDeviceId],
 	);
-	const read = useAppView(readId, {
-		...(versions ? { versions } : {}),
-		changes,
-		...(focus ? { focusDeviceIds: focus } : {}),
-	});
-	const view = useMemo(
-		() =>
-			read.view
-				? withoutAccess(refineView(read.view), coverage.noAccess)
-				: undefined,
-		[read.view, coverage.noAccess],
-	);
+	const read = useAppView(readId, extras);
+	const { view } = read;
 	const appHeadline = useMemo(
 		() =>
 			view ? headline(input, { items, app: headlineApp(view) }) : undefined,

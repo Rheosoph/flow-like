@@ -161,6 +161,7 @@
 	"apiSurfaceHint": "Which upstream API the model speaks. Responses is required by newer OpenAI models.",
 	"app": "App",
 	"appConfigurationAndEnvironmentVariables": "App configuration and environment variables",
+	"appDevicesDescription": "Run this app on your own devices and see where it runs",
 	"appearance": "Appearance",
 	"appExportedSuccessfully": "App exported successfully!",
 	"appImportedSuccessfully": "App imported successfully!",

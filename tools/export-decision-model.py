@@ -130,6 +130,21 @@ def reference_cases(model, graph, tokenizer, max_length: int, temperature: float
             {"0": "Billing or payment", "1": "Account access", "2": "Other requests mentioning [L]"},
         ),
     ]
+    if max_length >= 256:
+        labels = {
+            "0": "The request remains unresolved", "1": "The customer is waiting",
+            "2": "The issue is partly resolved", "3": "The issue is resolved",
+        }
+        sentence = "The support team resolved my problem and delivered the replacement on time."
+        paragraphs = []
+        # Cross ModernBERT's local attention window without exceeding the bundle budget.
+        for _ in range(min(max_length, 384)):
+            length = len(encode_case(tokenizer, " ".join(paragraphs + [sentence]), labels)[0])
+            if length > min(max_length, 384):
+                break
+            paragraphs.append(sentence)
+        if paragraphs:
+            examples.append(([" ".join(paragraphs)], labels))
     cases = []
     for texts, labels in examples:
         # Returning all softmax scores checks every label, including low scores.

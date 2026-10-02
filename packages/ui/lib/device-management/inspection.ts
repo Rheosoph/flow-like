@@ -241,6 +241,7 @@ function deviceFacts(
 
 const SNAPSHOT_PLACEMENT_FACTS = {
 	has_error: PLACEMENT_FACTS.has_error,
+	offline_writes: PLACEMENT_FACTS.offline_writes,
 	source: PLACEMENT_FACTS.source,
 	events: PLACEMENT_FACTS.events,
 	events_truncated: PLACEMENT_FACTS.events_truncated,

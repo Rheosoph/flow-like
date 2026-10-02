@@ -28,6 +28,7 @@ import {
 } from "./freshness-stamp";
 import { type Gate, GatedAction } from "./gate-notice";
 import { SEVERITY_ICON, SEVERITY_TONE, type SeverityKind } from "./icons";
+import { monoNames } from "./obj-name";
 import { severityLabel } from "./severity-word";
 import { TONE_TEXT, cx } from "./tone";
 
@@ -45,6 +46,8 @@ export interface AttentionEntry {
 	id: string;
 	severity: SeverityKind;
 	sentence: ReactNode;
+	/** Device and service names in a plain-string sentence, set in mono (`attentionCopy().names`). */
+	names?: readonly string[];
 	/** The IA §6.5 condition key; shown only with technical keys on (R3). */
 	conditionKey?: string;
 	stamp?: FreshnessStampProps;
@@ -59,6 +62,7 @@ export interface AttentionDone {
 	id: string;
 	/** The result sentence ("Backed up to your account as version 1 at 14:02."). */
 	sentence: ReactNode;
+	names?: readonly string[];
 	/** Unix seconds. */
 	doneAt: number;
 	conditionKey?: string;
@@ -270,7 +274,7 @@ export function AttentionItem(props: Readonly<AttentionItemProps>) {
 			</span>
 			<div className="min-w-0">
 				<p className={cx("max-w-[72ch]", sentenceSize(compact))}>
-					{item.sentence}
+					{monoNames(item.sentence, item.names)}
 				</p>
 				<ItemMeta {...props} compact={compact} />
 			</div>
@@ -306,7 +310,7 @@ export function AttentionDoneItem({
 			</span>
 			<div className="min-w-0">
 				<p className={cx("max-w-[72ch] text-ink-2", sentenceSize(compact))}>
-					{item.sentence}
+					{monoNames(item.sentence, item.names)}
 				</p>
 				<p className={cx(META, "mt-1.5")}>
 					<span>
@@ -423,7 +427,7 @@ function AllClear({ text, compact }: Readonly<AllClearProps>) {
 	return (
 		<p
 			className={cx(
-				"flex items-center gap-2 text-ink-2",
+				"flex items-center gap-2 text-ui text-ink-2",
 				compact ? "px-3 py-2.5" : "px-4 py-3.5",
 			)}
 		>

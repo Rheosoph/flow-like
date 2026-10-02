@@ -45,10 +45,6 @@ export const SELECT_CONTENT =
 export const SELECT_ITEM =
 	"text-[13px]/[18px] focus:bg-row-hover focus:text-foreground";
 
-/** The app's global table styles add cell borders and margins a `DvTable` doesn't have (requests.md → W4-SWITCH). */
-export const TABLE_RESET =
-	"my-0 [&_td]:border-x-0 [&_td]:border-b-0 [&_th]:border-x-0 [&_th]:border-t-0";
-
 /**
  * A facts list for half-width columns and cards: label and value stay side by
  * side down to 380 px (`KeyValueList` stacks below 520 px). Takes `KvRow` and

@@ -62,14 +62,13 @@ import { StateView } from "../../primitives/state-view";
 import { cx } from "../../primitives/tone";
 import { WizardStepHeader } from "../../primitives/wizard";
 import { appEventsHref } from "../../routing/devices-href";
-import { useDevicesRoute } from "../../routing/use-devices-route";
+import { useDevicesRoute, useHostLink } from "../../routing/use-devices-route";
 import { eventName, issueText, noFlowsText, planNames } from "../deploy-copy";
 import {
 	EventTile,
 	HeadChip,
 	HubStamp,
 	LocalStamp,
-	TABLE_RESET,
 	TargetsStamp,
 } from "../deploy-parts";
 import { ServicePlan } from "../service-plan";
@@ -517,6 +516,7 @@ function OnDeviceCell({
 	appId,
 }: Readonly<Pick<EventRowProps, "row" | "appId">>) {
 	const { t } = useTranslation("devices");
+	const hostLink = useHostLink();
 	const { event, rule, servedOn } = row;
 	if (rule.eligible)
 		return (
@@ -545,7 +545,7 @@ function OnDeviceCell({
 				<CellSub>
 					<a
 						className="underline decoration-border-strong underline-offset-2 hover:decoration-current"
-						href={appEventsHref(appId, event.id)}
+						{...hostLink(appEventsHref(appId, event.id))}
 					>
 						{eligibilityFixLabel(t, reason.fix)}
 					</a>
@@ -744,7 +744,6 @@ function EventsBlock(props: Readonly<PlanStepProps>) {
 					app: app.name,
 				})}
 				cols={EVENT_COLS}
-				className={TABLE_RESET}
 				head={<EventsHead last={t("deploy.what.colOnDevice", "On a device")} />}
 			>
 				{main.map(renderRow)}
@@ -861,7 +860,6 @@ function UpdateEventsTable(props: Readonly<PlanStepProps>) {
 		<DvTable
 			label={t("deploy.what.updateEventsLabel", "Events in this update")}
 			cols={EVENT_COLS}
-			className={TABLE_RESET}
 			head={<EventsHead last={t("deploy.what.colNow", "Now")} />}
 		>
 			{ok.map((row) => (

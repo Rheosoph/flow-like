@@ -162,6 +162,7 @@
 	"apiSurfaceHint": "",
 	"app": "Aplicación",
 	"appConfigurationAndEnvironmentVariables": "Configuración de la aplicación y variables de entorno",
+	"appDevicesDescription": "",
 	"appExportedSuccessfully": "¡Aplicación exportada correctamente!",
 	"appImportedSuccessfully": "¡Aplicación importada correctamente!",
 	"appliedOnRun": "Aplicado en la ejecución",

@@ -343,7 +343,7 @@ describe("action row", () => {
 		const row = actions(view);
 		const line = row.querySelector("[data-gate-inline=busy]");
 		expect(text(line as HTMLElement)).toMatch(
-			/^An update is in progress\. Edit settings, Update, Add an event,? and Edit as JSON work again after it finishes \(by \d\d:\d\d:\d\d at the latest\)\.$/,
+			/^An update is in progress\. Edit settings, Update to v1\.5\.0, Add an event,? and Edit as JSON work again after it finishes \(by \d\d:\d\d:\d\d at the latest\)\.$/,
 		);
 		expect(row.querySelectorAll("[data-gate-inline]").length).toBe(1);
 		expect(row.querySelector("[data-config-hint]")).toBeNull();
@@ -371,7 +371,8 @@ describe("action row", () => {
 		expect(text(note)).toContain(
 			"re-pins invoice-extractor to the event and flow versions published now: Extract invoice 1.4.0 → 1.5.0 (flow 2.1.0 → 2.2.0). Data stays in the cloud and isn't touched.",
 		);
-		expect(text(summary(view) as HTMLElement)).toContain("Behind");
+		// The app's version list knows the revision: the summary counts how far behind it is.
+		expect(text(summary(view) as HTMLElement)).toContain("1 behind");
 	});
 
 	test("on the published versions: Update… links to the wizard for this service; nothing more can be added", async () => {
@@ -396,7 +397,7 @@ describe("action row", () => {
 			"Edit settings goes through a safe or quick update and keeps the installed app version.",
 		);
 		expect(text(actions(view))).toContain(
-			"Runs the event and flow versions published now.",
+			"Runs the newest version, v2.0.0. Publishing on the hub doesn't change a running device. Each service keeps its version until you update it.",
 		);
 		expect(primaries()).toBe(1);
 	});

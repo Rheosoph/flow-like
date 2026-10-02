@@ -88,6 +88,7 @@ import { useDeviceWorkspace } from "../workspace/device-workspace-provider";
 import { useOverlay } from "../workspace/overlay-store";
 import { useAttentionState } from "../workspace/use-attention";
 import { useGate } from "../workspace/use-gate";
+import { UnknownPerson, identityName } from "./person-name";
 import type { DeviceAccess, PersonNames } from "./use-access";
 
 export const LINK =
@@ -99,13 +100,6 @@ export const OBJECT_LINK =
 export const POPOVER =
 	"rounded-lg border-border-strong bg-popover p-0 text-ui shadow-none backdrop-blur-none";
 const MENU_ITEM = "text-[13px]/[18px] focus:bg-row-hover focus:text-foreground";
-/**
- * The app's base layer gives every table margins and every cell four borders;
- * `DvTable` rules rows only. Chips in a cell have 4 px corners and may wrap.
- */
-export const TABLE_RESET =
-	"my-0 [&_td]:border-x-0 [&_td]:border-b-0 [&_th]:border-x-0 [&_th]:border-t-0 [&_td_[data-slot=badge]]:h-auto [&_td_[data-slot=badge]]:min-h-5.5 [&_td_[data-slot=badge]]:rounded-md [&_td_[data-slot=badge]]:py-0.5 [&_td_[data-slot=badge]]:whitespace-normal [&_td_[data-slot=badge]>span]:whitespace-normal";
-
 /** "in 14h", "in 19d": an end as a count; the area's relative times round to "tomorrow" and "next mo.". */
 export function untilText(time: AreaTime, atS: number): string {
 	const seconds = atS - time.nowS;
@@ -172,13 +166,13 @@ export function AccessPerson({
 	showId = true,
 	className,
 }: Readonly<{ userId: string; showId?: boolean; className?: string }>) {
-	const { t } = useTranslation("devices");
 	const { input } = useAttentionState();
 	const identity = useUserIdentity(userId);
-	if (identity.isResolved)
+	const name = identityName(identity, userId);
+	if (name)
 		return (
 			<PersonChip
-				name={identity.label}
+				name={name}
 				email={identity.user?.email}
 				avatarUrl={identity.avatarUrl}
 				you={userId === input.me}
@@ -187,35 +181,12 @@ export function AccessPerson({
 			/>
 		);
 	return (
-		<span
-			data-person-unknown=""
-			className={cx("inline-flex min-w-0 flex-col", className)}
-		>
-			<span
-				className="inline-flex min-w-0 items-center gap-1.5"
-				title={t(
-					"access.person.unknownTitle",
-					"This account couldn't be looked up from here",
-				)}
-			>
-				<span
-					aria-hidden
-					className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-ink-2"
-				>
-					?
-				</span>
-				<span className="truncate">
-					{identity.isPending
-						? t("access.person.lookingUp", "Looking up…")
-						: t("access.person.unknown", "Unknown account")}
-				</span>
-			</span>
-			{showId ? (
-				<span className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
-					{userId}
-				</span>
-			) : null}
-		</span>
+		<UnknownPerson
+			pending={identity.isPending}
+			unreachable={!identity.isResolved}
+			className={className}
+			{...(showId ? { userId } : {})}
+		/>
 	);
 }
 
@@ -1076,7 +1047,6 @@ export function GrantsTable({
 				device: device.name,
 			})}
 			cols={["19%", "15%", "21%", "13%", "16%", "16%"]}
-			className={TABLE_RESET}
 			head={
 				<tr>
 					<Th>{labels.person}</Th>

@@ -143,22 +143,25 @@ describe("device Keys tab: keys on this computer", () => {
 		expect(keyWrites(view)).toEqual([]);
 	});
 
-	test("a locked device keeps Download visible and disabled with the reason; clicking sends nothing", async () => {
+	test("a locked device can download its key backup file: the sheet asks for the device password and nothing is sent", async () => {
 		const view = await mount(SAMPLE_IDS.cold);
 		const { container } = view;
 		const download = byRole("button", "Download key backup file…", container);
-		expect(download.getAttribute("aria-disabled")).toBe("true");
-		expect(container.textContent).toContain(
+		// The file is sealed with the typed password, so the keys needn't be unlocked first.
+		expect(download.getAttribute("aria-disabled")).toBeNull();
+		expect(container.textContent).not.toContain(
 			"Unlock cold-storage-nas to use its keys.",
 		);
-		const calls = view.fake.api.calls.length;
-		await click(download);
-		expect(queryByRole("dialog")).toBeNull();
-		expect(view.fake.api.calls.length).toBe(calls);
 		expect(container.textContent).toContain(
 			"Not backed up. The keys exist only here.",
 		);
 		expect(byRole("button", "Back up to account", container)).toBeTruthy();
+		const calls = view.fake.api.calls.length;
+		await click(download);
+		const sheet = byRole("dialog");
+		expect(sheet.querySelector('input[type="password"]')).not.toBeNull();
+		expect(view.fake.api.calls.length).toBe(calls);
+		expect(keyWrites(view)).toEqual([]);
 	});
 
 	test("a shared device names the app its access covers and links to that app's devices", async () => {

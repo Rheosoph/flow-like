@@ -9,8 +9,7 @@ import { Block } from "../primitives/block";
 import { DvSheet } from "../primitives/dv-sheet";
 import { FreshnessStamp } from "../primitives/freshness-stamp";
 import { HowRunsStrip, ModeExplainer } from "../primitives/how-runs";
-import { cx } from "../primitives/tone";
-import { TABLE_RESET, useAppPage } from "./app-shared";
+import { useAppPage } from "./app-shared";
 import { versionName } from "./app-view-local";
 
 /*
@@ -20,8 +19,8 @@ import { versionName } from "./app-view-local";
  */
 const STRIP = "[&>p]:flex-[1_1_480px] [&>p]:text-ui [&>span:empty]:hidden";
 
-/* The explainer's own table and paragraphs, freed from the same base-layer rules (see `TABLE_RESET`). */
-const EXPLAINER = cx("[&_p]:text-ui [&_table]:my-0", TABLE_RESET);
+/* The explainer's paragraphs inside a sheet (a portal, outside the area's own leading). */
+const EXPLAINER = "[&_p]:text-ui";
 
 /** APP §2.5: how the app runs on devices, stated as a fact, with "Online or offline?" in a sheet. */
 export function HowRunsBlock() {

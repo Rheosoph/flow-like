@@ -181,7 +181,7 @@ export function Sparkline({
 					/>
 					<span
 						data-spark-tip=""
-						className="pointer-events-none absolute -top-6 z-10 -translate-x-1/2 rounded-sm border border-border-strong bg-popover px-1.5 py-0.5 font-mono text-xs whitespace-nowrap text-foreground tabular-nums"
+						className="pointer-events-none absolute -top-6 z-10 -translate-x-1/2 rounded-md border border-border-strong bg-popover px-1.5 py-0.5 font-mono text-xs whitespace-nowrap text-foreground tabular-nums"
 						style={{ left: `${((hovered[0] / W) * 100).toFixed(2)}%` }}
 					>
 						{tip}

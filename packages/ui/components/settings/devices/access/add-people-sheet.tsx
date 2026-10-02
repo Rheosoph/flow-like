@@ -2090,6 +2090,23 @@ function WizardBody({
 		}
 	};
 
+	/**
+	 * A device that stopped requiring a sandbox since its confirmation was
+	 * shown asks for trust before anything is signed: on Save, and on the
+	 * retry of a device whose save failed.
+	 */
+	const askMissingTrust = (): boolean => {
+		if (trust.every((item) => acks[ackKey(item.userId, item.deviceId)]))
+			return false;
+		setSavedSteps((taken) =>
+			taken && !taken.includes("trust")
+				? taken.flatMap((id) => (id === "review" ? ["trust", id] : [id]))
+				: taken,
+		);
+		setStep("trust");
+		return true;
+	};
+
 	const goNext = () => {
 		if (blocker || saving) return;
 		if (current === "result") {
@@ -2097,12 +2114,7 @@ function WizardBody({
 			return;
 		}
 		if (current === "review") {
-			// A device that stopped requiring a sandbox while the review was open asks for trust first.
-			if (trust.some((item) => !acks[ackKey(item.userId, item.deviceId)])) {
-				setStep("trust");
-				return;
-			}
-			void saveAll();
+			if (!askMissingTrust()) void saveAll();
 			return;
 		}
 		setStep(steps[index + 1] as AccessWizardStep);
@@ -2247,7 +2259,9 @@ function WizardBody({
 				onPassword={(deviceId, password) =>
 					setPasswords((existing) => ({ ...existing, [deviceId]: password }))
 				}
-				onRetry={() => void saveAll()}
+				onRetry={() => {
+					if (!askMissingTrust()) void saveAll();
+				}}
 				retrying={saving}
 			/>
 		);
@@ -2315,7 +2329,9 @@ function WizardBody({
 			}
 			foot={
 				<>
-					{index > 0 && current !== "result" ? (
+					{index > 0 &&
+					current !== "result" &&
+					!(savedSteps && current === "trust") ? (
 						<DvButton
 							icon={ChevronLeft}
 							aria-disabled={saving || undefined}

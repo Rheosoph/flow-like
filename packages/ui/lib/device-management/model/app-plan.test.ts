@@ -11,6 +11,7 @@ import {
 import {
 	type AppDeviceInput,
 	type AppServiceRow,
+	type AppUploadInput,
 	type AppView,
 	appMode,
 	appUnknownOf,
@@ -24,6 +25,8 @@ function view(
 		labUnlocked?: boolean;
 		devices?: AppDeviceInput[];
 		focus?: string[];
+		noAccess?: string[];
+		uploads?: AppUploadInput[];
 	} = {},
 ): AppView {
 	return buildAppView({
@@ -32,6 +35,8 @@ function view(
 		placements: PLACEMENTS[appId],
 		changes: CHANGES,
 		focusDeviceIds: options.focus,
+		noAccess: options.noAccess,
+		uploads: options.uploads,
 	});
 }
 
@@ -701,6 +706,199 @@ describe("versions and drift (APP §2.11, A7)", () => {
 		});
 		expect(result.services[0].cloud).toEqual({ state: "unknown" });
 		expect(result.services[0].lastChange).toBeNull();
+	});
+});
+
+describe("cloud access on the viewer's own device (APP §2.13)", () => {
+	const unapproved = (labUnlocked: boolean) =>
+		buildAppView({
+			app: APPS.app_invoice_ai,
+			devices: sampleDevices({ labUnlocked }),
+			placements: { server_time: 0, placements: [] },
+		}).services.map((row) => [row.deviceId, row.cloud.state]);
+
+	test("nothing listed means none on an owned device and hidden on a shared one", () => {
+		expect(unapproved(true)).toEqual([
+			["edge-berlin-01", "none"],
+			["lab-gpu-02", "hidden"],
+		]);
+	});
+});
+
+describe("staged version and uploads (APP §2.8, §2.9)", () => {
+	const staged = (changes: typeof CHANGES | undefined) => {
+		const devices = sampleDevices();
+		devices[0] = {
+			...devices[0],
+			services: [
+				{
+					...SERVICES.supportBot,
+					rollout: {
+						rollout_id: "r1",
+						placement_id: "support-bot",
+						project_id: "app_support_portal",
+						state: "staged",
+					},
+				},
+			],
+		};
+		return buildAppView({ app: APPS.app_support_portal, devices, changes })
+			.services[0];
+	};
+
+	test("the staged version is the one this computer recorded", () => {
+		expect(staged(CHANGES).stagedVersion?.label).toBe("v2.3.0");
+		expect(staged(undefined).stagedVersion).toBeNull();
+		expect(
+			staged({
+				"edge-berlin-01/support-bot": { at: 1, kind: "settings" },
+			}).stagedVersion,
+		).toBeNull();
+		expect(view("app_support_portal").services[0]).not.toHaveProperty(
+			"stagedVersion",
+		);
+	});
+
+	test("an upload joins its own service, else the first service of the app on that device", () => {
+		const upload = (
+			id: string,
+			deviceId: string,
+			serviceId?: string,
+		): AppUploadInput => ({
+			id,
+			deviceId,
+			...(serviceId ? { serviceId } : {}),
+			state: "paused",
+			done: 5,
+			total: 10,
+			expiresAt: 9,
+		});
+		const devices = sampleDevices({ labUnlocked: true });
+		devices[0] = {
+			...devices[0],
+			services: [
+				{ ...SERVICES.invoiceExtractor, serviceId: "invoice-extractor-b" },
+				SERVICES.invoiceExtractor,
+			],
+		};
+		const uploads = [
+			upload("device-wide", "edge-berlin-01"),
+			upload("own", "lab-gpu-02", "invoice-extractor-gpu"),
+			upload("gone", "lab-gpu-02", "removed-service"),
+			upload("elsewhere", "studio-mac-mini"),
+		];
+		const result = view("app_invoice_ai", { devices, uploads });
+		expect(
+			result.services.map((row) => [row.serviceId, row.upload?.id ?? null]),
+		).toEqual([
+			["invoice-extractor", "device-wide"],
+			["invoice-extractor-b", null],
+			["invoice-extractor-gpu", "own"],
+		]);
+		expect(view("app_invoice_ai").services[0]).not.toHaveProperty("upload");
+	});
+});
+
+describe("access that covers other apps only (APP §2.12)", () => {
+	const noAccess = ["lab-gpu-02"];
+
+	test("a locked device shared for another app is no access, not unknown", () => {
+		expect(
+			view("app_support_portal").everywhereElse.unknown.map(
+				(row) => row.deviceId,
+			),
+		).toEqual(["lab-gpu-02"]);
+		const result = view("app_support_portal", { noAccess });
+		expect(result.everywhereElse.unknown).toEqual([]);
+		expect(result.everywhereElse.noAccess).toMatchObject([
+			{ deviceId: "lab-gpu-02", gate: null, unknown: { kind: "noaccess" } },
+		]);
+		expect(result.groups.map((group) => group.deviceId)).toEqual([
+			"edge-berlin-01",
+		]);
+		expect(result.versions[0].unknownOn).toEqual([]);
+		expect(result.coverage.locked).toEqual([]);
+		expect(result.events.cols).toContain("lab-gpu-02");
+		expect(
+			result.events.rows.every(
+				(row) => row.cells["lab-gpu-02"]?.state === "no_access",
+			),
+		).toBe(true);
+	});
+
+	test("unlocked, it is never counted as not deployed", () => {
+		const open = { labUnlocked: true };
+		expect(
+			view("app_support_portal", open).everywhereElse.notDeployed.map(
+				(row) => row.deviceId,
+			),
+		).toContain("lab-gpu-02");
+		const result = view("app_support_portal", { ...open, noAccess });
+		expect(
+			result.everywhereElse.notDeployed.map((row) => row.deviceId),
+		).not.toContain("lab-gpu-02");
+		expect(result.everywhereElse.noAccess).toMatchObject([
+			{
+				deviceId: "lab-gpu-02",
+				gate: null,
+				unknown: { kind: "noaccess" },
+				runs: [{ serviceId: "invoice-extractor-gpu" }],
+			},
+		]);
+		expect(result.coverage.readable).toBe(
+			view("app_support_portal", open).coverage.readable,
+		);
+	});
+
+	test("a device that runs the app, or never checked in, stays where it is", () => {
+		const result = view("app_invoice_ai", {
+			labUnlocked: true,
+			noAccess: ["lab-gpu-02", "cold-storage-nas"],
+		});
+		expect(result.groups.map((group) => group.deviceId)).toContain(
+			"lab-gpu-02",
+		);
+		expect(result.everywhereElse.never.map((row) => row.deviceId)).toEqual([
+			"cold-storage-nas",
+		]);
+		expect(result.everywhereElse.noAccess).toEqual([]);
+	});
+
+	test("all-unknown becomes never-deployed when nothing can be unlocked", () => {
+		const devices = sampleDevices().filter(
+			(device) => device.id === "lab-gpu-02",
+		);
+		expect(view("app_visitor_checkin", { devices }).layout).toBe("all_unknown");
+		expect(view("app_visitor_checkin", { devices, noAccess }).layout).toBe(
+			"never",
+		);
+	});
+});
+
+describe("version foot and update size", () => {
+	test("services whose version can't be told are counted apart", () => {
+		const devices = sampleDevices({ labUnlocked: true });
+		devices[1] = {
+			...devices[1],
+			services: [{ ...SERVICES.invoiceGpu, appVersion: null }],
+		};
+		expect(view("app_invoice_ai", { devices }).newestRuns).toMatchObject({
+			services: 0,
+			of: 2,
+			unknown: 1,
+		});
+		expect(view("app_invoice_ai").newestRuns?.unknown).toBe(0);
+	});
+
+	test("a version carries what an update sends when the caller knows it", () => {
+		const [newest, older] = APPS.app_crm_sync.versions;
+		const sends = { bytes: 91_226_112, files: 38 };
+		const result = buildAppView({
+			app: { ...APPS.app_crm_sync, versions: [{ ...newest, sends }, older] },
+			devices: [],
+		});
+		expect(result.versions[0].sends).toEqual(sends);
+		expect(result.versions[1]).not.toHaveProperty("sends");
 	});
 });
 

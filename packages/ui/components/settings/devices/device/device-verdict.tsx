@@ -2,6 +2,7 @@
 
 import { Trans, useTranslation } from "@flow-like/locales";
 import { Fragment, type ReactElement, type ReactNode } from "react";
+import type { AppServiceRow } from "../../../../lib/device-management/model/app-plan";
 import { keysLocked } from "../../../../lib/device-management/model/device-view";
 import type { ServiceSummary } from "../../../../lib/device-management/workspace/types";
 import { formatMoney } from "../copy/attention-copy";
@@ -385,18 +386,24 @@ interface AppVerdictInput extends VerdictInput {
 	read: AppViewRead | null;
 }
 
+/** Where a counted sentence names the device: translators keep the mark, the name is put in its place. */
+const DEVICE_MARK = "<1/>";
+
 function elsewhere({ t, page }: AppVerdictInput): ReactNode | null {
 	const extra = counted(page).length - counted(page, true).length;
 	if (extra <= 0) return null;
+	// A plain `t()` with plural forms: <Trans> has one default and would read "1 items".
+	const [before, ...after] = t("devices:device.verdict.app.elsewhere", {
+		count: extra,
+		defaultValue_one: "Elsewhere on <1/>, {{count, number}} item needs you.",
+		defaultValue_other: "Elsewhere on <1/>, {{count, number}} items need you.",
+	}).split(DEVICE_MARK);
 	return (
-		<Trans
-			t={t}
-			i18nKey="devices:device.verdict.app.elsewhere"
-			count={extra}
-			defaults="Elsewhere on <1/>, {{count, number}} items need you."
-			values={{ count: extra }}
-			components={{ 1: mono(page.name) }}
-		/>
+		<>
+			{before}
+			{mono(page.name)}
+			{after.join(DEVICE_MARK)}
+		</>
 	);
 }
 
@@ -544,29 +551,53 @@ function stoppedBits(
 		));
 }
 
-/** "invoice-extractor runs v1.4.0, 1 behind v1.5.0." for each service on an older app version. */
-function behindBits({ t, page, read }: AppVerdictInput): ReactNode[] {
-	const newest = read?.view?.howRuns.newest?.label;
-	if (!newest) return [];
-	return (read?.view?.services ?? []).flatMap((row) => {
-		const label = row.version?.label;
-		const behind = row.behind ?? 0;
-		if (row.deviceId !== page.deviceId || !label || behind <= 0) return [];
-		return [
+/** "invoice-extractor runs v1.4.0, 1 behind v1.5.0."; an older version without a name is just "an older version". */
+function behindSentence(
+	t: AppVerdictInput["t"],
+	row: AppServiceRow,
+	newest: string,
+): ReactNode {
+	const behind = row.behind ?? 0;
+	const label = row.version?.label;
+	if (!label)
+		return (
 			<Trans
 				key={row.serviceId}
 				t={t}
-				i18nKey="devices:device.verdict.app.behind"
-				defaults="<1/> runs <2/>, {{behind, number}} behind <3/>."
+				i18nKey="devices:device.verdict.app.behindUnnamed"
+				defaults="<1/> runs an older version, {{behind, number}} behind <3/>."
 				values={{ behind }}
-				components={{
-					1: mono(row.serviceId),
-					2: mono(label),
-					3: mono(newest),
-				}}
-			/>,
-		];
-	});
+				components={{ 1: mono(row.serviceId), 3: mono(newest) }}
+			/>
+		);
+	return (
+		<Trans
+			key={row.serviceId}
+			t={t}
+			i18nKey="devices:device.verdict.app.behind"
+			defaults="<1/> runs <2/>, {{behind, number}} behind <3/>."
+			values={{ behind }}
+			components={{
+				1: mono(row.serviceId),
+				2: mono(label),
+				3: mono(newest),
+			}}
+		/>
+	);
+}
+
+/** A service of this device that runs an older version of the app's list (`behind` counts versions, 0 = newest). */
+function runsOlder(row: AppServiceRow, deviceId: string): boolean {
+	return row.deviceId === deviceId && !!row.version && !!row.behind;
+}
+
+/** One sentence for each service of this device that runs an older app version. */
+function behindBits({ t, page, read }: AppVerdictInput): ReactNode[] {
+	const newest = read?.view?.howRuns.newest?.label;
+	if (!read?.view || !newest) return [];
+	return read.view.services
+		.filter((row) => runsOlder(row, page.deviceId))
+		.map((row) => behindSentence(t, row, newest));
 }
 
 /** The service the lead sentence already calls crashing, so the rest doesn't repeat it. */

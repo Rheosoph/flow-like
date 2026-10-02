@@ -148,7 +148,7 @@ describe("Where · locked devices and updates", () => {
 			/^edge-berlin-01: Wait for invoice-extractor's update to finish \(by .+ at the latest\)\.$/,
 		);
 		expect(page).toContain(
-			"Invoice AI · runs online · 2 devices · update of 2 services",
+			"Invoice AI · runs online · v1.5.0 · 2 devices · update of 2 services",
 		);
 
 		await clickByText("Unlock 1 selected…", view.container);

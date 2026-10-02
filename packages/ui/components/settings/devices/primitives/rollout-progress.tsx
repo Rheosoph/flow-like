@@ -321,7 +321,7 @@ export function RolloutProgress({
 								<>
 									<b
 										data-countdown=""
-										className="font-mono font-semibold tabular-nums"
+										className="font-semibold tabular-nums"
 										title={time.abs(deadlineAt)}
 									>
 										{t("view.rollout.left", "{{time}} left", {
@@ -350,7 +350,7 @@ export function RolloutProgress({
 										{ value: (stable / stabilizeSec) * 100, tone: "good" },
 									]}
 								/>
-								<span className="font-mono tabular-nums">
+								<span className="tabular-nums">
 									{stableSince === undefined
 										? t("view.rollout.waitingFor", "waiting for {{what}}", {
 												what:
@@ -395,41 +395,43 @@ export function RolloutProgress({
 				<span className="flex-1" />
 				{stamp}
 			</header>
-			<ol className="grid grid-cols-4 gap-2">
-				{steps.map((step) => (
-					<li
-						key={step.id}
-						data-s={step.state}
-						aria-current={step.state === "active" ? "step" : undefined}
-						className="grid min-w-0 content-start gap-1 text-xs"
-					>
-						<StepBar
-							state={step.state}
-							failTone={end?.tone === "warning" ? "warning" : "critical"}
-						/>
-						<span
-							className={cx(
-								"flex min-w-0 items-start gap-1 font-medium",
-								step.state === "active" && "font-semibold text-info",
-								step.state === "todo" && "text-muted-foreground",
-								step.state === "fail" &&
-									end &&
-									cx("font-semibold", TONE_TEXT[end.tone]),
-							)}
+			<div className="@container/rollout min-w-0">
+				<ol className="grid grid-cols-4 gap-2 @max-[560px]/rollout:grid-cols-2">
+					{steps.map((step) => (
+						<li
+							key={step.id}
+							data-s={step.state}
+							aria-current={step.state === "active" ? "step" : undefined}
+							className="grid min-w-0 content-start gap-1 text-xs"
 						>
-							{step.state === "done" ? (
-								<Check aria-hidden className="mt-0.5 size-3 shrink-0" />
-							) : step.state === "fail" && end ? (
-								<end.icon aria-hidden className="mt-0.5 size-3 shrink-0" />
-							) : null}
-							<span className="min-w-0">{step.label}</span>
-						</span>
-						<span className="font-mono text-muted-foreground tabular-nums">
-							{step.time}
-						</span>
-					</li>
-				))}
-			</ol>
+							<StepBar
+								state={step.state}
+								failTone={end?.tone === "warning" ? "warning" : "critical"}
+							/>
+							<span
+								className={cx(
+									"flex min-w-0 items-start gap-1 font-medium",
+									step.state === "active" && "font-semibold text-info",
+									step.state === "todo" && "text-muted-foreground",
+									step.state === "fail" &&
+										end &&
+										cx("font-semibold", TONE_TEXT[end.tone]),
+								)}
+							>
+								{step.state === "done" ? (
+									<Check aria-hidden className="mt-0.5 size-3 shrink-0" />
+								) : step.state === "fail" && end ? (
+									<end.icon aria-hidden className="mt-0.5 size-3 shrink-0" />
+								) : null}
+								<span className="min-w-0">{step.label}</span>
+							</span>
+							<span className="font-mono text-muted-foreground tabular-nums">
+								{step.time}
+							</span>
+						</li>
+					))}
+				</ol>
+			</div>
 			<KeyValueList>{facts()}</KeyValueList>
 			{actions ? (
 				<div className="flex flex-wrap items-start gap-2">{actions}</div>

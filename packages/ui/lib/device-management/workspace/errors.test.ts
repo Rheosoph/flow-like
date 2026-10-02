@@ -192,6 +192,8 @@ describe("other families", () => {
 			"checking_identity",
 		);
 		expect(keyErrorStep({ code: "no_vault" })).toBe("unlocking_keys");
+		expect(keyErrorCode({ code: "hub" })).toBe("http_error");
+		expect(keyErrorStep({ code: "hub" })).toBe("checking_identity");
 		expect(fleetErrorCode({ kind: "integrity" })).toBe("fleet_integrity");
 	});
 

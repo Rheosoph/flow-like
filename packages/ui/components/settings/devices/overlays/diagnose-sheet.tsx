@@ -369,9 +369,20 @@ function keysCheck({ t, view }: SheetFacts): ChecklistItem {
 				"No keys for this device on this computer.",
 			),
 		};
+	// A session is blocked only by a changed identity; the shared label for that state speaks of the browser.
+	if (keys.state === "blocked")
+		return {
+			...base,
+			state: "fail",
+			label: t(
+				"devices:overlay.diagnose.keys.blocked",
+				"{{kind}} here · closed: the hub reports other keys for this device than the ones trusted here.",
+				{ kind: enumLabel(t, "vaultKind", keys.role) },
+			),
+		};
 	return {
 		...base,
-		state: keys.state === "stale" || keys.state === "blocked" ? "warn" : "pass",
+		state: keys.state === "stale" ? "warn" : "pass",
 		label: t(
 			"devices:overlay.diagnose.keys.here",
 			"{{kind}} here · {{state}}",
@@ -395,7 +406,10 @@ function deviceOnlyCheck(t: DevicesT): ChecklistItem {
 	};
 }
 
-function commands(t: DevicesT): { command: string; note: string }[] {
+/** What to run on the device itself, with what each command reveals; the device page's Overview lists the same four. */
+export function diagnoseCommands(
+	t: DevicesT,
+): { command: string; note: string }[] {
 	return [
 		{
 			command: "flow-like-standalone status",
@@ -798,7 +812,7 @@ export function DiagnoseSheet({
 				)}
 			</p>
 			<div className="flex flex-col gap-2">
-				{commands(t).map((entry) => (
+				{diagnoseCommands(t).map((entry) => (
 					<CommandBlock
 						key={entry.command}
 						command={entry.command}

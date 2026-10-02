@@ -36,6 +36,7 @@ const { cleanupDevices, mountDevices, preloadDevices } = await import(
 await preloadDevices();
 const { act, useState } = await import("react");
 const { AppDevicesScreen } = await import("./app-devices-screen");
+const { useAppRole } = await import("./use-app-devices");
 const { useDevicesRoute } = await import("../routing/use-devices-route");
 const { useActivityTray } = await import("../shell/activity-tray");
 const { useOverlayStore } = await import("../workspace/overlay-store");
@@ -1182,6 +1183,17 @@ describe("App › Devices · Update everywhere sheet", () => {
 			`${ID.edge}/invoice-extractor`,
 			`${ID.lab}/invoice-extractor-gpu`,
 		]);
+		// One group per device: its head row, then its services with what the update changes.
+		const groups = [...sheet.querySelectorAll("[data-update-group]")];
+		expect(
+			groups.map((group) => group.getAttribute("data-update-group")),
+		).toEqual([ID.edge, ID.lab]);
+		expect(text(groups[0])).toContain("edge-berlin-01");
+		expect(text(rows[0])).toContain(
+			"→ v1.5.0 · Extract invoice 1.4.0 → 1.5.0 · keeps settings v12",
+		);
+		expect(text(rows[0])).not.toContain("edge-berlin-01");
+		expect(sheet.querySelector("[data-update-locked]")).toBeNull();
 		expect(text(rows[0])).toContain("An update is already running.");
 		expect(
 			byRole(
@@ -1200,6 +1212,28 @@ describe("App › Devices · Update everywhere sheet", () => {
 		expect(hrefOf("Change settings or events too…", sheet)).toBe(
 			appUrl(INVOICE, `&flow=deploy&mode=update&device=${ID.lab}`),
 		);
+	});
+
+	test("choose: a locked device keeps its place in the list and offers its unlock", async () => {
+		await mountApp(INVOICE, { query: "action=update-all" });
+		const sheet = inPortal("dialog");
+		const locked = sheet.querySelector(
+			`[data-update-locked="${ID.lab}"]`,
+		) as HTMLElement;
+		expect(
+			locked.closest("[data-update-group]")?.getAttribute("data-update-group"),
+		).toBe(ID.lab);
+		expect(text(locked)).toContain(
+			"Which Invoice AI services run here isn't readable yet",
+		);
+		expect(text(locked)).toContain("Locked. Unlock to include it.");
+		expect(
+			allByRole("checkbox", undefined, locked).every((box) =>
+				box.hasAttribute("disabled"),
+			),
+		).toBe(true);
+		await click(byRole("button", "Unlock…", locked));
+		expect(text(document.body)).toContain("Unlock lab-gpu-02");
 	});
 
 	test("choose: three steps with the first one current, and the way on is the one coral", async () => {
@@ -1422,6 +1456,36 @@ describe("App › Devices · roles, gates and failures", () => {
 		expect(fake.api.commands).toEqual([]);
 		await click(byRole("button", "Copy a request for the owner", container));
 		expect(dom.clipboard.at(-1)).toContain("Read boards");
+	});
+
+	test("only the Owner permission names the app's owner: the hub answers is_owner for an Admin too", async () => {
+		const OWNER_BIT = 1;
+		const ADMIN_BIT = 2;
+		const seen: { admin?: boolean; owner?: boolean } = {};
+		function Probe() {
+			const admin = useAppRole(INVOICE);
+			const owner = useAppRole(SUPPORT);
+			if (admin.known) seen.admin = admin.isOwner;
+			if (owner.known) seen.owner = owner.isOwner;
+			return null;
+		}
+		await mountDevices(<Probe />, {
+			host: "app",
+			search: `id=${INVOICE}`,
+			backend: appBackend({
+				roleState: {
+					getOwnRole: async (appId: string) => ({
+						role_id: `role-${appId}`,
+						role_name: appId === INVOICE ? "Admin" : "Owner",
+						permissions: appId === INVOICE ? ADMIN_BIT : OWNER_BIT,
+						is_owner: true,
+						can_leave: false,
+					}),
+				} as unknown as IBackendState["roleState"],
+			}),
+		});
+		await advance(50);
+		expect(seen).toEqual({ admin: false, owner: true });
 	});
 
 	test("no devices yet: the strip stays and the page points to set-up", async () => {

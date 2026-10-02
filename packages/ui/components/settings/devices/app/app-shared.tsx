@@ -22,7 +22,6 @@ import {
 	Timer,
 	Zap,
 } from "lucide-react";
-import Link from "next/link";
 import {
 	type ComponentProps,
 	type MouseEvent,
@@ -53,6 +52,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../../../ui/dropdown-menu";
+import { UnknownPerson, identityName } from "../access/person-name";
 import { gateCopy } from "../copy/gate-copy";
 import { useAreaTime } from "../primitives/area-context";
 import { DvButton, type DvButtonProps } from "../primitives/dv-button";
@@ -60,7 +60,11 @@ import { type Gate, GatedAction } from "../primitives/gate-notice";
 import { PersonChip } from "../primitives/person-chip";
 import { cx } from "../primitives/tone";
 import { useCopy } from "../primitives/use-copy";
-import { useDevicesRoute, useRouteLink } from "../routing/use-devices-route";
+import {
+	useDevicesRoute,
+	useHostLink,
+	useRouteLink,
+} from "../routing/use-devices-route";
 import { useAttentionState, useOverlay } from "../workspace";
 import { capList, capNames } from "./app-view-local";
 import type { AppDevicesData } from "./use-app-devices";
@@ -104,20 +108,6 @@ export const MENU_CONTENT =
 	"border-border-strong bg-popover shadow-none backdrop-blur-none";
 export const MENU_ITEM =
 	"items-start gap-2 text-[13px]/[18px] focus:bg-row-hover focus:text-foreground data-[disabled]:opacity-100";
-
-/**
- * The app's base layer gives every table outer margins and every cell four
- * borders; `DvTable` rules rows only (requests.md, W3-N1 → W4-SWITCH).
- */
-export const TABLE_RESET =
-	"my-0 [&_td]:border-x-0 [&_td]:border-b-0 [&_th]:border-x-0 [&_th]:border-t-0";
-
-/**
- * In a table cell a long actual state goes under the requested one instead of
- * squeezing into a narrow column (requests.md, W3-N4 → W4-SWITCH).
- */
-export const STATE_WRAP =
-	"[&>[data-dvo]]:flex-wrap [&>[data-dvo]>span:last-child]:wrap-break-word";
 
 /** An id that is a readable name (an app id): shown whole, with Copy. `IdRef` cuts every id to 8 characters. */
 export function NameRef({
@@ -320,12 +310,26 @@ function MenuLabel({ entry }: Readonly<{ entry: MenuEntry }>) {
 }
 
 /**
- * A link to another page of the host app (its Events page). A plain anchor
- * loads the app anew, which locks every key again; the area's route API only
- * navigates inside the area (requests.md, REVIEW-W3-app → W4-SWITCH).
+ * A link to another page of the host app (its Events page): a plain click goes
+ * through the host's router, so the page isn't loaded anew and the key
+ * sessions stay open.
  */
-export function HostLink(props: Readonly<ComponentProps<typeof Link>>) {
-	return <Link prefetch={false} {...props} />;
+export function HostLink({
+	href,
+	onClick,
+	...props
+}: Readonly<ComponentProps<"a"> & { href: string }>) {
+	const anchor = useHostLink()(href);
+	return (
+		<a
+			{...props}
+			href={anchor.href}
+			onClick={(event) => {
+				onClick?.(event);
+				if (!event.defaultPrevented) anchor.onClick(event);
+			}}
+		/>
+	);
 }
 
 /** Where an entry leads inside the area; a blocked entry leads nowhere. */
@@ -532,22 +536,33 @@ export function EventTile({
 	);
 }
 
-/** A person by account id: "You" for the viewer, the directory name otherwise. */
+/**
+ * A person by account id: "You" for the viewer, the directory name otherwise;
+ * never the account id as the name. `showId` puts it on a second line for an
+ * account without a name, where it is the only way to tell who it is.
+ */
 export function Person({
 	userId,
+	showId = false,
 	className,
-}: Readonly<{ userId: string; className?: string }>) {
+}: Readonly<{ userId: string; showId?: boolean; className?: string }>) {
 	const { t } = useTranslation("devices");
 	const { input } = useAttentionState();
 	const identity = useUserIdentity(userId);
 	const you = userId === input.me;
+	const name = identityName(identity, userId);
+	if (!name && !you)
+		return (
+			<UnknownPerson
+				pending={identity.isPending}
+				unreachable={!identity.isResolved}
+				className={className}
+				{...(showId ? { userId } : {})}
+			/>
+		);
 	return (
 		<PersonChip
-			name={
-				you && !identity.isResolved
-					? t("app.person.you", "You")
-					: identity.label
-			}
+			name={name ?? t("app.person.you", "You")}
 			you={you}
 			{...(identity.subtitle ? { email: identity.subtitle } : {})}
 			{...(identity.avatarUrl ? { avatarUrl: identity.avatarUrl } : {})}

@@ -48,7 +48,7 @@ import type { DeviceWorkspace } from "../../../../lib/device-management/workspac
 import type { VerifiedRelease } from "../../../../lib/device-package";
 import type { DeviceResources } from "../../../../lib/device-resources";
 import { useDeviceWorkspace } from "./device-workspace-provider";
-import { useAttentionState } from "./use-attention";
+import { type PolicyVerification, useAttentionState } from "./use-attention";
 
 /** One hub read as screens consume it: data, where and when it was read, and the older-hub interim. */
 export interface HubRead<T> {
@@ -543,6 +543,8 @@ export function useReleaseTrust(): ReleaseTrustRead {
 export interface PolicyRead extends HubRead<PolicyView> {
 	/** The owner-signed rules, verified with this device's open keys; absent while locked. */
 	policy?: ManagementPolicy;
+	/** Why `policy` is there or not, once the hub copy is read: `rejected` rules are an error, `pending` ones a wait. */
+	verification?: PolicyVerification;
 }
 
 /** `awaitingApply` polls every 10 s while an access-rules tray item waits for the device. */
@@ -551,7 +553,7 @@ export function usePolicy(
 	options: { awaitingApply?: boolean } = {},
 ): PolicyRead {
 	const { hub } = useDeviceWorkspace();
-	const { verifyPolicy } = useAttentionState();
+	const { verifyPolicy, policyState } = useAttentionState();
 	const awaitingApply = options.awaitingApply === true;
 	const query = useQuery({
 		...queries.policy(hub, deviceId ?? "", { awaitingApply }),
@@ -564,10 +566,13 @@ export function usePolicy(
 		plain,
 	);
 	return useMemo(() => {
-		const policy =
-			deviceId && read.data ? verifyPolicy(deviceId, read.data) : undefined;
-		return policy ? { ...read, policy } : read;
-	}, [read, deviceId, verifyPolicy]);
+		if (!deviceId || !read.data) return read;
+		const policy = verifyPolicy(deviceId, read.data);
+		const verification = policyState(deviceId, read.data);
+		return policy
+			? { ...read, policy, verification }
+			: { ...read, verification };
+	}, [read, deviceId, verifyPolicy, policyState]);
 }
 
 /** `hubDeviceSupport` for callers that hold their own hub and usage reads (N10). */

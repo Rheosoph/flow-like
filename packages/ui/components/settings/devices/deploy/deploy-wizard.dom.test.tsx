@@ -6,6 +6,7 @@ import {
 	clickByText,
 	inPortal,
 	installDom,
+	queryByRole,
 } from "../testing/dom-harness";
 
 const dom = installDom();
@@ -37,7 +38,7 @@ describe("entries (APP §3.1)", () => {
 		const page = text(view.container);
 		expect(byRole("heading", "Deploy Visitor Check-in").tagName).toBe("H1");
 		expect(page).toContain(
-			"Visitor Check-in · runs online · no devices yet · new service",
+			"Visitor Check-in · runs online · v0.4.0 · no devices yet · new service",
 		);
 		expect(page).toContain(
 			"Deploy Visitor Check-in: pick what runs, then where.",
@@ -50,9 +51,7 @@ describe("entries (APP §3.1)", () => {
 		expect(page).toContain("Access & cost");
 		expect(page).not.toContain("Copy & upload");
 		expect(page).toContain("Can't run on devices · 2");
-		expect(page).toContain(
-			"Visitor Check-in · newest version · 2 events · 1 service",
-		);
+		expect(page).toContain("Visitor Check-in · v0.4.0 · 2 events · 1 service");
 		// No app picker in an app's own page.
 		expect(view.container.querySelector("#deploy-app")).toBeNull();
 		expect(kit.primaries(view.container)).toBe(1);
@@ -76,6 +75,26 @@ describe("entries (APP §3.1)", () => {
 		expect(byRole("heading", /How it runs/).tagName).toBe("H2");
 	});
 
+	test("the stepper leads back to a visited step, never ahead to one that wasn't reached", async () => {
+		const view = await kit.mountApp(mountDevices, VISITOR);
+		const stepOf = (name: string) =>
+			view.container.querySelector(`ol li[data-s]:nth-child(${name})`);
+		// In an app's page the app is given: step 1 is the current one, nothing ahead is a button.
+		expect(stepOf("1")?.getAttribute("aria-current")).toBe("step");
+		expect(queryByRole("button", /^Go to step/, view.container)).toBeNull();
+		await clickByText("Continue", view.container);
+		await view.settle();
+		expect(stepOf("1")?.getAttribute("data-s")).toBe("done");
+		expect(queryByRole("button", /^Go to step 3/, view.container)).toBeNull();
+		await click(byRole("button", "Go to step 1: What to run", view.container));
+		await view.settle();
+		expect(lastHref(view)).toContain("step=what");
+		// The step that was reached stays reachable from the stepper.
+		expect(
+			byRole("button", "Go to step 2: How it runs", view.container),
+		).toBeTruthy();
+	});
+
 	test("one event from Events: scope One event, the others collapsed, Exit returns to Events", async () => {
 		const view = await kit.mountApp(mountDevices, CRM, {
 			event: "evt_crm_webhook",
@@ -83,7 +102,7 @@ describe("entries (APP §3.1)", () => {
 		});
 		const page = text(view.container);
 		expect(byRole("heading", "Deploy CRM webhook").tagName).toBe("H1");
-		expect(page).toContain("CRM Sync · offline copy · no devices yet");
+		expect(page).toContain("CRM Sync · offline copy · v3.1.0 · no devices yet");
 		expect(
 			byRole("button", "One event", view.container).getAttribute(
 				"aria-pressed",
@@ -101,8 +120,11 @@ describe("entries (APP §3.1)", () => {
 		const exit = byText("Exit deploy", view.container).closest("a");
 		const events = `/library/config/events?id=${CRM}&event=evt_crm_webhook`;
 		expect(exit?.getAttribute("href")).toBe(events);
-		const crumb = byRole("link", "Events", view.container);
-		expect(crumb.getAttribute("href")).toBe(events);
+		// The top bar says "Events › Deploy" in an app; the frame adds no crumb row of its own.
+		expect(queryByRole("link", "Events", view.container)).toBeNull();
+		expect(
+			view.container.querySelector('nav[aria-label="Breadcrumb"]'),
+		).toBeNull();
 
 		await clickByText(/Also run other events/, view.container);
 		expect(text(view.container)).toContain("Nightly CRM sync");
@@ -141,7 +163,7 @@ describe("entries (APP §3.1)", () => {
 		});
 		const page = text(view.container);
 		expect(page).toContain(
-			"CRM Sync · offline copy · to edge-berlin-01 · new service",
+			"CRM Sync · offline copy · v3.1.0 · to edge-berlin-01 · new service",
 		);
 		expect(page).toContain("Deploy CRM Sync to edge-berlin-01 as crm-sync.");
 		expect(page).toContain("3 of its 5 events can run on a device.");
@@ -158,7 +180,7 @@ describe("entries (APP §3.1)", () => {
 		const page = text(view.container);
 		expect(page).toContain("Update nightly-sync");
 		expect(page).toContain(
-			"CRM Sync · offline copy · to edge-berlin-01 · update",
+			"CRM Sync · offline copy · v3.1.0 · to edge-berlin-01 · update",
 		);
 		expect(page).toContain(
 			"Update nightly-sync on edge-berlin-01 to the newest version.",
@@ -249,6 +271,18 @@ describe("frame", () => {
 		});
 	});
 
+	test("Exit back to Events goes through the host router, so the page isn't loaded anew", async () => {
+		const view = await kit.mountApp(mountDevices, CRM, {
+			event: "evt_crm_webhook",
+			from: "events",
+		});
+		await clickByText("Exit deploy", view.container);
+		expect(view.navigations.at(-1)).toEqual({
+			mode: "push",
+			href: `/library/config/events?id=${CRM}&event=evt_crm_webhook`,
+		});
+	});
+
 	test("Exit of a device-first update returns to the service", async () => {
 		const view = await kit.mountAccount(mountDevices, {
 			device: EDGE,
@@ -291,7 +325,7 @@ describe("frame", () => {
 		expect(page).toContain("Secrets and access tokens are never kept");
 		expect(lastHref(view)).toContain("step=endpoint");
 		// The saved choice, not the entry's default.
-		expect(page).toContain("Visitor Check-in · newest version · 1 event");
+		expect(page).toContain("Visitor Check-in · v0.4.0 · 1 event");
 		await clickByText("Dismiss", view.container);
 		expect(text(view.container)).not.toContain("Picked up where you left off");
 	});

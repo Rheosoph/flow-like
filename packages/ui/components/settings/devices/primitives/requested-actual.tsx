@@ -95,7 +95,7 @@ function Pair({
 			data-tone={tone ?? "neutral"}
 			{...attrs}
 			className={cx(
-				"inline-flex max-w-full items-stretch overflow-hidden rounded-sm border bg-card align-middle text-xs",
+				"inline-flex max-w-full items-stretch overflow-hidden rounded-md border bg-card align-middle text-xs in-[td]:flex-wrap",
 				critical ? "border-critical-line" : "border-border",
 			)}
 		>
@@ -110,7 +110,7 @@ function Pair({
 			</span>
 			<span
 				className={cx(
-					"inline-flex min-w-0 items-start gap-1 px-1.5 py-0.5 font-medium",
+					"inline-flex min-w-0 items-start gap-1 px-1.5 py-0.5 font-medium in-[td]:wrap-break-word",
 					tone ? TONE_TEXT[tone] : "text-ink-2",
 					critical && "bg-critical-bg",
 				)}

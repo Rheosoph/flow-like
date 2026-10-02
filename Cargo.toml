@@ -391,18 +391,13 @@ lto = "thin"
 codegen-units = 8
 strip = "symbols"
 
-# Optimize the AWS Lambda executable for startup and artifact size. ThinLTO
-# keeps link memory practical for the API's large dependency graph while still
-# providing cross-crate optimization. Keep unwind semantics because live API
-# handlers recover panics from blocking workers; aborting would terminate the
-# entire Lambda environment. Symbols remain available in the cached build
-# artifact for cargo-bloat; the Lambda Docker stage strips the shipped binary.
+# Reduce peak compiler memory for the API graph by splitting code generation
+# and disabling LTO. Handlers recover worker panics, so retain unwinding.
+# The cached binary keeps symbols for cargo-bloat; Docker strips the shipped copy.
 [profile.lambda]
-inherits = "dist"
-codegen-units = 1
+inherits = "release-fast"
 strip = "none"
 
-# Long-running container APIs (ECS). Lambda's code generation, including its
-# unwind semantics: one panicking handler must not end every in-flight request.
+# Long-running container APIs use the same build and panic settings as Lambda.
 [profile.server]
 inherits = "lambda"

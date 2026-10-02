@@ -22,7 +22,11 @@ import {
 	queryByRole,
 	settle,
 } from "../testing/dom-harness";
-import type { AnnunciatorCell, AnnunciatorWindow } from "./annunciator";
+import type {
+	AnnunciatorCell,
+	AnnunciatorWindow,
+	AnnunciatorWindowSpec,
+} from "./annunciator";
 import type { DevicesT } from "./area-context";
 import type { AttentionEntry } from "./attention-list";
 import type { FleetRolloutRow } from "./fleet-rollout";
@@ -42,7 +46,12 @@ const { PairedPins } = await import("./paired-pins");
 const { RolloutProgress } = await import("./rollout-progress");
 const { FleetRollout } = await import("./fleet-rollout");
 const { AttentionList } = await import("./attention-list");
-const { Annunciator, annunciatorSub } = await import("./annunciator");
+const { Annunciator, AnnunciatorWindows, annunciatorSub } = await import(
+	"./annunciator"
+);
+const { monoNames } = await import("./obj-name");
+const { DayOf, dayText, untilText } = await import("./day");
+const { EventCell, eventIcon } = await import("./event-cell");
 const { MetricGrid, Metric } = await import("./metric");
 const { Meter, SpendMeter, ProgressBar } = await import("./meter");
 const { CoverageLine } = await import("./coverage-line");
@@ -150,6 +159,10 @@ describe("requested → actual and paired pins", () => {
 		expect(text).toContain(", last known");
 		const versions = byRole("img", "Saved v2, device has v1");
 		expect(versions.getAttribute("data-tone")).toBe("neutral");
+		// In a table cell a long actual state goes under the requested one.
+		expect(pair.className).toContain("in-[td]:flex-wrap");
+		expect(actual.className).toContain("in-[td]:wrap-break-word");
+		expect(pair.className).toContain("rounded-md");
 	});
 
 	test("pins draw every actual state and a broken wire for crashes", async () => {
@@ -326,6 +339,20 @@ describe("rollouts", () => {
 		]);
 		expect(container.textContent).toContain("waiting for instance #0");
 		expect(container.textContent).toContain("previous 1 → new 1");
+		// Sentences stay in the text face (tabular digits); only step times are mono.
+		expect(
+			classesOf(container.querySelector("[data-countdown]")),
+		).not.toContain("font-mono");
+		expect(classesOf(byText("waiting for instance #0", container))).toBe(
+			"tabular-nums",
+		);
+		// Four steps in a phone-wide block wrap 2 × 2.
+		expect(classesOf(container.querySelector("ol"))).toContain(
+			"@max-[560px]/rollout:grid-cols-2",
+		);
+		expect(classesOf(container.querySelector("ol")?.parentElement)).toContain(
+			"@container/rollout",
+		);
 	});
 
 	test("end states replace the step labels", async () => {
@@ -653,9 +680,46 @@ describe("attention list", () => {
 			</At>,
 		);
 		expect(container.textContent).toContain("Nothing needs you right now.");
+		expect(
+			classesOf(
+				byText("Nothing needs you right now.", container).parentElement,
+			),
+		).toContain("text-ui");
 		byRole("region", "Done in this session");
 		await click(byRole("button", "Dismiss"));
 		expect(dismissed).toBe("d1");
+	});
+
+	test("device and service names in a sentence are set in mono, whole names only", async () => {
+		const { container } = await dom.render(
+			<At>
+				<AttentionList
+					items={[
+						{
+							id: "a1",
+							severity: "critical",
+							sentence:
+								"support-bot on edge-berlin-01 keeps crashing; edge-berlin-011 is fine.",
+							names: ["edge-berlin-01", "support-bot"],
+						},
+					]}
+				/>
+			</At>,
+		);
+		const item = container.querySelector("[data-attention=a1]");
+		expect(texts(item as Element, "[data-obj]")).toEqual([
+			"support-bot",
+			"edge-berlin-01",
+		]);
+		expect(classesOf(item?.querySelector("[data-obj]"))).toContain("font-mono");
+		expect(item?.textContent).toContain(
+			"support-bot on edge-berlin-01 keeps crashing; edge-berlin-011 is fine.",
+		);
+		expect(monoNames("nothing named", ["edge-berlin-01"])).toBe(
+			"nothing named",
+		);
+		const node = <b>already a node</b>;
+		expect(monoNames(node, ["node"])).toBe(node);
 	});
 });
 
@@ -697,6 +761,35 @@ const sparkRect = () => ({
 	bottom: 40,
 });
 
+const KEY_WINDOWS: AnnunciatorWindowSpec<
+	"here" | "backed" | "bare" | "none"
+>[] = [
+	{ id: "here", tone: "neutral", icon: Laptop, label: "Keys here", count: 3 },
+	{
+		id: "backed",
+		tone: "good",
+		icon: Lock,
+		label: "Backed up",
+		count: 2,
+		names: ["edge-berlin-01", "studio-mac-mini"],
+	},
+	{
+		id: "bare",
+		tone: "critical",
+		icon: Fingerprint,
+		label: "Not backed up",
+		count: 1,
+		title: "cold-storage-nas has no backup",
+	},
+	{
+		id: "none",
+		tone: "unknown",
+		icon: Users,
+		label: "No keys here",
+		count: 0,
+	},
+];
+
 describe("summary pieces", () => {
 	test("annunciator: six windows, lit by count, press toggles the filter", async () => {
 		const picked: (string | null)[] = [];
@@ -737,6 +830,40 @@ describe("summary pieces", () => {
 		expect(pressed?.getAttribute("aria-pressed")).toBe("true");
 		if (pressed) await click(pressed);
 		expect(picked).toEqual(["critical", null]);
+	});
+
+	test("annunciator windows are data-driven: another summary brings its own windows", async () => {
+		const picked: (string | null)[] = [];
+		const { container } = await dom.render(
+			<AnnunciatorWindows
+				label="Keys summary. Select a window to filter the device list."
+				pressed="backed"
+				onSelect={(next) => picked.push(next)}
+				windows={KEY_WINDOWS}
+			/>,
+		);
+		byRole("group", "Keys summary. Select a window to filter the device list.");
+		expect(attrs(container, "[data-window]", "data-window")).toEqual([
+			"here",
+			"backed",
+			"bare",
+			"none",
+		]);
+		const [here, backed, bare, none] = Array.from(
+			container.querySelectorAll("[data-window]"),
+		);
+		expect(classesOf(here.firstElementChild)).toContain("text-foreground");
+		expect(classesOf(backed.firstElementChild)).toContain("text-good");
+		expect(backed.getAttribute("aria-pressed")).toBe("true");
+		expect(backed.getAttribute("title")).toBe(
+			"edge-berlin-01, studio-mac-mini",
+		);
+		expect(bare.className).toContain("bg-critical-bg");
+		expect(bare.getAttribute("title")).toBe("cold-storage-nas has no backup");
+		expect(none.textContent).toContain("none right now");
+		await click(backed);
+		await click(bare);
+		expect(picked).toEqual([null, "bare"]);
 	});
 
 	test("annunciator: a count without names never reads as none", () => {
@@ -864,6 +991,26 @@ describe("summary pieces", () => {
 		).toBe(true);
 	});
 
+	test("a spending meter leaves out a zero reserve; its caption runs past a short bar", async () => {
+		const { container } = await dom.render(
+			<SpendMeter
+				used={7.41}
+				reserved={0}
+				limit={25}
+				tail="paid by you · ends 5 Oct"
+				className="w-full"
+				meterClassName="w-70"
+			/>,
+		);
+		const text = "€7.41 used · €25.00 limit";
+		expect(container.textContent).toBe(`${text} · paid by you · ends 5 Oct`);
+		const bar = byRole("img", text);
+		expect(classesOf(bar.parentElement)).toContain("w-70");
+		const caption = byText(`${text} · paid by you · ends 5 Oct`, container);
+		expect(bar.parentElement?.contains(caption)).toBe(false);
+		expect(classesOf(caption.parentElement)).toContain("w-full");
+	});
+
 	test("a spending meter survives a currency code the runtime rejects", async () => {
 		const { container } = await dom.render(
 			<SpendMeter used={7.41} reserved={0.12} limit={25} currency="EURO!" />,
@@ -910,6 +1057,65 @@ describe("summary pieces", () => {
 		);
 		expect(people[0].textContent).toBe("MNMira Novak");
 		expect(people[1].textContent).toBe("FSYou");
+	});
+
+	test("headline: the names it is given are set in mono in both sentences", async () => {
+		const { container } = await dom.render(
+			<Headline
+				lead="invoice-extractor on edge-berlin-01 is switching to settings v12."
+				rest="warehouse-pi has been offline since 11:00."
+				names={["edge-berlin-01", "invoice-extractor", "warehouse-pi"]}
+			/>,
+		);
+		const headline = container.querySelector("[data-headline]");
+		expect(texts(headline as Element, "[data-obj]")).toEqual([
+			"invoice-extractor",
+			"edge-berlin-01",
+			"warehouse-pi",
+		]);
+		expect(classesOf(headline?.querySelector("[data-obj]"))).toContain(
+			"text-[0.9em]",
+		);
+		expect(headline?.textContent).toBe(
+			"invoice-extractor on edge-berlin-01 is switching to settings v12.warehouse-pi has been offline since 11:00.",
+		);
+	});
+
+	test("days and distances: one formatter for the area", async () => {
+		const time = {
+			locale: "en-GB",
+			now: NOW_S * 1000,
+			nowS: NOW_S,
+			ago: () => "in 30 min.",
+		};
+		expect(dayText(time, NOW_S + 5 * DAY)).toBe(
+			new Intl.DateTimeFormat("en-GB", {
+				day: "numeric",
+				month: "short",
+			}).format((NOW_S + 5 * DAY) * 1000),
+		);
+		expect(dayText(time, NOW_S + 400 * DAY)).toMatch(/\d{4}$/);
+		// A count, where `time.ago` would say "tomorrow" and "next mo.".
+		const count = new Intl.RelativeTimeFormat("en-GB", {
+			numeric: "always",
+			style: "narrow",
+		});
+		expect(untilText(time, NOW_S + 24 * 3600)).toBe(count.format(24, "hour"));
+		expect(untilText(time, NOW_S + 24 * 3600)).toContain("24");
+		expect(untilText(time, NOW_S + 31 * DAY)).toBe(count.format(31, "day"));
+		expect(untilText(time, NOW_S + 31 * DAY)).toContain("31");
+		expect(untilText(time, NOW_S - 3 * DAY)).toBe(count.format(-3, "day"));
+		expect(untilText(time, NOW_S + 1800)).toBe("in 30 min.");
+		const { container } = await dom.render(
+			<At>
+				<DayOf at={NOW_S + 5 * DAY} />
+			</At>,
+		);
+		const day = container.querySelector("time");
+		expect(day?.getAttribute("datetime")).toBe(
+			new Date((NOW_S + 5 * DAY) * 1000).toISOString(),
+		);
+		expect(day?.getAttribute("title")).toBeTruthy();
 	});
 });
 
@@ -1026,7 +1232,7 @@ describe("time rails and chains", () => {
 		);
 		expect(container.querySelectorAll("[data-join]")).toHaveLength(2);
 		const critical = container.querySelector("[data-state=critical] span");
-		expect(critical?.className).toContain("rounded-sm");
+		expect(critical?.className).toContain("rounded-md");
 		expect(container.textContent).toContain("Device identity (Broken)");
 		await rerender(<TrustChain links={TRUST_LINKS} compact />);
 		expect(container.querySelectorAll("[data-join]")).toHaveLength(0);
@@ -1046,6 +1252,9 @@ describe("time rails and chains", () => {
 		);
 		expect(texts(container, "h4")).toEqual(["Today", "Yesterday"]);
 		expect(container.querySelectorAll("[data-kind]")).toHaveLength(3);
+		expect(classesOf(container.querySelector("[data-kind] p"))).toContain(
+			"text-ui",
+		);
 		await click(byRole("button", "Commands"));
 		expect(container.querySelectorAll("[data-kind]")).toHaveLength(1);
 		expect(container.querySelectorAll("[data-gap]")).toHaveLength(1);
@@ -1369,6 +1578,145 @@ describe("wizard and tray", () => {
 		byText("Needs a live connection.");
 	});
 
+	test("foot: a reason takes the note area at every width; a locked Back says why; a result sits above", async () => {
+		let moved = 0;
+		const foot = (extra: Partial<WizardFootProps>) => (
+			<wizard.WizardFoot
+				step={3}
+				total={5}
+				stepLabel="Create"
+				nextStepLabel="Start"
+				onBack={() => {
+					moved += 1;
+				}}
+				onNext={() => {
+					moved += 1;
+				}}
+				{...extra}
+			/>
+		);
+		const { container, rerender } = await dom.render(
+			foot({
+				reason: { kind: "busy", reason: "Enter the device password first." },
+				backGate: {
+					kind: "locked",
+					reason: "Earlier steps are locked: the package is built.",
+				},
+				result: <span data-result="">The setup couldn't be cancelled.</span>,
+			}),
+		);
+		const root = container.querySelector("[data-wizard-foot]") as HTMLElement;
+		expect(root.firstElementChild?.className).toBe("basis-full");
+		expect(root.firstElementChild?.textContent).toBe(
+			"The setup couldn't be cancelled.",
+		);
+		const reason = byText(
+			"Enter the device password first.",
+			container,
+		).closest("[data-gate-inline]") as HTMLElement;
+		expect(reason.getAttribute("data-gate-inline")).toBe("busy");
+		// Not the hidden-on-phones <output>: the reason gets its own row above the buttons.
+		expect(container.querySelector("output")).toBeNull();
+		expect(classesOf(reason.parentElement)).toContain(
+			"@max-[720px]/wfoot:basis-full",
+		);
+		const next = byRole("button", "Continue");
+		const back = byRole("button", "Back");
+		expect(next.getAttribute("aria-disabled")).toBe("true");
+		expect(next.getAttribute("aria-describedby")).toBe(reason.id);
+		expect(back.getAttribute("aria-disabled")).toBe("true");
+		expect(
+			document.getElementById(back.getAttribute("aria-describedby") ?? "")
+				?.textContent,
+		).toBe("Earlier steps are locked: the package is built.");
+		await click(next);
+		await click(back);
+		expect(moved).toBe(0);
+
+		await rerender(
+			foot({
+				backGate: {
+					kind: "locked",
+					reason: "Earlier steps are locked: the package is built.",
+				},
+			}),
+		);
+		expect(
+			byText("Earlier steps are locked: the package is built.", container)
+				.closest("[data-gate-inline]")
+				?.getAttribute("data-gate-inline"),
+		).toBe("locked");
+		await click(byRole("button", "Continue"));
+		expect(moved).toBe(1);
+
+		await rerender(foot({}));
+		expect(container.querySelector("output")?.textContent).toBe(
+			"Step 3 of 5 · Create · next: Start",
+		);
+	});
+
+	test("stepper: prefilled steps are done, reachable ones are buttons, the phone line takes the title", async () => {
+		const went: number[] = [];
+		const { container } = await dom.render(
+			<wizard.WizardStepper
+				steps={["What", "How it runs", "Where", "Settings"]}
+				titles={["What to run", "How it runs", "Where it runs", "Settings"]}
+				current={1}
+				done={[true, false, true, false]}
+				reachable={[true, true, true, false]}
+				onSelect={(index) => went.push(index)}
+				fit
+			/>,
+		);
+		expect(attrs(container, "ol > li", "data-s")).toEqual([
+			"done",
+			"current",
+			"done",
+			"todo",
+		]);
+		expect(texts(container, "ol button")).toEqual([
+			"What (done)",
+			"Where (done)",
+		]);
+		await click(byRole("button", "Go to step 3: Where it runs"));
+		expect(went).toEqual([2]);
+		expect(container.textContent).toContain("Step 2 of 4 · How it runs");
+		const [first] = Array.from(container.querySelectorAll("ol > li"));
+		expect(first.className).toContain("flex-auto");
+		expect(first.className).not.toContain("flex-1");
+		// Labels wrap instead of ending in "…" in a narrow window or area.
+		expect(classesOf(first.querySelector("[title]"))).toContain(
+			"max-[1200px]:whitespace-normal",
+		);
+		expect(classesOf(first.querySelector("[title]"))).toContain(
+			"@max-[1100px]/devices:whitespace-normal",
+		);
+	});
+
+	test("title row stacks by its own wrapper; the layout takes a row above both columns", async () => {
+		const { container } = await dom.render(
+			<wizard.WizardLayout
+				top={<span data-top="">stepper</span>}
+				side={<span>side</span>}
+			>
+				<wizard.WizardTitleRow
+					exitLabel="Exit deploy"
+					title="Deploy Invoice AI"
+					className="flex-[1_1_420px]"
+				/>
+			</wizard.WizardLayout>,
+		);
+		expect(
+			classesOf(container.querySelector("[data-top]")?.parentElement),
+		).toContain("col-span-full");
+		const row = byRole("button", "Exit deploy").parentElement as HTMLElement;
+		expect(row.className).toContain("@max-[720px]/wtitle:flex-col");
+		expect(row.className).not.toContain("@container/wtitle");
+		// A container query never matches the container itself: the wrapper is the container.
+		expect(classesOf(row.parentElement)).toContain("@container/wtitle");
+		expect(classesOf(row.parentElement)).toContain("flex-[1_1_420px]");
+	});
+
 	test("tray items: every state has a chip; unknown asks to check", async () => {
 		let dismissed = 0;
 		const onDismiss = () => {
@@ -1506,7 +1854,7 @@ const SERVICE_LABELS = [
 	"Service",
 	"Requested → actual",
 	"Instances",
-	"Version",
+	"Versions",
 	"Update",
 	"Actions",
 ];
@@ -1549,6 +1897,13 @@ describe("service rows and app pieces", () => {
 		expect(attrs(container, "tbody td", "data-label")).toEqual(SERVICE_LABELS);
 		const cells = container.querySelectorAll("tbody td");
 		expect(cells[2].textContent).toBe("0 of 1 readymax 1");
+		// "0 of 1 ready" is a sentence: text face, left-aligned, like its column head.
+		expect(cells[2].className).not.toContain("font-mono");
+		expect(cells[2].className).not.toContain("text-right");
+		expect(container.querySelectorAll("thead th")[2].className).not.toContain(
+			"text-right",
+		);
+		expect(container.querySelector("thead .sr-only")).toBeNull();
 		expect(container.querySelector("tbody [data-act=running]")).not.toBeNull();
 		expect(byText("invoice-extractor", cells[0]).getAttribute("title")).toBe(
 			"invoice-extractor",
@@ -1637,6 +1992,49 @@ describe("service rows and app pieces", () => {
 		expect(explainer).toContain(
 			"Why not online? Support Portal exists only on this computer",
 		);
+		// The app's base layer gives a bare <p> 28 px leading.
+		expect(
+			Array.from(container.querySelectorAll("p"), (p) =>
+				/\btext-ui\b|leading-\[inherit\]/.test(p.className),
+			),
+		).toEqual([true, true, true]);
+	});
+
+	test("event cell: tile, name, type, pins, how it runs and the new-in chip", async () => {
+		const { container, rerender } = await dom.render(
+			<At>
+				<EventCell
+					eventType="http"
+					name="Extract invoice"
+					eventId="evt_extract_http"
+					pin={{ event: "1.5.0", flow: "2.2.0" }}
+					runs="Served by the device · checks its web server"
+					newIn="v1.5.0"
+				/>
+			</At>,
+		);
+		const cell = container.querySelector("[data-event-cell]");
+		expect(cell?.textContent).toBe(
+			"Extract invoiceWeb requestNew in v1.5.0event 1.5.0 · flow 2.2.0Served by the device · checks its web server",
+		);
+		expect(
+			cell?.querySelector("[data-event-tile] svg.lucide-globe"),
+		).not.toBeNull();
+		expect(classesOf(byText("1.5.0", container))).toContain("font-mono");
+		await rerender(
+			<At tech>
+				<EventCell
+					eventType="rest"
+					hasPage
+					name="Review"
+					eventId="evt_invoice_review"
+				/>
+			</At>,
+		);
+		const page = container.querySelector("[data-event-cell]");
+		expect(page?.textContent).toBe("ReviewPageevt_invoice_review");
+		expect(page?.querySelector("svg.lucide-monitor")).not.toBeNull();
+		expect(eventIcon("never-heard-of-it")).toBe(eventIcon("quick_action"));
 	});
 
 	test("the mode explainer shows an app name with markup characters as it is", async () => {
@@ -1778,6 +2176,9 @@ const SOURCE_FILES = [
 	"how-runs",
 	"matrix-cell",
 	"diff-rows",
+	"event-cell",
+	"obj-name",
+	"day",
 ];
 
 describe("source hygiene (R12, R13)", () => {

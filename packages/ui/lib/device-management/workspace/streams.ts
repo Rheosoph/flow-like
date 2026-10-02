@@ -565,11 +565,7 @@ class Streams implements LiveStreamsImpl {
 			case "messages":
 				return this.follow(buffer);
 			case "offline_queues":
-				buffer.data = await readOfflineQueues(
-					this.call(buffer),
-					spec.placementId,
-				);
-				return false;
+				return this.queues(buffer, spec.placementId);
 			case "certificates":
 				buffer.data = await readCertificates(this.call(buffer));
 				return false;
@@ -592,6 +588,23 @@ class Streams implements LiveStreamsImpl {
 		};
 		if (rejection && !rejection.retryable) buffer.stopped = true;
 		return true;
+	}
+
+	/** The paged reader throws on a refusal; the stream keeps the device's own rejection, as for a single read. */
+	private async queues(buffer: Buffer, placementId: string): Promise<boolean> {
+		const call = this.call(buffer);
+		let refused = false;
+		const watched: ManagementCall = async (command, operationId) => {
+			const response = await call(command, operationId);
+			refused = this.rejectedBy(buffer, response);
+			return response;
+		};
+		try {
+			buffer.data = await readOfflineQueues(watched, placementId);
+		} catch (error) {
+			if (!refused) throw error;
+		}
+		return false;
 	}
 
 	private async single(

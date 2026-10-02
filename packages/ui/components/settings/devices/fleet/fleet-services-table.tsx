@@ -1090,10 +1090,16 @@ export function FleetServicesTable({
 	const input = useAttentionInput();
 	const apps = useInvoke(backend.appState.getApps, backend.appState, []);
 	const [query, setQuery] = useFleetSearch(route);
+	const { navigate } = useDevicesRoute();
 	const [chip, setChip] = useState<ServiceChip>("all");
-	const [appId, setAppId] = useState<string | null>(null);
 	const [pages, setPages] = useState(1);
 	const { services, base, hidden } = fleet;
+	const appId = route.app ?? null;
+	/** The app filter lives in the URL (`view=services&app=<id>`), so a reload and a shared link keep it. */
+	const setAppId = (next: string | null) => {
+		const { app: _app, ...rest } = route;
+		navigate(next ? { ...rest, app: next } : rest, { replace: true });
+	};
 
 	const extras = useMemo(() => {
 		const cloud = cloudServices(input);

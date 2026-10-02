@@ -857,6 +857,21 @@ mod tests {
             cached_files.push((target, modified));
             specs.push(spec);
         }
+        if std::env::var_os("DECISION_VERIFY_PRESET").is_some() {
+            let preset = presets::preset(model)
+                .unwrap()
+                .expect("exported source model must have a built-in preset");
+            assert_eq!(preset.layout, presets::PresetLayout::Bundle);
+            assert_eq!(preset.assets.len(), specs.len());
+            for asset in &preset.assets {
+                let source = specs
+                    .iter()
+                    .find(|spec| spec.role() == asset.role())
+                    .expect("published preset role must exist in the exported bundle");
+                assert_eq!(source.expected_sha256(), asset.expected_sha256());
+            }
+            specs = preset.assets;
+        }
         let options = LayaOptions {
             question_type: crate::laya::LayaQuestionType::Choice,
             instructions: "Which sentiment applies?".into(),

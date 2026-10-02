@@ -53,7 +53,7 @@ export function GateNotice({
 				)}
 			/>
 			<div className="flex max-w-[72ch] min-w-0 flex-col gap-1.5">
-				<p>
+				<p className="text-ui">
 					<b className="font-semibold text-foreground">{title}</b>
 					{text ? <> {text}</> : null}
 				</p>

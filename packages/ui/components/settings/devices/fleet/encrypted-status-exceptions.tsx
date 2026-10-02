@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useUserIdentity } from "../../../../hooks/use-user-lookup";
 import { keysLocked } from "../../../../lib/device-management/model/device-view";
 import type { DeviceViewModel } from "../../../../lib/device-management/model/types";
+import { identityName } from "../access/person-name";
 import type { DevicesT } from "../primitives/area-context";
 import { Block } from "../primitives/block";
 import { DvButton } from "../primitives/dv-button";
@@ -58,10 +59,11 @@ function unreadableReason(t: DevicesT, view: DeviceViewModel): string {
 
 function OwnerKeys({ view }: Readonly<{ view: DeviceViewModel }>) {
 	const { t } = useTranslation("devices");
-	const owner = useUserIdentity(view.row.owner_id);
-	return owner.isResolved
+	const ownerId = view.row.owner_id;
+	const owner = identityName(useUserIdentity(ownerId), ownerId);
+	return owner
 		? t("fleet.encrypted.sharedKeysFrom", "Shared-access keys from {{owner}}", {
-				owner: owner.label,
+				owner,
 			})
 		: t("fleet.encrypted.sharedKeys", "Shared-access keys");
 }

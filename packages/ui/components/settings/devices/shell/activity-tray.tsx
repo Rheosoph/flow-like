@@ -10,6 +10,7 @@ import {
 	Square,
 	Trash2,
 	X,
+	Zap,
 } from "lucide-react";
 import {
 	type ReactNode,
@@ -24,9 +25,11 @@ import { create } from "zustand";
 import { deviceName } from "../../../../lib/device-management/model/device-view";
 import type {
 	DeployRoute,
+	DeviceRoute,
 	DeviceTab,
 	DevicesRoute,
 	DevicesScope,
+	ServiceRoute,
 	ServiceTab,
 } from "../../../../lib/device-management/model/types";
 import type {
@@ -121,7 +124,14 @@ export function trayCounts(items: readonly ActivityItem[]) {
 	return { inFlight: active + waiting, active };
 }
 
-const COMMANDS = ["start", "stop", "restart", "scale", "remove"] as const;
+const COMMANDS = [
+	"start",
+	"stop",
+	"restart",
+	"scale",
+	"remove",
+	"apply",
+] as const;
 type TrayCommand = (typeof COMMANDS)[number];
 
 const COMMAND_ICON: Record<TrayCommand, LucideIcon> = {
@@ -130,6 +140,7 @@ const COMMAND_ICON: Record<TrayCommand, LucideIcon> = {
 	restart: RotateCw,
 	scale: Scaling,
 	remove: Trash2,
+	apply: Zap,
 };
 
 const isCommand = (value: unknown): value is TrayCommand =>
@@ -148,6 +159,7 @@ function commandTitle(t: DevicesT, command: TrayCommand | undefined) {
 		restart: t("devices:chrome.tray.command.restart", "Restart"),
 		scale: t("devices:chrome.tray.command.scale", "Change instances"),
 		remove: t("devices:chrome.tray.command.remove", "Remove service"),
+		apply: t("devices:chrome.tray.command.apply", "Quick update"),
 	} satisfies Record<TrayCommand, string>;
 	return titles[command];
 }
@@ -663,11 +675,35 @@ export function activityRoute(item: ActivityItem) {
 	return setupRoute(item) ?? targetRoute(item);
 }
 
-/** The screen already shows this device (or service): no toast needed there. */
-function showsItem(route: DevicesRoute | undefined, item: ActivityItem) {
-	if (route?.screen !== "device" && route?.screen !== "service") return false;
+/** The Rollout step of a deploy shows every target of its own run inline. */
+function showsRun(route: DeployRoute, item: ActivityItem) {
+	const run = item.href;
+	if (route.step !== "rollout" || run?.screen !== "deploy") return false;
+	return (
+		route.appId === run.appId &&
+		route.serviceId === run.serviceId &&
+		route.deviceIds.includes(item.target.deviceId)
+	);
+}
+
+/** The device page shows every item of its device, a service page those of its service. */
+function showsObject(route: DeviceRoute | ServiceRoute, item: ActivityItem) {
 	if (route.deviceId !== item.target.deviceId) return false;
 	return route.screen === "device" || route.serviceId === item.target.serviceId;
+}
+
+/** The screen already shows this device (or service), or the run the item belongs to: no toast needed there. */
+function showsItem(route: DevicesRoute | undefined, item: ActivityItem) {
+	if (!route) return false;
+	switch (route.screen) {
+		case "deploy":
+			return showsRun(route, item);
+		case "device":
+		case "service":
+			return showsObject(route, item);
+		default:
+			return false;
+	}
 }
 
 function finishedText(t: DevicesT, item: ActivityItem, target: string) {

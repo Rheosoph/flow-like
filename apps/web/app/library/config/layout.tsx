@@ -38,6 +38,7 @@ import {
 	useBackend,
 	useDeveloperMode,
 	useExecutionService,
+	useHub,
 	useInvoke,
 	useMobileHeader,
 } from "@flow-like/flow-like-ui";
@@ -60,7 +61,10 @@ import {
 	isConfigRouteActive,
 	resolveNavigationItems,
 } from "@flow-like/flow-like-ui/lib/config-nav";
-import { configRouteFillsHeight } from "@flow-like/flow-like-ui/lib/config-route";
+import {
+	configRouteFillsHeight,
+	configRouteOpensMaximized,
+} from "@flow-like/flow-like-ui/lib/config-route";
 import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -116,7 +120,19 @@ export default function Id({
 		typeof id === "string",
 	);
 
-	const [isMaximized, setIsMaximized] = useState(false);
+	const [cardMaximized, setCardMaximized] = useState(false);
+	// The deploy wizard opens maximized; its toggle is a choice of its own, so
+	// leaving the wizard hands the card back as the user left it.
+	const wizardOpen = configRouteOpensMaximized(
+		currentRoute,
+		searchParams.get("flow"),
+	);
+	const [wizardMaximized, setWizardMaximized] = useState(true);
+	const isMaximized = wizardOpen ? wizardMaximized : cardMaximized;
+	const setIsMaximized = wizardOpen ? setWizardMaximized : setCardMaximized;
+	useEffect(() => {
+		if (!wizardOpen) setWizardMaximized(true);
+	}, [wizardOpen]);
 	const [exportOpen, setExportOpen] = useState(false);
 	const [encrypt, setEncrypt] = useState(false);
 	const [password, setPassword] = useState("");
@@ -187,6 +203,13 @@ export default function Id({
 		[t],
 	);
 
+	const { hub } = useHub();
+	const devicesEnabled = hub?.standalone?.enabled === true;
+	const hostCapabilities = useMemo(
+		() => new Set(devicesEnabled ? ["devices"] : []),
+		[devicesEnabled],
+	);
+
 	// Nav items visible for this app's visibility, paywall, dev-mode and role —
 	// shared by the sidebar card and the mobile nav dialog (no double filtering).
 	// Items behind a gate stay in the list carrying a `lock`.
@@ -198,6 +221,7 @@ export default function Id({
 				isPaid: app.data?.price != null && app.data.price > 0,
 				can: permissions.can,
 				permissionLockReason,
+				hostCapabilities,
 			}),
 		[
 			developerMode,
@@ -206,6 +230,7 @@ export default function Id({
 			t,
 			permissions.can,
 			permissionLockReason,
+			hostCapabilities,
 		],
 	);
 

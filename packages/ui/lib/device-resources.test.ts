@@ -15,6 +15,7 @@ import {
 	parseExpiry,
 	publicResourceBinding,
 	revokeDeviceGrant,
+	serviceCloudAccess,
 } from "./device-resources";
 
 const grant: ResourceGrant = {
@@ -432,5 +433,70 @@ describe("device resource consent", () => {
 		expect(odd.grants[0].online_write_blocked).toBeUndefined();
 		expect(odd.grants[0].created_at).toBeUndefined();
 		expect(odd.grants[0].grant_id).toBe("grant");
+	});
+});
+
+describe("the cloud access of one service", () => {
+	const NOW = 1000;
+	const other = "someone-else";
+	const owner = { id: "owner", owner: true };
+	const guest = { id: "owner", owner: false };
+	const resources = (grants: ResourceGrant[], limits: BillingGrant[] = []) => ({
+		grants,
+		billing: limits,
+		instances: [],
+	});
+
+	test("unknown until the list is read; nothing listed is none for the owner and hidden for a guest", () => {
+		expect(serviceCloudAccess(undefined, "placement", owner, NOW)).toEqual({
+			state: "unknown",
+			approvals: [],
+			limits: [],
+		});
+		const elsewhere = resources([{ ...grant, placement_id: "another" }]);
+		expect(serviceCloudAccess(elsewhere, "placement", owner, NOW).state).toBe(
+			"none",
+		);
+		expect(serviceCloudAccess(elsewhere, "placement", guest, NOW).state).toBe(
+			"hidden",
+		);
+	});
+
+	test("revoked and ended approvals are not cloud access that stays", () => {
+		const ended = resources([
+			{ ...grant, status: "revoked" },
+			{ ...grant, grant_id: "late", expires_at: NOW },
+			{ ...grant, grant_id: "cut", effective_expires_at: NOW - 60 },
+		]);
+		expect(serviceCloudAccess(ended, "placement", owner, NOW).state).toBe(
+			"none",
+		);
+	});
+
+	test("the owner may end every approval, a guest the ones they gave; limits are the ones this account pays", () => {
+		const listed = resources(
+			[grant, { ...grant, grant_id: "theirs", delegating_user_id: other }],
+			[
+				billing,
+				{
+					...billing,
+					billing_grant_id: "paid-by-them",
+					grant_id: "theirs",
+					payer_id: other,
+				},
+				{ ...billing, billing_grant_id: "revoked", status: "revoked" },
+				{ ...billing, billing_grant_id: "elsewhere", grant_id: "another" },
+			],
+		);
+		expect(serviceCloudAccess(listed, "placement", owner, NOW)).toEqual({
+			state: "listed",
+			approvals: ["grant", "theirs"],
+			limits: ["billing"],
+		});
+		expect(serviceCloudAccess(listed, "placement", guest, NOW)).toEqual({
+			state: "listed",
+			approvals: ["grant"],
+			limits: ["billing"],
+		});
 	});
 });

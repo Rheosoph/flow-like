@@ -17,7 +17,7 @@ const { cleanupDevices, mountDevices, preloadDevices } = await import(
 );
 await preloadDevices();
 // Device-lib modules load after the DOM exists (a static import breaks combined runs, W2-FAKES).
-const { SAMPLE_IDS, SAMPLE_NOW, SAMPLE_PEOPLE } = await import(
+const { SAMPLE_IDS, SAMPLE_NOW, SAMPLE_PEOPLE, sampleFleet } = await import(
 	"../../../../lib/device-management/model/__fixtures__/sample-fleet"
 );
 const { createFakeWorkspace } = await import("../testing/fake-workspace");
@@ -749,6 +749,31 @@ describe("retained history", () => {
 		},
 		SLOW,
 	);
+
+	test("no keys on this computer: says so and leads to the keys, instead of asking to unlock", async () => {
+		const seed = sampleFleet();
+		seed.local.vaults = seed.local.vaults.filter(
+			(vault) => vault.deviceId !== EDGE,
+		);
+		seed.keys = seed.keys.filter((session) => session.deviceId !== EDGE);
+		delete seed.local.backups[EDGE];
+		const fake = await createFakeWorkspace(seed);
+		const view = await mountDevices(
+			<ActivityView deviceId={EDGE} scope={ACCOUNT_SCOPE} />,
+			{ fake, search: `device=${EDGE}&tab=activity`, overlays: true },
+		);
+		await view.settle();
+		const retained = block(view, "observe-retained-logs");
+		expect(text(retained)).toContain(
+			"This computer has no keys for edge-berlin-01.",
+		);
+		expect(retained.querySelector("[data-kind=locked]")).toBeNull();
+		expect(text(retained)).not.toContain("Unlock edge-berlin-01");
+		expect(
+			byRole("link", "Restore keys…", retained).getAttribute("href"),
+		).toContain("view=keys");
+		expect(view.fake.api.sent("GET", /archives/)).toEqual([]);
+	});
 });
 
 describe("history settings (owner)", () => {
@@ -995,6 +1020,53 @@ describe("history settings (owner)", () => {
 			await typeInto(password, FAKE_PASSWORD);
 			await click(byRole("button", "Resume recording", sheet));
 			await until(() => sent(view).includes("archive_policy"));
+		},
+		SLOW,
+	);
+
+	test(
+		"a list the device refuses: the sheet stays open with the device's words, and the typed password has left the field",
+		async () => {
+			const view = await open(EDGE, {
+				heldSigner: false,
+				arrange: (agent) =>
+					agent.handle("archive_policy", () => ({
+						state: "rejected",
+						result: {
+							code: "conflict",
+							error: "A newer readers list is already in place.",
+						},
+					})),
+			});
+			const settings = block(view, "observe-history-settings");
+			await until(
+				() => settings.querySelectorAll("[data-history-row]").length > 0,
+			);
+			await click(
+				byRole(
+					"button",
+					"Resume recording…",
+					settings.querySelector(
+						'[data-history-row="device|metrics"]',
+					) as HTMLElement,
+				),
+			);
+			const sheet = inPortal("dialog");
+			const field = () =>
+				sheet.querySelector<HTMLInputElement>(
+					"input[autocomplete=current-password]",
+				) as HTMLInputElement;
+			await typeInto(field(), FAKE_PASSWORD);
+			await click(byRole("button", "Resume recording", sheet));
+			await until(() => /refused the list/.test(text(sheet)));
+			expect(text(sheet)).toContain(
+				"edge-berlin-01 refused the list: “A newer readers list is already in place.”",
+			);
+			expect(field().value).toBe("");
+			expect(sheet.innerHTML).not.toContain(FAKE_PASSWORD);
+			expect(
+				byRole("button", "Resume recording", sheet).hasAttribute("disabled"),
+			).toBe(true);
 		},
 		SLOW,
 	);

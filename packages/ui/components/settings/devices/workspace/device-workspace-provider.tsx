@@ -76,14 +76,15 @@ export interface DeviceWorkspaceProviderProps {
 	children: ReactNode;
 	/**
 	 * No area gates and no fleet-wide hub reads (Events column): without a
-	 * workspace `fallback` renders in place of the children.
+	 * workspace `fallback` renders in place of the children, or `renderGate`
+	 * when the caller wants to say why there is none.
 	 */
 	passive?: boolean;
 	fallback?: ReactNode;
 	/**
-	 * Replaces the built-in gate block of a non-passive provider; the area
-	 * shell passes its own so its top bar and status bar stay. Children are
-	 * never rendered without a workspace, so they can call `useDeviceWorkspace()`.
+	 * Replaces the built-in gate block (and a passive provider's `fallback`);
+	 * the area shell passes its own so its top bar and status bar stay. Children
+	 * are never rendered without a workspace, so they can call `useDeviceWorkspace()`.
 	 */
 	renderGate?: (gate: WorkspaceGate) => ReactNode;
 	overrides?: DeviceWorkspaceOverrides;
@@ -320,11 +321,9 @@ export function DeviceWorkspaceProvider({
 				</AttentionProvider>
 			</WorkspaceContext.Provider>
 		);
-	if (passive) return <>{fallback}</>;
 	const gate = gateOf(account);
-	return (
-		<>{renderGate ? renderGate(gate) : <WorkspaceGateView gate={gate} />}</>
-	);
+	if (renderGate) return <>{renderGate(gate)}</>;
+	return passive ? <>{fallback}</> : <WorkspaceGateView gate={gate} />;
 }
 
 function useBinding(): WorkspaceBinding {

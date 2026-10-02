@@ -41,13 +41,11 @@ import { StatusChip } from "../../primitives/status-chip";
 import { useDeviceAction, useInlineResults } from "../../workspace";
 import {
 	ActionResults,
-	CHIP_WRAP,
 	GatedButton,
 	LabelField,
 	LiveStamp,
 	Names,
 	SheetBlocker,
-	TABLE_RESET,
 	TickFirst,
 	certificateResultKey,
 	chainProblem,
@@ -144,7 +142,7 @@ function RequestStateChip({ state }: Readonly<{ state: RequestState }>) {
 			</>
 		);
 	return (
-		<StatusChip tone="info" icon={Hourglass} className={CHIP_WRAP}>
+		<StatusChip tone="info" icon={Hourglass} wrap>
 			{enumLabel(t, "csrState", "pending")}
 		</StatusChip>
 	);
@@ -406,7 +404,6 @@ export function SigningRequests({
 			) : rows.length ? (
 				<DvTable
 					cols={COLS}
-					className={TABLE_RESET}
 					label={t(
 						"deviceCertificates.requests.label",
 						"Pending signing requests on {{device}}",

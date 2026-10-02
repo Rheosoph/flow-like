@@ -29,7 +29,7 @@ import {
 } from "../workspace/use-attention";
 import { useDeviceRows, useMyAccess } from "../workspace/use-hub";
 import { type CertificateFleet, LIST_CAP } from "./certificates-model";
-import { DeviceCell, LINK, LINK_BUTTON, TABLE_RESET } from "./parts";
+import { DeviceCell, LINK, LINK_BUTTON } from "./parts";
 import { type CertificateFleetRead, usePerson } from "./use-certificates";
 
 /** Reminders go to the owner and to people whose whole-device access includes one of these. */
@@ -330,7 +330,6 @@ export function RecipientsBlock({
 			) : devices.length ? (
 				<DvTable
 					cols={["22%", "46%", "32%"]}
-					className={TABLE_RESET}
 					label={t(
 						"certificates.recipients.caption",
 						"Who receives expiry reminders for each device",

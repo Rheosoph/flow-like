@@ -434,11 +434,25 @@ describe("FleetDevicesTable filters, sorting and paging", () => {
 		);
 	});
 
-	test("Shared with me narrows to devices that aren't yours", async () => {
+	test("filter=shared in the link lists the devices that aren't yours", async () => {
+		const { container } = await mountFleet({ search: "filter=shared" });
+		expect(rowIds(container)).toEqual([SAMPLE_IDS.lab]);
+		expect(
+			byRole("button", "Shared with me").getAttribute("aria-pressed"),
+		).toBe("true");
+	});
+
+	test("Shared with me narrows to devices that aren't yours, and survives a reload through the URL", async () => {
 		const { container, navigations } = await mountFleet();
 		await click(byRole("button", "Shared with me"));
 		expect(rowIds(container)).toEqual([SAMPLE_IDS.lab]);
-		expect(navigations).toEqual([]);
+		expect(navigations.at(-1)).toEqual({
+			mode: "replace",
+			href: "/settings/devices?filter=shared",
+		});
+		expect(
+			byRole("button", "Shared with me").getAttribute("aria-pressed"),
+		).toBe("true");
 
 		// A window of the annunciator takes over, and releasing it shows every device again.
 		const critical = container.querySelector(

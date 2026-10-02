@@ -57,6 +57,20 @@ test("the area is a size container that never uses fixed positioning", async () 
 		expect(element.className).not.toMatch(/(^|\s|:)fixed(\s|$)/);
 });
 
+test("page sections sit 24 px apart, and a paragraph follows its container's line height", async () => {
+	const view = await dom.render(
+		<AreaShell frame="page" {...parts}>
+			<section data-part="screen" />
+		</AreaShell>,
+	);
+	const root = view.container.firstElementChild as HTMLElement;
+	expect(root.className).toContain("[:where(&_p)]:leading-[inherit]");
+	const column = root.querySelector('[data-part="screen"]')
+		?.parentElement as HTMLElement;
+	expect(column.className).toContain("gap-6");
+	expect(column.className).not.toContain("gap-4");
+});
+
 test("the account page draws its frame; the app card relies on the config card", async () => {
 	const page = await dom.render(
 		<AreaShell frame="page" topbar={null}>

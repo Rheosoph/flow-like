@@ -13,7 +13,6 @@ import { DvButton } from "../primitives/dv-button";
 import { DvTable, Td, Th, Tr } from "../primitives/dv-table";
 import { cx } from "../primitives/tone";
 import { exceptionText, planNames } from "./deploy-copy";
-import { TABLE_RESET } from "./deploy-parts";
 
 /* APP §3.7 / §3.9 `exceptions`: what is the same on every device first, then one row per device that differs. */
 
@@ -101,7 +100,6 @@ export function ExceptionsTable({
 					label={label}
 					cols={["24%", "28%", "34%", "14%"]}
 					stackAt={560}
-					className={TABLE_RESET}
 					wrapperClassName="rounded-lg border border-border"
 					head={
 						<tr>

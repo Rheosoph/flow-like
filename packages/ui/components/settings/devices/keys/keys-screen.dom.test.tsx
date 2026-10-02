@@ -23,6 +23,7 @@ const { cleanupDevices, mountDevices, preloadDevices } = await import(
 	"../testing/mount-devices"
 );
 await preloadDevices();
+const { act } = await import("react");
 const { createFakeWorkspace } = await import("../testing/fake-workspace");
 const { KeysScreen } = await import("./keys-screen");
 
@@ -600,5 +601,37 @@ describe("Keys & recovery: this computer", () => {
 		await click(byRole("button", "Change device password…", table));
 		expect(queryByRole("dialog")).toBeNull();
 		expect(view.fake.api.calls.length).toBe(calls);
+	});
+
+	test("the row menu follows the same gates as the buttons: an action that can't run is off and says why", async () => {
+		const view = await mount();
+		const { container, fake } = view;
+		const menuItem = (id: string) =>
+			document.body.querySelector(`[data-menu-item="${id}"]`) as HTMLElement;
+		await click(byRole("button", /More for cold-storage-nas/, container));
+		expect(menuItem("backup").getAttribute("aria-disabled")).toBeNull();
+		await click(menuItem("backup"));
+		expect(byRole("dialog").textContent).toContain("Back up to account");
+		await click(byRole("button", "Cancel", byRole("dialog")));
+
+		// Account backups need the hub; the files on this computer don't.
+		fake.api.mode.tokenRestricted = true;
+		await act(async () => {
+			await fake.queryClient.refetchQueries();
+		});
+		await view.settle();
+		const reason =
+			"Your access token is restricted. Use a token with full permissions.";
+		expect(rowOf(container, SAMPLE_IDS.cold).textContent).toContain(reason);
+		await click(byRole("button", /More for cold-storage-nas/, container));
+		for (const id of ["backup", "check"]) {
+			expect(menuItem(id).getAttribute("aria-disabled")).toBe("true");
+			expect(menuItem(id).textContent).toContain(reason);
+		}
+		for (const id of ["download", "password", "delete"])
+			expect(menuItem(id).getAttribute("aria-disabled")).toBeNull();
+		await click(menuItem("backup"));
+		expect(queryByRole("dialog")).toBeNull();
+		expect(keyWrites(view)).toEqual([]);
 	});
 });

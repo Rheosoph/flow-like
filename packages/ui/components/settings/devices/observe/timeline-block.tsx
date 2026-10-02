@@ -55,10 +55,12 @@ const LINK = "font-mono text-foreground hover:underline";
 
 function useOperations(
 	target: ObserveTarget,
+	wanted: boolean,
 ): Map<string, AgentOperation> | undefined {
 	const workspace = useDeviceWorkspace();
 	const { deviceId, features } = target;
 	const enabled =
+		wanted &&
 		target.owner &&
 		livePhase(target) === "open" &&
 		agentSupports(features, "operations");
@@ -214,7 +216,15 @@ interface TimelineData {
 	older: ReturnType<typeof useOlderRecords>;
 }
 
-function useTimelineData(target: ObserveTarget): TimelineData {
+interface TimelineOptions {
+	/** A summary reads only this many records and skips the who-sent-it journal. */
+	recent?: number;
+}
+
+function useTimelineData(
+	target: ObserveTarget,
+	{ recent }: TimelineOptions = {},
+): TimelineData {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
 	const { deviceId, serviceId } = target;
@@ -233,10 +243,15 @@ function useTimelineData(target: ObserveTarget): TimelineData {
 	const stream = useLiveStream<unknown>(
 		deviceId,
 		liveWanted(target) && !refusal
-			? { kind: "messages", placementId: serviceId, projectId: ownApp }
+			? {
+					kind: "messages",
+					placementId: serviceId,
+					projectId: ownApp,
+					...(recent === undefined ? {} : { limit: recent }),
+				}
 			: null,
 	);
-	const operations = useOperations(target);
+	const operations = useOperations(target, recent === undefined);
 	const tray = useActivity({ deviceId });
 	const records = useMemo(() => recordsOf(stream.data), [stream.data]);
 	const older = useOlderRecords(records.length, stream.loadOlder);
@@ -419,41 +434,93 @@ function PersonFilter({
 	);
 }
 
+/** A service's name inside a sentence: a link to the service on the device page, plain on the service's own page. */
+function useServiceName(target: ObserveTarget): Sentences["service"] {
+	const link = useRouteLink();
+	const { deviceId, serviceId } = target;
+	return (id) =>
+		serviceId ? (
+			<span className="font-mono">{id}</span>
+		) : (
+			<a
+				className={LINK}
+				{...link({
+					screen: "service",
+					deviceId,
+					serviceId: id,
+					tab: "status",
+				})}
+			>
+				{id}
+			</a>
+		);
+}
+
+const NOBODY: readonly string[] = [];
+/** Records a summary asks the device for: enough for its few rows after commands were merged. */
+const RECENT_RECORDS = 20;
+
+export interface RecentTimeline {
+	/** The newest entries; empty while there is nothing to show. */
+	rows: TimelineRow[];
+	/** Source and age of what is shown. */
+	stamp: ReactNode;
+	/** What stands in for the entries: locked, not connected, no access, reading or nothing recorded. */
+	notice: ReactNode;
+}
+
+/**
+ * The newest entries of the same timeline for a summary block (the device
+ * Overview's "Recent activity"): one set of facts and sentences for both, here
+ * without filters, paging or the who-sent-it read.
+ */
+export function useRecentTimeline(
+	target: ObserveTarget,
+	limit: number,
+): RecentTimeline {
+	const { t } = useTranslation("devices");
+	const data = useTimelineData(target, { recent: RECENT_RECORDS });
+	const people = usePeople(NOBODY);
+	const service = useServiceName(target);
+	const sentences: Sentences = {
+		t,
+		target,
+		titles: data.titles,
+		operations: undefined,
+		people,
+		service,
+	};
+	const rows = data.refusal
+		? []
+		: data.facts.slice(0, limit).map((fact) => entryOf(sentences, fact));
+	return {
+		rows,
+		stamp: (
+			<TimelineStamp target={target} data={data} hasEntries={rows.length > 0} />
+		),
+		notice: <TimelineNotice target={target} data={data} />,
+	};
+}
+
 /** SPEC §5.2 "Timeline": what happened on the device or to one service, newest first. */
 export function TimelineBlock({ target }: Readonly<{ target: ObserveTarget }>) {
 	const { t } = useTranslation("devices");
-	const link = useRouteLink();
 	const appName = useAppNames();
 	const data = useTimelineData(target);
 	const { stream, facts, operations, titles, older } = data;
-	const { deviceId, serviceId } = target;
 	const [person, setPerson] = useState(EVERYONE);
 	const [shown, setShown] = useState(PAGE);
 
 	const actors = useMemo(() => actorsOf(operations), [operations]);
 	const people = usePeople(actors);
+	const service = useServiceName(target);
 	const sentences: Sentences = {
 		t,
 		target,
 		titles,
 		operations,
 		people,
-		service: (id) =>
-			serviceId ? (
-				<span className="font-mono">{id}</span>
-			) : (
-				<a
-					className={LINK}
-					{...link({
-						screen: "service",
-						deviceId,
-						serviceId: id,
-						tab: "status",
-					})}
-				>
-					{id}
-				</a>
-			),
+		service,
 	};
 
 	const visible = byPerson(facts, person, operations);

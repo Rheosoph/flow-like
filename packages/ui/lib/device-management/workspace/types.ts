@@ -137,7 +137,7 @@ export interface KeySessionSnapshot {
 	restoredNeedsFreshEndpoint: boolean;
 	/** Greyed "Locked · last read 12:03"; `readAt` is unix seconds. */
 	lockedSummary?: { readAt: number; services: ServiceSummary[] };
-	lastError?: KeyError;
+	lastError?: KeyError | KeyHubError;
 }
 
 export type KeyError =
@@ -148,12 +148,19 @@ export type KeyError =
 	| { code: "crypto_unavailable" }
 	| {
 			code: "identity_mismatch";
+			/** Unix seconds; 0 when this computer holds no pin. */
 			pinnedAt: number;
 			fingerprint: string;
 			reported: string;
 	  }
 	| { code: "authority_mismatch" }
 	| { code: "storage"; detail: string };
+
+/**
+ * The hub failed the identity read of an unlock. Only ever a session's
+ * `lastError`: the unlock itself rejects with the hub's original error.
+ */
+export type KeyHubError = { code: "hub"; status?: number };
 
 export interface UnlockOptions {
 	connectLive?: boolean;
@@ -664,6 +671,7 @@ export interface LocalVaultSummary {
 	role: "owner" | "shared";
 	grantId: string;
 	requiresFreshEndpoint: boolean;
+	/** Epoch milliseconds, as stored; pre-flight and `KeyError` carry it in seconds. */
 	identityPinnedAt?: number;
 	identityFingerprint?: string;
 }

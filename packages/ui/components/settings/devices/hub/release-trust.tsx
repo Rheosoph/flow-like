@@ -56,7 +56,6 @@ import {
 	Hint,
 	HubReadStamp,
 	SectionHead,
-	TABLE_RESET,
 	Tech,
 	UrlLine,
 	useLocale,
@@ -628,7 +627,6 @@ function Platforms({ release }: Readonly<{ release: VerifiedRelease }>) {
 					version: manifest.release_version,
 				})}
 				cols={["27%", "37%", "12%", "24%"]}
-				className={TABLE_RESET}
 				head={
 					<tr>
 						<Th>{labels.platform}</Th>

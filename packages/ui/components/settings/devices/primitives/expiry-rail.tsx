@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { useAreaTime } from "./area-context";
+import { dayText } from "./day";
 import { cx } from "./tone";
 
 const DAY = 86_400;
@@ -24,24 +25,6 @@ const MARK_FILL: Record<ExpiryState, string> = {
 	expiring: "fill-warning-solid",
 	valid: "fill-good-solid",
 };
-
-const dayFormatters = new Map<string, Intl.DateTimeFormat>();
-
-function dayMonth(locale: string, atS: number, nowS: number): string {
-	const withYear =
-		new Date(atS * 1000).getFullYear() !== new Date(nowS * 1000).getFullYear();
-	const key = `${locale}|${withYear}`;
-	let formatter = dayFormatters.get(key);
-	if (!formatter) {
-		formatter = new Intl.DateTimeFormat(locale, {
-			day: "numeric",
-			month: "short",
-			year: withYear ? "numeric" : undefined,
-		});
-		dayFormatters.set(key, formatter);
-	}
-	return formatter.format(atS * 1000);
-}
 
 /**
  * SPEC §4.27: −14 d … +90 d at 120 px with a "today" line at the same x in
@@ -66,7 +49,7 @@ export function ExpiryRail({
 		Math.min(WIDTH, ((days + PAST_DAYS) / (PAST_DAYS + FUTURE_DAYS)) * WIDTH),
 	);
 	const params = {
-		date: dayMonth(time.locale, notAfter, time.nowS),
+		date: dayText(time, notAfter),
 		ago: time.ago(notAfter, "long"),
 	};
 	const label =

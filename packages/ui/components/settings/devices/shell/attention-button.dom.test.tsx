@@ -87,7 +87,7 @@ describe("attention button", () => {
 		const critical = container.querySelector("[data-count=critical]");
 		const total = container.querySelector("[data-count=total]");
 		expect(critical?.textContent).toBe("2");
-		expect(critical?.className).toContain("rounded-sm");
+		expect(critical?.className).toContain("rounded-md");
 		expect(critical?.querySelector("svg")).not.toBeNull();
 		expect(total?.textContent).toBe("15");
 		expect(total?.className).toContain("rounded-full");

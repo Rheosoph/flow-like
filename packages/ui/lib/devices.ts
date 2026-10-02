@@ -42,8 +42,7 @@ const rowSchema = z.object({
 	registered_at: timestamp,
 	last_seen_at: timestamp.nullable(),
 	auth_epoch: count,
-	// Every hub sends `identity`; only legacy test fakes omit it, so a missing one is tolerated.
-	identity: identitySchema.optional(),
+	identity: identitySchema,
 	display_name: lenient(z.string().nullable()),
 	relationship: lenient(z.enum(["owner", "shared", "cloud_approval"])),
 	access_expires_at: lenient(timestamp.nullable()),
@@ -142,17 +141,4 @@ export function revokeDevice(
 	deviceId: string,
 ): Promise<void> {
 	return api.del<void>(profile, devicePath(deviceId));
-}
-
-/**
- * A recent heartbeat is evidence of contact, not a live management connection.
- * @deprecated Use `presence()` from `device-management/model/presence`.
- */
-export function hasRecentDeviceContact(
-	device: DeviceStatus,
-	nowMilliseconds: number,
-): boolean {
-	if (device.status !== "active" || device.last_seen_at === null) return false;
-	const elapsed = nowMilliseconds - device.last_seen_at * 1_000;
-	return elapsed >= 0 && elapsed <= 120_000;
 }

@@ -530,6 +530,24 @@ export function ApplyChoices({
 					"serviceConfig.apply.quickHintStopped",
 					"Stores the new settings. The service stays stopped and uses them at its next start.",
 				);
+	const timings = (
+		<div className="flex flex-wrap gap-3">
+			<Timing
+				id="svc-apply-stable"
+				label={t("serviceConfig.apply.stabilize", "Must stay healthy for")}
+				hint={t("serviceConfig.apply.stabilizeHint", "2 to 60 s")}
+				value={draft.stabilize}
+				onChange={(stabilize) => onChange({ ...draft, stabilize })}
+			/>
+			<Timing
+				id="svc-apply-deadline"
+				label={t("serviceConfig.apply.deadline", "Time limit to start")}
+				hint={t("serviceConfig.apply.deadlineHint", "10 to 600 s")}
+				value={draft.deadline}
+				onChange={(deadline) => onChange({ ...draft, deadline })}
+			/>
+		</div>
+	);
 	const options: ChoiceOption<ApplyMode>[] = [
 		{
 			value: "safe",
@@ -537,6 +555,8 @@ export function ApplyChoices({
 			hint: safeHint,
 			icon: ShieldCheck,
 			disabled: !!safeUnavailable,
+			// Shown inside the card while Safe update is the choice.
+			...(safeUnavailable ? {} : { detail: timings }),
 		},
 		{
 			value: "quick",
@@ -555,24 +575,6 @@ export function ApplyChoices({
 				onValueChange={(mode) => onChange({ ...draft, mode })}
 				options={options}
 			/>
-			{draft.mode === "safe" && !safeUnavailable ? (
-				<div className="flex flex-wrap gap-3">
-					<Timing
-						id="svc-apply-stable"
-						label={t("serviceConfig.apply.stabilize", "Must stay healthy for")}
-						hint={t("serviceConfig.apply.stabilizeHint", "2 to 60 s")}
-						value={draft.stabilize}
-						onChange={(stabilize) => onChange({ ...draft, stabilize })}
-					/>
-					<Timing
-						id="svc-apply-deadline"
-						label={t("serviceConfig.apply.deadline", "Time limit to start")}
-						hint={t("serviceConfig.apply.deadlineHint", "10 to 600 s")}
-						value={draft.deadline}
-						onChange={(deadline) => onChange({ ...draft, deadline })}
-					/>
-				</div>
-			) : null}
 			{error ? (
 				<p
 					role="alert"

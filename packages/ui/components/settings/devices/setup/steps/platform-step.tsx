@@ -8,12 +8,11 @@ import {
 	Info,
 	Laptop,
 	type LucideIcon,
-	type LucideProps,
 	OctagonX,
 	Server,
 	Terminal,
 } from "lucide-react";
-import { type Ref, forwardRef, useState } from "react";
+import { type Ref, useState } from "react";
 import type { ReleaseTarget } from "../../../../../lib/device-management/package";
 import { humanFileSize } from "../../../../../lib/utils";
 import { enumLabel } from "../../copy/enum-labels";
@@ -23,7 +22,6 @@ import { DvButton } from "../../primitives/dv-button";
 import { ChoiceCards, type ChoiceOption } from "../../primitives/form-fields";
 import { GateInline } from "../../primitives/gate-notice";
 import { StateView } from "../../primitives/state-view";
-import { cx } from "../../primitives/tone";
 import { WizardStepHeader } from "../../primitives/wizard";
 import { useSetup } from "../setup-context";
 import { FieldNote, Mono } from "../setup-parts";
@@ -35,27 +33,17 @@ import {
 	modeAvailable,
 } from "../setup-state";
 
-/** `ChoiceCards` lets its icon shrink next to a long hint; this keeps it at its size. */
-function fixed(Icon: LucideIcon): LucideIcon {
-	return forwardRef<SVGSVGElement, LucideProps>(function FixedIcon(
-		{ className, ...props },
-		ref,
-	) {
-		return <Icon ref={ref} {...props} className={cx("shrink-0", className)} />;
-	});
-}
-
 const TARGET_ICON: Record<ReleaseTarget, LucideIcon> = {
-	"x86_64-unknown-linux-gnu": fixed(Server),
-	"aarch64-unknown-linux-gnu": fixed(Cpu),
-	"x86_64-apple-darwin": fixed(Laptop),
-	"aarch64-apple-darwin": fixed(Laptop),
+	"x86_64-unknown-linux-gnu": Server,
+	"aarch64-unknown-linux-gnu": Cpu,
+	"x86_64-apple-darwin": Laptop,
+	"aarch64-apple-darwin": Laptop,
 };
 
 const MODE_ICON: Record<SetupMode, LucideIcon> = {
-	binary: fixed(Terminal),
-	docker: fixed(Container),
-	both: fixed(Boxes),
+	binary: Terminal,
+	docker: Container,
+	both: Boxes,
 };
 const MODES: readonly SetupMode[] = ["binary", "docker", "both"];
 

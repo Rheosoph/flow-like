@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { userLookupQueryOptions } from "../../../../hooks/use-user-lookup";
 import { ATTENTION_KEY_GROUPS } from "../../../../lib/device-management/model/attention";
 import {
 	type ServicesUnavailable,
@@ -29,6 +30,7 @@ import type {
 	KeyError,
 	ServiceSummary,
 } from "../../../../lib/device-management/workspace/types";
+import { userDisplayName } from "../../../../lib/user-display";
 import { useBackend } from "../../../../state/backend-state";
 import { gateCopy } from "../copy/gate-copy";
 import type { AreaTime, DevicesT } from "../primitives/area-context";
@@ -290,30 +292,19 @@ export function gateView(
 	};
 }
 
-/** A person's display name; undefined while it isn't known (the caller falls back to a neutral phrase). */
+/**
+ * A person's display name; undefined while it isn't known (the caller falls
+ * back to a neutral phrase). Never the account id or a sign-in provider's
+ * handle: `userDisplayName` decides what counts as a name.
+ */
 export function usePersonName(
 	userId: string | undefined,
 	enabled = true,
 ): string | undefined {
 	const backend = useBackend();
-	const id = userId ?? "";
 	const query = useQuery({
-		queryKey: ["devices", "person-name", id],
-		queryFn: () => backend.userState.lookupUser(id),
-		enabled: enabled && id !== "",
+		...userLookupQueryOptions(backend.userState, enabled ? userId : undefined),
 		retry: false,
-		staleTime: PERSON_STALE_MS,
 	});
-	return personLabel(query.data);
-}
-
-const PERSON_STALE_MS = 10 * 60_000;
-
-function personLabel(
-	user:
-		| { name?: string; preferred_username?: string; username?: string }
-		| null
-		| undefined,
-): string | undefined {
-	return [user?.name, user?.preferred_username, user?.username].find(Boolean);
+	return query.data ? userDisplayName(query.data, "") || undefined : undefined;
 }

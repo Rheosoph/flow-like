@@ -161,6 +161,7 @@
 	"apiSurfaceHint": "",
 	"app": "앱",
 	"appConfigurationAndEnvironmentVariables": "앱 구성 및 환경 변수",
+	"appDevicesDescription": "",
 	"appExportedSuccessfully": "앱을 내보냈습니다!",
 	"appImportedSuccessfully": "앱을 가져왔습니다!",
 	"appliedOnRun": "실행 시 적용됨",

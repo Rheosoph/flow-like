@@ -543,8 +543,17 @@ function subjectTarget(item: AttentionItem): {
 	};
 }
 
+/** "Renew" is said of a certificate, a person's access and a device plan; only the certificate is renewed on the device. */
+function actionGate(item: AttentionItem): ActionId | undefined {
+	const code = item.action?.code;
+	if (!code) return undefined;
+	if (code === "renew")
+		return item.subject.kind === "certificate" ? "csr_create" : undefined;
+	return ATTENTION_ACTION_GATES[code];
+}
+
 function gateOf(sources: GateSources, item: AttentionItem): GateResult | null {
-	const action = item.action && ATTENTION_ACTION_GATES[item.action.code];
+	const action = actionGate(item);
 	if (!action) return null;
 	const { deviceId, target } = subjectTarget(item);
 	return evaluateGate(action, buildGateContext(sources, deviceId, target));
@@ -580,7 +589,16 @@ export interface AttentionState extends GateSources {
 		deviceId: string,
 		view: PolicyView,
 	): ManagementPolicy | undefined;
+	/** Why `verifyPolicy` has, or has no, rules for this hub copy. */
+	policyState(deviceId: string, view: PolicyView): PolicyVerification;
 }
+
+/**
+ * `pending`: can't be checked right now (keys closed here, the crypto module
+ * still loading, or a hub copy without signed rules). `rejected`: the keys
+ * are open and the rules don't check out with the owner key.
+ */
+export type PolicyVerification = "verified" | "pending" | "rejected";
 
 const AttentionContext = createContext<AttentionState | null>(null);
 
@@ -660,7 +678,7 @@ function usePolicyVerifier(workspace: DeviceWorkspace, version: number) {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `loaded` swaps the verifier once the crypto module is there
 	return useMemo(() => {
 		const cache = new Map<string, ManagementPolicy>();
-		return (deviceId: string, view: PolicyView) => {
+		const verifyPolicy = (deviceId: string, view: PolicyView) => {
 			if (!workspace.keys.receipt(deviceId)) return undefined;
 			const key = `${deviceId}|${view.version}|${view.digest ?? ""}`;
 			const policy =
@@ -669,6 +687,20 @@ function usePolicyVerifier(workspace: DeviceWorkspace, version: number) {
 			if (policy) cache.set(key, policy);
 			return policy;
 		};
+		const policyState = (
+			deviceId: string,
+			view: PolicyView,
+		): PolicyVerification => {
+			if (verifyPolicy(deviceId, view)) return "verified";
+			const { keys } = workspace;
+			const checkable =
+				!!crypto.current &&
+				!!view.policy_jws &&
+				!!keys.receipt(deviceId) &&
+				!!keys.vault(deviceId);
+			return checkable ? "rejected" : "pending";
+		};
+		return { verifyPolicy, policyState };
 	}, [workspace, crypto, loaded]);
 }
 
@@ -747,7 +779,7 @@ export function AttentionProvider({
 		queries: ownedUnlocked.map((deviceId) => queries.policy(ctx, deviceId)),
 	});
 
-	const verifyPolicy = usePolicyVerifier(workspace, version);
+	const { verifyPolicy, policyState } = usePolicyVerifier(workspace, version);
 	const hub = useMemo(
 		() =>
 			hubDeviceSupport(
@@ -809,10 +841,12 @@ export function AttentionProvider({
 				refetch: list.refetch,
 			},
 			verifyPolicy,
+			policyState,
 		}),
 		[
 			computed,
 			verifyPolicy,
+			policyState,
 			list.data,
 			list.error,
 			list.dataUpdatedAt,

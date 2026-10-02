@@ -641,6 +641,49 @@ describe("connect auto-load and group metrics", () => {
 		expect(live.sent).toHaveLength(3);
 	});
 
+	test("a refused queue read carries the device's rejection, and a later read clears it", async () => {
+		const { live, streams } = setup();
+		live.set(live.live());
+		const queue = {
+			placement_id: "p1",
+			queues: [],
+			next: null,
+		};
+		live.handler = () => ({
+			operation_id: "op",
+			state: "rejected",
+			result: {
+				code: "unauthorized",
+				error: "View status is required.",
+				retryable: true,
+			},
+		});
+		const states: StreamState<unknown>[] = [];
+		streams.subscribe(
+			DEVICE,
+			{ kind: "offline_queues", placementId: "p1" },
+			collect(states),
+		);
+		await live.advance(0);
+		expect(states.at(-1)?.rejected).toMatchObject({
+			code: "unauthorized",
+			error: "View status is required.",
+		});
+		expect(states.at(-1)?.data).toBeUndefined();
+		expect(states.at(-1)?.freshness.error).toBeUndefined();
+
+		live.handler = () => completed(queue);
+		await live.advance(30_000);
+		expect(states.at(-1)?.rejected).toBeUndefined();
+		expect(states.at(-1)?.data).toEqual([]);
+
+		live.handler = () => completed({ ...queue, placement_id: "other" });
+		await live.advance(30_000);
+		expect(states.at(-1)?.rejected).toBeUndefined();
+		expect(states.at(-1)?.freshness).toMatchObject({ age: "error" });
+		expect(states.at(-1)?.data).toEqual([]);
+	});
+
 	test("the connect auto-load follows the session's own read, whatever the two clocks say", async () => {
 		const { live } = setup();
 		live.handler = (command) =>

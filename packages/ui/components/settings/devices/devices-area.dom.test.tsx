@@ -438,4 +438,21 @@ describe("page-level notices", () => {
 		await mounted.settle();
 		expect(one('[data-shell="hub-failing"]')).toBeNull();
 	});
+
+	test("a hub with devices off is not a failed refresh: Hub status states it without the banner", async () => {
+		const fake = await createFakeWorkspace();
+		fake.api.mode.devicesEnabled = false;
+		fake.api.fail({ method: "GET", path: "devices" });
+		const mounted = await mountArea({ fake, search: "view=hub" });
+		await act(async () => {
+			await fake.queryClient.refetchQueries();
+		});
+		await mounted.settle();
+		expect(gate()).toBeUndefined();
+		expect(screen()).toBe("hub");
+		expect(one('[data-shell="hub-failing"]')?.textContent ?? null).toBeNull();
+		const page = dom.document.body.textContent ?? "";
+		expect(page.includes("Couldn't refresh from the hub.")).toBe(false);
+		expect(one("[data-plane=hub]")?.textContent).toBe("Hubdevices off");
+	});
 });

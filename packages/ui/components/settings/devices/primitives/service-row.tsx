@@ -63,14 +63,10 @@ export function ServiceRowHead() {
 		<tr>
 			<Th>{t("view.serviceRow.service", "Service")}</Th>
 			<Th>{t("view.serviceRow.state", "Requested → actual")}</Th>
-			<Th numeric>{t("view.serviceRow.instances", "Instances")}</Th>
-			<Th>{t("view.serviceRow.version", "Version")}</Th>
+			<Th>{t("view.serviceRow.instances", "Instances")}</Th>
+			<Th>{t("view.serviceRow.versions", "Versions")}</Th>
 			<Th>{t("view.serviceRow.update", "Update")}</Th>
-			<Th>
-				<span className="sr-only">
-					{t("view.serviceRow.actions", "Actions")}
-				</span>
-			</Th>
+			<Th>{t("view.serviceRow.actions", "Actions")}</Th>
 		</tr>
 	);
 }
@@ -146,7 +142,7 @@ function InstancesCell({
 }: Readonly<Pick<ServiceRowProps, "instances">>) {
 	const { t } = useTranslation("devices");
 	return (
-		<Td label={t("view.serviceRow.instances", "Instances")} kind="num">
+		<Td label={t("view.serviceRow.instances", "Instances")} kind="name">
 			{instances ? (
 				<>
 					{t(
@@ -208,7 +204,7 @@ export function ServiceRow(props: Readonly<ServiceRowProps>) {
 			</Td>
 			<InstancesCell instances={props.instances} />
 			<TextCell
-				label={t("view.serviceRow.version", "Version")}
+				label={t("view.serviceRow.versions", "Versions")}
 				value={props.version}
 				sub={props.versionSub}
 			/>

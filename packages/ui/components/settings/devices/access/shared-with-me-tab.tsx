@@ -70,7 +70,6 @@ import {
 	OBJECT_LINK,
 	PermissionsCell,
 	ScopeLabel,
-	TABLE_RESET,
 	saveTextFile,
 } from "./access-parts";
 import type { FleetAccess, PersonNames } from "./use-access";
@@ -977,7 +976,6 @@ export function SharedWithMeTab({
 						<DvTable
 							label={t("access.shared.tableLabel", "Devices shared with you")}
 							cols={["15%", "16%", "16%", "11%", "10%", "14%", "18%"]}
-							className={TABLE_RESET}
 							head={
 								<tr>
 									<Th>{labels.device}</Th>

@@ -214,6 +214,39 @@ describe("unlock several sheet", () => {
 		expect(queryByRole("button", "Try another password")).toBeNull();
 	});
 
+	test("the password field has the focus when the sheet opens", async () => {
+		await openSeveral();
+		expect(window.document.activeElement).toBe(passwordInput());
+	});
+
+	test("another password is tried only on the devices that are still locked", async () => {
+		const mounted = await openSeveral();
+		mounted.fake.api.fail(
+			{ path: new RegExp(`^devices/${lab}/identity$`) },
+			undefined,
+			1,
+		);
+		await submit(mounted, mounted.fake.password);
+		await untilDone(mounted);
+		expect(keyState(mounted, cold)).toBe("unlocked");
+		expect(keyState(mounted, lab)).toBe("locked");
+		expect(resultText()).toBe(
+			"1 of 2 devices unlocked. Still locked: lab-gpu-02.",
+		);
+
+		await click(byRole("button", "Try another password"));
+		expect(lineText(cold)).toContain("Unlocked");
+		expect(
+			byRole("checkbox", "cold-storage-nas").hasAttribute("disabled"),
+		).toBe(true);
+		expect(window.document.activeElement).toBe(passwordInput());
+		await typeInto(passwordInput(), mounted.fake.password);
+		await click(byRole("button", "Unlock 1 device"));
+		await untilDone(mounted);
+		expect(keyState(mounted, lab)).toBe("unlocked");
+		expect(resultText()).toBe("2 of 2 devices unlocked.");
+	});
+
 	test("a device held by another window is skipped, the others still open", async () => {
 		const mounted = await openSeveral();
 		const release = mounted.fake.holdElsewhere(cold);

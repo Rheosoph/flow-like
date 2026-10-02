@@ -18,6 +18,7 @@ import {
 	StaleDeploymentRevisionError,
 	approvedOnlineCatalog,
 	assertOfflineQueuesDrained,
+	boardVariables,
 	cancelDeploymentRollout,
 	createDeploymentPlan,
 	discoverOfflineEvents,
@@ -929,6 +930,32 @@ test("a board with unconfigurable variables blocks only its own approved event",
 	expect(layered[1]?.ineligible_reason).toContain(
 		"define variable Credential differently",
 	);
+});
+
+test("board variables are the ones a device may set, from the board and its layers", () => {
+	const plain = { ...secret, id: "limit", name: "Limit", secret: false };
+	const board = {
+		variables: {
+			credential: { ...secret, exposed: true },
+			internal: { ...plain, id: "internal", exposed: false },
+		},
+		layers: {
+			layer: {
+				variables: {
+					limit: { ...plain, exposed: false, runtime_configured: true },
+					credential: { ...secret, exposed: true },
+				},
+			},
+		},
+	} as unknown as Parameters<typeof boardVariables>[0];
+	expect(boardVariables(board)).toEqual([secret, plain]);
+	expect(boardVariables({ variables: {}, layers: {} })).toEqual([]);
+	expect(() =>
+		boardVariables({
+			variables: { bad: { ...secret, id: "not an id", exposed: true } },
+			layers: {},
+		} as unknown as Parameters<typeof boardVariables>[0]),
+	).toThrow("cannot configure");
 });
 
 test("earlier online definitions propagate archive failures and refuse a different board snapshot", async () => {

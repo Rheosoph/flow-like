@@ -126,7 +126,7 @@ function consequenceRows(
 		what: (
 			<Trans
 				t={t}
-				i18nKey="keys.password.what"
+				i18nKey="devices:keys.password.what"
 				defaults="This computer's copy of the keys for <1/> is sealed with the new password."
 				components={{ 1: <Mono>{row.name}</Mono> }}
 			/>

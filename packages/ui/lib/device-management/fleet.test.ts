@@ -721,12 +721,22 @@ test("a status snapshot keeps the agent's validated facts and nothing else", asy
 		crash_looping: true,
 		last_started_at: 100,
 	};
+	const offlineWrites = {
+		scopes: 1,
+		pending_count: 2,
+		pending_bytes: 300,
+		oldest_at: 90,
+		quarantined_scopes: 0,
+		needs_attention: 1,
+		mirror_error: false,
+	};
 	f.inspection.placements = [
 		{
 			...snapshotRow,
 			online_metadata_sha256: "a".repeat(64),
 			events: [event],
 			events_truncated: false,
+			offline_writes: offlineWrites,
 			variables: { "api-key": "value" },
 			replicas: [
 				{ ...snapshotRow.replicas[0], has_error: true, restarts, note: "x" },
@@ -746,6 +756,7 @@ test("a status snapshot keeps the agent's validated facts and nothing else", asy
 		events: [event],
 		events_truncated: false,
 		online_metadata_sha256: "a".repeat(64),
+		offline_writes: offlineWrites,
 		replicas: [
 			{
 				slot: 0,
@@ -756,7 +767,13 @@ test("a status snapshot keeps the agent's validated facts and nothing else", asy
 	});
 	expect(JSON.stringify(full)).not.toMatch(/hostname|variables|note/u);
 
-	f.inspection.placements = [{ ...snapshotRow, source: "elsewhere" }];
+	f.inspection.placements = [
+		{
+			...snapshotRow,
+			source: "elsewhere",
+			offline_writes: { ...offlineWrites, scopes: -1 },
+		},
+	];
 	Object.assign(f.inspection, { agent: "0.1.0", tasks: [{ name: "bad" }] });
 	f.publish(2);
 	const [minimal] = (await f.read()).observations;
@@ -765,6 +782,7 @@ test("a status snapshot keeps the agent's validated facts and nothing else", asy
 		events_truncated: true,
 	});
 	expect(minimal.placements[0]).not.toHaveProperty("source");
+	expect(minimal.placements[0]).not.toHaveProperty("offline_writes");
 	expect(minimal.placements[0]).not.toHaveProperty("events");
 	expect(minimal).not.toHaveProperty("agent");
 	expect(minimal).not.toHaveProperty("tasks");

@@ -33,7 +33,6 @@ import {
 	EventTile,
 	HostLink,
 	LINK,
-	TABLE_RESET,
 	UnknownAction,
 	useAppPage,
 	useDeviceNames,
@@ -393,7 +392,6 @@ export function EventList() {
 			)}
 			cols={["100%"]}
 			stackAt={false}
-			className={TABLE_RESET}
 		>
 			{view.events.rows.map((row) => (
 				<Tr key={row.eventId} data-event={row.eventId}>
@@ -439,7 +437,6 @@ export function WhereByEvent() {
 				app: view.app.name,
 			})}
 			cols={widths}
-			className={TABLE_RESET}
 			head={
 				<tr>
 					<Th>{t("app.event.colEvent", "Event")}</Th>

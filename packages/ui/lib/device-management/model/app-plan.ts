@@ -42,6 +42,13 @@ export interface AppVersionPin {
 	boardVersion: VersionTriple;
 }
 
+/** What an update to a version sends to a device: the definitions (online) or the copy (local-only). */
+export interface AppVersionSends {
+	bytes: number;
+	/** Local-only copies. */
+	files?: number;
+}
+
 export interface AppVersionInput {
 	/** Copy revision (local-only) or approved-definitions hash (online). */
 	hash: string;
@@ -49,6 +56,8 @@ export interface AppVersionInput {
 	builtAt?: number | null;
 	by?: string | null;
 	pins: readonly AppVersionPin[];
+	/** Known once this computer prepared or sent the version. */
+	sends?: AppVersionSends | null;
 }
 
 export interface AppInput {
@@ -88,6 +97,20 @@ export interface LocalServiceChange {
 	seededAt?: number;
 }
 
+/** An upload of the app to a device that is running or can be resumed (APP §2.8). */
+export interface AppUploadInput {
+	/** The caller's handle, e.g. the activity item. */
+	id: string;
+	deviceId: string;
+	/** Absent while the upload is not tied to one service. */
+	serviceId?: string;
+	state: "active" | "paused";
+	done: number;
+	total: number;
+	/** Unix seconds the device keeps the partial upload. */
+	expiresAt: number;
+}
+
 export interface AppViewInput {
 	app: AppInput;
 	devices: readonly AppDeviceInput[];
@@ -97,6 +120,14 @@ export interface AppViewInput {
 	changes?: Readonly<Record<string, LocalServiceChange>>;
 	/** `d-<device>` deep-link targets, always shown as By event columns. */
 	focusDeviceIds?: readonly string[];
+	/** Newest first. */
+	uploads?: readonly AppUploadInput[];
+	/**
+	 * Shared devices whose access covers other apps only (APP §2.12). Locked or
+	 * not, they say nothing about this app: "no access", never "unknown until
+	 * unlocked" and never "not deployed".
+	 */
+	noAccess?: readonly string[];
 }
 
 export type AppUnknownKind =
@@ -142,6 +173,7 @@ export interface AppVersionView {
 	runningOn: VersionRunning[];
 	/** Devices or services whose version can't be read now (unknown ≠ not running). */
 	unknownOn: string[];
+	sends?: AppVersionSends | null;
 }
 
 export type AppCloudCell =
@@ -165,6 +197,14 @@ export interface AppServiceRow {
 	/** 0 = newest, n = behind, null = unknown. */
 	behind: number | null;
 	staged: boolean;
+	/**
+	 * Set while `staged`: the version the update switches to. The device's
+	 * rollout status carries none, so it is known only when this computer staged
+	 * the update (`changes[…].hash`), else null.
+	 */
+	stagedVersion?: AppVersionView | null;
+	/** Its own upload, else the app's upload to this device on the device's first service. */
+	upload?: AppUploadInput;
 	data: { where: "cloud" | "device"; since?: number };
 	writes: ServiceView["offlineWrites"] | null;
 	cloud: AppCloudCell;
@@ -281,8 +321,17 @@ export interface AppView {
 		noAccess: EverywhereRow[];
 	};
 	coverage: AppCoverage;
-	/** Version foot (APP §2.9): newest version and how many services run it. */
-	newestRuns: { version: AppVersionView; services: number; of: number } | null;
+	/**
+	 * Version foot (APP §2.9): newest version and how many services run it.
+	 * `unknown` of the `of` services have a version that can't be told (BG-A1),
+	 * so 0 running is "not on any service whose version is known" then.
+	 */
+	newestRuns: {
+		version: AppVersionView;
+		services: number;
+		of: number;
+		unknown?: number;
+	} | null;
 }
 
 /** Same rule as the attention items (`isLastKnown`): anything but live or current is last known. */
@@ -364,6 +413,7 @@ const baseVersions = (app: AppInput): AppVersionView[] => {
 		diff: versionDiff(version, versions[index + 1]),
 		runningOn: [],
 		unknownOn: [],
+		...(version.sends ? { sends: version.sends } : {}),
 	}));
 };
 
@@ -454,10 +504,15 @@ const serviceRank = (view: ServiceView, staged: boolean): number => {
 	return staged ? Math.min(rank, 2) : rank;
 };
 
+/**
+ * On a device the viewer owns the hub lists every approval, so none listed
+ * means none given; on a shared device it may be someone else's and hidden.
+ */
 const cloudCell = (
 	view: ServiceView,
 	mode: AppMode,
 	placements: AppDevicePlacements | null | undefined,
+	owned: boolean,
 ): AppCloudCell => {
 	if (!placements) return { state: "unknown" };
 	const placement = placements.placements.find(
@@ -466,7 +521,7 @@ const cloudCell = (
 			value.placement_id === view.serviceId,
 	);
 	if (placement) return { state: "approved", placement };
-	return mode === "online" ? { state: "hidden" } : { state: "none" };
+	return mode === "online" && !owned ? { state: "hidden" } : { state: "none" };
 };
 
 function serviceRow(
@@ -480,6 +535,8 @@ function serviceRow(
 	const version = matchVersion(view, versions);
 	const staged = view.rollout?.state === "staged";
 	const lastChange = input.changes?.[`${device.id}/${view.serviceId}`] ?? null;
+	const stagedHash =
+		staged && lastChange?.kind === "update" ? lastChange.hash : undefined;
 	return {
 		deviceId: device.id,
 		serviceId: view.serviceId,
@@ -490,6 +547,12 @@ function serviceRow(
 		version,
 		behind: version ? version.index : null,
 		staged,
+		...(staged
+			? {
+					stagedVersion:
+						versions.find((value) => sameHash(stagedHash, value.hash)) ?? null,
+				}
+			: {}),
 		data:
 			mode === "online"
 				? { where: "cloud" }
@@ -498,11 +561,29 @@ function serviceRow(
 						...(lastChange?.seededAt ? { since: lastChange.seededAt } : {}),
 					},
 		writes: view.offlineWrites ?? null,
-		cloud: cloudCell(view, mode, input.placements),
+		cloud: cloudCell(
+			view,
+			mode,
+			input.placements,
+			device.relationship === "owner",
+		),
 		lastChange,
 		lastKnown: !CURRENT_AGES.includes(view.freshness.age),
 		rank: serviceRank(view, staged),
 	};
+}
+
+function withUploads(
+	rows: AppServiceRow[],
+	uploads: readonly AppUploadInput[],
+): AppServiceRow[] {
+	if (!uploads.length) return rows;
+	return rows.map((row, index) => {
+		const upload =
+			uploads.find((value) => value.serviceId === row.serviceId) ??
+			(index === 0 ? uploads.find((value) => !value.serviceId) : undefined);
+		return upload ? { ...row, upload } : row;
+	});
 }
 
 function byRankThenName<T extends { rank: number }>(
@@ -541,8 +622,13 @@ function matrixCell(
 	device: AppDeviceInput,
 	group: AppDeviceGroup | undefined,
 	newestPin: Omit<AppVersionPin, "eventId"> | null,
+	noAccess: boolean,
 ): MatrixCell {
 	const base = { deviceId: device.id, serviceIds: [] as string[] };
+	const serving = (group?.services ?? []).filter((row) =>
+		row.events?.some((value) => value.event_id === event.id),
+	);
+	if (noAccess && !serving.length) return { ...base, state: "no_access" };
 	if (!readable(device)) {
 		const unknown = group?.unknown ?? appUnknownOf(device);
 		// Nothing runs on a device that never checked in: not served, with its deploy gate.
@@ -552,9 +638,6 @@ function matrixCell(
 			? { ...base, state: "no_access" }
 			: { ...base, state: "unknown", unknown };
 	}
-	const serving = (group?.services ?? []).filter((row) =>
-		row.events?.some((value) => value.event_id === event.id),
-	);
 	if (serving.length) {
 		const primary = serving[0];
 		const pin = primary.events?.find((value) => value.event_id === event.id);
@@ -628,6 +711,7 @@ function buildMatrix(
 				device,
 				groups.find((group) => group.deviceId === id),
 				pin,
+				input.noAccess?.includes(id) ?? false,
 			);
 		}
 		rows.push({ ...row, cells });
@@ -676,6 +760,7 @@ export function buildAppView(input: AppViewInput): AppView {
 		locked: [],
 		never: [],
 	};
+	const noAccess = new Set(input.noAccess ?? []);
 	for (const device of devices) {
 		const views = readable(device);
 		const group = {
@@ -684,6 +769,20 @@ export function buildAppView(input: AppViewInput): AppView {
 			presence: device.presence,
 			relationship: device.relationship,
 		};
+		const runsApp = views?.some((view) => view.projectId === app.id) ?? false;
+		if (
+			noAccess.has(device.id) &&
+			!runsApp &&
+			device.presence.kind !== "never"
+		) {
+			if (views) coverage.readable++;
+			else coverage.unknown++;
+			everywhereElse.noAccess.push({
+				...everywhereRow(device, app.id, { kind: "noaccess" }),
+				gate: null,
+			});
+			continue;
+		}
 		if (!views) {
 			const unknown = appUnknownOf(device);
 			coverage.unknown++;
@@ -702,10 +801,13 @@ export function buildAppView(input: AppViewInput): AppView {
 			continue;
 		}
 		coverage.readable++;
-		const services = views
-			.filter((view) => view.projectId === app.id)
-			.map((view) => serviceRow(device, view, input, mode, versions))
-			.sort(byRankThenName((row) => row.serviceId));
+		const services = withUploads(
+			views
+				.filter((view) => view.projectId === app.id)
+				.map((view) => serviceRow(device, view, input, mode, versions))
+				.sort(byRankThenName((row) => row.serviceId)),
+			(input.uploads ?? []).filter((upload) => upload.deviceId === device.id),
+		);
 		if (!services.length) {
 			everywhereElse.notDeployed.push(everywhereRow(device, app.id));
 			continue;
@@ -771,6 +873,7 @@ export function buildAppView(input: AppViewInput): AppView {
 					version: newest,
 					services: newest.runningOn.length,
 					of: services.length,
+					unknown: services.filter((row) => !row.version).length,
 				}
 			: null,
 	};

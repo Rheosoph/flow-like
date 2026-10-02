@@ -30,7 +30,7 @@ import {
 	SwitchField,
 } from "../primitives/form-fields";
 import { FreshnessStamp } from "../primitives/freshness-stamp";
-import { GatedAction } from "../primitives/gate-notice";
+import { GateInline } from "../primitives/gate-notice";
 import { InlineResult } from "../primitives/inline-result";
 import { KeyValueList, KvRow } from "../primitives/key-value-list";
 import { PersonChip } from "../primitives/person-chip";
@@ -59,6 +59,7 @@ import {
 import {
 	type MetricsReaderRequest,
 	type MetricsRequestProblem,
+	type SaveMetricReadersOutcome,
 	type SharedReader,
 	type SharedRoster,
 	createMetricsRequest,
@@ -103,6 +104,12 @@ function saveFailure(
 			"{{device}} refused the readers list: “{{reason}}”",
 			{ device, reason: detail },
 		);
+	if (reason === "unconfirmed")
+		return t(
+			"devices:observe.shared.failUnconfirmed",
+			"{{device}} didn't confirm the readers list, so it may or may not be in place. Close this and check the readers once they have been read again.",
+			{ device },
+		);
 	return t(
 		"devices:observe.shared.failOther",
 		"The readers list wasn't saved. Nothing changed on {{device}}.",
@@ -110,10 +117,49 @@ function saveFailure(
 	);
 }
 
+/** Owner only: taking a reader off the list. While it can't run, `blocked` disables the control and points to the reason. */
+interface RemoveReader {
+	blocked: Record<string, unknown>;
+	run(reader: SharedReader, name: string): void;
+}
+
+function RemoveButton({
+	reader,
+	name,
+	remove,
+}: Readonly<{
+	reader: SharedReader;
+	name: string;
+	remove: RemoveReader | undefined;
+}>) {
+	const { t } = useTranslation("devices");
+	if (!remove || reader.you) return null;
+	return (
+		<DvButton
+			size="xs"
+			variant="ghost"
+			{...remove.blocked}
+			aria-label={t(
+				"devices:observe.shared.removeReader",
+				"Remove {{name}} from the readers",
+				{ name },
+			)}
+			onClick={() => remove.run(reader, name)}
+		>
+			{t("devices:observe.shared.remove", "Remove…")}
+		</DvButton>
+	);
+}
+
 function ReadersValue({
 	shared,
 	people,
-}: Readonly<{ shared: SharedRoster; people: PersonNames }>) {
+	remove,
+}: Readonly<{
+	shared: SharedRoster;
+	people: PersonNames;
+	remove?: RemoveReader;
+}>) {
 	const { t } = useTranslation("devices");
 	const { readers } = shared;
 	if (!readers.length)
@@ -135,26 +181,27 @@ function ReadersValue({
 	if (shared.named)
 		return (
 			<span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-				{readers.map((reader) => (
-					<span
-						key={reader.endpointId}
-						className="inline-flex items-center gap-1"
-					>
-						<PersonChip
-							you={reader.you}
-							name={
-								(reader.userId ? people(reader.userId) : undefined) ??
-								(reader.you
-									? t("devices:observe.shared.you", "You")
-									: t(
-											"devices:observe.shared.someone",
-											"Someone with shared access",
-										))
-							}
-						/>
-						{tick(reader)}
-					</span>
-				))}
+				{readers.map((reader) => {
+					const name =
+						(reader.userId ? people(reader.userId) : undefined) ??
+						(reader.you
+							? t("devices:observe.shared.you", "You")
+							: t(
+									"devices:observe.shared.someone",
+									"Someone with shared access",
+								));
+					return (
+						<span
+							key={reader.endpointId}
+							data-reader={reader.endpointId}
+							className="inline-flex items-center gap-1"
+						>
+							<PersonChip you={reader.you} name={name} />
+							{tick(reader)}
+							<RemoveButton reader={reader} name={name} remove={remove} />
+						</span>
+					);
+				})}
 			</span>
 		);
 	return (
@@ -169,6 +216,7 @@ function ReadersValue({
 			{readers.map((reader) => (
 				<span
 					key={reader.endpointId}
+					data-reader={reader.endpointId}
 					className="inline-flex items-center gap-1"
 				>
 					<span aria-hidden>·</span>
@@ -179,6 +227,11 @@ function ReadersValue({
 						</span>
 					) : null}
 					{tick(reader)}
+					<RemoveButton
+						reader={reader}
+						name={shortId(reader.endpointId)}
+						remove={remove}
+					/>
 				</span>
 			))}
 		</span>
@@ -226,20 +279,93 @@ function problemText(t: DevicesT, problem: MetricsRequestProblem): string {
 	return texts[problem];
 }
 
+/** What a new readers list changes; renewing and removing open the sheet only when the signature needs the password. */
+type ReadersChange =
+	| { kind: "add" }
+	| { kind: "renew" }
+	| { kind: "remove"; reader: SharedReader; name: string };
+
+interface ChangeWords {
+	/** Verb + object: confirm step, tray item and result. */
+	label: string;
+	/** The sheet's title and its one action. */
+	title: string;
+	action: string;
+}
+
+function removeWords(t: DevicesT, name: string): ChangeWords {
+	return {
+		label: t(
+			"devices:observe.shared.removeLabel",
+			"Remove {{name}} from the shared metric readers",
+			{ name },
+		),
+		title: t("devices:observe.shared.sheetRemove", "Remove {{name}}", { name }),
+		action: t("devices:observe.shared.removeAction", "Remove reader"),
+	};
+}
+
+function renewWords(t: DevicesT): ChangeWords {
+	return {
+		label: t(
+			"devices:observe.shared.renewLabel",
+			"Renew shared metric readers",
+		),
+		title: t("devices:observe.shared.sheetRenew", "Renew the readers list"),
+		action: t("devices:observe.shared.renewAction", "Renew list"),
+	};
+}
+
+function addWords(t: DevicesT): ChangeWords {
+	return {
+		label: t("devices:observe.shared.addLabel", "Add shared metric readers"),
+		title: t("devices:observe.shared.sheetAdd", "Add readers"),
+		action: t("devices:observe.shared.addAction", "Add readers"),
+	};
+}
+
+/** The readers a change takes off the list. */
+function removedBy(change: ReadersChange): string[] {
+	return change.kind === "remove" ? [change.reader.endpointId] : [];
+}
+
+function changeWords(t: DevicesT, change: ReadersChange): ChangeWords {
+	if (change.kind === "remove") return removeWords(t, change.name);
+	if (change.kind === "renew") return renewWords(t);
+	return addWords(t);
+}
+
+type UnsavedReaders = Exclude<
+	SaveMetricReadersOutcome,
+	{ status: "done" | "password_required" }
+>;
+
+/** A run stopped before anything was sent (the action can't run right now) still gets an answer, never silence. */
+function unsavedText(
+	t: DevicesT,
+	outcome: UnsavedReaders,
+	device: string,
+): string {
+	if (outcome.status === "failed")
+		return saveFailure(t, outcome.reason, device, outcome.detail);
+	return saveFailure(t, "other", device);
+}
+
 function ReadersSheet({
 	target,
 	scope,
-	renew,
+	change,
 	onClose,
 }: Readonly<{
 	target: ObserveTarget;
 	scope: string;
-	/** Renew the list as it is (no new readers): shown when the signature needs the password. */
-	renew: boolean;
+	change: ReadersChange;
 	onClose(): void;
 }>) {
 	const { t } = useTranslation("devices");
 	const id = useId();
+	const adding = change.kind === "add";
+	const words = changeWords(t, change);
 	const workspace = useDeviceWorkspace();
 	const session = useKeySession(target.deviceId);
 	const save = useSaveMetricReaders(target, scope);
@@ -274,29 +400,26 @@ function ReadersSheet({
 	};
 
 	const submit = async () => {
+		// The typed password leaves the field with the click, whatever comes of the signature.
+		const secret = needsPassword ? password : undefined;
+		setPassword("");
 		setBusy(true);
 		setFailure(null);
 		try {
 			const outcome = await save({
 				add: requests,
-				label: renew
-					? t(
-							"devices:observe.shared.renewLabel",
-							"Renew shared metric readers",
-						)
-					: t("devices:observe.shared.addLabel", "Add shared metric readers"),
-				...(needsPassword ? { password } : {}),
+				remove: removedBy(change),
+				label: words.label,
+				...(secret === undefined ? {} : { password: secret }),
 			});
 			if (outcome.status === "done") {
-				setPassword("");
 				onClose();
 			} else if (outcome.status === "password_required") {
 				inlineResultsOf(workspace).clear(
 					sharedResultKey(target.deviceId, scope),
 				);
 				setAskPassword(true);
-			} else if (outcome.status === "failed")
-				setFailure(saveFailure(t, outcome.reason, target.name, outcome.detail));
+			} else setFailure(unsavedText(t, outcome, target.name));
 		} finally {
 			setBusy(false);
 		}
@@ -310,11 +433,7 @@ function ReadersSheet({
 				if (!open && !busy) onClose();
 			}}
 			icon={RadioTower}
-			title={
-				renew
-					? t("devices:observe.shared.sheetRenew", "Renew the readers list")
-					: t("devices:observe.shared.sheetAdd", "Add readers")
-			}
+			title={words.title}
 			sub={t(
 				"devices:observe.shared.sheetSub",
 				"Shared live metrics · whole device · {{device}}",
@@ -326,21 +445,19 @@ function ReadersSheet({
 						{t("devices:observe.shared.cancel", "Cancel")}
 					</DvButton>
 					<DvButton
-						variant="primary"
+						variant={change.kind === "remove" ? "danger" : "primary"}
 						busy={busy}
 						disabled={
-							(!renew && !requests.length) || (needsPassword && !password)
+							(adding && !requests.length) || (needsPassword && !password)
 						}
 						onClick={() => void submit()}
 					>
-						{renew
-							? t("devices:observe.shared.renewAction", "Renew list")
-							: t("devices:observe.shared.addAction", "Add readers")}
+						{words.action}
 					</DvButton>
 				</>
 			}
 		>
-			{renew ? null : (
+			{adding ? (
 				<>
 					<p className="text-ui text-muted-foreground">
 						{t(
@@ -404,7 +521,7 @@ function ReadersSheet({
 						</DvButton>
 					</div>
 				</>
-			)}
+			) : null}
 			{needsPassword ? (
 				<Field
 					id={`${id}-password`}
@@ -422,7 +539,7 @@ function ReadersSheet({
 					/>
 				</Field>
 			) : null}
-			<ConsequencePreview rows={consequence(t, renew)} />
+			<ConsequencePreview rows={consequence(t, change)} />
 			{failure ? (
 				<InlineResult tone="critical" onDismiss={() => setFailure(null)}>
 					{failure}
@@ -432,8 +549,32 @@ function ReadersSheet({
 	);
 }
 
-function consequence(t: DevicesT, renew: boolean): ConsequenceRows {
-	return renew
+function consequence(t: DevicesT, change: ReadersChange): ConsequenceRows {
+	if (change.kind === "remove")
+		return {
+			what: t(
+				"devices:observe.shared.removeWhat",
+				"{{name}} leaves the encrypted group and receives no further samples.",
+				{ name: change.name },
+			),
+			who: t(
+				"devices:observe.shared.removeWho",
+				"Other readers keep reading. The list is signed for one more day.",
+			),
+			stays: t(
+				"devices:observe.shared.removeStays",
+				"Samples they already received stay readable to them.",
+			),
+			when: t("devices:observe.shared.removeWhen", "From the next sample."),
+			undo: {
+				reversible: true,
+				text: t(
+					"devices:observe.shared.removeUndo",
+					"Add them again from a new reader request.",
+				),
+			},
+		};
+	return change.kind === "renew"
 		? {
 				what: t(
 					"devices:observe.shared.renewWhat",
@@ -469,7 +610,7 @@ function consequence(t: DevicesT, renew: boolean): ConsequenceRows {
 					reversible: true,
 					text: t(
 						"devices:observe.shared.addUndo",
-						"A reader leaves when the list is renewed without them, or when it expires.",
+						"Remove a reader from the list at any time; everyone leaves when it expires.",
 					),
 				},
 			};
@@ -669,7 +810,8 @@ export function SharedLiveMetrics({
 	const time = useAreaTime();
 	const scope = DEVICE_SCOPE;
 	const [open, setOpen] = useState(false);
-	const [sheet, setSheet] = useState<"add" | "renew" | null>(null);
+	const [sheet, setSheet] = useState<ReadersChange | null>(null);
+	const reasonId = useId();
 	const session = useKeySession(target.deviceId);
 	const shared = useSharedRoster(target, scope, open);
 	const gate = useGate("approve_metric_readers", target.deviceId, {
@@ -689,20 +831,34 @@ export function SharedLiveMetrics({
 	const roster = shared.data?.roster;
 	const expired = roster ? roster.expires_at <= time.nowS : false;
 
-	const renew = async () => {
+	// One reason blocks every change alike: the controls stay visible and point to the one sentence (R7).
+	const blocked = gated
+		? {
+				"aria-disabled": true,
+				"aria-describedby": reasonId,
+				"data-gated": gated.kind,
+			}
+		: {};
+
+	/** Renewing or removing needs no input: it is confirmed and signed at once, unless the signature needs the password. */
+	const change = async (next: Exclude<ReadersChange, { kind: "add" }>) => {
+		if (gated) return;
 		if (!session.canSign) {
-			setSheet("renew");
+			setSheet(next);
 			return;
 		}
 		const outcome = await save({
 			add: [],
-			label: t(
-				"devices:observe.shared.renewLabel",
-				"Renew shared metric readers",
-			),
-			consequence: consequence(t, true),
+			remove: removedBy(next),
+			danger: next.kind === "remove",
+			label: changeWords(t, next).label,
+			consequence: consequence(t, next),
 		});
-		if (outcome.status === "password_required") setSheet("renew");
+		if (outcome.status === "password_required") setSheet(next);
+	};
+	const remove: RemoveReader = {
+		blocked,
+		run: (reader, name) => void change({ kind: "remove", reader, name }),
 	};
 
 	let body: ReactNode;
@@ -745,7 +901,11 @@ export function SharedLiveMetrics({
 				{roster ? (
 					<KeyValueList>
 						<KvRow label={t("devices:observe.shared.readers", "Readers")}>
-							<ReadersValue shared={shared.data} people={people} />
+							<ReadersValue
+								shared={shared.data}
+								people={people}
+								remove={target.owner ? remove : undefined}
+							/>
 						</KvRow>
 						<KvRow
 							label={
@@ -784,22 +944,32 @@ export function SharedLiveMetrics({
 					/>
 				)}
 				{target.owner ? (
-					<div className="flex flex-wrap items-start gap-2">
-						<GatedAction gate={gated}>
+					<div className="flex flex-col items-start gap-1">
+						<div className="flex flex-wrap items-start gap-2">
 							<DvButton
 								size="sm"
 								icon={UserPlus}
-								onClick={() => setSheet("add")}
+								{...blocked}
+								onClick={() => setSheet({ kind: "add" })}
 							>
 								{t("devices:observe.shared.add", "Add readers…")}
 							</DvButton>
-						</GatedAction>
-						{roster && !gated ? (
-							<DvButton size="sm" onClick={() => void renew()}>
-								{t("devices:observe.shared.renew", "Renew")}
-							</DvButton>
+							{roster ? (
+								<DvButton
+									size="sm"
+									{...blocked}
+									onClick={() => void change({ kind: "renew" })}
+								>
+									{t("devices:observe.shared.renew", "Renew")}
+								</DvButton>
+							) : null}
+							{rulesOut ? <RenewRulesLink deviceId={target.deviceId} /> : null}
+						</div>
+						{gated ? (
+							<GateInline kind={gated.kind} id={reasonId}>
+								{gated.reason}
+							</GateInline>
 						) : null}
-						{rulesOut ? <RenewRulesLink deviceId={target.deviceId} /> : null}
 					</div>
 				) : (
 					<ReaderRequest target={target} scope={scope} />
@@ -858,7 +1028,7 @@ export function SharedLiveMetrics({
 				<ReadersSheet
 					target={target}
 					scope={scope}
-					renew={sheet === "renew"}
+					change={sheet}
 					onClose={() => setSheet(null)}
 				/>
 			) : null}

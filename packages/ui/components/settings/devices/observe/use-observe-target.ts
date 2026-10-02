@@ -217,8 +217,9 @@ export function usePeople(userIds: readonly string[]): PersonNames {
 			retry: false,
 		})),
 	});
-	const names = results.map((result, index) =>
-		result.data ? userDisplayName(result.data, ids[index] ?? "") : "",
+	// An account without a name, handle or mail stays unnamed: its id is never a label (R3).
+	const names = results.map((result) =>
+		result.data ? userDisplayName(result.data, "") : "",
 	);
 	const signature = names.join("|");
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `signature` stands for the looked-up names

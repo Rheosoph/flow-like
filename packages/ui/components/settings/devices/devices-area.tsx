@@ -326,15 +326,16 @@ function routeDeviceIds(route: DevicesRoute) {
 /** App page: "Devices › edge-berlin-01 › invoice-extractor". */
 function useAppCrumbs() {
 	const { t } = useTranslation("devices");
-	const { route } = useDevicesRoute();
+	const { route, scope } = useDevicesRoute();
 	const deviceId = routeDeviceId(route);
 	const row = useDeviceRow(deviceId);
 	const device = row ? deviceName(row) : (deviceId?.slice(0, 8) ?? "");
 	const devices = t("shell.crumbs.devices", "Devices");
 	const deploy = t("shell.crumbs.deploy", "Deploy");
+	const events = t("shell.crumbs.events", "Events");
 	return useMemo(
-		() => appCrumbs(route, { devices, device, deploy }),
-		[route, devices, device, deploy],
+		() => appCrumbs(route, { devices, device, deploy, events }, scope),
+		[route, scope, devices, device, deploy, events],
 	);
 }
 
@@ -655,7 +656,9 @@ function WorkspaceFrame() {
 						/>
 					)
 				}
-				tray={<ActivityTray scope={scope} onNavigate={navigate} />}
+				tray={
+					<ActivityTray scope={scope} onNavigate={navigate} route={route} />
+				}
 				statusBar={<DataPlaneBar scope={scope} onNavigate={navigate} />}
 				banners={
 					<>

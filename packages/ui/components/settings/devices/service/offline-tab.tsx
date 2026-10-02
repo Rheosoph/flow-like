@@ -75,7 +75,6 @@ import {
 	FactList,
 	Mono,
 	type Note,
-	TABLE_RESET,
 	gateLine,
 } from "./config-parts";
 import {
@@ -794,7 +793,6 @@ function QueuesBlock({
 				<DvTable
 					label={t("serviceConfig.buffer.queues", "Queues")}
 					cols={["23%", "26%", "8%", "17%", "15%", "11%"]}
-					className={TABLE_RESET}
 					head={head}
 				>
 					{queues.map((queue) => (

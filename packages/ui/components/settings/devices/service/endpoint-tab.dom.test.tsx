@@ -96,25 +96,6 @@ describe("service page", () => {
 		const copy = byRole("button", "Copy link", view.container);
 		expect(copy.getAttribute("aria-disabled")).toBe("true");
 		expect(page).toContain("Enter the address people use below to get a link.");
-		// Without an address the three link actions stay in place under one reason (R7); none of them does anything.
-		const clips = dom.clipboard.length;
-		for (const name of ["Copy link", "Open", "QR code"]) {
-			const button = byRole("button", name, view.container);
-			expect(button.getAttribute("aria-disabled")).toBe("true");
-			expect(
-				text(
-					view.container.querySelector(
-						`[id="${button.getAttribute("aria-describedby")}"]`,
-					) as HTMLElement,
-				),
-			).toBe("Enter the address people use below to get a link.");
-			await click(button);
-		}
-		expect(queryByRole("dialog")).toBeNull();
-		expect(dom.clipboard.length).toBe(clips);
-		expect(
-			view.container.querySelectorAll("[data-gate-inline=unsupported]").length,
-		).toBe(1);
 		const input = byRole("textbox", "Address people use", view.container);
 		await typeInto(input, "https://edge.example.com/ui");
 		await click(byRole("button", "Save", view.container));
@@ -142,6 +123,29 @@ describe("service page", () => {
 		).toBe(true);
 		expect(view.fake.api.sent("PUT", /address/)).toEqual([]);
 		expect(writes(view)).toEqual([]);
+	});
+
+	test("without an address Copy link, Open and QR code stay in place, disabled under one reason", async () => {
+		const view = await open(EDGE, "support-bot");
+		await ready(view);
+		const reason = "Enter the address people use below to get a link.";
+		const clips = dom.clipboard.length;
+		for (const name of ["Copy link", "Open", "QR code"]) {
+			const button = byRole("button", name, view.container);
+			expect(button.getAttribute("aria-disabled")).toBe("true");
+			const described = button.getAttribute("aria-describedby");
+			expect(
+				text(
+					view.container.querySelector(`[id="${described}"]`) as HTMLElement,
+				),
+			).toBe(reason);
+			await click(button);
+		}
+		expect(queryByRole("dialog")).toBeNull();
+		expect(dom.clipboard.length).toBe(clips);
+		expect(
+			view.container.querySelectorAll("[data-gate-inline=unsupported]").length,
+		).toBe(1);
 	});
 
 	test("the device's own network addresses are offered when its agent reports them", async () => {

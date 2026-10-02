@@ -14,6 +14,7 @@ import {
 	type KeyboardEvent,
 	type ReactNode,
 	type Ref,
+	useCallback,
 	useEffect,
 	useId,
 	useMemo,
@@ -506,15 +507,22 @@ export function UnlockSeveralSheet({
 	);
 	const withKeys = rows.filter((row) => row.kind !== "none");
 	const withoutKeys = rows.filter((row) => row.kind === "none");
+	/** Devices an earlier password of this sheet opened stay listed, but are not tried again. */
+	const opened = (row: Candidate) => attempts[row.deviceId] === "unlocked";
+	const pending = (row: Candidate) => canTry(row) && !opened(row);
 	const selected = withKeys.filter(
-		(row) => canTry(row) && !unticked[row.deviceId],
+		(row) => pending(row) && !unticked[row.deviceId],
 	);
 	const editable = phase === "form";
-	const askPassword = editable && withKeys.some(canTry);
+	const askPassword = editable && withKeys.some(pending);
 	const ready = editable && selected.length > 0 && password.length > 0;
 	const outcome = outcomeOf(withKeys, attempts);
 	const hidden = Math.max(0, withoutKeys.length - NO_KEYS_CAP);
 
+	/* The sheet's content mounts after this component's first effects, so the field takes the focus when it appears. */
+	const focusOnMount = useCallback((field: HTMLInputElement | null) => {
+		field?.focus();
+	}, []);
 	useEffect(() => {
 		if (askPassword) globalThis.document?.getElementById(passwordId)?.focus();
 	}, [askPassword, passwordId]);
@@ -609,7 +617,7 @@ export function UnlockSeveralSheet({
 							deviceId={row.deviceId}
 							name={row.name}
 							checked={selectable && !unticked[row.deviceId]}
-							disabled={!selectable || !editable}
+							disabled={!selectable || !editable || opened(row)}
 							status={
 								<LineStatus attempt={attempt}>
 									{candidateNote(t, row)}
@@ -645,6 +653,7 @@ export function UnlockSeveralSheet({
 					)}
 				>
 					<SecretInput
+						ref={focusOnMount}
 						value={password}
 						onValueChange={setPassword}
 						disabled={!askPassword}

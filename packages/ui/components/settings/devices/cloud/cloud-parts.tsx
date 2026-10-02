@@ -10,6 +10,7 @@ import type {
 	GateResult,
 } from "../../../../lib/device-management/model/types";
 import { formatEuroMicros } from "../../../../lib/device-resources";
+import { UnknownPerson, identityName } from "../access/person-name";
 import { enumLabel } from "../copy/enum-labels";
 import { gateCopy } from "../copy/gate-copy";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
@@ -22,13 +23,6 @@ import { useRouteLink } from "../routing/use-devices-route";
 import { useAttentionState } from "../workspace";
 import { type ApprovalState, type CloudApproval, endOf } from "./cloud-model";
 import { useAppNames, useModelNames } from "./use-cloud";
-
-/**
- * The app's base layer gives every `table` a margin and every cell a full
- * border; only the row hairlines of the table primitive remain.
- */
-export const TABLE_RESET =
-	"my-0 [&_td]:border-x-0 [&_td]:border-b-0 [&_th]:border-x-0 [&_th]:border-t-0";
 
 /** A table's first-column name; as a link it is underlined only on hover. */
 export const NAME_TEXT = "block truncate font-mono text-[12.5px] font-semibold";
@@ -92,17 +86,27 @@ export function useGateOf(): (
 				};
 }
 
-/** A person by account id: "You" for the viewer, the directory name otherwise. */
+/** A person by account id: "You" for the viewer, the directory name otherwise; never the account id. */
 export function CloudPerson({
 	userId,
 	fullName = false,
 }: Readonly<{ userId: string; fullName?: boolean }>) {
+	const { t } = useTranslation("devices");
 	const { input } = useAttentionState();
 	const identity = useUserIdentity(userId);
+	const you = userId === input.me;
+	const name = identityName(identity, userId);
+	if (!name && !you)
+		return (
+			<UnknownPerson
+				pending={identity.isPending}
+				unreachable={!identity.isResolved}
+			/>
+		);
 	return (
 		<PersonChip
-			name={identity.label}
-			you={userId === input.me}
+			name={name ?? t("cloud.spend.you", "You")}
+			you={you}
 			fullName={fullName}
 			{...(identity.subtitle ? { email: identity.subtitle } : {})}
 			{...(identity.avatarUrl ? { avatarUrl: identity.avatarUrl } : {})}
@@ -112,8 +116,7 @@ export function CloudPerson({
 
 /** The display name of an account for sentences ("Only Mira Novak can …"). */
 export function usePersonName(userId: string | undefined): string | undefined {
-	const identity = useUserIdentity(userId);
-	return userId && identity.isResolved ? identity.label : undefined;
+	return identityName(useUserIdentity(userId), userId);
 }
 
 /** Who pays: by name when the device's list says so, else "You" or "Someone else". */

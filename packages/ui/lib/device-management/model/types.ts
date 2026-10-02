@@ -509,6 +509,7 @@ export const FLEET_FILTERS = [
 	"offline",
 	"revoked",
 	"locked",
+	"shared",
 ] as const;
 export type FleetFilter = (typeof FLEET_FILTERS)[number];
 export const DEVICE_TABS = [
@@ -560,6 +561,8 @@ export interface FleetRoute {
 	view: FleetView;
 	filter?: FleetFilter;
 	q?: string;
+	/** Services view only: the app whose services are listed (`view=services&app=<id>`). */
+	app?: string;
 	focus?: "attention";
 }
 export interface DeviceRoute {
@@ -786,6 +789,7 @@ export type GateReason =
 	| "locked_logs"
 	| "locked_metrics"
 	| "locked_change"
+	| "locked_lookup"
 	| "locked_access"
 	| "locked_keys"
 	| "locked_certificates"
@@ -985,7 +989,9 @@ export interface GateRequirement {
 	deviceActive?: true;
 	caps?: readonly Capability[] | "owner";
 	deviceScopeOnly?: boolean;
-	keys?: true | "creates";
+	/** `true`: usable keys here; `"stored"`: any keys here, stale ones included (deleting them); `"creates"`: the action brings the keys. */
+	keys?: true | "creates" | "stored";
+	/** `"password"`: the action asks for the device password itself, so a locked device is no reason. */
 	unlocked?: true | "password";
 	session?: true;
 	features?: (features: GateFeatures, ctx: GateContext) => GateCheck | null;

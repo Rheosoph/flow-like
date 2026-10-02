@@ -1,4 +1,3 @@
-import type { ApprovedOnlineMetadata } from "./online-metadata";
 import type { IApp } from "../schema/app/app";
 import {
 	type ArtifactBlob,
@@ -7,6 +6,7 @@ import {
 	parseProjectArtifactAssets,
 	prepareProjectArtifact,
 } from "./artifacts";
+import type { ApprovedOnlineMetadata } from "./online-metadata";
 
 export type DesktopExport = {
 	export_id: string;

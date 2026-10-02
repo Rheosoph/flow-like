@@ -8,6 +8,7 @@ import type { ManagementRejection } from "../types";
 import type {
 	FleetDeviceState,
 	KeyError,
+	KeyHubError,
 	LiveError,
 	RelayFallbackReason,
 	UnlockStepId,
@@ -344,7 +345,9 @@ export function isFatalLiveError(cause: LiveError): boolean {
 	);
 }
 
-const KEY_CODE: Record<KeyError["code"], DeviceErrorCode> = {
+type SessionKeyError = Pick<KeyError | KeyHubError, "code">;
+
+const KEY_CODE: Record<SessionKeyError["code"], DeviceErrorCode> = {
 	wrong_password: "wrong_password",
 	no_vault: "no_vault",
 	held_elsewhere: "held_elsewhere",
@@ -353,15 +356,21 @@ const KEY_CODE: Record<KeyError["code"], DeviceErrorCode> = {
 	identity_mismatch: "identity_mismatch",
 	authority_mismatch: "authority_mismatch",
 	storage: "storage_error",
+	hub: "http_error",
 };
 
-export function keyErrorCode(error: Pick<KeyError, "code">): DeviceErrorCode {
+const IDENTITY_STEP_CODES: ReadonlySet<SessionKeyError["code"]> = new Set([
+	"identity_mismatch",
+	"authority_mismatch",
+	"hub",
+]);
+
+export function keyErrorCode(error: SessionKeyError): DeviceErrorCode {
 	return KEY_CODE[error.code];
 }
 
-export function keyErrorStep(error: Pick<KeyError, "code">): ConnectionStep {
-	return error.code === "identity_mismatch" ||
-		error.code === "authority_mismatch"
+export function keyErrorStep(error: SessionKeyError): ConnectionStep {
+	return IDENTITY_STEP_CODES.has(error.code)
 		? "checking_identity"
 		: "unlocking_keys";
 }

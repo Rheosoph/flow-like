@@ -134,7 +134,11 @@ pub(crate) async fn issue(
     .await
     .map_err(provider_error)?;
     let expires_at = scoped.expiration().ok_or_else(unavailable)?.timestamp();
-    let (locations, credentials) = match scoped {
+    // Audit workers can compile without any storage provider match arms.
+    let (locations, credentials): (
+        BTreeMap<StoragePurpose, InstanceStorageLocation>,
+        BTreeMap<String, InstanceStorageCredential>,
+    ) = match scoped {
         #[cfg(feature = "aws")]
         super::RuntimeCredentials::Aws(c) => (
             locations(

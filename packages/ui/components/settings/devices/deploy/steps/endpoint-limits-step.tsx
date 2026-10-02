@@ -58,7 +58,6 @@ import {
 	LocalStamp,
 	Note,
 	type SelectOption,
-	TABLE_RESET,
 	TargetsStamp,
 } from "../deploy-parts";
 import {
@@ -472,7 +471,6 @@ function Certificates({
 				label={t("deploy.endpoint.certEach", "Certificate on each device")}
 				cols={["32%", "68%"]}
 				stackAt={560}
-				className={TABLE_RESET}
 				wrapperClassName="rounded-lg border border-border"
 				head={
 					<tr>

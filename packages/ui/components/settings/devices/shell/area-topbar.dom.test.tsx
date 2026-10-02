@@ -1,4 +1,5 @@
 import { afterAll, afterEach, expect, test } from "bun:test";
+import type { DevicesRoute } from "../../../../lib/device-management/model/types";
 import type { MemoryNavigation } from "../routing/use-devices-route";
 import {
 	allByRole,
@@ -11,7 +12,7 @@ import type { AreaTopbarProps } from "./area-topbar";
 
 const dom = installDom();
 const { MemoryDevicesRoute } = await import("../routing/use-devices-route");
-const { AreaTopbar } = await import("./area-topbar");
+const { AreaTopbar, appCrumbs } = await import("./area-topbar");
 
 afterEach(dom.cleanup);
 afterAll(dom.restore);
@@ -149,6 +150,49 @@ test("the app bar shows the path instead of the area nav, and only the parent an
 			href: `/library/config/devices?id=${APP}&device=${DEVICE}&tab=services`,
 		},
 	]);
+});
+
+test("a deploy that started on the Events page reads Events › Deploy and goes back there without a page load", async () => {
+	const labels = {
+		devices: "Devices",
+		device: "",
+		deploy: "Deploy",
+		events: "Events",
+	};
+	const scope = { kind: "app", appId: APP } as const;
+	const fromEvents: DevicesRoute = {
+		screen: "deploy",
+		deviceIds: [],
+		mode: "new",
+		eventId: "evt_visitor_page",
+		from: "events",
+		step: "what",
+	};
+	const events = `/library/config/events?id=${APP}&event=evt_visitor_page`;
+	expect(appCrumbs(fromEvents, labels, scope)).toEqual([
+		{ label: "Events", href: events },
+		{ label: "Deploy" },
+	]);
+	const fromDevices: DevicesRoute = { screen: "deploy", deviceIds: [DEVICE] };
+	expect(appCrumbs(fromDevices, labels, scope)).toEqual([
+		{ label: "Devices", route: { screen: "app-devices", by: "device" } },
+		{ label: "Deploy" },
+	]);
+	expect(appCrumbs(fromEvents, labels)[0]?.label).toBe("Devices");
+
+	const { navigations, bar } = await mount(
+		{ crumbs: appCrumbs(fromEvents, labels, scope) },
+		"app",
+		"flow=deploy&mode=new&event=evt_visitor_page&from=events&step=what",
+	);
+	const crumbs = byRole("navigation", "Breadcrumb", bar);
+	expect(
+		allByRole("link", undefined, crumbs).map((a) => a.textContent),
+	).toEqual(["Events", "Deploy"]);
+	const back = byRole("link", "Events", crumbs);
+	expect(back.getAttribute("href")).toBe(events);
+	await click(back);
+	expect(navigations).toEqual([{ mode: "push", href: events }]);
 });
 
 test("the top bar has no primary button (R2)", async () => {

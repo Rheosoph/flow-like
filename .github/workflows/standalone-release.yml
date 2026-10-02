@@ -105,7 +105,7 @@ jobs:
           bun install --frozen-lockfile
           bun test ./.github/scripts/tests/standalone-package.test.ts
           bun test packages/ui/lib/device-package.test.ts
-          bun test packages/ui/components/settings/devices/device-setup-dialog.dom.test.tsx
+          bun test ./packages/ui/components/settings/devices/setup/setup-wizard.dom.test.tsx
           bun run --cwd apps/standalone build:frontend
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

@@ -12,9 +12,12 @@ import {
 import { type ReactNode, useId, useState } from "react";
 import {
 	type CertificateAuthorityEnvelope,
+	MAX_AUTHORITY_BACKUP_BYTES,
 	certificateAuthorityBackup,
 	renewLocalCertificateAuthority,
 	restoreCertificateAuthority,
+	rewrapLocalCertificateAuthority,
+	testCertificateAuthorityPassword,
 } from "../../../../lib/device-management/certificate-authority";
 import { humanFileSize } from "../../../../lib/utils";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
@@ -40,12 +43,9 @@ import { type AuthorityView, DAY_S } from "./certificates-model";
 import { dayText, shortId } from "./parts";
 import {
 	type AuthorityStore,
-	MAX_BACKUP_BYTES,
 	localAuthority,
 	readBackupFile,
-	rewrapAuthority,
 	saveFile,
-	testAuthorityPassword,
 	useStillHere,
 } from "./use-certificates";
 
@@ -127,7 +127,11 @@ function BackupFileField({
 					) : undefined
 				}
 				onFiles={([file]) => {
-					if (file) onChosen({ file, tooLarge: file.size > MAX_BACKUP_BYTES });
+					if (file)
+						onChosen({
+							file,
+							tooLarge: file.size > MAX_AUTHORITY_BACKUP_BYTES,
+						});
 				}}
 			/>
 			{error ? (
@@ -660,7 +664,13 @@ export function ChangePasswordSheet({
 		const result = await store
 			.crypto()
 			.then((crypto) =>
-				rewrapAuthority(store.scope, view.authority, text, secrets, crypto),
+				rewrapLocalCertificateAuthority(
+					store.scope,
+					view.authority,
+					text,
+					secrets,
+					crypto,
+				),
 			)
 			.catch(() => ({ ok: false as const, reason: "password" as const }));
 		if (!here()) return;
@@ -907,7 +917,12 @@ export function TestPasswordSheet({
 		const opens = await store
 			.crypto()
 			.then((crypto) =>
-				testAuthorityPassword(store.scope, view.authority, secret, crypto),
+				testCertificateAuthorityPassword(
+					store.scope,
+					view.authority,
+					secret,
+					crypto,
+				),
 			)
 			.catch(() => false);
 		if (!here()) return;

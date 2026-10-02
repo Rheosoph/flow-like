@@ -500,6 +500,8 @@ export type SaveFailure =
 	| "too_many_readers"
 	| "wrong_password"
 	| "rejected"
+	/** Sent, no reply: the device may or may not have applied the list. */
+	| "unconfirmed"
 	| "other";
 
 export class SaveReadersError extends Error {
@@ -698,7 +700,7 @@ export function unsavedOutcome(
 			...(outcome.rejection.error ? { detail: outcome.rejection.error } : {}),
 		};
 	return outcome.status === "unknown"
-		? { status: "failed", reason: "other" }
+		? { status: "failed", reason: "unconfirmed" }
 		: { status: "stopped" };
 }
 

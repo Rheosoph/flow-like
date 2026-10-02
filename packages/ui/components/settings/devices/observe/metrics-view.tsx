@@ -26,7 +26,6 @@ import { LiveDataState, livePhase, liveWanted } from "./live-state";
 import {
 	type MetricSample,
 	OBSERVE_STACK,
-	TABLE_RESET,
 	amount,
 	asRecord,
 	bytesText,
@@ -537,7 +536,6 @@ function PerInstance({
 			flush
 		>
 			<DvTable
-				className={TABLE_RESET}
 				label={t("observe.metrics.perInstanceLabel", "Resources per instance")}
 				cols={["16%", "28%", "28%", "28%"]}
 				head={

@@ -23,14 +23,6 @@ import { cx } from "../primitives/tone";
 import { useRouteLink } from "../routing/use-devices-route";
 import { type CertificateRow, DAY_S } from "./certificates-model";
 
-/**
- * The app's base layer gives every `table` a margin and every cell a full
- * border; inside a block only the row hairlines of the table primitive remain.
- * Chips in cells get 4 px corners and may wrap.
- */
-export const TABLE_RESET =
-	"my-0 [&_td]:border-x-0 [&_td]:border-b-0 [&_th]:border-x-0 [&_th]:border-t-0 [&_td_[data-slot=badge]]:h-auto [&_td_[data-slot=badge]]:min-h-5.5 [&_td_[data-slot=badge]]:rounded-md [&_td_[data-slot=badge]]:py-0.5 [&_td_[data-slot=badge]]:whitespace-normal [&_td_[data-slot=badge]>span]:whitespace-normal";
-
 export const LINK =
 	"underline decoration-border-strong underline-offset-2 hover:decoration-current focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
 export const LINK_BUTTON = cx(LINK, "cursor-pointer text-left text-xs");

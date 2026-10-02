@@ -135,6 +135,35 @@ pub(super) fn preset(model: &str) -> Result<Option<Preset>> {
 
 fn cdn_preset(model: &str) -> Result<Option<Preset>> {
     let (base, files): (&str, &[(&str, &str, u64, &str)]) = match model {
+        "fastino/GLiNER2.5-Decide-1B" => (
+            "https://cdn.flow-like.com/models/decision/gliner2.5-decide-1b/688cd7ba8917a0855ad3ce929cba5a9998932e79/fp32-v1",
+            &[
+                (
+                    "weights",
+                    "model.onnx",
+                    1_157_993,
+                    "f5f7dedc7eaf85a1b47e3f30c75a3217a05ff6cf07540b9cc4a08c34b1e038ad",
+                ),
+                (
+                    "external-data",
+                    "model.onnx_data",
+                    4_137_993_216,
+                    "f47c4a3cea16750f7efd686d7582e29c17b180c5c06e3c418729fe17f908744e",
+                ),
+                (
+                    "tokenizer",
+                    "tokenizer.json",
+                    3_585_055,
+                    "ddb379b6a4679ee16646bf0b726de9ec538d7c80ea9d4d4e33b069f19c9e1efb",
+                ),
+                (
+                    "config",
+                    "decision_config.json",
+                    478,
+                    "4bc42e0ee8f41a2f034d1f0e409c428ec3b3709124040970939c0755a216ba99",
+                ),
+            ],
+        ),
         "fastino/GLiNER2.5-multi-Decide" => (
             "https://cdn.flow-like.com/models/decision/gliner2.5-multi-decide/a35a0cd3b7a0f00f2effc576f454cd48fa98aa5f/fp32-v1",
             &[

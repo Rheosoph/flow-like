@@ -14,10 +14,11 @@ import {
 	type AppDeviceInput,
 	buildAppView,
 } from "../../../../lib/device-management/model/app-plan";
-import type {
-	GateFailure,
-	ServiceView,
-} from "../../../../lib/device-management/model/types";
+import {
+	refineView,
+	versionInputs,
+} from "../../../../lib/device-management/model/app-versions";
+import type { GateFailure } from "../../../../lib/device-management/model/types";
 import type {
 	ActivityItem,
 	ActivityRun,
@@ -32,13 +33,9 @@ import {
 	capNames,
 	changesOf,
 	cloudOf,
-	definitionHash,
 	eventsNowhere,
 	headlineApp,
-	newestPins,
 	openRunIds,
-	refineView,
-	revisionsSent,
 	runsElsewhere,
 	shortMoney,
 	stagedEndsAt,
@@ -47,10 +44,6 @@ import {
 	updateBatches,
 	updateRows,
 	uploadOf,
-	versionInputs,
-	versionLabel,
-	versionName,
-	withoutAccess,
 } from "./app-view-local";
 
 const INVOICE = APPS.app_invoice_ai;
@@ -97,107 +90,8 @@ function invoiceView(options: { labUnlocked?: boolean } = {}) {
 	);
 }
 
-describe("versions without a hub history", () => {
-	test("the newest version pins every event that can run on a device", () => {
-		expect(newestPins(INVOICE.events).map((pin) => pin.eventId)).toEqual([
-			"evt_extract_http",
-			"evt_gpu_extract",
-			"evt_invoice_mcp",
-		]);
-		expect(versionLabel("1.5.0")).toBe("v1.5.0");
-		expect(versionLabel("Autumn")).toBe("Autumn");
-		expect(versionLabel(" ")).toBeNull();
-	});
-
-	test("the definition hash is stable and order-independent", () => {
-		const pins = newestPins(INVOICE.events);
-		expect(definitionHash(pins)).toMatch(/^[a-f0-9]{64}$/);
-		expect(definitionHash([...pins].reverse())).toBe(definitionHash(pins));
-		expect(definitionHash(pins.slice(1))).not.toBe(definitionHash(pins));
-	});
-
-	test("older revisions come from what readable services still run", () => {
-		const versions = versionInputs({
-			label: "1.5.0",
-			changedAt: NOW0,
-			events: INVOICE.events,
-			services: [SERVICES.invoiceExtractor, SERVICES.invoiceGpu],
-		});
-		expect(versions.map((version) => version.label)).toEqual([
-			"v1.5.0",
-			null,
-			null,
-		]);
-		expect(versions[0].hash).toBe(definitionHash(newestPins(INVOICE.events)));
-		expect(versions.slice(1).map((version) => version.hash)).toEqual([
-			HASH.invoice14,
-			HASH.invoice13,
-		]);
-	});
-
-	test("this computer's upload time orders older revisions", () => {
-		const versions = versionInputs({
-			events: INVOICE.events,
-			services: [SERVICES.invoiceExtractor, SERVICES.invoiceGpu],
-			sentAt: { [HASH.invoice13]: NOW0 - 10, [HASH.invoice14]: NOW0 - 9000 },
-		});
-		expect(versions.slice(1).map((version) => version.hash)).toEqual([
-			HASH.invoice13,
-			HASH.invoice14,
-		]);
-		expect(versions[1].builtAt).toBe(NOW0 - 10);
-	});
-
-	test("a revision that serves only newest pins is the newest version", () => {
-		const current: ServiceView = svc({
-			deviceId: "edge-berlin-01",
-			serviceId: "extractor",
-			projectId: INVOICE.id,
-			appVersion: { hash: "a".repeat(64) },
-			events: [
-				{
-					event_id: "evt_extract_http",
-					event_version: v("1.5.0"),
-					board_version: v("2.2.0"),
-				},
-			],
-		});
-		const versions = versionInputs({
-			events: INVOICE.events,
-			services: [current, SERVICES.invoiceGpu],
-		});
-		expect(versions).toHaveLength(2);
-		expect(versions[0].hash).toBe("a".repeat(64));
-	});
-
-	test("a service without an event list adds no version", () => {
-		const versions = versionInputs({
-			events: APPS.app_warehouse_scan.events,
-			services: [SERVICES.scannerIngest],
-		});
-		expect(versions).toHaveLength(1);
-	});
-
-	test("an app with nothing to run and nothing running has no versions", () => {
-		expect(versionInputs({ events: [], services: [] })).toEqual([]);
-	});
-});
-
-describe("refineView", () => {
-	test("drift follows the pins and unknown stays unknown", () => {
-		const view = invoiceView({ labUnlocked: true });
-		const rows = Object.fromEntries(
-			view.services.map((row) => [row.serviceId, row.behind]),
-		);
-		expect(rows).toEqual({
-			"invoice-extractor": 1,
-			"invoice-extractor-gpu": 2,
-		});
-		expect(view.versions[0].runningOn).toEqual([]);
-		expect(view.newestRuns).toMatchObject({ services: 0, of: 2 });
-		expect(view.howRuns.newest?.label).toBe("v1.5.0");
-	});
-
+/* The version list and `refineView` are tested with the model (DM/model/app-versions.test.ts). */
+describe("update gates on a refined view", () => {
 	test("two revisions with the newest pins both count as newest", () => {
 		const pin = (id: string, ver: string, board: string) => ({
 			event_id: id,
@@ -250,82 +144,6 @@ describe("refineView", () => {
 		expect(updateRows(view)).toEqual([]);
 		expect(updateAllGate(view, false)).toBe("all_newest");
 	});
-
-	test("a partial older revision never claims an event is new", () => {
-		const view = invoiceView({ labUnlocked: true });
-		expect(view.versions[0].diff?.map((row) => row.kind)).toEqual(["changed"]);
-		expect(view.events.rows.every((row) => row.newIn === null)).toBe(true);
-	});
-
-	test("a view without versions is returned as it is", () => {
-		const view = buildAppView({
-			app: { ...INVOICE, versions: [] },
-			devices: sampleDevices(),
-		});
-		expect(refineView(view)).toBe(view);
-	});
-
-	test("a locked device is unknown for every version", () => {
-		const view = invoiceView();
-		expect(view.versions[0].unknownOn).toEqual(["lab-gpu-02"]);
-		expect(versionName(view.versions[1])).toBe(HASH.invoice14.slice(0, 8));
-	});
-});
-
-describe("withoutAccess", () => {
-	const supportView = (labUnlocked: boolean) => {
-		const devices = sampleDevices({ labUnlocked });
-		const versions = versionInputs({
-			events: SUPPORT.events,
-			services: [SERVICES.supportBot],
-		});
-		return refineView(buildAppView({ app: { ...SUPPORT, versions }, devices }));
-	};
-
-	test("a locked device shared for another app is no access, not unknown", () => {
-		const view = supportView(false);
-		expect(view.everywhereElse.unknown.map((row) => row.deviceId)).toEqual([
-			"lab-gpu-02",
-		]);
-		const fixed = withoutAccess(view, ["lab-gpu-02"]);
-		expect(fixed.everywhereElse.unknown).toEqual([]);
-		expect(fixed.everywhereElse.noAccess.map((row) => row.deviceId)).toEqual([
-			"lab-gpu-02",
-		]);
-		expect(fixed.groups.map((group) => group.deviceId)).toEqual([
-			"edge-berlin-01",
-		]);
-		expect(fixed.versions[0].unknownOn).toEqual([]);
-		expect(
-			fixed.events.rows.every(
-				(row) => row.cells["lab-gpu-02"]?.state === "no_access",
-			),
-		).toBe(true);
-	});
-
-	test("unlocked, it is never counted as not deployed", () => {
-		const view = supportView(true);
-		expect(
-			view.everywhereElse.notDeployed.map((row) => row.deviceId),
-		).toContain("lab-gpu-02");
-		const fixed = withoutAccess(view, ["lab-gpu-02"]);
-		expect(
-			fixed.everywhereElse.notDeployed.map((row) => row.deviceId),
-		).not.toContain("lab-gpu-02");
-		expect(fixed.everywhereElse.noAccess).toMatchObject([
-			{ deviceId: "lab-gpu-02", gate: null, unknown: { kind: "noaccess" } },
-		]);
-	});
-
-	test("all-unknown becomes never-deployed when nothing can be unlocked", () => {
-		const view = buildAppView({
-			app: { ...APPS.app_visitor_checkin, versions: [] },
-			devices: sampleDevices().filter((device) => device.id === "lab-gpu-02"),
-		});
-		expect(view.layout).toBe("all_unknown");
-		expect(withoutAccess(view, ["lab-gpu-02"]).layout).toBe("never");
-		expect(withoutAccess(view, [])).toBe(view);
-	});
 });
 
 describe("amounts", () => {
@@ -345,16 +163,6 @@ describe("this computer's records", () => {
 			manifestSha256: HASH.invoice14,
 			expiresAt: NOW0 + 3600,
 		},
-	});
-
-	test("revisions sent are read from finished uploads of this app", () => {
-		expect(revisionsSent([transfer], INVOICE.id)).toEqual({
-			[HASH.invoice14]: NOW0 - 500,
-		});
-		expect(revisionsSent([transfer], SUPPORT.id)).toEqual({});
-		expect(
-			revisionsSent([{ ...transfer, state: "paused" }], INVOICE.id),
-		).toEqual({});
 	});
 
 	test("the last change per service comes from finished tray items", () => {

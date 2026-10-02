@@ -354,8 +354,8 @@ export function useFleetEntries(): FleetDeviceEntry[] {
 	}, [input, views, actionItems, actionEntries, appName]);
 }
 
-/** The chips above the table: the URL filters plus "Shared with me", which the URL doesn't carry yet. */
-export type DeviceChip = FleetFilter | "shared" | "all";
+/** The chips above the table: the URL filters (`filter=`), and "All" for none. */
+export type DeviceChip = FleetFilter | "all";
 
 const CHIPS: readonly DeviceChip[] = [
 	"all",
@@ -475,7 +475,6 @@ export function FleetDevicesTable({
 	const inventory = useFleetCertificateInventory();
 	const summary = useResourceSummary();
 	const [query, setQuery] = useFleetSearch(route);
-	const [shared, setShared] = useState(false);
 	const [state, setState] = useState<Omit<TableState, "chip">>({
 		platform: "",
 		group: "none",
@@ -483,27 +482,20 @@ export function FleetDevicesTable({
 		pages: 1,
 		showRevoked: false,
 	});
-	const urlFilter = route.filter;
-	// A filter from the URL (annunciator, rail, link) replaces the local one.
-	useEffect(() => {
-		if (urlFilter) setShared(false);
-	}, [urlFilter]);
-	const chip: DeviceChip = urlFilter ?? (shared ? "shared" : "all");
+	const chip: DeviceChip = route.filter ?? "all";
 	const labels = fleetColumnLabels(t);
 
 	const setChip = useCallback(
 		(next: DeviceChip) => {
-			setShared(next === "shared");
 			setState((previous) => ({
 				...previous,
 				pages: 1,
 				showRevoked: previous.showRevoked || next === "revoked",
 			}));
 			const { filter: _filter, ...rest } = route;
-			navigate(
-				next === "all" || next === "shared" ? rest : { ...rest, filter: next },
-				{ replace: true },
-			);
+			navigate(next === "all" ? rest : { ...rest, filter: next }, {
+				replace: true,
+			});
 		},
 		[route, navigate],
 	);

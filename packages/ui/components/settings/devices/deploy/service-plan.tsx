@@ -18,17 +18,17 @@ import { eventName, issueText, planNames } from "./deploy-copy";
 function whyText(t: DevicesT, plan: DeployPlan, why: ServiceWhy): string {
 	if (why.code === "background")
 		return t(
-			"deploy.services.whyBackground",
+			"devices:deploy.services.whyBackground",
 			"{{event}} runs on its own, so this service runs 1 instance. Only Web request, Chat and Page events can run several.",
 			{ event: eventName(plan, why.eventId) },
 		);
 	if (why.code === "writes")
 		return t(
-			"deploy.services.whyWrites",
+			"devices:deploy.services.whyWrites",
 			"Write buffering is on, so this service runs 1 instance.",
 		);
 	return t(
-		"deploy.services.whySplit",
+		"devices:deploy.services.whySplit",
 		"{{first}} and {{second}} disagree about {{variable}}, so {{second}} gets its own service.",
 		{
 			first: eventName(plan, why.events[0]),
@@ -49,7 +49,7 @@ function renameNotes(
 			.filter((row) => row.key === service.key && row.renamedFrom)
 			.map((row) =>
 				t(
-					"deploy.services.renamed",
+					"devices:deploy.services.renamed",
 					"{{from}} is taken on {{device}}; this one becomes {{to}}.",
 					{ from: row.renamedFrom, device: target.name, to: row.serviceId },
 				),
@@ -90,15 +90,18 @@ function ServiceRow({
 		>
 			<Field
 				id={`deploy-service-id-${service.key}`}
-				label={t("deploy.services.id", "Service ID")}
+				label={t("devices:deploy.services.id", "Service ID")}
 				error={issue ? issueText(t, issue, planNames(t, plan)) : undefined}
 				hint={
 					single
 						? t(
-								"deploy.services.idHintSingle",
+								"devices:deploy.services.idHintSingle",
 								"Can't be changed after deploy. It names the service on each device, and cloud approvals are tied to it. A device that already uses it gets a -2 suffix.",
 							)
-						: t("deploy.services.idHint", "Can't be changed after deploy")
+						: t(
+								"devices:deploy.services.idHint",
+								"Can't be changed after deploy",
+							)
 				}
 			>
 				<DvInput
@@ -112,7 +115,7 @@ function ServiceRow({
 			{single ? null : (
 				<div className="min-w-0">
 					<p className="text-label font-semibold tracking-[0.06em] text-muted-foreground uppercase">
-						{t("deploy.services.events", "Events")}
+						{t("devices:deploy.services.events", "Events")}
 					</p>
 					<p className="mt-1.5 text-ui">
 						{service.events
@@ -158,34 +161,40 @@ export function ServicePlan({
 			{showSplit ? (
 				<ChoiceCards<ServiceSplit>
 					id="deploy-split"
-					legend={t("deploy.services.legend", "Services")}
+					legend={t("devices:deploy.services.legend", "Services")}
 					value={plan.draft.split}
 					onValueChange={onSplit}
 					className="[&_[role=radiogroup]]:grid-cols-2 @max-[560px]/svcplan:[&_[role=radiogroup]]:grid-cols-1"
 					options={[
 						{
 							value: "one",
-							title: t("deploy.services.one", "One service for these events"),
+							title: t(
+								"devices:deploy.services.one",
+								"One service for these events",
+							),
 							hint: offline
 								? t(
-										"deploy.services.oneHintOffline",
+										"devices:deploy.services.oneHintOffline",
 										"One endpoint and one set of settings per device.",
 									)
 								: t(
-										"deploy.services.oneHint",
+										"devices:deploy.services.oneHint",
 										"One endpoint, one set of settings and one cloud access per device.",
 									),
 						},
 						{
 							value: "per_event",
-							title: t("deploy.services.perEvent", "One service per event"),
+							title: t(
+								"devices:deploy.services.perEvent",
+								"One service per event",
+							),
 							hint: offline
 								? t(
-										"deploy.services.perEventHintOffline",
+										"devices:deploy.services.perEventHintOffline",
 										"Each event gets its own service and settings.",
 									)
 								: t(
-										"deploy.services.perEventHint",
+										"devices:deploy.services.perEventHint",
 										"Each event gets its own service, settings and cloud access.",
 									),
 						},

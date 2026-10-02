@@ -39,10 +39,6 @@ import type { DeployDevice } from "./deploy-facts";
 
 /* Small pieces the wizard's steps share: stamps (R5), notes, disclosures and the event type tile. */
 
-/** The app's base layer rules every table cell on four sides and gives tables outer margins; `DvTable` rules rows only. */
-export const TABLE_RESET =
-	"my-0 [&_td]:border-x-0 [&_td]:border-b-0 [&_th]:border-x-0 [&_th]:border-t-0";
-
 /** A block head's count when it carries words ("2 of 4", "2 selected"); `Block.count` takes a number. */
 export function HeadChip({ children }: Readonly<{ children: ReactNode }>) {
 	return (

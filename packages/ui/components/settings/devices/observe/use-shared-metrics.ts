@@ -327,10 +327,14 @@ export async function createMetricsRequest(
 export interface SaveMetricReadersRequest {
 	/** Reader requests to admit; none = renew the list as it is. */
 	add: readonly MetricsReaderRequest[];
+	/** Readers (endpoint IDs) the new list leaves out: they stop receiving samples. */
+	remove?: readonly string[];
 	/** Verb + object: tray item and result. */
 	label: string;
 	/** R8 rows for the confirm step; omit when the sheet showed them itself. */
 	consequence?: ConsequenceRows;
+	/** The confirm step takes something away. */
+	danger?: boolean;
 	password?: string;
 }
 
@@ -365,6 +369,7 @@ export function useSaveMetricReaders(target: ObserveTarget, scope: string) {
 				...(request.consequence
 					? { consequence: request.consequence, strength: "none" as const }
 					: {}),
+				...(request.danger ? { confirm: { tone: "danger" as const } } : {}),
 				resultKey: sharedResultKey(deviceId, scope),
 				activity: { kind: "metric_readers", deviceName: name },
 				call: async (context) => {
@@ -410,7 +415,12 @@ export function useSaveMetricReaders(target: ObserveTarget, scope: string) {
 							endpoint_id: trust.manifest.device_id,
 							signing_key: trust.receipt.identity.telemetry_key,
 						};
-						const members = [...(previous?.members ?? [publisher])];
+						const left = new Set(request.remove ?? []);
+						const members = [...(previous?.members ?? [publisher])].filter(
+							(member) =>
+								member.endpoint_id === publisher.endpoint_id ||
+								!left.has(member.endpoint_id),
+						);
 						for (const entry of keyPackages) {
 							if (
 								members.some(

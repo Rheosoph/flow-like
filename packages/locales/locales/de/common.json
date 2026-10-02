@@ -161,6 +161,7 @@
 	"apiSurfaceHint": "Welche vorgelagerte API das Modell verwendet. Neuere OpenAI-Modelle benötigen Responses.",
 	"app": "App",
 	"appConfigurationAndEnvironmentVariables": "App-Konfiguration und Umgebungsvariablen",
+	"appDevicesDescription": "",
 	"appExportedSuccessfully": "App erfolgreich exportiert!",
 	"appImportedSuccessfully": "App erfolgreich importiert!",
 	"appliedOnRun": "Auf Anwenden beim Laufen",

@@ -124,7 +124,7 @@ export function KeysPopoverView(props: Readonly<KeysPopoverViewProps>) {
 	return (
 		<div data-chrome="keys-popover" className="flex min-w-0 flex-col">
 			<div className="flex flex-col gap-1.5 px-4 pt-3 pb-2">
-				<h3 className="text-ui font-semibold">
+				<h3 className="text-ui font-semibold tracking-normal">
 					{t("chrome.keys.head", "Key sessions on this computer")}
 				</h3>
 				{sessions.length ? (
@@ -141,7 +141,7 @@ export function KeysPopoverView(props: Readonly<KeysPopoverViewProps>) {
 						})}
 					</ul>
 				) : (
-					<p className="text-muted-foreground">
+					<p className="text-ui text-muted-foreground">
 						{t("chrome.keys.none", "No device keys on this computer.")}
 					</p>
 				)}

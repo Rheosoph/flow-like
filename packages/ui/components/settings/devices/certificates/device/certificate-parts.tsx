@@ -3,6 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useMemo, useRef } from "react";
+import { userLookupQueryOptions } from "../../../../../hooks/use-user-lookup";
 import type { CertificateErrorCategory } from "../../../../../lib/device-management/certificate-acme";
 import { MAX_CERTIFICATE_PEM_BYTES } from "../../../../../lib/device-management/certificates";
 import type {
@@ -12,6 +13,7 @@ import type {
 } from "../../../../../lib/device-management/model/types";
 import type { ManagementCall } from "../../../../../lib/device-management/telemetry";
 import { ManagementUnconfirmedError } from "../../../../../lib/device-management/transport";
+import { userDisplayName } from "../../../../../lib/user-display";
 import { useBackend } from "../../../../../state/backend-state";
 import { gateCopy } from "../../copy/gate-copy";
 import {
@@ -40,16 +42,6 @@ export const MENU_ITEM =
 	"items-start text-[13px]/[18px] focus:bg-row-hover focus:text-foreground";
 export const LINK =
 	"underline decoration-border-strong underline-offset-2 hover:decoration-current";
-/**
- * The app's base layer gives every table outer margins and cell borders on all
- * sides, and chips in cells are pills where the design has 4 px corners.
- * Remove once `DvTable` does both itself (requested from W4-SWITCH).
- */
-export const TABLE_RESET =
-	"my-0 [&_td]:border-x-0 [&_td]:border-b-0 [&_th]:border-x-0 [&_th]:border-t-0 [&_td_[data-slot=badge]]:h-auto [&_td_[data-slot=badge]]:min-h-5.5 [&_td_[data-slot=badge]]:rounded-md [&_td_[data-slot=badge]]:py-0.5 [&_td_[data-slot=badge]]:whitespace-normal [&_td_[data-slot=badge]>span]:whitespace-normal";
-/** A chip whose label may take two lines in a narrow column instead of being cut. */
-export const CHIP_WRAP =
-	"h-auto min-h-5.5 items-start rounded-md py-0.5 whitespace-normal [&>span]:whitespace-normal [&>svg]:mt-0.5";
 
 /* Gates (R7). */
 
@@ -276,27 +268,20 @@ export function listOf(locale: string, values: readonly string[]): string {
 	return new Intl.ListFormat(locale, { type: "conjunction" }).format(values);
 }
 
-const PERSON_STALE_MS = 10 * 60_000;
-
-/** The owner's display name; undefined until it is known. */
+/**
+ * The owner's display name; undefined until it is known. Never the account id
+ * or a sign-in provider's handle: `userDisplayName` decides what is a name.
+ */
 export function usePersonName(
 	userId: string | undefined,
 	enabled = true,
 ): string | undefined {
 	const backend = useBackend();
-	const id = userId ?? "";
 	const query = useQuery({
-		queryKey: ["devices", "person-name", id],
-		queryFn: () => backend.userState.lookupUser(id),
-		enabled: enabled && id !== "",
+		...userLookupQueryOptions(backend.userState, enabled ? userId : undefined),
 		retry: false,
-		staleTime: PERSON_STALE_MS,
 	});
-	const user = query.data as
-		| { name?: string; preferred_username?: string; username?: string }
-		| null
-		| undefined;
-	return [user?.name, user?.preferred_username, user?.username].find(Boolean);
+	return query.data ? userDisplayName(query.data, "") || undefined : undefined;
 }
 
 /** IA §6.2 N2: the renewal sections are read-only for everyone but the owner. */

@@ -148,6 +148,7 @@ const FILTER_TEST: Record<FleetFilter, (device: RailDevice) => boolean> = {
 	revoked: (device) => device.health === "revoked",
 	offline: (device) => device.presence === "offline",
 	locked: (device) => device.keyState === "locked",
+	shared: notOwned,
 };
 
 const needsAttention = (device: RailDevice) =>
@@ -385,6 +386,7 @@ function filterLabel(t: DevicesT, filter: FleetFilter) {
 		revoked: enumLabel(t, "health", "revoked"),
 		offline: enumLabel(t, "presence", "offline"),
 		locked: enumLabel(t, "vaultState", "locked"),
+		shared: t("devices:chrome.rail.group.shared", "Shared with me"),
 	} satisfies Record<FleetFilter, string>;
 	return labels[filter];
 }

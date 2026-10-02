@@ -131,7 +131,7 @@ export function DvButton({
 			type={asChild ? undefined : (type ?? "button")}
 			className={cx(
 				buttonVariants({ variant: v.base, size: "default" }),
-				"rounded-lg text-ui font-medium shadow-none focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-busy:cursor-progress",
+				"rounded-lg text-ui font-medium shadow-none focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring focus-visible:outline-solid aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-busy:cursor-progress",
 				s.cls,
 				iconOnly && s.square,
 				v.cls,

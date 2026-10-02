@@ -213,7 +213,7 @@ function rowNote(row: PreflightRow, ctx: NoteContext): string | undefined {
  * in seconds, so a larger value is milliseconds.
  */
 const MS_FLOOR = 100_000_000_000;
-const pinSeconds = (at: number) =>
+export const pinSeconds = (at: number) =>
 	at >= MS_FLOOR ? Math.floor(at / 1000) : at;
 
 /** The identity row as the copy takes it: the pin time in seconds, the fingerprint in four groups of four as the device prints it. */

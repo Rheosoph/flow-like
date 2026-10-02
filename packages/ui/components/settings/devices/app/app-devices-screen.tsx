@@ -21,8 +21,9 @@ import {
 import { useUserIdentity } from "../../../../hooks/use-user-lookup";
 import type { AppView } from "../../../../lib/device-management/model/app-plan";
 import type { AppDevicesRoute } from "../../../../lib/device-management/model/types";
+import { identityName } from "../access/person-name";
 import { gateCopy } from "../copy/gate-copy";
-import { headlineCopy } from "../copy/headline-copy";
+import { headlineCopy, headlineNames } from "../copy/headline-copy";
 import { AppMetricsBlock } from "../observe/app-metrics";
 import { useAreaTime, useHubFreshness } from "../primitives/area-context";
 import { AttentionList } from "../primitives/attention-list";
@@ -242,16 +243,17 @@ function PartialNote({ deviceId }: Readonly<{ deviceId: string }>) {
 	const { t } = useTranslation("devices");
 	const { view, data } = useAppPage();
 	const deviceName = useDeviceNames();
-	const owner = useUserIdentity(data.devices.get(deviceId)?.row.owner_id);
+	const ownerId = data.devices.get(deviceId)?.row.owner_id;
+	const owner = identityName(useUserIdentity(ownerId), ownerId);
 	const values = { device: deviceName(deviceId), app: view.app.name };
 	return (
 		<Note>
-			{owner.isResolved ? (
+			{owner ? (
 				<Trans
 					t={t}
 					i18nKey="app.coverage.partialOwner"
 					defaults="Partial access on <1>{{device}}</1>: you see {{app}} only. {{owner}} owns it."
-					values={{ ...values, owner: owner.label }}
+					values={{ ...values, owner }}
 					components={{ 1: <span className="font-mono" /> }}
 				/>
 			) : (
@@ -370,8 +372,12 @@ function AppHeadline() {
 		() => (data.headline ? headlineCopy(t, data.headline, time) : null),
 		[data.headline, t, time],
 	);
+	const names = useMemo(
+		() => (data.headline ? headlineNames(data.headline) : []),
+		[data.headline],
+	);
 	if (!copy) return null;
-	return <Headline lead={copy.lead} rest={copy.rest} />;
+	return <Headline lead={copy.lead} rest={copy.rest} names={names} />;
 }
 
 /* Needs attention (APP §2.7). */

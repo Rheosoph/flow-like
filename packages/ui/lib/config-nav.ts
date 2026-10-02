@@ -179,11 +179,12 @@ export function buildNavigationItems(
 			label: t("projectDevices", "Devices"),
 			icon: ServerIcon,
 			description: t(
-				"projectDevicesDescription",
-				"Deploy this project to standalone devices and inspect replica health",
+				"appDevicesDescription",
+				"Run this app on your own devices and see where it runs",
 			),
 			group: groups.build,
 			permissions: [RolePermissions.ReadBoards],
+			hostCapability: "devices",
 		},
 		{
 			href: "/library/config/storage",

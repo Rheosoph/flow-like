@@ -23,9 +23,9 @@ export interface AttentionButtonProps {
 	className?: string;
 }
 
-/** Top bar buttons: 32 px, label hidden below 720 px of the area, pressed while their layer is open. */
+/** Top bar buttons: 32 px, label hidden below 720 px of the area, tighter at phone width, pressed while their layer is open. */
 export const CHROME_BUTTON =
-	"shrink-0 px-2.5 aria-expanded:bg-row-selected data-[state=open]:bg-row-selected";
+	"shrink-0 px-2.5 @max-[480px]/devices:px-1.5 @max-[480px]/devices:has-[>svg]:px-1.5 aria-expanded:bg-row-selected data-[state=open]:bg-row-selected";
 export const CHROME_LABEL = "@max-[720px]/devices:hidden";
 /** Popover surface of the area: popover fill, strong border, no blur or shadow (R13). */
 export const CHROME_POPOVER =

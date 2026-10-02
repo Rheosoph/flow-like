@@ -22,7 +22,6 @@ import { StatusChip } from "../primitives/status-chip";
 import { useGate, useInlineResults } from "../workspace";
 import type { ReadersEdit, ReadersMode } from "./history-readers-sheet";
 import { LiveDataState, livePhase } from "./live-state";
-import { TABLE_RESET } from "./observe-data";
 import { RulesExpiredNotice, rulesExpiredAt } from "./renew-rules";
 import type { HistoryPauseReason } from "./timeline-model";
 import {
@@ -293,7 +292,6 @@ export function HistorySettings({
 					</div>
 				) : null}
 				<DvTable
-					className={TABLE_RESET}
 					label={
 						service
 							? t(

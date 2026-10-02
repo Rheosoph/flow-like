@@ -114,7 +114,7 @@ export function Checklist({
 						</span>
 						<span className={cx("min-w-0", look.labelClass)}>{item.label}</span>
 						{source && SourceIcon ? (
-							<span className="inline-flex h-5 items-center gap-1 rounded-sm border border-hairline px-1.5 text-xs whitespace-nowrap text-muted-foreground">
+							<span className="inline-flex h-5 items-center gap-1 rounded-md border border-hairline px-1.5 text-xs whitespace-nowrap text-muted-foreground">
 								<SourceIcon aria-hidden className="size-3" />
 								{source.label}
 							</span>

@@ -14,7 +14,7 @@ import type {
 } from "../../../../lib/device-management/model/types";
 import { useBackend } from "../../../../state/backend-state";
 import type { IAppState } from "../../../../state/backend-state/app-state";
-import { attentionCopy } from "../copy/attention-copy";
+import { attentionCopy, attentionNames } from "../copy/attention-copy";
 import { gateCopy } from "../copy/gate-copy";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import {
@@ -28,6 +28,7 @@ import {
 	useAttention,
 	useFixAction,
 	useOverlayStore,
+	usePersonNames,
 	useSnoozeAttention,
 } from "../workspace";
 import type { ChromeNavigate } from "./rail-row";
@@ -67,7 +68,7 @@ function PopoverHead({
 >) {
 	const { t } = useTranslation("devices");
 	return (
-		<h3 className="flex flex-wrap items-center gap-x-1.5 px-4 pt-3 pb-2 text-ui font-semibold">
+		<h3 className="flex flex-wrap items-center gap-x-1.5 px-4 pt-3 pb-2 text-ui font-semibold tracking-normal">
 			<span>
 				{appName
 					? t("chrome.attention.headApp", "Needs you in {{app}}", {
@@ -236,10 +237,23 @@ function gateOf(t: DevicesT, action: ItemAction | undefined): Gate | null {
 	return { kind: gate.kind, reason: gateCopy(t, gate).inline };
 }
 
+/** The params of an item's sentence that hold an account id. */
+const PERSON_PARAMS = ["person", "owner"] as const;
+
+function accountIdsOf(items: readonly AttentionItem[]): string[] {
+	return items.flatMap((item) =>
+		PERSON_PARAMS.flatMap((name) => {
+			const value = item.copy.params?.[name];
+			return typeof value === "string" && value !== "" ? [value] : [];
+		}),
+	);
+}
+
 /**
- * Attention items as the list primitive takes them: translated sentence,
- * source stamp, primary action with its gate, snooze for notices. One adapter
- * for the header popover and every screen that lists attention.
+ * Attention items as the list primitive takes them: translated sentence with
+ * people by their directory name, source stamp, primary action with its gate,
+ * snooze for notices. One adapter for the header popover and every screen
+ * that lists attention.
  */
 export function useAttentionEntries(
 	items: readonly AttentionItem[],
@@ -248,17 +262,19 @@ export function useAttentionEntries(
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
 	const appName = useAppNames();
+	const personName = usePersonNames(accountIdsOf(items));
 	const run = useRunAttentionTarget(options);
 	const snooze = useSnoozeAttention();
 	return useMemo(
 		() =>
 			items.map((item) => {
-				const copy = attentionCopy(t, item, { time, appName });
+				const copy = attentionCopy(t, item, { time, appName, personName });
 				const { action } = item;
 				return {
 					id: item.id,
 					severity: item.severity,
 					sentence: copy.sentence,
+					names: attentionNames(item),
 					conditionKey: item.key,
 					stamp: stampOf(item.source),
 					since: item.firstSeenAt,
@@ -276,7 +292,7 @@ export function useAttentionEntries(
 						: {}),
 				};
 			}),
-		[items, t, time, appName, run, snooze],
+		[items, t, time, appName, personName, run, snooze],
 	);
 }
 

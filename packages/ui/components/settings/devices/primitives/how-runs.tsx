@@ -80,7 +80,7 @@ export function HowRunsStrip({
 		>
 			<VisibilityChip visibility={visibility} />
 			<ModeChip mode={mode} app={app} />
-			<p className="min-w-0 text-ink-2 @max-[900px]/howruns:order-3 @max-[900px]/howruns:basis-full">
+			<p className="min-w-0 text-ui text-ink-2 @max-[900px]/howruns:order-3 @max-[900px]/howruns:basis-full">
 				{copy.mode(mode, app).sentence}
 			</p>
 			<span className="flex-1 @max-[900px]/howruns:hidden" />
@@ -136,7 +136,7 @@ export function ModeExplainer({
 			data-mode-explainer={mode}
 			className={cx("flex min-w-0 flex-col gap-3", className)}
 		>
-			<p className="max-w-[72ch] text-ink-2">
+			<p className="max-w-[72ch] leading-[inherit] text-ink-2">
 				{mode === "offline" ? (
 					<Trans
 						t={t}
@@ -232,7 +232,7 @@ export function ModeExplainer({
 					aria-hidden
 					className="mt-px size-4 shrink-0 text-muted-foreground"
 				/>
-				<p className="max-w-[80ch]">{texts[mode].whyNot}</p>
+				<p className="max-w-[80ch] text-ui">{texts[mode].whyNot}</p>
 			</div>
 		</div>
 	);

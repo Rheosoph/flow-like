@@ -104,6 +104,31 @@ function blockedByIdentity(t: DevicesT, page: DevicePage): GateView | null {
 		: null;
 }
 
+/** Release trust is set up but no verified release is in hand: there is nothing to send to the device yet. */
+function releaseUnread(
+	t: DevicesT,
+	release: ReturnType<typeof useReleaseTrust>,
+): GateView | null {
+	if (!release.configured || release.data) return null;
+	return {
+		gate: release.error
+			? {
+					kind: "hub",
+					reason: t(
+						"devices:device.agent.releaseUnread",
+						"The latest verified release couldn't be read from the hub. Check for an agent update again.",
+					),
+				}
+			: {
+					kind: "busy",
+					reason: t(
+						"devices:device.agent.releaseReading",
+						"Reading the latest verified release…",
+					),
+				},
+	};
+}
+
 function runningServices(page: DevicePage) {
 	const rows = page.services ?? [];
 	return {
@@ -322,7 +347,7 @@ export function AgentUpdateActions({ page }: Readonly<{ page: DevicePage }>) {
 						),
 					},
 				}
-			: gateView(t, time, result));
+			: (gateView(t, time, result) ?? releaseUnread(t, release)));
 	const check = async () => {
 		setChecking(true);
 		try {

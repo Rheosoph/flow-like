@@ -17,7 +17,7 @@ import { Block } from "../primitives/block";
 import { DvButton } from "../primitives/dv-button";
 import { DvInput } from "../primitives/form-fields";
 import { FreshnessStamp } from "../primitives/freshness-stamp";
-import { type Gate, GatedAction } from "../primitives/gate-notice";
+import { GatedAction } from "../primitives/gate-notice";
 import { InlineResult } from "../primitives/inline-result";
 import { KeyValueList, KvRow } from "../primitives/key-value-list";
 import { activityTitle } from "../shell/activity-tray";
@@ -285,18 +285,6 @@ export function CommandLookup({ target }: Readonly<{ target: ObserveTarget }>) {
 	);
 	const invalid = id !== "" && !COMMAND_ID.test(id);
 	const refused = gateLine(t, gate, time);
-	// The shared sentence for a locked device speaks of changing settings; a look-up changes nothing.
-	const lookUpGate: Gate | null =
-		refused?.kind === "locked"
-			? {
-					kind: "locked",
-					reason: t(
-						"observe.lookup.locked",
-						"Unlock {{device}} to look up a command.",
-						{ device: target.name },
-					),
-				}
-			: refused;
 
 	const lookUp = async () => {
 		if (!id || invalid || busy) return;
@@ -337,7 +325,7 @@ export function CommandLookup({ target }: Readonly<{ target: ObserveTarget }>) {
 							if (event.key === "Enter" && gate.ok) void lookUp();
 						}}
 					/>
-					<GatedAction gate={lookUpGate}>
+					<GatedAction gate={refused}>
 						<DvButton
 							icon={Search}
 							busy={busy}

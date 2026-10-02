@@ -28,7 +28,10 @@ export interface StampError {
 export interface FreshnessStampProps extends StampSpec {
 	/** Unix seconds the data was observed (device) or fetched (hub). */
 	observedAt?: number;
-	/** Producer cadence in seconds; defaults per source (hub 30, snap 60, live 15). */
+	/**
+	 * Producer cadence in seconds; defaults per source (hub 30, snap 60, live 15).
+	 * `0` on a live stamp: read once on demand, so it promises no refresh.
+	 */
 	cadenceSec?: number;
 	/** Detected clock skew in seconds (device clock minus hub clock). */
 	skewSec?: number;
@@ -111,11 +114,17 @@ export function planeText(
 			"devices:common.stamp.plane.saved",
 			"Saved at the last live read. It never claims to be current.",
 		),
-		live: t(
-			"devices:common.stamp.plane.live",
-			"Read over the live connection; refreshed every {{count}} s while connected.",
-			{ count: cadenceSec },
-		),
+		live:
+			cadenceSec > 0
+				? t(
+						"devices:common.stamp.plane.live",
+						"Read over the live connection; refreshed every {{count}} s while connected.",
+						{ count: cadenceSec },
+					)
+				: t(
+						"devices:common.stamp.plane.liveOnce",
+						"Read once over the live connection, when you asked for it. It isn't refreshed.",
+					),
 		local: t(
 			"devices:common.stamp.plane.local",
 			"Stored in this app on this computer. Invisible from other browsers, profiles, hubs or accounts.",
@@ -182,14 +191,16 @@ function ageText(t: DevicesT, input: AgeTextInput): string {
 	const { ago, cadence, lockedAt } = input;
 	if (!ago && TIMED_AGES.includes(input.age)) return ageLabel(t, input.age);
 	const texts = {
-		live: () =>
-			ago
+		live: () => {
+			if (!ago) return t("devices:common.stamp.following", "following");
+			return cadence > 0
 				? t(
 						"devices:common.stamp.liveAgo",
 						"read {{ago}} · every {{count}} s",
 						{ ago, count: cadence },
 					)
-				: t("devices:common.stamp.following", "following"),
+				: t("devices:common.stamp.readAgo", "read {{ago}}", { ago });
+		},
 		current: () => currentText(t, input),
 		delayed: () =>
 			t("devices:common.stamp.delayedAgo", "Delayed · {{ago}}", { ago }),
@@ -294,7 +305,7 @@ export function FreshnessStamp({
 			className={cx(
 				"inline-flex max-w-full min-w-0 items-center align-middle text-xs whitespace-nowrap text-muted-foreground",
 				compact ? "gap-1" : "gap-1.5",
-				isBoxed && "h-5.5 rounded-sm border border-hairline bg-card px-1.5",
+				isBoxed && "h-5.5 rounded-md border border-hairline bg-card px-1.5",
 				age === "error" && !compact && "border-critical-line bg-critical-bg",
 				className,
 			)}

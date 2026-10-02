@@ -57,12 +57,14 @@ export interface ConfirmOptions {
 	/** `typed` / `review`: the exact text to type (device name, service ID). */
 	typed?: string;
 	reasons?: readonly ConfirmReason[];
-	/** `reason`: also require the acknowledgement (a change that was already attempted). */
+	/** `reason` and `typed`: also require the acknowledgement `checkLabel` (a change that was already attempted, data that would be lost). */
 	requireCheck?: boolean;
 	/** Verb + object: "Stop support-bot". */
 	confirmLabel: ReactNode;
 	tone?: "danger" | "default";
 	wide?: boolean;
+	/** Body content above the consequence rows (a state chip and the one sentence that frames them). */
+	intro?: ReactNode;
 	/** Extra body content under the consequence rows (options, prerequisites). */
 	extra?: ReactNode;
 	/** Runs while the button shows busy; a thrown error is shown inline and the sheet stays open. */
@@ -93,7 +95,7 @@ export function confirmReady(
 	const rules: Record<ConfirmStrength, () => boolean> = {
 		none: () => true,
 		check: () => input.checked,
-		typed: () => typedOk,
+		typed: () => typedOk && (!options.requireCheck || input.checked),
 		reason: () => !!input.reason && (!options.requireCheck || input.checked),
 		review: () => input.step === 2 && finalStep,
 	};
@@ -104,6 +106,17 @@ interface ConfirmSheetProps {
 	open: boolean;
 	options: ConfirmOptions;
 	onResolve(result: ConfirmResult): void;
+}
+
+const ConfirmCloseContext = createContext<() => void>(() => undefined);
+
+/**
+ * For content inside a confirm (`intro`, `extra`, a row): closes the confirm
+ * without confirming, e.g. before opening what has to happen first
+ * ("Back up to account"). Ignored while the confirmed action runs.
+ */
+export function useConfirmClose(): () => void {
+	return useContext(ConfirmCloseContext);
 }
 
 /**
@@ -136,6 +149,11 @@ function ConfirmSheetSession({
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const inFlight = useRef(false);
+	const typedRef = useRef<HTMLInputElement>(null);
+
+	useEffect(() => {
+		if (step === 2) typedRef.current?.focus();
+	}, [step]);
 
 	const reviewing = strength === "review" && step === 1;
 	const ready = confirmReady(options, { step, checked, typedValue, reason });
@@ -181,6 +199,7 @@ function ConfirmSheetSession({
 				}
 			>
 				<DvInput
+					ref={typedRef}
 					mono
 					autoComplete="off"
 					spellCheck={false}
@@ -215,6 +234,7 @@ function ConfirmSheetSession({
 			}}
 			role="alertdialog"
 			closeOnOutside={false}
+			initialFocus={strength === "typed" ? typedRef : undefined}
 			icon={options.icon}
 			eyebrow={t("common.confirm.eyebrow", "Before this runs")}
 			title={options.title}
@@ -247,18 +267,26 @@ function ConfirmSheetSession({
 				</>
 			}
 		>
-			{strength !== "review" || step === 1 ? (
-				<ConsequencePreview
-					rows={options.rows}
-					whoLabel={options.whoLabel}
-					labels={options.rowLabels}
-				/>
-			) : null}
-			{options.extra && (strength !== "review" || step === 1)
-				? options.extra
-				: null}
+			<ConfirmCloseContext.Provider value={cancel}>
+				{strength !== "review" || step === 1 ? (
+					<>
+						{options.intro}
+						<ConsequencePreview
+							rows={options.rows}
+							whoLabel={options.whoLabel}
+							labels={options.rowLabels}
+						/>
+						{options.extra}
+					</>
+				) : null}
+			</ConfirmCloseContext.Provider>
 			{strength === "check" ? checkField : null}
-			{strength === "typed" ? typedField : null}
+			{strength === "typed" ? (
+				<>
+					{typedField}
+					{options.requireCheck ? checkField : null}
+				</>
+			) : null}
 			{strength === "reason" ? (
 				<>
 					<ChoiceCards

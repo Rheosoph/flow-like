@@ -84,7 +84,7 @@ export function useSetupLeave(input: SetupLeaveInput): SetupLeave {
 	const savedId = created?.enrollmentId;
 	const enrollmentId = savedId ?? registration?.enrollmentId;
 	const creating = create.run.status === "running";
-	const { abort, settled, registered } = create;
+	const { abort, settled, registered, cancelFailed } = create;
 
 	/** Stops a running creation, then cancels what the hub registered; resolves to the cancelled setup's id. */
 	const cancelAtHub = useCallback(
@@ -100,11 +100,14 @@ export function useSetupLeave(input: SetupLeaveInput): SetupLeave {
 				);
 			} catch (error) {
 				// A run that stops before the package exists releases its own reservation.
-				if (toHubError(error).code !== "not_found") throw error;
+				if (toHubError(error).code !== "not_found") {
+					cancelFailed();
+					throw error;
+				}
 			}
 			return id;
 		},
-		[abort, settled, registered, savedId],
+		[abort, settled, registered, cancelFailed, savedId],
 	);
 
 	const invalidate = useMemo(

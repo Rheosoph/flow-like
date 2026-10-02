@@ -54,7 +54,6 @@ import { type AppViewRead, useAttentionState } from "../workspace";
 import { type DeployTarget, useDeployTarget } from "./device-header";
 import {
 	DeviceDataState,
-	TABLE_RESET,
 	desiredRun,
 	observedRun,
 	useLinkDelegate,
@@ -315,7 +314,6 @@ function EventMatrix({
 		<div onClick={delegate.onClick}>
 			<DvTable
 				cols={MATRIX_COLS}
-				className={TABLE_RESET}
 				stackAt={560}
 				label={t("device.app.matrixLabel", "How {{app}} runs on {{device}}", {
 					app: view.app.name,

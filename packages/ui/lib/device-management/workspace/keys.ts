@@ -37,6 +37,7 @@ import type {
 	FleetPort,
 	HubPort,
 	KeyError,
+	KeyHubError,
 	KeySessionManager,
 	KeySessionSnapshot,
 	KeyState,
@@ -194,7 +195,7 @@ interface Session {
 	keepUnlocked: boolean;
 	timer?: unknown;
 	lockedSummary?: KeySessionSnapshot["lockedSummary"];
-	lastError?: KeyError;
+	lastError?: KeySessionSnapshot["lastError"];
 	generation: number;
 	unlocking?: Promise<void>;
 	leases: Promise<unknown>;
@@ -232,6 +233,8 @@ interface UnlockRun {
 	/** Opened but not yet committed; closed and freed on any failure. */
 	controller?: BrowserController;
 	signerHeld: boolean;
+	/** Set when the hub fails the identity read; the run still rejects with the hub's error. */
+	hubError?: KeyHubError;
 }
 
 const MANY_OUTCOMES = new Set<KeyError["code"]>([
@@ -275,6 +278,15 @@ function failureDetail(error: unknown): StepDetailCode {
 	if (keyError) return KEY_STEP_DETAIL[keyError.code];
 	return isAbort(error) ? "cancelled" : "http_error";
 }
+
+function hubErrorOf(error: unknown): KeyHubError {
+	const status = (error as { status?: unknown } | null)?.status;
+	return typeof status === "number" ? { code: "hub", status } : { code: "hub" };
+}
+
+/** `LocalVaultSummary.identityPinnedAt` is stored in milliseconds; copy and `KeyError` take seconds. */
+const pinSeconds = (pinnedAtMs: number | undefined) =>
+	pinnedAtMs === undefined ? undefined : Math.floor(pinnedAtMs / 1000);
 
 function storageError(error: unknown): KeySessionError {
 	return new KeySessionError({
@@ -542,7 +554,7 @@ export function createKeySessionManager(
 			.vaults.find((row) => row.deviceId === deviceId);
 		return new KeySessionError({
 			code: "identity_mismatch",
-			pinnedAt: pinned?.identityPinnedAt ?? 0,
+			pinnedAt: pinSeconds(pinned?.identityPinnedAt) ?? 0,
 			fingerprint: pinned?.identityFingerprint ?? "",
 			reported: safeFingerprint(reported),
 		});
@@ -553,6 +565,7 @@ export function createKeySessionManager(
 		controller: BrowserController,
 		vault: LocalDeviceVault,
 		alive: () => void,
+		onHubFailure: (error: unknown) => void,
 	): Promise<DeviceReceipt> {
 		const deviceId = vault.deviceId;
 		const publicKey = controller.publicBundle();
@@ -561,9 +574,12 @@ export function createKeySessionManager(
 			publicKey.controller_key.x !== vault.controllerPublic.controller_key.x
 		)
 			throw new KeySessionError({ code: "authority_mismatch" });
-		const receipt = await ports.hub.fetch<DeviceReceipt>(
-			`devices/${encodeURIComponent(deviceId)}/identity`,
-		);
+		const receipt = await ports.hub
+			.fetch<DeviceReceipt>(`devices/${encodeURIComponent(deviceId)}/identity`)
+			.catch((error: unknown) => {
+				if (!isAbort(error)) onHubFailure(error);
+				throw error;
+			});
 		alive();
 		try {
 			const accepted = crypto.verifyDeviceReceipt(
@@ -778,6 +794,9 @@ export function createKeySessionManager(
 			opened.controller,
 			opened.vault,
 			alive,
+			(error) => {
+				run.hubError = hubErrorOf(error);
+			},
 		);
 		alive();
 		run.signerHeld = await holdSignerAtUnlock(
@@ -823,7 +842,7 @@ export function createKeySessionManager(
 			value.lockToken = undefined;
 		}
 		value.state = (keyError && FAILED_STATE[keyError.code]) ?? "locked";
-		value.lastError = keyError;
+		value.lastError = keyError ?? run.hubError;
 		emit();
 	}
 
@@ -1108,7 +1127,7 @@ export function createKeySessionManager(
 				lock,
 				identity: {
 					check,
-					pinnedAt: pinned?.identityPinnedAt,
+					pinnedAt: pinSeconds(pinned?.identityPinnedAt),
 					fingerprint: pinned?.identityFingerprint,
 				},
 				clock: facts.clock,

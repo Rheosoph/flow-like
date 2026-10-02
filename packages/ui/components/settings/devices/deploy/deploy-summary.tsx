@@ -68,17 +68,19 @@ const joined = (parts: readonly (string | false | undefined)[]) =>
 
 function versionText({ t, plan, versionLabel }: ValueContext): string {
 	if (plan.draft.entry === "update" && plan.draft.version === "keep")
-		return t("deploy.summary.keepsVersion", "keeps each version");
-	return versionLabel ?? t("deploy.summary.newest", "newest version");
+		return t("devices:deploy.summary.keepsVersion", "keeps each version");
+	return versionLabel ?? t("devices:deploy.summary.newest", "newest version");
 }
 
 function whatValue(c: ValueContext): ReactNode {
 	const { t, plan } = c;
 	if (!plan.app)
-		return <Muted>{t("deploy.summary.nothing", "Nothing chosen yet")}</Muted>;
+		return (
+			<Muted>{t("devices:deploy.summary.nothing", "Nothing chosen yet")}</Muted>
+		);
 	const events = new Set(plan.services.flatMap((service) => service.events));
 	const services = (count: number) =>
-		t("deploy.summary.services", {
+		t("devices:deploy.summary.services", {
 			count,
 			defaultValue_one: "{{count, number}} service",
 			defaultValue_other: "{{count, number}} services",
@@ -87,7 +89,7 @@ function whatValue(c: ValueContext): ReactNode {
 		plan.draft.entry === "update"
 			? [services(plan.targets.length)]
 			: [
-					t("deploy.summary.events", {
+					t("devices:deploy.summary.events", {
 						count: events.size,
 						defaultValue_one: "{{count, number}} event",
 						defaultValue_other: "{{count, number}} events",
@@ -99,28 +101,32 @@ function whatValue(c: ValueContext): ReactNode {
 
 function howValue({ t, plan, check }: ValueContext): ReactNode {
 	if (!plan.app)
-		return <Muted>{t("deploy.summary.afterApp", "After the app")}</Muted>;
+		return (
+			<Muted>{t("devices:deploy.summary.afterApp", "After the app")}</Muted>
+		);
 	if (check.issues.some((issue) => issue.code === "local_only_web"))
 		return (
 			<span className="text-critical">
-				{t("deploy.summary.needsDesktop", "Needs the desktop app")}
+				{t("devices:deploy.summary.needsDesktop", "Needs the desktop app")}
 			</span>
 		);
 	return plan.mode === "offline"
-		? t("deploy.summary.offline", "Offline copy · data on the device")
-		: t("deploy.summary.online", "Runs online · data in the cloud");
+		? t("devices:deploy.summary.offline", "Offline copy · data on the device")
+		: t("devices:deploy.summary.online", "Runs online · data in the cloud");
 }
 
 function whereValue({ t, plan }: ValueContext): ReactNode {
 	if (!plan.targets.length)
-		return <Muted>{t("deploy.summary.noDevices", "No devices yet")}</Muted>;
+		return (
+			<Muted>{t("devices:deploy.summary.noDevices", "No devices yet")}</Muted>
+		);
 	return plan.targets.map((target, index) => (
 		<span key={target.deviceId}>
 			{index ? ", " : ""}
 			<Mono>{target.name}</Mono>
 			{target.locked ? (
 				<Lock
-					aria-label={t("deploy.summary.locked", "locked")}
+					aria-label={t("devices:deploy.summary.locked", "locked")}
 					className="ml-1 inline size-3 text-locked"
 				/>
 			) : null}
@@ -155,15 +161,17 @@ function settingsCounts(plan: DeployPlan) {
 
 function settingsValue({ t, plan }: ValueContext): ReactNode {
 	if (!plan.app)
-		return <Muted>{t("deploy.summary.afterApp", "After the app")}</Muted>;
+		return (
+			<Muted>{t("devices:deploy.summary.afterApp", "After the app")}</Muted>
+		);
 	const { all, values, differ, secrets } = settingsCounts(plan);
 	if (!all)
 		return (
 			<Muted>
 				{plan.app.variables
-					? t("deploy.summary.noSettings", "This app has no settings")
+					? t("devices:deploy.summary.noSettings", "This app has no settings")
 					: t(
-							"deploy.summary.settingsUnknown",
+							"devices:deploy.summary.settingsUnknown",
 							"Known once the version is prepared",
 						)}
 			</Muted>
@@ -171,25 +179,25 @@ function settingsValue({ t, plan }: ValueContext): ReactNode {
 	const defaults = all - values - secrets;
 	return joined([
 		values > 0 &&
-			t("deploy.summary.values", {
+			t("devices:deploy.summary.values", {
 				count: values,
 				defaultValue_one: "{{count, number}} value",
 				defaultValue_other: "{{count, number}} values",
 			}),
 		differ > 0 &&
-			t("deploy.summary.differ", {
+			t("devices:deploy.summary.differ", {
 				count: differ,
 				defaultValue_one: "{{count, number}} differs by device",
 				defaultValue_other: "{{count, number}} differ by device",
 			}),
 		secrets > 0 &&
-			t("deploy.summary.secrets", {
+			t("devices:deploy.summary.secrets", {
 				count: secrets,
 				defaultValue_one: "{{count, number}} secret",
 				defaultValue_other: "{{count, number}} secrets",
 			}),
 		defaults > 0 &&
-			t("deploy.summary.defaults", {
+			t("devices:deploy.summary.defaults", {
 				count: defaults,
 				defaultValue_one: "{{count, number}} app default",
 				defaultValue_other: "{{count, number}} app defaults",
@@ -200,13 +208,16 @@ function settingsValue({ t, plan }: ValueContext): ReactNode {
 function isolationText({ t, plan }: ValueContext): string {
 	const { targets, draft } = plan;
 	if (!draft.isolation)
-		return t("deploy.summary.keepsLimits", "keeps each service's limits");
+		return t(
+			"devices:deploy.summary.keepsLimits",
+			"keeps each service's limits",
+		);
 	if (!targets.length)
 		return draft.isolation.profile === "trusted_process"
-			? t("deploy.summary.asAgent", "runs as the agent")
-			: t("deploy.summary.sandboxWhere", "sandboxed where possible");
+			? t("devices:deploy.summary.asAgent", "runs as the agent")
+			: t("devices:deploy.summary.sandboxWhere", "sandboxed where possible");
 	return t(
-		"deploy.summary.sandboxedOn",
+		"devices:deploy.summary.sandboxedOn",
 		"sandboxed on {{count, number}} of {{total, number}}",
 		{
 			count: targets.filter((target) => !target.runsAsAgent).length,
@@ -218,17 +229,19 @@ function isolationText({ t, plan }: ValueContext): string {
 function endpointValue(c: ValueContext): ReactNode {
 	const { t, plan } = c;
 	if (!plan.app)
-		return <Muted>{t("deploy.summary.afterApp", "After the app")}</Muted>;
-	const instances = t("deploy.summary.instances", {
+		return (
+			<Muted>{t("devices:deploy.summary.afterApp", "After the app")}</Muted>
+		);
+	const instances = t("devices:deploy.summary.instances", {
 		count: Math.max(1, ...plan.services.map((row) => row.maxInstances)),
 		defaultValue_one: "{{count, number}} instance",
 		defaultValue_other: "{{count, number}} instances",
 	});
 	const { host, port } = plan.draft.endpoint;
 	const address = c.limitsOnly ? (
-		t("deploy.summary.noEndpoint", "No endpoint")
+		t("devices:deploy.summary.noEndpoint", "No endpoint")
 	) : host === null || port === null ? (
-		t("deploy.summary.keepsAddress", "Keeps each address")
+		t("devices:deploy.summary.keepsAddress", "Keeps each address")
 	) : (
 		<Mono>
 			{host}:{port}
@@ -251,50 +264,61 @@ function creates(plan: DeployPlan): number {
 
 function accessValue({ t, plan, locale }: ValueContext): ReactNode {
 	if (!plan.app)
-		return <Muted>{t("deploy.summary.afterApp", "After the app")}</Muted>;
+		return (
+			<Muted>{t("devices:deploy.summary.afterApp", "After the app")}</Muted>
+		);
 	if (!plan.targets.length)
 		return (
-			<Muted>{t("deploy.summary.afterDevices", "After the devices")}</Muted>
+			<Muted>
+				{t("devices:deploy.summary.afterDevices", "After the devices")}
+			</Muted>
 		);
 	const created = creates(plan);
 	const kept = plan.targets.length - created;
 	const { spending } = plan.draft;
 	return joined([
 		created > 0 &&
-			t("deploy.summary.approvals", {
+			t("devices:deploy.summary.approvals", {
 				count: created,
 				defaultValue_one: "{{count, number}} approval",
 				defaultValue_other: "{{count, number}} approvals",
 			}),
 		created > 0 &&
 			spending !== null &&
-			t("deploy.summary.spendEach", "{{amount}} each", {
+			t("devices:deploy.summary.spendEach", "{{amount}} each", {
 				amount: formatMoney(spending.limitMicros, locale),
 			}),
 		kept > 0 &&
-			t("deploy.summary.kept", "{{count, number}} kept", { count: kept }),
-		!!plan.draft.writes && t("deploy.summary.writesOn", "write buffering on"),
+			t("devices:deploy.summary.kept", "{{count, number}} kept", {
+				count: kept,
+			}),
+		!!plan.draft.writes &&
+			t("devices:deploy.summary.writesOn", "write buffering on"),
 	]);
 }
 
 function copyValue({ t, plan, prepared }: ValueContext): ReactNode {
 	if (!plan.app)
-		return <Muted>{t("deploy.summary.afterApp", "After the app")}</Muted>;
+		return (
+			<Muted>{t("devices:deploy.summary.afterApp", "After the app")}</Muted>
+		);
 	if (!plan.targets.length)
 		return (
-			<Muted>{t("deploy.summary.afterDevices", "After the devices")}</Muted>
+			<Muted>
+				{t("devices:deploy.summary.afterDevices", "After the devices")}
+			</Muted>
 		);
 	if (plan.draft.version === "keep")
-		return t("deploy.summary.nothingToSend", "Nothing to send");
+		return t("devices:deploy.summary.nothingToSend", "Nothing to send");
 	const count = plan.targets.length;
 	return prepared
-		? t("deploy.summary.sizeToDevices", {
+		? t("devices:deploy.summary.sizeToDevices", {
 				count,
 				size: humanFileSize(prepared.artifact.descriptor.total_bytes),
 				defaultValue_one: "{{size}} to {{count, number}} device",
 				defaultValue_other: "{{size}} to {{count, number}} devices",
 			})
-		: t("deploy.summary.copyToDevices", {
+		: t("devices:deploy.summary.copyToDevices", {
 				count,
 				defaultValue_one: "The copy goes to {{count, number}} device",
 				defaultValue_other: "The copy goes to {{count, number}} devices",
@@ -306,17 +330,20 @@ function reviewValue({ t, plan }: ValueContext): ReactNode {
 	const how =
 		draft.entry === "update"
 			? draft.strategy === "quick"
-				? t("deploy.summary.quick", "quick update")
-				: t("deploy.summary.safe", "safe update where possible")
+				? t("devices:deploy.summary.quick", "quick update")
+				: t("devices:deploy.summary.safe", "safe update where possible")
 			: draft.start
-				? t("deploy.summary.start", "start after deploy")
-				: t("deploy.summary.stopped", "stays stopped");
+				? t("devices:deploy.summary.start", "start after deploy")
+				: t("devices:deploy.summary.stopped", "stays stopped");
 	if (plan.targets.length < 2)
 		return how.charAt(0).toUpperCase() + how.slice(1);
 	const order = {
-		one: t("deploy.summary.orderOne", "One device at a time"),
-		all: t("deploy.summary.orderAll", "All at once"),
-		first: t("deploy.summary.orderFirst", "First device, then the rest"),
+		one: t("devices:deploy.summary.orderOne", "One device at a time"),
+		all: t("devices:deploy.summary.orderAll", "All at once"),
+		first: t(
+			"devices:deploy.summary.orderFirst",
+			"First device, then the rest",
+		),
 	}[draft.order];
 	return `${order} · ${how}`;
 }
@@ -326,9 +353,9 @@ const startedRun = (run: DeployRunState | null | undefined) =>
 	run && run.status !== "idle" ? run : null;
 
 const ENDED: Record<DeployResult["outcome"], (t: DevicesT) => string> = {
-	all: (t) => t("deploy.summary.runDone", "Done"),
-	partial: (t) => t("deploy.summary.runFailed", "Failed"),
-	none: (t) => t("deploy.summary.runFailed", "Failed"),
+	all: (t) => t("devices:deploy.summary.runDone", "Done"),
+	partial: (t) => t("devices:deploy.summary.runFailed", "Failed"),
+	none: (t) => t("devices:deploy.summary.runFailed", "Failed"),
 };
 
 /** One device: Running, Done or Failed; several: the board's own count ("1 of 2 done", "Failed on 1"). */
@@ -347,7 +374,7 @@ function runValue(t: DevicesT, run: DeployRunState): string {
 		).text;
 	return result
 		? ENDED[result.outcome](t)
-		: t("deploy.summary.runRunning", "Running");
+		: t("devices:deploy.summary.runRunning", "Running");
 }
 
 function rolloutValue({ t, deployed, run, outcome }: ValueContext): ReactNode {
@@ -356,9 +383,9 @@ function rolloutValue({ t, deployed, run, outcome }: ValueContext): ReactNode {
 	// No run in this window (a reload): how the last one ended, as far as it was kept.
 	if (outcome) return ENDED[outcome](t);
 	return deployed ? (
-		t("deploy.summary.finished", "Finished")
+		t("devices:deploy.summary.finished", "Finished")
 	) : (
-		<Muted>{t("deploy.summary.afterDeploy", "After you deploy")}</Muted>
+		<Muted>{t("devices:deploy.summary.afterDeploy", "After you deploy")}</Muted>
 	);
 }
 
@@ -428,17 +455,17 @@ function footText(t: DevicesT, plan: DeployPlan): string {
 	const [first] = plan.targets;
 	if (plan.targets.length > 1)
 		return t(
-			"deploy.summary.footMany",
+			"devices:deploy.summary.footMany",
 			"Nothing changes on any device until you deploy.",
 		);
 	return first
 		? t(
-				"deploy.summary.footOne",
+				"devices:deploy.summary.footOne",
 				"Nothing changes on {{device}} until you deploy.",
 				{ device: first.name },
 			)
 		: t(
-				"deploy.summary.footNone",
+				"devices:deploy.summary.footNone",
 				"Nothing is sent anywhere until you deploy.",
 			);
 }
@@ -456,27 +483,31 @@ function runFootText(
 	if (run.rows.length > 1 || !only)
 		return result
 			? t(
-					"deploy.summary.footFinished",
+					"devices:deploy.summary.footFinished",
 					"Finished. Change anything to start a new deploy from the same choices.",
 				)
 			: t(
-					"deploy.summary.footRunning",
+					"devices:deploy.summary.footRunning",
 					"Running on the devices now. Your choices are locked until it finishes.",
 				);
 	const device = only.name;
 	if (!result)
 		return t(
-			"deploy.summary.footRunningOne",
+			"devices:deploy.summary.footRunningOne",
 			"Applying on {{device}} now. Your choices are locked until it finishes.",
 			{ device },
 		);
 	return result.outcome === "all"
-		? t("deploy.summary.footDoneOne", "Finished on {{device}} at {{time}}.", {
-				device,
-				time: time.clock(result.at),
-			})
+		? t(
+				"devices:deploy.summary.footDoneOne",
+				"Finished on {{device}} at {{time}}.",
+				{
+					device,
+					time: time.clock(result.at),
+				},
+			)
 		: t(
-				"deploy.summary.footFailedOne",
+				"devices:deploy.summary.footFailedOne",
 				"It didn't finish on {{device}}. Your choices are kept for a retry.",
 				{ device },
 			);
@@ -497,7 +528,7 @@ export function DeploySummary({
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
 	const { locale } = time;
-	const title = t("deploy.summary.title", "This deploy");
+	const title = t("devices:deploy.summary.title", "This deploy");
 	return (
 		<WizardSummary
 			className={className}
@@ -513,7 +544,7 @@ export function DeploySummary({
 					<FreshnessStamp
 						source="local"
 						age="current"
-						text={t("deploy.summary.keptHere", "kept in this window")}
+						text={t("devices:deploy.summary.keptHere", "kept in this window")}
 						className={inSheet ? "flex font-normal" : "mt-1 flex font-normal"}
 					/>
 				</>
@@ -554,10 +585,10 @@ export function DeploySummaryBar({
 				<ClipboardList aria-hidden className="size-4 shrink-0 text-ink-2" />
 				<span className="min-w-0 flex-1 truncate">
 					<b className="font-semibold">
-						{t("deploy.summary.title", "This deploy")}
+						{t("devices:deploy.summary.title", "This deploy")}
 					</b>
 					{t(
-						"deploy.summary.barStep",
+						"devices:deploy.summary.barStep",
 						" · Step {{n, number}} of {{total, number}} · ",
 						{
 							n: input.steps.indexOf(input.current) + 1,
@@ -565,12 +596,12 @@ export function DeploySummaryBar({
 						},
 					)}
 					{count
-						? t("deploy.summary.barDevices", {
+						? t("devices:deploy.summary.barDevices", {
 								count,
 								defaultValue_one: "{{count, number}} device",
 								defaultValue_other: "{{count, number}} devices",
 							})
-						: t("deploy.summary.barNoDevices", "no devices yet")}
+						: t("devices:deploy.summary.barNoDevices", "no devices yet")}
 				</span>
 				<ChevronUp
 					aria-hidden
@@ -581,7 +612,7 @@ export function DeploySummaryBar({
 				open={open}
 				onOpenChange={setOpen}
 				icon={ClipboardList}
-				title={t("deploy.summary.title", "This deploy")}
+				title={t("devices:deploy.summary.title", "This deploy")}
 				bodyClassName="p-0"
 			>
 				<DeploySummary

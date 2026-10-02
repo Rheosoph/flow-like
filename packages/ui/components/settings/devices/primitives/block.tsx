@@ -144,9 +144,14 @@ export interface ObjectHeaderProps {
 	className?: string;
 }
 
+/** On a phone the one primary comes first and takes the full width. */
 function HeaderActions({ actions }: Readonly<{ actions?: ReactNode }>) {
 	if (!actions) return null;
-	return <div className="flex flex-wrap items-center gap-2">{actions}</div>;
+	return (
+		<div className="flex flex-wrap items-center gap-2 @max-[720px]/devices:[&>[data-dv-primary]]:order-first @max-[720px]/devices:[&>[data-dv-primary]]:basis-full">
+			{actions}
+		</div>
+	);
 }
 
 /** A link when it has an `href`, a button when it only navigates client-side, plain text otherwise. */
@@ -228,7 +233,7 @@ export function PageHeader({
 	return (
 		<header className={cx("flex flex-col gap-3", className)}>
 			<Crumbs crumbs={crumbs} />
-			<div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+			<div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 @max-[720px]/devices:flex-col @max-[720px]/devices:items-stretch">
 				<div className="min-w-0">
 					<h1 className="text-2xl/[30px] font-semibold tracking-[-0.015em]">
 						{title}
@@ -252,7 +257,9 @@ function ObjectFacts({
 		<div className="mt-2.5 flex flex-wrap items-center gap-x-4.5 gap-y-1.5 text-xs text-ink-2">
 			{facts.map((fact) => (
 				<span key={fact.id} className="inline-flex min-w-0 items-center gap-1">
-					<span className="text-muted-foreground">{fact.label}</span>
+					<span className="whitespace-nowrap text-muted-foreground">
+						{fact.label}
+					</span>
 					{fact.value}
 				</span>
 			))}

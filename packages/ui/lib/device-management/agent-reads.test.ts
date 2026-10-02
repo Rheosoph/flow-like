@@ -378,6 +378,70 @@ test("artifact usage asks for one app or the device only", async () => {
 	]);
 });
 
+describe("artifact usage follows the device's cursor", () => {
+	const digest = (index: number) => index.toString(16).padStart(64, "0");
+	const budgets = {
+		device: null,
+		project: {
+			bytes: { used: 30, max: 100 },
+			entries: { used: 3, max: null },
+			revisions: { used: 3, max: 128 },
+		},
+	};
+	const row = (index: number) => ({
+		revision: digest(index),
+		bytes: 10,
+		referenced_by: [],
+		rollout: false,
+	});
+	const usageRequest = (after?: string) => ({
+		type: "artifact",
+		request: { kind: "usage", project_id: "app", ...(after ? { after } : {}) },
+	});
+	const read = (call: ManagementCall) =>
+		readArtifactUsage(call, { artifact_capacity: 1 }, { projectId: "app" });
+
+	test("pages are asked for with `after` and their revisions concatenated", async () => {
+		const pages: Record<string, unknown>[] = [
+			{ ...budgets, revisions: [row(1), row(2)], next: digest(2) },
+			{ ...budgets, project: null, revisions: [row(3)], next: null },
+		];
+		const { call, sent } = recorder(() => completed(pages[sent.length - 1]));
+		expect(await read(call)).toEqual({
+			kind: "ok",
+			data: { ...budgets, revisions: [row(1), row(2), row(3)] },
+		});
+		expect(sent).toEqual([usageRequest(), usageRequest(digest(2))]);
+	});
+
+	test("a cursor that does not advance stops the read", async () => {
+		const { call, sent } = recorder(() =>
+			completed({ ...budgets, revisions: [row(1)], next: digest(1) }),
+		);
+		await expect(read(call)).rejects.toThrow("repeated a page");
+		expect(sent).toHaveLength(2);
+	});
+
+	test("the read gives up after 180 pages", async () => {
+		const { call, sent } = recorder(() =>
+			completed({
+				...budgets,
+				revisions: [row(sent.length)],
+				next: digest(sent.length),
+			}),
+		);
+		await expect(read(call)).rejects.toThrow("more than 180 pages");
+		expect(sent).toHaveLength(180);
+	});
+
+	test("an invalid cursor is an invalid answer", async () => {
+		const { call } = recorder(() =>
+			completed({ ...budgets, revisions: [], next: "abc" }),
+		);
+		await expect(read(call)).rejects.toThrow("invalid app storage usage");
+	});
+});
+
 const pruneInput = { projectId: "app", revisions: [revision] };
 const pruned =
 	(result: Record<string, unknown>): ManagementCall =>

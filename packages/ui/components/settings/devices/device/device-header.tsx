@@ -4,6 +4,7 @@ import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	Copy,
 	Ellipsis,
+	Fingerprint,
 	KeyRound,
 	Lock,
 	LockOpen,
@@ -393,6 +394,25 @@ function DeviceSafetyChip({ page }: Readonly<{ page: DevicePage }>) {
 	);
 }
 
+/** The key manager blocks a session only for a changed identity; the shared chip's wording for that state is about the browser. */
+function DeviceKeyChip({ page }: Readonly<{ page: DevicePage }>) {
+	const { t } = useTranslation("devices");
+	if (!page.identity) return <KeyChip {...page.keyChip} />;
+	return (
+		<StatusChip
+			tone="critical"
+			icon={Fingerprint}
+			data-key-state="blocked"
+			title={t(
+				"device.header.identityChangedTitle",
+				"The hub reports other keys than the ones trusted on this computer. The keys here stay closed until you confirm the identity.",
+			)}
+		>
+			{t("device.header.identityChanged", "Identity changed")}
+		</StatusChip>
+	);
+}
+
 function IdleLockChip({ page }: Readonly<{ page: DevicePage }>) {
 	const { t } = useTranslation("devices");
 	const { keys } = page.view;
@@ -767,7 +787,7 @@ export function DeviceHeader({
 							}
 						/>
 					)}
-					{page.consentOnly ? null : <KeyChip {...page.keyChip} />}
+					{page.consentOnly ? null : <DeviceKeyChip page={page} />}
 					<DeviceSafetyChip page={page} />
 					<IdleLockChip page={page} />
 				</>
