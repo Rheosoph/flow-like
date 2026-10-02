@@ -28,6 +28,7 @@ import {
 	LINK,
 	PermissionsCell,
 	RulesPair,
+	RulesUnverified,
 	ScopeLabel,
 	UnlockButton,
 	keysNeedOf,
@@ -45,6 +46,7 @@ import {
 	useDeviceAccess,
 	usePersonNames,
 	useRulesRead,
+	useRulesUnverified,
 } from "../access/use-access";
 import { DeviceCloudApprovals } from "../cloud/device-cloud-approvals";
 import { enumLabel } from "../copy/enum-labels";
@@ -65,6 +67,57 @@ import { useAttentionState } from "../workspace/use-attention";
 import { useDeviceRow } from "../workspace/use-hub";
 import { useKeySession } from "../workspace/use-keys";
 
+/** The people aren't known yet: never the empty state, which would say nobody else has access (R6). */
+function PeopleUnknown({
+	state,
+	device,
+	onRetry,
+}: Readonly<{
+	/** `checking`: the rules are here, their people are still verified with the owner key. */
+	state: "reading" | "checking" | "failed";
+	device: string;
+	onRetry(): void;
+}>) {
+	const { t } = useTranslation("devices");
+	if (state !== "failed")
+		return (
+			<StateView
+				kind="loading"
+				title={
+					state === "reading"
+						? t("access.device.peopleReading", "Reading who has access…")
+						: t(
+								"access.device.peopleChecking",
+								"Checking the access rules with your owner key…",
+							)
+				}
+				rows={2}
+				className="mx-4 my-3"
+			/>
+		);
+	return (
+		<StateView
+			kind="error"
+			title={t(
+				"access.device.peopleError",
+				"Couldn't read who has access to {{device}}",
+				{ device },
+			)}
+			text={t(
+				"access.device.peopleErrorText",
+				"The hub didn't answer, so it isn't known whether {{device}} is shared. Nothing changed on the device.",
+				{ device },
+			)}
+			actions={
+				<DvButton size="sm" onClick={onRetry}>
+					{t("access.people.retry", "Try again")}
+				</DvButton>
+			}
+			className="mx-4 my-3"
+		/>
+	);
+}
+
 /** Owner view: the rules of this device, its people and every change to them. */
 function OwnerAccess({ device }: Readonly<{ device: DeviceAccess }>) {
 	const { t } = useTranslation("devices");
@@ -81,6 +134,7 @@ function OwnerAccess({ device }: Readonly<{ device: DeviceAccess }>) {
 	);
 	const flows = useGrantFlows(device, devices, names);
 	const gate = useKeysGate(device);
+	const unverified = useRulesUnverified(device);
 	const { rules, rows } = device;
 	const stamp = <FreshnessStamp {...stampOf(read.freshness)} />;
 	const failed = read.error && !read.data;
@@ -144,7 +198,9 @@ function OwnerAccess({ device }: Readonly<{ device: DeviceAccess }>) {
 									</span>
 								) : (
 									<span className="text-muted-foreground">
-										{t("access.facts.unlockToSee", "Shows once unlocked")}
+										{keysNeedOf(device)
+											? t("access.facts.unlockToSee", "Shows once unlocked")
+											: t("access.facts.notKnown", "Not known yet")}
 									</span>
 								)}
 							</KvRow>
@@ -282,9 +338,15 @@ function OwnerAccess({ device }: Readonly<{ device: DeviceAccess }>) {
 						}
 						className="mx-4 my-3"
 					/>
+				) : unverified ? (
+					<RulesUnverified
+						device={device.name}
+						onRetry={() => void read.refetch()}
+						className="mx-4 my-3"
+					/>
 				) : (
 					<PeopleUnknown
-						state={failed ? "failed" : rules ? "unchecked" : "reading"}
+						state={failed ? "failed" : rules ? "checking" : "reading"}
 						device={device.name}
 						onRetry={() => void read.refetch()}
 					/>

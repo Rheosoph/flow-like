@@ -543,6 +543,33 @@ describe("retained metrics history", () => {
 		SLOW,
 	);
 
+	test(
+		"expired access rules (BG31): the paused notice offers Renew access rules instead of a resume that can't be signed",
+		async () => {
+			const view = await open(EDGE, {
+				arrange: (agent, fake) => {
+					agent.record("metrics:device", deviceSample());
+					const rules = fake.seed.policies[EDGE]?.policy;
+					if (!rules) throw new Error("The seed has access rules for edge.");
+					fake.hub.setPolicy(EDGE, {
+						...rules,
+						expires_at: SAMPLE_NOW - 3_600,
+					});
+				},
+			});
+			const kept = block(view, "observe-retained-metrics");
+			await until(() => /Recording paused/.test(text(kept)));
+			await until(
+				() => queryByRole("link", "Renew access rules", kept) !== null,
+			);
+			expect(queryByRole("button", "Resume recording…", kept)).toBeNull();
+			expect(
+				byRole("link", "Renew access rules", kept).getAttribute("href"),
+			).toContain("tab=access");
+		},
+		SLOW,
+	);
+
 	test("offline and never read: the block says what it can't know instead of looking empty", async () => {
 		const view = await open(WAREHOUSE);
 		const kept = block(view, "observe-retained-metrics");

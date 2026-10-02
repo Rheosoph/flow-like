@@ -191,7 +191,7 @@ describe("FleetScreen triage blocks", () => {
 		expect(windowText("offline")).toContain("warehouse-pi · also critical");
 		expect(windowText("revoked")).toContain("1 still billed to you");
 		expect(container.textContent).toContain(
-			"Device slots 5 of 100 · 1 unused setup package · setup packages today 1 of 220.",
+			"Device slots 6 of 100 · 1 unused setup package · setup packages today 1 of 220.",
 		);
 
 		await click(healthWindow("critical"));
@@ -244,6 +244,30 @@ describe("FleetScreen triage blocks", () => {
 		expect(done.querySelectorAll("li[data-done]").length).toBe(1);
 		await click(byRole("button", "Dismiss", done));
 		expect(block.querySelector('[data-tier="done"]')).toBeNull();
+	});
+
+	test("locking the devices doesn't call the items they showed resolved", async () => {
+		const { fake, container, settle } = await mountFleet();
+		const block = container.querySelector("#devices-needs-you") as HTMLElement;
+		expect(block.textContent).toContain("kept crashing");
+		const encrypted = byText("Encrypted status").closest(
+			"section",
+		) as HTMLElement;
+		await click(byRole("button", "Lock all", encrypted));
+		await settle();
+		expect(block.textContent).not.toContain("kept crashing");
+		expect(block.textContent).not.toContain("Resolved.");
+		expect(block.querySelector('[data-tier="done"]')).toBeNull();
+
+		// A fact the hub states without keys still counts when it clears.
+		fake.hub.checkIn(SAMPLE_IDS.cold);
+		await act(async () => {
+			await fake.queryClient.refetchQueries();
+		});
+		await settle();
+		const done = block.querySelector('[data-tier="done"]') as HTMLElement;
+		expect(done.querySelectorAll("li[data-done]").length).toBe(1);
+		expect(done.textContent).toContain("has never checked in");
 	});
 
 	test("In progress previews three tracked operations and opens the tray", async () => {

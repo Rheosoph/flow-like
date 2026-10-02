@@ -17,7 +17,7 @@ import {
 	Square,
 	X,
 } from "lucide-react";
-import { Fragment, type ReactNode, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useId, useMemo, useState } from "react";
 import { useInvoke } from "../../../../hooks/use-invoke";
 import {
 	type AppMode,
@@ -72,7 +72,7 @@ import {
 	useOverlayStore,
 	useServiceCommands,
 } from "../workspace";
-import type { FleetDeviceEntry } from "./fleet-device-row";
+import { CELL_CHIP, type FleetDeviceEntry } from "./fleet-device-row";
 import {
 	FLEET_PAGE_SIZE,
 	FLEET_TABLE_CLASS,
@@ -505,8 +505,7 @@ function Badges({ usesCloud, buffering, endpoint }: Readonly<ServiceExtras>) {
 }
 
 /** R10: a badge wraps inside its cell instead of clipping. */
-const BADGE =
-	"h-auto min-h-5.5 items-start rounded-lg py-0.5 [&>span]:overflow-visible [&>span]:whitespace-normal [&>svg]:mt-0.5 [&>svg]:shrink-0";
+const BADGE = `${CELL_CHIP} items-start [&>svg]:mt-0.5 [&>svg]:shrink-0`;
 
 function bufferingText(
 	t: DevicesT,
@@ -547,6 +546,7 @@ function UpdateCell({
 						tone="info"
 						icon={LoaderCircle}
 						spin={rollout.state !== "staged"}
+						className={CELL_CHIP}
 					>
 						{enumLabel(t, "rollout", rollout.state)}
 					</StatusChip>
@@ -617,6 +617,7 @@ function ServiceActions({
 	const failing = specs.find((spec) => !spec.command.gate.ok)?.command.gate;
 	const gate = failing && !failing.ok ? failing : undefined;
 	const copy = gate ? gateCopy(t, gate) : undefined;
+	const reasonId = useId();
 	const runFix = () => {
 		if (!gate?.fix) return;
 		const outcome = fix(gate.fix);
@@ -634,6 +635,7 @@ function ServiceActions({
 							icon={spec.icon}
 							data-service-action={spec.id}
 							aria-disabled={blocked || undefined}
+							aria-describedby={blocked ? reasonId : undefined}
 							busy={spec.command.pending}
 							onClick={() => onAsk(spec)}
 						>
@@ -655,7 +657,7 @@ function ServiceActions({
 				</DvButton>
 			</div>
 			{copy && gate ? (
-				<GateInline kind={gate.kind}>
+				<GateInline kind={gate.kind} id={reasonId}>
 					{copy.inline}
 					{copy.fix && gate.fix ? (
 						<>

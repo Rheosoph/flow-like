@@ -109,8 +109,12 @@ class PrepareBlocked extends Error {
 	}
 }
 
-const errorText = (error: unknown) =>
-	error instanceof Error ? error.message : String(error);
+/** The hub's own sentence when it sent one: its error's `message` also carries the code and a reference. */
+const errorText = (error: unknown) => {
+	const server = (error as { serverMessage?: unknown } | null)?.serverMessage;
+	if (typeof server === "string" && server.trim()) return server;
+	return error instanceof Error ? error.message : String(error);
+};
 
 const OFFLINE_REFUSALS: readonly [RegExp, PrepareCheckId][] = [
 	[/secret/i, "no_secrets"],

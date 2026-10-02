@@ -96,6 +96,25 @@ describe("service page", () => {
 		const copy = byRole("button", "Copy link", view.container);
 		expect(copy.getAttribute("aria-disabled")).toBe("true");
 		expect(page).toContain("Enter the address people use below to get a link.");
+		// Without an address the three link actions stay in place under one reason (R7); none of them does anything.
+		const clips = dom.clipboard.length;
+		for (const name of ["Copy link", "Open", "QR code"]) {
+			const button = byRole("button", name, view.container);
+			expect(button.getAttribute("aria-disabled")).toBe("true");
+			expect(
+				text(
+					view.container.querySelector(
+						`[id="${button.getAttribute("aria-describedby")}"]`,
+					) as HTMLElement,
+				),
+			).toBe("Enter the address people use below to get a link.");
+			await click(button);
+		}
+		expect(queryByRole("dialog")).toBeNull();
+		expect(dom.clipboard.length).toBe(clips);
+		expect(
+			view.container.querySelectorAll("[data-gate-inline=unsupported]").length,
+		).toBe(1);
 		const input = byRole("textbox", "Address people use", view.container);
 		await typeInto(input, "https://edge.example.com/ui");
 		await click(byRole("button", "Save", view.container));
@@ -108,6 +127,12 @@ describe("service page", () => {
 			"https://edge.example.com:8443/ui/",
 		);
 		expect(text(view.container)).toContain("Saved on this computer at");
+		expect(byRole("link", "Open", view.container).getAttribute("href")).toBe(
+			"https://edge.example.com:8443/ui/",
+		);
+		await click(byRole("button", "QR code", view.container));
+		expect(text(inPortal("dialog"))).toContain("QR code for the service page");
+		await click(byRole("button", "Close", inPortal("dialog")));
 		expect(
 			Object.keys(localStorage).some(
 				(key) =>
@@ -202,6 +227,10 @@ describe("access token", () => {
 		);
 		expect(text(sheet)).toContain("No, this is permanent.");
 		const input = sheet.querySelector("#svc-token-value") as HTMLInputElement;
+		// The one field of the sheet has the focus, is masked, and no saved login is offered for it.
+		expect(document.activeElement).toBe(input);
+		expect(input.type).toBe("password");
+		expect(input.getAttribute("autocomplete")).toBe("new-password");
 		await typeInto(input, "short");
 		await click(byRole("button", "Set new token", sheet));
 		expect(text(sheet)).toContain("The token is 5 characters. Use at least 32");

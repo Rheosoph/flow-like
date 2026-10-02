@@ -722,12 +722,11 @@ function AppBody({
 			}}
 		/>
 	) : undefined;
-	// A finished run no longer blocks the next one.
+	// A finished run no longer blocks the next one; a run on one device blocks like any other while it is open.
 	useEffect(() => {
 		if (!runId) return;
-		const tracked = data.runs.find((entry) => entry.run.id === runId);
-		setRunDone(!tracked?.open && !!run);
-	}, [runId, data.runs, run]);
+		setRunDone(!data.openRuns.has(runId) && !!run);
+	}, [runId, data.openRuns, run]);
 	const never = view.layout === "never";
 	return (
 		<AppPageProvider value={page}>

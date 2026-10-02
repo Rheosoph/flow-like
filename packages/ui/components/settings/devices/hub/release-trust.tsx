@@ -56,6 +56,7 @@ import {
 	Hint,
 	HubReadStamp,
 	SectionHead,
+	TABLE_RESET,
 	Tech,
 	UrlLine,
 	useLocale,
@@ -74,6 +75,8 @@ const TARGETS: readonly { target: ReleaseTarget; docker: string | null }[] = [
 /** Above this a setup package downloads the agent on the device instead of carrying it. */
 const PACKAGE_BINARY_MAX = 268_435_456;
 const DAY = 86_400;
+/** A cell without a value shows a dash in the table and drops out of the stacked card. */
+const NO_VALUE = "empty:before:content-['–']";
 const DEVICES_SHOWN = 6;
 const DEVICES_STEP = 20;
 const TRANSPORT: ReadonlySet<HubErrorCode> = new Set([
@@ -190,7 +193,10 @@ function ValidityTrack({
 
 function Hero({ release }: Readonly<{ release: VerifiedRelease }>) {
 	const { t } = useTranslation("devices");
+	const time = useAreaTime();
 	const { manifest } = release;
+	// A release verified earlier can run out while the page is open.
+	const expired = manifest.expires_at <= time.nowS;
 	return (
 		<div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-8 gap-y-3 border-b border-hairline px-4 py-3.5 @max-[1080px]/devices:grid-cols-1">
 			<div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
@@ -202,9 +208,19 @@ function Hero({ release }: Readonly<{ release: VerifiedRelease }>) {
 						sequence: manifest.sequence,
 					})}
 				</span>
-				<StatusChip tone="good" icon={BadgeCheck} className="self-center">
-					{t("hub.release.verified", "Verified")}
-				</StatusChip>
+				{expired ? (
+					<StatusChip
+						tone="warning"
+						icon={TriangleAlert}
+						className="self-center"
+					>
+						{t("hub.release.expired", "Expired")}
+					</StatusChip>
+				) : (
+					<StatusChip tone="good" icon={BadgeCheck} className="self-center">
+						{t("hub.release.verified", "Verified")}
+					</StatusChip>
+				)}
 			</div>
 			<ValidityTrack manifest={manifest} />
 		</div>
@@ -291,7 +307,7 @@ function TrustFacts({
 					</KvHint>
 				</KvRow>
 			) : null}
-			{release && manifest ? (
+			{release && manifest && manifest.expires_at > time.nowS ? (
 				<KvRow label={t("hub.release.verification", "Verification")}>
 					<StatusChip tone="good" icon={BadgeCheck} className="mr-1.5">
 						{t("hub.release.verified", "Verified")}
@@ -612,6 +628,7 @@ function Platforms({ release }: Readonly<{ release: VerifiedRelease }>) {
 					version: manifest.release_version,
 				})}
 				cols={["27%", "37%", "12%", "24%"]}
+				className={TABLE_RESET}
 				head={
 					<tr>
 						<Th>{labels.platform}</Th>
@@ -647,10 +664,8 @@ function Platforms({ release }: Readonly<{ release: VerifiedRelease }>) {
 										)}
 									</CellSub>
 								</Td>
-								<Td label={labels.size} kind="num">
-									–
-								</Td>
-								<Td label={labels.hash}>–</Td>
+								<Td label={labels.size} kind="num" className={NO_VALUE} />
+								<Td label={labels.hash} className={NO_VALUE} />
 							</Tr>
 						);
 					const composed =

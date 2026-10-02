@@ -32,7 +32,7 @@ import { useDevicesRoute, useRouteLink } from "../routing/use-devices-route";
 import type { ScreenProps } from "../screen-props";
 import { useAttention } from "../workspace/use-attention";
 import { useResourceSummary } from "../workspace/use-hub";
-import { OBJECT_LINK } from "./access-parts";
+import { OBJECT_LINK, keysNeedOf } from "./access-parts";
 import { AccessWizard, type AccessWizardStart } from "./add-people-sheet";
 import { nextWizardId } from "./change-permissions-sheet";
 import { AccessCloudTab } from "./cloud-tab";
@@ -212,14 +212,43 @@ function ReachSentence({
 	);
 }
 
+/** People who can reach the devices, or why that can't be said: keys closed, or rules not readable yet. */
+function reachLead(
+	t: DevicesT,
+	people: number,
+	locked: number,
+	unread: number,
+): string {
+	if (people)
+		return t("devices:access.headline.people", {
+			count: people,
+			defaultValue_one: "{{count, number}} person can reach your devices.",
+			defaultValue_other: "{{count, number}} people can reach your devices.",
+		});
+	if (locked)
+		return t(
+			"devices:access.headline.unread",
+			"Unlock your shared devices to see who can reach them.",
+		);
+	return unread
+		? t(
+				"devices:access.headline.unknown",
+				"Who can reach your devices isn't known yet.",
+			)
+		: t("devices:access.headline.onlyYou", "Only you can reach your devices.");
+}
+
 /** SPEC §6.4: the page's one conclusion about who can reach the viewer's devices. */
 function AccessConclusion({
 	fleet,
 	headline,
+	lockedUnread,
 	names,
 }: Readonly<{
 	fleet: FleetAccess;
 	headline: AccessHeadline;
+	/** Shared devices whose people need the keys opened here: only those are fixed by unlocking. */
+	lockedUnread: AccessHeadline["unread"];
 	names: PersonNames;
 }>) {
 	const { t } = useTranslation("devices");
@@ -252,29 +281,18 @@ function AccessConclusion({
 			/>
 		);
 	const { people, soon, waiting, unread } = headline;
-	const lead = people
-		? t("access.headline.people", {
-				count: people,
-				defaultValue_one: "{{count, number}} person can reach your devices.",
-				defaultValue_other: "{{count, number}} people can reach your devices.",
-			})
-		: unread.length
-			? t(
-					"access.headline.unread",
-					"Unlock your shared devices to see who can reach them.",
-				)
-			: t("access.headline.onlyYou", "Only you can reach your devices.");
+	const lead = reachLead(t, people, lockedUnread.length, unread.length);
 	const reach =
 		soon || waiting.length ? (
 			<ReachSentence soon={soon} waiting={waiting} names={names} />
 		) : null;
 	const locked =
-		unread.length && people ? (
+		lockedUnread.length && people ? (
 			<Trans
 				t={t}
 				i18nKey="access.headline.unreadRest"
 				defaults="Unlock <1/> to see who else has access there."
-				components={{ 1: <DeviceLinks devices={unread} /> }}
+				components={{ 1: <DeviceLinks devices={lockedUnread} /> }}
 			/>
 		) : null;
 	const rest =
@@ -479,6 +497,14 @@ export function AccessScreen({ route, scope }: Readonly<ScreenProps>) {
 		[devices, time.nowS],
 	);
 	const tabs = useTabs(t, local.requests.length, pendingRequests);
+	const lockedUnread = useMemo(() => {
+		const closed = new Set(
+			devices
+				.filter((device) => keysNeedOf(device))
+				.map((device) => device.deviceId),
+		);
+		return headline.unread.filter((entry) => closed.has(entry.deviceId));
+	}, [devices, headline.unread]);
 
 	const setTab = useCallback(
 		(next: AccessTab) =>
@@ -530,7 +556,12 @@ export function AccessScreen({ route, scope }: Readonly<ScreenProps>) {
 	return (
 		<div className={PAGE}>
 			<AccessHeader fleet={fleet} onAdd={startAdd} onRequest={startRequest} />
-			<AccessConclusion fleet={fleet} headline={headline} names={names} />
+			<AccessConclusion
+				fleet={fleet}
+				headline={headline}
+				lockedUnread={lockedUnread}
+				names={names}
+			/>
 			<UnderlineTabs
 				label={t("access.tabs", "Access sections")}
 				tabs={tabs}

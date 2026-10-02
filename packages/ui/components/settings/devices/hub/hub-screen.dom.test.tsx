@@ -95,6 +95,37 @@ function setupRequests(view: View) {
 	return view.fake.api.sent("GET", "devices/setup").length;
 }
 
+type Fake = Awaited<ReturnType<typeof createFakeWorkspace>>;
+
+interface FetchApi {
+	fetch(profile: unknown, path: string, init?: RequestInit): Promise<unknown>;
+}
+
+/** What the hub answers on `GET devices/setup` while device support is off: the limits check fails. */
+function checksWhileOff(fake: Fake) {
+	const checks = [];
+	for (const check of fake.hub.readiness.checks) {
+		const off = check.id === "policy";
+		checks.push(
+			off ? { ...check, ready: false, message: "server text" } : check,
+		);
+	}
+	return { version: 1, ready: false, checks };
+}
+
+/** The fake refuses every device route while devices are off; the hub still answers its checks. */
+function answerChecksWhileOff(fake: Fake) {
+	const api = fake.api as unknown as FetchApi;
+	const refused = api.fetch.bind(api);
+	api.fetch = function answer(profile, path, init) {
+		const route = path.replace(/^\/+/, "").split("?")[0];
+		if (route !== "devices/setup" || fake.api.mode.devicesEnabled)
+			return refused(profile, path, init);
+		fake.api.calls.push(["GET", route]);
+		return Promise.resolve(checksWhileOff(fake));
+	};
+}
+
 function releaseRequests(view: View) {
 	return view.fake.api.calls.filter(([, path]) => path === RELEASE_URL).length;
 }
@@ -110,12 +141,23 @@ function rateLimited() {
 /** The hub's own retries of a failed read have finished: nothing is fetching any more. */
 async function idle(view: View) {
 	for (let round = 0; round < 80; round++) {
-		if (!view.fake.queryClient.isFetching()) return;
+		if (!view.fake.queryClient.isFetching()) {
+			// The last answer reaches the components a tick after the cache has it.
+			await view.settle();
+			return;
+		}
 		await act(async () => {
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		});
 	}
 	throw new Error("The hub reads never settled");
+}
+
+/** Real time passes, so a ticking area clock reads the fake clock again. */
+async function pass(ms: number) {
+	await act(async () => {
+		await new Promise((resolve) => setTimeout(resolve, ms));
+	});
 }
 
 /** R7: a gated control is disabled, and clicking it navigates nowhere and sends nothing. */
@@ -412,6 +454,16 @@ describe("Hub status: a hub that isn't ready", () => {
 		expect(stateOf(view, "setup")).toBe("blocked");
 		expect(releases.textContent).toContain(RELEASE_URL);
 	});
+
+	test("a release that runs out while the page is open stops reading as verified", async () => {
+		const view = await mount({ tickMs: 100 });
+		const releases = block(view, "releases");
+		expect(releases.textContent).toContain("within its validity window");
+		view.fake.clock.advance(8 * 86_400_000);
+		await pass(300);
+		expect(releases.textContent).not.toContain("within its validity window");
+		expect(releases.textContent).toContain("Expired");
+	});
 });
 
 describe("Hub status: hub states", () => {
@@ -428,14 +480,15 @@ describe("Hub status: hub states", () => {
 		expect(all(view.container, "[data-kind='empty']").length).toBe(0);
 	});
 
-	test("off: the checks can't run and the limits still show, without usage", async () => {
+	test("off: unread checks say so and the limits still show, without usage", async () => {
 		const fake = await createFakeWorkspace();
 		fake.api.mode.devicesEnabled = false;
 		const view = await mount({ fake });
+		await idle(view);
 		expect(headline(view)).toContain("Devices are off on hub.test.");
 		expect(block(view, "hub").textContent).toContain("Off on this hub");
 		expect(text(block(view, "readiness"), '[data-gate="hub"]')).toContain(
-			"Devices are off on this hub.",
+			"Devices are off on this hub. Its checks couldn't be read.",
 		);
 		expect(stateOf(view, "checkin")).toBe("blocked");
 		const limits = block(view, "limits");
@@ -445,16 +498,52 @@ describe("Hub status: hub states", () => {
 		expect(all(limits, "[data-limit]").length).toBe(4);
 		expect(limits.querySelector("[data-usage]")).toBeNull();
 		expect(all(view.container, "[data-kind='empty']").length).toBe(0);
-	});
+	}, 20_000);
 
-	test("off: Check again and Set up a device are gated and send nothing", async () => {
+	test("off: Set up a device is gated and sends nothing; Check again asks the hub and says what came back", async () => {
 		const fake = await createFakeWorkspace();
 		fake.api.mode.devicesEnabled = false;
 		const view = await mount({ fake });
 		await idle(view);
-		await expectGated(view, "Check again");
 		await expectGated(view, "Set up a device");
-	}, 20_000);
+
+		const again = byRole("button", "Check again");
+		expect(again.getAttribute("aria-disabled")).toBeNull();
+		const asked = setupRequests(view);
+		await click(again);
+		await idle(view);
+		expect(setupRequests(view)).toBeGreaterThan(asked);
+		expect(block(view, "readiness").textContent).toMatch(
+			new RegExp(`Couldn't check at ${CLOCK}`),
+		);
+	}, 30_000);
+
+	test("off: the hub still answers its checks, every block states its own read, and Check again shows the operator's fix", async () => {
+		const fake = await createFakeWorkspace();
+		fake.api.mode.devicesEnabled = false;
+		answerChecksWhileOff(fake);
+		const view = await mount({ fake });
+		await idle(view);
+		expect(headline(view)).toContain("Devices are off on hub.test.");
+		const readiness = block(view, "readiness");
+		expect(readiness.textContent).toContain("5 of 6 pass");
+		expect(text(readiness, "[data-fix]")).toContain(
+			"Turn on device support in the hub settings",
+		);
+		// The device list can't be read while devices are off. That isn't a failed read of these blocks.
+		const ages = ["hub", "readiness", "features", "limits", "releases"].map(
+			(id) => find(block(view, id), "header [data-stamp]").dataset.age,
+		);
+		expect(ages).not.toContain("error");
+
+		fake.api.mode.devicesEnabled = true;
+		await click(byRole("button", "Check again"));
+		await idle(view);
+		expect(headline(view)).toContain("hub.test is ready for devices.");
+		expect(readiness.textContent).toMatch(
+			new RegExp(`Checked again at ${CLOCK}\\. All 6 checks pass\\.`),
+		);
+	}, 30_000);
 
 	test("unreachable: Retry reports the attempt, and the page fills once the hub answers", async () => {
 		const api = fakeDeviceApi();
@@ -550,6 +639,9 @@ describe("Hub status: older hub and older agents", () => {
 		expect(headline(view)).toContain("hub.test is ready for devices.");
 		expect(text(block(view, "limits"), '[data-kind="unsupported"]')).toContain(
 			"This hub doesn't state its limits.",
+		);
+		expect(block(view, "limits").textContent).not.toContain(
+			"only the limits are shown",
 		);
 		const history = block(view, "history");
 		expect(all(history, "tr[data-tier]").length).toBeGreaterThan(0);

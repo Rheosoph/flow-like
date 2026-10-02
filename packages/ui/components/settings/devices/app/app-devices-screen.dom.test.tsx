@@ -476,19 +476,40 @@ describe("App › Devices · normal (online app, one update running)", () => {
 			"Actions",
 		]);
 		const rows = [...access.querySelectorAll("[data-grant]")];
-		// Someone else's access on a device of the viewer: the rules the device runs, and the device's Access tab.
+		// Someone else's access on a device of the viewer: the rules the device runs, and how soon it ends.
 		expect(text(rows[0])).toMatch(/Active · rules v\d+/);
 		expect(present(rows[0].querySelector("[data-ends-soon]"))).toBe(true);
 		expect(present(rows[1].querySelector("[data-ends-soon]"))).toBe(false);
-		expect(hrefOf("Open device access", rows[0])).toBe(
-			appUrl(INVOICE, `&device=${ID.edge}&tab=access`),
-		);
 		// The viewer's own access to a shared device can only be asked for.
 		expect(text(rows[2])).not.toContain("rules v");
 		expect(hrefOf("Ask to renew", rows[2])).toBe(
 			"/settings/devices?view=access&tab=shared&action=request",
 		);
+		expect(present(rows[2].querySelector("[data-grant-actions]"))).toBe(false);
 		expect(primaries(access)).toBe(0);
+	});
+
+	test("access to this app: Renew… and the row menu work from here and send nothing before the confirm", async () => {
+		const { container, fake } = await mountApp(INVOICE);
+		const [row] = block(container, "ad-access").querySelectorAll(
+			"[data-grant]",
+		);
+		expect(present(row.querySelector("[data-grant-actions]"))).toBe(true);
+		const writes = fake.api.writes().length;
+		await click(byRole("button", "Renew…", row));
+		const confirm = inPortal("alertdialog");
+		expect(text(confirm)).toContain("access to edge-berlin-01?");
+		expect(text(confirm)).toContain("Can you undo it?");
+		await click(byRole("button", "Cancel", confirm));
+		expect(fake.api.writes().length).toBe(writes);
+		await click(byRole("button", /^More for /, row));
+		const items = allByRole("menuitem", undefined, inPortal("menu")).map(
+			(item) => text(item),
+		);
+		expect(items.some((label) => label.startsWith("Change permissions"))).toBe(
+			true,
+		);
+		expect(items.some((label) => label.startsWith("Remove "))).toBe(true);
 	});
 });
 
@@ -1179,25 +1200,27 @@ describe("App › Devices · Update everywhere sheet", () => {
 		expect(hrefOf("Change settings or events too…", sheet)).toBe(
 			appUrl(INVOICE, `&flow=deploy&mode=update&device=${ID.lab}`),
 		);
-		// Three steps, the first one current; one coral, the way on.
-		expect(
-			[...sheet.querySelectorAll("ol li")].map((step) => [
-				step.getAttribute("data-s"),
-				text(step),
-			]),
-		).toEqual([
-			["current", "1Choose"],
-			["todo", "2Strategy"],
-			["todo", "3Review"],
+	});
+
+	test("choose: three steps with the first one current, and the way on is the one coral", async () => {
+		await openSheet();
+		const sheet = inPortal("dialog");
+		const steps = [...sheet.querySelectorAll("ol li")];
+		expect(steps.map((step) => step.getAttribute("data-s"))).toEqual([
+			"current",
+			"todo",
+			"todo",
+		]);
+		expect(steps.map((step) => text(step))).toEqual([
+			"1Choose",
+			"2Strategy",
+			"3Review",
 		]);
 		expect(text(sheet)).toContain("Services per device");
 		expect(text(sheet)).toContain("Step 1 of 3 · Choose");
 		expect(primaries(sheet)).toBe(1);
-		expect(
-			present(
-				byRole("button", "Next: strategy", sheet).closest("[data-dv-primary]"),
-			),
-		).toBe(true);
+		const next = byRole("button", "Next: strategy", sheet);
+		expect(present(next.closest("[data-dv-primary]"))).toBe(true);
 	});
 
 	test("review states the consequences; nothing is sent before the last button", async () => {
@@ -1426,6 +1449,33 @@ describe("App › Devices · roles, gates and failures", () => {
 		);
 		expect(primaries(container)).toBe(1);
 	});
+
+	test("the app can't be loaded: an error, not an empty page, and Try again reads it again", async () => {
+		const base = appBackend().appState as IBackendState["appState"];
+		const attempts = { failing: true, count: 0 };
+		const { container, settle } = await mountApp(INVOICE, {
+			backend: {
+				appState: {
+					...base,
+					getApp: async (id: string) => {
+						attempts.count += 1;
+						if (attempts.failing) throw new Error("no answer");
+						return base.getApp(id);
+					},
+				} as unknown as IBackendState["appState"],
+			},
+		});
+		await advance(50);
+		await settle();
+		expect(text(container)).toContain("This app couldn't be loaded");
+		expect(present(container.querySelector("[data-app-devices]"))).toBe(false);
+		attempts.failing = false;
+		const before = attempts.count;
+		await click(byRole("button", "Try again", container));
+		await settle();
+		expect(attempts.count).toBeGreaterThan(before);
+		expect(layout(container)).toBe("normal");
+	}, 20_000);
 
 	test("a failing hub keeps the data, says so once, and marks the hub stamps", async () => {
 		const { container, fake, settle } = await mountApp(INVOICE);

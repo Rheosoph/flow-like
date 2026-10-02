@@ -112,18 +112,17 @@ export function useAppRole(appId: string | null | undefined): AppRole {
 		if (!data || !Number.isInteger(data.permissions))
 			return { known: false, owner: false };
 		const bits = new RolePermissions(BigInt(data.permissions));
+		// `is_owner` also holds for an Admin; only the Owner permission itself names the app's owner.
+		const owner = bits.contains(RolePermissions.Owner);
 		return {
 			known: true,
-			owner: data.is_owner,
+			owner,
 			projectRole: {
 				readBoards: bits.hasPermission(RolePermissions.ReadBoards),
 				// The hub accepts the Admin or the Owner permission for an approval.
-				admin:
-					data.is_owner ||
-					bits.contains(RolePermissions.Admin) ||
-					bits.contains(RolePermissions.Owner),
+				admin: data.is_owner || owner || bits.contains(RolePermissions.Admin),
 				executeBoards: bits.hasPermission(RolePermissions.ExecuteBoards),
-				owner: data.is_owner,
+				owner,
 			},
 		};
 	}, [data]);

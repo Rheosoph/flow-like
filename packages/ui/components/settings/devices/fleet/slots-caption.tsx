@@ -23,12 +23,14 @@ export function SlotsCaption() {
 
 	if (usage.data) {
 		const { limits, usage: used } = usage.data;
-		const over = used.active_devices > limits.max_devices;
+		// The hub counts an unused setup package as a device slot, like a registered device.
+		const slots = used.active_devices + used.pending_enrollments;
+		const over = slots > limits.max_devices;
 		return (
 			<span data-slots="usage">
 				{t("fleet.slots.usage", {
 					count: used.pending_enrollments,
-					used: used.active_devices,
+					used: slots,
 					max: limits.max_devices,
 					today: used.enrollments_last_24h,
 					cap: limits.max_enrollments_per_day,

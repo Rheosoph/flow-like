@@ -630,31 +630,49 @@ export interface AppRun {
 	open: boolean;
 }
 
+/** Every tracked run with its items of this app. */
+function runEntries(
+	runs: readonly ActivityRun[],
+	items: readonly ActivityItem[],
+	appId: string,
+): AppRun[] {
+	return runs.map((run) => {
+		const ids = new Set(run.itemIds);
+		const own = items.filter(
+			(item) => ids.has(item.id) && item.target.projectId === appId,
+		);
+		return {
+			run,
+			items: own,
+			done: own.filter((item) => item.state === "done").length,
+			total: own.length,
+			open: own.some((item) => RUN_OPEN.has(item.state)),
+		};
+	});
+}
+
 /** Multi-device runs of this app that this computer tracks, newest first; `items` is the tray's list. */
 export function appRuns(
 	runs: readonly ActivityRun[],
 	items: readonly ActivityItem[],
 	appId: string,
 ): AppRun[] {
-	return runs
-		.map((run) => {
-			const ids = new Set(run.itemIds);
-			const own = items.filter(
-				(item) => ids.has(item.id) && item.target.projectId === appId,
-			);
-			return { run, own };
-		})
-		.map(({ run, own: items }) => {
-			return {
-				run,
-				items,
-				done: items.filter((item) => item.state === "done").length,
-				total: items.length,
-				open: items.some((item) => RUN_OPEN.has(item.state)),
-			};
-		})
+	return runEntries(runs, items, appId)
 		.filter((entry) => entry.total > 1 && entry.open)
 		.sort((a, b) => b.run.updatedAt - a.run.updatedAt);
+}
+
+/** Runs of this app that still have work open, a run on one device included. */
+export function openRunIds(
+	runs: readonly ActivityRun[],
+	items: readonly ActivityItem[],
+	appId: string,
+): Set<string> {
+	return new Set(
+		runEntries(runs, items, appId)
+			.filter((entry) => entry.open)
+			.map((entry) => entry.run.id),
+	);
 }
 
 /* Lists (R10, R11). */

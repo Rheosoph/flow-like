@@ -100,6 +100,12 @@ function ConnectionLine({ device }: Readonly<{ device: DeployDevice }>) {
 			};
 		if (device.keyState !== "unlocked")
 			return { icon: KeyRound, text: t("deploy.card.noKeys", "No keys here") };
+		// A device that can't be picked right now makes no promise about connecting.
+		if (device.gate)
+			return {
+				icon: LockOpen,
+				text: t("deploy.card.unlockedOnly", "Unlocked"),
+			};
 		return {
 			icon: LockOpen,
 			text:

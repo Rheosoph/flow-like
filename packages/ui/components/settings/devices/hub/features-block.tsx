@@ -28,6 +28,7 @@ import { FreshnessStamp } from "../primitives/freshness-stamp";
 import { StatusChip } from "../primitives/status-chip";
 import type { ChipTone } from "../primitives/tone";
 import { useRouteLink } from "../routing/use-devices-route";
+import { stampOf } from "../shell/attention-popover";
 import { HubReadStamp } from "./hub-parts";
 import { type HubView, failsCheck, firstFailing, jumpTo } from "./hub-view";
 import { checkCopy } from "./readiness-list";
@@ -524,12 +525,12 @@ function FeaturesStamp({ view }: Readonly<{ view: HubView }>) {
 		);
 	return (
 		<FreshnessStamp
-			source="hub"
-			age="current"
+			{...stampOf(readiness.freshness)}
 			observedAt={checkedAt}
 			text={t("hub.features.stamp", "from the checks {{ago}}", {
 				ago: time.ago(checkedAt),
 			})}
+			noFail={hub.support.state === "off"}
 		/>
 	);
 }

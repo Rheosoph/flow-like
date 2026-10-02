@@ -628,7 +628,7 @@ function FullLimits() {
 						"hub.limits.foot",
 						"Per account on this hub. Only the hub operator can change them.",
 					)}{" "}
-					{usageNote(t, facts)}
+					{hasLimits(facts.limits) ? usageNote(t, facts) : null}
 				</span>
 			}
 		>

@@ -151,7 +151,10 @@ function useApprover(plan: DeployPlan, fresh: readonly NewService[]): Approver {
 	return {
 		known: permissions.known,
 		loading: permissions.isLoading,
-		owner: permissions.known && permissions.isOwner,
+		// `isOwner` also holds for an Admin; project files need the Owner permission itself.
+		owner:
+			permissions.known &&
+			permissions.permissions.contains(RolePermissions.Owner),
 		canApprove,
 		...(permissions.roleName ? { roleName: permissions.roleName } : {}),
 		devices,
@@ -647,6 +650,7 @@ export function SpendingBlock(props: Readonly<FormProps>) {
 				value={spending}
 				approval={draft.approval}
 				onChange={setSpending}
+				services={targets.length}
 			/>
 			{targets.length > 1 ? (
 				<div className="flex flex-col items-start gap-1.5" data-limit-mode="">
@@ -726,7 +730,13 @@ function SumLine({
 	);
 }
 
-function WritesBlock({ plan, draft, update, blocked }: Readonly<FormProps>) {
+function WritesBlock({
+	plan,
+	draft,
+	update,
+	blocked,
+	notOwner,
+}: Readonly<FormProps>) {
 	const { t } = useTranslation("devices");
 	const readWrite = draft.approval.files === "read_write";
 	const maxInstances = Math.max(
@@ -759,9 +769,10 @@ function WritesBlock({ plan, draft, update, blocked }: Readonly<FormProps>) {
 						"It keeps accepting changes when the internet drops and sends them when it's back.",
 					)}
 					actions={
+						// Only the app's owner can allow its files; Cloud access above says so.
 						<DvButton
 							size="sm"
-							disabled={blocked}
+							disabled={blocked || notOwner}
 							onClick={() =>
 								update({
 									approval: { ...draft.approval, files: "read_write" },

@@ -20538,8 +20538,8 @@ export const catalogNodes: CatalogNode[] = [
     "slug": "nodes/ai/ml/onnx/nlp/onnx-laya",
     "packageName": "onnx",
     "name": "onnx_laya",
-    "friendlyName": "Typed Decision (Laya)",
-    "description": "Answer a choice, rubric score, or true-probability question about text using Laya multilingual. Connect one Model Directory; existing model files are loaded and missing files download automatically from mizchi/laya-multilingual-onnx. Loaded models are reused within the execution cache.",
+    "friendlyName": "Typed Decision",
+    "description": "Answer a choice, rubric score, or true-probability question about text with Laya or GLiNER2.5. Select ONNX model weights and connect a Model Directory to cache downloads and reuse them across runs. Select custom to load your own complete bundle without downloading missing files.",
     "category": "AI/ML/ONNX/NLP",
     "categoryPath": [
       "AI",
@@ -20562,7 +20562,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "model_dir",
         "friendlyName": "Model Directory",
-        "description": "Directory containing model.onnx, tokenizer/tokenizer.json (or tokenizer.json), and rl_agent_config.json. Missing files download automatically into this directory's managed cache (about 681 MB for the complete bundle)",
+        "description": "FlowPath directory for downloaded ONNX models and reusable cache. Place your exported weights here for custom. Custom requires a complete Laya or GLiNER2 classification bundle and never downloads missing files",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",
@@ -20573,13 +20573,35 @@ export const catalogNodes: CatalogNode[] = [
         }
       },
       {
+        "name": "model",
+        "friendlyName": "Model",
+        "description": "Model weights to use. ONNX presets download once and reuse the Model Directory cache. Custom loads your own complete bundle",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "mizchi/laya-multilingual-onnx",
+        "index": 3,
+        "options": {
+          "validValues": [
+            "mizchi/laya-multilingual-onnx",
+            "fastino/GLiNER2.5-Decide",
+            "fastino/GLiNER2.5-multi-Decide",
+            "fastino/GLiNER2.5-Decide-1B",
+            "fastino/gliner2.5-multi-v1",
+            "fastino/gliner2.5-base-v1",
+            "fastino/gliner2.5-small-v1",
+            "custom"
+          ]
+        }
+      },
+      {
         "name": "text",
         "friendlyName": "Text",
         "description": "Text or serialized JSON state to evaluate",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
-        "index": 3
+        "index": 4
       },
       {
         "name": "instructions",
@@ -20588,7 +20610,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
-        "index": 4
+        "index": 5
       },
       {
         "name": "question_type",
@@ -20598,7 +20620,7 @@ export const catalogNodes: CatalogNode[] = [
         "dataType": "String",
         "valueType": "Normal",
         "defaultValue": "choice",
-        "index": 5,
+        "index": 6,
         "options": {
           "validValues": [
             "choice",
@@ -20615,7 +20637,7 @@ export const catalogNodes: CatalogNode[] = [
         "dataType": "String",
         "valueType": "Array",
         "defaultValue": [],
-        "index": 6
+        "index": 7
       },
       {
         "name": "exec_out",
@@ -20629,11 +20651,11 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "result",
         "friendlyName": "Result",
-        "description": "Typed answer, calibrated probabilities, confidence, action probability and token count",
+        "description": "Typed answer, option probabilities, confidence and token count. act_probability is Laya's action probability and null for models without an action head",
         "pinType": "Output",
         "dataType": "Struct",
         "valueType": "Normal",
-        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LayaResult\",\"type\":\"object\",\"properties\":{\"question_type\":{\"$ref\":\"#/$defs/LayaQuestionType\"},\"choice\":{\"description\":\"Selected label for a choice question.\",\"type\":[\"string\",\"null\"]},\"score\":{\"description\":\"Expected zero-based rubric level for a score question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"noul\":{\"description\":\"Probability that the statement holds for a noul question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"probabilities\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/LayaProbability\"}},\"confidence\":{\"description\":\"One minus normalized entropy; for noul, the larger of P(false) and P(true).\",\"type\":\"number\",\"format\":\"double\"},\"act_probability\":{\"description\":\"Probability of action index zero from the model's separate action head.\",\"type\":\"number\",\"format\":\"double\"},\"input_tokens\":{\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0}},\"required\":[\"question_type\",\"probabilities\",\"confidence\",\"act_probability\",\"input_tokens\"],\"$defs\":{\"LayaQuestionType\":{\"type\":\"string\",\"enum\":[\"choice\",\"score\",\"noul\"]},\"LayaProbability\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"probability\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"label\",\"probability\"]}}}",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LayaResult\",\"type\":\"object\",\"properties\":{\"question_type\":{\"$ref\":\"#/$defs/LayaQuestionType\"},\"choice\":{\"description\":\"Selected label for a choice question.\",\"type\":[\"string\",\"null\"]},\"score\":{\"description\":\"Expected zero-based rubric level for a score question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"noul\":{\"description\":\"Probability that the statement holds for a noul question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"probabilities\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/LayaProbability\"}},\"confidence\":{\"description\":\"One minus normalized entropy; for noul, the larger of P(false) and P(true).\",\"type\":\"number\",\"format\":\"double\"},\"act_probability\":{\"description\":\"Laya's probability of action index zero; absent for models without an action head.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"input_tokens\":{\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0}},\"required\":[\"question_type\",\"probabilities\",\"confidence\",\"input_tokens\"],\"$defs\":{\"LayaQuestionType\":{\"type\":\"string\",\"enum\":[\"choice\",\"score\",\"noul\"]},\"LayaProbability\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"probability\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"label\",\"probability\"]}}}",
         "index": 2
       },
       {
@@ -20655,10 +20677,10 @@ export const catalogNodes: CatalogNode[] = [
         "index": 6
       }
     ],
-    "inputCount": 6,
+    "inputCount": 7,
     "outputCount": 4,
     "flags": [],
-    "version": 2,
+    "version": 3,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []

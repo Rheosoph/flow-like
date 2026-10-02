@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { ApiResponseError } from "../../../../../lib/api-error";
 import type { ExportCommands } from "../../../../../lib/device-management/project-export";
 import {
 	byRole,
@@ -112,16 +113,21 @@ describe("How it runs · online (APP §3.6)", () => {
 
 	test("prepare-blocked: the hub's reason is the failing check, and Continue waits", async () => {
 		const fake = await createFakeWorkspace();
-		const restore = fake.api.fail(
-			{ method: "GET", path: METADATA },
-			new Error(
-				"Publish widgets before deploying them: Visitor badge is a draft.",
-			),
-		);
-		const view = await mount({ fake });
 		const reason =
 			"Publish widgets before deploying them: Visitor badge is a draft.";
+		// As the hub sends it: the error's own text also carries the code and a reference.
+		const restore = fake.api.fail(
+			{ method: "GET", path: METADATA },
+			new ApiResponseError({
+				status: 400,
+				code: "BAD_REQUEST",
+				errorId: "ref-1",
+				message: reason,
+			}),
+		);
+		const view = await mount({ fake });
 		expect(checks(view.container)[0]).toBe(`fail: ${reason}`);
+		expect(text(view.container)).not.toContain("BAD_REQUEST");
 		expect(checks(view.container)[1]).toContain("skip:");
 		expect(text(view.container)).toContain("· not checked");
 		expect(kit.footBlocking(view.container)).toBe(reason);

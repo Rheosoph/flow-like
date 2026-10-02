@@ -17,6 +17,7 @@ import {
 	rulesExpiryAfterSave,
 } from "../../../../lib/device-management/sharing";
 import type { ManagementGrant } from "../../../../lib/device-management/types";
+import { Label } from "../../../ui/label";
 import {
 	type AreaTime,
 	type DevicesT,
@@ -32,9 +33,11 @@ import { Field, SecretInput } from "../primitives/form-fields";
 import { InlineResult } from "../primitives/inline-result";
 import {
 	ConnectionFileSheet,
+	GrantActions,
 	type GrantHandlers,
 	appliesSentence,
 	permissionSummary,
+	useKeysGate,
 	useScopeNames,
 } from "./access-parts";
 import { AccessWizard, type AccessWizardStart } from "./add-people-sheet";
@@ -45,6 +48,8 @@ import {
 	type PersonNames,
 	type SaveAccessOutcome,
 	saveErrorText,
+	useDeviceAccess,
+	usePersonNames,
 	useSaveAccessRules,
 } from "./use-access";
 
@@ -116,6 +121,8 @@ function ConfirmPassword({
 interface RenewTarget {
 	row: GrantRow;
 }
+
+const EXTEND_ID = "access-renew-extend";
 
 function renewalLabel(
 	t: DevicesT,
@@ -282,21 +289,31 @@ function RenewAccessSheet({
 				</>
 			}
 		>
-			<Field
-				id="access-renew-extend"
-				label={t("access.renew.extendBy", "Extend by")}
-				hint={t(
-					"access.renew.extendHint",
-					"Access can't outlast the access rules. Saving re-signs them until {{date}}.",
-					{ date: time.at(rulesExpiryAfterSave(openedAt)) },
-				)}
-			>
-				<SelectControl
-					value={choice}
-					onValueChange={setChoice}
-					options={renewalChoices(t, time, options)}
-				/>
-			</Field>
+			<div data-field="" className="flex min-w-0 flex-col gap-1.5">
+				<div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+					<Label
+						htmlFor={EXTEND_ID}
+						className="text-[13px]/[18px] font-semibold"
+					>
+						{t("access.renew.extendBy", "Extend by")}
+					</Label>
+					<SelectControl
+						id={EXTEND_ID}
+						aria-describedby={`${EXTEND_ID}-hint`}
+						value={choice}
+						onValueChange={setChoice}
+						options={renewalChoices(t, time, options)}
+						className="w-auto min-w-72 flex-[0_1_auto]"
+					/>
+				</div>
+				<p id={`${EXTEND_ID}-hint`} className="text-xs text-muted-foreground">
+					{t(
+						"access.renew.extendHint",
+						"Access can't outlast the access rules. Saving re-signs them until {{date}}.",
+						{ date: time.at(rulesExpiryAfterSave(openedAt)) },
+					)}
+				</p>
+			</div>
 			<ConsequencePreview rows={rows} />
 			{needsPassword ? (
 				<SigningPassword
@@ -672,4 +689,43 @@ export function useGrantFlows(
 		sheets,
 		result: resultNode,
 	};
+}
+
+/**
+ * One person's Renew…, Change permissions… and Remove access… for rows
+ * outside the Access screens (App › Devices "Access to this app"), with their
+ * sheets and the result. Renders nothing while the device's people can't be
+ * read here (locked, not the owner): the caller keeps its own link then.
+ */
+export function GrantRowActions({
+	deviceId,
+	grantId,
+}: Readonly<{ deviceId: string; grantId: string }>) {
+	const { t } = useTranslation("devices");
+	const device = useDeviceAccess(deviceId);
+	const row = device?.rows?.find((entry) => entry.grant.grant_id === grantId);
+	const userId = row?.grant.user_id;
+	const names = usePersonNames(
+		t,
+		useMemo(() => (userId ? [userId] : []), [userId]),
+	);
+	const devices = useMemo(() => (device ? [device] : []), [device]);
+	const flows = useGrantFlows(device, devices, names);
+	const gate = useKeysGate(device);
+	if (!device || !row) return null;
+	return (
+		<div data-grant-actions={grantId} className="flex min-w-0 flex-col gap-1.5">
+			<div>
+				<GrantActions
+					device={device}
+					row={row}
+					name={names(row.grant.user_id).name}
+					gate={gate}
+					handlers={flows.handlers}
+				/>
+			</div>
+			{flows.result}
+			{flows.sheets}
+		</div>
+	);
 }

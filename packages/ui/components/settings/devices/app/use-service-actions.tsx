@@ -64,16 +64,21 @@ async function stoppedOnDevice(
 	deviceId: string,
 	serviceId: string,
 ): Promise<void> {
+	const sinceS = Math.floor(workspace.clock.now() / 1000);
 	for (let attempt = 0; attempt < STOP_POLLS; attempt++) {
 		await workspace.live.refreshInspection(deviceId).catch(() => undefined);
-		const status = workspace.live
-			.inspection(deviceId)
-			?.value.placements.find((entry) => entry.id === serviceId);
-		if (
-			!status ||
-			(STOPPED.includes(status.observed_state) && !status.running_replicas)
-		)
-			return;
+		const inspection = workspace.live.inspection(deviceId);
+		// Only a status read after the stop counts: an older one still shows it running, or stopped by chance.
+		if (inspection && inspection.readAt >= sinceS) {
+			const status = inspection.value.placements.find(
+				(entry) => entry.id === serviceId,
+			);
+			if (
+				!status ||
+				(STOPPED.includes(status.observed_state) && !status.running_replicas)
+			)
+				return;
+		}
 		await new Promise((resolve) => setTimeout(resolve, STOP_POLL_MS));
 	}
 }

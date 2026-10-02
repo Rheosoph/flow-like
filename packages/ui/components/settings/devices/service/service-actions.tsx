@@ -19,7 +19,7 @@ import {
 	Square,
 	Trash2,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
 import { deviceName } from "../../../../lib/device-management/model/device-view";
 import type {
 	DeviceViewModel,
@@ -149,6 +149,7 @@ export function ServiceActions({
 		extra: serviceGateExtra(service),
 	});
 	const [confirming, setConfirming] = useState<Confirming | null>(null);
+	const reasonId = useId();
 
 	const staged = service.rollout?.state === "staged";
 	const inline = (gate: GateResult, menu = false) => {
@@ -175,23 +176,6 @@ export function ServiceActions({
 		service.conv === "failed_stopped";
 	const { requested, ready, max } = service.instances;
 
-	const commandButton = (
-		command: ServiceCommand,
-		kind: "start" | "stop" | "restart",
-		label: string,
-		icon: LucideIcon,
-	) => (
-		<DvButton
-			icon={icon}
-			busy={command.pending}
-			aria-disabled={command.gate.ok ? undefined : true}
-			data-command={kind}
-			onClick={() => setConfirming(kind)}
-		>
-			{label}
-		</DvButton>
-	);
-
 	const shown = crashed
 		? [commands.start.gate]
 		: [commands.restart.gate, commands.stop.gate];
@@ -203,6 +187,31 @@ export function ServiceActions({
 		).values(),
 	];
 	const fix = reasons.find((gate) => gate.fix?.kind === "connect")?.fix;
+	/** The id of the visible reason line of a gated command, for `aria-describedby`. */
+	const reasonOf = (gate: GateResult) => {
+		const index = gate.ok
+			? -1
+			: reasons.findIndex((reason) => inline(reason) === inline(gate));
+		return index < 0 ? undefined : `${reasonId}-${index}`;
+	};
+
+	const commandButton = (
+		command: ServiceCommand,
+		kind: "start" | "stop" | "restart",
+		label: string,
+		icon: LucideIcon,
+	) => (
+		<DvButton
+			icon={icon}
+			busy={command.pending}
+			aria-disabled={command.gate.ok ? undefined : true}
+			aria-describedby={reasonOf(command.gate)}
+			data-command={kind}
+			onClick={() => setConfirming(kind)}
+		>
+			{label}
+		</DvButton>
+	);
 	const hint =
 		crashed && commands.start.gate.ok
 			? service.conv === "crash_looping"
@@ -349,8 +358,12 @@ export function ServiceActions({
 							</DvButton>
 						) : null}
 					</div>
-					{reasons.map((gate) => (
-						<GateInline key={inline(gate)} kind={gate.kind}>
+					{reasons.map((gate, index) => (
+						<GateInline
+							key={inline(gate)}
+							kind={gate.kind}
+							id={`${reasonId}-${index}`}
+						>
 							{inline(gate)}
 						</GateInline>
 					))}

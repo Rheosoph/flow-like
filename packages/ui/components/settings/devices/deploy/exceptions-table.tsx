@@ -32,12 +32,22 @@ export interface ExceptionRow {
 	onChange?(): void;
 }
 
+/** The tone's edge: on the row's first cell, and on the card's edge once the table stacks (560 px). */
+const STACKED_EDGE =
+	"[&>td:first-child]:border-l-2 @max-[560px]/tbl:border-l-2! @max-[560px]/tbl:[&>td:first-child]:border-l-0";
 const TONE_EDGE: Record<ExceptionRow["tone"], string> = {
-	warning:
-		"[&>td:first-child]:border-l-2 [&>td:first-child]:border-l-warning-solid",
-	info: "[&>td:first-child]:border-l-2 [&>td:first-child]:border-l-info-solid",
-	paused:
-		"[&>td:first-child]:border-l-2 [&>td:first-child]:border-l-paused-solid",
+	warning: cx(
+		STACKED_EDGE,
+		"[&>td:first-child]:border-l-warning-solid @max-[560px]/tbl:border-l-warning-solid!",
+	),
+	info: cx(
+		STACKED_EDGE,
+		"[&>td:first-child]:border-l-info-solid @max-[560px]/tbl:border-l-info-solid!",
+	),
+	paused: cx(
+		STACKED_EDGE,
+		"[&>td:first-child]:border-l-paused-solid @max-[560px]/tbl:border-l-paused-solid!",
+	),
 };
 
 /** Plan exceptions as rows, with the sentences of `deploy-copy`. */

@@ -53,6 +53,7 @@ import {
 	type PlanTargetService,
 	type WireFacts,
 	approvalRequest,
+	draftWithoutSecrets,
 	wirePlan,
 } from "../../../../lib/device-management/model/deploy-plan";
 import {
@@ -90,6 +91,7 @@ import {
 	createDeviceResourceGrant,
 	isActiveGrant,
 	loadDeviceResources,
+	revokeDeviceGrant,
 } from "../../../../lib/device-resources";
 import {
 	type IBackendState,
@@ -170,6 +172,8 @@ export interface DeployTargetDetail {
 	reasons?: StrategyReason[];
 	/** The access token of a new endpoint, shown once. */
 	token?: string;
+	/** The token was shown and is no longer kept here. */
+	tokenGone?: boolean;
 	fromSettings?: number;
 	toSettings?: number;
 	wasRunning?: boolean;
@@ -332,6 +336,21 @@ const CLASSIFIERS: ((error: unknown) => Classified | undefined)[] = [
 					detail: error.rejection?.error ?? error.message,
 				}
 			: undefined,
+	// The hub answered and said no (not allowed, a conflict, bad input): that is a refusal, not a lost answer.
+	(error) => {
+		const status = (error as { status?: unknown } | null)?.status;
+		const refused =
+			typeof status === "number" &&
+			status >= 400 &&
+			status < 500 &&
+			status !== 408;
+		return refused
+			? {
+					code: "hub_refused",
+					detail: error instanceof Error ? error.message : undefined,
+				}
+			: undefined;
+	},
 ];
 
 function classify(error: unknown): Classified {
@@ -826,10 +845,58 @@ async function setSpending(job: Job, held: readonly BillingGrant[]) {
 	job.run.note(job.target, { kept: "approval_spending" });
 }
 
-function createApproval(job: Job): Promise<ResourceGrant> {
+/** Whether the device runs a service with this id right now: asked again, because the plan may be older than the device's services. */
+async function serviceOnDevice(job: Job): Promise<boolean> {
+	guard(job);
+	const { live } = job.run.workspace;
+	const { deviceId } = job.device;
+	await live.refreshInspection(deviceId);
+	job.run.alive();
+	const inspection = live.inspection(deviceId);
+	if (!inspection || inspection.error)
+		throw new DeployRunFailure("device_unread");
+	return inspection.value.placements.some(
+		(placement) => placement.id === job.service.serviceId,
+	);
+}
+
+/**
+ * The hub keeps one active approval per service id on a device. A deploy that
+ * failed after its approval was created leaves it there; once the plan is
+ * changed (a new deploy ID) that approval no longer fits and would refuse the
+ * new one, so it is revoked first. Never while a service on the device has
+ * that id: its approval is the one it runs on.
+ */
+async function revokeLeftover(job: Job, held: readonly ResourceGrant[]) {
+	const { api, profile } = job.run.workspace.deps;
+	const leftover = held.filter(
+		(grant) =>
+			grant.placement_id === job.service.serviceId &&
+			grant.deployment_id !== job.plan.draft.deploymentId &&
+			isActiveGrant(grant, job.run.at()),
+	);
+	if (!leftover.length) return;
+	if (await serviceOnDevice(job)) throw new DeployRunFailure("service_exists");
+	for (const grant of leftover) {
+		await revokeDeviceGrant(
+			api,
+			profile,
+			job.device.deviceId,
+			"resource",
+			grant.grant_id,
+		);
+		job.run.alive();
+	}
+}
+
+async function createApproval(
+	job: Job,
+	held: readonly ResourceGrant[],
+): Promise<ResourceGrant> {
 	const { plan, service } = job;
 	const { api, profile } = job.run.workspace.deps;
 	const appId = appIdOf(plan);
+	await revokeLeftover(job, held);
 	return createDeviceResourceGrant(
 		api,
 		profile,
@@ -852,7 +919,8 @@ async function approveAccess(job: Job) {
 	job.run.phase(job.target, "approve");
 	const held = await loadDeviceResources(api, profile, job.device.deviceId);
 	job.run.alive();
-	memo.grant ??= matchingGrant(job, held.grants) ?? (await createApproval(job));
+	memo.grant ??=
+		matchingGrant(job, held.grants) ?? (await createApproval(job, held.grants));
 	job.run.note(job.target, { kept: "approval" });
 	await setSpending(job, held.billing);
 }
@@ -1368,6 +1436,8 @@ class DeployRun {
 	options: DeployRunOptions | null = null;
 	/** Rollout steps showing this run. */
 	watchers = 0;
+	/** Results that show this run's access tokens right now. */
+	tokenViews = 0;
 	private readonly listeners = new Set<Listener>();
 	private readonly memos = new Map<string, TargetMemo>();
 	private readonly inFlight = new Set<string>();
@@ -1760,8 +1830,38 @@ class DeployRun {
 		if (this.announced) return;
 		this.announced = true;
 		// A failed device may be retried: the native export stays readable until every device has it.
-		if (state.rows.every((row) => row.state === "done")) this.releaseBundle();
+		if (state.rows.every((row) => row.state === "done")) {
+			this.releaseBundle();
+			this.forgetSecrets();
+		}
 		if (this.watchers === 0) this.extras.announce?.(state);
+	}
+
+	/** Every device has what it needs: the secret values the plan carried leave this window's memory. */
+	private forgetSecrets() {
+		this.token = "";
+		this.memos.clear();
+		if (this.plan)
+			this.plan = {
+				...this.plan,
+				draft: draftWithoutSecrets(this.plan.draft),
+			};
+	}
+
+	/** "Shown once": the access tokens a result showed leave memory when that result goes. */
+	forgetTokens(targets: readonly string[]) {
+		const details = { ...this.details };
+		let changed = false;
+		for (const target of targets) {
+			const detail = details[target];
+			if (!detail?.token) continue;
+			const { token: _token, ...rest } = detail;
+			details[target] = { ...rest, tokenGone: true };
+			changed = true;
+		}
+		if (!changed) return;
+		this.details = details;
+		this.emit();
 	}
 
 	private releaseBundle() {
@@ -2052,6 +2152,19 @@ export function useLiveTargets(targets: readonly PlanTarget[]) {
 	}, [workspace, ids]);
 }
 
+/** The run of one deploy as this window has it; null before it starts (or is adopted after a reload). */
+export function useDeployRunState(
+	deploymentId: string | undefined,
+): DeployRunState | null {
+	const workspace = useDeviceWorkspace();
+	const run = deploymentId ? runFor(workspace, deploymentId) : null;
+	return useSyncExternalStore(
+		run?.subscribe ?? noSubscription,
+		run?.getState ?? noState,
+		noState,
+	);
+}
+
 const notAdopted = () => false;
 
 /** True for a run this window only follows (after a reload): the plan it shows may lack what the run began with. */
@@ -2063,6 +2176,32 @@ export function useDeployRunAdopted(deploymentId: string | undefined): boolean {
 		run?.isAdopted ?? notAdopted,
 		notAdopted,
 	);
+}
+
+/**
+ * "Access tokens · shown once": a token stays in memory only while a result
+ * shows it. `targets` are the rows whose token is on screen; when the last
+ * result showing them is gone, the run drops them.
+ */
+export function useShownTokens(
+	deploymentId: string | undefined,
+	targets: readonly string[],
+) {
+	const workspace = useDeviceWorkspace();
+	const key = targets.join("\n");
+	useEffect(() => {
+		if (!deploymentId || !key) return;
+		const run = runFor(workspace, deploymentId);
+		const shown = key.split("\n");
+		run.tokenViews += 1;
+		return () => {
+			run.tokenViews -= 1;
+			// A list that only grew (or an effect React runs again) shows them again in the same pass.
+			queueMicrotask(() => {
+				if (run.tokenViews === 0) run.forgetTokens(shown);
+			});
+		};
+	}, [workspace, deploymentId, key]);
 }
 
 /** Marks the run as shown on this page, so its end isn't announced with a toast. */

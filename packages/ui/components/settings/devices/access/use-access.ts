@@ -262,6 +262,43 @@ export function useDeviceAccess(deviceId: string): DeviceAccess | undefined {
 	}, [deviceId, input, workspace, changes]);
 }
 
+/** After the crypto module is there, the verified rules arrive with the next render; past this they don't verify. */
+const VERIFY_GRACE_MS = 500;
+
+/**
+ * True when the owner keys are open here and the rules the hub returned still
+ * don't check out with the owner key: their people can't be shown, and that is
+ * an error, never "nobody" and never an endless wait.
+ */
+export function useRulesUnverified(device: DeviceAccess | undefined): boolean {
+	const workspace = useDeviceWorkspace();
+	const waiting =
+		!!device &&
+		device.keys.state === "unlocked" &&
+		!!device.view?.policy_jws &&
+		!device.policy;
+	const [given, setGiven] = useState(false);
+	useEffect(() => {
+		if (!waiting) {
+			setGiven(false);
+			return;
+		}
+		let active = true;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		void workspace.deps.crypto().then(
+			() => {
+				if (active) timer = setTimeout(() => setGiven(true), VERIFY_GRACE_MS);
+			},
+			() => undefined,
+		);
+		return () => {
+			active = false;
+			if (timer) clearTimeout(timer);
+		};
+	}, [waiting, workspace]);
+	return waiting && given;
+}
+
 /** The rules of one device on screen: every 30 s, every 10 s while the device has not applied them. */
 export function useRulesRead(deviceId: string | undefined): PolicyRead {
 	const [awaitingApply, setAwaitingApply] = useState(false);

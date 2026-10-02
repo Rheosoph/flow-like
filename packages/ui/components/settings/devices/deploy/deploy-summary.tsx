@@ -5,13 +5,19 @@ import { ChevronUp, ClipboardList, Lock } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import type {
 	DeployPlan,
+	DeployResult,
 	PlanCheck,
 } from "../../../../lib/device-management/model/deploy-plan";
+import {
+	type DeployRunState,
+	deployRunResult,
+} from "../../../../lib/device-management/model/deploy-run";
 import type { DeployStepId } from "../../../../lib/device-management/model/types";
 import { humanFileSize } from "../../../../lib/utils";
 import { formatMoney } from "../copy/attention-copy";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import { DvSheet } from "../primitives/dv-sheet";
+import { fleetRolloutChip } from "../primitives/fleet-rollout";
 import { FreshnessStamp } from "../primitives/freshness-stamp";
 import { cx } from "../primitives/tone";
 import {
@@ -38,6 +44,10 @@ export interface DeploySummaryInput {
 	versionLabel?: string;
 	prepared?: DeployPrepared | null;
 	deployed: boolean;
+	/** This plan's run once it started in this window (or was picked up after a reload). */
+	run?: DeployRunState | null;
+	/** How the plan's last run ended, kept with the saved progress. */
+	outcome?: DeployResult["outcome"];
 	goTo(step: DeployStepId): void;
 }
 
@@ -311,9 +321,42 @@ function reviewValue({ t, plan }: ValueContext): ReactNode {
 	return `${order} · ${how}`;
 }
 
-function rolloutValue({ t, deployed }: ValueContext): ReactNode {
+/** The run of this plan, once there is one to speak of. */
+const startedRun = (run: DeployRunState | null | undefined) =>
+	run && run.status !== "idle" ? run : null;
+
+const ENDED: Record<DeployResult["outcome"], (t: DevicesT) => string> = {
+	all: (t) => t("deploy.summary.runDone", "Done"),
+	partial: (t) => t("deploy.summary.runFailed", "Failed"),
+	none: (t) => t("deploy.summary.runFailed", "Failed"),
+};
+
+/** One device: Running, Done or Failed; several: the board's own count ("1 of 2 done", "Failed on 1"). */
+function runValue(t: DevicesT, run: DeployRunState): string {
+	const result = deployRunResult(run);
+	if (result?.outcome === "all") return ENDED.all(t);
+	if (run.rows.length > 1)
+		return fleetRolloutChip(
+			t,
+			run.rows.map((row) => ({
+				state:
+					row.state === "failed" && row.error?.rolledBack
+						? ("rolled_back" as const)
+						: row.state,
+			})),
+		).text;
+	return result
+		? ENDED[result.outcome](t)
+		: t("deploy.summary.runRunning", "Running");
+}
+
+function rolloutValue({ t, deployed, run, outcome }: ValueContext): ReactNode {
+	const started = startedRun(run);
+	if (started) return runValue(t, started);
+	// No run in this window (a reload): how the last one ended, as far as it was kept.
+	if (outcome) return ENDED[outcome](t);
 	return deployed ? (
-		t("deploy.summary.deployed", "Deployed")
+		t("deploy.summary.finished", "Finished")
 	) : (
 		<Muted>{t("deploy.summary.afterDeploy", "After you deploy")}</Muted>
 	);
@@ -400,6 +443,45 @@ function footText(t: DevicesT, plan: DeployPlan): string {
 			);
 }
 
+/** On Rollout the note says where the run stands instead of what deploying will do. */
+function runFootText(
+	t: DevicesT,
+	time: ReturnType<typeof useAreaTime>,
+	input: DeploySummaryInput,
+): string | undefined {
+	const run = startedRun(input.run);
+	if (!run) return undefined;
+	const result = deployRunResult(run);
+	const [only] = input.plan.targets;
+	if (run.rows.length > 1 || !only)
+		return result
+			? t(
+					"deploy.summary.footFinished",
+					"Finished. Change anything to start a new deploy from the same choices.",
+				)
+			: t(
+					"deploy.summary.footRunning",
+					"Running on the devices now. Your choices are locked until it finishes.",
+				);
+	const device = only.name;
+	if (!result)
+		return t(
+			"deploy.summary.footRunningOne",
+			"Applying on {{device}} now. Your choices are locked until it finishes.",
+			{ device },
+		);
+	return result.outcome === "all"
+		? t("deploy.summary.footDoneOne", "Finished on {{device}} at {{time}}.", {
+				device,
+				time: time.clock(result.at),
+			})
+		: t(
+				"deploy.summary.footFailedOne",
+				"It didn't finish on {{device}}. Your choices are kept for a retry.",
+				{ device },
+			);
+}
+
 /** The side summary with its done lines; reachable steps are buttons. */
 export function DeploySummary({
 	className,
@@ -413,7 +495,8 @@ export function DeploySummary({
 	}
 >) {
 	const { t } = useTranslation("devices");
-	const { locale } = useAreaTime();
+	const time = useAreaTime();
+	const { locale } = time;
 	const title = t("deploy.summary.title", "This deploy");
 	return (
 		<WizardSummary
@@ -435,7 +518,11 @@ export function DeploySummary({
 					/>
 				</>
 			}
-			foot={input.current === "rollout" ? undefined : footText(t, input.plan)}
+			foot={
+				input.current === "rollout"
+					? runFootText(t, time, input)
+					: footText(t, input.plan)
+			}
 		/>
 	);
 }

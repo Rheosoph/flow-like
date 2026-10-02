@@ -417,13 +417,28 @@ export function authorityView(
 /** Whether this authority can sign today. */
 export const canSign = (view: AuthorityView) => view.status === "active";
 
-/** Certificates a live read attributes to this authority (its issuer name ends in "service issuer"). */
+/** The issuer names exactly this name: "Lab service issuer" is not in "CN=Rheosoph Lab service issuer". */
+function namesIssuer(issuer: string | undefined, name: string): boolean {
+	if (!issuer) return false;
+	for (
+		let at = issuer.indexOf(name);
+		at !== -1;
+		at = issuer.indexOf(name, at + 1)
+	) {
+		const starts = at === 0 || issuer[at - 1] === "=";
+		const ends = [undefined, ","].includes(issuer[at + name.length]);
+		if (starts && ends) return true;
+	}
+	return false;
+}
+
+/** Certificates a live read attributes to this authority (its issuer is named "<label> service issuer"). */
 export function signedBy(
 	rows: readonly CertificateRow[],
 	label: string,
 ): CertificateRow[] {
 	const issuer = `${label} service issuer`;
-	return rows.filter((row) => row.detail?.issuer.includes(issuer));
+	return rows.filter((row) => namesIssuer(row.detail?.issuer, issuer));
 }
 
 /* Create authority: the same limits the signing code enforces. */

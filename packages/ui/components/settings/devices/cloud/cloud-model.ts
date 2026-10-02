@@ -263,7 +263,11 @@ export function byState(rows: readonly CloudApproval[]): CloudApproval[] {
 		.map(({ row }) => row);
 }
 
-/** The approval a service runs on: the active one, else the one that ended last. */
+/**
+ * The approval a service runs on: the active one; else one the hub still holds
+ * (it ended early and blocks a new approval until it is revoked or replaced);
+ * else the one that ended last.
+ */
 export function currentApproval(
 	rows: readonly CloudApproval[],
 	serviceId: string,
@@ -271,6 +275,7 @@ export function currentApproval(
 	const own = rows.filter((row) => row.serviceId === serviceId);
 	return (
 		own.find((row) => row.state === "active") ??
+		own.find((row) => row.revocable) ??
 		[...own].sort((a, b) => endOf(b) - endOf(a))[0]
 	);
 }

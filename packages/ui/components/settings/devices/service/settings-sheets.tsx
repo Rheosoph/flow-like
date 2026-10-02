@@ -592,15 +592,16 @@ interface ApplyRun {
 
 function doneNote(
 	t: DevicesT,
-	time: AreaTime,
 	editor: SettingsEditor,
 	safe: boolean,
 	revision: number,
+	/** The clock time the device finished, not the time of the click. */
+	finishedAt: string,
 ): Note {
 	const params = {
 		service: editor.serviceId,
 		version: revision,
-		time: time.clock(time.nowS),
+		time: finishedAt,
 	};
 	if (safe)
 		return {
@@ -639,6 +640,7 @@ function useApplyRun(
 ): ApplyRun {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
+	const { workspace } = useAttentionState();
 	const [draft, setDraft] = useState<ApplyDraft>(() =>
 		applyDraftOf(editor.safeUnavailable ? "quick" : "safe"),
 	);
@@ -646,6 +648,8 @@ function useApplyRun(
 	const [note, setNote] = useState<Note | null>(null);
 	const [stale, setStale] = useState(false);
 	const names = { service: editor.serviceId, device: editor.read.deviceLabel };
+	// A safe update ends minutes after the click: its sentences read the clock when they are written.
+	const clockNow = () => time.clock(workspace.clock.now() / 1000);
 	const run = async (base: PlacementConfiguration, config: PlacementConfig) => {
 		const how = howOf(draft);
 		const invalid = checkApplyHow(how);
@@ -671,7 +675,7 @@ function useApplyRun(
 						"Safe update to settings v{{version}} started at {{time}}. Follow it on Status.",
 						{
 							version: base.config_revision + 1,
-							time: time.clock(time.nowS),
+							time: clockNow(),
 						},
 					),
 				});
@@ -679,7 +683,7 @@ function useApplyRun(
 		});
 		if (outcome.status === "done") {
 			if (!started) onClose();
-			onNote(doneNote(t, time, editor, safe, outcome.revision));
+			onNote(doneNote(t, editor, safe, outcome.revision, clockNow()));
 			return;
 		}
 		const failed = outcomeNote(t, time, outcome, names);
@@ -707,6 +711,16 @@ function useApplyRun(
 		run,
 	};
 }
+
+/**
+ * A sheet stays while its apply is on the way: what the device answers is said
+ * in the sheet, so Esc, the close button and a click outside wait for it like
+ * Cancel does.
+ */
+const whileIdle =
+	(run: ApplyRun, onOpenChange: (open: boolean) => void) => (open: boolean) => {
+		if (open || !run.busy) onOpenChange(open);
+	};
 
 function ApplySection({
 	editor,
@@ -813,6 +827,9 @@ function StaleBanner({
 /** Radix refuses an empty item value. */
 const NONE = "__none__";
 
+/** A locked field reads as fixed, not as an empty input. */
+const LOCKED_LOOK = "disabled:bg-surface-sunken";
+
 function optionLabel(
 	t: DevicesT,
 	names: DiffNames,
@@ -833,7 +850,13 @@ function optionLabel(
 	});
 }
 
-interface ControlProps {
+/** What `Field` hands its control: the ids of its hint and error, and whether it is invalid. */
+interface Described {
+	"aria-describedby"?: string;
+	"aria-invalid"?: boolean;
+}
+
+interface ControlProps extends Described {
 	field: SettingField;
 	id: string;
 	value: string;
@@ -841,7 +864,19 @@ interface ControlProps {
 	onChange(value: string): void;
 }
 
-function SelectControl({ field, id, value, names, onChange }: ControlProps) {
+const described = (props: Described): Described => ({
+	"aria-describedby": props["aria-describedby"],
+	"aria-invalid": props["aria-invalid"],
+});
+
+function SelectControl({
+	field,
+	id,
+	value,
+	names,
+	onChange,
+	...rest
+}: ControlProps) {
 	const { t } = useTranslation("devices");
 	const options =
 		field.kind === "bool" ? ["true", "false"] : (field.options ?? []);
@@ -851,7 +886,7 @@ function SelectControl({ field, id, value, names, onChange }: ControlProps) {
 			onValueChange={(next) => onChange(next === NONE ? "" : next)}
 			disabled={!!field.lock}
 		>
-			<SelectTrigger id={id} className={SELECT_TRIGGER}>
+			<SelectTrigger id={id} className={SELECT_TRIGGER} {...described(rest)}>
 				<SelectValue
 					placeholder={t("serviceConfig.field.appDefault", "App default")}
 				/>
@@ -871,7 +906,7 @@ function SelectControl({ field, id, value, names, onChange }: ControlProps) {
 	);
 }
 
-function TextControl({ field, id, value, onChange }: ControlProps) {
+function TextControl({ field, id, value, onChange, ...rest }: ControlProps) {
 	const { t } = useTranslation("devices");
 	const common = {
 		id,
@@ -882,13 +917,14 @@ function TextControl({ field, id, value, onChange }: ControlProps) {
 		placeholder: field.variable?.stored
 			? undefined
 			: t("serviceConfig.field.appDefault", "App default"),
+		...described(rest),
 	};
 	if (field.kind === "json")
 		return (
 			<DvTextarea
 				{...common}
 				rows={3}
-				className="font-mono"
+				className={cx("font-mono", LOCKED_LOOK)}
 				onChange={(event) => onChange(event.target.value)}
 			/>
 		);
@@ -904,7 +940,7 @@ function TextControl({ field, id, value, onChange }: ControlProps) {
 	return field.unit ? (
 		<InputWithUnit {...props} unit={UNIT_LABEL[field.unit](t)} />
 	) : (
-		<DvInput {...props} />
+		<DvInput {...props} className={LOCKED_LOOK} />
 	);
 }
 
@@ -1000,7 +1036,10 @@ function FieldRow({
 	return (
 		<div
 			data-field-id={field.id}
-			className={cx("flex min-w-0 flex-col gap-1", wide && "col-span-full")}
+			className={cx(
+				"flex min-w-0 flex-col gap-1",
+				wide && "col-span-2 max-[560px]:col-span-full",
+			)}
 		>
 			{fixed ? (
 				<div className="flex flex-col gap-1.5">
@@ -1120,6 +1159,7 @@ function ChangeStep({
 	wizardNote?: ReactNode;
 }>) {
 	const { t } = useTranslation("devices");
+	const { locale } = useAreaTime();
 	const { names } = editor;
 	const errorOf = (field: SettingField) => {
 		const error = result.errors.find((entry) => entry.field === field.id);
@@ -1145,35 +1185,37 @@ function ChangeStep({
 		});
 	return (
 		<>
-			{sectionsOf(fields).map((section) => (
-				<section
-					key={section.id}
-					data-section={section.id}
-					className="flex flex-col gap-2.5"
-				>
-					<h3 className="text-label font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-						{SECTION_LABEL[section.id](t)}
-					</h3>
-					<div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-x-4 gap-y-3">
-						{section.fields.map((field) => (
-							<FieldRow
-								key={field.id}
-								field={field}
-								names={names}
-								draft={draft}
-								error={errorOf(field)}
-								onChange={(value) =>
-									onDraft({
-										...draft,
-										values: { ...draft.values, [field.id]: value },
-									})
-								}
-								onRemove={() => toggleRemoved(field.variable?.id ?? "")}
-							/>
-						))}
-					</div>
-				</section>
-			))}
+			<div className="flex flex-col">
+				{sectionsOf(fields).map((section) => (
+					<section
+						key={section.id}
+						data-section={section.id}
+						className="flex flex-col gap-3 border-t border-hairline py-3.5 first:border-t-0 first:pt-0 last:pb-0"
+					>
+						<h3 className="text-[13px]/[18px] font-semibold">
+							{SECTION_LABEL[section.id](t)}
+						</h3>
+						<div className="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-x-4 gap-y-3">
+							{section.fields.map((field) => (
+								<FieldRow
+									key={field.id}
+									field={field}
+									names={names}
+									draft={draft}
+									error={errorOf(field)}
+									onChange={(value) =>
+										onDraft({
+											...draft,
+											values: { ...draft.values, [field.id]: value },
+										})
+									}
+									onRemove={() => toggleRemoved(field.variable?.id ?? "")}
+								/>
+							))}
+						</div>
+					</section>
+				))}
+			</div>
 			{editor.definitions.definitions === undefined &&
 			!editor.definitions.loading &&
 			fields.some((field) => field.section === "variables") ? (
@@ -1191,7 +1233,7 @@ function ChangeStep({
 						{t(
 							"serviceConfig.edit.secretsNote",
 							"Secret values aren't edited here. To change {{names}}, use Change secret value on the Configuration tab; it needs no update.",
-							{ names: new Intl.ListFormat().format(secrets) },
+							{ names: new Intl.ListFormat(locale).format(secrets) },
 						)}
 					</span>
 				</p>
@@ -1318,7 +1360,7 @@ export function EditSettingsSheet({
 	return (
 		<DvSheet
 			open={open}
-			onOpenChange={onOpenChange}
+			onOpenChange={whileIdle(run, onOpenChange)}
 			wide
 			icon={reviewing ? Diff : Pencil}
 			title={
@@ -1502,7 +1544,7 @@ export function EditJsonSheet({
 	return (
 		<DvSheet
 			open={open}
-			onOpenChange={onOpenChange}
+			onOpenChange={whileIdle(run, onOpenChange)}
 			wide
 			icon={Braces}
 			title={t("serviceConfig.json.title", "Edit {{service}} as JSON", {

@@ -339,7 +339,10 @@ describe("Access › Shared with me", () => {
 		await mounted.settle();
 		expect(vaultIds(fake)).toContain(SAMPLE_IDS.lab);
 
-		await typeInto(sheet.querySelector("input") as HTMLInputElement, "lab-gpu-02");
+		await typeInto(
+			sheet.querySelector("input") as HTMLInputElement,
+			"lab-gpu-02",
+		);
 		sheet = inPortal("alertdialog");
 		await click(byRole("button", "Remove from this computer", sheet));
 		await mounted.settle();

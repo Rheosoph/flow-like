@@ -7,6 +7,14 @@ import {
 	type AttentionCounts,
 	countAttention,
 } from "../../../../lib/device-management/model/attention";
+import {
+	buildServiceViews,
+	subjectDevice,
+} from "../../../../lib/device-management/model/device-view";
+import type {
+	AttentionInput,
+	AttentionItem,
+} from "../../../../lib/device-management/model/types";
 import type { DeviceWorkspace } from "../../../../lib/device-management/workspace/types";
 import type { DevicesT } from "../primitives/area-context";
 import {
@@ -33,6 +41,8 @@ export const NEEDS_YOU_ID = "devices-needs-you";
 interface Seen {
 	sentence: AttentionEntry["sentence"];
 	conditionKey?: string;
+	/** The device whose status was readable here when the item was last listed. */
+	readFrom?: string;
 }
 
 interface Resolved extends Seen {
@@ -59,15 +69,31 @@ function sessionOf(workspace: DeviceWorkspace) {
 	return memory;
 }
 
+/** Whether this computer can read a device's status right now (keys open, a status to read). */
+const statusReadable = (input: AttentionInput, deviceId: string) =>
+	Array.isArray(buildServiceViews(deviceId, input));
+
+interface Listed {
+	entries: readonly AttentionEntry[];
+	/** The model items behind `entries`. */
+	items: readonly AttentionItem[];
+	input: AttentionInput;
+}
+
 /** The counted items of the list by id (Info never counts, so it is never "done"). */
-function countedById(entries: readonly AttentionEntry[]) {
+function countedById({ entries, items, input }: Listed) {
+	const devices = new Map<string, string | undefined>();
+	for (const item of items) devices.set(item.id, subjectDevice(item.subject));
 	const open = new Map<string, Seen>();
 	for (const entry of entries) {
 		if (entry.severity === "info") continue;
-		open.set(entry.id, {
+		const deviceId = devices.get(entry.id);
+		const seen: Seen = {
 			sentence: entry.sentence,
 			conditionKey: entry.conditionKey,
-		});
+		};
+		if (deviceId && statusReadable(input, deviceId)) seen.readFrom = deviceId;
+		open.set(entry.id, seen);
 	}
 	return open;
 }
@@ -77,17 +103,28 @@ interface Tracking {
 	/** Snooze end per item id, unix seconds. */
 	snoozed: Readonly<Record<string, number>>;
 	nowS: number;
+	readable(deviceId: string): boolean;
 }
 
-/** Items that left the list since the last look, unless the person snoozed them. */
+/**
+ * Items that left the list since the last look, unless the person snoozed
+ * them. An item of a device that was readable and no longer is (locked, keys
+ * gone, access ended) only stopped being visible: nothing says it was resolved.
+ */
 function newlyResolved(memory: SessionMemory, tracking: Tracking) {
-	const { open, snoozed, nowS } = tracking;
+	const { open, snoozed, nowS, readable } = tracking;
 	const resolved: Resolved[] = [];
 	for (const [id, last] of memory.seen) {
 		if (open.has(id)) continue;
 		const snoozedUntil = snoozed[id];
 		if (snoozedUntil !== undefined && snoozedUntil > nowS) continue;
-		resolved.push({ id, ...last, doneAt: nowS });
+		if (last.readFrom && !readable(last.readFrom)) continue;
+		resolved.push({
+			id,
+			sentence: last.sentence,
+			conditionKey: last.conditionKey,
+			doneAt: nowS,
+		});
 	}
 	return resolved;
 }
@@ -135,23 +172,25 @@ function doneRow(row: Resolved, onDismiss: (id: string) => void) {
 	return done;
 }
 
-function useDoneInSession(entries: readonly AttentionEntry[]) {
+function useDoneInSession(
+	items: readonly AttentionItem[],
+	entries: readonly AttentionEntry[],
+) {
 	const { workspace, input, rows } = useAttentionState();
 	const [, setVersion] = useState(0);
 	const memory = sessionOf(workspace);
 	// A list that hasn't loaded says nothing about what was resolved.
 	const known = rows.data !== undefined;
-	const now = useRef(input.now);
-	now.current = input.now;
 	useEffect(() => {
 		if (!known) return;
 		const changed = trackResolved(memory, {
-			open: countedById(entries),
+			open: countedById({ entries, items, input }),
 			snoozed: workspace.attention.snoozed,
-			nowS: now.current,
+			nowS: input.now,
+			readable: (deviceId) => statusReadable(input, deviceId),
 		});
 		if (changed) setVersion(bump);
-	}, [memory, entries, known, workspace]);
+	}, [memory, entries, items, input, known, workspace]);
 	const dismiss = (id: string) => {
 		const kept: Resolved[] = [];
 		for (const row of memory.done) if (row.id !== id) kept.push(row);
@@ -164,6 +203,9 @@ function useDoneInSession(entries: readonly AttentionEntry[]) {
 }
 
 const bump = (version: number) => version + 1;
+
+/** The list's "Nothing needs you right now." line in the area's text size, not the app's paragraph size. */
+const ALL_CLEAR_TEXT = "[&>p]:text-ui";
 
 function summaryOf(t: DevicesT, counts: AttentionCounts) {
 	if (counts.total === 0) return undefined;
@@ -211,7 +253,7 @@ export function NeedsYou({ focus = false }: NeedsYouProps) {
 	const { navigate, clearParam } = useDevicesRoute();
 	const items = useAttention();
 	const entries = useAttentionEntries(items, { onNavigate: navigate });
-	const done = useDoneInSession(entries);
+	const done = useDoneInSession(items, entries);
 	const [all, setAll] = useState(false);
 	const counts = useMemo(() => countAttention(items), [items]);
 	const base = useMemo(() => baseSource(entries.map(stampOfEntry)), [entries]);
@@ -249,6 +291,7 @@ export function NeedsYou({ focus = false }: NeedsYouProps) {
 					onShowAll={showAll}
 					expanded={all && entries.length > NEEDS_YOU_CAP}
 					onShowFewer={showFewer}
+					className={ALL_CLEAR_TEXT}
 				/>
 			</Block>
 		</div>

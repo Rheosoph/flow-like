@@ -7,14 +7,14 @@ import {
 	RefreshCw,
 	SlidersHorizontal,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
 import { enumLabel } from "../copy/enum-labels";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import { Block } from "../primitives/block";
 import { DvButton } from "../primitives/dv-button";
 import { CellSub, DvTable, Td, Th, Tr } from "../primitives/dv-table";
 import { FreshnessStamp } from "../primitives/freshness-stamp";
-import { GatedAction } from "../primitives/gate-notice";
+import { GateInline } from "../primitives/gate-notice";
 import { InlineResult } from "../primitives/inline-result";
 import { PersonChip } from "../primitives/person-chip";
 import { StateView } from "../primitives/state-view";
@@ -23,6 +23,7 @@ import { useGate, useInlineResults } from "../workspace";
 import type { ReadersEdit, ReadersMode } from "./history-readers-sheet";
 import { LiveDataState, livePhase } from "./live-state";
 import { TABLE_RESET } from "./observe-data";
+import { RulesExpiredNotice, rulesExpiredAt } from "./renew-rules";
 import type { HistoryPauseReason } from "./timeline-model";
 import {
 	DEVICE_SCOPE,
@@ -252,7 +253,11 @@ export function HistorySettings({
 		change: t("devices:observe.history.changeReaders", "Change readers…"),
 		resume: t("devices:observe.history.resume", "Resume recording…"),
 	};
-	const gated = gateLine(t, gate, time);
+	// One reason blocks every row alike, so it is said once above the table and the buttons point to it (R7).
+	const reasonId = useId();
+	const expiredAt = rulesExpiredAt(target, now);
+	const refused = expiredAt === undefined ? gateLine(t, gate, time) : null;
+	const blockedBy = expiredAt === undefined ? refused?.kind : "policy";
 	const projectOf = (scope: string) =>
 		target.services?.find((row) => row.serviceId === scope)?.projectId ?? null;
 
@@ -271,6 +276,22 @@ export function HistorySettings({
 	if (rows.length)
 		body = (
 			<>
+				{expiredAt === undefined ? null : (
+					<div id={reasonId} className="border-b border-hairline px-4 py-3">
+						<RulesExpiredNotice target={target} expiredAt={expiredAt} />
+					</div>
+				)}
+				{refused ? (
+					<div className="border-b border-hairline px-4 py-2.5">
+						<GateInline
+							kind={refused.kind}
+							id={reasonId}
+							className="max-w-none"
+						>
+							{refused.reason}
+						</GateInline>
+					</div>
+				) : null}
 				<DvTable
 					className={TABLE_RESET}
 					label={
@@ -334,22 +355,28 @@ export function HistorySettings({
 								</Td>
 								<Td label={labels.expires}>{expires(row.recording)}</Td>
 								<Td label={labels.action} kind="act">
-									<GatedAction gate={gated}>
-										<DvButton
-											size="sm"
-											onClick={() =>
-												onEdit({
-													scope: row.scope,
-													kinds: row.kinds,
-													projectId: projectOf(row.scope),
-													mode,
-													streams: row.streams,
-												})
-											}
-										>
-											{actions[mode]}
-										</DvButton>
-									</GatedAction>
+									<DvButton
+										size="sm"
+										{...(blockedBy
+											? {
+													"aria-disabled": true,
+													"aria-describedby": reasonId,
+													"data-gated": blockedBy,
+												}
+											: {})}
+										onClick={() => {
+											if (blockedBy) return;
+											onEdit({
+												scope: row.scope,
+												kinds: row.kinds,
+												projectId: projectOf(row.scope),
+												mode,
+												streams: row.streams,
+											});
+										}}
+									>
+										{actions[mode]}
+									</DvButton>
 								</Td>
 							</Tr>
 						);

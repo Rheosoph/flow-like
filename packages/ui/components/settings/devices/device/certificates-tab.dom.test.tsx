@@ -178,7 +178,8 @@ describe("states", () => {
 			"Unlock edge-berlin-01 to see names and details. The hub knows only IDs, fingerprints and expiry dates.",
 		);
 		const mqtt = text(row(view, INTERNAL_MQTT));
-		expect(mqtt).toContain("93bcc1ef");
+		// Without a name the ID is the row's title, once.
+		expect(mqtt.match(/93bcc1ef/g)).toHaveLength(1);
 		expect(mqtt).toContain("Expires in 5 d");
 		expect(mqtt).toContain("Name shows after a live read");
 		expect(mqtt).not.toContain("internal-mqtt");

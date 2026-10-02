@@ -80,6 +80,18 @@ const setupGate = (t: DevicesT, view: HubView) => {
 	};
 };
 
+/*
+ * Phone width: the actions take the whole row with the primary action first
+ * and full width. The page header primitive keeps its row, so the header's
+ * last child (that row) is turned into a column from here.
+ */
+const PHONE_HEADER =
+	"@max-[720px]/devices:[&>div:last-child]:flex-col @max-[720px]/devices:[&>div:last-child]:items-stretch";
+const PHONE_ACTIONS =
+	"@max-[720px]/devices:w-full @max-[720px]/devices:justify-start";
+const PHONE_PRIMARY =
+	"@max-[720px]/devices:order-first @max-[720px]/devices:w-full";
+
 function SetupAction({ view }: Readonly<{ view: HubView }>) {
 	const { t } = useTranslation("devices");
 	const link = useRouteLink();
@@ -87,14 +99,20 @@ function SetupAction({ view }: Readonly<{ view: HubView }>) {
 	const label = t("hub.setup.action", "Set up a device");
 	if (gate)
 		return (
-			<GatedAction gate={gate} className="items-end">
+			<GatedAction
+				gate={gate}
+				className={cx(
+					"items-end @max-[720px]/devices:items-stretch",
+					PHONE_PRIMARY,
+				)}
+			>
 				<DvButton variant="primary" icon={Plus}>
 					{label}
 				</DvButton>
 			</GatedAction>
 		);
 	return (
-		<DvButton variant="primary" icon={Plus} asChild>
+		<DvButton variant="primary" icon={Plus} asChild className={PHONE_PRIMARY}>
 			<a {...link(SETUP)}>{label}</a>
 		</DvButton>
 	);
@@ -364,10 +382,7 @@ function SupportCell({ view }: Readonly<{ view: HubView }>) {
 }
 
 const noChecksSub = (t: DevicesT, view: HubView) => {
-	const { state } = view.hub.support;
-	if (state === "off")
-		return t("devices:hub.sum.checksOff", "Run once device support is on");
-	if (view.readiness.loading || state === "checking")
+	if (view.readiness.loading || view.hub.support.state === "checking")
 		return t("devices:hub.sum.waiting", "Waiting for the hub");
 	return t("devices:hub.sum.checksNotRun", "Not run yet");
 };
@@ -803,8 +818,14 @@ function HubHeader({ view }: Readonly<{ view: HubView }>) {
 					"{{host}} · read-only · everyone signed in to this hub sees the same checks",
 					{ host: view.host },
 				)}
+				className={PHONE_HEADER}
 				actions={
-					<div className="flex flex-wrap items-start justify-end gap-2">
+					<div
+						className={cx(
+							"flex flex-wrap items-start justify-end gap-2",
+							PHONE_ACTIONS,
+						)}
+					>
 						<DvButton
 							icon={ClipboardCopy}
 							onClick={() => {

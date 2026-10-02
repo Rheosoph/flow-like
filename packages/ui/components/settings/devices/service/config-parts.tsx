@@ -242,10 +242,18 @@ export function ConfigUnavailable({
 					"The settings couldn't be read from {{device}}",
 					{ device: read.deviceLabel },
 				)}
-				text={t(
-					"serviceConfig.state.failedText",
-					"The device answered with something this app can't use, or the connection dropped. Nothing was changed.",
-				)}
+				text={
+					read.failure
+						? t(
+								"serviceConfig.state.failedReason",
+								"{{device}} answered: “{{reason}}” Nothing was changed.",
+								{ device: read.deviceLabel, reason: read.failure },
+							)
+						: t(
+								"serviceConfig.state.failedText",
+								"The device answered with something this app can't use, or the connection dropped. Nothing was changed.",
+							)
+				}
 				actions={
 					<DvButton
 						size="sm"

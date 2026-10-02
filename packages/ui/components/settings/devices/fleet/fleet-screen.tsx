@@ -619,7 +619,7 @@ function FleetLoaded({
 		<>
 			<FleetHeadline />
 			<FleetAnnunciator route={route} entries={entries} />
-			<div className="grid min-w-0 grid-cols-[minmax(0,1fr)_380px] items-start gap-4 @max-[1024px]/devices:grid-cols-1">
+			<div className="grid min-w-0 grid-cols-[minmax(0,1fr)_380px] items-start gap-6 @max-[1024px]/devices:grid-cols-1">
 				<NeedsYou focus={route.focus === "attention"} />
 				<div className="flex min-w-0 flex-col gap-4">
 					<InProgressPanel />
@@ -642,7 +642,7 @@ export function FleetScreen({ route }: Readonly<ScreenProps>) {
 
 	if (!loaded)
 		return (
-			<>
+			<div className={PAGE_STACK}>
 				<FleetHeader />
 				{rows.error ? (
 					<StateView
@@ -662,24 +662,27 @@ export function FleetScreen({ route }: Readonly<ScreenProps>) {
 						rows={6}
 					/>
 				)}
-			</>
+			</div>
 		);
 
 	if (entries.length === 0)
 		return (
-			<>
+			<div className={PAGE_STACK}>
 				<KeysRiskBanner />
 				<FleetHeader entries={entries} startActions={false} />
 				<FleetEmpty />
 				<PendingSetups />
-			</>
+			</div>
 		);
 
 	return (
-		<>
+		<div className={PAGE_STACK}>
 			<KeysRiskBanner />
 			<FleetHeader entries={entries} />
 			<FleetLoaded route={fleetRoute} entries={entries} />
-		</>
+		</div>
 	);
 }
+
+/** The page's sections sit 24 px apart, like the Hub status and Keys pages. */
+const PAGE_STACK = "flex min-w-0 flex-col gap-6";

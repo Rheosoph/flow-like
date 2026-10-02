@@ -990,20 +990,9 @@ function ConfigActions({
 				) : null}
 				<ConnectLive read={read} />
 			</div>
-			{model.lines.length ? (
-				model.lines.map((line, index) => (
-					<GateInline
-						key={line.text}
-						kind={line.kind}
-						id={`${lineId}-${index}`}
-						className="max-w-[92ch]"
-					>
-						{line.text}
-					</GateInline>
-				))
-			) : (
-				<p className="text-xs text-muted-foreground">
-					{secrets.length
+			{edit && !edit.gate ? (
+				<p data-config-hint="" className="text-xs text-muted-foreground">
+					{secret && !secret.gate
 						? t(
 								"serviceConfig.action.hintSecrets",
 								"Change secret value works while the service runs. Edit settings goes through a safe or quick update and keeps the installed app version.",
@@ -1013,7 +1002,17 @@ function ConfigActions({
 								"Edit settings goes through a safe or quick update and keeps the installed app version.",
 							)}
 				</p>
-			)}
+			) : null}
+			{model.lines.map((line, index) => (
+				<GateInline
+					key={line.text}
+					kind={line.kind}
+					id={`${lineId}-${index}`}
+					className="max-w-[92ch]"
+				>
+					{line.text}
+				</GateInline>
+			))}
 			<UpdateNote
 				facts={facts}
 				label={model.updateLabel}

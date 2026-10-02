@@ -83,25 +83,25 @@ export function InProgressPanel() {
 			}
 		>
 			{shown.length ? (
-				shown.map((item) => (
-					<TrayItem
-						key={item.id}
-						compact
-						kind={item.kind}
-						state={item.state}
-						title={activityTitle(t, item)}
-						sub={activityTarget(item, deviceName)}
-						progress={progressOf(item)}
-						detail={activityDetail(t, time, item)}
-						startedAt={item.startedAt / 1000}
-						onOpen={() => {
-							const route = activityRoute(item);
-							if (route) navigate(route);
-						}}
-					/>
-				))
+				shown.map((item) => {
+					const route = activityRoute(item);
+					return (
+						<TrayItem
+							key={item.id}
+							compact
+							kind={item.kind}
+							state={item.state}
+							title={activityTitle(t, item)}
+							sub={activityTarget(item, deviceName)}
+							progress={progressOf(item)}
+							detail={activityDetail(t, time, item)}
+							startedAt={item.startedAt / 1000}
+							onOpen={route ? () => navigate(route) : undefined}
+						/>
+					);
+				})
 			) : (
-				<p className="flex items-center gap-2 px-4 py-3.5 text-ink-2">
+				<p className="flex items-center gap-2 px-4 py-3.5 text-ui text-ink-2">
 					<CircleCheck aria-hidden className="size-4 text-good" />
 					<span>
 						{t("fleet.inProgress.none", "Nothing is running right now.")}

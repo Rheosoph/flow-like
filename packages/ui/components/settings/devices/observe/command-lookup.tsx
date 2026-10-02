@@ -153,9 +153,18 @@ function LookupStamp({
 	found,
 }: Readonly<{ target: ObserveTarget; found: Lookup | null }>) {
 	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	// A look-up is read once: the stamp's default wording would promise a refresh.
 	if (found)
 		return (
-			<FreshnessStamp source="live" age="live" observedAt={found.readAt} />
+			<FreshnessStamp
+				source="live"
+				age="live"
+				observedAt={found.readAt}
+				text={t("observe.lookup.readAgo", "read {{ago}} · on demand", {
+					ago: time.ago(Math.min(found.readAt, time.nowS)),
+				})}
+			/>
 		);
 	return livePhase(target) === "open" ? (
 		<FreshnessStamp

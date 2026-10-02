@@ -52,6 +52,7 @@ import {
 	OBJECT_LINK,
 	RestoreKeysLink,
 	RulesPair,
+	RulesUnverified,
 	SandboxFact,
 	type ScopeNames,
 	UnlockButton,
@@ -78,6 +79,7 @@ import {
 	useAccessLocal,
 	useRetryRules,
 	useRulesRead,
+	useRulesUnverified,
 } from "./use-access";
 
 const SECTION_CAP = 8;
@@ -197,6 +199,7 @@ function DeviceBlock({
 	const read = useRulesRead(device.deviceId);
 	const flows = useGrantFlows(device, devices, names);
 	const gate = useKeysGate(device);
+	const unverified = useRulesUnverified(device);
 	const [checking, setChecking] = useState(false);
 	const [checked, setChecked] = useState<CheckedNow | null>(null);
 	const { rules, rows } = device;
@@ -366,7 +369,9 @@ function DeviceBlock({
 				<Fact label={t("access.facts.slots", "Access slots")}>
 					{people === undefined ? (
 						<span className="text-muted-foreground">
-							{t("access.facts.unlockToSee", "Shows once unlocked")}
+							{keysNeedOf(device)
+								? t("access.facts.unlockToSee", "Shows once unlocked")
+								: t("access.facts.notKnown", "Not known yet")}
 						</span>
 					) : (
 						<>
@@ -433,7 +438,23 @@ function DeviceBlock({
 						className="mx-4 mb-3"
 					/>
 				)
-			) : null}
+			) : keysNeedOf(device) ? null : unverified ? (
+				<RulesUnverified
+					device={device.name}
+					onRetry={() => void read.refetch()}
+					className="mx-4 mb-3"
+				/>
+			) : (
+				<StateView
+					kind="loading"
+					title={t(
+						"access.device.peopleChecking",
+						"Checking the access rules with your owner key…",
+					)}
+					rows={2}
+					className="mx-4 mb-3"
+				/>
+			)}
 			{flows.result ? <div className="px-4 pb-3">{flows.result}</div> : null}
 			{flows.sheets}
 		</Block>

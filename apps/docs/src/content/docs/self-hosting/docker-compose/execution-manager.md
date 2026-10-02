@@ -98,7 +98,7 @@ The input is limited to 8 MiB. stdout carries NDJSON; tracing goes to stderr. Th
 
 Docker and gVisor both disable the runner's external networking. A loopback HTTP proxy relay inside the runner connects to `/gateway/proxy.sock` on its read-only, per-run volume. Ignoring proxy environment variables cannot create direct external connectivity.
 
-The external gateway enforces the signed run's callback capability, app widget identity, and channel identity. Its callback routes permit progress, events, execution JWKS, widgets for the selected app, and the selected run's channel operations. General API management, model APIs, arbitrary hub calls, sibling run channels, and other app widget routes are unavailable unless a separate reviewed capability is implemented.
+The external gateway enforces the signed run's callback capability, app widget identity, and channel identity. Its callback routes permit progress, events, execution JWKS, the selected app's own widgets and the widgets of its packages, and the selected run's channel operations. General API management, model APIs, arbitrary hub calls, sibling run channels, and other app widget routes are unavailable unless a separate reviewed capability is implemented.
 
 For HTTP S3, the gateway checks the bucket path and denies STS and administration. Prefix authorization remains the object store's responsibility and must be verified with the bundled store's STS acceptance suite. For HTTPS S3, the configured TLS gateway must enforce those bucket and administration restrictions because CONNECT hides HTTP paths from the run gateway.
 

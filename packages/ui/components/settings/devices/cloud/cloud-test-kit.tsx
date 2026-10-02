@@ -41,12 +41,12 @@ export const OWNER_ROLE = {
 	is_owner: true,
 	can_leave: false,
 };
-/** An admin who doesn't own the app: may approve models, not project files. */
+/** An admin who doesn't own the app: may approve models, not project files. The hub answers `is_owner: true` for an Admin too. */
 export const ADMIN_ROLE = {
 	role_id: "role-admin",
 	role_name: "Admin",
 	permissions: 2,
-	is_owner: false,
+	is_owner: true,
 	can_leave: true,
 };
 /** A member who may read boards only. */

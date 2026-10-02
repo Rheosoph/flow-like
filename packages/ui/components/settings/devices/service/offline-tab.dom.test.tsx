@@ -410,6 +410,34 @@ describe("states without settings", () => {
 		expect(page).toContain("Needs you: conflict");
 	});
 
+	test("a queue read the device turns down ends in a sentence and Try again, not in an endless wait", async () => {
+		let lift: () => void = () => undefined;
+		// Refused from the first read on, so no earlier read is left to fall back on.
+		const view = await fieldNotes({
+			unlock: "none",
+			arrange: async (fake) => {
+				lift = fake
+					.agent(STUDIO)
+					.reject("offline_queue", "busy", "The device database is busy.");
+				await fake.unlock(STUDIO, { connectLive: true });
+			},
+		});
+		await until(() =>
+			text(view.container).includes(
+				"The queues couldn't be read from studio-mac-mini",
+			),
+		);
+		const page = text(view.container);
+		expect(page).toContain("Buffered changes stay on the device.");
+		expect(page).not.toContain("Needs View status");
+		expect(view.container.querySelector("[data-kind=loading]")).toBeNull();
+		expect(page).not.toMatch(MACHINE);
+		lift();
+		await click(byRole("button", "Try again", view.container));
+		await ready(view);
+		expect(text(summary(view) as HTMLElement)).toBe("17 waiting · 2 need you");
+	});
+
 	test("an offline device: the queues aren't known and nothing is sent", async () => {
 		const view = await open(WAREHOUSE, "scanner-ingest");
 		expect(text(view.container)).toContain("Settings aren't known");

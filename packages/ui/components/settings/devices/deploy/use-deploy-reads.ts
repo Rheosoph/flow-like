@@ -71,11 +71,11 @@ function ownRoleReader(backend: IBackendState): {
 export function roleFacts(role: IOwnRole | null | undefined): DeployRole {
 	if (!role || !Number.isInteger(role.permissions))
 		return { canReadFlows: true };
+	const bits = new RolePermissions(BigInt(role.permissions));
 	return {
-		canReadFlows: new RolePermissions(BigInt(role.permissions)).hasPermission(
-			RolePermissions.ReadBoards,
-		),
-		isOwner: role.is_owner,
+		canReadFlows: bits.hasPermission(RolePermissions.ReadBoards),
+		// `is_owner` also holds for an Admin; only the Owner permission itself names the app's owner.
+		isOwner: bits.contains(RolePermissions.Owner),
 	};
 }
 

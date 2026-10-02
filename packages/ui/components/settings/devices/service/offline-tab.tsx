@@ -32,7 +32,10 @@ import {
 	skipOfflineQueue,
 } from "../../../../lib/device-management/offline-queue";
 import type { ManagementCall } from "../../../../lib/device-management/telemetry";
-import type { ManagementResponse } from "../../../../lib/device-management/types";
+import type {
+	ManagementRejection,
+	ManagementResponse,
+} from "../../../../lib/device-management/types";
 import { humanFileSize } from "../../../../lib/utils";
 import {
 	type AreaTime,
@@ -75,7 +78,11 @@ import {
 	TABLE_RESET,
 	gateLine,
 } from "./config-parts";
-import { type ServiceConfigRead, useServiceConfig } from "./use-service-config";
+import {
+	ACCESS_REFUSED,
+	type ServiceConfigRead,
+	useServiceConfig,
+} from "./use-service-config";
 
 const QUEUES_EVERY_MS = 15_000;
 const FINISHED_SHOWN = 5;
@@ -87,8 +94,10 @@ interface QueuesRead {
 	queues: OfflineQueueStatus[] | undefined;
 	freshness: Freshness;
 	live: boolean;
-	/** The device refused the read (no View status on this service). */
-	refused: boolean;
+	/** The device turned the read down: without View status on this service, or for a reason of its own. */
+	refused: ManagementRejection | undefined;
+	/** The read failed and no earlier read is left to show. */
+	failed: boolean;
 	loading: boolean;
 	refresh(): Promise<void>;
 }
@@ -103,13 +112,16 @@ function queuesRead(
 	live: boolean,
 ) {
 	const queues = stream.data ?? known;
-	const refused = !!stream.rejected;
+	const refused = stream.rejected;
+	const failed =
+		!queues && !refused && stream.started && stream.freshness.age === "error";
 	const read: QueuesRead = {
 		queues,
 		freshness: stream.started ? stream.freshness : keptFreshness(!!queues),
 		live,
 		refused,
-		loading: live && !queues && !refused,
+		failed,
+		loading: live && !queues && !refused && !failed,
 		refresh: stream.refresh,
 	};
 	return read;
@@ -212,6 +224,8 @@ function useQueueDetails(
 		},
 		enabled: live && supported && !!queues?.length,
 		staleTime: QUEUES_EVERY_MS,
+		// Read with the device's keys: it goes when the tab closes, like the settings.
+		gcTime: 0,
 		retry: false,
 		meta: { persist: false },
 	});
@@ -1481,7 +1495,7 @@ function QueuesState({
 				title={t("serviceConfig.buffer.loading", "Reading the queues…")}
 			/>
 		);
-	if (queues.refused)
+	if (queues.refused?.code === ACCESS_REFUSED)
 		return (
 			<StateView
 				kind="noaccess"
@@ -1489,6 +1503,39 @@ function QueuesState({
 					"serviceConfig.buffer.refused",
 					"Needs View status on this service to read its queues.",
 				)}
+			/>
+		);
+	if (queues.refused || queues.failed)
+		return (
+			<StateView
+				kind="error"
+				title={t(
+					"serviceConfig.buffer.failed",
+					"The queues couldn't be read from {{device}}",
+					{ device },
+				)}
+				text={
+					queues.refused
+						? t(
+								"serviceConfig.buffer.failedReason",
+								"{{device}} answered: “{{reason}}” Buffered changes stay on the device.",
+								{ device, reason: queues.refused.error },
+							)
+						: t(
+								"serviceConfig.buffer.failedText",
+								"The device turned the read down or the connection dropped. Buffered changes stay on the device.",
+							)
+				}
+				actions={
+					<DvButton
+						size="sm"
+						icon={RefreshCw}
+						data-act="queues-retry"
+						onClick={() => void queues.refresh()}
+					>
+						{t("serviceConfig.state.retry", "Try again")}
+					</DvButton>
+				}
 			/>
 		);
 	if (settingsClosed) return null;

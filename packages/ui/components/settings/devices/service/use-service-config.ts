@@ -60,6 +60,9 @@ import {
 
 const CONFIG_EVERY_MS = 15_000;
 
+/** The device's code for "this account may not do that". */
+export const ACCESS_REFUSED = "unauthorized";
+
 export const serviceConfigKey = (
 	scopeKey: string,
 	deviceId: string,
@@ -87,12 +90,18 @@ export interface ServiceConfigRead {
 	refused: ManagementRejection | undefined;
 	/** The read failed for another reason; settings read earlier stay. */
 	failed: boolean;
+	/** The device's own sentence when it turned the read down for that other reason. */
+	failure?: string;
 	freshness: Freshness;
 	/** Reads the settings again; resolves with what the device holds now. */
 	refresh(): Promise<PlacementConfiguration | undefined>;
 }
 
-/** What other screens derive from a service's settings (endpoint, certificate, buffering, approval). */
+/**
+ * What other screens derive from a service's settings (endpoint, certificate,
+ * buffering, approval). The read is complete, so a fact the settings no longer
+ * carry goes: an endpoint that was removed, buffering that was turned off.
+ */
 function reportFacts(
 	workspace: DeviceWorkspace,
 	deviceId: string,
@@ -103,7 +112,6 @@ function reportFacts(
 	const known = workspace.facts.get(deviceId)?.placements?.[serviceId];
 	const writes = config.offline_writes;
 	const next = {
-		...known,
 		...(config.hosting
 			? { host: config.hosting.host, port: config.hosting.port }
 			: {}),
@@ -178,6 +186,8 @@ export function useServiceConfig(
 		enabled: gate.ok && !!projectId,
 		staleTime: CONFIG_EVERY_MS,
 		refetchInterval: CONFIG_EVERY_MS,
+		// Nothing watches the keys once the last settings tab closed, so the settings go with it.
+		gcTime: 0,
 		retry: false,
 		meta: { persist: false },
 	});
@@ -196,10 +206,13 @@ export function useServiceConfig(
 		[refetch],
 	);
 	return useMemo(() => {
-		const shown = unlocked ? data : undefined;
-		const refused =
+		const rejection =
 			error instanceof DeviceRejectedError ? error.rejection : undefined;
+		// Only "you may not" is a matter of access; a busy or failing device is a failed read.
+		const refused = rejection?.code === ACCESS_REFUSED ? rejection : undefined;
 		const failed = !!error && !refused;
+		// Settings read before the device withdrew the access don't stay on screen.
+		const shown = unlocked && !refused ? data : undefined;
 		return {
 			device,
 			deviceLabel: device ? deviceName(device.row) : deviceId.slice(0, 8),
@@ -211,6 +224,7 @@ export function useServiceConfig(
 			loading: isLoading,
 			refused,
 			failed,
+			...(failed && rejection?.error ? { failure: rejection.error } : {}),
 			freshness: freshnessOf(shown, gate.ok, failed),
 			refresh,
 		};

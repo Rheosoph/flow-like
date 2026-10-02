@@ -47,14 +47,10 @@ const MAX_MODEL_CACHE_BYTES: u64 = model_cache_quota_bytes(cfg!(any(
 )));
 
 #[cfg(feature = "execute")]
-pub(crate) const fn model_cache_quota_bytes(mobile: bool) -> u64 {
-    // The full Laya bundle needs 681 MB of disk space. Transfers still use bounded chunks;
+pub(crate) const fn model_cache_quota_bytes(_mobile: bool) -> u64 {
+    // The GLiNER Decide 1B bundle needs over 4 GB of disk space. Transfers use bounded chunks;
     // this disk quota does not control the in-memory fallback upload limit.
-    if mobile {
-        1024 * 1024 * 1024
-    } else {
-        2 * 1024 * 1024 * 1024
-    }
+    6 * 1024 * 1024 * 1024
 }
 
 /// A group of cached models. Cache files are named
@@ -94,9 +90,29 @@ pub(crate) const LAYA_MODELS: ModelFamily = ModelFamily {
     roles: &["weights", "tokenizer", "config"],
 };
 
+#[cfg(any(feature = "execute", test))]
+pub(crate) const DECISION_MODELS: ModelFamily = ModelFamily {
+    label: "decision",
+    hash_domain: b"flowlike-decision-model-cache-v1",
+    file_prefix: "decision",
+    roles: &[
+        "weights",
+        "external-data",
+        "encoder",
+        "classifier",
+        "tokenizer",
+        "config",
+    ],
+};
+
 /// Every family whose files count towards, and may be evicted by, the shared directory quota.
 #[cfg(any(feature = "execute", test))]
-const MANAGED_FAMILIES: &[&ModelFamily] = &[&FACE_ID_MODELS, &REID_MODELS, &LAYA_MODELS];
+const MANAGED_FAMILIES: &[&ModelFamily] = &[
+    &FACE_ID_MODELS,
+    &REID_MODELS,
+    &LAYA_MODELS,
+    &DECISION_MODELS,
+];
 
 #[cfg(any(feature = "execute", test))]
 pub(crate) fn validate_model_cache_dir(cache_dir: &FlowPath, label: &str) -> Result<()> {
@@ -1291,6 +1307,16 @@ mod tests {
                 );
                 assert!(validate_model_set_size("face", &[quota, 1, 0], quota).is_err());
                 assert!(validate_model_set_size("face", &[u64::MAX, 1, 0], quota).is_err());
+            }
+        }
+
+        #[test]
+        fn decision_external_weights_fit_the_disk_quota_on_every_target() {
+            for mobile in [false, true] {
+                let quota = model_cache_quota_bytes(mobile);
+                let bundle = [10_000_000, 4_800_000_000, 16_000_000, 4096];
+                assert!(validate_model_set_size("decision", &bundle, quota).is_ok());
+                assert!(quota <= 6 * 1024 * 1024 * 1024);
             }
         }
 

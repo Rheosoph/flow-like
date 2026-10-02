@@ -74,14 +74,18 @@ import {
 	useOverlayStore,
 } from "../workspace";
 
-/** SPEC §5.1 column plan: Device · Health · Check-in · Services · Certificates · Access & keys · Agent · menu. */
+/**
+ * SPEC §5.1 column plan: Device · Health · Check-in · Services · Certificates · Access & keys · Agent · menu.
+ * At 1440 Device holds the ID and the registration day on one line and
+ * Check-in a dated "Offline since …"; Health holds its widest chip down to 1280.
+ */
 export const FLEET_DEVICE_COLS = [
-	"17%",
-	"13%",
-	"16%",
-	"15%",
-	"13%",
-	"13%",
+	"18.5%",
+	"14%",
+	"15.5%",
+	"14.5%",
+	"12.5%",
+	"12%",
 	"9%",
 	"auto",
 ] as const;
@@ -91,6 +95,18 @@ const PLAIN_CHIP =
 	"h-auto max-w-full rounded-none border-0 bg-transparent p-0 text-ui font-normal text-inherit [&>span]:overflow-visible [&>span]:whitespace-normal";
 /** The same without the chip's icon ("Yours", "Shared by Mira Novak · ends in 14 h"). */
 const PLAIN_TEXT = `${PLAIN_CHIP} [&>svg]:hidden`;
+/** A chip inside a table cell: 4 px corners, and it wraps instead of clipping (R10). */
+export const CELL_CHIP =
+	"h-auto min-h-5.5 rounded-md py-0.5 whitespace-normal [&>span]:overflow-visible [&>span]:whitespace-normal";
+/**
+ * A line of facts separated by "·" that may wrap: the dot sits in each
+ * following fact's left gutter, which is clipped at the start of a line.
+ */
+const FACT_LINE = "-ml-1 overflow-x-clip pl-1";
+const FACT_ROW = "-ml-3 flex flex-wrap items-center gap-y-0.5";
+const FACT_FIRST = "pl-3";
+const FACT_NEXT =
+	"relative pl-3 whitespace-nowrap before:absolute before:left-1 before:content-['·']";
 
 /**
  * The hub keeps one check-in time per device, so the lane states only what
@@ -235,14 +251,14 @@ function HealthCell({ view }: Readonly<{ view: DeviceViewModel }>) {
 	const { top, more } = healthReasons(t, view);
 	return (
 		<>
-			<HealthChip level={view.health} />
+			<HealthChip level={view.health} className={CELL_CHIP} />
 			{top ? (
 				<CellSub>
 					{more > 0 ? (
 						<Trans
 							t={t}
-							i18nKey="fleet.health.more"
-							defaults="{{reason}} <1>· +{{count, number}} more</1>"
+							i18nKey="fleet.health.andMore"
+							defaults="{{reason}} · <1>+{{count, number}} more</1>"
 							values={{ reason: top, count: more }}
 							components={{ 1: <span className="whitespace-nowrap" /> }}
 						/>
@@ -505,7 +521,12 @@ function ServicesCell({ entry }: Readonly<{ entry: FleetDeviceEntry }>) {
 
 function CertificateSummary({
 	inventory,
-}: Readonly<{ inventory: PublicCertificateInventory }>) {
+	never = false,
+}: Readonly<{
+	inventory: PublicCertificateInventory;
+	/** The device has never checked in, so it can't have reported anything. */
+	never?: boolean;
+}>) {
 	const { t, i18n } = useTranslation("devices");
 	const time = useAreaTime();
 	const locale = i18n?.language ?? "en";
@@ -515,10 +536,12 @@ function CertificateSummary({
 			<>
 				{t("fleet.certificates.notReported", "Not reported")}
 				<CellSub>
-					{t(
-						"fleet.certificates.notReportedSub",
-						"the device hasn't reported certificates",
-					)}
+					{never
+						? t("fleet.certificates.neverCheckedIn", "never checked in")
+						: t(
+								"fleet.certificates.notReportedSub",
+								"the device hasn't reported certificates",
+							)}
 				</CellSub>
 			</>
 		);
@@ -623,10 +646,12 @@ function CertificatesCell({
 	perRow: boolean;
 }>) {
 	if (view.row.status === "revoked") return "–";
-	if (certificates) return <CertificateSummary inventory={certificates} />;
+	const never = view.presence.kind === "never";
+	if (certificates)
+		return <CertificateSummary inventory={certificates} never={never} />;
 	if (perRow) return <CertificatesPerRow deviceId={view.row.device_id} />;
 	if (view.relationship === "owner")
-		return <CertificateSummary inventory={NOT_REPORTED} />;
+		return <CertificateSummary inventory={NOT_REPORTED} never={never} />;
 	return <CertificatesNoAccess />;
 }
 
@@ -689,7 +714,7 @@ function AccessCell({ entry }: Readonly<{ entry: FleetDeviceEntry }>) {
 			) : null}
 			{showKeys ? (
 				<CellSub>
-					<KeyChip {...chip} />
+					<KeyChip {...chip} className={CELL_CHIP} />
 				</CellSub>
 			) : null}
 			{locked || entry.actions.length ? (
@@ -733,17 +758,21 @@ function AgentCell({ entry }: Readonly<{ entry: FleetDeviceEntry }>) {
 	const platform = os ? platformLabel(t, os) : undefined;
 	const { agent } = view;
 	if (!agent) {
-		const closed = Array.isArray(view.services)
-			? undefined
-			: view.services.state;
+		const locked =
+			!Array.isArray(view.services) && view.services.state === "locked";
+		const sub =
+			platform ??
+			(locked
+				? t("fleet.agent.untilUnlocked", "Unknown until unlocked")
+				: undefined);
 		return (
 			<>
 				<span className="font-sans">
-					{closed === "locked"
+					{locked
 						? t("fleet.agent.locked", "Locked")
 						: t("fleet.agent.notReported", "Not reported")}
 				</span>
-				{platform ? <CellSub className="font-sans">{platform}</CellSub> : null}
+				{sub ? <CellSub className="font-sans">{sub}</CellSub> : null}
 			</>
 		);
 	}
@@ -1106,22 +1135,23 @@ export const FleetDeviceRow = memo(function FleetDeviceRow(
 				>
 					{name}
 				</a>
-				<CellSub>
-					<IdRef
-						id={row.device_id}
-						copyLabel={t("fleet.device.copyId", "Copy device ID")}
-					/>{" "}
-					<span
-						title={time.abs(row.registered_at)}
-						className="whitespace-nowrap"
-					>
-						{t("fleet.device.registered", "· registered {{date}}", {
-							date: dayLabel(
-								row.registered_at,
-								time.now,
-								i18n?.language ?? "en",
-							),
-						})}
+				<CellSub className={FACT_LINE}>
+					<span className={FACT_ROW}>
+						<span className={FACT_FIRST}>
+							<IdRef
+								id={row.device_id}
+								copyLabel={t("fleet.device.copyId", "Copy device ID")}
+							/>
+						</span>
+						<span title={time.abs(row.registered_at)} className={FACT_NEXT}>
+							{t("fleet.device.registeredOn", "registered {{date}}", {
+								date: dayLabel(
+									row.registered_at,
+									time.now,
+									i18n?.language ?? "en",
+								),
+							})}
+						</span>
 					</span>
 				</CellSub>
 			</Td>

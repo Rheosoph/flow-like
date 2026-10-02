@@ -233,6 +233,22 @@ describe("organisation authorities", () => {
 			signedBy(rows, "Rheosoph Internal").map((row) => row.detail?.label),
 		).toEqual(["internal-mqtt"]);
 		expect(signedBy(rows, "Someone Else")).toEqual([]);
+		// An authority whose name ends another's is not credited with its certificates.
+		expect(signedBy(rows, "Internal")).toEqual([]);
+		const [mqtt] = signedBy(rows, "Rheosoph Internal");
+		if (!mqtt?.detail) throw new Error("the sample fleet changed");
+		const plain = {
+			...mqtt,
+			detail: { ...mqtt.detail, issuer: "Rheosoph Internal service issuer" },
+		};
+		const longer = {
+			...mqtt,
+			detail: {
+				...mqtt.detail,
+				issuer: "O=Rheosoph,CN=Rheosoph Internal service issuer,C=DE",
+			},
+		};
+		expect(signedBy([plain, longer], "Rheosoph Internal")).toHaveLength(2);
 	});
 
 	test("refuses names an authority can never sign for", () => {

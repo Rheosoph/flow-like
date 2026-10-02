@@ -291,7 +291,7 @@ export function EncryptedStatusExceptions({
 					) : null}
 				</div>
 			) : (
-				<p className="flex items-center gap-2 text-ink-2">
+				<p className="flex items-center gap-2 text-ui text-ink-2">
 					<CircleCheck aria-hidden className="size-4 text-good" />
 					<span>
 						{t(

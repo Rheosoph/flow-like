@@ -90,6 +90,7 @@ import {
 	type DeployPrepareState,
 	useDeployPrepare,
 } from "./use-deploy-prepare";
+import { useDeployRunState } from "./use-deploy-run";
 
 /* The deploy wizard's frame (APP §3.2, §3.4): header, planning headline, stepper, summary and foot around one of eight steps. */
 
@@ -1115,9 +1116,10 @@ function Wizard({
 	);
 	const { markDeployed } = state;
 	const onFinished = useCallback(
-		(_result: DeployResult) => markDeployed(),
+		(result: DeployResult) => markDeployed(result.outcome),
 		[markDeployed],
 	);
+	const runState = useDeployRunState(state.draft.deploymentId);
 	const time = useAreaTime();
 	const blockingContext: BlockingContext = { t, time, state, prepare };
 	const blocking = stepBlocking(step, blockingContext);
@@ -1144,8 +1146,11 @@ function Wizard({
 		...(state.versionLabel ? { versionLabel: state.versionLabel } : {}),
 		prepared: prepare.prepared,
 		deployed: state.deployed,
+		run: runState,
+		...(state.outcome ? { outcome: state.outcome } : {}),
 		goTo,
 	};
+	const running = step === "rollout";
 	const stepProps: PlanStepProps = {
 		scope,
 		route,
@@ -1158,10 +1163,21 @@ function Wizard({
 		prepared: prepare.prepared,
 		...(blockingText ? { blockingText } : {}),
 		reportDeviceCheck: state.reportDeviceCheck,
+		startOver: discard,
+		// Rollout has its own foot: the summary's one-line form goes there below 960 px.
+		...(running
+			? {
+					summaryBar: (
+						<DeploySummaryBar
+							{...summary}
+							className="hidden @max-[960px]/dwiz:flex"
+						/>
+					),
+				}
+			: {}),
 		state,
 		prepare,
 	};
-	const running = step === "rollout";
 	const exit = t("deploy.frame.exit", "Exit deploy");
 	const exitTitle = t(
 		"deploy.frame.exitTitle",

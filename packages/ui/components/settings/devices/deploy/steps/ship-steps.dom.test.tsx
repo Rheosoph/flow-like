@@ -110,6 +110,8 @@ interface Sink {
 	updates: number;
 	/** Device id → what it said about the copy, as the frame would receive it. */
 	checks: Record<string, DeployDeviceCheck>;
+	/** How often a step asked the frame to start over. */
+	startOvers: number;
 }
 
 let deployments = 0;
@@ -193,6 +195,10 @@ function Stage(stage: StageProps) {
 				reportDeviceCheck={(deviceId, value) => {
 					sink.checks[deviceId] = value;
 				}}
+				startOver={() => {
+					sink.startOvers += 1;
+				}}
+				summaryBar={<span data-stage-summary="" />}
 			/>
 		</div>
 	);
@@ -212,12 +218,26 @@ const MEMBER = {
 	is_owner: false,
 	can_leave: true,
 };
+/** The hub answers `is_owner: true` for an Admin too: only the Owner permission names the owner. */
+const ADMIN = {
+	role_id: "role_admin",
+	role_name: "Admin",
+	permissions: 0b10,
+	is_owner: true,
+	can_leave: true,
+};
 
 async function mountStage(
 	stage: Omit<StageProps, "sink">,
 	options: MountDevicesOptions & { role?: typeof OWNER } = {},
 ) {
-	const sink: Sink = { steps: [], results: [], updates: 0, checks: {} };
+	const sink: Sink = {
+		steps: [],
+		results: [],
+		updates: 0,
+		checks: {},
+		startOvers: 0,
+	};
 	const { role = OWNER, ...mount } = options;
 	const mounted = await mountDevices(<Stage {...stage} sink={sink} />, {
 		host: "app",
@@ -423,6 +443,10 @@ describe("Access & cost (APP §3.10)", () => {
 		expect(text(block("dp-spend"))).toContain(
 			"€10.00 on each device · €20.00 at most in total · paid by you · doesn't renew · ends with the approval",
 		);
+		// One limit per device: the consent names all of them.
+		expect(text(block("dp-spend"))).toContain(
+			"I pay for model use by these services up to these limits.",
+		);
 
 		await clickByText("Different per device");
 		expect(
@@ -500,6 +524,54 @@ describe("Access & cost (APP §3.10)", () => {
 		await click(allow);
 		expect(sink.updates).toBe(before);
 		expect(grants(fake)).toEqual([]);
+	});
+
+	test("an Admin who doesn't own the app may approve, but isn't told they own it and can't allow its files", async () => {
+		await mountStage(
+			{
+				app: VISITOR_PLAN_APP,
+				initial: visitorDraft([EDGE], {
+					approval: {
+						files: "read_only",
+						ownerConsent: false,
+						models: [],
+						maxInstances: 1,
+						expiresAt: NOW0 + 30 * 86_400,
+					},
+				}),
+				start: "access_cost",
+			},
+			{ role: ADMIN },
+		);
+		await until(
+			() => block("dp-who").querySelectorAll('[data-state="fail"]').length > 0,
+			"the owner check",
+		);
+		const who = text(block("dp-who"));
+		expect(who).toContain(
+			"Only the owner of Visitor Check-in can allow project files",
+		);
+		expect(who).not.toContain("You own Visitor Check-in");
+		expect(block("dp-who").querySelectorAll('[data-state="pass"]').length).toBe(
+			2,
+		);
+		// An Admin with Execute boards can approve: the whole-step gate stays away.
+		expect(document.querySelector("[data-gate='role']")).toBeNull();
+
+		const cloud = block("dp-cloud");
+		expect(text(cloud)).toContain(
+			"Only the owner of Visitor Check-in can allow access to its project files.",
+		);
+		expect(text(cloud)).not.toContain("I own Visitor Check-in");
+		expect(text(cloud)).not.toContain("Tick the box");
+		const read = allByRole("button", "Read").find((option) =>
+			cloud.contains(option),
+		);
+		expect(read?.hasAttribute("disabled")).toBe(true);
+		// Write buffering needs the files the Admin can't allow: its shortcut is off too.
+		expect(
+			byRole("button", "Allow Read & write").hasAttribute("disabled"),
+		).toBe(true);
 	});
 
 	test("updates keep their approval: one line each, from the hub's list or the interim on an older hub", async () => {
@@ -645,8 +717,10 @@ describe("Copy & upload (APP §3.11)", () => {
 		serveArtifacts(served.agent(STUDIO));
 		const { fake, sink } = await crmStage({ fake: served });
 		await until(
-			() => /used by CRM Sync on/.test(text(block("dp-uploads"))),
-			"the storage line",
+			() =>
+				(text(block("dp-uploads")).match(/used by CRM Sync on/g) ?? [])
+					.length === 2,
+			"the storage line of both devices",
 		);
 		const uploads = block("dp-uploads");
 		expect(text(uploads)).toContain("2 files");
@@ -658,8 +732,9 @@ describe("Copy & upload (APP §3.11)", () => {
 		expect(
 			allByRole("row").filter((row) => /Not started/.test(text(row))),
 		).toHaveLength(2);
+		// Every device that reports its storage is named, not only the first.
 		expect(text(uploads)).toContain(
-			"1.9 GiB of 16.0 GiB used by CRM Sync on edge-berlin-01.",
+			"1.9 GiB of 16.0 GiB used by CRM Sync on edge-berlin-01. 1.9 GiB of 16.0 GiB used by CRM Sync on studio-mac-mini.",
 		);
 		expect(primaries()).toBe(0);
 		expect(sink.checks).toEqual({});
@@ -1282,6 +1357,47 @@ describe("Rollout (APP §3.13, §7.8)", () => {
 		expect(sink.results).toHaveLength(1);
 	});
 
+	test("shown once: an access token leaves this window with the result that showed it", async () => {
+		const stage = await deployStage([EDGE]);
+		const { sink } = stage;
+		await until(() => sink.results.length === 1, "the run to finish");
+		const shown = block("dp-tokens").querySelector("code")?.textContent ?? "";
+		expect(shown).toMatch(/^[\x21-\x7e]{10}…$/);
+		expect(
+			queryByRole(
+				"button",
+				"Copy the access token of check-in-page on edge-berlin-01",
+			),
+		).not.toBeNull();
+
+		// The result goes away (another step, another screen) and comes back.
+		await stage.rerender(<div />);
+		await settle();
+		await stage.rerender(
+			<Stage
+				app={VISITOR_PLAN_APP}
+				initial={sink.draft as DeployDraft}
+				sink={sink}
+				start="rollout"
+			/>,
+		);
+		await until(
+			() => document.getElementById("dp-tokens") !== null,
+			"the result again",
+		);
+		const tokens = block("dp-tokens");
+		expect(text(tokens)).toContain("edge-berlin-01 › check-in-page");
+		expect(text(tokens)).toContain(
+			"Shown once · not kept after you left this page",
+		);
+		expect(tokens.querySelector("code")).toBeNull();
+		expect(text()).not.toContain(shown.slice(0, 10));
+		expect(allByRole("button", undefined, tokens)).toEqual([]);
+		// It is the same finished run, not a new one.
+		expect(text()).toContain("Done on edge-berlin-01.");
+		expect(stage.fake.workspace.activity.runs()).toHaveLength(1);
+	});
+
 	test("multi-partial: the failed device says what stays on the hub and a retry finishes it", async () => {
 		let restore = () => {};
 		const { fake, sink } = await deployStage([EDGE, STUDIO], (fakes) => {
@@ -1350,6 +1466,18 @@ describe("Rollout (APP §3.13, §7.8)", () => {
 		const deployed = document.querySelector("[data-deployed]") as HTMLElement;
 		expect(text(deployed)).toContain("What you deployed");
 		expect(text(deployed)).toContain("check-in-page · new on edge-berlin-01");
+
+		// The frame's "This deploy" line sits right above the run's foot; the status also has a form for narrow widths.
+		const foot = document.querySelector("[data-wizard-foot]") as HTMLElement;
+		expect(
+			foot.previousElementSibling?.hasAttribute("data-stage-summary"),
+		).toBe(true);
+		const narrow = foot.querySelector("output[data-run-foot-status]");
+		expect(text(narrow as HTMLElement)).toBe("Nothing was deployed.");
+		// "Start over…" is the frame's: it asks first and resets; the step alone doesn't just jump to What.
+		await click(byRole("button", "Start over…"));
+		expect(sink.startOvers).toBe(1);
+		expect(sink.steps).toEqual(["rollout"]);
 
 		restore();
 		await click(byRole("button", "Retry"));

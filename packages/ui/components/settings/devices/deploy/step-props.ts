@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { PreparedProjectArtifact } from "../../../../lib/device-management/artifacts";
 import type { DeploymentVariable } from "../../../../lib/device-management/deployment";
 import type {
@@ -48,6 +49,10 @@ export interface DeployStepProps {
 	blockingText?: string;
 	/** Step 6 (offline) hands each device's event check back; Where and Settings then show it. */
 	reportDeviceCheck?(deviceId: string, check: DeployDeviceCheck): void;
+	/** Rollout's "Start over…": the frame asks first, then forgets the choices and opens What. */
+	startOver?(): void;
+	/** Rollout: the frame's "This deploy" bar for narrow containers; the step places it above its foot. */
+	summaryBar?: ReactNode;
 }
 
 /** Steps 1–5 also read the wizard's draft state and the preparation of step 2. */

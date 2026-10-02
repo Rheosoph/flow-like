@@ -49,6 +49,7 @@ import {
 	connectionFileName,
 	connectionFileText,
 } from "../../../../lib/device-management/sharing";
+import { deviceApiBase } from "../../../../lib/device-management/storage";
 import type {
 	Capability,
 	InventoryScope,
@@ -77,6 +78,7 @@ import { InlineResult } from "../primitives/inline-result";
 import { KeyValueList, KvRow } from "../primitives/key-value-list";
 import { PersonChip } from "../primitives/person-chip";
 import { RequestedActual } from "../primitives/requested-actual";
+import { StateView } from "../primitives/state-view";
 import { StatusChip } from "../primitives/status-chip";
 import { cx } from "../primitives/tone";
 import { useCopy } from "../primitives/use-copy";
@@ -137,6 +139,15 @@ export function WizardPosition({
 		</span>
 	);
 }
+
+/** The hub as people name it to each other: the host of its address. */
+export const hostOf = (url: string) => {
+	try {
+		return new URL(url).host;
+	} catch {
+		return url;
+	}
+};
 
 /** Hands a small public text file (request, connection file) to the browser's download. */
 export function saveTextFile(fileName: string, text: string): void {
@@ -857,6 +868,35 @@ export function KeysNotice({
 	);
 }
 
+/** The owner keys are open and the rules the hub returned still don't verify: the people in them aren't shown. */
+export function RulesUnverified({
+	device,
+	onRetry,
+	className,
+}: Readonly<{ device: string; onRetry(): void; className?: string }>) {
+	const { t } = useTranslation("devices");
+	return (
+		<StateView
+			kind="error"
+			title={t(
+				"access.unverified.title",
+				"These access rules don't check out with your owner key",
+			)}
+			text={t(
+				"access.unverified.text",
+				"The hub returned access rules for {{device}} that this computer can't verify, so the people in them aren't shown. Try again; if it stays, don't change access from this hub.",
+				{ device },
+			)}
+			actions={
+				<DvButton size="sm" onClick={onRetry}>
+					{t("access.people.retry", "Try again")}
+				</DvButton>
+			}
+			className={className}
+		/>
+	);
+}
+
 /* The people of one device. */
 
 export interface GrantHandlers {
@@ -940,7 +980,8 @@ function GrantMenu({
 	);
 }
 
-function GrantActions({
+/** Renew… and the row menu of one person, or what to wait for; disabled with the gate's reason. */
+export function GrantActions({
 	device,
 	row,
 	name,
@@ -1268,6 +1309,11 @@ export function ConnectionFileSheet({
 						id={device.deviceId}
 						copyLabel={t("access.connection.copyDeviceId", "Copy device ID")}
 					/>
+				</KvRow>
+				<KvRow label={t("access.connection.hub", "Hub")}>
+					<span data-connection-hub="">
+						{hostOf(deviceApiBase(workspace.deps.scope))}
+					</span>
 				</KvRow>
 				<KvRow label={t("access.connection.contains", "Contains")}>
 					{t(

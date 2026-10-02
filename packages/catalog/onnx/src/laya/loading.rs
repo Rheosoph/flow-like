@@ -141,8 +141,23 @@ pub(super) async fn load_laya(
     context: &mut ExecutionContext,
     model_dir: &FlowPath,
 ) -> Result<Arc<LoadedLaya>> {
+    load_laya_mode(context, model_dir, false).await
+}
+
+pub(super) async fn load_laya_custom(
+    context: &mut ExecutionContext,
+    model_dir: &FlowPath,
+) -> Result<Arc<LoadedLaya>> {
+    load_laya_mode(context, model_dir, true).await
+}
+
+async fn load_laya_mode(
+    context: &mut ExecutionContext,
+    model_dir: &FlowPath,
+    custom: bool,
+) -> Result<Arc<LoadedLaya>> {
     let providers = ensure_ort_initialized()?.active_providers;
-    let key = model_cache_key(model_dir, &providers);
+    let key = format!("{}:{custom}", model_cache_key(model_dir, &providers));
     let cell = {
         let mut cache = context.cache.write().await;
         if let Some(entry) = cache.get(&key) {
@@ -163,7 +178,7 @@ pub(super) async fn load_laya(
             model
         }
     };
-    cell.get_or_try_init(|| build_laya(context, model_dir))
+    cell.get_or_try_init(|| build_laya(context, model_dir, custom))
         .await
         .cloned()
 }
@@ -171,6 +186,7 @@ pub(super) async fn load_laya(
 async fn build_laya(
     context: &mut ExecutionContext,
     model_dir: &FlowPath,
+    custom: bool,
 ) -> Result<Arc<LoadedLaya>> {
     let temporary = tempfile::Builder::new()
         .prefix("flowlike-laya-custom-")
@@ -181,6 +197,16 @@ async fn build_laya(
             .join(format!("{}-asset", ASSETS[index].role))
     });
     let missing = materialize_directory(context, model_dir, &local_paths).await?;
+    if custom && !missing.is_empty() {
+        return Err(anyhow!(
+            "Custom Laya bundle is missing: {}",
+            missing
+                .iter()
+                .map(|&index| ASSETS[index].file)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     let specs: Vec<ModelSpec> = missing
         .iter()
         .map(|&index| builtin_spec(&ASSETS[index]))
@@ -384,6 +410,25 @@ mod tests {
         FlowPath::new(value.to_string(), "store".to_string(), None)
     }
 
+    #[tokio::test]
+    async fn incomplete_custom_laya_bundle_never_downloads_missing_assets() {
+        let (mut context, store) = memory_context().await;
+        store
+            .put(
+                &path("models/rl_agent_config.json").object_path(),
+                "{}".into(),
+            )
+            .await
+            .unwrap();
+        let error = build_laya(&mut context, &path("models"), true)
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("Custom Laya bundle is missing"));
+        assert!(error.to_string().contains("model.onnx"));
+        assert!(error.to_string().contains("tokenizer/tokenizer.json"));
+    }
+
     #[test]
     fn bundled_assets_are_pinned_managed_roles() {
         assert_eq!(ASSETS.map(|asset| asset.role), LAYA_MODELS.roles);
@@ -515,7 +560,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let error = build_laya(&mut context, &model_dir).await.err().unwrap();
+        let error = build_laya(&mut context, &model_dir, false)
+            .await
+            .err()
+            .unwrap();
         assert!(
             error
                 .to_string()

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { ApiResponseError } from "../../../../lib/api-error";
 import {
 	SAMPLE_IDS,
 	SAMPLE_PEOPLE,
@@ -22,7 +23,10 @@ await preloadDevices();
 const { MACHINE_WORDS, mountAccess } = await import(
 	"../access/access-test-kit"
 );
+const { act } = await import("react");
 const { DeviceAccessTab } = await import("./access-tab");
+const { createFakeWorkspace } = await import("../testing/fake-workspace");
+const { fakeCompact, fakeKeys } = await import("../testing/fake-device-api");
 const { useDevicesRoute } = await import("../routing/use-devices-route");
 const { useOverlayStore } = await import("../workspace/overlay-store");
 
@@ -178,6 +182,78 @@ describe("Device › Access (owner)", () => {
 		await click(renew);
 		expect(fake.api.writes()).toHaveLength(writes);
 		expect(queryByRole("alertdialog")).toBeNull();
+	});
+
+	test("rules the hub can't deliver are an error with a retry, never 'Nobody else has access'", async () => {
+		const fake = await createFakeWorkspace();
+		const stop = fake.api.fail(
+			{
+				method: "GET",
+				path: new RegExp(`${SAMPLE_IDS.edge}/management/policy$`),
+			},
+			new ApiResponseError({
+				status: 429,
+				code: "RATE_LIMITED",
+				message: "Too many requests",
+			}),
+		);
+		fake.queryClient.clear();
+		const mounted = await mount(SAMPLE_IDS.edge, { fake });
+		const people = mounted.container.querySelector(
+			"#device-access-people",
+		) as HTMLElement;
+		expect(people.textContent).not.toContain("Nobody else has access");
+		expect(people.querySelector("[data-kind=empty]")).toBeNull();
+		const error = people.querySelector("[data-kind=error]") as HTMLElement;
+		expect(error.textContent).toContain(
+			"Couldn't read who has access to edge-berlin-01",
+		);
+		expect(error.textContent).toContain(
+			"it isn't known whether edge-berlin-01 is shared",
+		);
+		stop();
+		await click(byRole("button", "Try again", error));
+		await mounted.settle();
+		expect(
+			mounted.container.querySelectorAll("#device-access-people [data-grant]"),
+		).toHaveLength(2);
+		expect(
+			mounted.container.querySelector(
+				"#device-access-people [data-kind=error]",
+			),
+		).toBeNull();
+	});
+
+	test("rules that don't check out with the owner key are an error: no people, no 'nobody', no endless wait", async () => {
+		const fake = await createFakeWorkspace();
+		const stored = fake.hub.policies.get(SAMPLE_IDS.edge);
+		if (!stored?.policy) throw new Error("the sample fleet changed");
+		// The hub hands out rules signed with a key that isn't this owner's.
+		stored.jws = fakeCompact(
+			stored.policy,
+			fakeKeys.invitation("usr_someone_else", SAMPLE_IDS.edge),
+		);
+		fake.queryClient.clear();
+		const mounted = await mount(SAMPLE_IDS.edge, { fake });
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 700));
+		});
+		await mounted.settle();
+		const people = mounted.container.querySelector(
+			"#device-access-people",
+		) as HTMLElement;
+		expect(people.querySelector("[data-grant]")).toBeNull();
+		expect(people.textContent).not.toContain("Nobody else has access");
+		expect(people.querySelector("[data-kind=loading]")).toBeNull();
+		const error = people.querySelector("[data-kind=error]") as HTMLElement;
+		expect(error.textContent).toContain(
+			"These access rules don't check out with your owner key",
+		);
+		expect(error.textContent).toContain(
+			"if it stays, don't change access from this hub.",
+		);
+		expect(byRole("button", "Try again", error)).toBeTruthy();
+		expect(mounted.container.textContent).not.toMatch(MACHINE_WORDS);
 	});
 
 	test("a device nobody else can reach says so instead of showing an empty table", async () => {

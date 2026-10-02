@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
+import { ApiResponseError } from "../../../../lib/api-error";
 import type {
 	DeployDraft,
 	DeployPlan,
@@ -487,6 +488,131 @@ describe("useDeployRun", () => {
 		expect(sent(fake, EDGE, "apply")).toHaveLength(2);
 		expect(deployRunResult(state())?.outcome).toBe("all");
 		expect(studio).toBeDefined();
+	});
+
+	test("a changed plan after a failed deploy: the approval the first attempt left is revoked before the new one is created", async () => {
+		const first = visitorPlan([EDGE]);
+		const view = await mountRun(first);
+		const { fake } = view;
+		serveArtifacts(fake.agent(EDGE));
+		run.setDeployRunExtras(first.draft.deploymentId, {
+			prepared: await visitorBundle(),
+		});
+		const restore = fake
+			.agent(EDGE)
+			.reject("apply", "invalid", "The device refused these settings.");
+		await start(view.sink);
+		await until(() => view.state().status === "finished", "the first attempt");
+		expect(view.state().rows[0]?.state).toBe("failed");
+		const [left] = fake.hub
+			.resourcesOf(EDGE)
+			.grants.filter((grant) => grant.placement_id === "check-in-page");
+		expect(left?.status).toBe("active");
+		expect(left?.deployment_id).toBe(first.draft.deploymentId);
+		restore();
+
+		// "Change and deploy again": the same service under a new deploy ID.
+		const second = visitorPlan([EDGE]);
+		expect(second.draft.deploymentId).not.toBe(first.draft.deploymentId);
+		const again: Sink = {};
+		await view.rerender(<Probe plan={second} options={{}} sink={again} />);
+		run.setDeployRunExtras(second.draft.deploymentId, {
+			prepared: await visitorBundle(),
+		});
+		await start(again);
+		await until(
+			() => again.handle?.state.status === "finished",
+			"the second attempt",
+		);
+
+		expect(again.handle?.state.rows[0]?.state).toBe("done");
+		const active = fake.hub
+			.resourcesOf(EDGE)
+			.grants.filter(
+				(grant) =>
+					grant.placement_id === "check-in-page" && grant.status === "active",
+			);
+		// The hub takes one active approval per service: exactly the new deploy's is left.
+		expect(active.map((grant) => grant.deployment_id)).toEqual([
+			second.draft.deploymentId,
+		]);
+		const writes = fake.api.calls
+			.filter(([method]) => method === "POST" || method === "DELETE")
+			.map(([method, path]) => `${method} ${path}`)
+			.filter((line) => line.includes(`devices/${EDGE}/resource-grants`));
+		expect(writes.at(-2)).toBe(
+			`DELETE devices/${EDGE}/resource-grants/${left?.grant_id}`,
+		);
+		expect(writes.at(-1)).toBe(`POST devices/${EDGE}/resource-grants`);
+		const created = sent(fake, EDGE, "apply").at(-1)?.[2] as {
+			config: { deployment_id: string; resource_grant: { grant_id: string } };
+		};
+		expect(created.config.deployment_id).toBe(second.draft.deploymentId);
+		expect(created.config.resource_grant.grant_id).toBe(active[0]?.grant_id);
+	});
+
+	test("an approval a service on the device still runs on is never revoked: the device is asked first", async () => {
+		const first = visitorPlan([EDGE]);
+		const view = await mountRun(first);
+		const { fake } = view;
+		serveArtifacts(fake.agent(EDGE));
+		run.setDeployRunExtras(first.draft.deploymentId, {
+			prepared: await visitorBundle(),
+		});
+		await start(view.sink);
+		await until(() => view.state().status === "finished", "the first deploy");
+		expect(view.state().rows[0]?.state).toBe("done");
+		const running = fake.hub
+			.resourcesOf(EDGE)
+			.grants.find((grant) => grant.placement_id === "check-in-page");
+		expect(running?.status).toBe("active");
+
+		// A plan made from older facts still calls check-in-page a new service on this device.
+		const stale = visitorPlan([EDGE]);
+		const again: Sink = {};
+		await view.rerender(<Probe plan={stale} options={{}} sink={again} />);
+		run.setDeployRunExtras(stale.draft.deploymentId, {
+			prepared: await visitorBundle(),
+		});
+		const applies = sent(fake, EDGE, "apply").length;
+		await start(again);
+		await until(
+			() => again.handle?.state.status === "finished",
+			"the second attempt",
+		);
+
+		expect(again.handle?.state.rows[0]?.error).toMatchObject({
+			phase: "approve",
+			code: "service_exists",
+		});
+		expect(fake.api.sent("DELETE", /resource-grants/)).toEqual([]);
+		expect(running?.status).toBe("active");
+		expect(grants(fake, EDGE)).toHaveLength(1);
+		expect(sent(fake, EDGE, "apply")).toHaveLength(applies);
+	});
+
+	test("the hub refusing an approval is a refusal, not a lost answer", async () => {
+		const plan = visitorPlan([EDGE]);
+		const { fake, sink, state } = await mountRun(plan);
+		serveArtifacts(fake.agent(EDGE));
+		run.setDeployRunExtras(plan.draft.deploymentId, {
+			prepared: await visitorBundle(),
+		});
+		fake.api.fail(
+			{ method: "POST", path: /resource-grants$/ },
+			new ApiResponseError({
+				status: 403,
+				code: "FORBIDDEN",
+				message: "Online storage requires the current project owner's approval",
+			}),
+		);
+		await start(sink);
+		await until(() => state().status === "finished", "the refusal to show");
+		expect(state().rows[0]?.error).toMatchObject({
+			phase: "approve",
+			code: "hub_refused",
+		});
+		expect(types(fake, EDGE)).toEqual([]);
 	});
 
 	test("an apply whose reply was lost is looked up and sent again under the same command id", async () => {

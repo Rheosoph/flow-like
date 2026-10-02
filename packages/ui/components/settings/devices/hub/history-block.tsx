@@ -12,7 +12,14 @@ import { StateView } from "../primitives/state-view";
 import { StatusChip } from "../primitives/status-chip";
 import { useRouteLink } from "../routing/use-devices-route";
 import { hubErrorCopy, useDeviceRows } from "../workspace";
-import { Hint, HubReadStamp, SectionHead, Tech, useLocale } from "./hub-parts";
+import {
+	Hint,
+	HubReadStamp,
+	SectionHead,
+	TABLE_RESET,
+	Tech,
+	useLocale,
+} from "./hub-parts";
 import { DAY, type HubView, planName } from "./hub-view";
 import { bytesText, limitTone } from "./use-hub-facts";
 
@@ -98,6 +105,7 @@ function TierTable({
 			label={t("hub.history.title", "History storage")}
 			cols={["40%", "34%", "26%"]}
 			stackAt={560}
+			className={TABLE_RESET}
 			head={
 				<tr>
 					<Th>{t("hub.history.plan", "Plan")}</Th>

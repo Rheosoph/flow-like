@@ -7,6 +7,7 @@ import {
 	SAMPLE_PEOPLE,
 	emptyInput,
 } from "../../../../lib/device-management/model/__fixtures__/sample-fleet";
+import { deviceApiBase } from "../../../../lib/device-management/storage";
 import type { ManagementPolicy } from "../../../../lib/device-management/types";
 import {
 	allByRole,
@@ -33,8 +34,10 @@ const { MACHINE_WORDS, mountAccess, requestFile } = await import(
 	"./access-test-kit"
 );
 const { AccessScreen } = await import("./access-screen");
+const { GrantRowActions } = await import("./change-permissions-sheet");
 const { accessStoreOf } = await import("./use-access");
 const { createFakeWorkspace } = await import("../testing/fake-workspace");
+const { fakeCompact, fakeKeys } = await import("../testing/fake-device-api");
 const { useDevicesRoute } = await import("../routing/use-devices-route");
 const { useOverlayStore } = await import("../workspace/overlay-store");
 const { useActivityTray } = await import("../shell/activity-tray");
@@ -166,6 +169,28 @@ describe("Access › People", () => {
 		expect(list.textContent).toContain("Deploy & configure");
 		expect(list.textContent).toContain("Change instance count");
 		expect(list.querySelectorAll("li")).toHaveLength(7);
+	});
+
+	test("the connection file sheet names the owner key, the device and the hub the other person signs in to", async () => {
+		const { container, fake } = await mount();
+		await click(
+			byRole(
+				"button",
+				"Download connection file…",
+				section(container, SAMPLE_IDS.edge),
+			),
+		);
+		const sheet = inPortal("dialog");
+		expect(sheet.textContent).toContain("Connection file for edge-berlin-01");
+		expect(sheet.textContent).toContain("Your owner key fingerprint");
+		const hub = sheet.querySelector("[data-connection-hub]")?.textContent;
+		expect(hub).toBe(new URL(deviceApiBase(fake.workspace.deps.scope)).host);
+		expect(hub).not.toContain("/");
+		expect(
+			byRole("button", "Download connection file", sheet).getAttribute(
+				"aria-disabled",
+			),
+		).toBeNull();
 	});
 
 	test("locked: the rules stay readable, the people need the keys, gated controls send nothing", async () => {
@@ -379,6 +404,38 @@ describe("Access › People", () => {
 			section(container, SAMPLE_IDS.edge).querySelectorAll("[data-grant]"),
 		).toHaveLength(2);
 		expect(container.querySelector("[data-kind=error]")).toBeNull();
+	});
+});
+
+describe("Access › rules that can't be verified", () => {
+	test("an unlocked device whose rules don't check out says so; the headline doesn't ask to unlock it", async () => {
+		const fake = await createFakeWorkspace();
+		const stored = fake.hub.policies.get(SAMPLE_IDS.edge);
+		if (!stored?.policy) throw new Error("the sample fleet changed");
+		stored.jws = fakeCompact(
+			stored.policy,
+			fakeKeys.invitation("usr_someone_else", SAMPLE_IDS.edge),
+		);
+		fake.queryClient.clear();
+		const mounted = await mount({ fake });
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 700));
+		});
+		await mounted.settle();
+		const { container } = mounted;
+		const edge = section(container, SAMPLE_IDS.edge);
+		expect(edge.querySelector("[data-grant]")).toBeNull();
+		expect(edge.querySelector("[data-kind=error]")?.textContent).toContain(
+			"These access rules don't check out with your owner key",
+		);
+		expect(edge.querySelector("[data-kind=loading]")).toBeNull();
+		// studio-mac-mini still verifies: its people count, and nothing asks to unlock edge-berlin-01.
+		const headline = container.querySelector("[data-headline]")?.textContent;
+		expect(headline).toContain("1 person can reach your devices.");
+		expect(headline).not.toContain("Unlock");
+		expect(
+			section(container, SAMPLE_IDS.studio).querySelectorAll("[data-grant]"),
+		).toHaveLength(1);
 	});
 });
 
@@ -1123,5 +1180,48 @@ describe("Access › requests, deep links and interims", () => {
 		expect(allByRole("link", "Set up a device").length).toBeGreaterThan(0);
 		expect(primaries(container)).toBe(1);
 		expect(byText("You don't own any devices yet")).toBeTruthy();
+	});
+});
+
+describe("Access › one person's actions outside the Access screens", () => {
+	test("Renew…, Change permissions… and Remove access… work for one row, and nothing renders while the people can't be read", async () => {
+		const fake = await createFakeWorkspace();
+		const jonas = policyOf(fake, SAMPLE_IDS.edge).grants.find(
+			(grant) => grant.user_id === JONAS,
+		);
+		if (!jonas) throw new Error("the sample fleet changed");
+		const mounted = await mountAccess(
+			<GrantRowActions deviceId={SAMPLE_IDS.edge} grantId={jonas.grant_id} />,
+			{ fake, people: PEOPLE },
+		);
+		const { container } = mounted;
+		await click(byRole("button", "Renew…", container));
+		expect(inPortal("alertdialog").textContent).toContain(
+			"Renew Jonas Weber's access to edge-berlin-01?",
+		);
+		await click(byRole("button", "Cancel", inPortal("alertdialog")));
+		await click(byRole("button", "More for Jonas Weber", container));
+		await clickByText("Remove Jonas Weber's access…", inPortal("menu"));
+		const confirm = inPortal("alertdialog");
+		expect(confirm.textContent).toContain("Can you undo it?");
+		await click(byRole("button", "Remove Jonas Weber", confirm));
+		await mounted.settle();
+		expect(policyPuts(fake)).toHaveLength(1);
+		expect(
+			policyOf(fake, SAMPLE_IDS.edge).grants.some(
+				(grant) => grant.user_id === JONAS,
+			),
+		).toBe(false);
+		expect(container.textContent).toContain(
+			"Saved access rules v6 without Jonas Weber",
+		);
+
+		await cleanupDevices();
+		const locked = await mountAccess(
+			<GrantRowActions deviceId={SAMPLE_IDS.edge} grantId={jonas.grant_id} />,
+			{ unlock: "none", people: PEOPLE },
+		);
+		expect(locked.container.querySelector("[data-grant-actions]")).toBeNull();
+		expect(queryByRole("button", "Renew…", locked.container)).toBeNull();
 	});
 });

@@ -548,7 +548,9 @@ function lockedFacts(t: DevicesT, device: DeviceViewModel): ObjectFact[] {
 	return [
 		{
 			id: "mode",
-			label: t("devices:service.facts.mode", "How it runs"),
+			label: (
+				<FactLabel>{t("devices:service.facts.mode", "How it runs")}</FactLabel>
+			),
 			value: unknown,
 		},
 		{
@@ -557,6 +559,11 @@ function lockedFacts(t: DevicesT, device: DeviceViewModel): ObjectFact[] {
 			value: unknown,
 		},
 	];
+}
+
+/** A fact's label stays on one line; on a phone the value wraps beside it instead of squeezing it. */
+function FactLabel({ children }: Readonly<{ children: ReactNode }>) {
+	return <span className="whitespace-nowrap">{children}</span>;
 }
 
 /** A service ID is a name: shown whole (the shared ID chip cuts every ID to eight characters). */
@@ -709,7 +716,9 @@ export function ServiceHeader({
 		? [
 				{
 					id: "mode",
-					label: t("service.facts.mode", "How it runs"),
+					label: (
+						<FactLabel>{t("service.facts.mode", "How it runs")}</FactLabel>
+					),
 					value: (
 						<span
 							title={
@@ -722,9 +731,11 @@ export function ServiceHeader({
 				},
 				{
 					id: "version",
-					label: t("service.facts.version", "App version"),
+					label: (
+						<FactLabel>{t("service.facts.version", "App version")}</FactLabel>
+					),
 					value: (
-						<>
+						<span className="inline-flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
 							<AppVersionValue app={app} service={service} />
 							{isBehind(app.drift) && tab !== "configuration" ? (
 								<a
@@ -734,7 +745,7 @@ export function ServiceHeader({
 										serviceId,
 										tab: "configuration",
 									})}
-									className={`ml-1 ${LINK}`}
+									className={`whitespace-nowrap ${LINK}`}
 									title={t(
 										"service.facts.howToUpdateTitle",
 										"Configuration explains what an update sends and keeps, and starts it",
@@ -743,7 +754,7 @@ export function ServiceHeader({
 									{t("service.facts.howToUpdate", "How to update")}
 								</a>
 							) : null}
-						</>
+						</span>
 					),
 				},
 				{

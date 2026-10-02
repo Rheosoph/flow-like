@@ -340,6 +340,10 @@ export function CloudApprovalFields({
 			? t("cloud.issue.nothingApprovedModel", "Pick at least one model.")
 			: approvalIssueText(t, found, app);
 	};
+	// Someone who isn't the owner gets no consent box, so nothing asks them to tick one.
+	const softHint =
+		issueOf("models", true) ??
+		(isAppOwner === false ? undefined : issueOf("files", true));
 	const days = daysUntil(value.expiresAt, now);
 	const validDays = value.expiresAt > now;
 
@@ -478,9 +482,7 @@ export function CloudApprovalFields({
 					/>
 				</Field>
 			</div>
-			{issueOf("models", true) || issueOf("files", true) ? (
-				<FormHint>{issueOf("models", true) ?? issueOf("files", true)}</FormHint>
-			) : null}
+			{softHint ? <FormHint>{softHint}</FormHint> : null}
 			{modelOnly ? (
 				<FormHint>
 					{t(
@@ -500,6 +502,8 @@ export interface SpendingLimitFieldsProps {
 	onChange(value: SpendingDraft): void;
 	/** An existing approval: the hub then says whether the viewer's plan covers its models (BG34). */
 	grantId?: string;
+	/** How many services get a limit like this one (the deploy wizard's devices); the consent then names all of them. */
+	services?: number;
 }
 
 const amountText = (micros: number) =>
@@ -576,6 +580,7 @@ export function SpendingLimitFields({
 	approval,
 	onChange,
 	grantId,
+	services = 1,
 }: Readonly<SpendingLimitFieldsProps>) {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
@@ -641,10 +646,15 @@ export function SpendingLimitFields({
 				checked={value.consent}
 				onCheckedChange={(consent) => onChange({ ...value, consent })}
 			>
-				{t(
-					"cloud.spendFields.consent",
-					"I pay for model use by this service up to this limit.",
-				)}
+				{services > 1
+					? t(
+							"cloud.spendFields.consentMany",
+							"I pay for model use by these services up to these limits.",
+						)
+					: t(
+							"cloud.spendFields.consent",
+							"I pay for model use by this service up to this limit.",
+						)}
 			</CheckField>
 			<Eligibility deviceId={deviceId} {...(grantId ? { grantId } : {})} />
 		</div>

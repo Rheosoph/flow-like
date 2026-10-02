@@ -11,6 +11,7 @@ import {
 import {
 	type DeployDraft,
 	type DeployPlan,
+	type DeployResult,
 	type DeployTargetDraft,
 	type PlanApp,
 	type PlanCheck,
@@ -59,8 +60,10 @@ interface SavedDraft {
 	draft: DeployDraft;
 	/** Index of the furthest step visited. */
 	reached: number;
-	/** The plan was deployed; the next change starts a new one. */
+	/** The plan's run ended; the next change starts a new plan. */
 	deployed: boolean;
+	/** How that run ended. */
+	outcome?: DeployResult["outcome"];
 	/** A one-service update took its events from the service. */
 	seeded: boolean;
 	/** The user changed something: only then "Picked up where you left off" is true. */
@@ -95,6 +98,8 @@ export interface DeployDraftState {
 	resumed: boolean;
 	reached: number;
 	deployed: boolean;
+	/** How the plan's last run ended; undefined until one did. */
+	outcome?: DeployResult["outcome"];
 	update(patch: Partial<DeployDraft>): void;
 	updateTarget(
 		deviceId: string,
@@ -108,7 +113,7 @@ export interface DeployDraftState {
 	dismissResumed(): void;
 	/** Forgets the saved progress and starts over from the entry. */
 	discard(): void;
-	markDeployed(): void;
+	markDeployed(outcome?: DeployResult["outcome"]): void;
 }
 
 /** `app|<appId>|<new|update>|<eventId or all>` or `dev|<deviceId>|<appId>|<new or serviceId>`. */
@@ -361,8 +366,9 @@ function useDraftStore(
 
 /** Changing a deployed plan starts a new one from the same choices (APP §3.13). */
 function patched(saved: SavedDraft, patch: Partial<DeployDraft>): SavedDraft {
+	const { outcome: _ended, ...rest } = saved;
 	return {
-		...saved,
+		...rest,
 		deployed: false,
 		touched: true,
 		draft: {
@@ -449,7 +455,12 @@ function useDraftActions(change: DraftStore["change"]) {
 		[change],
 	);
 	const markDeployed = useCallback(
-		() => change((value) => ({ ...value, deployed: true })),
+		(outcome?: DeployResult["outcome"]) =>
+			change((value) => ({
+				...value,
+				deployed: true,
+				...(outcome ? { outcome } : {}),
+			})),
 		[change],
 	);
 	return { update, updateTarget, toggleDevice, setReached, markDeployed };
@@ -579,7 +590,7 @@ export function useDeployDraft(
 		[keepCatalog.loading, installed.loading, definitionsError],
 	);
 
-	// `is_owner` also holds for an admin, so only "not the owner" is a fact here.
+	// A role without the Owner permission (an Admin included) can't approve the app's files; with it the hub still decides.
 	const notOwner = role.isOwner === false;
 	const facts = useMemo(
 		() =>
@@ -650,6 +661,7 @@ export function useDeployDraft(
 		resumed: store.resumed,
 		reached: saved.reached,
 		deployed: saved.deployed,
+		...(saved.outcome ? { outcome: saved.outcome } : {}),
 		...actions,
 		setCatalog,
 		reportDeviceCheck,

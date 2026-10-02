@@ -334,9 +334,20 @@ describe("ordering, the service's approval and the sum", () => {
 	});
 
 	test("a service runs on its active approval, else the one that ended last", () => {
+		const ended = { revocable: false };
 		const rows = [
-			row({ grantId: "old", state: "revoked", expiresAt: NOW - 9 * DAY }),
-			row({ grantId: "newer", state: "expired", expiresAt: NOW - DAY }),
+			row({
+				...ended,
+				grantId: "old",
+				state: "revoked",
+				expiresAt: NOW - 9 * DAY,
+			}),
+			row({
+				...ended,
+				grantId: "newer",
+				state: "expired",
+				expiresAt: NOW - DAY,
+			}),
 			row({ grantId: "elsewhere", serviceId: "other" }),
 		];
 		expect(currentApproval(rows, "svc")?.grantId).toBe("newer");
@@ -344,6 +355,27 @@ describe("ordering, the service's approval and the sum", () => {
 			currentApproval([...rows, row({ grantId: "live" })], "svc")?.grantId,
 		).toBe("live");
 		expect(currentApproval(rows, "none")).toBeUndefined();
+	});
+
+	test("an approval that ended early is still held by the hub: it comes before a revoked one with a later date", () => {
+		const rows = [
+			// Revoked last month; its approved date is still ahead.
+			row({
+				grantId: "revoked",
+				state: "revoked",
+				revocable: false,
+				expiresAt: NOW + 20 * DAY,
+			}),
+			// Ended ten minutes ago with the access rules; not revoked, so it blocks a new approval.
+			row({
+				grantId: "held",
+				state: "expired",
+				revocable: true,
+				expiresAt: NOW + 29 * DAY,
+				effective: { at: NOW - 600, limit: "access_rules" },
+			}),
+		];
+		expect(currentApproval(rows, "svc")?.grantId).toBe("held");
 	});
 
 	test("the sum counts only limits the viewer pays for that still accept charges", () => {

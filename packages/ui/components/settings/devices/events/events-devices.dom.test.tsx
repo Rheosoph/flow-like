@@ -289,6 +289,10 @@ describe("EventsDevicesProvider over the device workspace", () => {
 		expect(
 			view.fake.api.sent("GET", /device-placements/).length,
 		).toBeLessThanOrEqual(1);
+		// What the one shared device's access covers is asked once, never retried on a hub without the route.
+		expect(view.fake.api.sent("GET", /my-access/).length).toBeLessThanOrEqual(
+			1,
+		);
 	});
 
 	test("older agent: status without event lists reads unknown, and no command is sent", async () => {
@@ -371,9 +375,7 @@ describe("EventsDevicesProvider over the device workspace", () => {
 			"cold-storage-nas hasn't checked in yet. Deploying needs it online first.",
 		);
 		expect(queryByRole("button", /Unlock/, row)).toBeNull();
-		expect(
-			byRole("link", "Start instructions", row).getAttribute("href"),
-		).toBe(
+		expect(byRole("link", "Start instructions", row).getAttribute("href")).toBe(
 			`/library/config/devices?id=${APP}&device=${SAMPLE_IDS.cold}&tab=overview`,
 		);
 	});

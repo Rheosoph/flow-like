@@ -14,7 +14,7 @@ import {
 	TriangleAlert,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import { type ReactNode, useCallback, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useId, useMemo, useState } from "react";
 import type { PlacementConfiguration } from "../../../../lib/device-management/deployment";
 import type { NetworkInterface } from "../../../../lib/device-management/model/types";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
@@ -23,7 +23,7 @@ import { DvButton } from "../primitives/dv-button";
 import { DvSheet } from "../primitives/dv-sheet";
 import { ExpiryRail } from "../primitives/expiry-rail";
 import { DvInput, Field } from "../primitives/form-fields";
-import { type Gate, GatedAction } from "../primitives/gate-notice";
+import { type Gate, GateInline, GatedAction } from "../primitives/gate-notice";
 import { InlineResult } from "../primitives/inline-result";
 import { KeyValueList, KvRow } from "../primitives/key-value-list";
 import { StateView } from "../primitives/state-view";
@@ -286,6 +286,7 @@ function LinkBlock({
 	const { copied, copy } = useCopy();
 	const [qr, setQr] = useState(false);
 	const { url, hosting } = facts;
+	const reasonId = useId();
 	const loopback = hosting.exposure === "loopback";
 	const missing: Gate | null = url
 		? null
@@ -296,6 +297,14 @@ function LinkBlock({
 					"Enter the address people use below to get a link.",
 				),
 			};
+	// Without an address the three link actions stay in place, disabled, under one reason (R7).
+	const gated = missing
+		? {
+				"aria-disabled": true,
+				"aria-describedby": reasonId,
+				"data-gated": missing.kind,
+			}
+		: {};
 	return (
 		<div className="flex min-w-0 flex-col gap-2.5">
 			<div
@@ -313,49 +322,67 @@ function LinkBlock({
 						},
 					)}
 			</div>
-			<div className="flex flex-wrap items-start gap-2">
-				<GatedAction gate={missing}>
+			<div className="flex flex-wrap items-center gap-2">
+				<DvButton
+					size="sm"
+					icon={copied ? Check : Copy}
+					data-act="endpoint-copy"
+					{...gated}
+					onClick={() => void copy(url ?? "")}
+				>
+					{copied
+						? t("serviceConfig.endpoint.copied", "Copied")
+						: t("serviceConfig.endpoint.copy", "Copy link")}
+				</DvButton>
+				{url ? (
+					<DvButton asChild size="sm" icon={ExternalLink}>
+						<a
+							href={url}
+							target="_blank"
+							rel="noopener noreferrer"
+							data-act="endpoint-open"
+						>
+							{t("serviceConfig.endpoint.open", "Open")}
+						</a>
+					</DvButton>
+				) : (
 					<DvButton
 						size="sm"
-						icon={copied ? Check : Copy}
-						data-act="endpoint-copy"
-						onClick={() => void copy(url ?? "")}
+						icon={ExternalLink}
+						data-act="endpoint-open"
+						{...gated}
 					>
-						{copied
-							? t("serviceConfig.endpoint.copied", "Copied")
-							: t("serviceConfig.endpoint.copy", "Copy link")}
+						{t("serviceConfig.endpoint.open", "Open")}
 					</DvButton>
-				</GatedAction>
-				{url ? (
-					<>
-						<DvButton asChild size="sm" icon={ExternalLink}>
-							<a
-								href={url}
-								target="_blank"
-								rel="noopener noreferrer"
-								data-act="endpoint-open"
-							>
-								{t("serviceConfig.endpoint.open", "Open")}
-							</a>
-						</DvButton>
-						<DvButton
-							size="sm"
-							icon={QrCode}
-							data-act="endpoint-qr"
-							onClick={() => setQr(true)}
-						>
-							{t("serviceConfig.endpoint.qr", "QR code")}
-						</DvButton>
-						<QrSheet
-							url={url}
-							loopback={loopback}
-							device={device}
-							open={qr}
-							onOpenChange={setQr}
-						/>
-					</>
-				) : null}
+				)}
+				<DvButton
+					size="sm"
+					icon={QrCode}
+					data-act="endpoint-qr"
+					{...gated}
+					onClick={() => setQr(true)}
+				>
+					{t("serviceConfig.endpoint.qr", "QR code")}
+				</DvButton>
 			</div>
+			{missing ? (
+				<GateInline
+					kind={missing.kind}
+					id={reasonId}
+					className="-mt-1.5 max-w-[92ch]"
+				>
+					{missing.reason}
+				</GateInline>
+			) : null}
+			{url ? (
+				<QrSheet
+					url={url}
+					loopback={loopback}
+					device={device}
+					open={qr}
+					onOpenChange={setQr}
+				/>
+			) : null}
 			{loopback ? (
 				<p className="text-xs text-muted-foreground">
 					{t(
@@ -816,6 +843,7 @@ function NoEndpoint({
 	configuration: PlacementConfiguration;
 }>) {
 	const { t } = useTranslation("devices");
+	const { locale } = useAreaTime();
 	const kinds = useEventKinds(
 		configuration.project_id,
 		configuration.config.events.map((event) => event.event_id),
@@ -839,7 +867,7 @@ function NoEndpoint({
 						? t(
 								"serviceConfig.endpoint.noneKinds",
 								"Its events run as {{kinds}}, so it has no service page.",
-								{ kinds: new Intl.ListFormat().format(kinds) },
+								{ kinds: new Intl.ListFormat(locale).format(kinds) },
 							)
 						: t(
 								"serviceConfig.endpoint.noneText",

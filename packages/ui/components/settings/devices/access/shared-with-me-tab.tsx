@@ -976,7 +976,7 @@ export function SharedWithMeTab({
 					{total ? (
 						<DvTable
 							label={t("access.shared.tableLabel", "Devices shared with you")}
-							cols={["16%", "16%", "16%", "11%", "10%", "14%", "17%"]}
+							cols={["15%", "16%", "16%", "11%", "10%", "14%", "18%"]}
 							className={TABLE_RESET}
 							head={
 								<tr>

@@ -76,6 +76,11 @@ describe("Where · devices (APP §3.7)", () => {
 	test("a gated card can't be ticked, and its fix opens where it helps", async () => {
 		const view = await where(VISITOR, { device: EDGE });
 		const commands = view.fake.api.commands.length;
+		// It is unlocked but can't be picked, so its card promises no connection.
+		expect(text(card(view.container, WAREHOUSE))).toContain("Unlocked");
+		expect(text(card(view.container, WAREHOUSE))).not.toContain(
+			"connects live when you pick it",
+		);
 		await click(box(view.container, WAREHOUSE));
 		expect(box(view.container, WAREHOUSE).getAttribute("data-state")).toBe(
 			"unchecked",

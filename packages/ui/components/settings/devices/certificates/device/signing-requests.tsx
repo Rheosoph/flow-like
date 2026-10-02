@@ -748,7 +748,9 @@ export function InstallChainSheet({
 						)
 			}
 			sub={certs.name}
-			footNote={!view && needsCheck && !acknowledged ? <TickFirst /> : undefined}
+			footNote={
+				!view && needsCheck && !acknowledged ? <TickFirst /> : undefined
+			}
 			foot={
 				<>
 					<DvButton onClick={onClose}>

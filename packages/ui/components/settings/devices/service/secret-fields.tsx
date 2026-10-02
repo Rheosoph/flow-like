@@ -33,6 +33,8 @@ export const SECRET_MAX_BYTES = 4096;
 export const TOKEN_MIN_CHARS = 32;
 const TOKEN_PATTERN = /^[\x21-\x7e]{32,4096}$/;
 const TOKEN_RANDOM_BYTES = 24;
+/** Browsers ignore "off" on a password field; "new-password" keeps a saved login from being filled in. */
+const NEW_SECRET = "new-password";
 
 export interface SecretChoice {
 	/** Variable id. */
@@ -318,7 +320,9 @@ export function ChangeSecretSheet({
 						setValue(next);
 						setError(null);
 					}}
-					autoComplete="off"
+					autoComplete={NEW_SECRET}
+					// With one secret the value is all there is to enter; with several the picker comes first.
+					autoFocus={secrets.length === 1}
 					maxBytes={SECRET_MAX_BYTES}
 				/>
 			</Field>
@@ -459,7 +463,8 @@ export function NewTokenSheet({
 						setToken(next);
 						setError(null);
 					}}
-					autoComplete="off"
+					autoComplete={NEW_SECRET}
+					autoFocus
 				/>
 			</Field>
 			<TokenTools

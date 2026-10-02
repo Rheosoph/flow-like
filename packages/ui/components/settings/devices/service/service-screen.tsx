@@ -693,8 +693,10 @@ export function ServiceScreen({
 		) : (
 			<StateView kind="loading" rows={5} />
 		);
+	// One page per service: confirms, notes and drafts of one service never show on the next.
 	return (
 		<ServicePage
+			key={`${deviceId}/${serviceId}`}
 			route={route}
 			scope={scope}
 			deviceId={deviceId}

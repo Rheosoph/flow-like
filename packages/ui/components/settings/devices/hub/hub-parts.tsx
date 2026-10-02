@@ -10,6 +10,7 @@ import { FreshnessStamp } from "../primitives/freshness-stamp";
 import { cx } from "../primitives/tone";
 import { useCopy } from "../primitives/use-copy";
 import { stampOf } from "../shell/attention-popover";
+import { useHubSupport } from "../workspace";
 
 /** The active language for number and size formatting, without following the area clock. */
 export function useLocale(): string {
@@ -31,21 +32,40 @@ export function Tech({ children }: Readonly<{ children: ReactNode }>) {
 	);
 }
 
+/**
+ * The app's base layer gives every `table` a margin and every cell a full
+ * border; inside a block only the row hairlines of the table primitive remain.
+ * A chip in a cell has 4 px corners.
+ */
+export const TABLE_RESET =
+	"my-0 [&_td]:border-x-0 [&_td]:border-b-0 [&_th]:border-x-0 [&_th]:border-t-0 [&_td_[data-slot=badge]]:rounded-md";
+
+/**
+ * While devices are off the device list can't be read, which the area counts
+ * as a failing hub. This page's blocks read other routes, so each states the
+ * age of its own read instead.
+ */
+export function useOwnStampAge(): boolean {
+	return useHubSupport().support.state === "off";
+}
+
 /** A block head's Hub stamp: "checking…" until the first answer, then source and age (R5). */
 export function HubReadStamp({
 	freshness,
 	loading,
 }: Readonly<{ freshness: Freshness; loading: boolean }>) {
 	const { t } = useTranslation("devices");
+	const own = useOwnStampAge();
 	if (loading)
 		return (
 			<FreshnessStamp
 				source="hub"
 				age="notloaded"
 				text={t("hub.stamp.checking", "checking…")}
+				noFail={own}
 			/>
 		);
-	return <FreshnessStamp {...stampOf(freshness)} />;
+	return <FreshnessStamp {...stampOf(freshness)} noFail={own} />;
 }
 
 /** One address on one line with Copy; the full value is in the hover. */

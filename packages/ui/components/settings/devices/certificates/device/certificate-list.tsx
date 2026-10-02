@@ -703,15 +703,23 @@ function CertificateRowView({
 						{row.detail ? (
 							row.detail.label
 						) : (
-							<span className="font-mono">{row.id.slice(0, 8)}</span>
+							<span className="font-mono" title={row.id}>
+								{row.id.slice(0, 8)}
+							</span>
 						)}
 					</button>
-					<CellSub>
-						<IdRef
-							id={row.id}
-							copyLabel={t("deviceCertificates.copyId", "Copy certificate ID")}
-						/>
-					</CellSub>
+					{/* Without a name the ID is the title; the row's details carry the copy control. */}
+					{row.detail ? (
+						<CellSub>
+							<IdRef
+								id={row.id}
+								copyLabel={t(
+									"deviceCertificates.copyId",
+									"Copy certificate ID",
+								)}
+							/>
+						</CellSub>
+					) : null}
 				</Td>
 				<Td label={labels.validity}>
 					<ValidityChip row={row} now={certs.now} />

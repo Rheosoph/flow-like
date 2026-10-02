@@ -671,7 +671,20 @@ function useRemoval(
 		if (!answer.ok) return;
 		setNote(null);
 		setBusy(true);
-		const removed = await removeService(flow, choice.current.revoke);
+		let removed = false;
+		try {
+			removed = await removeService(flow, choice.current.revoke);
+		} catch {
+			// A step that broke outside the action layer still ends in a sentence and a free button.
+			flow.say({
+				tone: "critical",
+				text: t(
+					"serviceConfig.remove.interrupted",
+					"Removing {{service}} was interrupted before {{device}} confirmed it. Check its status, then try again.",
+					{ service: serviceId, device: deviceLabel },
+				),
+			});
+		}
 		if (removed) void workspace.live.refreshInspection(deviceId);
 		// Someone who left the page meanwhile stays where they went.
 		if (!mounted.current) return;

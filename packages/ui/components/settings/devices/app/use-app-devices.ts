@@ -49,6 +49,7 @@ import {
 	appUploads,
 	changesOf,
 	headlineApp,
+	openRunIds,
 	refineView,
 	revisionsSent,
 	versionInputs,
@@ -158,6 +159,8 @@ export interface AppDevicesData {
 	eventNames: ReadonlyMap<string, string>;
 	uploads: ServiceUpload[];
 	runs: AppRun[];
+	/** Ids of this app's runs that still have work open, a run on one device included. */
+	openRuns: ReadonlySet<string>;
 	activity: ActivityItem[];
 	/** Unix seconds the app's events and settings were read from the backend. */
 	readAt?: number;
@@ -293,6 +296,12 @@ export function useAppDevices(
 		() => appRuns(runList, activity, appId),
 		[runList, activity, appId],
 	);
+	const openRuns = useMemo(
+		() => openRunIds(runList, activity, appId),
+		[runList, activity, appId],
+	);
+	const { refetch: refetchApp } = app;
+	const { refetch: refetchEvents } = events;
 	const refresh = useCallback(async () => {
 		const unlocked = input.keys
 			.filter((session) => session.state === "unlocked")
@@ -301,18 +310,32 @@ export function useAppDevices(
 		const connected = unlocked.filter(
 			(deviceId) => workspace.live.state(deviceId).kind === "live",
 		);
-		const [, , ...devices] = await Promise.allSettled([
-			state.rows.refetch(),
-			read.placements.refetch(),
-			...unlocked.map((deviceId) => workspace.fleet.refresh(deviceId)),
-			...connected.map((deviceId) =>
-				workspace.live.refreshInspection(deviceId),
-			),
+		// The app and its events too: "Try again" after a failed load has to read them again.
+		const [, devices] = await Promise.all([
+			Promise.allSettled([
+				state.rows.refetch(),
+				read.placements.refetch(),
+				refetchApp(),
+				refetchEvents(),
+			]),
+			Promise.allSettled([
+				...unlocked.map((deviceId) => workspace.fleet.refresh(deviceId)),
+				...connected.map((deviceId) =>
+					workspace.live.refreshInspection(deviceId),
+				),
+			]),
 		]);
 		return {
 			failed: devices.filter((result) => result.status === "rejected").length,
 		};
-	}, [input.keys, state.rows, read.placements, workspace]);
+	}, [
+		input.keys,
+		state.rows,
+		read.placements,
+		workspace,
+		refetchApp,
+		refetchEvents,
+	]);
 
 	const error = read.error ?? app.error ?? undefined;
 	const readMs = Math.min(
@@ -346,6 +369,7 @@ export function useAppDevices(
 			eventNames,
 			uploads,
 			runs,
+			openRuns,
 			activity,
 			refresh,
 		}),
@@ -368,6 +392,7 @@ export function useAppDevices(
 			eventNames,
 			uploads,
 			runs,
+			openRuns,
 			activity,
 			refresh,
 		],

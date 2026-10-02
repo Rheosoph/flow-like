@@ -4,17 +4,20 @@ import {
 	click,
 	inPortal,
 	installDom,
+	keyDown,
 	queryByRole,
 	typeInto,
 } from "../testing/dom-harness";
 
 const dom = installDom();
-const { cleanupDevices, preloadDevices } = await import(
+const { cleanupDevices, mountDevices, preloadDevices } = await import(
 	"../testing/mount-devices"
 );
 await preloadDevices();
 const { rejected } = await import("../testing/fake-device-api");
+const { formatTimeOfDay } = await import("../../../../lib/date");
 const { useOverlayStore } = await import("../workspace/overlay-store");
+const { ConfigUnavailable } = await import("./config-parts");
 const {
 	EDGE,
 	STUDIO,
@@ -31,6 +34,7 @@ const {
 } = await import("./config-test-kit");
 type Kit = typeof import("./config-test-kit");
 type View = Awaited<ReturnType<Kit["openTab"]>>;
+type ServiceConfigRead = import("./use-service-config").ServiceConfigRead;
 type Config = Record<string, unknown>;
 
 afterEach(async () => {
@@ -89,6 +93,10 @@ async function reviewTimeout(view: View, seconds = "90") {
 
 const quick = (sheet: HTMLElement) => byRole("radio", /Quick update/, sheet);
 
+/** The workspace clock as the page writes it ("14:01:15"). */
+const clock = (view: View) =>
+	formatTimeOfDay(view.fake.clock.now(), { locale: "en", seconds: true });
+
 describe("summary", () => {
 	test("settings read live: events by name, endpoint, write buffering, how it runs and their size", async () => {
 		const view = await fieldNotes();
@@ -134,6 +142,30 @@ describe("summary", () => {
 		expect(
 			byRole("button", "Change secret value…", view.container),
 		).toBeTruthy();
+	});
+
+	test("what was read reaches the rest of the area, and a fact the settings no longer carry goes", async () => {
+		const known = (view: View) =>
+			view.fake.workspace.facts.get(STUDIO)?.placements?.["field-notes"];
+		const view = await fieldNotes({
+			arrange: async (fake) => {
+				expect(
+					fake.workspace.facts.get(STUDIO)?.placements?.["field-notes"]
+						?.offlineWrites,
+				).toEqual({ maxAgeS: 604_800, maxBytes: 268_435_456 });
+				await patchConfig(fake, STUDIO, "field-notes", (config) => {
+					config.offline_writes = undefined;
+				});
+			},
+		});
+		await ready(view);
+		await until(() => known(view)?.offlineWrites === undefined);
+		expect(known(view)).toEqual({
+			host: "127.0.0.1",
+			port: 8_090,
+			tlsCertificateId: null,
+			resourceGrantId: "6e2f1a9c-3b7d-4e05-8a1c-9d4b2f6e0a73",
+		});
 	});
 
 	test("an offline copy says where its data lives and that nothing is buffered", async () => {
@@ -205,6 +237,103 @@ describe("states without settings", () => {
 				.length,
 		).toBe(1);
 	});
+
+	test("a device that turns the read down for another reason is a failed read with its sentence, not a matter of access", async () => {
+		let lift: () => void = () => undefined;
+		const view = await fieldNotes({
+			arrange: (fake) => {
+				lift = fake
+					.agent(STUDIO)
+					.reject(
+						"placement_configuration",
+						"busy",
+						"The device database is busy.",
+					);
+			},
+		});
+		await until(() =>
+			text(view.container).includes(
+				"The settings couldn't be read from studio-mac-mini",
+			),
+		);
+		const page = text(view.container);
+		expect(page).toContain(
+			"studio-mac-mini answered: “The device database is busy.” Nothing was changed.",
+		);
+		expect(page).not.toContain("Needs Deploy & configure");
+		expect(view.container.querySelector("[data-gate=noaccess]")).toBeNull();
+		expect(page).not.toMatch(MACHINE);
+		lift();
+		await click(byRole("button", "Try again", view.container));
+		await ready(view);
+		expect(text(view.container)).not.toContain("couldn't be read");
+	});
+
+	test("access withdrawn after a read: the settings leave the screen and the gate takes their place", async () => {
+		const view = await fieldNotes();
+		await ready(view);
+		expect(text(view.container)).toContain("127.0.0.1:8090");
+		view.fake
+			.agent(STUDIO)
+			.reject(
+				"placement_configuration",
+				"unauthorized",
+				"Deploy capability required.",
+			);
+		setTimeout(
+			() =>
+				void view.fake.queryClient.refetchQueries({
+					predicate: (query) => query.queryKey[2] === "service-config",
+				}),
+			0,
+		);
+		await until(() =>
+			text(view.container).includes("Needs Deploy & configure on this service"),
+		);
+		expect(summary(view)).toBeNull();
+		expect(text(view.container)).not.toContain("127.0.0.1:8090");
+		expect(writes(view)).toEqual([]);
+	});
+
+	test("a viewer whose access lacks Deploy & configure reads which permissions they have", async () => {
+		const read: ServiceConfigRead = {
+			device: undefined,
+			deviceLabel: "lab-gpu-02",
+			service: undefined,
+			unavailable: undefined,
+			gate: {
+				ok: false,
+				gate: "G5",
+				kind: "noaccess",
+				hide: false,
+				copy: { code: "needs_capability", params: { scope: "this service" } },
+				have: ["status", "logs"],
+				need: ["deploy"],
+			},
+			configuration: undefined,
+			readAt: undefined,
+			loading: false,
+			refused: undefined,
+			failed: false,
+			freshness: { src: "live", age: "notloaded" },
+			refresh: async () => undefined,
+		};
+		const view = await mountDevices(
+			<ConfigUnavailable read={read} serviceId="invoice-extractor-gpu" />,
+		);
+		const page = text(view.container);
+		expect(page).toContain(
+			"Needs Deploy & configure on this service to read its settings.",
+		);
+		expect(page).toContain("You have View status and Read logs.");
+		await click(
+			byRole("button", "Copy a request for the owner", view.container),
+		);
+		expect(dom.clipboard.at(-1)).toContain(
+			"Deploy & configure for invoice-extractor-gpu on lab-gpu-02",
+		);
+		expect(page).not.toMatch(MACHINE);
+	});
 });
 
 describe("action row", () => {
@@ -217,6 +346,7 @@ describe("action row", () => {
 			/^An update is in progress\. Edit settings, Update, Add an event,? and Edit as JSON work again after it finishes \(by \d\d:\d\d:\d\d at the latest\)\.$/,
 		);
 		expect(row.querySelectorAll("[data-gate-inline]").length).toBe(1);
+		expect(row.querySelector("[data-config-hint]")).toBeNull();
 		for (const id of ["edit", "update", "add", "json"]) {
 			const button = act(view, id);
 			expect(button.getAttribute("aria-disabled")).toBe("true");
@@ -258,6 +388,12 @@ describe("action row", () => {
 		expect(add.getAttribute("aria-disabled")).toBe("true");
 		expect(text(actions(view))).toContain(
 			"Add an event: Every event of Field Notes that can run on a device is already served here.",
+		);
+		// Another action's reason doesn't take the place of what Edit settings does.
+		expect(
+			text(actions(view).querySelector("[data-config-hint]") as HTMLElement),
+		).toBe(
+			"Edit settings goes through a safe or quick update and keeps the installed app version.",
 		);
 		expect(text(actions(view))).toContain(
 			"Runs the event and flow versions published now.",
@@ -342,8 +478,11 @@ describe("edit settings", () => {
 				sheet.querySelector("#svc-apply-stable") as HTMLElement,
 				"20",
 			);
+			const clickedAt = clock(view);
 			await click(byRole("button", "Apply", sheet));
 			await until(() => commandsOf(view, "activate_rollout").length === 1);
+			// The device takes its time: the end is reported with the time it ended, not the time of the click.
+			view.fake.clock.advance(75_000);
 			const [stage] = commandsOf(view, "stage_rollout");
 			expect(stage).toMatchObject({
 				expected_revision: 9,
@@ -358,6 +497,10 @@ describe("edit settings", () => {
 			await until(
 				() => text(view.container).includes("runs settings v10"),
 				10_000,
+			);
+			expect(clock(view)).not.toBe(clickedAt);
+			expect(text(view.container)).toContain(
+				`field-notes runs settings v10. Updated at ${clock(view)}.`,
 			);
 			const tray = view.fake.workspace.activity
 				.list()
@@ -395,8 +538,19 @@ describe("edit settings", () => {
 		expect(text(sheet)).toContain(
 			"Nothing changed yet. Change a value, or cancel.",
 		);
-		await typeInto(sheet.querySelector("#svc-edit-port") as HTMLElement, "0");
+		const port = sheet.querySelector("#svc-edit-port") as HTMLElement;
+		expect(port.getAttribute("aria-invalid")).toBeNull();
+		await typeInto(port, "0");
 		expect(text(sheet)).toContain("Port is 0. Use 1 to 65535.");
+		// The error belongs to its field for assistive tech too, not only by position.
+		expect(port.getAttribute("aria-invalid")).toBe("true");
+		expect(
+			text(
+				sheet.querySelector(
+					`[id="${(port.getAttribute("aria-describedby") ?? "").split(" ")[0]}"]`,
+				) as HTMLElement,
+			),
+		).toBe("Port is 0. Use 1 to 65535.");
 		await click(byRole("button", "Review changes", sheet));
 		expect(text(inPortal("dialog"))).toContain("Step 1 of 2 · Change");
 		expect(writes(view)).toEqual([]);
@@ -412,6 +566,13 @@ describe("edit settings", () => {
 		expect(text(sheet)).toContain(
 			"Write buffering needs exactly one instance.",
 		);
+		expect(
+			text(
+				sheet.querySelector(
+					`[id="${max.getAttribute("aria-describedby")}"]`,
+				) as HTMLElement,
+			),
+		).toBe("Write buffering needs exactly one instance.");
 		expect(text(sheet)).toContain(
 			"To change the app version, use Update; to serve another event, use Add an event.",
 		);
@@ -491,6 +652,32 @@ describe("edit settings", () => {
 			text(inPortal("dialog")).includes("Port 8090 is already bound."),
 		);
 		expect(text(inPortal("dialog"))).toContain("The device refused the change");
+		expect(commandsOf(view, "apply").length).toBe(1);
+	});
+
+	test("the sheet waits for the device's answer: Close and Esc are held while a quick update is on the way", async () => {
+		const view = await fieldNotes({
+			arrange: (fake) => {
+				fake
+					.agent(STUDIO)
+					.reject("apply", "invalid", "Port 8090 is already bound.");
+			},
+		});
+		await ready(view);
+		const sheet = await reviewTimeout(view);
+		await click(quick(sheet));
+		const answer = view.fake.agent(STUDIO).hold("apply");
+		await click(byRole("button", "Apply", sheet));
+		await until(() => commandsOf(view, "apply").length === 1);
+		await click(byRole("button", "Close", inPortal("dialog")));
+		await keyDown(inPortal("dialog"), "Escape");
+		expect(queryByRole("dialog")).not.toBeNull();
+		answer();
+		await until(() =>
+			text(inPortal("dialog")).includes("Port 8090 is already bound."),
+		);
+		await click(byRole("button", "Close", inPortal("dialog")));
+		expect(queryByRole("dialog")).toBeNull();
 		expect(commandsOf(view, "apply").length).toBe(1);
 	});
 });

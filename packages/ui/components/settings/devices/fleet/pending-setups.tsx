@@ -29,7 +29,7 @@ import {
 	useInlineResults,
 	usePendingSetups,
 } from "../workspace";
-import { dayLabel } from "./fleet-device-row";
+import { CELL_CHIP, dayLabel } from "./fleet-device-row";
 import { FLEET_TABLE_CLASS } from "./fleet-devices-table";
 
 const COLS = ["20%", "16%", "11%", "14%", "16%", "23%"] as const;
@@ -83,15 +83,15 @@ function SetupRow({ setup, onCancel, cancelling }: Readonly<RowProps>) {
 			</Td>
 			<Td label={labels.state}>
 				{waiting ? (
-					<StatusChip tone="info" icon={Hourglass}>
+					<StatusChip tone="info" icon={Hourglass} className={CELL_CHIP}>
 						{t("fleet.pending.waiting", "Waiting for the device")}
 					</StatusChip>
 				) : cancelled ? (
-					<StatusChip tone="outline" icon={CircleX}>
+					<StatusChip tone="outline" icon={CircleX} className={CELL_CHIP}>
 						{t("fleet.pending.cancelled", "Cancelled")}
 					</StatusChip>
 				) : (
-					<StatusChip tone="unknown" icon={CircleDashed}>
+					<StatusChip tone="unknown" icon={CircleDashed} className={CELL_CHIP}>
 						{t("fleet.pending.expired", "Expired")}
 					</StatusChip>
 				)}

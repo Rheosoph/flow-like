@@ -146,6 +146,31 @@ describe("What · services (A5)", () => {
 describe("What · the viewer's role on the app (APP §3.5 item 1)", () => {
 	const READ_TEAM = 4;
 	const READ_BOARDS = 256;
+
+	test("only the Owner permission names the app's owner: the hub says `is_owner` for an Admin too", async () => {
+		const { roleFacts } = await import("../use-deploy-reads");
+		const role = (permissions: number, is_owner: boolean) => ({
+			role_id: "role",
+			role_name: "Role",
+			permissions,
+			is_owner,
+			can_leave: true,
+		});
+		expect(roleFacts(role(1, true))).toEqual({
+			canReadFlows: true,
+			isOwner: true,
+		});
+		expect(roleFacts(role(2, true))).toEqual({
+			canReadFlows: true,
+			isOwner: false,
+		});
+		expect(roleFacts(role(READ_TEAM + READ_BOARDS, false))).toEqual({
+			canReadFlows: true,
+			isOwner: false,
+		});
+		// No role answer (local-only app, signed out): nothing is claimed either way.
+		expect(roleFacts(null)).toEqual({ canReadFlows: true });
+	});
 	/** The hub's role answer per app; every other app can be read. */
 	const roles = (unreadable: string) =>
 		({

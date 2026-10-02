@@ -36,6 +36,7 @@ import {
 	eventsNowhere,
 	headlineApp,
 	newestPins,
+	openRunIds,
 	refineView,
 	revisionsSent,
 	runsElsewhere,
@@ -749,12 +750,18 @@ describe("runs tracked on this computer", () => {
 				}),
 			],
 		};
-		const runs = appRuns(
-			[run("open", 2), run("finished", 3), run("single", 4), run("other", 5)],
-			Object.values(items).flat(),
-			INVOICE.id,
-		);
+		const all = [
+			run("open", 2),
+			run("finished", 3),
+			run("single", 4),
+			run("other", 5),
+		];
+		const runs = appRuns(all, Object.values(items).flat(), INVOICE.id);
 		expect(runs.map((entry) => entry.run.id)).toEqual(["open"]);
 		expect(runs[0]).toMatchObject({ done: 1, total: 2, open: true });
+		// What keeps the next Update everywhere waiting: every open run of the app, one device or many.
+		expect([
+			...openRunIds(all, Object.values(items).flat(), INVOICE.id),
+		]).toEqual(["open", "single"]);
 	});
 });

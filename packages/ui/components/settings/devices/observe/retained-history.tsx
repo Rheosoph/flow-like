@@ -41,6 +41,7 @@ import {
 	metricSamples,
 	recordsOf,
 } from "./observe-data";
+import { RenewRulesLink, rulesExpiredAt, rulesGate } from "./renew-rules";
 import { DeviceResourceCells, ServiceResourceCells } from "./resource-cells";
 import { pauseReason } from "./timeline-sentences";
 import {
@@ -283,6 +284,29 @@ function PausedNotice({
 			}
 			actions={resume}
 		/>
+	);
+}
+
+/** Owner only: resume, or renew the access rules first when they ran out (BG31). */
+function ResumeAction({
+	deviceId,
+	needsRules,
+	gate,
+	onResume,
+}: Readonly<{
+	deviceId: string;
+	needsRules: boolean;
+	gate: Gate | null;
+	onResume(): void;
+}>) {
+	const { t } = useTranslation("devices");
+	if (needsRules) return <RenewRulesLink deviceId={deviceId} />;
+	return (
+		<GatedAction gate={gate}>
+			<DvButton size="sm" onClick={onResume}>
+				{t("observe.retained.resume", "Resume recording…")}
+			</DvButton>
+		</GatedAction>
 	);
 }
 
@@ -639,18 +663,18 @@ export function RetainedHistory({
 	const reader = useChunkReader(target, scope, kind);
 	const [shown, setShown] = useState(PAGE);
 
+	const now = Math.floor(time.nowS / 30) * 30;
 	const recording = stream
-		? recordingOf(
-				stream,
-				Math.floor(time.nowS / 30) * 30,
-				interimDigest(target),
-			)
+		? recordingOf(stream, now, interimDigest(target))
 		: undefined;
 	const rows = list.rows ?? [];
 	const metrics = kind === "metrics";
 	const kindText = enumLabel(t, "archiveKind", kind).toLowerCase();
 	const readGated = gateLine(t, readGate, time);
-	const editGated = gateLine(t, editGate, time);
+	const needsRules =
+		rulesExpiredAt(target, now) !== undefined ||
+		(recording?.state === "paused" && recording.reason === "rules_expired");
+	const editGated = needsRules ? rulesGate(t) : gateLine(t, editGate, time);
 	const planGated: Gate | null =
 		usage.data !== undefined && usage.data.max_bytes <= 0
 			? {
@@ -680,11 +704,12 @@ export function RetainedHistory({
 				metrics={metrics}
 				resume={
 					owned ? (
-						<GatedAction gate={editGated}>
-							<DvButton size="sm" onClick={() => edit("resume")}>
-								{t("observe.retained.resume", "Resume recording…")}
-							</DvButton>
-						</GatedAction>
+						<ResumeAction
+							deviceId={deviceId}
+							needsRules={needsRules}
+							gate={editGated}
+							onResume={() => edit("resume")}
+						/>
 					) : null
 				}
 			/>

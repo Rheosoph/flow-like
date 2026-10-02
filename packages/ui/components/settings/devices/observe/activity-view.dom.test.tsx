@@ -117,59 +117,41 @@ const MACHINE =
 
 const message = (data: Record<string, unknown>) => ({ version: 1, ...data });
 
+/** A command with two states, an instance change, and two records the timeline must leave out. */
+const ACTIVITY: Record<string, unknown>[] = [
+	{
+		kind: "operation",
+		source_id: COMMAND,
+		placement_id: SERVICE,
+		state: "accepted",
+		secret: "do-not-render-this",
+	},
+	{
+		kind: "replica",
+		source_id: SERVICE,
+		placement_id: SERVICE,
+		state: "starting",
+		config_revision: 12,
+		replica_slot: 0,
+		process_id: 48211,
+	},
+	{
+		kind: "operation",
+		source_id: COMMAND,
+		placement_id: SERVICE,
+		state: "completed",
+	},
+	{ kind: "arbitrary", state: "completed", source_id: "unknown-kind" },
+	{
+		kind: "replica",
+		placement_id: SERVICE,
+		state: "<script>unknown-state</script>",
+	},
+];
+
 function activity(agent: Agent) {
-	agent.record(
-		"messages:device",
-		message({
-			kind: "operation",
-			source_id: COMMAND,
-			placement_id: SERVICE,
-			state: "accepted",
-			secret: "do-not-render-this",
-		}),
-		"message",
-	);
-	agent.record(
-		"messages:device",
-		message({
-			kind: "replica",
-			source_id: SERVICE,
-			placement_id: SERVICE,
-			state: "starting",
-			config_revision: 12,
-			replica_slot: 0,
-			process_id: 48211,
-		}),
-		"message",
-	);
-	agent.record(
-		"messages:device",
-		message({
-			kind: "operation",
-			source_id: COMMAND,
-			placement_id: SERVICE,
-			state: "completed",
-		}),
-		"message",
-	);
-	agent.record(
-		"messages:device",
-		message({
-			kind: "arbitrary",
-			state: "completed",
-			source_id: "unknown-kind",
-		}),
-		"message",
-	);
-	agent.record(
-		"messages:device",
-		message({
-			kind: "replica",
-			placement_id: SERVICE,
-			state: "<script>unknown-state</script>",
-		}),
-		"message",
-	);
+	for (const data of ACTIVITY)
+		agent.record("messages:device", message(data), "message");
 }
 
 function logs(agent: Agent, key = "logs:device") {
@@ -664,6 +646,9 @@ describe("look up a command", () => {
 			expect(text(lookup)).toContain("Restart");
 			expect(text(lookup)).toContain(SERVICE);
 			expect(text(lookup)).toContain("v12");
+			const stamp = lookup.querySelector("[data-stamp]")?.textContent ?? "";
+			expect(stamp).toContain("on demand");
+			expect(stamp).not.toContain("every");
 			expect(text(lookup)).toContain(
 				"Results are kept for 24 hours and only for the person who sent the command.",
 			);
@@ -835,6 +820,84 @@ describe("history settings (owner)", () => {
 				),
 			).toContain("Paused: access changed");
 			expect(document.querySelector("[data-kind=error]")).toBeNull();
+		},
+		SLOW,
+	);
+
+	test(
+		"expired access rules (BG31): one notice says why and offers Renew access rules; no list can be signed",
+		async () => {
+			const view = await open(EDGE, {
+				arrange: (_agent, fake) => {
+					const rules = fake.seed.policies[EDGE]?.policy;
+					if (!rules) throw new Error("The seed has access rules for edge.");
+					fake.hub.setPolicy(EDGE, {
+						...rules,
+						expires_at: SAMPLE_NOW - 3_600,
+					});
+				},
+			});
+			const settings = block(view, "observe-history-settings");
+			await until(() =>
+				/Access rules on edge-berlin-01 expired/.test(text(settings)),
+			);
+			expect(settings.querySelectorAll("[data-gate=policy]").length).toBe(1);
+			const renew = byRole("link", "Renew access rules", settings);
+			expect(renew.getAttribute("href")).toContain("tab=access");
+			// The reason is said once; every row's action is disabled and points to it.
+			const actions = [
+				...settings.querySelectorAll<HTMLElement>("[data-history-row] button"),
+			];
+			expect(actions.length).toBeGreaterThan(1);
+			for (const action of actions) {
+				expect(action.getAttribute("aria-disabled")).toBe("true");
+				const reason = document.getElementById(
+					action.getAttribute("aria-describedby") ?? "",
+				);
+				expect(text(reason as Element)).toContain("Access rules on");
+			}
+			expect(settings.querySelector("[data-gate-inline]")).toBeNull();
+			const change = byRole("button", "Change readers…", settings);
+			const before = view.fake.api.commands.length;
+			await click(change);
+			expect(queryByRole("dialog")).toBeNull();
+			expect(view.fake.api.commands.length).toBe(before);
+			expect(primaries()).toBeLessThanOrEqual(1);
+		},
+		SLOW,
+	);
+
+	test(
+		"rules not applied by the device yet: the reason is said once above the table and no row action opens the sheet",
+		async () => {
+			const view = await open(EDGE, {
+				arrange: (_agent, fake) => {
+					const policy = fake.hub.policies.get(EDGE);
+					if (!policy) throw new Error("The seed has access rules for edge.");
+					policy.appliedVersion = policy.version - 1;
+					policy.appliedDigest = "digest-before";
+				},
+			});
+			const settings = block(view, "observe-history-settings");
+			await until(
+				() => settings.querySelectorAll("[data-history-row]").length > 0,
+			);
+			await until(
+				() => settings.querySelectorAll("[data-gate-inline]").length === 1,
+			);
+			const reason = settings.querySelector("[data-gate-inline]") as Element;
+			const actions = [
+				...settings.querySelectorAll<HTMLElement>("[data-history-row] button"),
+			];
+			expect(actions.length).toBeGreaterThan(1);
+			for (const action of actions) {
+				expect(action.getAttribute("aria-disabled")).toBe("true");
+				expect(action.getAttribute("aria-describedby")).toBe(reason.id);
+			}
+			const before = view.fake.api.commands.length;
+			await click(actions[0] as HTMLElement);
+			expect(queryByRole("dialog")).toBeNull();
+			expect(view.fake.api.commands.length).toBe(before);
 		},
 		SLOW,
 	);

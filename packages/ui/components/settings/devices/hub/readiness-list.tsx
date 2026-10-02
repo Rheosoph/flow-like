@@ -425,12 +425,6 @@ interface ChecksView {
 
 /** Why "Check again" can't run right now (R7: visible, disabled, with the reason). */
 function recheckGate(t: DevicesT, view: ChecksView): Gate | null {
-	const { state } = view.hub.support;
-	if (state === "off")
-		return {
-			kind: "hub",
-			reason: t("devices:hub.checks.gate.off", "Devices are off on this hub."),
-		};
 	if (view.readiness.loading && !view.recheck.busy)
 		return {
 			kind: "busy",
@@ -441,6 +435,9 @@ function recheckGate(t: DevicesT, view: ChecksView): Gate | null {
 		};
 	return null;
 }
+
+/** The hub answers its checks while device support is off, so asking again is how a fix shows up. */
+const ASKS_HUB_TOO = new Set(["off", "unreachable"]);
 
 function CheckAgain({ view }: Readonly<{ view: ChecksView }>) {
 	const { t } = useTranslation("devices");
@@ -457,7 +454,7 @@ function CheckAgain({ view }: Readonly<{ view: ChecksView }>) {
 				icon={RefreshCw}
 				busy={recheck.busy}
 				onClick={() => {
-					if (hub.support.state === "unreachable") void hub.retry();
+					if (ASKS_HUB_TOO.has(hub.support.state)) void hub.retry();
 					void recheck.run();
 				}}
 			>
@@ -484,19 +481,22 @@ function ChecksBody({
 		/>
 	);
 	if (!data) {
-		if (state === "off")
-			return (
-				<GateNotice
-					kind="hub"
-					title={t("hub.checks.off.title", "Devices are off on this hub.")}
-					text={t(
-						"hub.checks.off.text",
-						"The checks run once the hub operator turns device support on.",
-					)}
-				/>
-			);
 		if (readiness.loading || recheck.busy || state === "checking")
 			return list(waitingItems(t));
+		if (state === "off")
+			return (
+				<>
+					<RecheckResultLine recheck={recheck} />
+					<GateNotice
+						kind="hub"
+						title={t("hub.checks.off.title", "Devices are off on this hub.")}
+						text={t(
+							"hub.checks.off.unread",
+							"Its checks couldn't be read. Select Check again once the hub operator has turned device support on.",
+						)}
+					/>
+				</>
+			);
 		return (
 			<>
 				<RecheckResultLine recheck={recheck} />

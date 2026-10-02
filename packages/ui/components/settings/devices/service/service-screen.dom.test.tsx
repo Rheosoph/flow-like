@@ -232,9 +232,15 @@ describe("action bar", () => {
 		);
 		const restart = byRole("button", "Restart…", bar);
 		expect(restart.getAttribute("aria-disabled")).toBe("true");
-		expect(byRole("button", "Stop…", bar).getAttribute("aria-disabled")).toBe(
-			null,
+		const reason = bar.querySelector(
+			`[id="${restart.getAttribute("aria-describedby")}"]`,
 		);
+		expect(text(reason as HTMLElement)).toBe(
+			"An update is in progress. Only Stop is allowed.",
+		);
+		const stop = byRole("button", "Stop…", bar);
+		expect(stop.getAttribute("aria-disabled")).toBe(null);
+		expect(stop.getAttribute("aria-describedby")).toBe(null);
 		const hubWrites = view.fake.api.writes().length;
 		await click(restart);
 		await view.settle();
@@ -281,6 +287,19 @@ describe("action bar", () => {
 		expect(text(view.container)).toMatch(
 			/Stop support-bot: (in progress|done)/,
 		);
+	});
+
+	test("an open confirm stays with its service: the next service's page starts clean", async () => {
+		const view = await open(EDGE, "support-bot");
+		await click(byRole("button", "Stop…", actions(view) as HTMLElement));
+		expect(
+			view.container.querySelector("[data-inline-confirm]"),
+		).not.toBeNull();
+		await click(byRole("link", "nightly-sync", view.container));
+		await view.settle();
+		expect(byRole("heading", /nightly-sync/)).toBeTruthy();
+		expect(view.container.querySelector("[data-inline-confirm]")).toBeNull();
+		expect(writes(view)).toEqual([]);
 	});
 
 	test("Cancel in the inline confirm sends nothing", async () => {

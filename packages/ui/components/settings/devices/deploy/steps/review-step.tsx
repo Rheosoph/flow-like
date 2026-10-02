@@ -409,8 +409,9 @@ function howCell(c: Context, item: ReviewTarget): string {
 }
 
 const PLAN_COLS = ["18%", "20%", "17%", "18%", "13%", "14%"];
+/** The warning edge: on the row's first cell, and on the card's edge once the table stacks (560 px). */
 const WARNING_ROW =
-	"[&>td:first-child]:border-l-2 [&>td:first-child]:border-l-warning-solid";
+	"[&>td:first-child]:border-l-2 [&>td:first-child]:border-l-warning-solid @max-[560px]/tbl:border-l-2! @max-[560px]/tbl:border-l-warning-solid! @max-[560px]/tbl:[&>td:first-child]:border-l-0";
 
 function PlanRow({
 	c,

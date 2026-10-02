@@ -664,27 +664,24 @@ function useAbort(uploader: Uploader, bundle: Bundle) {
 		if (!bundle || !paused) return;
 		const projectId = bundle.artifact.descriptor.project_id;
 		const request = abortRequest({ t, workspace, projectId, row, paused });
-		await actions.run(request);
-		copyUploadsOf(workspace).set(row.key, undefined);
+		const outcome = await actions.run(request);
+		// Cancelled or refused: the row keeps what it said about the upload.
+		if (outcome.status === "done")
+			copyUploadsOf(workspace).set(row.key, undefined);
 		await refresh();
 	};
 }
 
 /* Blocks. */
 
-const reportsStorage = (row: CopyRow) => Boolean(row.usage?.project);
 const isLocked = (row: CopyRow) => row.target.locked;
 
-function storageText(t: DevicesT, app: string, rows: readonly CopyRow[]) {
-	const known = rows.find(reportsStorage);
-	const bytes = known?.usage?.project?.bytes;
-	if (!known || !bytes)
-		return t(
-			"devices:deployShip.copy.roomUnknown",
-			"Room for this copy on the device: unknown.",
-		);
+/** What one device says its app versions take; undefined when it doesn't report it. */
+function roomOf(t: DevicesT, app: string, row: CopyRow): string | undefined {
+	const bytes = row.usage?.project?.bytes;
+	if (!bytes) return undefined;
 	const used = humanFileSize(bytes.used);
-	const device = known.target.name;
+	const device = row.target.name;
 	if (bytes.max === null)
 		return t(
 			"devices:deployShip.copy.roomUsed",
@@ -697,6 +694,17 @@ function storageText(t: DevicesT, app: string, rows: readonly CopyRow[]) {
 		"{{used}} of {{max}} used by {{app}} on {{device}}.",
 		{ used, max, app, device },
 	);
+}
+
+/** One sentence per device that reports its storage (BG17); none does on older agents. */
+function storageText(t: DevicesT, app: string, rows: readonly CopyRow[]) {
+	const rooms = rows.flatMap((row) => roomOf(t, app, row) ?? []);
+	return rooms.length
+		? rooms.join(" ")
+		: t(
+				"devices:deployShip.copy.roomUnknown",
+				"Room for this copy on the device: unknown.",
+			);
 }
 
 function uploadGate(t: DevicesT, open: readonly CopyRow[], busy: boolean) {

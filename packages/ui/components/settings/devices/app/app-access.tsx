@@ -1,6 +1,6 @@
 "use client";
 
-import { Trans, useTranslation } from "@flow-like/locales";
+import { useTranslation } from "@flow-like/locales";
 import { useQueries } from "@tanstack/react-query";
 import {
 	CircleCheck,
@@ -23,6 +23,8 @@ import type {
 	ManagementPolicy,
 	PolicyView,
 } from "../../../../lib/device-management/types";
+import { GrantRowActions } from "../access/change-permissions-sheet";
+import { useDeviceAccess } from "../access/use-access";
 import { enumLabel } from "../copy/enum-labels";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import { Block } from "../primitives/block";
@@ -33,7 +35,10 @@ import { StateView } from "../primitives/state-view";
 import { StatusChip } from "../primitives/status-chip";
 import { cx } from "../primitives/tone";
 import { ACCOUNT_SCOPE } from "../routing/devices-route";
-import { useRouteLink } from "../routing/use-devices-route";
+import {
+	type RouteLinkProps,
+	useRouteLink,
+} from "../routing/use-devices-route";
 import { stampOf } from "../shell/attention-popover";
 import {
 	useAttentionState,
@@ -69,25 +74,17 @@ function scopeLabel(t: DevicesT, scope: InventoryScope, app: string): string {
 		: enumLabel(t, "scopeKind", "placement", { name: scope.placement_id });
 }
 
-/** "Viewer · 3 permissions", the preset as the word that leads. */
-function Permissions({
-	capabilities,
-}: Readonly<{ capabilities: readonly Capability[] }>) {
-	const { t } = useTranslation("devices");
+/** "Viewer" and " · 3 permissions": the preset leads, how many permissions it holds follows. */
+function presetParts(t: DevicesT, capabilities: readonly Capability[]) {
 	const { preset, count } = presetOf(capabilities);
-	return (
-		<Trans
-			t={t}
-			i18nKey="app.access.presetLead"
-			count={count}
-			values={{ preset: enumLabel(t, "preset", preset) }}
-			tOptions={{
-				defaultValue_one: "<1>{{preset}}</1> · {{count, number}} permission",
-				defaultValue_other: "<1>{{preset}}</1> · {{count, number}} permissions",
-			}}
-			components={{ 1: <b className="font-semibold" /> }}
-		/>
-	);
+	return {
+		preset: enumLabel(t, "preset", preset),
+		held: t("devices:app.access.presetCount", {
+			count,
+			defaultValue_one: " · {{count, number}} permission",
+			defaultValue_other: " · {{count, number}} permissions",
+		}),
+	};
 }
 
 /** Access that ends within this many seconds is marked (PROTO: six hours). */
@@ -116,6 +113,12 @@ interface AccessRead {
 	unread: AppDeviceGroup[];
 	/** Shared devices whose access for the viewer the hub hasn't told. */
 	sharedUnknown: AppDeviceGroup[];
+}
+
+/** The viewer's access as the hub answered it; nothing while it hasn't, or on a hub without the route. */
+function okAccess(result: unknown): MyAccess | undefined {
+	const read = result as HubResult<MyAccess> | undefined;
+	return read?.kind === "ok" ? read.data : undefined;
 }
 
 /** One hub read per listed device: its access rules (own devices) or the viewer's access (shared ones). */
@@ -179,12 +182,15 @@ function useAccessRead(groups: readonly AppDeviceGroup[]): AccessRead {
 			});
 	});
 	shared.forEach((group, index) => {
-		const result = access[index]?.data as HubResult<MyAccess> | undefined;
-		const mine = result?.kind === "ok" ? result.data : undefined;
-		const grants = (mine?.grants ?? []).filter((grant) =>
-			covers(grant.scope, data.appId),
-		);
-		if (!grants.length) read.sharedUnknown.push(group);
+		const mine = okAccess(access[index]?.data);
+		const grants = mine
+			? mine.grants.filter((grant) => covers(grant.scope, data.appId))
+			: [];
+		if (!mine || !grants.length) {
+			read.sharedUnknown.push(group);
+			return;
+		}
+		const rules = { version: mine.policy_version, applied: mine.applied };
 		for (const grant of grants)
 			read.rows.push({
 				id: grant.grant_id,
@@ -194,10 +200,7 @@ function useAccessRead(groups: readonly AppDeviceGroup[]): AccessRead {
 				capabilities: grant.capabilities,
 				expiresAt: grant.expires_at,
 				mine: true,
-				rules: {
-					version: mine?.policy_version ?? 0,
-					applied: mine?.applied ?? true,
-				},
+				rules,
 			});
 	});
 	const order = new Map(groups.map((group, index) => [group.deviceId, index]));
@@ -260,7 +263,7 @@ function EndsCell({ row }: Readonly<{ row: Row }>) {
 			{time.at(row.expiresAt)}
 			<CellSub
 				data-ends-soon={soon || undefined}
-				className={cx("inline-flex items-center gap-1", soon && "text-warning")}
+				className={cx("flex items-center gap-1", soon && "text-warning")}
 			>
 				{soon ? (
 					<TriangleAlert aria-hidden className="size-3 shrink-0" />
@@ -271,11 +274,46 @@ function EndsCell({ row }: Readonly<{ row: Row }>) {
 	);
 }
 
+/**
+ * What can be done about one row: the viewer's own access can only be asked
+ * for; someone else's gets Renew… and its menu where the device's people are
+ * readable here (W3-N7's actions), else the way to the device's Access tab.
+ */
+function RowActions({
+	row,
+	deviceAccess,
+}: Readonly<{ row: Row; deviceAccess: RouteLinkProps }>) {
+	const { t } = useTranslation("devices");
+	const people = useDeviceAccess(row.group.deviceId);
+	if (row.mine)
+		return (
+			<LinkButton
+				route={{ screen: "access", tab: "shared", action: "request" }}
+				scope={ACCOUNT_SCOPE}
+				size="sm"
+				icon={RefreshCw}
+				act="ask-renew"
+			>
+				{t("app.access.askRenew", "Ask to renew")}
+			</LinkButton>
+		);
+	if (people?.rows?.some((entry) => entry.grant.grant_id === row.id))
+		return <GrantRowActions deviceId={row.group.deviceId} grantId={row.id} />;
+	return (
+		<DvButton size="sm" asChild>
+			<a data-act="open-device-access" {...deviceAccess}>
+				{t("app.access.openDevice", "Open device access")}
+			</a>
+		</DvButton>
+	);
+}
+
 function AccessRow({ row }: Readonly<{ row: Row }>) {
 	const { t } = useTranslation("devices");
 	const { view } = useAppPage();
 	const link = useRouteLink();
 	const labels = accessLabels(t);
+	const permissions = presetParts(t, row.capabilities);
 	const { group } = row;
 	const deviceAccess = link({
 		screen: "device",
@@ -301,29 +339,14 @@ function AccessRow({ row }: Readonly<{ row: Row }>) {
 			</Td>
 			<Td label={labels.scope}>{scopeLabel(t, row.scope, view.app.name)}</Td>
 			<Td label={labels.permissions}>
-				<Permissions capabilities={row.capabilities} />
+				<b className="font-semibold">{permissions.preset}</b>
+				{permissions.held}
 			</Td>
 			<Td label={labels.ends}>
 				<EndsCell row={row} />
 			</Td>
 			<Td label={labels.actions}>
-				{row.mine ? (
-					<LinkButton
-						route={{ screen: "access", tab: "shared", action: "request" }}
-						scope={ACCOUNT_SCOPE}
-						size="sm"
-						icon={RefreshCw}
-						act="ask-renew"
-					>
-						{t("app.access.askRenew", "Ask to renew")}
-					</LinkButton>
-				) : (
-					<DvButton size="sm" asChild>
-						<a data-act="open-device-access" {...deviceAccess}>
-							{t("app.access.openDevice", "Open device access")}
-						</a>
-					</DvButton>
-				)}
+				<RowActions row={row} deviceAccess={deviceAccess} />
 			</Td>
 		</Tr>
 	);
@@ -508,7 +531,7 @@ export function AppAccess() {
 					label={t("app.access.tableLabel", "People with access to {{app}}", {
 						app: view.app.name,
 					})}
-					cols={["21%", "16%", "15%", "18%", "13%", "17%"]}
+					cols={["19%", "16%", "13%", "20%", "12%", "20%"]}
 					className={TABLE_RESET}
 					head={
 						<tr>

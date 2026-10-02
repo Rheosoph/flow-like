@@ -1,6 +1,6 @@
 "use client";
 
-import { useTranslation } from "@flow-like/locales";
+import { Trans, useTranslation } from "@flow-like/locales";
 import {
 	ChevronLeft,
 	Download,
@@ -57,6 +57,7 @@ import {
 	FingerprintReadout,
 	KeyFingerprint,
 	WizardPosition,
+	hostOf,
 	saveTextFile,
 } from "./access-parts";
 import { type PersonNames, useGuardedRead, usePersonNames } from "./use-access";
@@ -92,14 +93,6 @@ type CheckedFile =
 			/** Keys made earlier for the same file: their request can be downloaded again. */
 			reusable?: { controllerKey: Ed25519PublicKey; grantId: string };
 	  });
-
-const hostOf = (url: string) => {
-	try {
-		return new URL(url).host;
-	} catch {
-		return url;
-	}
-};
 
 /** Reads and checks a connection file on this computer: shape, the device's signature, the hub and keys already here. */
 async function checkConnectionFile(
@@ -360,6 +353,7 @@ function CheckStep({
 	const time = useAreaTime();
 	const { manifest, file } = checked;
 	const owner = names(manifest.owner_id);
+	const lead = { 1: <b className="font-semibold" /> };
 	return (
 		<>
 			<Checklist
@@ -369,38 +363,56 @@ function CheckStep({
 						id: "size",
 						state: "pass",
 						source: "local",
-						label: t(
-							"access.request.check.size",
-							"Connection file · {{size}}, under the 128 KiB limit",
-							{ size: humanFileSize(checked.bytes) },
+						label: (
+							<Trans
+								t={t}
+								i18nKey="access.request.check.size"
+								defaults="<1>Connection file</1> · {{size}}, under the 128 KiB limit"
+								values={{ size: humanFileSize(checked.bytes) }}
+								components={lead}
+							/>
 						),
 					},
 					{
 						id: "signature",
 						state: "pass",
 						source: "local",
-						label: t(
-							"access.request.check.signature",
-							"Signed by {{device}} · its registration signature is valid",
-							{ device: manifest.name },
+						label: (
+							<Trans
+								t={t}
+								i18nKey="access.request.check.signature"
+								defaults="<1>Signed by {{device}}</1> · its registration signature is valid"
+								values={{ device: manifest.name }}
+								components={lead}
+							/>
 						),
 					},
 					{
 						id: "hub",
 						state: "pass",
 						source: "local",
-						label: t("access.request.check.hub", "Same hub · {{hub}}", {
-							hub: myHub,
-						}),
+						label: (
+							<Trans
+								t={t}
+								i18nKey="access.request.check.hub"
+								defaults="<1>Same hub</1> · {{hub}}"
+								values={{ hub: myHub }}
+								components={lead}
+							/>
+						),
 					},
 					{
 						id: "keys",
 						state: "pass",
 						source: "local",
-						label: t(
-							"access.request.check.keys",
-							"No keys for {{device}} on this computer yet",
-							{ device: manifest.name },
+						label: (
+							<Trans
+								t={t}
+								i18nKey="access.request.check.keys"
+								defaults="<1>No keys for {{device}} on this computer yet</1>"
+								values={{ device: manifest.name }}
+								components={lead}
+							/>
 						),
 					},
 				]}
@@ -905,7 +917,7 @@ function FlowBody({ onClose }: Readonly<{ onClose(): void }>) {
 					) : null}
 					<DvButton onClick={onClose}>
 						{step === 3
-							? t("access.request.done", "Done")
+							? t("access.request.finish", "Done")
 							: t("access.request.cancel", "Cancel")}
 					</DvButton>
 					<DvButton

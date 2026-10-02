@@ -47,6 +47,7 @@ import {
 } from "../workspace";
 import { LiveDataState, livePhase } from "./live-state";
 import { PLAIN_PARAGRAPHS, downloadText } from "./observe-data";
+import { RenewRulesLink, rulesExpiredAt, rulesGate } from "./renew-rules";
 import { DeviceResourceCells } from "./resource-cells";
 import { DEVICE_SCOPE, type SaveFailure, policyAppliedOf } from "./use-history";
 import {
@@ -681,7 +682,10 @@ export function SharedLiveMetrics({
 			reader.userId ? [reader.userId] : [],
 		),
 	);
-	const gated = gateLine(t, gate, time);
+	// A readers list can't outlast the access rules: once they ran out, renewing them comes first (BG31).
+	const rulesOut =
+		rulesExpiredAt(target, Math.floor(time.nowS / 30) * 30) !== undefined;
+	const gated = rulesOut ? rulesGate(t) : gateLine(t, gate, time);
 	const roster = shared.data?.roster;
 	const expired = roster ? roster.expires_at <= time.nowS : false;
 
@@ -795,6 +799,7 @@ export function SharedLiveMetrics({
 								{t("devices:observe.shared.renew", "Renew")}
 							</DvButton>
 						) : null}
+						{rulesOut ? <RenewRulesLink deviceId={target.deviceId} /> : null}
 					</div>
 				) : (
 					<ReaderRequest target={target} scope={scope} />

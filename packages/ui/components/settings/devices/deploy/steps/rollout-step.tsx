@@ -87,6 +87,7 @@ import {
 	useDeployRunDetails,
 	useDeployRunWatch,
 	useHandedBundle,
+	useShownTokens,
 	useWizardSlot,
 } from "../use-deploy-run";
 import { PlanSummary } from "./review-step";
@@ -219,6 +220,18 @@ const REASON: Record<string, (t: DevicesT) => string> = {
 		),
 	unconfirmed: (t) =>
 		t("devices:deployShip.fail.unconfirmed", "the device stopped answering"),
+	hub_refused: (t) =>
+		t("devices:deployShip.fail.hubRefused", "the hub refused it"),
+	service_exists: (t) =>
+		t(
+			"devices:deployShip.fail.serviceExists",
+			"a service with this ID already runs on the device",
+		),
+	device_unread: (t) =>
+		t(
+			"devices:deployShip.fail.deviceUnread",
+			"the device's services couldn't be read",
+		),
 	secret_publication: (t) =>
 		t(
 			"devices:deployShip.fail.secret",
@@ -766,14 +779,24 @@ function allLead(c: ResultContext, what: string, total: number): string {
 /* Blocks. */
 
 function TokenBlock({
+	deploymentId,
 	state,
 	details,
-}: Readonly<{ state: DeployRunState; details: DeployRunDetails }>) {
+}: Readonly<{
+	deploymentId: string;
+	state: DeployRunState;
+	details: DeployRunDetails;
+}>) {
 	const { t } = useTranslation("devices");
 	const tokens = state.rows.flatMap((row) => {
 		const detail = details[row.target];
-		return row.state === "done" && detail?.token ? [detail] : [];
+		const held = detail?.token || detail?.tokenGone;
+		return row.state === "done" && detail && held ? [detail] : [];
 	});
+	useShownTokens(
+		deploymentId,
+		tokens.filter((detail) => detail.token).map((detail) => detail.target),
+	);
 	if (!tokens.length) return null;
 	return (
 		<Block
@@ -823,19 +846,30 @@ function TokenRow({ detail }: Readonly<TokenRowProps>) {
 				{detail.deviceName}
 				<span className="text-muted-foreground"> › {detail.serviceId}</span>
 			</span>
-			<code className="rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
-				{token.slice(0, 10)}…
-			</code>
-			<DvButton
-				size="xs"
-				icon={Copy}
-				aria-label={copied ? undefined : label}
-				onClick={copyToken}
-			>
-				{copied
-					? t("deployShip.tokens.copied", "Copied")
-					: t("deployShip.tokens.copy", "Copy")}
-			</DvButton>
+			{token ? (
+				<>
+					<code className="rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
+						{token.slice(0, 10)}…
+					</code>
+					<DvButton
+						size="xs"
+						icon={Copy}
+						aria-label={copied ? undefined : label}
+						onClick={copyToken}
+					>
+						{copied
+							? t("deployShip.tokens.copied", "Copied")
+							: t("deployShip.tokens.copy", "Copy")}
+					</DvButton>
+				</>
+			) : (
+				<span className="text-xs text-muted-foreground" data-token-gone="">
+					{t(
+						"deployShip.tokens.gone",
+						"Shown once · not kept after you left this page",
+					)}
+				</span>
+			)}
 		</li>
 	);
 }
@@ -1107,7 +1141,8 @@ function SingleRun({ c, row, labels, shared }: Readonly<SingleRunProps>) {
 						<IdRef id={detail.operationId} />
 					</KvRow>
 				) : null}
-				{view === "done" ? null : (
+				{/* What a failure would leave is said while it can still fail; afterwards the sentence above says what it left. */}
+				{view === "done" || ENDED_BADLY.includes(view) ? null : (
 					<KvRow label={t("deployShip.single.ifFails", "If it fails")}>
 						{ifItFails(t, detail)}
 					</KvRow>
@@ -1165,8 +1200,14 @@ interface FootProps {
 	navigation: Navigation;
 	gated: boolean;
 	goTo: DeployStepProps["goTo"];
+	startOver: DeployStepProps["startOver"];
 	eventId: string | undefined;
 }
+
+/** Phone (APP §3.17): the primary on its own row first, the others full width under it. */
+const PHONE_PRIMARY =
+	"@max-[480px]/wfoot:order-1 @max-[480px]/wfoot:basis-full";
+const PHONE_OTHER = "@max-[480px]/wfoot:order-2 @max-[480px]/wfoot:flex-1";
 
 function OpenInDevices({
 	navigation,
@@ -1179,7 +1220,12 @@ function OpenInDevices({
 		? { screen: "app-devices", by: "event", eventId }
 		: { screen: "app-devices", by: "device" };
 	return (
-		<DvButton variant={primary ? "primary" : "default"} icon={Server} asChild>
+		<DvButton
+			variant={primary ? "primary" : "default"}
+			icon={Server}
+			className={primary ? PHONE_PRIMARY : PHONE_OTHER}
+			asChild
+		>
 			<a {...link(route, { scope: navigation.appScope })}>
 				{t("deployShip.rollout.openInDevices", "Open in Devices")}
 			</a>
@@ -1206,16 +1252,20 @@ function DoneButtons(props: Readonly<FootProps>) {
 	};
 	return (
 		<>
-			<DvButton icon={Plus} onClick={() => navigate(more)}>
+			<DvButton
+				icon={Plus}
+				className={PHONE_OTHER}
+				onClick={() => navigate(more)}
+			>
 				{t("deployShip.rollout.deployMore", "Deploy to more devices…")}
 			</DvButton>
-			<DvButton asChild>
+			<DvButton className={PHONE_OTHER} asChild>
 				<a href={deployExitHref(navigation.route, navigation.scope)}>
 					{t("deployShip.rollout.exit", "Exit deploy")}
 				</a>
 			</DvButton>
 			{single ? (
-				<DvButton variant="primary" asChild>
+				<DvButton variant="primary" className={PHONE_PRIMARY} asChild>
 					<a {...link(serviceRoute(single), { scope: navigation.scope })}>
 						{t("deployShip.rollout.openNamed", "Open {{service}}", {
 							service: single.serviceId ?? "",
@@ -1249,6 +1299,7 @@ function PartialButtons(props: Readonly<FootProps>) {
 					key={row.target}
 					variant={index === 0 ? "primary" : "default"}
 					icon={RotateCw}
+					className={index === 0 ? PHONE_PRIMARY : PHONE_OTHER}
 					disabled={props.gated}
 					onClick={() => props.run.retry(row.target)}
 				>
@@ -1270,22 +1321,30 @@ function NoneButtons(props: Readonly<FootProps>) {
 		for (const row of failed) run.retry(row.target);
 	};
 	const canRetry = failed.length > 0 || state.shared?.state === "failed";
+	// The frame asks first and resets the choices; on its own the step can only open What.
+	const startOver = props.startOver ?? (() => goTo("what"));
 	return (
 		<>
 			<DvButton
 				variant="danger-ghost"
 				icon={RotateCcw}
-				onClick={() => goTo("what")}
+				className={PHONE_OTHER}
+				onClick={startOver}
 			>
 				{t("deployShip.rollout.startOver", "Start over…")}
 			</DvButton>
-			<DvButton icon={Pencil} onClick={() => goTo("review")}>
+			<DvButton
+				icon={Pencil}
+				className={PHONE_OTHER}
+				onClick={() => goTo("review")}
+			>
 				{t("deployShip.rollout.changeAgain", "Change and deploy again")}
 			</DvButton>
 			{canRetry ? (
 				<DvButton
 					variant="primary"
 					icon={RotateCw}
+					className={PHONE_PRIMARY}
 					disabled={props.gated}
 					onClick={retry}
 				>
@@ -1351,12 +1410,23 @@ function RolloutFoot(props: Readonly<FootProps>) {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
 	const outcome = props.result?.outcome;
+	const status = footStatus(t, time, props);
 	return (
 		<WizardFoot
+			className="static"
 			step={8}
 			total={8}
 			stepLabel={t("deployShip.rollout.title", "Rollout")}
-			status={footStatus(t, time, props)}
+			status={status}
+			cancel={
+				// The foot hides its note below 720 px; how the run stands stays visible there.
+				<output
+					data-run-foot-status=""
+					className="hidden basis-full text-xs text-muted-foreground @max-[720px]/wfoot:block"
+				>
+					{status}
+				</output>
+			}
 		>
 			{outcome === undefined ? <RunningButtons /> : null}
 			{outcome === "all" ? <DoneButtons {...props} /> : null}
@@ -1743,21 +1813,29 @@ function RolloutBody({
 			{result && !only ? (
 				<AfterNotes c={c} state={state} result={result} />
 			) : null}
-			<TokenBlock state={state} details={details} />
+			<TokenBlock
+				deploymentId={draft.deploymentId}
+				state={state}
+				details={details}
+			/>
 			{only ? (
 				<DeployedDisclosure plan={plan} prepared={props.prepared} />
 			) : null}
-			<RolloutFoot
-				title={deployRunTitle(c.t, deployRunTitleRef(plan))}
-				state={state}
-				result={result}
-				run={run}
-				details={details}
-				navigation={navigation}
-				gated={gated}
-				goTo={props.goTo}
-				eventId={draft.scope === "event" ? draft.events[0] : undefined}
-			/>
+			<div className="sticky bottom-2 z-5 flex flex-col gap-2">
+				{props.summaryBar}
+				<RolloutFoot
+					title={deployRunTitle(c.t, deployRunTitleRef(plan))}
+					state={state}
+					result={result}
+					run={run}
+					details={details}
+					navigation={navigation}
+					gated={gated}
+					goTo={props.goTo}
+					startOver={props.startOver}
+					eventId={draft.scope === "event" ? draft.events[0] : undefined}
+				/>
+			</div>
 		</div>
 	);
 }
