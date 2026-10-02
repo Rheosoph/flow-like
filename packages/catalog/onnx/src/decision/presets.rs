@@ -15,7 +15,9 @@ pub(super) enum PresetLayout {
 }
 
 pub(super) fn preset(model: &str) -> Result<Option<Preset>> {
-    if let Some(preset) = cdn_preset(model)? { return Ok(Some(preset)); }
+    if let Some(preset) = cdn_preset(model)? {
+        return Ok(Some(preset));
+    }
     let (repo, revision, files): (&str, &str, &[(&str, &str, u64, &str)]) = match model {
         "fastino/GLiNER2.5-Decide" => (
             "nishparadox/gliner2.5-decide-onnx",
@@ -122,23 +124,62 @@ pub(super) fn preset(model: &str) -> Result<Option<Preset>> {
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(Some(Preset {
-        layout: if files.len() == 3 { PresetLayout::Split } else { PresetLayout::Combined },
+        layout: if files.len() == 3 {
+            PresetLayout::Split
+        } else {
+            PresetLayout::Combined
+        },
         assets,
     }))
 }
 
 fn cdn_preset(model: &str) -> Result<Option<Preset>> {
     let (base, files): (&str, &[(&str, &str, u64, &str)]) = match model {
-        "fastino/GLiNER2.5-multi-Decide" => ("https://cdn.flow-like.com/models/decision/gliner2.5-multi-decide/a35a0cd3b7a0f00f2effc576f454cd48fa98aa5f/fp32-v1", &[
-            ("weights", "model.onnx", 1_068_422, "c2cf6b9b80f3524d4c99e5fef2428f24e97d24d98f4e8224707d229fa38c0a36"),
-            ("external-data", "model.onnx_data", 1_114_877_952, "9bbe122d2c0c42b6e6d8baf03b028ef6e4d3672c5757b538c30f556ce8980765"),
-            ("tokenizer", "tokenizer.json", 16_020_605, "b107e2e5998e7429491aaae7807d8b0815ff3e06fcb5ba95bc6a35c9b93185c5"),
-            ("config", "decision_config.json", 374, "33fab8719037e2593bb24a86aae6071e9184554edec2874aad53f389eb4afc30"),
-        ]),
+        "fastino/GLiNER2.5-multi-Decide" => (
+            "https://cdn.flow-like.com/models/decision/gliner2.5-multi-decide/a35a0cd3b7a0f00f2effc576f454cd48fa98aa5f/fp32-v1",
+            &[
+                (
+                    "weights",
+                    "model.onnx",
+                    1_068_422,
+                    "c2cf6b9b80f3524d4c99e5fef2428f24e97d24d98f4e8224707d229fa38c0a36",
+                ),
+                (
+                    "external-data",
+                    "model.onnx_data",
+                    1_114_877_952,
+                    "9bbe122d2c0c42b6e6d8baf03b028ef6e4d3672c5757b538c30f556ce8980765",
+                ),
+                (
+                    "tokenizer",
+                    "tokenizer.json",
+                    16_020_605,
+                    "b107e2e5998e7429491aaae7807d8b0815ff3e06fcb5ba95bc6a35c9b93185c5",
+                ),
+                (
+                    "config",
+                    "decision_config.json",
+                    374,
+                    "33fab8719037e2593bb24a86aae6071e9184554edec2874aad53f389eb4afc30",
+                ),
+            ],
+        ),
         _ => return Ok(None),
     };
-    let assets = files.iter().map(|(role, file, size, hash)| {
-        ModelSpec::new(&DECISION_MODELS, role, *size, &format!("{base}/{file}"), hash)
-    }).collect::<Result<Vec<_>>>()?;
-    Ok(Some(Preset { assets, layout: PresetLayout::Bundle }))
+    let assets = files
+        .iter()
+        .map(|(role, file, size, hash)| {
+            ModelSpec::new(
+                &DECISION_MODELS,
+                role,
+                *size,
+                &format!("{base}/{file}"),
+                hash,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some(Preset {
+        assets,
+        layout: PresetLayout::Bundle,
+    }))
 }
