@@ -5,7 +5,7 @@ use crate::{
     state::FlowLikeState,
 };
 use flow_like_model_provider::{
-    embedding::{EmbeddingModelLogic, GeneralTextSplitter},
+    embedding::{EmbeddingModelLogic, GeneralTextSplitter, local::embed},
     fastembed::{
         self, InitOptionsUserDefined, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel,
     },
@@ -145,6 +145,7 @@ pub struct LocalEmbeddingModel {
     pub bit: Arc<Bit>,
     pub embedding_model: Arc<Mutex<fastembed::TextEmbedding>>,
     pub tokenizer_files: Arc<TokenizerFiles>,
+    pooling: fastembed::Pooling,
     max_tokens: usize,
     chunk_capacity: usize,
     sizer: Arc<TokenizerSizer>,
@@ -191,7 +192,7 @@ impl LocalEmbeddingModel {
 
         let user_embedding_model =
             UserDefinedEmbeddingModel::new(loaded_model, loaded_tokenizer.clone())
-                .with_pooling(pooling);
+                .with_pooling(pooling.clone());
         ensure_ort_initialized()
             .map_err(|error| anyhow!("Failed to configure ONNX Runtime: {error}"))?;
 
@@ -240,6 +241,7 @@ impl LocalEmbeddingModel {
             bit,
             embedding_model: Arc::new(Mutex::new(loaded_model)),
             tokenizer_files: loaded_tokenizer_files,
+            pooling,
             max_tokens,
             chunk_capacity,
             sizer,
@@ -264,6 +266,7 @@ impl LocalEmbeddingModel {
         let sizer = self.sizer.clone();
         let chunk_capacity = self.chunk_capacity;
         let max_tokens = self.max_tokens;
+        let pooling = self.pooling.clone();
 
         flow_like_types::tokio::task::spawn_blocking(move || {
             let mut pieces: Vec<String> = Vec::with_capacity(texts.len());
@@ -301,8 +304,7 @@ impl LocalEmbeddingModel {
                 for size in sizes {
                     let batch = pieces[offset..offset + size].to_vec();
                     tracing::debug!(size, max_tokens, "embedding batch");
-                    let batch = model
-                        .embed(batch, Some(size))
+                    let batch = embed(&mut model, batch, Some(size), &pooling)
                         .map_err(|e| anyhow!("Error embedding text: {}", e))?;
                     vectors.extend(batch);
                     offset += size;

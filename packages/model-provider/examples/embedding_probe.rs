@@ -8,6 +8,7 @@
 use std::{path::PathBuf, time::Instant};
 
 use flow_like_model_provider::{
+    embedding::local::embed,
     fastembed::{
         self, InitOptionsUserDefined, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel,
     },
@@ -133,7 +134,7 @@ fn main() {
         Err(e) => return println!("RESULT provider_select_failed: {e}"),
     };
 
-    let user_model = UserDefinedEmbeddingModel::new(model, files).with_pooling(pooling);
+    let user_model = UserDefinedEmbeddingModel::new(model, files).with_pooling(pooling.clone());
     let options = InitOptionsUserDefined::new()
         .with_max_length(max_tokens)
         .with_execution_providers(providers);
@@ -155,14 +156,14 @@ fn main() {
         .collect();
 
     let start = Instant::now();
-    let doc_vectors = match embedder.embed(docs.clone(), Some(12)) {
+    let doc_vectors = match embed(&mut embedder, docs.clone(), Some(12), &pooling) {
         Ok(v) => v,
         Err(e) => return println!("RESULT embed_failed: {e}"),
     };
     let index_ms = start.elapsed().as_millis();
 
     let start = Instant::now();
-    let query_vectors = match embedder.embed(queries.clone(), Some(12)) {
+    let query_vectors = match embed(&mut embedder, queries.clone(), Some(12), &pooling) {
         Ok(v) => v,
         Err(e) => return println!("RESULT embed_failed: {e}"),
     };
@@ -222,7 +223,7 @@ fn main() {
         .map(|i| format!("{} Passage {i}.", DOCUMENTS[i % DOCUMENTS.len()]))
         .collect();
     let bulk = Instant::now();
-    let bulk_ok = embedder.embed(corpus.clone(), Some(16)).is_ok();
+    let bulk_ok = embed(&mut embedder, corpus.clone(), Some(16), &pooling).is_ok();
     let bulk_ms = bulk.elapsed().as_millis();
     let per_doc = bulk_ms as f64 / corpus.len() as f64;
 

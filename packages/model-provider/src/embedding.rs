@@ -10,6 +10,9 @@ use tiktoken_rs::CoreBPE;
 pub mod openai;
 pub mod proxy_config;
 
+#[cfg(feature = "local-ml")]
+pub mod local;
+
 #[cfg(feature = "remote-ml")]
 pub mod proxy;
 
