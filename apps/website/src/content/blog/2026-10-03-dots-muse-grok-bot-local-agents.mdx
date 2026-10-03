@@ -3,7 +3,7 @@ title: "Dots, Muse and Grok Bot: build a local agent with Flow-Like"
 description: "A quick comparison of OpenAI dots, Meta Muse and Grok Bot, plus a practical way to build a recurring AI assistant on your own device with Flow-Like."
 date: 2026-10-03
 tags: ["agents", "comparison", "local-ai", "automation"]
-cover: "/images/simple-agent.jpg"
+cover: "/images/dots-muse-grok-bot-local-agents.jpg"
 draft: false
 ---
 
@@ -27,6 +27,13 @@ The emphasis differs more than the basic idea. Dots builds on your ChatGPT conte
 
 Desktop access is already part of this category. Dots can [connect to your computer](https://learn.chatgpt.com/docs/dots/computers-and-apps), and Muse offers a [Mac app](https://ai.meta.com/muse/download/) with permissioned access to local files and apps. That access does not make their cloud agent a model running on your device.
 
+<figure>
+  <a href="/posts/dots-muse-grok-bot/execution-options.svg" aria-label="Open the execution comparison at full size">
+    <img src="/posts/dots-muse-grok-bot/execution-options.svg" alt="A managed agent runs in its provider's cloud and can continue while your laptop is off. A Flow-Like workflow with a local model and chosen files runs on your own machine, which must stay awake and running." width="1200" height="1060" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Connecting a cloud agent to your desktop and running a workflow with local inference are different setups.</figcaption>
+</figure>
+
 ## Where Flow-Like fits
 
 Flow-Like gives you a visual workflow to build the assistant's job. You choose what starts it, which information it reads, where a model helps, and what happens with the result. Its [agent nodes](https://docs.flow-like.com/topics/genai/agents/) let a model choose between tools you provide when the task needs that flexibility.
@@ -38,6 +45,13 @@ The tradeoff is setup. A managed agent comes with its own conversational experie
 ## Build a daily brief on your own device
 
 Start with a small folder of text or Markdown project notes. The goal is a saved brief that identifies changes and open questions, with filenames beside the claims.
+
+<figure>
+  <a href="/posts/dots-muse-grok-bot/local-brief-workflow.svg" aria-label="Open the morning brief workflow at full size">
+    <img src="/posts/dots-muse-grok-bot/local-brief-workflow.svg" alt="At 09:00, a local schedule starts a workflow that reads chosen notes and the previous brief, sends them to a local model, and saves brief.md. The saved brief becomes context for the next run. External actions follow a separate human review." width="1200" height="1080" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>A conceptual view of the daily brief. The saved result supplies context for the next run.</figcaption>
+</figure>
 
 ### Set up local execution and a local model
 

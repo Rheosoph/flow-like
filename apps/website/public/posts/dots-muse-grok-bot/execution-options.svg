@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1060" viewBox="0 0 1200 1060" role="img" aria-labelledby="title desc">
+  <title id="title">Where the work happens</title>
+  <desc id="desc">A managed cloud agent runs its model, tools and memory in the provider's cloud and can continue while your laptop is off. Apps and your device can be optional connections. A local Flow-Like flow runs the workflow, a local model and chosen files on your own machine. The machine must stay running and awake. Cloud calls are optional and must be configured. Local workflow execution alone does not make a hosted model local.</desc>
+  <defs>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" fill="none" stroke="#8db0ba" stroke-opacity=".055"/></pattern>
+    <linearGradient id="cloud" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#132636"/><stop offset="1" stop-color="#101c27"/></linearGradient>
+    <linearGradient id="local" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#132a27"/><stop offset="1" stop-color="#101f21"/></linearGradient>
+  </defs>
+  <rect width="1200" height="1060" rx="24" fill="#081219"/>
+  <rect width="1200" height="1060" rx="24" fill="url(#grid)"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="52" y="61" fill="#9aadb8" font-size="23" font-weight="700" letter-spacing="3">EXECUTION &amp; DATA</text>
+    <text x="52" y="124" fill="#f4f3ea" font-size="59" font-weight="700" letter-spacing="-1.8">Where the work happens</text>
+    <text x="52" y="171" fill="#b2c1c9" font-size="29">The workflow and the model are separate choices.</text>
+
+    <rect x="52" y="211" width="1096" height="333" rx="24" fill="url(#cloud)" stroke="#7db6ff" stroke-opacity=".38"/>
+    <rect x="52" y="239" width="4" height="76" rx="2" fill="#7db6ff"/>
+    <text x="86" y="263" fill="#7db6ff" font-size="25" font-weight="700" letter-spacing="1.5">01 / MANAGED CLOUD AGENT</text>
+    <path d="M1060 260h35a13 13 0 0 0 1-26 20 20 0 0 0-38-1 14 14 0 0 0 2 27Z" fill="none" stroke="#7db6ff" stroke-width="2.5" stroke-linejoin="round"/>
+
+    <g fill="#0b1721" stroke="#7db6ff" stroke-opacity=".23">
+      <rect x="86" y="293" width="324" height="85" rx="14"/>
+      <rect x="438" y="293" width="324" height="85" rx="14"/>
+      <rect x="790" y="293" width="324" height="85" rx="14"/>
+    </g>
+    <g fill="#f4f3ea" font-size="37" font-weight="700" text-anchor="middle">
+      <text x="248" y="348">Model</text><text x="600" y="348">Tools</text><text x="952" y="348">Memory</text>
+    </g>
+    <text x="86" y="429" fill="#f4f3ea" font-size="34">Runs in the provider’s cloud.</text>
+    <text x="86" y="474" fill="#c1d1df" font-size="31">Can keep working while your laptop is off.</text>
+    <circle cx="95" cy="510" r="6" fill="#7db6ff"/>
+    <text x="115" y="520" fill="#9fb9ce" font-size="27">Optional connections: apps and your device</text>
+
+    <rect x="52" y="580" width="1096" height="366" rx="24" fill="url(#local)" stroke="#74efc2" stroke-opacity=".4"/>
+    <rect x="52" y="608" width="4" height="76" rx="2" fill="#74efc2"/>
+    <text x="86" y="632" fill="#74efc2" font-size="25" font-weight="700" letter-spacing="1.5">02 / LOCAL FLOW-LIKE FLOW</text>
+    <g fill="none" stroke="#74efc2" stroke-width="2.5" stroke-linejoin="round">
+      <rect x="1055" y="602" width="48" height="31" rx="3"/>
+      <path d="M1047 641h64M1079 633v8"/>
+    </g>
+    <g fill="#0b191a" stroke="#74efc2" stroke-opacity=".24">
+      <rect x="86" y="662" width="324" height="85" rx="14"/>
+      <rect x="438" y="662" width="324" height="85" rx="14"/>
+      <rect x="790" y="662" width="324" height="85" rx="14"/>
+    </g>
+    <g fill="#f4f3ea" font-size="36" font-weight="700" text-anchor="middle">
+      <text x="248" y="717">Workflow</text><text x="600" y="717">Local model</text><text x="952" y="717">Chosen files</text>
+    </g>
+    <text x="86" y="798" fill="#f4f3ea" font-size="34">Runs on your own machine.</text>
+    <text x="86" y="843" fill="#c0d7cf" font-size="31">Keep the device running and awake.</text>
+    <path d="M86 870h1028" stroke="#74efc2" stroke-opacity=".15"/>
+    <circle cx="95" cy="906" r="6" fill="#74efc2"/>
+    <text x="115" y="916" fill="#a8cbc0" font-size="27">Cloud calls are optional and must be configured.</text>
+
+    <text x="52" y="1001" fill="#a7b8c1" font-size="27">A local flow using a hosted model sends model inputs to that provider.</text>
+  </g>
+</svg>
