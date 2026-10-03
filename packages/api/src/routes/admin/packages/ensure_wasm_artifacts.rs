@@ -1,12 +1,13 @@
 //! Ensure active package versions have current Linux AOT artifacts.
 
 use crate::audit;
+use crate::compilation::dispatch::compiled_artifact_paths;
 use crate::entity::sea_orm_active_enums::{WasmCompilationStatus, WasmPackageStatus};
 use crate::entity::{wasm_package, wasm_package_version};
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::permission::global_permission::GlobalPermission;
-use crate::routes::registry::server::{WASM_COMPILED_PATH, with_current_wasmtime_version};
+use crate::routes::registry::server::with_current_wasmtime_version;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::{Extension, Json};
@@ -51,16 +52,6 @@ fn current_linux_x86_64_platform() -> String {
     )
 }
 
-fn artifact_paths(package_id: &str, version: &str, target_platform: &str) -> (Path, Path) {
-    let base = Path::from(WASM_COMPILED_PATH)
-        .join(package_id)
-        .join(version);
-    (
-        base.clone().join(format!("{}.cwasm", target_platform)),
-        base.join(format!("{}.cwasm.b3", target_platform)),
-    )
-}
-
 async fn object_exists(state: &AppState, path: &Path) -> Result<bool, ApiError> {
     match state.meta_bucket.as_generic().head(path).await {
         Ok(_) => Ok(true),
@@ -77,8 +68,10 @@ async fn artifacts_exist(
     package_id: &str,
     version: &str,
     target_platform: &str,
+    generation: Option<&str>,
 ) -> Result<bool, ApiError> {
-    let (cwasm_path, checksum_path) = artifact_paths(package_id, version, target_platform);
+    let (cwasm_path, checksum_path) =
+        compiled_artifact_paths(package_id, version, target_platform, generation);
     let cwasm_exists = object_exists(state, &cwasm_path).await?;
     let checksum_exists = object_exists(state, &checksum_path).await?;
     Ok(cwasm_exists && checksum_exists)
@@ -153,7 +146,15 @@ pub async fn ensure_wasm_artifacts(
 
         checked_versions += 1;
 
-        if artifacts_exist(&state, &package.id, &package.version, &target_platform).await? {
+        if artifacts_exist(
+            &state,
+            &package.id,
+            &package.version,
+            &target_platform,
+            version_record.compiled_artifact_generation.as_deref(),
+        )
+        .await?
+        {
             let supported_wasmtime_versions = version_record.supported_wasmtime_versions.clone();
             let compiled_platforms = version_record.compiled_platforms.clone();
             let mut active: wasm_package_version::ActiveModel = version_record.into();

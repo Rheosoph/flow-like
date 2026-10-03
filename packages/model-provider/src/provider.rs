@@ -60,26 +60,39 @@ impl ModelProvider {
 }
 
 /// Remote embedding provider implementation
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum RemoteEmbeddingProvider {
     /// Internal OpenAI-compatible embedding gateway.
-    ///
-    /// Older bit configs serialized as `HuggingfaceEndpoint` or
-    /// `CloudflareWorkersAI` are accepted as aliases so existing records can be
-    /// migrated by config alone.
     #[default]
-    #[serde(alias = "HuggingfaceEndpoint", alias = "CloudflareWorkersAI")]
     Internal,
+    /// Cloudflare Workers AI through its OpenAI-compatible embeddings API.
+    CloudflareWorkersAI,
+    /// OpenAI's hosted embeddings API.
+    OpenAI,
+    /// Azure OpenAI v1 API; model_id names the deployment.
+    AzureOpenAI,
+    /// A Hugging Face Text Embeddings Inference endpoint.
+    HuggingfaceEndpoint,
+    /// An operator-configured service with an OpenAI-compatible embeddings API.
+    OpenAICompatible,
+    /// Cohere's hosted v2 embeddings API.
+    Cohere,
+    /// Voyage AI's hosted embeddings API.
+    VoyageAI,
 }
 
 /// Configuration for remote execution via API proxy
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Default)]
 pub struct RemoteExecutionConfig {
-    /// Deprecated per-bit endpoint URL. Remote embeddings now use the shared
-    /// INTERNAL_EMBEDDING_ENDPOINT secret resolved by the API.
+    /// Legacy endpoint URL retained for reading old Bits. Hosted execution
+    /// resolves endpoints from server secrets instead of using this URL.
     #[serde(default)]
     pub endpoint: Option<String>,
-    /// Optional API key secret override. Defaults to INTERNAL_EMBEDDING_SECRET.
+    /// Optional server secret containing the base endpoint. Supported by
+    /// Internal, AzureOpenAI, HuggingfaceEndpoint and OpenAICompatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_secret_name: Option<String>,
+    /// Optional API key secret override. Each provider has its own default.
     #[serde(default)]
     pub secret_name: Option<String>,
     /// Which remote provider implementation to use
@@ -354,6 +367,66 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_embedding_providers_keep_distinct_wire_identities() {
+        for (name, expected) in [
+            ("Internal", RemoteEmbeddingProvider::Internal),
+            (
+                "CloudflareWorkersAI",
+                RemoteEmbeddingProvider::CloudflareWorkersAI,
+            ),
+            ("OpenAI", RemoteEmbeddingProvider::OpenAI),
+            ("AzureOpenAI", RemoteEmbeddingProvider::AzureOpenAI),
+            (
+                "HuggingfaceEndpoint",
+                RemoteEmbeddingProvider::HuggingfaceEndpoint,
+            ),
+            (
+                "OpenAICompatible",
+                RemoteEmbeddingProvider::OpenAICompatible,
+            ),
+            ("Cohere", RemoteEmbeddingProvider::Cohere),
+            ("VoyageAI", RemoteEmbeddingProvider::VoyageAI),
+        ] {
+            let parsed: RemoteExecutionConfig = serde_json::from_value(serde_json::json!({
+                "implementation": name,
+                "model_id": "embedding-model",
+                "endpoint_secret_name": "TEAM_EMBEDDING_ENDPOINT"
+            }))
+            .unwrap();
+            assert_eq!(parsed.implementation, Some(expected));
+            assert_eq!(
+                serde_json::to_value(&parsed).unwrap()["implementation"],
+                name
+            );
+            assert_eq!(
+                parsed.endpoint_secret_name.as_deref(),
+                Some("TEAM_EMBEDDING_ENDPOINT")
+            );
+        }
+        let legacy: RemoteExecutionConfig = serde_json::from_value(serde_json::json!({
+            "model_id": "embedding-model"
+        }))
+        .unwrap();
+        assert_eq!(legacy.implementation, None);
+        assert_eq!(legacy.endpoint_secret_name, None);
+    }
+
+    #[test]
+    fn published_embedding_schemas_match_remote_provider_contract() {
+        let generated =
+            serde_json::to_value(schemars::schema_for!(EmbeddingModelProvider)).unwrap();
+        for source in [
+            include_str!("../../schema/bit/bit/embedding-model-parameters.json"),
+            include_str!("../../schema/bit/bit/image-embedding-model-parameters.json"),
+        ] {
+            let published: Value = serde_json::from_str(source).unwrap();
+            for name in ["RemoteEmbeddingProvider", "RemoteExecutionConfig"] {
+                assert_eq!(published["$defs"][name], generated["$defs"][name], "{name}");
+            }
+        }
+    }
 
     #[test]
     fn text_embedding_accepts_legacy_remote_config_without_implementation() {

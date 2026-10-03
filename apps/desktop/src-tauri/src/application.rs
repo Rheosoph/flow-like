@@ -1225,6 +1225,8 @@ pub fn run() {
             functions::flow::storage::storage_user_to_fullpath,
             functions::flow::catalog::get_catalog,
             functions::flow::board::create_board_version,
+            functions::flow::board::get_board_version_current,
+            functions::flow::board::publish_board_version_current,
             functions::flow::board::get_board_versions,
             functions::flow::board::get_board_version_infos,
             functions::flow::board::close_board,

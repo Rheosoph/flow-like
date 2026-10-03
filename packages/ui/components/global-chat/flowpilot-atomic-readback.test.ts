@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { deliverBoardEditJobReceipt } from "../../lib/flowpilot/board-edit-job-delivery";
 import type { BoardEditJob } from "../../lib/schema/copilot";
+import type { IFlowIrCommitReadback } from "../../state/backend-state/board-state";
 import {
 	verifyAtomicBoardDeliveryReadback,
 	verifyAtomicBoardReadback,
@@ -17,7 +18,7 @@ const snapshot = {
 	flowscript: "on eventsGeneric submitTicket(payload: Struct) {}",
 };
 
-function fixture(overrides: Partial<typeof snapshot> = {}) {
+function fixture(overrides: Partial<IFlowIrCommitReadback> = {}) {
 	const readFlowIrCommitBoard = mock(async () => ({
 		...snapshot,
 		...overrides,
@@ -64,6 +65,53 @@ function pendingJob(): BoardEditJob {
 }
 
 describe("atomic workflow persistence verification", () => {
+	test("verifies new receipts with the current fingerprint", async () => {
+		const fingerprint = `flowpilot-board-v2:${"b".repeat(64)}`;
+		const f = fixture({
+			graph_fingerprint: fingerprint,
+			legacy_graph_fingerprint: applied.persisted_board_fingerprint,
+		});
+		f.result = { ...applied, persisted_board_fingerprint: fingerprint };
+		expect(await verifyAtomicBoardReadback(f)).toEqual({ verified: true });
+	});
+
+	test("verifies older receipts with the unchanged legacy algorithm", async () => {
+		expect(
+			await verifyAtomicBoardReadback(
+				fixture({
+					graph_fingerprint: `flowpilot-board-v2:${"b".repeat(64)}`,
+					legacy_graph_fingerprint: applied.persisted_board_fingerprint,
+				}),
+			),
+		).toEqual({ verified: true });
+	});
+
+	test("does not compare an old receipt against a different algorithm", async () => {
+		const f = fixture({
+			graph_fingerprint: `flowpilot-board-v2:${"a".repeat(64)}`,
+			legacy_graph_fingerprint: `flowpilot-board-v1:${"b".repeat(64)}`,
+		});
+		expect(await verifyAtomicBoardReadback(f)).toMatchObject({
+			verified: false,
+			diagnostic: expect.stringContaining("PERSISTED_BOARD_MISMATCH:"),
+		});
+	});
+
+	test("does not use legacy proof for a current receipt", async () => {
+		const f = fixture({
+			graph_fingerprint: `flowpilot-board-v2:${"b".repeat(64)}`,
+			legacy_graph_fingerprint: applied.persisted_board_fingerprint,
+		});
+		f.result = {
+			...applied,
+			persisted_board_fingerprint: `flowpilot-board-v2:${"a".repeat(64)}`,
+		};
+		expect(await verifyAtomicBoardReadback(f)).toMatchObject({
+			verified: false,
+			diagnostic: expect.stringContaining("PERSISTED_BOARD_MISMATCH:"),
+		});
+	});
+
 	test("verifies the leased receipt when the real job wrapper omits successful results", async () => {
 		const job = pendingJob();
 		const settledJob: BoardEditJob = { ...job, phase: "applied" };
@@ -237,6 +285,10 @@ describe("atomic workflow persistence verification", () => {
 			undefined,
 			{ status: "applied" as const },
 			{ ...applied, status: "error" as const },
+			{
+				...applied,
+				persisted_board_fingerprint: `flowpilot-board-v3:${"a".repeat(64)}`,
+			},
 		]) {
 			const f = fixture();
 			expect(await verifyAtomicBoardReadback({ ...f, result })).toMatchObject({

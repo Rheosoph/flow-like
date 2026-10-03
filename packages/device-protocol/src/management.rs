@@ -237,6 +237,16 @@ impl std::fmt::Debug for SecretValue {
     }
 }
 
+/// Field values of a person-started run. They can hold short secrets, so they never print.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RunPayload(pub serde_json::Value);
+impl std::fmt::Debug for RunPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[REDACTED]")
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ManagementCommand {
@@ -340,6 +350,24 @@ pub enum ManagementCommand {
         #[serde(default)]
         acknowledge_uncertain: bool,
     },
+    /// Queued writes of one authorization scope without their payloads. `terminal` lists
+    /// applied, skipped and superseded writes, newest first; `after_sequence` is the
+    /// previous page's `next` in both directions.
+    OfflineQueueOperations {
+        placement_id: String,
+        scope: String,
+        #[serde(default)]
+        after_sequence: Option<u64>,
+        #[serde(default = "default_offline_operations_limit")]
+        limit: u16,
+        #[serde(default)]
+        terminal: bool,
+    },
+    OfflineQueueLookup {
+        placement_id: String,
+        scope: String,
+        queued_operation_id: String,
+    },
     Inspect,
     InspectPage {
         after: Option<String>,
@@ -352,6 +380,16 @@ pub enum ManagementCommand {
     Operation {
         operation_id: String,
     },
+    /// Journaled operations of every principal, newest first. `after` is the previous
+    /// page's `next`.
+    Operations {
+        #[serde(default)]
+        after: Option<String>,
+        #[serde(default = "default_operations_limit")]
+        limit: u8,
+    },
+    /// The reboot or agent update that is in progress, whoever started it.
+    HostOperation,
     #[serde(alias = "placement_config")]
     PlacementConfiguration {
         placement_id: String,
@@ -383,6 +421,15 @@ pub enum ManagementCommand {
     Rollout {
         rollout_id: String,
     },
+    /// Current and finished updates of one placement, newest first. `before` is the
+    /// previous page's `next`.
+    RolloutHistory {
+        placement_id: String,
+        #[serde(default)]
+        before: Option<String>,
+        #[serde(default = "default_rollout_history_limit")]
+        limit: u8,
+    },
     Scale {
         placement_id: String,
         expected_revision: u64,
@@ -413,8 +460,33 @@ pub enum ManagementCommand {
         name: String,
         value: SecretValue,
     },
+    /// Queues one run of a person-started event of a running service. The answer carries the
+    /// run id at once; the `operation` read follows the run to its end.
+    RunEvent {
+        placement_id: String,
+        event_id: String,
+        expected_revision: u64,
+        #[serde(default)]
+        payload: Option<RunPayload>,
+    },
+    /// Stops a run queued with `run_event` by the same principal, or by any for the owner.
+    CancelRun {
+        operation_id: String,
+    },
+    /// The fields of a person-started event as the running service derived them.
+    EventForm {
+        placement_id: String,
+        event_id: String,
+    },
     Metrics {
         placement_id: Option<String>,
+    },
+    /// Retained samples after record `after`, reduced on the device to the named fields.
+    MetricsHistory {
+        placement_id: Option<String>,
+        after: u64,
+        limit: u16,
+        fields: Vec<String>,
     },
     ProjectMetrics {
         project_id: String,
@@ -490,6 +562,18 @@ fn default_inspect_page_limit() -> u16 {
 
 fn default_certificate_page_limit() -> u16 {
     4
+}
+
+fn default_offline_operations_limit() -> u16 {
+    20
+}
+
+fn default_operations_limit() -> u8 {
+    20
+}
+
+fn default_rollout_history_limit() -> u8 {
+    8
 }
 
 fn default_rollout_stabilization() -> u32 {
@@ -790,6 +874,163 @@ mod tests {
             matches!(legacy, ManagementCommand::PlacementConfiguration { placement_id } if placement_id == "api")
         );
     }
+
+    #[test]
+    fn read_commands_round_trip_with_their_wire_names_and_defaults() {
+        use serde_json::json;
+        let command = |value: serde_json::Value| {
+            serde_json::from_value::<ManagementCommand>(value).map(|command| {
+                let encoded = serde_json::to_value(&command).unwrap();
+                (command, encoded)
+            })
+        };
+        let (host, encoded) = command(json!({"type":"host_operation"})).unwrap();
+        assert!(matches!(host, ManagementCommand::HostOperation));
+        assert_eq!(encoded, json!({"type":"host_operation"}));
+
+        let (history, encoded) =
+            command(json!({"type":"rollout_history","placement_id":"api"})).unwrap();
+        assert!(matches!(
+            history,
+            ManagementCommand::RolloutHistory {
+                before: None,
+                limit: 8,
+                ..
+            }
+        ));
+        assert_eq!(
+            encoded,
+            json!({"type":"rollout_history","placement_id":"api","before":null,"limit":8})
+        );
+        let paged =
+            json!({"type":"rollout_history","placement_id":"api","before":"rollout-7","limit":16});
+        assert_eq!(command(paged.clone()).unwrap().1, paged);
+
+        let (operations, encoded) = command(json!({"type":"operations"})).unwrap();
+        assert!(matches!(
+            operations,
+            ManagementCommand::Operations {
+                after: None,
+                limit: 20
+            }
+        ));
+        assert_eq!(
+            encoded,
+            json!({"type":"operations","after":null,"limit":20})
+        );
+
+        let metrics = json!({"type":"metrics_history","placement_id":null,"after":7,"limit":256,"fields":["cpu_percent"]});
+        assert_eq!(command(metrics.clone()).unwrap().1, metrics);
+        assert!(
+            command(json!({"type":"metrics_history","placement_id":"api","after":0,"limit":1}))
+                .is_err()
+        );
+
+        let (queued, encoded) =
+            command(json!({"type":"offline_queue_operations","placement_id":"api","scope":"a"}))
+                .unwrap();
+        assert!(matches!(
+            queued,
+            ManagementCommand::OfflineQueueOperations {
+                after_sequence: None,
+                limit: 20,
+                terminal: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            encoded,
+            json!({"type":"offline_queue_operations","placement_id":"api","scope":"a","after_sequence":null,"limit":20,"terminal":false})
+        );
+        let lookup = json!({"type":"offline_queue_lookup","placement_id":"api","scope":"a","queued_operation_id":"write-1"});
+        assert_eq!(command(lookup.clone()).unwrap().1, lookup);
+
+        for unknown in [
+            json!({"type":"operations","kind":"stop"}),
+            json!({"type":"rollout_histories","placement_id":"api"}),
+        ] {
+            assert!(command(unknown).is_err());
+        }
+    }
+
+    #[test]
+    fn person_started_run_commands_parse_their_literals_and_refuse_unknown_fields() {
+        use serde_json::json;
+        let run: ManagementCommand = serde_json::from_value(json!({"type":"run_event","placement_id":"notes","event_id":"evt_notes_form","expected_revision":7,
+            "payload":{"title":"Hello","urgent":true}}))
+        .unwrap();
+        let ManagementCommand::RunEvent {
+            placement_id,
+            event_id,
+            expected_revision,
+            payload: Some(payload),
+        } = &run
+        else {
+            panic!("run_event did not parse")
+        };
+        assert_eq!(
+            (placement_id.as_str(), event_id.as_str(), *expected_revision),
+            ("notes", "evt_notes_form", 7)
+        );
+        assert_eq!(payload.0, json!({"title":"Hello","urgent":true}));
+        assert_eq!(
+            serde_json::to_value(&run).unwrap(),
+            json!({"type":"run_event","placement_id":"notes","event_id":"evt_notes_form","expected_revision":7,"payload":{"title":"Hello","urgent":true}})
+        );
+        assert!(!format!("{run:?}").contains("Hello"));
+
+        let action: ManagementCommand = serde_json::from_value(json!({"type":"run_event","placement_id":"notes","event_id":"evt_action","expected_revision":7}))
+            .unwrap();
+        assert!(matches!(
+            action,
+            ManagementCommand::RunEvent { payload: None, .. }
+        ));
+
+        let cancel = json!({"type":"cancel_run","operation_id":"op-1"});
+        let parsed: ManagementCommand = serde_json::from_value(cancel.clone()).unwrap();
+        assert!(
+            matches!(&parsed, ManagementCommand::CancelRun { operation_id } if operation_id == "op-1")
+        );
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), cancel);
+
+        let form = json!({"type":"event_form","placement_id":"notes","event_id":"evt_notes_form"});
+        let parsed: ManagementCommand = serde_json::from_value(form.clone()).unwrap();
+        assert!(matches!(
+            &parsed,
+            ManagementCommand::EventForm { placement_id, event_id }
+                if placement_id == "notes" && event_id == "evt_notes_form"
+        ));
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), form);
+
+        for unknown in [
+            json!({"type":"run_event","placement_id":"notes","event_id":"e","expected_revision":7,"inputs":{}}),
+            json!({"type":"run_event","placement_id":"notes","event_id":"e"}),
+            json!({"type":"cancel_run","operation_id":"op-1","run_id":"r"}),
+            json!({"type":"event_form","placement_id":"notes","event_id":"e","revision":7}),
+            json!({"type":"event_forms","placement_id":"notes","event_id":"e"}),
+        ] {
+            assert!(
+                serde_json::from_value::<ManagementCommand>(unknown.clone()).is_err(),
+                "{unknown}"
+            );
+        }
+
+        let start = json!({"type":"start","placement_id":"notes","expected_revision":7});
+        assert_eq!(
+            serde_json::to_value(
+                serde_json::from_value::<ManagementCommand>(start.clone()).unwrap()
+            )
+            .unwrap(),
+            start
+        );
+        assert!(
+            serde_json::from_value::<ManagementCommand>(
+                json!({"type":"start","placement_id":"notes","expected_revision":7,"event_id":"e"})
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn roster_pins_signer_members_and_expiry() {
         let owner = SigningKey::generate();

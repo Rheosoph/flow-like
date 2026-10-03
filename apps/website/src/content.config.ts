@@ -9,7 +9,11 @@ const blog = defineCollection({
 		date: z.coerce.date(), // accepts string dates
 		updated: z.coerce.date().optional(),
 		draft: z.boolean().default(false),
-		tags: z.array(z.string()).default([]),
+		// Tags become URL segments, so casing must not create duplicate routes.
+		tags: z
+			.array(z.string().trim().toLowerCase())
+			.default([])
+			.transform((tags) => [...new Set(tags)]),
 		cover: z.string().optional(), // /public/... or remote URL
 		canonical: z.string().url().optional(),
 	}),

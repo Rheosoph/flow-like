@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { managementRejection } from "./types";
+import { agentFeatures, managementRejection } from "./types";
 
 test("coded rejections expose their reason and retryability", () => {
 	expect(
@@ -39,4 +39,26 @@ test("older agents and other states carry no rejection reason", () => {
 		{ state: "completed", result: { code: "invalid", retryable: false } },
 	])
 		expect(managementRejection(response)).toBeUndefined();
+});
+
+test("agent feature flags keep only well-formed enabled flags", () => {
+	expect<unknown>(
+		agentFeatures({
+			placement_diagnostics: 1,
+			task_health: 1,
+			future_flag: 1,
+			placement_events: 0,
+			network_interfaces: true,
+			"Bad Flag": 1,
+		}),
+	).toEqual({ placement_diagnostics: 1, task_health: 1, future_flag: 1 });
+	const many = Object.fromEntries(
+		Array.from({ length: 100 }, (_, index) => [`flag_${index}`, 1]),
+	);
+	expect(Object.keys(agentFeatures(many))).toHaveLength(64);
+});
+
+test("older agents without a features map have no flags", () => {
+	for (const value of [undefined, null, "placement_events", [1], 1])
+		expect(agentFeatures(value)).toEqual({});
 });

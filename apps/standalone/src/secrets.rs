@@ -272,7 +272,9 @@ pub async fn publish(root: PathBuf, cancel: CancellationToken) -> Result<()> {
     let mut failures = 0u32;
     loop {
         tokio::select! {_=cancel.cancelled()=>return Ok(()),_=tick.tick()=>()};
-        match publish_one(&root) {
+        let published = publish_one(&root);
+        crate::diagnostics::global().report_error(crate::diagnostics::SECRET_PUBLISHER, &published);
+        match published {
             Ok(_) => failures = 0,
             Err(error) => {
                 failures = failures.saturating_add(1);
@@ -476,6 +478,11 @@ mod tests {
             !publisher.is_finished(),
             "A database error ended publication"
         );
+        use crate::diagnostics::{SECRET_PUBLISHER, TaskFailure, TaskState, test_support::health};
+        assert_eq!(
+            health(SECRET_PUBLISHER),
+            Some((TaskState::Failing, Some(TaskFailure::Storage)))
+        );
         std::fs::remove_dir(&database)?;
         let mut store = StateStore::open(&database)?;
         let config: PlacementConfig = serde_json::from_value(
@@ -497,6 +504,7 @@ mod tests {
         assert_eq!(&**vault::read_private(&secret)?, b"value");
         cancel.cancel();
         publisher.await??;
+        assert_eq!(health(SECRET_PUBLISHER), Some((TaskState::Ok, None)));
         assert_eq!(publish_retry_delay(1), Duration::from_millis(500));
         assert_eq!(publish_retry_delay(u32::MAX), Duration::from_secs(30));
         Ok(())

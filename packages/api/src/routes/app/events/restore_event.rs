@@ -304,7 +304,9 @@ pub async fn restore_event(
 
     // Forward-only: a failed re-setup never rolls the restore back — inbound
     // keeps serving the previous registration set until a setup succeeds.
-    let setup_status = if matches!(event.event_type.as_str(), "rest" | "mcp") {
+    let setup_source =
+        !event.is_device_source() && matches!(event.event_type.as_str(), "rest" | "mcp");
+    let setup_status = if setup_source {
         Some(
             match super::setup_event::run_event_setup(
                 state.clone(),

@@ -1,5 +1,6 @@
 "use client";
 
+import { isCancelledError } from "@tanstack/react-query";
 import {
 	FilesIcon,
 	FolderPlusIcon,
@@ -9,6 +10,7 @@ import {
 	ListIcon,
 	MaximizeIcon,
 	MinimizeIcon,
+	RefreshCwIcon,
 	SearchIcon,
 	SortAscIcon,
 	UploadIcon,
@@ -22,10 +24,12 @@ import {
 	type BulkUploadProgressCallback,
 	type IBulkUploadProgress,
 	type IStorageItem,
+	type IStorageListOptions,
 	type IStorageUploadOptions,
 	storageDisplayName,
 	useBackend,
 	useInvoke,
+	useQueryClient,
 } from "../..";
 import { asArray } from "../../lib/response-shape";
 import { humanFileSize } from "../../lib/utils";
@@ -109,7 +113,11 @@ function StorageItemGrid({
 }
 
 interface StorageOperations {
-	listStorageItems: (appId: string, prefix: string) => Promise<IStorageItem[]>;
+	listStorageItems: (
+		appId: string,
+		prefix: string,
+		options?: IStorageListOptions,
+	) => Promise<IStorageItem[]>;
 	deleteStorageItems: (appId: string, prefixes: string[]) => Promise<void>;
 	downloadStorageItems: (
 		appId: string,
@@ -184,11 +192,16 @@ export function StorageSystem({
 	const fileReference = useRef<HTMLInputElement>(null);
 	const folderReference = useRef<HTMLInputElement>(null);
 	const backend = useBackend();
+	const queryClient = useQueryClient();
 	const storageApi = useMemo<StorageOperations>(
 		() => ({
-			listStorageItems: (targetAppId, targetPrefix) =>
-				operations?.listStorageItems(targetAppId, targetPrefix) ??
-				backend.storageState.listStorageItems(targetAppId, targetPrefix),
+			listStorageItems: (targetAppId, targetPrefix, options) =>
+				operations?.listStorageItems(targetAppId, targetPrefix, options) ??
+				backend.storageState.listStorageItems(
+					targetAppId,
+					targetPrefix,
+					options,
+				),
 			deleteStorageItems: (targetAppId, prefixes) =>
 				operations?.deleteStorageItems(targetAppId, prefixes) ??
 				backend.storageState.deleteStorageItems(targetAppId, prefixes),
@@ -246,6 +259,33 @@ export function StorageSystem({
 		true,
 		[storageScopeKey],
 	);
+	const refreshFiles = useCallback(async () => {
+		const queryKey = [
+			storageApi.listStorageItems.name || "backendFn",
+			appId,
+			prefix,
+			storageScopeKey,
+		];
+		try {
+			// A listing started before the mutation must not replace its result.
+			await queryClient.cancelQueries({ queryKey, exact: true });
+			await queryClient.invalidateQueries({
+				queryKey,
+				exact: true,
+				refetchType: "none",
+			});
+			await queryClient.fetchQuery({
+				queryKey,
+				queryFn: () =>
+					storageApi.listStorageItems(appId, prefix, { refresh: true }),
+				staleTime: 0,
+			});
+		} catch (error) {
+			if (isCancelledError(error)) return;
+			console.error("Failed to refresh storage:", error);
+			toast.error("Failed to refresh files");
+		}
+	}, [queryClient, storageApi, appId, prefix, storageScopeKey]);
 
 	// ---------- Virtual folders (sessionStorage) ----------
 	const [creatingFolder, setCreatingFolder] = useState(false);
@@ -471,10 +511,10 @@ export function StorageSystem({
 			} finally {
 				uploadAbort.current = null;
 				// Always refetch: a cancelled or partial run still wrote files.
-				files.refetch();
+				void refreshFiles();
 			}
 		},
-		[prefix, storageApi, appId, files.refetch],
+		[prefix, storageApi, appId, refreshFiles],
 	);
 
 	const loadFile = useCallback(
@@ -514,14 +554,14 @@ export function StorageSystem({
 				const file = new File([blob], fileName, { type: "text/plain" });
 
 				await storageApi.uploadStorageItems(appId, prefix, [file], undefined);
-
-				await files.refetch();
 			} catch (error) {
 				console.error("Failed to save file:", error);
 				throw error;
+			} finally {
+				await refreshFiles();
 			}
 		},
-		[appId, prefix, preview.file, storageApi, files],
+		[appId, prefix, preview.file, storageApi, refreshFiles],
 	);
 
 	const isFileEditable = useCallback((fileUrl: string, fileName?: string) => {
@@ -643,7 +683,7 @@ export function StorageSystem({
 						console.error(error);
 						toast.error("Failed to delete");
 					} finally {
-						await files.refetch();
+						await refreshFiles();
 					}
 				}}
 				shareFile={async (target) => {
@@ -667,7 +707,7 @@ export function StorageSystem({
 		[
 			appId,
 			downloadFile,
-			files.refetch,
+			refreshFiles,
 			listAppsForFile,
 			loadFile,
 			openWithApp,
@@ -864,6 +904,16 @@ export function StorageSystem({
 						</div>
 
 						{/* View toggle */}
+						<Button
+							variant="outline"
+							size="icon"
+							aria-label="Refresh files"
+							title="Refresh files"
+							disabled={files.isFetching}
+							onClick={() => void refreshFiles()}
+						>
+							<RefreshCwIcon className="h-4 w-4" />
+						</Button>
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button

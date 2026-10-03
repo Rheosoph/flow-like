@@ -578,6 +578,7 @@ async fn invoke_event_impl(
         Some(event) => event,
         None => get_event_from_db(&state.db, &event_id, &app_id).await?,
     };
+    super::ensure_source_execution_allowed(&event)?;
     if !governed_connected_app_call {
         super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
     }

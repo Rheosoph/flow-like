@@ -486,7 +486,7 @@ pub async fn sync_event_with_sink_tokens(
             pat_encrypted,
             oauth_tokens_encrypted,
             profile_json,
-            active: Some(event.active),
+            active: Some(event.active && !event.is_device_source()),
         },
     )
     .await?;
@@ -1148,6 +1148,25 @@ mod tests {
             .default_value
             .as_ref()
             .map(|bytes| String::from_utf8(bytes.clone()).unwrap())
+    }
+
+    #[test]
+    fn device_source_survives_database_roundtrip_without_disabling_deployment() {
+        use sea_orm::TryIntoModel;
+
+        let mut event = event_with(HashMap::new());
+        assert!(super::super::ensure_source_execution_allowed(&event).is_ok());
+        event.set_device_source().unwrap();
+        let mut row = event_to_db_model("app-1", &event);
+        row.setup_status = Set(None);
+        row.last_setup_at = Set(None);
+        row.last_setup_version = Set(None);
+        row.last_setup_error = Set(None);
+        let restored = db_model_to_event(row.try_into_model().unwrap()).unwrap();
+
+        assert!(restored.active);
+        assert!(restored.is_device_source());
+        assert!(super::super::ensure_source_execution_allowed(&restored).is_err());
     }
 
     /// The round trip that used to erase secrets: read blanks the value, so the

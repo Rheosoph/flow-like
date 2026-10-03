@@ -12,7 +12,10 @@ use axum::http::StatusCode;
 use flow_like_types::dispatch::{CompilationResult, CompilationStatus};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    ActiveModelTrait,
+    ActiveValue::{NotSet, Set},
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, TransactionTrait,
+    UpdateMany,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -54,6 +57,10 @@ pub async fn handle_compilation_callback(
     if claims.job_id != result.job_id
         || claims.package_id != result.package_id
         || claims.version != result.version
+        || claims
+            .artifact_generation
+            .as_deref()
+            .is_some_and(|generation| generation != claims.job_id)
     {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -116,20 +123,29 @@ pub async fn handle_compilation_callback(
     let supported_wasmtime_versions = version_record.supported_wasmtime_versions.clone();
 
     let mut update = wasm_package_version::ActiveModel {
-        id: Set(version_record.id),
+        id: Set(version_record.id.clone()),
         compilation_status: Set(compilation_status),
         compiled_platforms: Set(platforms.map(Into::into)),
         compilation_error: Set(error),
+        compiled_artifact_generation: Set(if compiled_ok {
+            claims.artifact_generation.clone()
+        } else {
+            None
+        }),
         ..Default::default()
     };
 
-    if let Some(ref nodes) = nodes {
+    if compiled_ok && let Some(ref nodes) = nodes {
         update.nodes = Set(nodes.clone());
     }
 
     if compiled_ok {
         update.supported_wasmtime_versions = Set(Some(
-            with_current_wasmtime_version(supported_wasmtime_versions.map(Into::into)).into(),
+            supported_versions_for_publication(
+                supported_wasmtime_versions.map(Into::into),
+                claims.artifact_generation.as_deref(),
+            )
+            .into(),
         ));
     }
 
@@ -145,7 +161,19 @@ pub async fn handle_compilation_callback(
         update.approved_at = Set(Some(now));
     }
 
-    update.update(db.as_ref()).await.map_err(|e| {
+    // Publish the generation and its package metadata together. A failed
+    // metadata write rolls back the generation so a callback retry can repair it.
+    let transaction = db.begin().await.map_err(|e| {
+        callback_write_error(format!("Failed to begin compilation publication: {e}"))
+    })?;
+    let published = publication_update(
+        update,
+        &version_record.id,
+        claims.artifact_generation.as_deref(),
+    )
+    .exec(&transaction)
+    .await
+    .map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(CallbackResponse {
@@ -154,6 +182,18 @@ pub async fn handle_compilation_callback(
             }),
         )
     })?;
+    if published.rows_affected == 0 {
+        transaction.commit().await.map_err(|e| {
+            callback_write_error(format!(
+                "Failed to finish duplicate compilation callback: {e}"
+            ))
+        })?;
+        tracing::info!(job_id = %result.job_id, "Ignoring callback for an already published generation");
+        return Ok(Json(CallbackResponse {
+            ok: true,
+            error: None,
+        }));
+    }
 
     // The store lists capabilities from the compiled nodes, so they follow the
     // node definitions onto the package row.
@@ -184,13 +224,9 @@ pub async fn handle_compilation_callback(
         if let Some(ref permissions) = derived_permissions {
             pkg_update.permissions = Set(permissions.clone());
         }
-        if let Err(e) = pkg_update.update(db.as_ref()).await {
-            tracing::warn!(
-                package_id = %result.package_id,
-                error = %e,
-                "Failed to promote version to parent package"
-            );
-        }
+        pkg_update.update(&transaction).await.map_err(|e| {
+            callback_write_error(format!("Failed to promote version to parent package: {e}"))
+        })?;
     } else if compiled_ok
         && let (Some(pkg), Some(nodes)) = (&package, &nodes)
         && pkg.version == result.version
@@ -208,7 +244,7 @@ pub async fn handle_compilation_callback(
         update
             .filter(wasm_package::Column::Id.eq(&result.package_id))
             .filter(wasm_package::Column::Version.eq(&result.version))
-            .exec(db.as_ref())
+            .exec(&transaction)
             .await
             .map_err(|e| {
                 (
@@ -220,6 +256,9 @@ pub async fn handle_compilation_callback(
                 )
             })?;
     }
+    transaction.commit().await.map_err(|e| {
+        callback_write_error(format!("Failed to commit compilation publication: {e}"))
+    })?;
 
     tracing::info!(
         job_id = %result.job_id,
@@ -233,4 +272,166 @@ pub async fn handle_compilation_callback(
         ok: true,
         error: None,
     }))
+}
+
+fn callback_write_error(message: String) -> (StatusCode, Json<CallbackResponse>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(CallbackResponse {
+            ok: false,
+            error: Some(message),
+        }),
+    )
+}
+
+fn supported_versions_for_publication(
+    existing: Option<Vec<String>>,
+    generation: Option<&str>,
+) -> Vec<String> {
+    // A generation contains only this job's targets. Older engine artifacts
+    // remain under their previous paths and are not part of this publication.
+    with_current_wasmtime_version(if generation.is_some() { None } else { existing })
+}
+
+fn publication_update(
+    mut update: wasm_package_version::ActiveModel,
+    version_id: &str,
+    generation: Option<&str>,
+) -> UpdateMany<wasm_package_version::Entity> {
+    let failed = matches!(
+        update.compilation_status,
+        Set(WasmCompilationStatus::LocalOnly)
+    );
+    if failed {
+        // A failed replacement must leave the last successful publication
+        // addressable. Read these fields in the mutation, since another
+        // callback may publish after this handler reads the version row.
+        update.compiled_artifact_generation = NotSet;
+        update.compilation_status = NotSet;
+        update.compiled_platforms = NotSet;
+        update.nodes = NotSet;
+    }
+    update.id = NotSet;
+    let mut query = wasm_package_version::Entity::update_many()
+        .set(update)
+        .filter(wasm_package_version::Column::Id.eq(version_id));
+    if failed {
+        use wasm_package_version::Column;
+        query = query
+            .col_expr(
+                Column::CompilationStatus,
+                Column::CompilationStatus.save_as(Expr::expr(
+                    Expr::case(
+                        Column::CompiledArtifactGeneration.is_not_null(),
+                        Expr::value(WasmCompilationStatus::Compiled),
+                    )
+                    .finally(Expr::value(WasmCompilationStatus::LocalOnly)),
+                )),
+            )
+            .col_expr(
+                Column::CompiledPlatforms,
+                Column::CompiledPlatforms.save_as(Expr::expr(
+                    Expr::case(
+                        Column::CompiledArtifactGeneration.is_not_null(),
+                        Expr::col(Column::CompiledPlatforms),
+                    )
+                    .finally(Expr::value(serde_json::json!([]))),
+                )),
+            );
+    }
+    if let Some(generation) = generation {
+        // A retry may have read Pending before another callback published.
+        // Check in the mutation so it cannot replace those nodes or fail that
+        // generation after publication, including while a newer job is Pending.
+        // Different jobs retain the existing callback arrival ordering.
+        query = query.filter(
+            Condition::any()
+                .add(wasm_package_version::Column::CompiledArtifactGeneration.is_null())
+                .add(wasm_package_version::Column::CompiledArtifactGeneration.ne(generation)),
+        );
+    }
+    query
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+    use sea_orm::{DatabaseBackend, QueryTrait};
+
+    #[test]
+    fn generation_publication_replaces_engine_support_while_legacy_preserves_it() {
+        let current = flow_like_wasm_schema::runtime::WASMTIME_MAJOR_VERSION.to_string();
+        let previous = (current.parse::<u32>().unwrap() - 1).to_string();
+        let existing = Some(vec![previous.clone(), current.clone()]);
+
+        assert_eq!(
+            supported_versions_for_publication(existing.clone(), Some("new-job")),
+            vec![current.clone()],
+        );
+        assert_eq!(
+            supported_versions_for_publication(existing, None),
+            vec![previous, current.clone()],
+        );
+        assert_eq!(
+            supported_versions_for_publication(None, Some("first-job")),
+            vec![current],
+        );
+    }
+
+    #[test]
+    fn successful_and_failed_retries_guard_publication_in_the_database_write() {
+        for status in [
+            WasmCompilationStatus::Compiled,
+            WasmCompilationStatus::LocalOnly,
+        ] {
+            let update = wasm_package_version::ActiveModel {
+                compilation_status: Set(status),
+                nodes: Set(serde_json::json!([{"name": "retry-node"}])),
+                ..Default::default()
+            };
+            let sql = publication_update(update, "version-row", Some("published-job"))
+                .build(DatabaseBackend::Postgres)
+                .to_string();
+            let (_, predicate) = sql.split_once(" WHERE ").unwrap();
+            assert!(predicate.contains("\"id\" = 'version-row'"));
+            assert!(predicate.contains("\"compiledArtifactGeneration\" IS NULL"));
+            assert!(predicate.contains(" OR "));
+            assert!(predicate.contains("\"compiledArtifactGeneration\" <> 'published-job'"));
+        }
+    }
+
+    #[test]
+    fn legacy_callback_keeps_its_original_publication_behavior() {
+        let update = wasm_package_version::ActiveModel {
+            compilation_status: Set(WasmCompilationStatus::Compiled),
+            ..Default::default()
+        };
+        let sql = publication_update(update, "version-row", None)
+            .build(DatabaseBackend::Postgres)
+            .to_string();
+        let (_, predicate) = sql.split_once(" WHERE ").unwrap();
+        assert!(predicate.contains("\"id\" = 'version-row'"));
+        assert!(!predicate.contains("compiledArtifactGeneration"));
+    }
+
+    #[test]
+    fn failed_recompile_preserves_published_generation_and_nodes_atomically() {
+        let update = wasm_package_version::ActiveModel {
+            compilation_status: Set(WasmCompilationStatus::LocalOnly),
+            compiled_artifact_generation: Set(None),
+            compiled_platforms: Set(Some(Default::default())),
+            compilation_error: Set(Some("replacement failed".into())),
+            nodes: Set(serde_json::json!([{"name": "failed-job-node"}])),
+            ..Default::default()
+        };
+        let sql = publication_update(update, "version-row", Some("new-job"))
+            .build(DatabaseBackend::Postgres)
+            .to_string();
+        let (assignments, _) = sql.split_once(" WHERE ").unwrap();
+        assert!(assignments.contains("CASE WHEN (\"WasmPackageVersion\".\"compiledArtifactGeneration\" IS NOT NULL) THEN 'COMPILED' ELSE 'LOCAL_ONLY' END"));
+        assert!(assignments.contains("THEN \"compiledPlatforms\""));
+        assert!(!assignments.contains("\"compiledArtifactGeneration\" ="));
+        assert!(!assignments.contains("\"nodes\" ="));
+        assert!(assignments.contains("replacement failed"));
+    }
 }

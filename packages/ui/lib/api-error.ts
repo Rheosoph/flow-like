@@ -9,6 +9,7 @@ export interface ApiResponseErrorOptions {
 	errorId?: string;
 	path?: string;
 	quota?: QuotaDetail;
+	retryAfter?: number;
 }
 
 const CAPABILITY_PATH_SEGMENTS = [
@@ -46,6 +47,8 @@ export class ApiResponseError extends Error {
 	/** The server's message without the `[CODE]` prefix — safe to show to users. */
 	readonly serverMessage: string;
 	readonly quota?: QuotaDetail;
+	/** How long the server asked the caller to wait before the next attempt, in seconds. */
+	readonly retryAfter?: number;
 
 	constructor(options: ApiResponseErrorOptions) {
 		const label = options.code || `HTTP_${options.status}`;
@@ -59,6 +62,7 @@ export class ApiResponseError extends Error {
 		this.path = options.path;
 		this.serverMessage = options.message;
 		this.quota = options.quota;
+		this.retryAfter = options.retryAfter;
 	}
 
 	toJSON() {
@@ -71,6 +75,7 @@ export class ApiResponseError extends Error {
 			errorId: this.errorId,
 			path: this.path,
 			quota: this.quota,
+			retryAfter: this.retryAfter,
 		};
 	}
 }
@@ -155,6 +160,22 @@ function nonEmptyString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/**
+ * The wait in seconds: the `Retry-After` header when it is a number of seconds,
+ * else the body's top-level `retry_after` (browsers hide the header from
+ * cross-origin callers unless the server exposes it).
+ */
+function retryAfterSeconds(
+	header: string | null,
+	body: unknown,
+): number | undefined {
+	const text = header?.trim();
+	if (text && /^\d{1,9}$/.test(text)) return Number(text);
+	return typeof body === "number" && Number.isFinite(body) && body >= 0
+		? body
+		: undefined;
+}
+
 export function apiResponseError(
 	response: Pick<Response, "status" | "statusText" | "headers">,
 	body: string,
@@ -164,6 +185,7 @@ export function apiResponseError(
 	let errorId: string | undefined;
 	let message: string | undefined;
 	let quota: QuotaDetail | undefined;
+	let bodyRetryAfter: unknown;
 
 	if (body) {
 		try {
@@ -179,6 +201,7 @@ export function apiResponseError(
 				typeof (quotaValue as QuotaDetail).resource === "string"
 			)
 				quota = quotaValue as QuotaDetail;
+			bodyRetryAfter = parsed.retry_after;
 			code = nonEmptyString(nested?.code) ?? nonEmptyString(parsed.code);
 			errorId = nonEmptyString(nested?.id) ?? nonEmptyString(parsed.id);
 			message =
@@ -214,6 +237,10 @@ export function apiResponseError(
 		errorId,
 		path,
 		quota,
+		retryAfter: retryAfterSeconds(
+			response.headers.get("retry-after"),
+			bodyRetryAfter,
+		),
 	});
 	if (typeof window !== "undefined" && isUpgradeRequiredError(error)) {
 		window.dispatchEvent(

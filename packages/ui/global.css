@@ -165,6 +165,50 @@
 	--tab-blue: oklch(0.58 0.16 255);
 	--tab-purple: oklch(0.56 0.19 295);
 	--tab-pink: oklch(0.62 0.2 350);
+
+	/* Status families: ink (text, icons) · bg (soft fill) · line (decorative border) · solid (bars, dots).
+	   Coral is never a status; critical is crimson + octagon + square corners (devices spec R2/R14). */
+	--good: oklch(0.5 0.125 152);
+	--good-bg: oklch(0.962 0.035 152);
+	--good-line: oklch(0.8 0.08 152);
+	--good-solid: oklch(0.56 0.14 152);
+	--warning: oklch(0.52 0.115 62);
+	--warning-bg: oklch(0.965 0.045 85);
+	--warning-line: oklch(0.83 0.1 80);
+	--warning-solid: oklch(0.66 0.145 66);
+	--critical: oklch(0.5 0.19 12);
+	--critical-bg: oklch(0.955 0.03 12);
+	--critical-line: oklch(0.8 0.09 12);
+	--critical-solid: oklch(0.52 0.2 12);
+	--info: oklch(0.5 0.14 255);
+	--info-bg: oklch(0.958 0.025 255);
+	--info-line: oklch(0.8 0.07 255);
+	--info-solid: oklch(0.56 0.16 255);
+	--unknown: oklch(0.52 0.018 285);
+	--unknown-bg: oklch(0.955 0.004 285);
+	--unknown-line: oklch(0.8 0.012 285);
+	--unknown-solid: oklch(0.64 0.015 285);
+	--paused: oklch(0.5 0.07 225);
+	--paused-bg: oklch(0.958 0.016 225);
+	--paused-line: oklch(0.8 0.04 225);
+	--paused-solid: oklch(0.6 0.07 225);
+	--locked: oklch(0.5 0.1 295);
+	--locked-bg: oklch(0.958 0.02 295);
+	--locked-line: oklch(0.8 0.06 295);
+	--locked-solid: oklch(0.58 0.12 295);
+	--ink-2: oklch(0.36 0.012 285);
+	--surface-sunken: oklch(0.975 0.004 55);
+	--row-hover: oklch(0.965 0.006 60);
+	--row-selected: oklch(0.94 0.012 55);
+	--hairline: oklch(0.925 0.008 54);
+	--border-strong: oklch(0.82 0.012 54);
+	--scrim: oklch(0.2 0.01 285 / 0.32);
+	--danger: oklch(0.52 0.2 12);
+	--danger-hover: oklch(0.47 0.19 12);
+	--danger-foreground: oklch(1 0 0);
+	--spark: oklch(0.42 0.035 262);
+	--spark-fill: oklch(0.42 0.035 262 / 0.1);
+	--lane-ok: oklch(0.64 0.015 285);
 }
 
 .dark,
@@ -274,6 +318,48 @@
 	--tab-blue: oklch(0.7 0.15 255);
 	--tab-purple: oklch(0.69 0.17 295);
 	--tab-pink: oklch(0.73 0.18 350);
+
+	--good: oklch(0.78 0.14 152);
+	--good-bg: oklch(0.26 0.045 152);
+	--good-line: oklch(0.42 0.08 152);
+	--good-solid: oklch(0.7 0.15 152);
+	--warning: oklch(0.83 0.13 80);
+	--warning-bg: oklch(0.275 0.05 75);
+	--warning-line: oklch(0.45 0.08 75);
+	--warning-solid: oklch(0.78 0.14 75);
+	--critical: oklch(0.74 0.16 12);
+	--critical-bg: oklch(0.265 0.065 12);
+	--critical-line: oklch(0.45 0.12 12);
+	--critical-solid: oklch(0.52 0.2 12);
+	--info: oklch(0.77 0.11 250);
+	--info-bg: oklch(0.26 0.045 250);
+	--info-line: oklch(0.43 0.08 250);
+	--info-solid: oklch(0.66 0.14 250);
+	--unknown: oklch(0.72 0.015 265);
+	--unknown-bg: oklch(0.25 0.01 265);
+	--unknown-line: oklch(0.4 0.015 265);
+	--unknown-solid: oklch(0.6 0.015 265);
+	--paused: oklch(0.76 0.07 215);
+	--paused-bg: oklch(0.26 0.03 215);
+	--paused-line: oklch(0.42 0.05 215);
+	--paused-solid: oklch(0.64 0.07 215);
+	--locked: oklch(0.76 0.09 295);
+	--locked-bg: oklch(0.26 0.04 295);
+	--locked-line: oklch(0.43 0.07 295);
+	--locked-solid: oklch(0.62 0.11 295);
+	--ink-2: oklch(0.84 0.01 260);
+	--surface-sunken: oklch(0.18 0.011 264);
+	--row-hover: oklch(0.225 0.012 262);
+	--row-selected: oklch(0.255 0.016 262);
+	--hairline: oklch(0.255 0.012 262);
+	--border-strong: oklch(0.36 0.014 262);
+	--scrim: oklch(0.05 0.02 260 / 0.6);
+	--danger: oklch(0.52 0.2 12);
+	--danger-hover: oklch(0.57 0.2 12);
+	--danger-foreground: oklch(1 0 0);
+	--spark: oklch(0.82 0.04 250);
+	--spark-fill: oklch(0.82 0.04 250 / 0.12);
+	--lane-ok: oklch(0.6 0.015 265);
 }
 
 .fl-chat-root {
@@ -730,6 +816,54 @@
 	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
 	--color-sidebar-border: var(--sidebar-border);
 	--color-sidebar-ring: var(--sidebar-ring);
+	--color-good: var(--good);
+	--color-good-bg: var(--good-bg);
+	--color-good-line: var(--good-line);
+	--color-good-solid: var(--good-solid);
+	--color-warning: var(--warning);
+	--color-warning-bg: var(--warning-bg);
+	--color-warning-line: var(--warning-line);
+	--color-warning-solid: var(--warning-solid);
+	--color-critical: var(--critical);
+	--color-critical-bg: var(--critical-bg);
+	--color-critical-line: var(--critical-line);
+	--color-critical-solid: var(--critical-solid);
+	--color-info: var(--info);
+	--color-info-bg: var(--info-bg);
+	--color-info-line: var(--info-line);
+	--color-info-solid: var(--info-solid);
+	--color-unknown: var(--unknown);
+	--color-unknown-bg: var(--unknown-bg);
+	--color-unknown-line: var(--unknown-line);
+	--color-unknown-solid: var(--unknown-solid);
+	--color-paused: var(--paused);
+	--color-paused-bg: var(--paused-bg);
+	--color-paused-line: var(--paused-line);
+	--color-paused-solid: var(--paused-solid);
+	--color-locked: var(--locked);
+	--color-locked-bg: var(--locked-bg);
+	--color-locked-line: var(--locked-line);
+	--color-locked-solid: var(--locked-solid);
+	--color-ink-2: var(--ink-2);
+	--color-surface-sunken: var(--surface-sunken);
+	--color-row-hover: var(--row-hover);
+	--color-row-selected: var(--row-selected);
+	--color-hairline: var(--hairline);
+	--color-border-strong: var(--border-strong);
+	--color-scrim: var(--scrim);
+	--color-danger: var(--danger);
+	--color-danger-hover: var(--danger-hover);
+	--color-danger-foreground: var(--danger-foreground);
+	--color-spark: var(--spark);
+	--color-spark-fill: var(--spark-fill);
+	--color-lane-ok: var(--lane-ok);
+
+	--text-ui: 13px;
+	--text-ui--line-height: 18px;
+	--text-label: 11px;
+	--text-label--line-height: 14px;
+	--text-headline: 18px;
+	--text-headline--line-height: 26px;
 
 	--font-sans: var(--font-sans);
 	--font-mono: var(--font-mono);

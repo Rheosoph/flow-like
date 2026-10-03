@@ -1,22 +1,39 @@
 "use client";
 
-import { Trans, useTranslation } from "@flow-like/locales";
-import { Loader2Icon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useTranslation } from "@flow-like/locales";
+import {
+	Check,
+	Cloud,
+	Info,
+	Loader2,
+	Monitor,
+	Server,
+	Zap,
+} from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { IOAuthConsentStore } from "../../db/oauth-db";
-import { useInvoke } from "../../hooks";
+import { useInvoke } from "../../hooks/use-invoke";
 import type { IEvent, IOAuthProvider, IOAuthToken } from "../../lib";
+import { eventKind } from "../../lib/device-management/deployment";
 import {
 	isServerOnlyEventType,
 	serverEventBlocker,
 	serverEventBlockerMessage,
 	sinkSupportsEventExecution,
 } from "../../lib/event-definitions";
+import { getEventSections, isTriggerSection } from "../../lib/event-sections";
+import {
+	eventTriggerConfig,
+	mergeEventTriggerConfig,
+} from "../../lib/event-source";
 import { formatEventTypeLabel } from "../../lib/event-type-label";
 import { checkOAuthTokens } from "../../lib/oauth/helpers";
-import type { IOAuthTokenStoreWithPending } from "../../lib/oauth/types";
-import type { IStoredOAuthToken } from "../../lib/oauth/types";
-import { asArray, isRecord } from "../../lib/response-shape";
+import type {
+	IOAuthTokenStoreWithPending,
+	IStoredOAuthToken,
+} from "../../lib/oauth/types";
+import { asArray } from "../../lib/response-shape";
+import { normalizeRoutePath } from "../../lib/route-path";
 import { IExecutionMode } from "../../lib/schema/flow/board";
 import {
 	type BoardVersion,
@@ -27,13 +44,18 @@ import {
 	IEventExposure,
 } from "../../lib/schema/flow/event";
 import type { IHub } from "../../lib/schema/hub/hub";
-import { convertJsonToUint8Array } from "../../lib/uint8";
+import {
+	convertJsonToUint8Array,
+	parseUint8ArrayToJson,
+} from "../../lib/uint8";
+import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
-import type { PageListItem } from "../../state/backend-state/page-state";
-import type { IEventMapping } from "../interfaces";
+import type { IEventMapping } from "../interfaces/interfaces";
 import { OAuthConsentDialog } from "../oauth/oauth-consent-dialog";
+import type { DeviceWorkspaceOverrides } from "../settings/devices/workspace/device-workspace-provider";
+import { NewEventDeployment } from "../settings/events/new-event-deployment";
 import { Button } from "./button";
-import { EventTypeConfig } from "./event-type-config";
+import { EventStartPicker, type EventStartTarget } from "./event-start-picker";
 import { Input } from "./input";
 import { Label } from "./label";
 import {
@@ -43,36 +65,36 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "./select";
-import { Separator } from "./separator";
 import { Textarea } from "./textarea";
 
 interface EventFormProps {
+	deviceWorkspaceOverrides?: DeviceWorkspaceOverrides;
+	deviceEventId?: string;
 	event?: IEvent;
 	eventConfig: IEventMapping;
-	/** Optional list of event types that should be treated as UI-capable and require a unique route path. */
 	uiEventTypes?: string[];
 	appId: string;
 	onSubmit: (
 		event: Partial<IEvent>,
 		oauthTokens?: Record<string, IOAuthToken>,
-	) => void;
+	) => void | Promise<void>;
+	onCreateDevice?: (event: Partial<IEvent>) => Promise<IEvent>;
+	onDeploymentComplete?: (event: IEvent) => void;
+	onNavigateDeployment?: (href: string) => void;
+	onBusyChange?: (busy: boolean) => void;
 	onCancel: () => void;
 	isSubmitting?: boolean;
-	/** Token store for OAuth checks. If not provided, OAuth checks are skipped. */
 	tokenStore?: IOAuthTokenStoreWithPending;
-	/** Consent store for OAuth consent tracking. */
 	consentStore?: IOAuthConsentStore;
-	/** Hub configuration for OAuth provider resolution */
 	hub?: IHub;
-	/** Callback to start OAuth authorization for a provider */
 	onStartOAuth?: (provider: IOAuthProvider) => Promise<void>;
-	/** Optional callback to refresh expired tokens */
 	onRefreshToken?: (
 		provider: IOAuthProvider,
 		token: IStoredOAuthToken,
 	) => Promise<IStoredOAuthToken>;
 }
 
+type Destination = "computer" | "hub" | "device";
 interface EventFormData {
 	name: string;
 	description: string;
@@ -89,11 +111,17 @@ interface EventFormData {
 }
 
 export function EventForm({
+	deviceWorkspaceOverrides,
+	deviceEventId,
 	eventConfig,
 	uiEventTypes,
 	appId,
 	event,
 	onSubmit,
+	onCreateDevice,
+	onDeploymentComplete,
+	onNavigateDeployment,
+	onBusyChange,
 	onCancel,
 	isSubmitting = false,
 	tokenStore,
@@ -104,27 +132,40 @@ export function EventForm({
 }: Readonly<EventFormProps>) {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
-	const inferredDefaultPageId = event?.default_page_id;
+	const formId = useId();
+	const formRef = useRef<HTMLFormElement>(null);
+	const [footerContainer, setFooterContainer] = useState<HTMLDivElement | null>(
+		null,
+	);
+	const canExecuteLocally = backend.capabilities().canExecuteLocally;
+	const [destination, setDestination] = useState<Destination>(
+		onCreateDevice ? "device" : canExecuteLocally ? "computer" : "hub",
+	);
+	const [deploymentBusy, setDeploymentBusy] = useState(false);
+	const [deploymentSaved, setDeploymentSaved] = useState(false);
+	const [checkingOAuth, setCheckingOAuth] = useState(false);
+	const [submitError, setSubmitError] = useState<string | null>(null);
+	const [configSection, setConfigSection] = useState<string | undefined>();
 	const [formData, setFormData] = useState<EventFormData>({
 		name: event?.name ?? "",
 		description: event?.description ?? "",
 		board_version: normalizeBoardVersion(event?.board_version),
 		node_id: event?.node_id ?? "",
 		board_id: event?.board_id ?? "",
-		default_page_id: inferredDefaultPageId ?? undefined,
-		target_kind: inferredDefaultPageId ? ("page" as const) : ("board" as const),
+		default_page_id: event?.default_page_id ?? undefined,
+		target_kind: event?.default_page_id ? "page" : "board",
 		event_type: event?.event_type,
 		config: event?.config ?? [],
-		path: typeof event?.path === "string" ? event.path : "/",
-		execution_mode:
-			(event?.execution_mode as IEventExecutionMode | undefined) ??
-			IEventExecutionMode.Local,
-		exposure:
-			(event?.exposure as IEventExposure | undefined) ?? IEventExposure.Public,
+		path:
+			typeof event?.route === "string"
+				? event.route
+				: typeof event?.path === "string"
+					? event.path
+					: "/",
+		execution_mode: event?.execution_mode ?? IEventExecutionMode.Local,
+		exposure: event?.exposure ?? IEventExposure.Public,
 	});
 	const [pathError, setPathError] = useState<string | null>(null);
-
-	// OAuth consent dialog state
 	const [showOAuthConsent, setShowOAuthConsent] = useState(false);
 	const [missingProviders, setMissingProviders] = useState<IOAuthProvider[]>(
 		[],
@@ -138,140 +179,237 @@ export function EventForm({
 	const [pendingOAuthTokens, setPendingOAuthTokens] = useState<
 		Record<string, IOAuthToken>
 	>({});
-
-	const boards = useInvoke(
-		backend.boardState.getBoardSummaries,
-		backend.boardState,
-		[appId],
-	);
-	const pages = useInvoke(
-		backend.pageState.getPages,
-		backend.pageState,
-		[appId],
-		appId !== "",
-	);
+	const offline = useInvoke(backend.isOffline, backend, [appId], !!appId);
 	const routes = useInvoke(
 		backend.routeState.getRoutes,
 		backend.routeState,
 		[appId],
-		appId !== "",
+		!!appId,
 	);
 	const board = useInvoke(
 		backend.boardState.getBoard,
 		backend.boardState,
 		[appId, formData.board_id, formData.board_version],
-		(formData.board_id ?? "") !== "",
+		!!formData.board_id,
 	);
-
 	const versions = useInvoke(
 		backend.boardState.getBoardVersions,
 		backend.boardState,
 		[appId, formData.board_id],
-		(formData.board_id ?? "") !== "",
+		!!formData.board_id,
 	);
-
-	const [selectedNodeType, setSelectedNodeType] = useState<string>("");
-	const [eventTypeConfig, setEventTypeConfig] = useState<
-		Record<string, unknown>
-	>({});
-
+	const node = board.data?.nodes?.[formData.node_id ?? ""];
+	const mapping = node ? eventConfig[node.name] : undefined;
 	const boardExecutionMode = board.data?.execution_mode;
-	const canExecuteLocally = backend.capabilities().canExecuteLocally;
-	const offline = useInvoke(backend.isOffline, backend, [appId], !!appId);
 	const isServerEvent = isServerOnlyEventType(formData.event_type);
 	const serverBlocker = serverEventBlocker(offline.data, boardExecutionMode);
 	const serverEventError =
 		isServerEvent && serverBlocker
 			? serverEventBlockerMessage(t, serverBlocker, formData.event_type ?? "")
 			: undefined;
-	const serverEventChecking = isServerEvent && offline.isLoading;
-
-	// Lock the event's execution mode when the board constrains it. Boards in
-	// Hybrid mode let the user pick; Local/Remote boards propagate to events.
-	useEffect(() => {
-		if (!boardExecutionMode) return;
-		if (boardExecutionMode === IExecutionMode.Local) {
-			if (formData.execution_mode !== IEventExecutionMode.Local) {
-				setFormData((prev) => ({
-					...prev,
-					execution_mode: IEventExecutionMode.Local,
-				}));
-			}
-		} else if (boardExecutionMode === IExecutionMode.Remote || isServerEvent) {
-			if (formData.execution_mode !== IEventExecutionMode.Remote) {
-				setFormData((prev) => ({
-					...prev,
-					execution_mode: IEventExecutionMode.Remote,
-				}));
-			}
-		}
-	}, [boardExecutionMode, formData.execution_mode, isServerEvent]);
-
-	const executionModeLocked =
-		boardExecutionMode === IExecutionMode.Local ||
-		boardExecutionMode === IExecutionMode.Remote;
-
-	// Local is disabled only when the device can't execute locally; Remote
-	// is always a valid choice (the backend rejects unsupported hub setups).
-	const canPickLocal = canExecuteLocally;
-
-	const normalizedPath = (path: string | undefined): string => {
-		const raw = (path ?? "").trim();
-		if (!raw) return "/";
-		const withoutQuery = raw.split("?")[0] ?? raw;
-		if (!withoutQuery || withoutQuery === "/") return "/";
-		return withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
-	};
-
-	const isUiEventType = (eventType: string | undefined): boolean => {
-		if (!eventType) return false;
-		if (!uiEventTypes || uiEventTypes.length === 0) return false;
-		return uiEventTypes.includes(eventType);
-	};
-
+	const isPageEvent = formData.target_kind === "page";
 	const shouldRequireRoutePath =
-		formData.target_kind === "page" || isUiEventType(formData.event_type);
-
+		isPageEvent || !!uiEventTypes?.includes(formData.event_type ?? "");
+	const config = useMemo(
+		() => parseUint8ArrayToJson(eventTriggerConfig(formData.config)) ?? {},
+		[formData.config],
+	);
+	const triggerLabels: Record<string, string> = {
+		quick_action: t("eventCreation.quickAction", "Quick action"),
+		api: t("eventCreation.apiEndpoint", "API endpoint"),
+		cron: t("eventCreation.schedule", "Schedule"),
+		daemon: t("eventCreation.backgroundService", "Background service"),
+		deeplink: t("eventCreation.deepLink", "Deep link"),
+		rest: t("eventCreation.restServer", "REST server"),
+		mcp: t("eventCreation.mcpServer", "MCP server"),
+	};
+	const triggerLabel = (type: string) =>
+		triggerLabels[type] ?? formatEventTypeLabel(type);
+	const typeLabel = formData.event_type
+		? triggerLabel(formData.event_type)
+		: t("event", "Event");
+	const deviceSupported =
+		!formData.event_type ||
+		eventKind({
+			event_type: formData.event_type,
+			default_page_id: formData.default_page_id,
+		}) !== null;
+	const supportsDestination = (target: Destination) => {
+		if (target === "device") return !!onCreateDevice && deviceSupported;
+		if (
+			target === "computer" &&
+			(!canExecuteLocally ||
+				boardExecutionMode === IExecutionMode.Remote ||
+				isServerEvent)
+		)
+			return false;
+		if (
+			target === "hub" &&
+			(offline.data !== false || boardExecutionMode === IExecutionMode.Local)
+		)
+			return false;
+		if (mapping?.withSink.includes(formData.event_type ?? "")) {
+			const mode =
+				target === "computer"
+					? IEventExecutionMode.Local
+					: IEventExecutionMode.Remote;
+			if (
+				!sinkSupportsEventExecution(
+					mapping.sinkAvailability?.[formData.event_type ?? ""],
+					mode,
+					canExecuteLocally,
+				)
+			)
+				return false;
+			if (
+				target === "hub" &&
+				isServerEvent &&
+				hub &&
+				hub.supported_sinks?.[formData.event_type ?? ""] !== true
+			)
+				return false;
+		}
+		return true;
+	};
+	const destinationAvailable = supportsDestination(destination);
+	const busy = isSubmitting || checkingOAuth || deploymentBusy;
+	const locked = busy || deploymentSaved;
+	const availableTriggers = isPageEvent
+		? ["page"]
+		: (mapping?.eventTypes ?? (node?.start ? ["default"] : []));
+	const validTrigger = availableTriggers.includes(formData.event_type ?? "");
+	const validTarget =
+		!!formData.board_id &&
+		(isPageEvent ? !!formData.default_page_id : !!node?.start);
+	const canSubmit =
+		!!formData.name.trim() &&
+		validTarget &&
+		validTrigger &&
+		!!formData.event_type &&
+		destinationAvailable &&
+		!serverEventError &&
+		!board.isLoading &&
+		!board.isError &&
+		(!shouldRequireRoutePath || routes.isSuccess) &&
+		!(isServerEvent && offline.isLoading);
+	useEffect(() => {
+		onBusyChange?.(busy);
+	}, [busy, onBusyChange]);
+	useEffect(() => {
+		if (deploymentBusy || deploymentSaved) return;
+		const mode =
+			destination === "hub" || boardExecutionMode === IExecutionMode.Remote
+				? IEventExecutionMode.Remote
+				: IEventExecutionMode.Local;
+		setFormData((previous) =>
+			previous.execution_mode === mode
+				? previous
+				: { ...previous, execution_mode: mode },
+		);
+	}, [destination, boardExecutionMode, deploymentBusy, deploymentSaved]);
+	useEffect(() => {
+		if (deploymentBusy || deploymentSaved || !isServerEvent || serverBlocker)
+			return;
+		setDestination("hub");
+	}, [isServerEvent, serverBlocker, deploymentBusy, deploymentSaved]);
 	function handleInputChange<K extends keyof EventFormData>(
 		field: K,
 		value: EventFormData[K],
 	) {
-		setFormData((prev) => ({ ...prev, [field]: value }));
+		setSubmitError(null);
+		setFormData((previous) => ({
+			...previous,
+			[field]:
+				field === "config"
+					? mergeEventTriggerConfig(previous.config, value as number[])
+					: value,
+		}));
 	}
-
+	function selectTarget(target: EventStartTarget) {
+		const nextMapping = eventConfig[target.nodeType ?? ""];
+		const type = target.pageId
+			? "page"
+			: (nextMapping?.defaultEventType ?? "default");
+		setPathError(null);
+		setConfigSection(undefined);
+		setSubmitError(null);
+		setFormData((previous) => ({
+			...previous,
+			board_id: target.boardId,
+			node_id: target.nodeId,
+			default_page_id: target.pageId,
+			board_version: target.boardVersion,
+			target_kind: target.pageId ? "page" : "board",
+			event_type: type,
+			config: convertJsonToUint8Array(nextMapping?.configs[type] ?? {}) ?? [],
+			name: previous.name || target.name,
+		}));
+	}
+	function selectType(type: string) {
+		setConfigSection(undefined);
+		setPathError(null);
+		setFormData((previous) => ({
+			...previous,
+			event_type: type,
+			config: convertJsonToUint8Array(mapping?.configs[type] ?? {}) ?? [],
+		}));
+	}
+	function buildEventData(): Partial<IEvent> {
+		const { target_kind, path, ...data } = formData;
+		return {
+			...data,
+			name: data.name.trim(),
+			config: eventTriggerConfig(data.config),
+			...(shouldRequireRoutePath
+				? { path: normalizeRoutePath(path), route: normalizeRoutePath(path) }
+				: {}),
+			variables: event?.variables ?? {},
+		};
+	}
+	function validate(): boolean {
+		if (!canSubmit || !formRef.current?.reportValidity()) return false;
+		if (shouldRequireRoutePath) {
+			if (routes.isLoading || routes.isError) {
+				setPathError(
+					t(
+						"routeCheckUnavailable",
+						"Wait for route availability to load, then try again.",
+					),
+				);
+				return false;
+			}
+			if (
+				asArray(routes.data).some(
+					(route) =>
+						normalizeRoutePath(route.path) ===
+							normalizeRoutePath(formData.path) &&
+						(destination !== "device" || route.eventId !== deviceEventId),
+				)
+			) {
+				setPathError(
+					t("routeAlreadyUsed", "This path is already used by another route."),
+				);
+				return false;
+			}
+		}
+		setPathError(null);
+		return true;
+	}
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
-		if (serverEventError || serverEventChecking) return;
-
-		// Validate route path for UI events
-		if (shouldRequireRoutePath) {
-			const path = normalizedPath(formData.path);
-			if (!path.startsWith("/")) {
-				setPathError("Path must start with '/'");
-				return;
-			}
-			const existing = asArray(routes.data).find((r) => {
-				if (normalizedPath(r.path) !== path) return false;
-				if (event?.id && r.eventId === event.id) return false;
-				return true;
-			});
-			if (existing) {
-				setPathError("This path is already used by another route");
-				return;
-			}
-			setPathError(null);
+		if (locked || destination === "device" || !validate()) return;
+		setCheckingOAuth(true);
+		setSubmitError(null);
+		try {
+			await submitToSource();
+		} catch (error) {
+			setSubmitError(error instanceof Error ? error.message : String(error));
+		} finally {
+			setCheckingOAuth(false);
 		}
-
-		if (formData.target_kind === "page") {
-			if (!formData.default_page_id) return;
-		}
-
-		const eventData: Partial<IEvent> = {
-			...formData,
-			variables: event?.variables || {},
-			...(selectedNodeType && { eventTypeConfig }),
-		};
-
+	};
+	const submitToSource = async () => {
+		const eventData = buildEventData();
 		// Check OAuth requirements if tokenStore is provided and board is loaded
 		if (tokenStore && board.data) {
 			const oauthResult = await checkOAuthTokens(board.data, tokenStore, hub, {
@@ -312,13 +450,13 @@ export function EventForm({
 
 				// All OAuth is satisfied, pass tokens
 				if (Object.keys(oauthResult.tokens).length > 0) {
-					onSubmit(eventData, oauthResult.tokens);
+					await onSubmit(eventData, oauthResult.tokens);
 					return;
 				}
 			}
 		}
 
-		onSubmit(eventData);
+		await onSubmit(eventData);
 	};
 
 	const handleOAuthAuthorize = async (providerId: string) => {
@@ -328,42 +466,47 @@ export function EventForm({
 	};
 
 	const handleOAuthConfirmAll = async (rememberConsent: boolean) => {
-		if (rememberConsent && consentStore) {
-			for (const provider of missingProviders) {
-				await consentStore.setConsent(appId, provider.id, provider.scopes);
-			}
-		}
-
-		setShowOAuthConsent(false);
-
-		const eventData: Partial<IEvent> = {
-			...formData,
-			variables: event?.variables || {},
-			...(selectedNodeType && { eventTypeConfig }),
-		};
-
-		// Collect all tokens (pending + newly authorized)
-		const allTokens = { ...pendingOAuthTokens };
-		for (const providerId of authorizedProviders) {
-			if (tokenStore) {
-				const token = await tokenStore.getToken(providerId);
-				if (token && !tokenStore.isExpired(token)) {
-					allTokens[providerId] = {
-						access_token: token.access_token,
-						refresh_token: token.refresh_token,
-						expires_at: token.expires_at
-							? Math.floor(token.expires_at / 1000)
-							: undefined,
-						token_type: token.token_type ?? "Bearer",
-					};
+		if (busy || !validate()) return;
+		setCheckingOAuth(true);
+		setSubmitError(null);
+		try {
+			if (rememberConsent && consentStore) {
+				for (const provider of missingProviders) {
+					await consentStore.setConsent(appId, provider.id, provider.scopes);
 				}
 			}
-		}
 
-		if (Object.keys(allTokens).length > 0) {
-			onSubmit(eventData, allTokens);
-		} else {
-			onSubmit(eventData);
+			setShowOAuthConsent(false);
+
+			const eventData = buildEventData();
+
+			// Collect all tokens (pending + newly authorized)
+			const allTokens = { ...pendingOAuthTokens };
+			for (const providerId of authorizedProviders) {
+				if (tokenStore) {
+					const token = await tokenStore.getToken(providerId);
+					if (token && !tokenStore.isExpired(token)) {
+						allTokens[providerId] = {
+							access_token: token.access_token,
+							refresh_token: token.refresh_token,
+							expires_at: token.expires_at
+								? Math.floor(token.expires_at / 1000)
+								: undefined,
+							token_type: token.token_type ?? "Bearer",
+						};
+					}
+				}
+			}
+
+			if (Object.keys(allTokens).length > 0) {
+				await onSubmit(eventData, allTokens);
+			} else {
+				await onSubmit(eventData);
+			}
+		} catch (error) {
+			setSubmitError(error instanceof Error ? error.message : String(error));
+		} finally {
+			setCheckingOAuth(false);
 		}
 	};
 
@@ -426,452 +569,533 @@ export function EventForm({
 		pendingOAuthTokens,
 	]);
 
-	const isEditing = !!event;
-	const isPageEvent = formData.target_kind === "page";
-
-	const handleSelectPage = (pageId: string) => {
-		setPathError(null);
-		const page = asArray(pages.data).find(
-			(p: PageListItem) => p.pageId === pageId,
-		);
-		handleInputChange("default_page_id", pageId);
-		handleInputChange("event_type", "page");
-		handleInputChange("node_id", "");
-		handleInputChange("board_version", undefined);
-		setSelectedNodeType("");
-		setEventTypeConfig({});
-		handleInputChange("board_id", page?.boardId ?? "");
-	};
-
-	const boardVersionSelector = formData.board_id ? (
-		<div className="space-y-2">
-			<Label>{t("flowVersion", "Flow Version")}</Label>
-			<Select
-				value={formData.board_version?.join(".") ?? "latest"}
-				onValueChange={(value) => {
-					handleInputChange(
-						"board_version",
-						value === "latest"
-							? undefined
-							: normalizeBoardVersion(value.split(".").map(Number)),
-					);
-					if (!isPageEvent) handleInputChange("node_id", undefined);
-				}}
-			>
-				<SelectTrigger>
-					<SelectValue />
-				</SelectTrigger>
-				<SelectContent>
-					<SelectItem value="latest">{t("latest", "Latest")}</SelectItem>
-					{asArray(versions.data).map((version) => (
-						<SelectItem key={version.join(".")} value={version.join(".")}>
-							v{version.join(".")}
-						</SelectItem>
-					))}
-				</SelectContent>
-			</Select>
-			<p className="text-xs text-muted-foreground">
-				{t(
-					"latestFollowsTheCurrentFlowAPinnedVersionAlwaysRunsThatExactSnapshot",
-					"Latest follows the current flow. A pinned version always runs that exact snapshot.",
-				)}
-			</p>
-		</div>
-	) : null;
-
+	const ConfigInterface = mapping?.configInterfaces[formData.event_type ?? ""];
+	const triggerSections = getEventSections(buildEventData() as IEvent).filter(
+		(section) => isTriggerSection(section.id),
+	);
+	const activeSection = configSection ?? triggerSections[0]?.id;
+	const configEditor =
+		ConfigInterface && node ? (
+			<ConfigInterface
+				isEditing={!locked}
+				appId={appId}
+				boardId={formData.board_id}
+				nodeId={node.id}
+				node={node}
+				config={config}
+				onConfigUpdate={(payload) =>
+					handleInputChange("config", convertJsonToUint8Array(payload) ?? [])
+				}
+				hub={hub}
+				canExecuteLocally={destination === "device" || canExecuteLocally}
+				eventExecutionMode={formData.execution_mode}
+				section={activeSection}
+			/>
+		) : null;
+	const destinations = [
+		{
+			id: "computer" as const,
+			icon: Monitor,
+			title: t("thisComputer", "This computer"),
+			detail: t("runsInDesktopApp", "Desktop app"),
+		},
+		{
+			id: "hub" as const,
+			icon: Cloud,
+			title: t("hub", "Hub"),
+			detail: t("runsOnServer", "On the server"),
+		},
+		{
+			id: "device" as const,
+			icon: Server,
+			title: t("device", "Device"),
+			detail: t("chooseDevices", "Choose devices"),
+		},
+	];
 	return (
-		<form onSubmit={handleSubmit} className="space-y-6 pb-4">
-			{/* Basic Information */}
-			<div className="space-y-4">
-				<div className="space-y-2">
-					<Label htmlFor="name">{t("eventName", "Event Name")}</Label>
-					<Input
-						id="name"
-						value={formData.name}
-						onChange={(e) => handleInputChange("name", e.target.value)}
-						placeholder={t("enterEventName", "Enter event name")}
-						required
-					/>
-				</div>
-
-				<div className="space-y-2">
-					<Label htmlFor="description">{t("description", "Description")}</Label>
-					<Textarea
-						id="description"
-						value={formData.description}
-						onChange={(e) => handleInputChange("description", e.target.value)}
-						placeholder={t("enterEventDescription", "Enter event description")}
-						rows={3}
-					/>
-				</div>
-			</div>
-
-			<Separator />
-
-			{/* Target Selection */}
-			<div className="space-y-4">
-				<div className="space-y-2">
-					<Label>{t("target", "Target")}</Label>
-					<Select
-						value={formData.target_kind}
-						onValueChange={(value) => {
-							setPathError(null);
-							handleInputChange("target_kind", value as "board" | "page");
-							if (value === "page") {
-								handleInputChange("event_type", "page");
-								return;
-							}
-							handleInputChange("default_page_id", undefined);
-						}}
-					>
-						<SelectTrigger>
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="board">
-								{t("boardEvent", "Board Event")}
-							</SelectItem>
-							<SelectItem value="page">{t("page", "Page")}</SelectItem>
-						</SelectContent>
-					</Select>
-				</div>
-			</div>
-
-			{isPageEvent ? (
-				<div className="space-y-4">
-					<div className="space-y-2">
-						<Label>{t("page", "Page")}</Label>
-						<Select
-							value={(formData.default_page_id ?? "") as string}
-							onValueChange={handleSelectPage}
-						>
-							<SelectTrigger>
-								<SelectValue placeholder={t("selectAPage", "Select a page")} />
-							</SelectTrigger>
-							<SelectContent>
-								{asArray(pages.data).map((p: PageListItem) => (
-									<SelectItem key={p.pageId} value={p.pageId}>
-										{p.name}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
-					</div>
-
-					{boardVersionSelector}
-
-					<div className="space-y-2">
-						<Label htmlFor="path">{t("routePath", "Route Path")}</Label>
-						<Input
-							id="path"
-							value={formData.path}
-							onChange={(e) => {
-								setPathError(null);
-								handleInputChange("path", e.target.value);
-							}}
-							placeholder="/"
-						/>
-						{pathError ? (
-							<p className="text-sm text-destructive">{pathError}</p>
-						) : (
-							<p className="text-xs text-muted-foreground">
-								<Trans i18nKey="defaultIsSpanClassnamefontmonospanEachPathCanOnlyBeUsedOnce">
-									Default is <span className="font-mono">/</span>. Each path can
-									only be used once.
-								</Trans>
-							</p>
-						)}
-					</div>
-				</div>
-			) : (
-				<>
-					{/* Board Selection */}
-					<div className="space-y-4">
-						<div className="space-y-2">
-							<Label htmlFor="board">{t("flow", "Flow")}</Label>
-							<Select
-								value={formData.board_id}
-								onValueChange={(value) => {
-									handleInputChange("board_id", value);
-									handleInputChange("board_version", undefined);
-									handleInputChange("node_id", undefined);
-									setSelectedNodeType("");
-									setEventTypeConfig({});
-								}}
-							>
-								<SelectTrigger>
-									<SelectValue
-										placeholder={t("selectABoard", "Select a board")}
-									/>
-								</SelectTrigger>
-								<SelectContent>
-									{asArray(boards.data).map((board) => (
-										<SelectItem key={board.id} value={board.id}>
-											{board.name}
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						</div>
-					</div>
-
-					{/* Board Version Selection */}
-					{boardVersionSelector}
-
-					{/* Execution mode — where the event runs. Locked to match the
-					    board when the board is Local/Remote; user-selectable when
-					    the board is Hybrid. */}
-					{formData.board_id && !isServerEvent && (
-						<div className="space-y-2">
-							<Label htmlFor="execution_mode">
-								{t("executionMode", "Execution Mode")}
-							</Label>
-							<Select
-								value={formData.execution_mode}
-								onValueChange={(value) =>
-									handleInputChange(
-										"execution_mode",
-										value as IEventExecutionMode,
-									)
-								}
-								disabled={executionModeLocked}
-							>
-								<SelectTrigger id="execution_mode">
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem
-										value={IEventExecutionMode.Local}
-										disabled={!canPickLocal && !executionModeLocked}
-									>
-										{t("localRunsOnThisDevice", "Local — runs on this device")}
-									</SelectItem>
-									<SelectItem value={IEventExecutionMode.Remote}>
-										{t("remoteRunsOnTheServer", "Remote — runs on the server")}
-									</SelectItem>
-								</SelectContent>
-							</Select>
-							<p className="text-xs text-muted-foreground">
-								{executionModeLocked
-									? t(
-											"lockedByTheFlowsExecutionModeBoardexecutionmode",
-											"Locked by the flow's execution mode ({{boardExecutionMode}}).",
-											{ boardExecutionMode },
-										)
-									: t(
-											"anEventAlwaysRunsInExactlyOneEnvironmentTheUiEndpointsAndCredentialsDifferBetweenTheTwo",
-											"An event always runs in exactly one environment — the UI, endpoints, and credentials differ between the two.",
-										)}
-							</p>
-						</div>
+		<div className="flex min-h-0 flex-1 flex-col">
+			<div
+				className={cn(
+					"grid min-h-0 flex-1 overflow-y-auto",
+					!deploymentSaved &&
+						"lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]",
+				)}
+			>
+				<form
+					id={formId}
+					ref={formRef}
+					onSubmit={handleSubmit}
+					className={cn(
+						"min-w-0 space-y-5 p-5 sm:p-7",
+						deploymentSaved && "hidden",
 					)}
-				</>
-			)}
-
-			{isServerEvent && (
-				<p className="text-sm text-muted-foreground">
-					{formData.event_type === "teams"
-						? t(
-								"teamsBotsRunOnTheServerSaveTheEventThenConnectTheBot",
-								"Teams bots run on the server. Save the event, then connect the bot in its trigger settings.",
-							)
-						: t(
-								"inboundEmailRunsOnTheServerSaveTheEventToReceiveItsAddress",
-								"Inbound email runs on the server. Save the event to receive its email address.",
-							)}
-				</p>
-			)}
-			{serverEventError && (
-				<p role="alert" className="text-sm text-destructive">
-					{serverEventError}
-				</p>
-			)}
-
-			{/* Node and Board Selection */}
-			{!isPageEvent && board.data && isRecord(board.data.nodes) && (
-				<div className="space-y-4">
-					<div className="space-y-2">
-						<Label htmlFor="node">{t("node", "Node")}</Label>
-						<Select
-							value={formData.node_id}
-							onValueChange={(value) => {
-								handleInputChange("node_id", value);
-								const node = board.data.nodes[value];
-								if (!node) return;
-								if (node) {
-									const eventType = eventConfig[node?.name];
-									if (eventType) {
-										handleInputChange("event_type", eventType.defaultEventType);
-										handleInputChange(
-											"config",
-											convertJsonToUint8Array(
-												eventType.configs[eventType.defaultEventType] ?? {},
-											) ?? [],
-										);
-									}
-								}
+				>
+					<fieldset disabled={locked} className="min-w-0 space-y-5">
+						<EventStartPicker
+							appId={appId}
+							eventConfig={eventConfig}
+							selected={{
+								boardId: formData.board_id,
+								nodeId: formData.node_id,
+								pageId: formData.default_page_id,
+								boardVersion: formData.board_version,
 							}}
-						>
-							<SelectTrigger>
-								<SelectValue placeholder={t("selectANode", "Select a node")} />
-							</SelectTrigger>
-							<SelectContent>
-								{Object.values(board.data.nodes)
-									.filter((node) => node.start)
-									.map((node) => (
-										<SelectItem
-											key={node.id}
-											value={node.id}
-											disabled={
-												node.name === "events_inbound_email" && !!serverBlocker
-											}
-										>
-											{node?.friendly_name || node?.name}
-										</SelectItem>
-									))}
-							</SelectContent>
-						</Select>
-					</div>
-
-					{/* Event Type Selector - shown when node has multiple event types.
-					    Types are filtered by the chosen execution mode so a Remote
-					    event never shows offline-only choices (email IMAP, Discord). */}
-					{formData.node_id &&
-						board.data.nodes[formData.node_id] &&
-						(() => {
-							const node = board.data.nodes[formData.node_id];
-							const nodeEventConfig = eventConfig[node?.name];
-
-							if (!nodeEventConfig) return null;
-
-							const visibleTypes = nodeEventConfig.eventTypes.filter((type) => {
-								if (!nodeEventConfig.withSink?.includes(type)) return true;
-								// Server-only types are listed in any mode; choosing one
-								// switches the event to Remote.
-								if (isServerOnlyEventType(type))
-									return !hub || hub.supported_sinks?.[type] === true;
-								return sinkSupportsEventExecution(
-									nodeEventConfig.sinkAvailability?.[type],
-									formData.execution_mode,
-									canExecuteLocally,
-								);
-							});
-
-							if (visibleTypes.length <= 1) return null;
-
-							return (
-								<div className="space-y-2">
-									<Label htmlFor="event_type">
-										{t("eventType", "Event Type")}
-									</Label>
-									<Select
-										value={
-											formData.event_type || nodeEventConfig.defaultEventType
-										}
-										onValueChange={(value) => {
-											handleInputChange("event_type", value);
-											setPathError(null);
-											handleInputChange(
-												"config",
-												convertJsonToUint8Array(
-													nodeEventConfig.configs[value] ?? {},
-												) ?? [],
-											);
-										}}
-									>
-										<SelectTrigger>
-											<SelectValue
-												placeholder={t("selectEventType", "Select event type")}
-											/>
-										</SelectTrigger>
-										<SelectContent>
-											{visibleTypes.map((type) => (
-												<SelectItem key={type} value={type}>
-													{formatEventTypeLabel(type)}
-												</SelectItem>
-											))}
-										</SelectContent>
-									</Select>
-								</div>
-							);
-						})()}
-
-					{shouldRequireRoutePath && (
-						<div className="space-y-2">
-							<Label htmlFor="path">{t("routePath", "Route Path")}</Label>
-							<Input
-								id="path"
-								value={formData.path}
-								onChange={(e) => {
-									setPathError(null);
-									handleInputChange("path", e.target.value);
-								}}
-								placeholder="/"
-							/>
-							{pathError ? (
-								<p className="text-sm text-destructive">{pathError}</p>
-							) : (
-								<p className="text-xs text-muted-foreground">
-									<Trans i18nKey="defaultIsSpanClassnamefontmonospanEachPathCanOnlyBeUsedOnce2">
-										Default is <span className="font-mono">/</span>. Each path
-										can only be used once.
-									</Trans>
+							onSelect={selectTarget}
+							disabled={locked}
+						/>
+						{board.isError && (
+							<div role="alert" className="text-sm text-destructive">
+								{t(
+									"flowCouldNotBeLoaded",
+									"The selected flow could not be loaded.",
+								)}{" "}
+								<button
+									type="button"
+									className="underline"
+									onClick={() => void board.refetch()}
+								>
+									{t("retry", "Retry")}
+								</button>
+							</div>
+						)}
+						{formData.board_id &&
+							!board.isLoading &&
+							!isPageEvent &&
+							!node?.start && (
+								<p role="alert" className="text-sm text-destructive">
+									{t(
+										"chooseStartNodeInVersion",
+										"Choose a start node from this flow version.",
+									)}
 								</p>
 							)}
+						{validTarget && !validTrigger && (
+							<p role="alert" className="text-sm text-destructive">
+								{t(
+									"chooseTriggerInVersion",
+									"Choose a trigger supported by this flow version.",
+								)}
+							</p>
+						)}
+						{availableTriggers.length > 0 && (
+							<section className="space-y-3 border-t pt-5">
+								<Label>{t("triggeredBy", "Triggered by")}</Label>
+								<div
+									className="flex flex-wrap gap-1.5"
+									aria-roledescription="choices"
+									aria-label={t("eventType", "Event type")}
+								>
+									{availableTriggers.map((type) => (
+										<button
+											key={type}
+											type="button"
+											aria-pressed={formData.event_type === type}
+											onClick={() => selectType(type)}
+											className={cn(
+												"rounded-md border px-3 py-2 text-xs font-medium transition-colors hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+												formData.event_type === type
+													? "border-primary bg-primary/8 text-foreground"
+													: "border-border bg-background text-muted-foreground",
+											)}
+										>
+											{triggerLabel(type)}
+										</button>
+									))}
+								</div>
+								{formData.event_type === "api" ? (
+									<div className="grid grid-cols-[110px_minmax(0,1fr)] gap-3 rounded-lg bg-muted/40 p-3">
+										<div className="space-y-1.5">
+											<Label htmlFor={`${formId}-method`} className="text-xs">
+												{t("method", "Method")}
+											</Label>
+											<select
+												id={`${formId}-method`}
+												value={config.method ?? "POST"}
+												onChange={(e) =>
+													handleInputChange(
+														"config",
+														convertJsonToUint8Array({
+															...config,
+															method: e.target.value,
+														}) ?? [],
+													)
+												}
+												className="h-10 w-full rounded-md border bg-background px-2 font-mono text-xs"
+											>
+												{[
+													"GET",
+													"POST",
+													"PUT",
+													"PATCH",
+													"DELETE",
+													"HEAD",
+													"OPTIONS",
+												].map((method) => (
+													<option key={method}>{method}</option>
+												))}
+											</select>
+										</div>
+										<div className="space-y-1.5">
+											<Label htmlFor={`${formId}-endpoint`} className="text-xs">
+												{t("path", "Path")}
+											</Label>
+											<Input
+												id={`${formId}-endpoint`}
+												required
+												pattern="/.*"
+												value={config.path ?? "/webhook"}
+												onChange={(e) =>
+													handleInputChange(
+														"config",
+														convertJsonToUint8Array({
+															...config,
+															path: e.target.value,
+														}) ?? [],
+													)
+												}
+												className="h-10 bg-background font-mono text-xs"
+											/>
+										</div>
+									</div>
+								) : (
+									configEditor && (
+										<details
+											className="rounded-lg border bg-muted/20"
+											open={undefined}
+										>
+											<summary className="cursor-pointer px-3 py-3 text-xs font-medium">
+												{t("triggerSettings", "Trigger settings")}
+											</summary>
+											<div className="space-y-3 border-t p-3">
+												{triggerSections.length > 1 && (
+													<select
+														aria-label={t(
+															"settingsSection",
+															"Settings section",
+														)}
+														value={activeSection}
+														onChange={(e) => setConfigSection(e.target.value)}
+														className="h-9 w-full rounded-md border bg-background px-2 text-xs"
+													>
+														{triggerSections.map((section) => (
+															<option key={section.id} value={section.id}>
+																{section.label}
+															</option>
+														))}
+													</select>
+												)}
+												{configEditor}
+											</div>
+										</details>
+									)
+								)}
+								{shouldRequireRoutePath && (
+									<div className="space-y-1.5">
+										<Label htmlFor={`${formId}-path`}>
+											{t("routePath", "Route path")}
+										</Label>
+										<Input
+											id={`${formId}-path`}
+											value={formData.path}
+											onChange={(e) => {
+												setPathError(null);
+												handleInputChange("path", e.target.value);
+											}}
+											className="h-10 font-mono text-sm"
+										/>
+										{pathError && (
+											<p role="alert" className="text-xs text-destructive">
+												{pathError}
+											</p>
+										)}
+										{routes.isError && (
+											<button
+												type="button"
+												onClick={() => void routes.refetch()}
+												className="text-xs text-destructive underline"
+											>
+												{t("retryRouteCheck", "Retry route availability check")}
+											</button>
+										)}
+									</div>
+								)}
+							</section>
+						)}
+						<section className="grid grid-cols-[minmax(0,1fr)_140px] gap-3 border-t pt-5">
+							<div className="space-y-1.5">
+								<Label htmlFor={`${formId}-name`}>
+									{t("eventName", "Event name")}
+								</Label>
+								<Input
+									id={`${formId}-name`}
+									value={formData.name}
+									onChange={(e) => handleInputChange("name", e.target.value)}
+									placeholder={t("nameThisEvent", "Name this event")}
+									required
+									className="h-10"
+								/>
+							</div>
+							<div className="space-y-1.5">
+								<Label htmlFor={`${formId}-version`}>
+									{t("flowVersion", "Flow version")}
+								</Label>
+								<Select
+									value={formData.board_version?.join(".") ?? "latest"}
+									disabled={locked || !formData.board_id}
+									onValueChange={(value) => {
+										handleInputChange(
+											"board_version",
+											value === "latest"
+												? undefined
+												: normalizeBoardVersion(value.split(".").map(Number)),
+										);
+									}}
+								>
+									<SelectTrigger
+										id={`${formId}-version`}
+										className="h-10 w-full"
+									>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="latest">
+											{t("latest", "Latest")}
+										</SelectItem>
+										{asArray(versions.data).map((version) => (
+											<SelectItem
+												key={version.join(".")}
+												value={version.join(".")}
+											>
+												v{version.join(".")}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</div>
+							<p className="col-span-2 text-xs leading-relaxed text-muted-foreground">
+								{destination === "device"
+									? t(
+											"deviceVersionSnapshot",
+											"Devices run the flow as it was when you last deployed or updated it.",
+										)
+									: t(
+											"latestOrPinnedFlow",
+											"Latest follows the current flow. A pinned version keeps the same snapshot.",
+										)}
+							</p>
+						</section>
+						<details className="text-xs">
+							<summary className="cursor-pointer font-medium text-muted-foreground">
+								{t("addDescription", "Add a description")}
+							</summary>
+							<Textarea
+								aria-label={t("description", "Description")}
+								value={formData.description}
+								onChange={(e) =>
+									handleInputChange("description", e.target.value)
+								}
+								rows={2}
+								className="mt-2"
+							/>
+						</details>
+					</fieldset>
+				</form>
+				<section
+					className="min-w-0 space-y-5 border-t bg-muted/25 p-5 sm:p-7 lg:border-l lg:border-t-0"
+					aria-label={t("whereItRuns", "Where it runs")}
+				>
+					{!deploymentSaved && (
+						<>
+							<div className="space-y-3">
+								<Label>{t("whereItRuns", "Where it runs")}</Label>
+								<div
+									aria-roledescription="choices"
+									aria-label={t(
+										"executionDestination",
+										"Execution destination",
+									)}
+									className="grid grid-cols-3 gap-2"
+								>
+									{destinations.map((target) => {
+										const Icon = target.icon;
+										const enabled = supportsDestination(target.id);
+										return (
+											<button
+												type="button"
+												key={target.id}
+												aria-pressed={destination === target.id}
+												disabled={locked || !enabled}
+												onClick={() => {
+													setDestination(target.id);
+													setPathError(null);
+												}}
+												className={cn(
+													"flex min-h-24 flex-col items-start gap-2 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-45",
+													destination === target.id
+														? "border-primary bg-primary/8 ring-1 ring-primary"
+														: "border-border bg-background hover:border-primary/50",
+												)}
+											>
+												<div className="flex w-full items-center justify-between">
+													<Icon
+														aria-hidden
+														className="size-4 text-muted-foreground"
+													/>
+													{destination === target.id && (
+														<Check
+															aria-hidden
+															className="size-3.5 text-primary"
+														/>
+													)}
+												</div>
+												<span className="text-xs font-semibold">
+													{target.title}
+												</span>
+												<span className="text-[11px] text-muted-foreground">
+													{target.detail}
+												</span>
+											</button>
+										);
+									})}
+								</div>
+							</div>
+							{!destinationAvailable && (
+								<p role="alert" className="text-xs text-destructive">
+									{t(
+										"chooseSupportedDestination",
+										"Choose an available destination for this event and flow.",
+									)}
+								</p>
+							)}
+							{serverEventError && (
+								<p role="alert" className="text-xs text-destructive">
+									{serverEventError}
+								</p>
+							)}
+						</>
+					)}
+					{destination === "device" && onCreateDevice ? (
+						<NewEventDeployment
+							overrides={deviceWorkspaceOverrides}
+							footerContainer={footerContainer}
+							onNavigate={onNavigateDeployment}
+							appId={appId}
+							draftEvent={buildEventData()}
+							disabled={!canSubmit || isSubmitting || checkingOAuth}
+							onBusyChange={setDeploymentBusy}
+							onSavedChange={setDeploymentSaved}
+							onCreate={async () => {
+								if (!validate())
+									throw new Error(
+										t(
+											"completeEventDetails",
+											"Complete the event details before deploying.",
+										),
+									);
+								return onCreateDevice(buildEventData());
+							}}
+							onComplete={onDeploymentComplete}
+						/>
+					) : (
+						<div className="rounded-xl border bg-background p-5">
+							<div className="flex items-center gap-2 text-sm font-medium">
+								<Zap aria-hidden className="size-4 text-primary" />
+								{t("whatWillHappen", "What will happen")}
+							</div>
+							<p className="mt-3 text-sm leading-relaxed">
+								{destination === "computer"
+									? t(
+											"eventRunsOnComputer",
+											"This event runs in the desktop app on this computer.",
+										)
+									: t(
+											"eventRunsOnHub",
+											"This event runs on the hub, independently of this computer.",
+										)}
+							</p>
+							{formData.name && (
+								<p className="mt-3 text-xs text-muted-foreground">
+									{formData.name} · {typeLabel}
+								</p>
+							)}
+							<div className="mt-5 flex items-start gap-2 border-t pt-4 text-xs leading-relaxed text-muted-foreground">
+								<Info aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+								<p>
+									{destination === "computer"
+										? t(
+												"keepDesktopRunning",
+												"Keep the desktop app running to receive triggers.",
+											)
+										: t(
+												"sourceCredentialsNext",
+												"Any required authorization is checked before the event is created.",
+											)}
+								</p>
+							</div>
 						</div>
 					)}
+				</section>
+			</div>
+			<div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t bg-background px-5 py-4 sm:px-7">
+				<div
+					className="min-w-0 flex-1 text-xs text-muted-foreground"
+					aria-live="polite"
+				>
+					{submitError ? (
+						<span role="alert" className="text-destructive">
+							{submitError}
+						</span>
+					) : deploymentSaved ? (
+						t(
+							"finishDeploymentHere",
+							"Finish deployment here. Your event definition is saved.",
+						)
+					) : destination === "device" ? (
+						t(
+							"createDirectlyForDevices",
+							"Create the event and deploy its flow to your selected devices.",
+						)
+					) : (
+						t("eventCanBeChangedLater", "You can change these settings later.")
+					)}
 				</div>
-			)}
-
-			{/* Type-specific Configuration */}
-			{selectedNodeType && (
-				<>
-					<Separator />
-					<EventTypeConfig
-						type={selectedNodeType}
-						config={eventTypeConfig}
-						onChange={setEventTypeConfig}
-					/>
-				</>
-			)}
-
-			{/* Form Actions — sticky so the primary action stays reachable instead
-			    of sitting past a screenful of type-specific configuration. */}
-			<div className="sticky bottom-0 flex justify-end gap-2 border-t bg-background/95 pt-3 pb-1 backdrop-blur supports-backdrop-filter:bg-background/85">
 				<Button
 					type="button"
 					variant="outline"
 					onClick={onCancel}
-					disabled={isSubmitting}
-					className="h-10 sm:h-9"
+					disabled={busy}
+					className="h-10"
 				>
-					{t("cancel", "Cancel")}
+					{deploymentSaved ? t("close", "Close") : t("cancel", "Cancel")}
 				</Button>
-				<Button
-					type="submit"
-					className="h-10 sm:h-9"
-					disabled={
-						isSubmitting ||
-						!!serverEventError ||
-						serverEventChecking ||
-						!formData.name ||
-						(isPageEvent
-							? !formData.default_page_id
-							: !formData.board_id || !formData.node_id)
-					}
-				>
-					{isSubmitting && <Loader2Icon className="h-4 w-4 animate-spin" />}
-					{isSubmitting
-						? isEditing
-							? "Updating…"
-							: "Creating…"
-						: isEditing
-							? t("updateEvent", "Update Event")
-							: t("createEvent", "Create Event")}
-				</Button>
+				{destination === "device" && (
+					<div
+						ref={setFooterContainer}
+						className="flex flex-wrap items-center gap-2"
+					/>
+				)}
+				{destination !== "device" && (
+					<Button
+						type="submit"
+						form={formId}
+						disabled={
+							locked ||
+							!canSubmit ||
+							(shouldRequireRoutePath && (routes.isLoading || routes.isError))
+						}
+						className="h-10"
+					>
+						{locked ? (
+							<Loader2 aria-hidden className="size-4 animate-spin" />
+						) : (
+							<Zap aria-hidden className="size-4" />
+						)}
+						{locked
+							? t("creatingEvent", "Creating…")
+							: t("createEvent", "Create event")}
+					</Button>
+				)}
 			</div>
-
-			{/* OAuth Consent Dialog */}
 			<OAuthConsentDialog
 				open={showOAuthConsent}
 				onOpenChange={setShowOAuthConsent}
@@ -882,6 +1106,6 @@ export function EventForm({
 				authorizedProviders={authorizedProviders}
 				preAuthorizedProviders={preAuthorizedProviders}
 			/>
-		</form>
+		</div>
 	);
 }

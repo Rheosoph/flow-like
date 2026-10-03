@@ -14,6 +14,7 @@
 //! are refused to navigations, exactly as on the `widget-sandbox` route.
 
 use super::ServerRegistry;
+use super::widget_access::verify_widget_access;
 use super::widget_policy::request_engine_gate;
 use super::widget_sandbox::{
     WIDGET_ASSET_ROUTE, asset_response, bundle_sources, document_response,
@@ -40,16 +41,21 @@ pub struct AuthorizedWidgetVersion {
     pub registry: Arc<ServerRegistry>,
     pub sub: Option<String>,
     pub bundle_hash: String,
+    /// The project whose licence let the caller in, when nothing else did.
+    pub through_project: Option<String>,
 }
 
 /// Access checks shared by every widget route. They mirror
 /// `GET /registry/package/{id}` plus version-level visibility, and require the
 /// version to ship a widget bundle. A widget grant never substitutes for them.
+/// With `app_id`, a member of that project may load the version it pins or an
+/// older one.
 pub async fn authorize_widget_version(
     state: &AppState,
     user: &AppUser,
     package_id: &str,
     version: &str,
+    app_id: Option<&str>,
 ) -> Result<AuthorizedWidgetVersion, ApiError> {
     let sub = user.sub().ok();
 
@@ -85,11 +91,19 @@ pub async fn authorize_widget_version(
         }
     }
 
+    let mut through_project = None;
     if package.visibility == WasmPackageVisibility::Private {
         let uid = sub.clone().ok_or(ApiError::FORBIDDEN)?;
         let access = crate::check_wasm_access!(state, &uid, package_id);
         if access.is_none() {
-            return Err(ApiError::FORBIDDEN);
+            match app_id {
+                Some(app_id)
+                    if member_opens_version(state, user, app_id, package_id, version).await? =>
+                {
+                    through_project = Some(app_id.to_string());
+                }
+                _ => return Err(ApiError::FORBIDDEN),
+            }
         }
     }
 
@@ -101,7 +115,98 @@ pub async fn authorize_widget_version(
         registry,
         sub,
         bundle_hash,
+        through_project,
     })
+}
+
+/// Access through a `widget-access` token, which was minted after
+/// [`authorize_widget_version`] and binds this version's bundle. The iframe
+/// requests that carry it have no credentials of their own.
+pub async fn authorize_widget_access_token(
+    state: &AppState,
+    package_id: &str,
+    version: &str,
+    token: &str,
+) -> Result<AuthorizedWidgetVersion, ApiError> {
+    let claims = verify_widget_access(token)
+        .ok()
+        .filter(|claims| claims.is_bound_to(package_id, version))
+        .ok_or_else(|| {
+            ApiError::forbidden("Widget access token is invalid, expired or for another version")
+        })?;
+    let registry = state
+        .wasm_registry
+        .clone()
+        .ok_or_else(|| ApiError::service_unavailable("WASM registry not configured"))?;
+    let bundle_hash = visible_bundle_hash(state, package_id, version, true).await?;
+    if bundle_hash != claims.bundle_hash {
+        return Err(ApiError::forbidden(
+            "Widget access token was issued for another bundle of this version",
+        ));
+    }
+    if let Some(app_id) = claims.app_id.as_deref()
+        && !project_still_opens_version(state, app_id, package_id, version).await?
+    {
+        return Err(ApiError::forbidden(
+            "The project behind this widget access token no longer licenses this package version",
+        ));
+    }
+
+    Ok(AuthorizedWidgetVersion {
+        registry,
+        sub: None,
+        bundle_hash,
+        through_project: claims.app_id,
+    })
+}
+
+/// Whether the caller's membership in `app_id` opens this version's widgets.
+async fn member_opens_version(
+    state: &AppState,
+    user: &AppUser,
+    app_id: &str,
+    package_id: &str,
+    version: &str,
+) -> Result<bool, ApiError> {
+    match crate::package_license::caller_pin(state, user, app_id, package_id).await? {
+        Some(pin) => {
+            crate::package_license::pin_covers_widget_version(&state.db, &pin, version).await
+        }
+        None => Ok(false),
+    }
+}
+
+/// Whether `app_id` still licenses this version's widgets for a token minted
+/// through it: the package is active and the project's usable pin covers the
+/// version. Membership cannot be checked again, since the frame sends no
+/// credentials. A yes is reused for the response cache's lifetime so the
+/// files of one widget do not each repeat the queries.
+async fn project_still_opens_version(
+    state: &AppState,
+    app_id: &str,
+    package_id: &str,
+    version: &str,
+) -> Result<bool, ApiError> {
+    let cache_key =
+        serde_json::json!(["widget_project_access", app_id, package_id, version]).to_string();
+    if state.get_cache::<bool>(&cache_key) == Some(true) {
+        return Ok(true);
+    }
+    let active = wasm_package::Entity::find_by_id(package_id)
+        .one(&state.db)
+        .await?
+        .is_some_and(|package| package.status == WasmPackageStatus::Active);
+    let opens = active
+        && match crate::package_license::usable_pin(&state.db, app_id, package_id).await? {
+            Some(pin) => {
+                crate::package_license::pin_covers_widget_version(&state.db, &pin, version).await?
+            }
+            None => false,
+        };
+    if opens {
+        state.set_cache(cache_key, true);
+    }
+    Ok(opens)
 }
 
 /// Widget bundle hash of one package version, under the version visibility of
@@ -309,7 +414,7 @@ pub async fn get_widget_asset(
         return Err(ApiError::not_found("Widget asset not found"));
     }
 
-    let authorized = authorize_widget_version(&state, &user, &package_id, &version).await?;
+    let authorized = authorize_widget_version(&state, &user, &package_id, &version, None).await?;
     if is_refused_legacy_navigation(route, &path, &headers) {
         return Ok(non_iframe_refusal());
     }

@@ -9,16 +9,17 @@
 //!
 //! [`WidgetProvider`] unifies the two widget sources a board can instantiate
 //! from: the project's declarative A2UI widgets and micro widgets shipped by
-//! packages added to the app (`App.packages`). Package widgets are resolved
-//! through a host-registered [`PackageWidgetSource`] on [`FlowLikeState`],
-//! since installed package manifests live outside this crate.
+//! packages added to the app. Which packages an app pins is the host's
+//! knowledge and the package manifests live outside this crate, so package
+//! widgets are resolved through the [`PackageWidgetSource`] the host registers
+//! on [`FlowLikeState`].
 
 use crate::app::App;
 use crate::flow::board::Board;
 use crate::state::FlowLikeState;
 use flow_like_types::{Value, async_trait};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::widget::Widget;
@@ -208,17 +209,20 @@ impl PackageWidgetRef {
     }
 }
 
-/// Host-registered source of package widget entries.
+/// Host-registered source of an app's package widget entries.
 ///
-/// Implementations (desktop registry client, server-side registry) resolve the
-/// installed manifests of the given packages. Only the requested packages may
-/// be considered — never everything installed locally.
+/// Which packages an app pins is the host's knowledge: a device keeps the pins
+/// in the app manifest, the hub in its database, and a server executor asks
+/// its hub. An implementation answers for exactly the packages the app pins —
+/// never for everything installed locally.
 #[async_trait]
 pub trait PackageWidgetSource: Send + Sync {
-    /// List widget entries for an app's package map (`package_id -> version`).
+    /// Widget entries of the packages `app_id` pins. `state` is the state the
+    /// source is registered on, for hosts that read the pins from its stores.
     async fn list_widgets(
         &self,
-        packages: &HashMap<String, String>,
+        app_id: &str,
+        state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Vec<PackageWidgetRef>>;
 }
 
@@ -247,6 +251,18 @@ pub async fn load_app_widgets(
     Ok(Arc::new(app.get_widgets().await?))
 }
 
+/// An app's package widgets, through the registered [`PackageWidgetSource`];
+/// none when the host registered no source.
+pub async fn load_package_widgets(
+    app_id: &str,
+    state: Arc<FlowLikeState>,
+) -> flow_like_types::Result<Vec<PackageWidgetRef>> {
+    match state.package_widget_source().await {
+        Some(source) => source.list_widgets(app_id, state).await,
+        None => Ok(Vec::new()),
+    }
+}
+
 /// A widget resolved through the unified provider.
 pub enum ResolvedWidget<'a> {
     Declarative(&'a Widget),
@@ -273,32 +289,8 @@ impl WidgetProvider {
         }
     }
 
-    /// Load both widget sources for an app. Declarative widget failures are
-    /// tolerated (empty list, matching existing behavior); package source
-    /// errors propagate so callers can surface them.
-    pub async fn load(app_id: &str, state: Arc<FlowLikeState>) -> flow_like_types::Result<Self> {
-        let declarative = load_app_widgets(app_id, state.clone())
-            .await
-            .map(|widgets| widgets.as_ref().clone())
-            .unwrap_or_default();
-        let package_widgets = match state.package_widget_source().await {
-            Some(source) => {
-                let app = App::load(app_id.to_string(), state.clone()).await?;
-                if app.packages.is_empty() {
-                    Vec::new()
-                } else {
-                    source.list_widgets(&app.packages).await?
-                }
-            }
-            None => Vec::new(),
-        };
-        Ok(Self {
-            declarative,
-            package_widgets,
-        })
-    }
-
-    /// Tolerant variant for `on_update`: any failure yields an empty provider.
+    /// Both widget sources of a board's app, for `on_update`: a source that
+    /// fails contributes no widgets and the other source's widgets are kept.
     pub async fn from_board(board: &Board) -> Self {
         let Some(state) = board.app_state.clone() else {
             return Self::empty();
@@ -307,12 +299,22 @@ impl WidgetProvider {
             Some(id) if !id.is_empty() => id.to_string(),
             _ => return Self::empty(),
         };
-        match Self::load(&app_id, state).await {
-            Ok(provider) => provider,
+        let declarative = load_app_widgets(&app_id, state.clone())
+            .await
+            .map(|widgets| widgets.as_ref().clone())
+            .unwrap_or_default();
+        // The package half is the host's own lookup (the pin database on the
+        // hub); when it fails, the project's own widgets must not go blank.
+        let package_widgets = match load_package_widgets(&app_id, state).await {
+            Ok(widgets) => widgets,
             Err(e) => {
-                tracing::warn!(app_id = %app_id, error = %e, "Failed to load widget provider");
-                Self::empty()
+                tracing::warn!(app_id = %app_id, error = %e, "Failed to load package widgets");
+                Vec::new()
             }
+        };
+        Self {
+            declarative,
+            package_widgets,
         }
     }
 
@@ -507,7 +509,7 @@ mod app_widget_source_tests {
         }
     }
 
-    fn state() -> Arc<FlowLikeState> {
+    pub(super) fn state() -> Arc<FlowLikeState> {
         let store = FlowLikeStore::Memory(Arc::new(
             flow_like_storage::object_store::memory::InMemory::new(),
         ));
@@ -544,5 +546,139 @@ mod app_widget_source_tests {
         // on the missing manifest instead of pretending the app has no widgets.
         let state = state();
         assert!(load_app_widgets("app-1", state).await.is_err());
+    }
+}
+
+#[cfg(test)]
+mod package_widget_source_tests {
+    use super::app_widget_source_tests::state;
+    use super::*;
+    use flow_like_storage::Path;
+    use flow_like_types::json::json;
+    use std::sync::Mutex;
+
+    fn sales_chart() -> PackageWidgetRef {
+        PackageWidgetRef {
+            package_id: "com.example.sales".into(),
+            package_version: "1.0.0".into(),
+            widget_id: "sales-chart".into(),
+            name: "Sales Chart".into(),
+            description: String::new(),
+            bundle_hash: None,
+            contract: json!({ "contractVersion": 1, "id": "sales-chart" }),
+        }
+    }
+
+    /// Keeps the app ids it is asked for; answers with one widget, or fails
+    /// like a hub that cannot be reached.
+    #[derive(Default)]
+    struct RecordingSource {
+        asked: Mutex<Vec<String>>,
+        fails: bool,
+    }
+
+    impl RecordingSource {
+        fn failing() -> Self {
+            Self {
+                fails: true,
+                ..Self::default()
+            }
+        }
+    }
+
+    #[async_trait]
+    impl PackageWidgetSource for RecordingSource {
+        async fn list_widgets(
+            &self,
+            app_id: &str,
+            _state: Arc<FlowLikeState>,
+        ) -> flow_like_types::Result<Vec<PackageWidgetRef>> {
+            self.asked.lock().unwrap().push(app_id.to_string());
+            if self.fails {
+                return Err(flow_like_types::anyhow!("hub unreachable"));
+            }
+            Ok(vec![sales_chart()])
+        }
+    }
+
+    struct OneWidget;
+
+    #[async_trait]
+    impl AppWidgetSource for OneWidget {
+        async fn list_app_widgets(
+            &self,
+            _app_id: &str,
+        ) -> flow_like_types::Result<Arc<Vec<Widget>>> {
+            Ok(Arc::new(vec![Widget::new("widget-1", "My Widget", "root")]))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_registered_package_source_is_asked_for_the_app_without_reading_a_manifest() {
+        // The store is empty, so a lookup that still read the pins from the
+        // app manifest would fail here.
+        let state = state();
+        let source = Arc::new(RecordingSource::default());
+        state.register_package_widget_source(source.clone()).await;
+
+        let widgets = load_package_widgets("app-1", state)
+            .await
+            .expect("the pins are the source's knowledge");
+
+        assert_eq!(widgets.len(), 1);
+        assert_eq!(widgets[0].selector(), "pkg:com.example.sales/sales-chart");
+        assert_eq!(*source.asked.lock().unwrap(), ["app-1"]);
+    }
+
+    #[tokio::test]
+    async fn without_a_package_source_an_app_has_no_package_widgets() {
+        // Unlike the declarative half there is no store fallback: on the empty
+        // store it would fail instead of answering "none".
+        let widgets = load_package_widgets("app-1", state())
+            .await
+            .expect("no source is not an error");
+        assert!(widgets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_package_source_error_reaches_the_caller() {
+        let state = state();
+        let source = Arc::new(RecordingSource::failing());
+        state.register_package_widget_source(source).await;
+
+        let error = load_package_widgets("app-1", state)
+            .await
+            .err()
+            .expect("the source's failure is the caller's to surface");
+        assert!(error.to_string().contains("hub unreachable"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn from_board_resolves_package_widgets_without_a_manifest() {
+        let state = state();
+        let source = Arc::new(RecordingSource::default());
+        state.register_package_widget_source(source.clone()).await;
+        let board = Board::new(None, Path::from("apps").join("app-1"), state);
+
+        let provider = WidgetProvider::from_board(&board).await;
+
+        let entry = provider.resolve_package("com.example.sales", "sales-chart");
+        assert!(entry.is_some());
+        assert_eq!(*source.asked.lock().unwrap(), ["app-1"]);
+    }
+
+    #[tokio::test]
+    async fn from_board_keeps_the_declarative_widgets_when_the_package_source_fails() {
+        let state = state();
+        let source = Arc::new(RecordingSource::failing());
+        state.register_app_widget_source(Arc::new(OneWidget)).await;
+        state.register_package_widget_source(source.clone()).await;
+        let board = Board::new(None, Path::from("apps").join("app-1"), state);
+
+        let provider = WidgetProvider::from_board(&board).await;
+
+        assert!(provider.resolve_declarative("widget-1").is_some());
+        assert!(provider.package_widgets().is_empty());
+        assert_eq!(*source.asked.lock().unwrap(), ["app-1"]);
     }
 }

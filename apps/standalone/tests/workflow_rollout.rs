@@ -243,6 +243,153 @@ impl Controller {
         self.command(serde_json::from_value(command)?).await
     }
 
+    /// One history page of placement `api` as `(rollout, state)` rows, and its cursor.
+    async fn rollout_history(
+        &mut self,
+        before: Option<&str>,
+        limit: u8,
+    ) -> Result<(Vec<(String, String)>, Value)> {
+        let page = self
+            .wire(json!({"type":"rollout_history","placement_id":"api","before":before,"limit":limit}))
+            .await?
+            .result;
+        ensure!(!page.to_string().contains("secret_overrides"));
+        let text = |row: &Value, key: &str| row[key].as_str().unwrap_or_default().to_owned();
+        let rows = page["rollouts"].as_array().context("rollout history")?;
+        let rows = rows
+            .iter()
+            .map(|row| (text(row, "rollout_id"), text(row, "state")))
+            .collect();
+        Ok((rows, page["next"].clone()))
+    }
+
+    /// History pages newest first, with a cursor only while older rollouts remain.
+    async fn assert_rollout_pages(&mut self, newest_first: &[(String, &str)]) -> Result<()> {
+        let staged: Vec<_> = newest_first
+            .iter()
+            .map(|(id, state)| (id.clone(), (*state).to_owned()))
+            .collect();
+        let second = staged[1].0.as_str();
+        let all = self.rollout_history(None, 8).await?;
+        ensure!(all == (staged.clone(), Value::Null));
+        let newest = self.rollout_history(None, 2).await?;
+        ensure!(newest == (staged[..2].to_vec(), json!(second)));
+        let older = self.rollout_history(Some(second), 16).await?;
+        ensure!(older == (staged[2..].to_vec(), Value::Null));
+        Ok(())
+    }
+
+    /// The owner sees every journaled operation, each staged rollout among them.
+    async fn assert_owner_journal(&mut self, staged: &[(String, &str)]) -> Result<()> {
+        let listed = self.wire(json!({"type":"operations","limit":50})).await?;
+        let journal = listed.result["operations"]
+            .as_array()
+            .context("operation list")?;
+        ensure!(journal.iter().all(|operation| {
+            operation["actor"]["role"] == "owner"
+                && operation["kind"].is_null()
+                && operation["accepted_at"].as_i64().is_some_and(|at| at > 0)
+        }));
+        ensure!(staged.iter().all(|(id, _)| {
+            journal
+                .iter()
+                .any(|operation| operation["operation_id"] == *id)
+        }));
+        Ok(())
+    }
+
+    /// Feature flags and the device facts they announce.
+    async fn assert_console_facts(&mut self) -> Result<()> {
+        let inspected = self
+            .wire(json!({"type":"inspect_page","after":null,"limit":2}))
+            .await?
+            .result;
+        let flags = [
+            "offline_summary",
+            "host_operation",
+            "network_interfaces",
+            "rollout_history",
+            "operations",
+            "metrics_history",
+            "offline_lookup",
+            "reader_bindings",
+            "acme_failure_detail",
+            "archive_status",
+            "artifact_capacity",
+            "scheduled_events",
+        ];
+        ensure!(flags.iter().all(|flag| inspected["features"][flag] == 1));
+        ensure!(inspected["host_operation"].is_null());
+        ensure!(inspected["network"]["interfaces"].is_array());
+        ensure!(inspected["placements"][0]["offline_writes"]["pending_count"] == 0);
+        let operation = self.wire(json!({"type":"host_operation"})).await?;
+        ensure!(operation.result == json!({"operation":null}));
+        Ok(())
+    }
+
+    /// Sampled history of placement `api`, and a queue scope it never had.
+    async fn assert_history_reads(&mut self) -> Result<()> {
+        let samples = self
+            .wire(json!({"type":"metrics_history","placement_id":"api","after":0,"limit":256,"fields":["running_replicas","memory_bytes"]}))
+            .await?;
+        let points = samples.result["points"]
+            .as_array()
+            .context("metric points")?;
+        let triple = |point: &Value| point.as_array().is_some_and(|point| point.len() == 3);
+        ensure!(!points.is_empty() && points.iter().all(triple));
+        let no_queue = self.request(serde_json::from_value(json!({
+            "type":"offline_queue_operations","placement_id":"api","scope":"0".repeat(64)
+        }))?)?;
+        let refused = self.transmit(&no_queue).await?;
+        ensure!(refused.state == "rejected" && refused.result["code"] == "invalid");
+        Ok(())
+    }
+
+    /// Revisions of project `project` on the device: those placement `api` runs from, and
+    /// those nothing uses.
+    async fn retained_revisions(&mut self) -> Result<(Vec<Value>, Vec<Value>)> {
+        let usage = json!({"type":"artifact","request":{"kind":"usage","project_id":"project"}});
+        let used = self.wire(usage).await?.result;
+        let rows = used["revisions"].as_array().context("retained revisions")?;
+        ensure!(used["next"].is_null() && used["project"]["revisions"]["used"] == rows.len());
+        let digests = |users: Value| -> Vec<Value> {
+            let listed = rows
+                .iter()
+                .filter(|row| row["referenced_by"] == users && row["rollout"] == false);
+            listed.map(|row| row["revision"].clone()).collect()
+        };
+        Ok((digests(json!(["api"])), digests(json!([]))))
+    }
+
+    /// Removal of the listed revisions of project `project`, as the device answers it.
+    async fn prune(&mut self, revisions: &[Value]) -> Result<ManagementResponse> {
+        let prune = json!({"kind":"prune","project_id":"project","revisions":revisions});
+        let command = serde_json::from_value(json!({"type":"artifact","request":prune}))?;
+        let request = self.request(command)?;
+        self.transmit(&request).await
+    }
+
+    /// Only revisions that no service runs from leave the device.
+    async fn assert_capacity(&mut self) -> Result<()> {
+        let (kept, unused) = self.retained_revisions().await?;
+        ensure!(kept.len() == 1 && !unused.is_empty());
+        let refused = self.prune(&[kept[0].clone(), unused[0].clone()]).await?;
+        ensure!(refused.state == "rejected" && refused.result["code"] == "revision_conflict");
+        let removed = self.prune(&unused).await?;
+        ensure!(removed.state == "completed" && removed.result["pruned"] == json!(unused));
+        ensure!(self.retained_revisions().await? == (kept, Vec::new()));
+        Ok(())
+    }
+
+    /// The reads behind the device console, over this encrypted session.
+    async fn assert_console_reads(&mut self, newest_first: &[(String, &str)]) -> Result<()> {
+        self.assert_rollout_pages(newest_first).await?;
+        self.assert_owner_journal(newest_first).await?;
+        self.assert_console_facts().await?;
+        self.assert_history_reads().await?;
+        self.assert_capacity().await
+    }
+
     async fn stage(
         &mut self,
         config: &PlacementConfig,
@@ -273,6 +420,40 @@ impl Controller {
             .as_str()
             .context("rollout ID")?
             .to_owned())
+    }
+
+    /// Publishes one secret of placement `api` at revision 1 and waits until it is stored.
+    async fn set_secret(&mut self, name: &str, value: String) -> Result<()> {
+        let secret = ManagementCommand::SetSecret {
+            placement_id: "api".into(),
+            expected_revision: 1,
+            name: name.into(),
+            value: SecretValue(value),
+        };
+        let operation = self.command(secret).await?.operation_id;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while self.operation(&operation).await?.state != "completed" {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .context("secret publication timeout")?
+    }
+
+    /// Publishes the service token and the secret variable that placement `api` needs at
+    /// revision 1, then starts it.
+    async fn provision_and_start(&mut self) -> Result<()> {
+        let variable = serde_json::to_string(VARIABLE_SECRET)?;
+        self.set_secret("service-token", SERVICE_TOKEN.to_owned())
+            .await?;
+        self.set_secret("credential-secret", variable).await?;
+        let start = ManagementCommand::Start {
+            placement_id: "api".into(),
+            expected_revision: 1,
+        };
+        self.command(start).await?;
+        Ok(())
     }
 
     async fn activate(&mut self, rollout: &str) -> Result<()> {
@@ -612,14 +793,8 @@ impl Fixture {
         })
     }
 
-    async fn catalog_service(
-        &self,
-        version: u32,
-        kind: &str,
-        port: u16,
-        exits: bool,
-    ) -> Result<PlacementConfig> {
-        let mut placement = self.project(version, "/unused").await?;
+    /// The saved project of `version`, opened again, and a new empty flow `name` in it.
+    async fn second_board(&self, version: u32, name: &str) -> Result<(PathBuf, App, Board)> {
         let source = self.directory.path().join(format!("source-{version}"));
         let mut configuration = FlowLikeConfig::new();
         configuration.register_app_meta_store(FlowLikeStore::Local(Arc::new(
@@ -630,11 +805,30 @@ impl Fixture {
             HTTPClient::new_without_refetch(),
         ));
         let app = App::load("project".into(), state.clone()).await?;
-        let mut board = Board::new(
-            Some("service-board".into()),
-            StorePath::from("apps/project"),
-            state,
-        );
+        let board = Board::new(Some(name.into()), StorePath::from("apps/project"), state);
+        Ok((source, app, board))
+    }
+
+    /// Imports the changed project at `source` and points `placement` at the new revision.
+    fn reimport(&self, placement: &mut PlacementConfig, source: &Path) -> Result<()> {
+        let receipt = artifact_io(|| {
+            project_artifacts::import_local(&self.store()?, &self.root, "project", source)
+        })?;
+        placement.revision = receipt.descriptor.manifest_sha256;
+        placement.project_path =
+            project_artifacts::managed_revision(&self.root, "project", &placement.revision)?;
+        Ok(())
+    }
+
+    async fn catalog_service(
+        &self,
+        version: u32,
+        kind: &str,
+        port: u16,
+        exits: bool,
+    ) -> Result<PlacementConfig> {
+        let mut placement = self.project(version, "/unused").await?;
+        let (source, app, mut board) = self.second_board(version, "service-board").await?;
         let catalog = flow_like_catalog::get_catalog();
         let mut insert = |name: &str, id: &str| -> Result<()> {
             let mut node = catalog
@@ -687,18 +881,140 @@ impl Fixture {
         event.board_id = board.id;
         event.config.clear();
         event.save(&app, Some((version, 0, 0))).await?;
-        let receipt = artifact_io(|| {
-            project_artifacts::import_local(&self.store()?, &self.root, "project", &source)
-        })?;
-        placement.revision = receipt.descriptor.manifest_sha256;
-        placement.project_path =
-            project_artifacts::managed_revision(&self.root, "project", &placement.revision)?;
+        self.reimport(&mut placement, &source)?;
         placement.events[0].event_id = event.id;
         placement.hosting = None;
         placement.variables.clear();
         placement.secret_overrides.clear();
         placement.max_replicas = 1;
         Ok(placement)
+    }
+
+    /// Adds the event `report` to the project of `version` and to `placement`: a schedule
+    /// on a flow of its own whose start node ends at once. A schedule runs in one process.
+    async fn with_schedule(
+        &self,
+        mut placement: PlacementConfig,
+        version: u32,
+        schedule: Value,
+    ) -> Result<PlacementConfig> {
+        let (source, app, mut board) = self.second_board(version, "schedule-board").await?;
+        let mut tick = flow_like_catalog::get_catalog()
+            .iter()
+            .map(|logic| logic.get_node())
+            .find(|node| node.name == "events_generic")
+            .context("catalog node events_generic")?;
+        tick.id = "tick".into();
+        board.nodes.insert(tick.id.clone(), tick);
+        board.snapshot_at_version((version, 0, 0), None).await?;
+        let mut event = app.get_event("http", Some((version, 0, 0))).await?;
+        event.id = "report".into();
+        event.node_id = "tick".into();
+        event.event_type = "cron".into();
+        event.board_id = board.id;
+        event.config = serde_json::to_vec(&schedule)?;
+        event.save(&app, Some((version, 0, 0))).await?;
+        self.reimport(&mut placement, &source)?;
+        placement.events.push(EventBinding {
+            event_id: "report".into(),
+            event_version: [version, 0, 0],
+            board_version: [version, 0, 0],
+        });
+        placement.max_replicas = 1;
+        Ok(placement)
+    }
+
+    /// Placement `api` with the one Page event `page` of the project of `version`: a form
+    /// with a default Page, on a flow of its own. A Page needs no settings.
+    async fn page_service(&self, version: u32) -> Result<PlacementConfig> {
+        let mut placement = self.project(version, "/unused").await?;
+        let (source, app, mut board) = self.second_board(version, "page-board").await?;
+        let page = flow_like_runtime::a2ui::widget::Page::new("page", "Page", "/")
+            .with_board_id(board.id.clone());
+        board.save_page(&page, None).await?;
+        board.snapshot_at_version((version, 0, 0), None).await?;
+        let mut event = app.get_event("http", Some((version, 0, 0))).await?;
+        event.id = "page".into();
+        event.event_type = "generic_form".into();
+        event.board_id = board.id;
+        event.node_id.clear();
+        event.config.clear();
+        event.default_page_id = Some("page".into());
+        event.save(&app, Some((version, 0, 0))).await?;
+        self.reimport(&mut placement, &source)?;
+        placement.events = vec![EventBinding {
+            event_id: "page".into(),
+            event_version: [version, 0, 0],
+            board_version: [version, 0, 0],
+        }];
+        placement.variables.clear();
+        placement.secret_overrides.clear();
+        Ok(placement)
+    }
+
+    /// Adds the Endpoint `id` (an `api` event with `config`, on the fixture's first flow,
+    /// which answers `{"revision": version}`) to the project of `version` and to `placement`.
+    async fn with_endpoint(
+        &self,
+        mut placement: PlacementConfig,
+        version: u32,
+        id: &str,
+        config: Value,
+    ) -> Result<PlacementConfig> {
+        let (source, app, _) = self.second_board(version, "unused").await?;
+        let mut event = app.get_event("http", Some((version, 0, 0))).await?;
+        event.id = id.into();
+        event.event_type = "api".into();
+        event.config = serde_json::to_vec(&config)?;
+        event.save(&app, Some((version, 0, 0))).await?;
+        self.reimport(&mut placement, &source)?;
+        placement.events.push(EventBinding {
+            event_id: id.into(),
+            event_version: [version, 0, 0],
+            board_version: [version, 0, 0],
+        });
+        Ok(placement)
+    }
+
+    /// The Page `id` of placement `api` answers its bootstrap to the service token only.
+    async fn assert_page(&self, id: &str) -> Result<()> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()?;
+        let url = format!("http://127.0.0.1:{}/pages/{id}/bootstrap", self.port);
+        let refused = client.get(&url).send().await?.status();
+        ensure!(refused == reqwest::StatusCode::UNAUTHORIZED, "{refused}");
+        let bootstrap: Value = client
+            .get(&url)
+            .bearer_auth(SERVICE_TOKEN)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        ensure!(
+            bootstrap["event_id"] == id,
+            "unexpected bootstrap {bootstrap}"
+        );
+        Ok(())
+    }
+
+    /// The running process of the first replica of placement `api`.
+    fn process(&self) -> Result<u32> {
+        let record = self.store()?.get_placement("api")?.context("placement")?;
+        let replica = record.replicas.first().context("first replica")?;
+        replica.process_id.context("running replica")
+    }
+
+    /// The schedule state the placement process of `api` keeps under its data root.
+    fn schedule_state(&self) -> Value {
+        let file = self
+            .root
+            .join("placement-data/api/current/store/.standalone-schedule/api/state.json");
+        std::fs::read(file)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
     }
 
     async fn wait_ready(&self, revision: u64) -> Result<()> {
@@ -910,6 +1226,203 @@ async fn catalog_rest_mcp_and_daemon_rollouts_wait_for_readiness_and_rollback() 
         agent.stop().await?;
     }
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires loopback listeners and spawning the standalone runtime binary"]
+async fn a_schedule_joins_a_served_service_by_a_safe_update_and_a_broken_one_never_starts()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    let mut controller = fixture.controller().await?;
+    let mut agent = served_service(&fixture, &mut controller).await?;
+    // A service without a schedule keeps no schedule state.
+    assert_eq!(fixture.schedule_state(), Value::Null);
+    let report = update_adds_a_schedule(&fixture, &mut controller).await?;
+    broken_schedule_never_starts(&fixture, &mut controller, &report).await?;
+    stop_ends_the_schedule(&fixture, &mut controller).await?;
+    agent.stop().await
+}
+
+/// Service `api` serving `/first` at revision 1 from one process of a started agent.
+async fn served_service(fixture: &Fixture, controller: &mut Controller) -> Result<Agent> {
+    let mut initial = fixture.project(1, "/first").await?;
+    initial.max_replicas = 1;
+    let apply = ManagementCommand::Apply {
+        config: serde_json::to_value(&initial)?,
+        expected_revision: 0,
+        start: false,
+    };
+    controller.command(apply).await?;
+    let agent = Agent::start(&fixture.root)?;
+    controller.provision_and_start().await?;
+    fixture.wait_ready(1).await?;
+    fixture.assert_serving("/first", 1).await?;
+    Ok(agent)
+}
+
+/// Rolls `candidate` out over revision `from` and waits until the rollout is `expected`.
+async fn roll_out(
+    controller: &mut Controller,
+    candidate: &PlacementConfig,
+    from: u64,
+    expected: &str,
+) -> Result<()> {
+    let rollout = controller.stage(candidate, from, 2).await?;
+    controller.activate(&rollout).await?;
+    controller.wait_rollout(&rollout, expected).await?;
+    Ok(())
+}
+
+/// What the owner's device page says about placement `api`.
+async fn inspected_placement(controller: &mut Controller) -> Result<Value> {
+    let inspected = controller
+        .wire(json!({"type":"inspect_page","after":null,"limit":2}))
+        .await?
+        .result;
+    ensure!(inspected["features"]["scheduled_events"] == 1);
+    Ok(inspected["placements"][0].clone())
+}
+
+/// The update to revision 2 adds a schedule to the served route. Returns what the
+/// placement process keeps about it.
+async fn update_adds_a_schedule(fixture: &Fixture, controller: &mut Controller) -> Result<Value> {
+    let nightly = json!({"expression": "0 0 2 * * *", "timezone": "Europe/Berlin"});
+    let served = fixture.project(2, "/second").await?;
+    let candidate = fixture.with_schedule(served, 2, nightly).await?;
+    roll_out(controller, &candidate, 1, "healthy").await?;
+    fixture.wait_ready(2).await?;
+    fixture.assert_serving("/second", 2).await?;
+    let report = armed_report(fixture).await?;
+    owner_reads_the_schedule(controller, &report).await?;
+    Ok(report)
+}
+
+/// What the process of revision 2 keeps about schedule `report`. It arms the schedule
+/// once the supervisor accepted the service as ready.
+async fn armed_report(fixture: &Fixture) -> Result<Value> {
+    wait_for("armed schedule", || {
+        Ok(fixture.schedule_state()["decided"] == true)
+    })
+    .await?;
+    let state = fixture.schedule_state();
+    assert_eq!(state["config_revision"], 2);
+    let report = state["events"]["report"].clone();
+    assert_eq!(report["expression"], "0 0 2 * * *");
+    assert_eq!(report["timezone"], "Europe/Berlin");
+    assert!(report["hold"].is_null() && report["next_at"].is_i64());
+    assert_eq!(
+        (&report["runs"], &report["watermark"]),
+        (&json!(0), &Value::Null)
+    );
+    Ok(report)
+}
+
+/// The owner reads the schedule from the running process. The agent reuses a file read
+/// for 15 s, so the row can lag behind the state file.
+async fn owner_reads_the_schedule(controller: &mut Controller, report: &Value) -> Result<()> {
+    let mut reported = Value::Null;
+    for _ in 0..80 {
+        reported = inspected_placement(controller).await?;
+        if reported.get("schedules").is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert_eq!(
+        reported["schedules"],
+        json!([{"event_id":"report","expression":"0 0 2 * * *","timezone":"Europe/Berlin","hold":null,
+            "last_outcome":null,"next_at":report["next_at"],"running":false,"last_at":null,
+            "runs":0,"failed":0,"skipped":0,"last_skip":null,"clock_behind":false}])
+    );
+    assert_eq!(reported["schedules_truncated"], false);
+    Ok(())
+}
+
+/// A schedule a device cannot read fails validation and never replaces the service.
+async fn broken_schedule_never_starts(
+    fixture: &Fixture,
+    controller: &mut Controller,
+    report: &Value,
+) -> Result<()> {
+    let unreadable = json!({"expression": "0 0 9 ? * *"});
+    let served = fixture.project(3, "/third").await?;
+    let broken = fixture.with_schedule(served, 3, unreadable).await?;
+    let process = fixture.process()?;
+    roll_out(controller, &broken, 2, "failed").await?;
+    fixture.wait_ready(2).await?;
+    assert_eq!(fixture.process()?, process);
+    fixture.assert_serving("/second", 2).await?;
+    assert_eq!(fixture.schedule_state()["events"]["report"], *report);
+    Ok(())
+}
+
+/// Stop ends the schedule with the service; its state stays for the next start.
+async fn stop_ends_the_schedule(fixture: &Fixture, controller: &mut Controller) -> Result<()> {
+    let stop = ManagementCommand::Stop {
+        placement_id: "api".into(),
+        expected_revision: 2,
+    };
+    controller.command(stop).await?;
+    wait_for("stopped service", || {
+        Ok(fixture
+            .store()?
+            .get_placement("api")?
+            .is_some_and(|record| record.observed_state == ObservedState::Stopped))
+    })
+    .await?;
+    let reported = inspected_placement(controller).await?;
+    assert!(reported.get("schedules").is_none());
+    assert_eq!(
+        fixture.schedule_state()["events"]["report"]["hold"],
+        Value::Null
+    );
+    Ok(())
+}
+
+/// Needs an agent built with `--features api-events` and the route checks at validation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires loopback listeners and spawning the standalone runtime binary"]
+async fn an_endpoint_joins_a_page_by_a_safe_update_and_a_doubled_route_never_starts() -> Result<()>
+{
+    let fixture = Fixture::new()?;
+    let mut controller = fixture.controller().await?;
+    let initial = fixture.page_service(1).await?;
+    let apply = ManagementCommand::Apply {
+        config: serde_json::to_value(&initial)?,
+        expected_revision: 0,
+        start: false,
+    };
+    controller.command(apply).await?;
+    let mut agent = Agent::start(&fixture.root)?;
+    controller.provision_and_start().await?;
+    fixture.wait_ready(1).await?;
+    fixture.assert_page("page").await?;
+
+    // The editor's default config of an Endpoint, with POST as the method.
+    let orders =
+        json!({"sink_type":"http","method":"POST","path":"/orders","public_endpoint":false});
+    let page = fixture.page_service(2).await?;
+    let candidate = fixture
+        .with_endpoint(page, 2, "orders", orders.clone())
+        .await?;
+    roll_out(&mut controller, &candidate, 1, "healthy").await?;
+    fixture.wait_ready(2).await?;
+    fixture.assert_serving("/orders", 2).await?;
+    fixture.assert_page("page").await?;
+
+    // A second Endpoint reads as POST /orders too: refused before it replaces the service.
+    let page = fixture.page_service(3).await?;
+    let first = fixture.with_endpoint(page, 3, "orders", orders).await?;
+    let doubled = fixture
+        .with_endpoint(first, 3, "orders-again", json!({"path":"orders"}))
+        .await?;
+    let process = fixture.process()?;
+    roll_out(&mut controller, &doubled, 2, "failed").await?;
+    fixture.wait_ready(2).await?;
+    assert_eq!(fixture.process()?, process);
+    fixture.assert_serving("/orders", 2).await?;
+    fixture.assert_page("page").await?;
+    agent.stop().await
 }
 
 async fn assert_catalog_listener(port: u16) -> Result<()> {
@@ -1205,36 +1718,7 @@ async fn workflow_rollout_preserves_secrets_and_mutable_data_across_recovery() -
         .await?;
     assert_eq!(response.result["config_revision"], 1);
     let mut agent = Agent::start(&fixture.root)?;
-    for (name, value) in [
-        ("service-token", SERVICE_TOKEN.to_owned()),
-        ("credential-secret", serde_json::to_string(VARIABLE_SECRET)?),
-    ] {
-        let response = controller
-            .command(ManagementCommand::SetSecret {
-                placement_id: "api".into(),
-                expected_revision: 1,
-                name: name.into(),
-                value: SecretValue(value),
-            })
-            .await?;
-        let operation = response.operation_id;
-        tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                if controller.operation(&operation).await?.state == "completed" {
-                    return Ok::<_, anyhow::Error>(());
-                }
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            }
-        })
-        .await
-        .context("secret publication timeout")??;
-    }
-    controller
-        .command(ManagementCommand::Start {
-            placement_id: "api".into(),
-            expected_revision: 1,
-        })
-        .await?;
+    controller.provision_and_start().await?;
     fixture.wait_ready(1).await?;
     fixture.assert_serving("/first", 1).await?;
     controller
@@ -1446,6 +1930,17 @@ async fn workflow_rollout_preserves_secrets_and_mutable_data_across_recovery() -
     );
     assert_eq!(stopped.running_replicas, 0);
     fixture.assert_preserved(&recovered, &marker)?;
+
+    // The console's history reads, through the same encrypted session as the commands above.
+    let newest_first = [
+        (cancelled_rollout, "cancelled"),
+        (recovered_rollout, "healthy"),
+        (failed_rollout, "rolled_back"),
+        (missing_secret_rollout, "failed"),
+        (invalid_rollout, "failed"),
+        (rollout, "healthy"),
+    ];
+    controller.assert_console_reads(&newest_first).await?;
     agent.stop().await?;
     Ok(())
 }

@@ -784,6 +784,30 @@ async fn push_target_resolution_issues(
 }
 
 impl Event {
+    /// The definition is kept here for deployment; this source must not start its trigger.
+    pub fn is_device_source(&self) -> bool {
+        serde_json::from_slice::<serde_json::Value>(&self.config)
+            .ok()
+            .and_then(|config| config.get("__flow_like_source").cloned())
+            .is_some_and(|source| source == "device")
+    }
+
+    pub fn set_device_source(&mut self) -> flow_like_types::Result<()> {
+        let mut config = if self.config.is_empty() {
+            serde_json::Map::new()
+        } else {
+            serde_json::from_slice::<serde_json::Value>(&self.config)?
+                .as_object()
+                .cloned()
+                .ok_or_else(|| {
+                    flow_like_types::anyhow!("Device event settings must be a JSON object")
+                })?
+        };
+        config.insert("__flow_like_source".into(), serde_json::json!("device"));
+        self.config = serde_json::to_vec(&config)?;
+        Ok(())
+    }
+
     /// Populate the inputs field from the board's node pins
     pub async fn populate_inputs(&mut self, app: &App) -> flow_like_types::Result<()> {
         let board = app
@@ -1059,6 +1083,12 @@ impl Event {
         };
 
         self.validate_variants(old_event.as_ref())?;
+
+        // Trigger editors may send only their own fields. Keep deployment metadata
+        // from the authoritative record so an ordinary edit cannot start its source.
+        if old_event.as_ref().is_some_and(Event::is_device_source) {
+            self.set_device_source()?;
+        }
 
         if let Some(mut old_event) = old_event {
             if !old_event.content_equal(self) || version_type.is_some() {
@@ -1829,6 +1859,51 @@ mod tests {
             exposure: super::EventExposure::Public,
             correlation_mappings: None,
         }
+    }
+
+    #[tokio::test]
+    async fn ordinary_edit_keeps_device_source_when_trigger_settings_are_replaced() {
+        let app = test_app().await;
+        let mut event = storage_event("device-source");
+        event.config = br#"{"expression":"0 9 * * *"}"#.to_vec();
+        event.set_device_source().unwrap();
+        let mut saved = event.upsert(&app, None, true).await.unwrap();
+        saved.name = "Updated schedule".into();
+        saved.config = br#"{"expression":"0 10 * * *"}"#.to_vec();
+
+        let saved = saved.upsert(&app, None, true).await.unwrap();
+        let reloaded = Event::load(&saved.id, &app, None).await.unwrap();
+        assert!(reloaded.is_device_source());
+        let config: serde_json::Value = serde_json::from_slice(&reloaded.config).unwrap();
+        assert_eq!(config["expression"], "0 10 * * *");
+    }
+
+    #[test]
+    fn device_source_keeps_event_active_and_rejects_non_object_config() {
+        let mut event = storage_event("device-source");
+        event.active = true;
+        event.set_device_source().unwrap();
+        assert!(event.active);
+        assert!(event.is_device_source());
+        event.config = br#"[1,2]"#.to_vec();
+        assert!(event.set_device_source().is_err());
+    }
+
+    #[tokio::test]
+    async fn retrying_device_source_creation_keeps_the_same_id_and_version() {
+        let mut app = test_app().await;
+        let mut event = storage_event("reserved-device-event");
+        event.set_device_source().unwrap();
+        let saved = app
+            .upsert_event(event.clone(), None, Some(true))
+            .await
+            .unwrap();
+        let retried = app.upsert_event(event, None, Some(true)).await.unwrap();
+
+        assert_eq!(retried.id, "reserved-device-event");
+        assert_eq!(retried.event_version, saved.event_version);
+        assert_eq!(app.events, vec!["reserved-device-event"]);
+        assert!(retried.get_versions(&app).await.unwrap().is_empty());
     }
 
     fn test_variant(name: &str) -> EventVariant {

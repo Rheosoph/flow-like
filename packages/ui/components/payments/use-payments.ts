@@ -1,6 +1,10 @@
 "use client";
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	type QueryClient,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { useCallback } from "react";
 import { useAuth } from "react-oidc-context";
 import { useHub } from "../../hooks/use-hub";
@@ -11,7 +15,7 @@ import { useBackend } from "../../state/backend-state";
 export function usePayments() {
 	const backend = useBackend();
 	const auth = useAuth();
-	const { hub } = useHub();
+	const { hub, refetch: refetchConfig } = useHub();
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
@@ -46,6 +50,9 @@ export function usePayments() {
 		ready: !!hubProfile,
 		identity: [hubProfile?.hub, auth.user?.profile.sub],
 		config: hub?.payments,
+		/** False until the hub answered, when `config` can't tell "off" from "unknown". */
+		configLoaded: hub !== undefined,
+		refetchConfig,
 		auth,
 	};
 }
@@ -64,20 +71,30 @@ export function usePaymentQuery<T>(path: string, enabled = true, poll = false) {
 	});
 }
 
+/** Whether this build may sell anything. Store-distributed desktop builds may not. */
+const paymentDistributionQuery = {
+	queryKey: ["payment-distribution"],
+	queryFn: async (): Promise<boolean> => {
+		if (!isTauri()) return true;
+		const { invoke } = await import("@tauri-apps/api/core");
+		const capabilities = await invoke<{ payments_allowed?: boolean }>(
+			"get_system_info",
+		);
+		return capabilities.payments_allowed === true;
+	},
+	staleTime: Number.POSITIVE_INFINITY,
+	retry: false,
+	meta: { persist: false },
+};
+
 export function usePaymentDistribution(): boolean {
-	const policy = useQuery({
-		queryKey: ["payment-distribution"],
-		queryFn: async () => {
-			if (!isTauri()) return true;
-			const { invoke } = await import("@tauri-apps/api/core");
-			const capabilities = await invoke<{ payments_allowed?: boolean }>(
-				"get_system_info",
-			);
-			return capabilities.payments_allowed === true;
-		},
-		staleTime: Number.POSITIVE_INFINITY,
-		retry: false,
-		meta: { persist: false },
-	});
+	const policy = useQuery(paymentDistributionQuery);
 	return policy.data === true;
+}
+
+/** {@link usePaymentDistribution} for code that runs outside a component. */
+export function purchasingAllowed(queryClient: QueryClient): Promise<boolean> {
+	return queryClient
+		.ensureQueryData(paymentDistributionQuery)
+		.catch(() => false);
 }

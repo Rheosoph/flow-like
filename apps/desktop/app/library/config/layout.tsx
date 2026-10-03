@@ -35,6 +35,7 @@ import {
 	useBackend,
 	useDeveloperMode,
 	useExecutionServiceOptional,
+	useHub,
 	useInvoke,
 	useMobileHeader,
 } from "@flow-like/flow-like-ui";
@@ -57,7 +58,10 @@ import {
 	isConfigRouteActive,
 	resolveNavigationItems,
 } from "@flow-like/flow-like-ui/lib/config-nav";
-import { configRouteFillsHeight } from "@flow-like/flow-like-ui/lib/config-route";
+import {
+	configRouteFillsHeight,
+	configRouteOpensMaximized,
+} from "@flow-like/flow-like-ui/lib/config-route";
 import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
@@ -123,7 +127,19 @@ export default function Id({
 		typeof id === "string",
 	);
 
-	const [isMaximized, setIsMaximized] = useState(false);
+	const [cardMaximized, setCardMaximized] = useState(false);
+	// The deploy wizard opens maximized; its toggle is a choice of its own, so
+	// leaving the wizard hands the card back as the user left it.
+	const wizardOpen = configRouteOpensMaximized(
+		currentRoute,
+		searchParams.get("flow"),
+	);
+	const [wizardMaximized, setWizardMaximized] = useState(true);
+	const isMaximized = wizardOpen ? wizardMaximized : cardMaximized;
+	const setIsMaximized = wizardOpen ? setWizardMaximized : setCardMaximized;
+	useEffect(() => {
+		if (!wizardOpen) setWizardMaximized(true);
+	}, [wizardOpen]);
 	const [exportOpen, setExportOpen] = useState(false);
 	const [mobileNavOpen, setMobileNavOpen] = useState(false);
 	const [mobileNavFilter, setMobileNavFilter] = useState("");
@@ -185,10 +201,14 @@ export default function Id({
 		[t],
 	);
 
-	const hostCapabilities = useMemo(
-		() => (backend.offlineWritesState ? new Set(["offlineWrites"]) : undefined),
-		[backend.offlineWritesState],
-	);
+	const { hub } = useHub();
+	const devicesEnabled = hub?.standalone?.enabled === true;
+	const hostCapabilities = useMemo(() => {
+		const capabilities = new Set<string>();
+		if (backend.offlineWritesState) capabilities.add("offlineWrites");
+		if (devicesEnabled) capabilities.add("devices");
+		return capabilities;
+	}, [backend.offlineWritesState, devicesEnabled]);
 
 	// Nav items visible for this app's visibility, paywall and role — shared by
 	// the desktop sidebar and the mobile bottom-sheet switcher (no double

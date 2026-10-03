@@ -147,10 +147,11 @@ pub async fn begin_offline_fork(
     // didn't make it because they only run server-side."
     let token_sites = detect_remote_token_sites(&state, &app_id).await?;
 
-    let credential_subject = match &user {
-        AppUser::Unauthorized => "anonymous-fork".to_string(),
-        _ => user.sub()?,
+    let forker = match &user {
+        AppUser::Unauthorized => None,
+        _ => Some(user.sub()?),
     };
+    let credential_subject = forker.as_deref().unwrap_or("anonymous-fork");
     // `body` is currently empty (see `BeginOfflineForkBody` doc) but
     // kept on the signature so adding fields later is non-breaking.
     let _ = body;
@@ -159,7 +160,7 @@ pub async fn begin_offline_fork(
     // call, no destination storage prefix on the server, no DB rows.
     // Just read source meta, remap + strip + drop-remote, return
     // base64 blobs.
-    let bundle = compute_offline_fork_bundle(&state, &app_id).await?;
+    let bundle = compute_offline_fork_bundle(&state, &app_id, forker.as_deref()).await?;
 
     // Sanity check: a healthy deployment never has `.board` /
     // `.event` files under the *content* store. Don't fail the fork
@@ -191,7 +192,7 @@ pub async fn begin_offline_fork(
     // credential would cost four provider implementations and protect
     // nothing. The exclusion list is honored by the desktop client.
     let scoped = RuntimeCredentials::scoped(
-        &credential_subject,
+        credential_subject,
         &app_id,
         &state,
         CredentialsAccess::ReadAppContent,

@@ -254,6 +254,10 @@ export interface EmbedResult {
 	embeddings: number[][];
 	model: string;
 	usage: { prompt_tokens: number; total_tokens: number };
+	/** True when token counts are estimated from input bytes. */
+	usage_estimated?: boolean;
+	/** Whether the provider reported token usage. Older servers omit this field. */
+	usage_available?: boolean;
 }
 
 export type BitType =

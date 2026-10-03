@@ -80,6 +80,10 @@ pub fn routes() -> Router<AppState> {
             "/{course_id}/links/{alias}/open",
             post(shared_app::open_shared_app),
         )
+        .route(
+            "/{course_id}/links/{alias}/packages",
+            post(shared_app::sync_shared_app_packages),
+        )
         .route("/{course_id}/translate", get(translate::translate))
         .route("/{course_id}/enroll", post(enrollment::enroll))
         .route("/enrollments/me", get(enrollment::get_my_enrollments))

@@ -439,6 +439,7 @@ function WidgetTile({
 				style={DOT_GRID}
 			>
 				<WidgetThumbnail
+					appId={appId}
 					widget={widget.data}
 					isLoading={widget.isLoading}
 					thumbnail={meta?.thumbnail ?? widget.data?.thumbnail}
@@ -530,11 +531,13 @@ function WidgetTile({
 }
 
 function WidgetThumbnail({
+	appId,
 	widget,
 	isLoading,
 	thumbnail,
 	scale,
 }: Readonly<{
+	appId: string;
 	widget?: IWidget;
 	isLoading: boolean;
 	thumbnail?: string | null;
@@ -568,7 +571,7 @@ function WidgetThumbnail({
 				}}
 			>
 				<DataProvider initialData={widget?.dataModel ?? []}>
-					<A2UIRenderer surface={surface} isPreviewMode={true} />
+					<A2UIRenderer surface={surface} appId={appId} isPreviewMode={true} />
 				</DataProvider>
 			</div>
 		);

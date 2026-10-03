@@ -2094,35 +2094,168 @@ async fn get_jwks(jwks_url: &str) -> Result<jsonwebtoken::jwk::JwkSet, ApiError>
     Ok(jwks)
 }
 
-/// Resolve the JWKS URL: prefer explicit `jwks_url`, otherwise discover
-/// it from `oidc_discovery_url` (`/.well-known/openid-configuration`).
-async fn resolve_jwks_url(cfg: &Value) -> Result<String, ApiError> {
+const OIDC_DISCOVERY_NAMESPACE: &str = "oidc-discovery-v1";
+const OIDC_DISCOVERY_TTL: Duration = Duration::from_secs(60);
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedOidcDiscovery {
+    jwks_uri: String,
+    expires_at_ms: u64,
+}
+
+struct OidcDiscovery {
+    jwks_uri: String,
+    cache_ttl: Duration,
+}
+
+fn discovery_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn oidc_discovery_cache_key(cfg: &Value) -> String {
+    // Include the exact issuer, URL, and remaining auth configuration. Only the
+    // digest is stored, so configurations cannot reuse each other's discovery.
+    sha256_hex(cfg.to_string().as_bytes())
+}
+
+fn oidc_discovery_cache_ttl(headers: &HeaderMap) -> Duration {
+    let mut seconds = OIDC_DISCOVERY_TTL.as_secs();
+    for header in headers.get_all(axum::http::header::CACHE_CONTROL) {
+        let Ok(value) = header.to_str() else {
+            return Duration::ZERO;
+        };
+        for directive in value.split(',') {
+            let (name, value) = directive
+                .trim()
+                .split_once('=')
+                .unwrap_or((directive.trim(), ""));
+            if ["no-store", "no-cache", "private"]
+                .iter()
+                .any(|v| name.trim().eq_ignore_ascii_case(v))
+            {
+                return Duration::ZERO;
+            }
+            if name.trim().eq_ignore_ascii_case("max-age")
+                || name.trim().eq_ignore_ascii_case("s-maxage")
+            {
+                let Ok(max_age) = value.trim().trim_matches('"').parse::<u64>() else {
+                    return Duration::ZERO;
+                };
+                seconds = seconds.min(max_age);
+            }
+        }
+    }
+    if headers
+        .get_all(axum::http::header::VARY)
+        .iter()
+        .any(|value| {
+            value.to_str().map_or(true, |value| {
+                value.split(',').any(|item| item.trim() == "*")
+            })
+        })
+    {
+        return Duration::ZERO;
+    }
+    let age = headers
+        .get(axum::http::header::AGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or_default();
+    Duration::from_secs(seconds.saturating_sub(age))
+}
+
+fn cacheable_jwks_uri(uri: &str) -> bool {
+    reqwest::Url::parse(uri).is_ok_and(|url| {
+        matches!(url.scheme(), "https" | "http")
+            && url.username().is_empty()
+            && url.password().is_none()
+    })
+}
+
+async fn fetch_oidc_discovery(disco: String) -> Result<OidcDiscovery, ApiError> {
+    let resp = reqwest::Client::new()
+        .get(&disco)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| ApiError::internal(format!("oidc discovery fetch failed: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(ApiError::internal(format!(
+            "oidc discovery returned status {}",
+            resp.status()
+        )));
+    }
+    let cache_ttl = oidc_discovery_cache_ttl(resp.headers());
+    let doc: Value = resp
+        .json()
+        .await
+        .map_err(|e| ApiError::internal(format!("oidc discovery parse failed: {e}")))?;
+    let jwks_uri = doc
+        .get("jwks_uri")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::internal("oidc discovery document has no `jwks_uri`"))?;
+    Ok(OidcDiscovery {
+        jwks_uri: jwks_uri.to_owned(),
+        cache_ttl,
+    })
+}
+
+/// Resolve the JWKS URL: prefer explicit configuration, then reuse successful
+/// discovery briefly across replicas. JWT validation and the JWKS key TTL are
+/// independent of this metadata cache.
+async fn resolve_jwks_url(
+    cache: &crate::cache::CacheBackendHandle,
+    cfg: &Value,
+) -> Result<String, ApiError> {
+    resolve_jwks_url_with(cache, cfg, fetch_oidc_discovery).await
+}
+
+async fn resolve_jwks_url_with<F, Fut>(
+    cache: &crate::cache::CacheBackendHandle,
+    cfg: &Value,
+    fetch: F,
+) -> Result<String, ApiError>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Result<OidcDiscovery, ApiError>>,
+{
     if let Some(url) = cfg.get("jwks_url").and_then(|v| v.as_str()) {
         return Ok(url.to_string());
     }
     if let Some(disco) = cfg.get("oidc_discovery_url").and_then(|v| v.as_str()) {
-        let resp = reqwest::Client::new()
-            .get(disco)
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-            .map_err(|e| ApiError::internal(format!("oidc discovery fetch failed: {e}")))?;
-        if !resp.status().is_success() {
-            return Err(ApiError::internal(format!(
-                "oidc discovery returned status {}",
-                resp.status()
-            )));
+        let key = oidc_discovery_cache_key(cfg);
+        let now = discovery_now_ms();
+        if let Some(hit) = crate::cache::best_effort::get::<CachedOidcDiscovery>(
+            cache,
+            OIDC_DISCOVERY_NAMESPACE,
+            &key,
+        )
+        .await
+            && hit.expires_at_ms > now
+            && hit.expires_at_ms.saturating_sub(now) <= OIDC_DISCOVERY_TTL.as_millis() as u64
+            && cacheable_jwks_uri(&hit.jwks_uri)
+        {
+            return Ok(hit.jwks_uri);
         }
-        let doc: Value = resp
-            .json()
-            .await
-            .map_err(|e| ApiError::internal(format!("oidc discovery parse failed: {e}")))?;
-        if let Some(url) = doc.get("jwks_uri").and_then(|v| v.as_str()) {
-            return Ok(url.to_string());
+        let discovered = fetch(disco.to_owned()).await?;
+        let ttl = discovered.cache_ttl.min(OIDC_DISCOVERY_TTL);
+        if !ttl.is_zero() && cacheable_jwks_uri(&discovered.jwks_uri) {
+            crate::cache::best_effort::set(
+                cache,
+                OIDC_DISCOVERY_NAMESPACE,
+                &key,
+                &CachedOidcDiscovery {
+                    jwks_uri: discovered.jwks_uri.clone(),
+                    expires_at_ms: discovery_now_ms().saturating_add(ttl.as_millis() as u64),
+                },
+                ttl,
+            )
+            .await;
         }
-        return Err(ApiError::internal(
-            "oidc discovery document has no `jwks_uri`",
-        ));
+        return Ok(discovered.jwks_uri);
     }
     Err(ApiError::internal(
         "oauth_bearer auth requires `jwks_url`, `jwks_flow_path`, or `oidc_discovery_url`",
@@ -2171,7 +2304,7 @@ async fn oauth_jwks(state: &AppState, cfg: &Value) -> Result<jsonwebtoken::jwk::
             .map_err(|e| ApiError::internal(format!("jwks_flow_path parse failed: {e}")));
     }
 
-    let jwks_url = resolve_jwks_url(cfg).await?;
+    let jwks_url = resolve_jwks_url(&state.cache, cfg).await?;
     get_jwks(&jwks_url).await
 }
 
@@ -3708,8 +3841,16 @@ async fn mcp_tools_for_event(
             target.board_version,
         )
         .await
-        .map_err(ApiError::internal_error)?;
+        .map_err(mcp_board_load_error)?;
     Ok(mcp_tool_entries(&board, &function_refs))
+}
+
+/// MCP's Streamable HTTP transport reserves 404 for an expired session, which clients answer by
+/// re-initializing. A served board that cannot be loaded (e.g. deleted while its MCP Event stays
+/// active) is a server fault for the app owner, so it never becomes the usual missing-board 404.
+fn mcp_board_load_error(error: flow_like_types::Error) -> ApiError {
+    ApiError::from_board_format_error(&error)
+        .unwrap_or_else(|| ApiError::internal(format!("{error:#}")))
 }
 
 fn mcp_tool_entries(board: &Board, function_refs: &[String]) -> Vec<McpToolEntry> {
@@ -4392,6 +4533,165 @@ mod tests {
     };
 
     #[test]
+    fn oidc_discovery_respects_provider_cache_limits() {
+        use axum::http::{HeaderMap, HeaderValue, header};
+        use std::time::Duration;
+
+        let mut headers = HeaderMap::new();
+        assert_eq!(
+            super::oidc_discovery_cache_ttl(&headers),
+            Duration::from_secs(60)
+        );
+        for (value, expected) in [
+            ("public, max-age=3600", 60),
+            ("max-age=30", 30),
+            ("max-age=600, s-maxage=20", 20),
+            ("no-store", 0),
+            ("no-cache", 0),
+            ("private = \"Set-Cookie\"", 0),
+            ("max-age=0", 0),
+            ("max-age=invalid", 0),
+        ] {
+            headers.insert(header::CACHE_CONTROL, HeaderValue::from_str(value).unwrap());
+            assert_eq!(
+                super::oidc_discovery_cache_ttl(&headers),
+                Duration::from_secs(expected)
+            );
+        }
+        headers.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("max-age=30"),
+        );
+        headers.insert(header::AGE, HeaderValue::from_static("5"));
+        assert_eq!(
+            super::oidc_discovery_cache_ttl(&headers),
+            Duration::from_secs(25)
+        );
+        headers.insert(header::VARY, HeaderValue::from_static("*"));
+        assert_eq!(super::oidc_discovery_cache_ttl(&headers), Duration::ZERO);
+        assert!(!super::cacheable_jwks_uri(
+            "https://user:secret@issuer.example/jwks"
+        ));
+    }
+
+    #[tokio::test]
+    async fn oidc_discovery_is_shared_config_isolated_and_refreshes_after_expiry() {
+        use super::{
+            CachedOidcDiscovery, OIDC_DISCOVERY_NAMESPACE, OIDC_DISCOVERY_TTL, OidcDiscovery,
+        };
+        use crate::cache::{CacheBackendHandle, best_effort};
+
+        let cache = CacheBackendHandle::memory_for_test();
+        let cfg = json!({
+            "oidc_discovery_url": "https://issuer.example/discovery",
+            "issuer": "https://issuer.example",
+            "audience": "first-client",
+        });
+        let first = super::resolve_jwks_url_with(&cache, &cfg, |url| async move {
+            assert_eq!(url, "https://issuer.example/discovery");
+            Ok(OidcDiscovery {
+                jwks_uri: "https://issuer.example/keys-1".into(),
+                cache_ttl: OIDC_DISCOVERY_TTL,
+            })
+        })
+        .await
+        .unwrap();
+        let fresh = CacheBackendHandle::from_store_for_test(cache.store().await.unwrap());
+        let hit = super::resolve_jwks_url_with(&fresh, &cfg, |_| async {
+            panic!("a different Lambda should reuse shared discovery metadata");
+        })
+        .await
+        .unwrap();
+        assert_eq!(hit, first);
+
+        for (field, value) in [
+            ("issuer", "https://other-issuer.example"),
+            (
+                "oidc_discovery_url",
+                "https://issuer.example/other-discovery",
+            ),
+            ("audience", "second-client"),
+        ] {
+            let mut changed = cfg.clone();
+            changed[field] = json!(value);
+            let found = super::resolve_jwks_url_with(&fresh, &changed, |_| async {
+                Ok(OidcDiscovery {
+                    jwks_uri: "https://issuer.example/config-specific".into(),
+                    cache_ttl: OIDC_DISCOVERY_TTL,
+                })
+            })
+            .await
+            .unwrap();
+            assert_eq!(found, "https://issuer.example/config-specific");
+        }
+
+        // Explicit expiry is checked even if a backend has not removed its row.
+        best_effort::set(
+            &fresh,
+            OIDC_DISCOVERY_NAMESPACE,
+            &super::oidc_discovery_cache_key(&cfg),
+            &CachedOidcDiscovery {
+                jwks_uri: first,
+                expires_at_ms: super::discovery_now_ms().saturating_sub(1),
+            },
+            OIDC_DISCOVERY_TTL,
+        )
+        .await;
+        let rotated = super::resolve_jwks_url_with(&fresh, &cfg, |_| async {
+            Ok(OidcDiscovery {
+                jwks_uri: "https://issuer.example/keys-2".into(),
+                cache_ttl: OIDC_DISCOVERY_TTL,
+            })
+        })
+        .await
+        .unwrap();
+        assert_eq!(rotated, "https://issuer.example/keys-2");
+    }
+
+    #[tokio::test]
+    async fn oidc_discovery_does_not_cache_failures_or_override_explicit_urls() {
+        use super::{OIDC_DISCOVERY_NAMESPACE, OidcDiscovery};
+        use crate::cache::{CacheBackendHandle, best_effort};
+        use std::time::Duration;
+
+        let cache = CacheBackendHandle::memory_for_test();
+        let mut cfg = json!({"oidc_discovery_url": "https://issuer.example/discovery"});
+        assert!(
+            super::resolve_jwks_url_with(&cache, &cfg, |_| async {
+                Err(crate::error::ApiError::internal("discovery unavailable"))
+            })
+            .await
+            .is_err()
+        );
+        let found = super::resolve_jwks_url_with(&cache, &cfg, |_| async {
+            Ok(OidcDiscovery {
+                jwks_uri: "https://issuer.example/keys".into(),
+                cache_ttl: Duration::ZERO,
+            })
+        })
+        .await
+        .unwrap();
+        assert_eq!(found, "https://issuer.example/keys");
+        assert!(
+            best_effort::get::<super::CachedOidcDiscovery>(
+                &cache,
+                OIDC_DISCOVERY_NAMESPACE,
+                &super::oidc_discovery_cache_key(&cfg),
+            )
+            .await
+            .is_none()
+        );
+
+        cfg["jwks_url"] = json!("https://issuer.example/explicit");
+        let explicit = super::resolve_jwks_url_with(&cache, &cfg, |_| async {
+            panic!("explicit JWKS configuration must bypass discovery");
+        })
+        .await
+        .unwrap();
+        assert_eq!(explicit, "https://issuer.example/explicit");
+    }
+
+    #[test]
     fn jwks_object_path_resolves_raw_and_encoded_flow_paths_to_one_key() {
         let raw = "apps/x/upload/Übersicht (2)#1.json";
         let expected = flow_like_storage::Path::from(raw);
@@ -5049,5 +5349,24 @@ mod tests {
         assert_eq!(client["auth"]["type"], json!("oauth_bearer"));
         assert_eq!(client["proxy"]["via"], json!("app_connection"));
         assert_eq!(client["proxy"]["origin_app_id"], json!("source-app"));
+    }
+
+    #[tokio::test]
+    async fn missing_mcp_board_is_a_server_error_not_a_session_ending_404() {
+        let missing = flow_like::flow::board::Board::load_proto(
+            std::sync::Arc::new(flow_like_storage::object_store::memory::InMemory::new()),
+            &flow_like_storage::object_store::path::Path::from("apps/app"),
+            "gone",
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        let error = super::mcp_board_load_error(missing);
+        assert_eq!(
+            error.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(error.public_message(), None);
     }
 }

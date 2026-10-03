@@ -20,10 +20,11 @@ use flow_like::bit::Bit;
 use flow_like::flow_like_model_provider::provider::{
     EmbeddingModelProvider, RemoteEmbeddingProvider, RemoteExecutionConfig,
 };
-use flow_like_secrets::{ExposeSecret, SecretRef};
 use flow_like_types::json::{Deserialize, Serialize};
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{EntityTrait, Set};
+
+use super::providers;
 
 const APP_ID_HEADER: &str = "x-flow-like-app-id";
 
@@ -82,6 +83,7 @@ async fn resolve_usage_context(
 struct CachedBit {
     provider: EmbeddingModelProvider,
     remote_config: RemoteExecutionConfig,
+    rate: HostedRateSnapshot,
     cached_at: Instant,
 }
 
@@ -112,6 +114,10 @@ pub struct EmbedResponse {
     pub embeddings: Vec<Vec<f32>>,
     pub model: String,
     pub usage: EmbedUsage,
+    /// Whether token counts are an estimate rather than provider-reported usage.
+    pub usage_estimated: bool,
+    /// False when the provider returned vectors without reporting token usage.
+    pub usage_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,7 +129,14 @@ pub struct EmbedUsage {
 async fn get_cached_bit(
     state: &AppState,
     bit_id: &str,
-) -> Result<(EmbeddingModelProvider, RemoteExecutionConfig), ApiError> {
+) -> Result<
+    (
+        EmbeddingModelProvider,
+        RemoteExecutionConfig,
+        HostedRateSnapshot,
+    ),
+    ApiError,
+> {
     // Check cache first (using sync RwLock - should be fast)
     {
         let cache = BIT_CACHE
@@ -132,12 +145,16 @@ async fn get_cached_bit(
         if let Some(cached) = cache.get(bit_id)
             && cached.cached_at.elapsed() < BIT_CACHE_TTL
         {
-            return Ok((cached.provider.clone(), cached.remote_config.clone()));
+            return Ok((
+                cached.provider.clone(),
+                cached.remote_config.clone(),
+                cached.rate.clone(),
+            ));
         }
     }
 
     // Fetch from storage
-    let (provider, remote_config) = fetch_embedding_provider(state, bit_id).await?;
+    let (provider, remote_config, rate) = fetch_embedding_provider(state, bit_id).await?;
 
     // Cache the result
     {
@@ -149,6 +166,7 @@ async fn get_cached_bit(
             CachedBit {
                 provider: provider.clone(),
                 remote_config: remote_config.clone(),
+                rate: rate.clone(),
                 cached_at: Instant::now(),
             },
         );
@@ -159,19 +177,35 @@ async fn get_cached_bit(
         }
     }
 
-    Ok((provider, remote_config))
+    Ok((provider, remote_config, rate))
 }
 
 async fn fetch_embedding_provider(
     state: &AppState,
     bit_id: &str,
-) -> Result<(EmbeddingModelProvider, RemoteExecutionConfig), ApiError> {
+) -> Result<
+    (
+        EmbeddingModelProvider,
+        RemoteExecutionConfig,
+        HostedRateSnapshot,
+    ),
+    ApiError,
+> {
     let bit_model = bit::Entity::find_by_id(bit_id)
         .one(&state.db)
         .await?
         .ok_or_else(|| anyhow!("Bit not found: {}", bit_id))?;
 
-    embedding_provider_for_bit(&Bit::from(bit_model))
+    let bit = Bit::from(bit_model);
+    let (provider, config) = embedding_provider_for_bit(&bit)?;
+    let rate = if config.implementation == Some(RemoteEmbeddingProvider::Internal) {
+        internal_embedding_rate()
+    } else {
+        let mut rate = crate::bit_pricing::hosted_embedding_rate(&bit)?;
+        crate::routes::chat::hosted_worker::apply_worker_tariff(&mut rate);
+        rate
+    };
+    Ok((provider, config, rate))
 }
 
 pub(crate) fn embedding_provider_for_bit(
@@ -261,13 +295,14 @@ pub async fn embed_text(
     headers: HeaderMap,
     Json(payload): Json<EmbedRequest>,
 ) -> Result<Response, ApiError> {
-    let (embedding_provider, remote_config) = get_cached_bit(&state, &payload.model).await?;
+    let (embedding_provider, remote_config, rate) = get_cached_bit(&state, &payload.model).await?;
     let usage_context = resolve_usage_context(&state, &user, &headers).await?;
     embed_authorized_text(
         state,
         payload,
         embedding_provider,
         remote_config,
+        rate,
         usage_context,
         None,
     )
@@ -287,7 +322,7 @@ pub async fn embed_instance_text(
         &payload.model,
     )
     .await?;
-    let (embedding_provider, remote_config) = get_cached_bit(&state, &payload.model).await?;
+    let (embedding_provider, remote_config, rate) = get_cached_bit(&state, &payload.model).await?;
     let usage_context = UsageRequestContext {
         app_id: instance.app_id.clone(),
         user_id: instance.delegated_user_id.clone(),
@@ -298,6 +333,7 @@ pub async fn embed_instance_text(
         payload,
         embedding_provider,
         remote_config,
+        rate,
         usage_context,
         Some(instance),
     )
@@ -309,46 +345,41 @@ async fn embed_authorized_text(
     payload: EmbedRequest,
     embedding_provider: EmbeddingModelProvider,
     remote_config: RemoteExecutionConfig,
+    rate: HostedRateSnapshot,
     usage_context: UsageRequestContext,
     instance: Option<crate::instances::VerifiedInstanceUsage>,
 ) -> Result<Response, ApiError> {
     let user_id = usage_context.user_id.clone();
-    let rate = internal_embedding_rate();
+    providers::validate_request(&embedding_provider, &remote_config, &payload)?;
+    providers::validate_configuration(&state, &remote_config).await?;
+    rate.validate()?;
     let prefix = match payload.embed_type {
         EmbedType::Query => &embedding_provider.prefix.query,
         EmbedType::Document => &embedding_provider.prefix.paragraph,
     };
-    if payload.input.is_empty() || payload.input.len() > INTERNAL_MAX_BATCH_SIZE {
-        return Err(ApiError::bad_request(
-            "Embedding batch must contain between 1 and 2,048 items",
-        ));
-    }
-    if payload
-        .input
-        .iter()
-        .any(|text| text.len().saturating_add(prefix.len()) > INTERNAL_MAX_TEXT_LEN)
-    {
-        return Err(ApiError::bad_request(
-            "Embedding input exceeds the per-item size limit",
-        ));
-    }
-    let token_count_estimate = embedding_input_bytes(&payload.input, prefix);
-    let max_input_bytes = rate
+    let input_bytes = embedding_input_bytes(&payload.input, prefix);
+    if rate
         .max_input_bytes
-        .ok_or_else(|| ApiError::internal("Internal embedding tariff requires max_input_bytes"))?;
-    if token_count_estimate > max_input_bytes {
+        .is_some_and(|limit| input_bytes > limit)
+    {
         return Err(ApiError::bad_request(
             "Embedding batch exceeds the configured input byte limit",
         ));
     }
-    let price_estimate = rate.provider_cost_bytes(token_count_estimate)?;
+    let token_count_estimate = embedding_reservation_units(&rate, input_bytes, payload.input.len());
+    let price_estimate = match rate.input_micro_usd_per_million_bytes {
+        Some(_) => rate.provider_cost_bytes(input_bytes)?,
+        None => rate.provider_cost(token_count_estimate, 0),
+    };
+    let implementation = remote_config.implementation.unwrap_or_default();
+    let upstream = providers::provider_name(&implementation);
     let start = UsageInvocationStart {
         kind: "embedding",
         user_id: Some(&user_id),
         technical_user_id: usage_context.technical_user_id.as_deref(),
         app_id: usage_context.app_id.as_deref(),
-        provider: Some(&embedding_provider.provider.provider_name),
-        endpoint: Some("internal"),
+        provider: Some(upstream),
+        endpoint: Some(upstream),
         model_id: remote_config.model_id.as_deref().or(Some(&payload.model)),
         estimated_tokens: token_count_estimate,
         estimated_cost_micro_dollars: price_estimate,
@@ -408,6 +439,70 @@ fn embedding_input_bytes(input: &[String], prefix: &str) -> i64 {
         .sum()
 }
 
+fn embedding_reservation_units(
+    rate: &HostedRateSnapshot,
+    input_bytes: i64,
+    item_count: usize,
+) -> i64 {
+    if rate.input_micro_usd_per_million_bytes.is_some() {
+        return input_bytes;
+    }
+    // Reserve the supplied UTF-8 bytes plus the configured context allowance
+    // for each input. A small Bit context cannot under-reserve a longer input
+    // accepted by the upstream model. Settlement uses reported tokens.
+    input_bytes.saturating_add(rate.context_tokens.saturating_mul(item_count as i64))
+}
+
+struct EmbeddingMetering {
+    tokens: i64,
+    price: i64,
+    known_usage: bool,
+    usage_available: bool,
+    usage_estimated: bool,
+    details: serde_json::Value,
+}
+
+fn embedding_metering(
+    implementation: &RemoteEmbeddingProvider,
+    result: &providers::HostedEmbeddingResult,
+    rate: &HostedRateSnapshot,
+    input_bytes: i64,
+    reserved_tokens: i64,
+) -> Result<EmbeddingMetering, ApiError> {
+    let internal = *implementation == RemoteEmbeddingProvider::Internal;
+    // The internal gateway reports whitespace words. Only external provider
+    // usage is eligible for token-priced settlement.
+    let reported_tokens = (!internal)
+        .then(|| result.usage.as_ref().map(|usage| usage.total_tokens))
+        .flatten();
+    let byte_priced = rate.input_micro_usd_per_million_bytes.is_some();
+    let usage_available = reported_tokens.is_some();
+    let usage_estimated = byte_priced && !usage_available;
+    Ok(EmbeddingMetering {
+        tokens: reported_tokens.unwrap_or(if byte_priced { input_bytes } else { 0 }),
+        price: if byte_priced {
+            rate.provider_cost_bytes(input_bytes)?
+        } else {
+            reported_tokens
+                .map(|tokens| rate.provider_cost(tokens, 0))
+                .unwrap_or(0)
+        },
+        known_usage: byte_priced || usage_available,
+        usage_available,
+        usage_estimated,
+        details: serde_json::json!({
+            "meteringBasis": if byte_priced { "input_bytes" } else { "tokens" },
+            "inputBytes": input_bytes,
+            "providerReportedWords": if internal { result.usage.as_ref().map(|usage| usage.total_tokens) } else { None },
+            "providerUsage": result.raw_usage,
+            "tokenCountEstimated": usage_estimated,
+            "usageAvailable": usage_available,
+            "costEstimated": byte_priced,
+            "reservedTokens": reserved_tokens,
+        }),
+    })
+}
+
 #[cfg(test)]
 mod byte_meter_tests {
     use super::*;
@@ -427,6 +522,110 @@ mod byte_meter_tests {
             embedding_input_bytes(&["你好".into(), "abc".into()], "p: "),
             15
         );
+    }
+
+    fn result(tokens: Option<i64>) -> providers::HostedEmbeddingResult {
+        providers::HostedEmbeddingResult {
+            embeddings: vec![vec![0.1, 0.2]],
+            model: None,
+            usage: tokens.map(|tokens| EmbedUsage {
+                prompt_tokens: tokens,
+                total_tokens: tokens,
+            }),
+            provider_request_id: None,
+            raw_usage: None,
+        }
+    }
+
+    fn token_rate() -> HostedRateSnapshot {
+        let mut rate = internal_embedding_rate();
+        rate.input_micro_usd_per_million_bytes = None;
+        rate.input_micro_usd_per_million_tokens = 100_000;
+        rate.request_micro_usd = 5;
+        rate
+    }
+
+    #[test]
+    fn token_reservation_covers_inputs_larger_than_the_declared_context() {
+        let mut rate = token_rate();
+        rate.context_tokens = 2048;
+        assert_eq!(embedding_reservation_units(&rate, 20_000, 1), 22_048);
+        assert_eq!(embedding_reservation_units(&rate, 20_000, 2), 24_096);
+        assert_eq!(
+            embedding_reservation_units(&internal_embedding_rate(), 20_000, 2),
+            20_000
+        );
+    }
+
+    #[test]
+    fn external_token_tariffs_use_reported_usage_including_zero() {
+        for tokens in [0, 200] {
+            let rate = token_rate();
+            let meter = embedding_metering(
+                &RemoteEmbeddingProvider::Cohere,
+                &result(Some(tokens)),
+                &rate,
+                900,
+                2048,
+            )
+            .unwrap();
+            assert_eq!(meter.tokens, tokens);
+            assert_eq!(meter.price, rate.provider_cost(tokens, 0));
+            assert!(meter.known_usage && meter.usage_available);
+            assert!(!meter.usage_estimated);
+        }
+    }
+
+    #[test]
+    fn missing_token_usage_cannot_settle_a_token_tariff() {
+        let meter = embedding_metering(
+            &RemoteEmbeddingProvider::CloudflareWorkersAI,
+            &result(None),
+            &token_rate(),
+            900,
+            2048,
+        )
+        .unwrap();
+        assert_eq!((meter.tokens, meter.price), (0, 0));
+        assert!(!meter.known_usage && !meter.usage_available && !meter.usage_estimated);
+        assert_eq!(meter.details["reservedTokens"], 2048);
+    }
+
+    #[test]
+    fn internal_word_count_is_only_metadata() {
+        let rate = internal_embedding_rate();
+        let meter = embedding_metering(
+            &RemoteEmbeddingProvider::Internal,
+            &result(Some(3)),
+            &rate,
+            1500,
+            1500,
+        )
+        .unwrap();
+        assert_eq!(meter.tokens, 1500);
+        assert_eq!(meter.price, rate.provider_cost_bytes(1500).unwrap());
+        assert!(meter.known_usage && meter.usage_estimated && !meter.usage_available);
+        assert_eq!(meter.details["providerReportedWords"], 3);
+    }
+
+    #[test]
+    fn byte_tariff_settles_without_tokens_but_preserves_them_when_reported() {
+        let rate = internal_embedding_rate();
+        for tokens in [None, Some(100)] {
+            let meter = embedding_metering(
+                &RemoteEmbeddingProvider::CloudflareWorkersAI,
+                &result(tokens),
+                &rate,
+                1500,
+                1500,
+            )
+            .unwrap();
+            assert_eq!(meter.price, rate.provider_cost_bytes(1500).unwrap());
+            assert_eq!(meter.tokens, tokens.unwrap_or(1500));
+            assert!(meter.known_usage);
+            assert_eq!(meter.usage_available, tokens.is_some());
+            assert_eq!(meter.usage_estimated, tokens.is_none());
+        }
     }
 }
 
@@ -451,18 +650,14 @@ pub(crate) async fn execute_hosted_embedding(
         .implementation
         .as_ref()
         .ok_or_else(|| ApiError::bad_request("Remote embedding execution is not configured"))?;
-    let result = match implementation {
-        RemoteEmbeddingProvider::Internal => {
-            call_internal(
-                &state,
-                &embedding_provider,
-                &remote_config,
-                &payload,
-                timeout_ms,
-            )
-            .await
-        }
-    };
+    let result = providers::call_provider(
+        state,
+        &embedding_provider,
+        &remote_config,
+        &payload,
+        timeout_ms,
+    )
+    .await;
     let result = match result {
         Ok(result) => result,
         Err(error) => {
@@ -482,15 +677,21 @@ pub(crate) async fn execute_hosted_embedding(
     };
     let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    // any-embedding reports whitespace word counts, not tokenizer output. The
-    // admitted byte tariff is explicit and cannot be reduced by removing spaces.
-    let reported_words = result.usage.as_ref().map(|usage| usage.total_tokens);
-    let token_count = token_count_estimate;
-    let price = rate.provider_cost_bytes(token_count_estimate)?;
-    let metering = serde_json::json!({
-        "meteringBasis":"input_bytes", "inputBytes":token_count_estimate,
-        "providerReportedWords":reported_words,"tokenCountEstimated":true,"costEstimated":true,
-    });
+    let prefix = match payload.embed_type {
+        EmbedType::Query => &embedding_provider.prefix.query,
+        EmbedType::Document => &embedding_provider.prefix.paragraph,
+    };
+    let input_bytes = embedding_input_bytes(&payload.input, prefix);
+    let metering = embedding_metering(
+        implementation,
+        &result,
+        &rate,
+        input_bytes,
+        token_count_estimate,
+    )?;
+    let token_count = metering.tokens;
+    let price = metering.price;
+    let upstream = providers::provider_name(implementation);
 
     // Best-effort usage tracking
     if let Err(e) = track_embedding_usage(
@@ -502,12 +703,12 @@ pub(crate) async fn execute_hosted_embedding(
         latency_ms,
         usage_context.app_id.as_deref(),
         usage_context.technical_user_id.as_deref(),
-        Some(&embedding_provider.provider.provider_name),
-        Some("internal"),
+        Some(upstream),
+        Some(upstream),
         invocation_id.as_deref(),
         result.provider_request_id.as_deref(),
-        Some(metering),
-        true,
+        Some(metering.details),
+        metering.known_usage,
     )
     .await
     {
@@ -527,9 +728,11 @@ pub(crate) async fn execute_hosted_embedding(
         embeddings: result.embeddings,
         model: result.model.unwrap_or(payload.model),
         usage: EmbedUsage {
-            prompt_tokens: reported_words.unwrap_or(token_count),
-            total_tokens: reported_words.unwrap_or(token_count),
+            prompt_tokens: token_count,
+            total_tokens: token_count,
         },
+        usage_estimated: metering.usage_estimated,
+        usage_available: metering.usage_available,
     }))
 }
 
@@ -607,169 +810,9 @@ async fn track_embedding_usage(
     Ok(())
 }
 
-/// Secret names used for the shared internal embedding gateway.
-const INTERNAL_EMBEDDING_ENDPOINT_SECRET: &str = "INTERNAL_EMBEDDING_ENDPOINT";
-const INTERNAL_EMBEDDING_API_KEY_SECRET: &str = "INTERNAL_EMBEDDING_SECRET";
-
-/// Maximum batch size accepted by the internal gateway
+/// Maximum batch size and per-item bytes admitted by the internal gateway.
 const INTERNAL_MAX_BATCH_SIZE: usize = 2048;
-
-/// Maximum character length per text item
 const INTERNAL_MAX_TEXT_LEN: usize = 100_000;
-
-/// Internal deployments can take up to 80s to cold-start.
-#[cfg(test)]
-const INTERNAL_REQUEST_TIMEOUT_SECS: u64 = 120;
-
-#[derive(Debug, Clone)]
-struct InternalEmbeddingResult {
-    embeddings: Vec<Vec<f32>>,
-    model: Option<String>,
-    usage: Option<EmbedUsage>,
-    provider_request_id: Option<String>,
-    raw_usage: Option<flow_like_types::Value>,
-}
-
-async fn get_secret_string(state: &AppState, secret_name: &str) -> Result<String, ApiError> {
-    state
-        .secrets
-        .get_secret_string(&SecretRef::new(secret_name))
-        .await
-        .map(|s| s.expose_secret().to_string())
-        .map_err(|_| ApiError::internal(format!("Secret '{}' not found", secret_name)))
-}
-
-async fn call_internal(
-    state: &AppState,
-    provider: &EmbeddingModelProvider,
-    config: &RemoteExecutionConfig,
-    payload: &EmbedRequest,
-    request_timeout_ms: u64,
-) -> Result<InternalEmbeddingResult, ApiError> {
-    let endpoint = get_secret_string(state, INTERNAL_EMBEDDING_ENDPOINT_SECRET).await?;
-    let model_id = config
-        .model_id
-        .as_deref()
-        .filter(|model_id| !model_id.trim().is_empty())
-        .ok_or_else(|| ApiError::internal("model_id not configured for Internal"))?;
-    let api_key_secret = config
-        .secret_name
-        .as_deref()
-        .filter(|secret_name| !secret_name.trim().is_empty())
-        .unwrap_or(INTERNAL_EMBEDDING_API_KEY_SECRET);
-    let api_key = get_secret_string(state, api_key_secret).await?;
-
-    // Apply prefix based on embed_type
-    let prefixed_input: Vec<String> = payload
-        .input
-        .iter()
-        .map(|text| match payload.embed_type {
-            EmbedType::Query => format!("{}{}", provider.prefix.query, text),
-            EmbedType::Document => format!("{}{}", provider.prefix.paragraph, text),
-        })
-        .collect();
-
-    // Validate batch size and text length limits
-    if prefixed_input.len() > INTERNAL_MAX_BATCH_SIZE {
-        return Err(ApiError::bad_request(format!(
-            "Batch size {} exceeds maximum of {}",
-            prefixed_input.len(),
-            INTERNAL_MAX_BATCH_SIZE
-        )));
-    }
-    for (i, text) in prefixed_input.iter().enumerate() {
-        if text.len() > INTERNAL_MAX_TEXT_LEN {
-            return Err(ApiError::bad_request(format!(
-                "Input item {} is {} characters, exceeds maximum of {}",
-                i,
-                text.len(),
-                INTERNAL_MAX_TEXT_LEN
-            )));
-        }
-    }
-
-    let url = format!("{}/v1/embeddings", endpoint.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(request_timeout_ms))
-        .build()
-        .map_err(|e| ApiError::internal(format!("Failed to create HTTP client: {}", e)))?;
-    let body = serde_json::json!({
-        "model": model_id,
-        "input": prefixed_input,
-    });
-
-    // A timeout or gateway failure may have incurred inference cost. A new
-    // attempt needs a new reservation instead of silently repeating billed work.
-    {
-        let response_result = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await;
-
-        let response = match response_result {
-            Ok(response) => response,
-            Err(error) => {
-                return Err(ApiError::internal(format!(
-                    "Failed to call Internal gateway: {}",
-                    error
-                )));
-            }
-        };
-
-        let status = response.status();
-
-        if status.is_success() {
-            #[derive(Deserialize)]
-            struct InternalEmbeddingObject {
-                embedding: Vec<f32>,
-                #[allow(dead_code)]
-                index: usize,
-            }
-
-            #[derive(Deserialize)]
-            struct InternalResponse {
-                data: Vec<InternalEmbeddingObject>,
-                model: Option<String>,
-                usage: Option<EmbedUsage>,
-            }
-
-            let resp_json: flow_like_types::Value = response.json().await.map_err(|e| {
-                ApiError::internal(format!("Failed to parse Internal gateway response: {}", e))
-            })?;
-            let provider_request_id = resp_json
-                .get("id")
-                .or_else(|| resp_json.get("request_id"))
-                .and_then(|value| value.as_str())
-                .map(ToOwned::to_owned);
-            let raw_usage = resp_json.get("usage").cloned();
-            let resp: InternalResponse =
-                flow_like_types::json::from_value(resp_json).map_err(|e| {
-                    ApiError::internal(format!("Failed to parse Internal gateway response: {}", e))
-                })?;
-
-            // Sort by index to guarantee order, then extract embeddings
-            let mut items = resp.data;
-            items.sort_by_key(|item| item.index);
-            return Ok(InternalEmbeddingResult {
-                embeddings: items.into_iter().map(|item| item.embedding).collect(),
-                model: resp.model,
-                usage: resp.usage,
-                provider_request_id,
-                raw_usage,
-            });
-        }
-
-        let error = response.text().await.unwrap_or_default();
-        tracing::error!(status = %status, error = %error, "Internal gateway upstream error");
-        return Err(ApiError::internal(format!(
-            "Internal gateway error ({}): {}",
-            status, error
-        )));
-    }
-}
 
 #[cfg(test)]
 mod tests {

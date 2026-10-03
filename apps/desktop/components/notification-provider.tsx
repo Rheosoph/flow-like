@@ -246,7 +246,12 @@ export default function NotificationProvider({
 			await queryClient.refetchQueries({
 				predicate: (query) => {
 					const key = query.queryKey[0];
-					return key === "getNotifications" || key === "listNotifications";
+					return (
+						key === "getNotifications" ||
+						key === "listNotifications" ||
+						key === "getInvites" ||
+						key === "listMyInvitations"
+					);
 				},
 			});
 		} catch (error) {

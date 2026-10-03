@@ -299,6 +299,7 @@ pub(crate) async fn run_event_setup(
         get_event_with_setup_status_from_db(&state.db, &event_id, &app_id)
             .await
             .map_err(|e| ApiError::not_found(e.to_string()))?;
+    super::ensure_source_execution_allowed(&core_event)?;
     if !super::generic_event_endpoint_allowed(&core_event.event_type) {
         return Err(ApiError::forbidden(
             "Ontology action events are managed and invoked through Data Studio",

@@ -10,7 +10,6 @@
 //! database snapshot.
 
 use crate::entity::{
-    app_package,
     sea_orm_active_enums::{WasmCompilationStatus, WasmPackageStatus, WasmPackageVisibility},
     wasm_package, wasm_package_version,
 };
@@ -45,10 +44,7 @@ pub async fn resolve_wasm_packages_for_platform(
     let registry = state.wasm_registry.as_ref()?;
 
     // Lapsed pins keep running through the licence grace period; expired ones do not.
-    let packages = app_package::Entity::find()
-        .filter(app_package::Column::AppId.eq(app_id))
-        .filter(crate::package_license::usable_pins(chrono::Utc::now()))
-        .all(&state.db)
+    let packages = crate::package_license::usable_app_pins(&state.db, app_id)
         .await
         .ok()?;
 
@@ -158,14 +154,20 @@ pub async fn resolve_wasm_packages_for_platform(
     }
 
     let attempted = candidates.len();
-    let signed: Vec<Option<(String, WasmPackageRef)>> = stream::iter(
-        candidates
-            .into_iter()
-            .map(|record| sign_package(registry, target, record)),
-    )
-    .buffer_unordered(SIGN_CONCURRENCY)
-    .collect()
-    .await;
+    let storage_scope = state.storage_identity.meta.cache_scope();
+    let signed: Vec<Option<(String, WasmPackageRef)>> =
+        stream::iter(candidates.into_iter().map(|record| {
+            sign_package(
+                registry,
+                target,
+                record,
+                &state.cache,
+                storage_scope.as_deref(),
+            )
+        }))
+        .buffer_unordered(SIGN_CONCURRENCY)
+        .collect()
+        .await;
     let result: HashMap<String, WasmPackageRef> = signed.into_iter().flatten().collect();
     had_errors |= result.len() < attempted;
 
@@ -190,6 +192,8 @@ async fn sign_package(
     registry: &ServerRegistry,
     target: &str,
     record: wasm_package_version::Model,
+    cache: &crate::cache::CacheBackendHandle,
+    storage_scope: Option<&str>,
 ) -> Option<(String, WasmPackageRef)> {
     let wasm_url = match registry.sign_wasm_path(&record.wasm_path).await {
         Ok(url) => url,
@@ -205,7 +209,14 @@ async fn sign_package(
     };
 
     match registry
-        .sign_cwasm_url(&record.package_id, &record.version, target)
+        .sign_cwasm_url(
+            &record.package_id,
+            &record.version,
+            target,
+            record.compiled_artifact_generation.as_deref(),
+            cache,
+            storage_scope,
+        )
         .await
     {
         Ok((cwasm_url, cwasm_checksum)) => Some((

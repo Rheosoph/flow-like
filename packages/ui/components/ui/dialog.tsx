@@ -58,16 +58,18 @@ function DialogOverlay({
 
 function DialogContent({
 	className,
+	overlayClassName,
 	children,
 	showCloseButton = true,
 	...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
 	showCloseButton?: boolean;
+	overlayClassName?: string;
 }) {
 	const { t } = useTranslation("common");
 	return (
 		<DialogPortal data-slot="dialog-portal">
-			<DialogOverlay />
+			<DialogOverlay className={overlayClassName} />
 			<DialogPrimitive.Content
 				data-slot="dialog-content"
 				className={cn(
@@ -77,7 +79,10 @@ function DialogContent({
 				{...props}
 			>
 				{/* Subtle gradient accent */}
-				<div className="absolute inset-0 rounded-xl bg-gradient-to-br from-primary/[0.02] via-transparent to-purple-500/[0.02] pointer-events-none" />
+				<div
+					data-slot="dialog-accent"
+					className="absolute inset-0 rounded-xl bg-gradient-to-br from-primary/[0.02] via-transparent to-purple-500/[0.02] pointer-events-none"
+				/>
 				{children}
 				{showCloseButton && (
 					<DialogPrimitive.Close

@@ -9,7 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use flow_like::a2ui::widget::Page;
-use flow_like::{app::App, flow::event::Event};
+use flow_like::{app::App, flow::board::Board, flow::event::Event};
 use flow_like_types::anyhow;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
@@ -167,26 +167,41 @@ pub async fn get_page(
     // to a full scan so stale/orphaned DB rows can't make a page
     // permanently unreachable. The same scan strategy is used by the
     // desktop's `get_page` Tauri command.
-    let row = page::Entity::find_by_id(&page_id)
-        .filter(page::Column::AppId.eq(&app_id))
-        .one(&state.db)
-        .await?;
-    let board_hint = requested_board_id
-        .clone()
-        .or_else(|| row.and_then(|r| r.board_id));
-
-    let app = state.master_app(&user.sub()?, &app_id, &state).await?;
+    let board_hint = match requested_board_id.as_ref() {
+        Some(board_id) => Some(board_id.clone()),
+        None => page::Entity::find_by_id(&page_id)
+            .filter(page::Column::AppId.eq(&app_id))
+            .one(&state.db)
+            .await?
+            .and_then(|row| row.board_id),
+    };
+    let subject = user.sub()?;
+    let app_state = state.master_state(&state).await?;
+    let store = Board::meta_store(&app_state).await?;
+    let storage_scope = state.storage_identity.meta.cache_scope();
 
     let try_board = |board_id: String| {
-        let app = &app;
+        let state = &state;
+        let app_id = &app_id;
         let page_id = &page_id;
+        let store = store.clone();
+        let storage_scope = storage_scope.as_deref();
         async move {
-            let board = app.open_board(board_id, None, version_opt).await.ok()?;
-            let board_guard = board.snapshot();
-            match version_opt {
-                Some(v) => board_guard.load_versioned_page(page_id, v, None).await.ok(),
-                None => board_guard.load_page(page_id, None).await.ok(),
-            }
+            let board = state
+                .master_board_shared(app_id, &board_id, state, version_opt)
+                .await
+                .ok()?;
+            super::cached_page::load(
+                &state.cache,
+                store,
+                storage_scope,
+                app_id,
+                &board.board,
+                page_id,
+                version_opt,
+            )
+            .await
+            .ok()
         }
     };
 
@@ -201,6 +216,9 @@ pub async fn get_page(
         return Err(ApiError::NOT_FOUND);
     }
 
+    // Most reads have an exact or database-provided board. Load the app manifest
+    // only when that hint fails and the compatibility scan is actually needed.
+    let app = state.master_app(&subject, &app_id, &state).await?;
     for board_id in app.boards.iter() {
         if let Some(page) = try_board(board_id.clone()).await {
             return page_response(&page, &headers, versioned);

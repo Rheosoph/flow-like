@@ -23,6 +23,13 @@ TARGETS = {
 }
 MAX_RELEASE_BINARY_BYTES = 2 * 1024**3
 CDN_NOT_FOUND_ATTEMPTS, CDN_NOT_FOUND_RETRY_SECONDS = 9, 30
+DAY_SECONDS = 86400
+DEFAULT_RELEASE_LIFETIME_DAYS, MAX_RELEASE_LIFETIME_DAYS = 365, 1825
+# Agents of release 0.1.0 refuse a list dated ahead of their own clock, so every list is dated back.
+ISSUED_BACKDATE_SECONDS = 300
+# At setup an agent checks the list of its own release with the cap it was built with.
+AGENT_LIFETIME_CAP_DAYS = {"0.1.0": 30}
+RELEASE_DATES = ("issued_at", "expires_at")
 
 
 def usable_package_modes(records, container):
@@ -65,13 +72,24 @@ def pinned_image(image):
                 and "/" in image.split("@")[0])
 
 
-def manifest(artifacts, base_url, sequence, image, output, issued_at=None):
+def validity(validity_days, issued_at=None):
+    whole = isinstance(validity_days, int) and not isinstance(validity_days, bool)
+    if not whole or not 1 <= validity_days <= MAX_RELEASE_LIFETIME_DAYS:
+        raise ValueError(f"Release validity must be between 1 and {MAX_RELEASE_LIFETIME_DAYS} days")
+    if issued_at is None:
+        issued_at = int(time.time()) - ISSUED_BACKDATE_SECONDS
+    return {"issued_at": issued_at, "expires_at": issued_at + validity_days * DAY_SECONDS}
+
+
+def manifest(artifacts, base_url, sequence, image, output, issued_at=None,
+             validity_days=DEFAULT_RELEASE_LIFETIME_DAYS):
     url = urlsplit(base_url)
     if (url.scheme != "https" or not url.netloc or url.username or url.password
             or url.query or url.fragment or base_url.endswith("/") or len(base_url) > 800):
         raise ValueError("Artifact base must be a direct HTTPS prefix without credentials or query")
     if not 0 < sequence <= 9007199254740991 or not pinned_image(image):
         raise ValueError("Expected a positive release sequence and digest-pinned container")
+    dates = validity(validity_days, issued_at)
     records = []
     version = schema = None
     for target in TARGETS:
@@ -89,10 +107,8 @@ def manifest(artifacts, base_url, sequence, image, output, issued_at=None):
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
         records.append({"target": target, "url": f"{base_url}/{binary.name}",
                         "size": binary.stat().st_size, "sha256": digest})
-    issued_at = int(time.time()) if issued_at is None else issued_at
     value = {"version": 1, "state_schema_version": schema, "sequence": sequence,
-             "release_version": version, "issued_at": issued_at,
-             "expires_at": issued_at + 30 * 86400, "artifacts": records,
+             "release_version": version, **dates, "artifacts": records,
              "container": {"image": image, "platforms": ["linux/amd64", "linux/arm64"]}}
     usable_package_modes(records, value["container"])
     output.write_text(json.dumps(value, separators=(",", ":")))
@@ -151,7 +167,7 @@ def verified_release(compact, public_keys, current=True):
         if (type(value.get("sequence")) is not int or not 0 < value["sequence"] <= 9007199254740991
                 or value.get("version") != 1 or type(value.get("issued_at")) is not int
                 or type(value.get("expires_at")) is not int or value["issued_at"] < 0
-                or not 0 < value["expires_at"] - value["issued_at"] <= 30 * 86400):
+                or not 0 < value["expires_at"] - value["issued_at"] <= MAX_RELEASE_LIFETIME_DAYS * DAY_SECONDS):
             raise ValueError("Invalid signed release version, sequence or lifetime")
         if current and not value["issued_at"] <= int(time.time()) < value["expires_at"]:
             raise ValueError("Release manifest is expired or not yet valid")
@@ -221,17 +237,52 @@ def published_object(url, method="GET", limit=16384):
     return body
 
 
-def preflight(base_url, sequence, public_keys):
+def preflight(base_url, sequence, public_keys, release_version=None):
     base_url = secure_prefix(base_url)
     stable = published_object(f"{base_url}/release.jws")
     if stable is not None:
-        current = verified_release(stable, json.loads(public_keys), current=False)["sequence"]
-        if sequence <= current:
-            raise ValueError(f"Release sequence {sequence} must be greater than the published sequence {current}")
+        published = verified_release(stable, json.loads(public_keys), current=False)
+        if sequence <= published["sequence"]:
+            raise ValueError(f"Release sequence {sequence} must be greater than the published sequence {published['sequence']}")
+        if release_version is not None and release_version == published.get("release_version"):
+            raise ValueError(f"Release {published['sequence']} is already published as agent version {release_version}; "
+                             "bump the agent version: the update button compares versions")
     # Immutable objects of a failed run keep their bytes; a rebuild under the same sequence cannot replace them.
     for name in [f"flow-like-standalone-{target}" for target in TARGETS] + ["release.jws"]:
         if published_object(f"{base_url}/releases/{sequence}/{name}", "HEAD") is not None:
             raise ValueError(f"An earlier run already uploaded {name} for sequence {sequence}; dispatch with a higher sequence")
+
+
+def renewable(value, sequence, validity_days):
+    # The CDN could serve an older genuine list; re-signing it would give it a new life.
+    if sequence is not None and value["sequence"] != sequence:
+        raise ValueError(f"The published release is number {value['sequence']}, not {sequence}; nothing was renewed")
+    version = value.get("release_version")
+    cap = AGENT_LIFETIME_CAP_DAYS.get(version, MAX_RELEASE_LIFETIME_DAYS)
+    if validity_days > cap:
+        raise ValueError(f"Agents of release {version} accept at most {cap} days, so no device could be set up; "
+                         f"renew for {cap} days or less, or publish a newer release")
+
+
+def renew_manifest(base_url, public_keys, output, validity_days=DEFAULT_RELEASE_LIFETIME_DAYS,
+                   sequence=None, only_if_days_left=None):
+    dates = validity(validity_days)
+    if only_if_days_left is not None and only_if_days_left < 0:
+        raise ValueError("Expected a number of remaining days of zero or more")
+    stable = published_object(f"{secure_prefix(base_url)}/release.jws")
+    if stable is None:
+        raise ValueError("No published release to renew")
+    # The published list may have run out already: a renewal is how it becomes usable again.
+    value = verified_release(stable, json.loads(public_keys), current=False)
+    renewable(value, sequence, validity_days)
+    remaining = value["expires_at"] - int(time.time())
+    if only_if_days_left is not None and remaining > only_if_days_left * DAY_SECONDS:
+        print(f"::notice::Release {value['sequence']} is valid for {remaining // DAY_SECONDS} more days, "
+              f"more than {only_if_days_left}; nothing was renewed")
+        return None
+    value.update(dates)
+    output.write_text(json.dumps(value, separators=(",", ":")))
+    return value
 
 
 class S3Store:
@@ -320,8 +371,7 @@ def anonymous_container_readback(container):
                 raise ValueError(f"Release image is not anonymously pullable for {platform}: {docker_failure(result.stderr)}")
 
 
-def publish_bundle(artifacts, base_url, prefix, public_keys, store, verify_public=public_readback,
-                   verify_container=anonymous_container_readback):
+def signed_manifest(artifacts, base_url, prefix, public_keys):
     base_url = secure_prefix(base_url)
     if not re.fullmatch(r"[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*", prefix):
         raise ValueError("Release prefix must contain safe, nonempty path segments")
@@ -331,7 +381,29 @@ def publish_bundle(artifacts, base_url, prefix, public_keys, store, verify_publi
     if signed_path.is_symlink() or not signed_path.is_file() or signed_path.stat().st_size > 16384:
         raise ValueError("Expected a bounded signed release manifest")
     signed = signed_path.read_bytes()
-    value = verified_release(signed, public_keys)
+    return base_url, signed_path, signed, verified_release(signed, public_keys)
+
+
+def holds(stored, signed):
+    return bool(stored) and stored["body"] == signed
+
+
+def promote(store, stable_key, signed_path, signed, previous, public_keys):
+    # The ETag read before any upload still guards this write. A competing publisher wins once.
+    verified_release(signed, public_keys)
+    if not holds(previous, signed):
+        try:
+            store.put(stable_key, signed_path, etag=previous["etag"] if previous else None, immutable=False)
+        except FileExistsError as error:
+            if not holds(store.read(stable_key), signed):
+                raise ValueError("Stable release changed concurrently; refusing to overwrite it") from error
+    if not holds(store.read(stable_key), signed):
+        raise ValueError("Stable release acknowledgement could not be verified")
+
+
+def publish_bundle(artifacts, base_url, prefix, public_keys, store, verify_public=public_readback,
+                   verify_container=anonymous_container_readback):
+    base_url, signed_path, signed, value = signed_manifest(artifacts, base_url, prefix, public_keys)
     sequence = value["sequence"]
     stable_key = f"{prefix}/release.jws"
     previous = store.read(stable_key)
@@ -367,18 +439,7 @@ def publish_bundle(artifacts, base_url, prefix, public_keys, store, verify_publi
         if not stored or stored["size"] != size or stored["sha256"] != digest:
             raise ValueError("Immutable release object differs from the signed bundle")
         verify_public(url, size, digest)
-    # Keep the old stable ETag throughout uploads. A competing publisher wins once.
-    verified_release(signed, public_keys)
-    if not previous or previous["body"] != signed:
-        try:
-            store.put(stable_key, signed_path, etag=previous["etag"] if previous else None, immutable=False)
-        except FileExistsError as error:
-            current = store.read(stable_key)
-            if not current or current["body"] != signed:
-                raise ValueError("Stable release changed concurrently; refusing to overwrite it") from error
-    current = store.read(stable_key)
-    if not current or current["body"] != signed:
-        raise ValueError("Stable release acknowledgement could not be verified")
+    promote(store, stable_key, signed_path, signed, previous, public_keys)
     verify_public(f"{base_url}/release.jws", len(signed), hashlib.sha256(signed).hexdigest())
     return {"sequence": sequence, "manifest_url": f"{base_url}/release.jws"}
 
@@ -387,6 +448,50 @@ def publish(artifacts, base_url, bucket, prefix, public_keys, endpoint=None):
     keys = json.loads(public_keys)
     result = publish_bundle(artifacts, base_url, prefix, keys, S3Store(bucket, endpoint))
     print(json.dumps(result, separators=(",", ":")))
+
+
+def undated(value):
+    return {name: field for name, field in value.items() if name not in RELEASE_DATES}
+
+
+def renew_bundle(artifacts, base_url, prefix, public_keys, store, verify_public=public_readback):
+    base_url, signed_path, signed, value = signed_manifest(artifacts, base_url, prefix, public_keys)
+    stable_key = f"{prefix}/release.jws"
+    previous = store.read(stable_key)
+    if not previous:
+        raise ValueError("No published release to renew")
+    # releases/<sequence>/release.jws keeps the first signature; only the stable list is re-signed.
+    if undated(verified_release(previous["body"], public_keys, current=False)) != undated(value):
+        raise ValueError("A renewal may change only the dates of the published release; it differs in other fields")
+    promote(store, stable_key, signed_path, signed, previous, public_keys)
+    verify_public(f"{base_url}/release.jws", len(signed), hashlib.sha256(signed).hexdigest())
+    return {"sequence": value["sequence"], "manifest_url": f"{base_url}/release.jws"}
+
+
+def renew_publish(artifacts, base_url, bucket, prefix, public_keys, endpoint=None):
+    keys = json.loads(public_keys)
+    result = renew_bundle(artifacts, base_url, prefix, keys, S3Store(bucket, endpoint))
+    print(json.dumps(result, separators=(",", ":")))
+
+
+def summary(artifacts, public_keys, renewed=False):
+    value = verified_release((artifacts / "release.jws").read_bytes(), json.loads(public_keys), current=False)
+    sequence = value["sequence"]
+    until = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(value["expires_at"]))
+    days = (value["expires_at"] - value["issued_at"]) / DAY_SECONDS
+    minimum = (f"If the hub's minimum release number is below {sequence}, raise it to {sequence}" if renewed
+               else f"Next: set the hub's minimum release number to {sequence}")
+    next_step = (f"{minimum} (`standalone.release_trust.minimum_sequence` in the hub config) and deploy the hub. "
+                 "While the minimum is lower, an older genuine release can still be served to new devices "
+                 "for as long as that older release is valid.")
+    print("\n".join([
+        f"### Standalone release {sequence} {'renewed' if renewed else 'published'}", "",
+        "| | |", "|---|---|",
+        f"| Release number | {sequence} |",
+        f"| Agent version | {value.get('release_version')} |",
+        f"| Valid until | {until} ({days:g} days) |", "",
+        next_step,
+    ]))
 
 
 def dependencies(executable):
@@ -438,7 +543,7 @@ def rootfs(binary, output, epoch):
             result.add(path, arcname=path.relative_to(output), recursive=False, filter=normalize)
 
 
-if __name__ == "__main__":
+def main(argv=None):
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
     describe_parser = commands.add_parser("describe")
@@ -455,17 +560,35 @@ if __name__ == "__main__":
     manifest_parser.add_argument("--sequence", type=int, required=True)
     manifest_parser.add_argument("--image", required=True)
     manifest_parser.add_argument("--output", type=Path, required=True)
-    publish_parser = commands.add_parser("publish")
-    publish_parser.add_argument("--artifacts", type=Path, required=True)
-    publish_parser.add_argument("--base-url", required=True)
-    publish_parser.add_argument("--bucket", required=True)
-    publish_parser.add_argument("--prefix", required=True)
-    publish_parser.add_argument("--public-keys", required=True)
-    publish_parser.add_argument("--endpoint")
+    manifest_parser.add_argument("--validity-days", type=int, default=DEFAULT_RELEASE_LIFETIME_DAYS)
+    for name in ["publish", "renew-publish"]:
+        publish_parser = commands.add_parser(name)
+        publish_parser.add_argument("--artifacts", type=Path, required=True)
+        publish_parser.add_argument("--base-url", required=True)
+        publish_parser.add_argument("--bucket", required=True)
+        publish_parser.add_argument("--prefix", required=True)
+        publish_parser.add_argument("--public-keys", required=True)
+        publish_parser.add_argument("--endpoint")
     preflight_parser = commands.add_parser("preflight")
     preflight_parser.add_argument("--base-url", required=True)
     preflight_parser.add_argument("--sequence", type=int, required=True)
     preflight_parser.add_argument("--public-keys", required=True)
-    args = vars(parser.parse_args())
+    preflight_parser.add_argument("--release-version")
+    renew_parser = commands.add_parser("renew-manifest")
+    renew_parser.add_argument("--base-url", required=True)
+    renew_parser.add_argument("--public-keys", required=True)
+    renew_parser.add_argument("--output", type=Path, required=True)
+    renew_parser.add_argument("--validity-days", type=int, default=DEFAULT_RELEASE_LIFETIME_DAYS)
+    renew_parser.add_argument("--sequence", type=int)
+    renew_parser.add_argument("--only-if-days-left", type=int)
+    summary_parser = commands.add_parser("summary")
+    summary_parser.add_argument("--artifacts", type=Path, required=True)
+    summary_parser.add_argument("--public-keys", required=True)
+    summary_parser.add_argument("--renewed", action="store_true")
+    args = vars(parser.parse_args(argv))
     command = args.pop("command")
-    globals()[command](**args)
+    globals()[command.replace("-", "_")](**args)
+
+
+if __name__ == "__main__":
+    main()

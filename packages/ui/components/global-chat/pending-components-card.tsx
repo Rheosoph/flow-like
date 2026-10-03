@@ -107,7 +107,7 @@ export function PendingComponentsCard() {
 		} finally {
 			applyingRef.current = false;
 		}
-	}, [setPendingComponents]);
+	}, [setPendingComponents, t]);
 
 	const handleDismiss = useCallback(
 		() => setPendingComponents(null, null),
@@ -166,6 +166,7 @@ export function PendingComponentsCard() {
 				components={pending.components}
 				canvasSettings={pending.canvasSettings}
 				warnings={pending.warnings}
+				appId={pending.appId}
 				onApply={() => void handleApply()}
 				onDismiss={handleDismiss}
 			/>

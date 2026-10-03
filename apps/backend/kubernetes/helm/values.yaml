@@ -316,7 +316,8 @@ storage:
     # sends explicit SSE-KMS headers on writes. The runtime role must allow
     # kms:Decrypt and kms:GenerateDataKey on the key either way.
     kmsKeyArn: ""
-    kmsBucketKey: false
+    # Reduce KMS requests on writes with an explicit AWS KMS key.
+    kmsBucketKey: true
     existingSecret: ""
 
   # Cloudflare R2 Configuration (when provider=r2)

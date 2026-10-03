@@ -1,16 +1,21 @@
 //! Resolves an app's package widgets from installed package manifests.
 //!
 //! [`flow_like::a2ui::micro_widget::WidgetProvider`] asks a host-registered
-//! [`PackageWidgetSource`] for the widgets of the packages an app declares. The
+//! [`PackageWidgetSource`] for the widgets of the packages an app pins. On a
+//! device the pins are the `packages` map of the app manifest in its meta store;
+//! a hub does not keep that map in step and answers from its database. The
 //! installed manifest carries the full typed contract, so a widget can be listed
-//! and its pins generated without opening the widget bundle.
+//! and its node pins generated without opening the widget bundle.
 
 use crate::client::RegistryClient;
 use crate::manifest::{PackageManifest, PackageWidgetEntry};
 use crate::registry::InstalledPackage;
 use flow_like::a2ui::micro_widget::{PackageWidgetRef, PackageWidgetSource};
+use flow_like::app::App;
+use flow_like::state::FlowLikeState;
 use flow_like_types::async_trait;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Manifest of the version an app pinned, falling back to the active install.
 ///
@@ -66,12 +71,14 @@ pub fn installed_package_widgets(
         .collect()
 }
 
-#[async_trait]
-impl PackageWidgetSource for RegistryClient {
-    async fn list_widgets(
+impl RegistryClient {
+    /// Widget entries of the given pins (`package_id -> version`), from the
+    /// manifests installed on this device. Only these packages are considered —
+    /// never everything installed locally.
+    pub async fn pinned_widgets(
         &self,
         packages: &HashMap<String, String>,
-    ) -> flow_like_types::Result<Vec<PackageWidgetRef>> {
+    ) -> Vec<PackageWidgetRef> {
         let mut widgets = Vec::new();
 
         for (package_id, version) in packages {
@@ -89,16 +96,35 @@ impl PackageWidgetSource for RegistryClient {
                 .then_with(|| a.widget_id.cmp(&b.widget_id))
         });
 
-        Ok(widgets)
+        widgets
+    }
+}
+
+#[async_trait]
+impl PackageWidgetSource for RegistryClient {
+    async fn list_widgets(
+        &self,
+        app_id: &str,
+        state: Arc<FlowLikeState>,
+    ) -> flow_like_types::Result<Vec<PackageWidgetRef>> {
+        // A device has no pin database: its copy of the app manifest carries them.
+        let app = App::load(app_id.to_string(), state).await?;
+        Ok(self.pinned_widgets(&app.packages).await)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::{InstalledVersion, PackageSource};
+    use crate::registry::{InstalledVersion, PackageSource, RegistryConfig};
     use crate::widget::WidgetContract;
-    use std::path::PathBuf;
+    use crate::widget_bundle::{BuilderWidget, WidgetBundleBuilder};
+    use flow_like::bit::Metadata;
+    use flow_like::state::FlowLikeConfig;
+    use flow_like::utils::http::HTTPClient;
+    use flow_like_storage::files::store::FlowLikeStore;
+    use flow_like_storage::object_store::memory::InMemory;
+    use std::path::{Path, PathBuf};
 
     fn widget_entry(id: &str, name: &str) -> PackageWidgetEntry {
         PackageWidgetEntry {
@@ -204,5 +230,112 @@ mod tests {
 
         assert_eq!(widgets[0].contract, expected);
         assert!(widgets[0].parsed_contract().is_ok());
+    }
+
+    fn memory_state() -> Arc<FlowLikeState> {
+        let store = FlowLikeStore::Memory(Arc::new(InMemory::new()));
+        Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            HTTPClient::new_without_refetch(),
+        ))
+    }
+
+    async fn save_app(state: &Arc<FlowLikeState>, app_id: &str, pins: &[(&str, &str)]) {
+        let mut app = App::new(
+            Some(app_id.to_string()),
+            Metadata::default(),
+            Vec::new(),
+            state.clone(),
+        )
+        .await
+        .expect("test app should be created");
+        app.packages = pins
+            .iter()
+            .map(|(package_id, version)| (package_id.to_string(), version.to_string()))
+            .collect();
+        app.save().await.expect("app manifest should save");
+    }
+
+    async fn device_client(root: &Path) -> RegistryClient {
+        let config = RegistryConfig {
+            cache_dir: root.join("cache"),
+            ..Default::default()
+        };
+        let client = RegistryClient::new(config).unwrap();
+        client.init().await.unwrap();
+        client
+    }
+
+    // A local bundle is the one install that needs no registry to answer.
+    async fn install_local_package(client: &RegistryClient, root: &Path, package_id: &str) {
+        let (bundle, _) = WidgetBundleBuilder::new(package_id, "1.0.0")
+            .add_widget(BuilderWidget {
+                id: "kpi-card".to_string(),
+                name: "KPI Card".to_string(),
+                description: "A widget".to_string(),
+                framework: None,
+                entry_html: b"<html><body></body></html>".to_vec(),
+                contract: WidgetContract::new("kpi-card"),
+                assets: Vec::new(),
+                thumbnail: None,
+            })
+            .build()
+            .unwrap();
+        let project_dir = root.join(package_id);
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(project_dir.join("widgets.flwb"), bundle).unwrap();
+
+        let mut package = PackageManifest::new(package_id, package_id, "1.0.0", "A package");
+        package.widget_bundle_path = Some("widgets.flwb".to_string());
+        client
+            .register_local_package(&project_dir.join("node.wasm"), package)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn only_packages_pinned_in_the_app_manifest_contribute_widgets() {
+        let temp = tempfile::tempdir().unwrap();
+        let client = device_client(temp.path()).await;
+        install_local_package(&client, temp.path(), "com.example.sales").await;
+        install_local_package(&client, temp.path(), "com.example.maps").await;
+        let state = memory_state();
+        save_app(&state, "app-1", &[("com.example.sales", "1.0.0")]).await;
+
+        let widgets = PackageWidgetSource::list_widgets(&client, "app-1", state)
+            .await
+            .unwrap();
+
+        let selectors: Vec<String> = widgets.iter().map(PackageWidgetRef::selector).collect();
+        assert_eq!(
+            selectors,
+            ["pkg:com.example.sales/kpi-card"],
+            "com.example.maps is installed on the device but the app does not pin it"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_app_that_pins_no_package_lists_no_widgets() {
+        let temp = tempfile::tempdir().unwrap();
+        let client = device_client(temp.path()).await;
+        install_local_package(&client, temp.path(), "com.example.sales").await;
+        let state = memory_state();
+        save_app(&state, "app-1", &[]).await;
+
+        let widgets = PackageWidgetSource::list_widgets(&client, "app-1", state)
+            .await
+            .unwrap();
+
+        assert!(widgets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_missing_app_manifest_is_an_error_not_an_empty_list() {
+        let temp = tempfile::tempdir().unwrap();
+        let client = device_client(temp.path()).await;
+
+        let listed = PackageWidgetSource::list_widgets(&client, "app-1", memory_state()).await;
+
+        assert!(listed.is_err());
     }
 }

@@ -41,6 +41,7 @@ pub struct CreateVersionQuery {
         (status = 200, description = "New version created as (major, minor, patch) tuple", body = (u32, u32, u32)),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
+        (status = 404, description = "Board not found"),
         (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]
@@ -66,8 +67,23 @@ pub async fn version_board(
     let (version, published) = board
         .create_version_returning_published(params.version_type.unwrap_or(VersionType::Patch), None)
         .await?;
+    after_publication(&state, &user, &sub, &app_id, &board, published).await;
+    Ok(Json(version))
+}
+
+/// What follows every publication of a board version: who published it, the prerun manifests
+/// of the board and its Pages, the compiled warm-up, the publish-triggered suites and the audit
+/// entry. `board` is the draft after the publication, so its version is the next one.
+pub(super) async fn after_publication(
+    state: &AppState,
+    user: &AppUser,
+    sub: &str,
+    app_id: &str,
+    board: &Board,
+    published: (u32, u32, u32),
+) {
     if let Err(error) = board
-        .record_version_publisher(published, Some(sub.clone()), None)
+        .record_version_publisher(published, Some(sub.to_string()), None)
         .await
     {
         tracing::warn!(
@@ -77,8 +93,38 @@ pub async fn version_board(
             "Publisher of the published board version could not be recorded"
         );
     }
-    let manifest = Arc::new(PrerunManifest::from_board(&board));
-    let page_manifests = published_page_prerun_manifests(&board, published).await;
+    persist_published_prerun_manifests(state, app_id, board, published).await;
+    spawn_compiled_artifact_warmup(state, app_id, board, published);
+    // Publish-triggered regression suites: one indexed projection lookup plus
+    // the dispatches, all on a detached task — the publish PATCH is never
+    // blocked or failed by them.
+    crate::execution::regression::spawn_publish_triggered_suites(
+        state, sub, app_id, &board.id, published,
+    );
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "board.version",
+        "board",
+        board.id,
+        serde_json::json!({
+            "version": crate::routes::app::events::dotted_version_key(board.version),
+        })
+    );
+}
+
+/// Persists the prerun manifest of the published board and of each of its Pages, and caches
+/// the ones that were stored.
+async fn persist_published_prerun_manifests(
+    state: &AppState,
+    app_id: &str,
+    board: &Board,
+    published: (u32, u32, u32),
+) {
+    let manifest = Arc::new(PrerunManifest::from_board(board));
+    let page_manifests = published_page_prerun_manifests(board, published).await;
     let manifest_path = manifest_path(&board.board_dir, &board.id, published);
     let manifest_persisted = persist_prerun_manifest(
         state.meta_bucket.as_generic().as_ref(),
@@ -90,7 +136,7 @@ pub async fn version_board(
     // a later Page write cannot invalidate an already queued callback.
     if manifest_persisted {
         state.prerun_manifest_cache.insert(
-            version_manifest_cache_key(&app_id, &board.id, published),
+            version_manifest_cache_key(app_id, &board.id, published),
             manifest,
         );
     }
@@ -111,7 +157,7 @@ pub async fn version_board(
         {
             state.prerun_manifest_cache.insert(
                 version_page_manifest_cache_key(
-                    &app_id,
+                    app_id,
                     &board.id,
                     published,
                     &page_id,
@@ -121,26 +167,6 @@ pub async fn version_board(
             );
         }
     }
-    spawn_compiled_artifact_warmup(&state, &app_id, &board, published);
-    // Publish-triggered regression suites: one indexed projection lookup plus
-    // the dispatches, all on a detached task — the publish PATCH is never
-    // blocked or failed by them.
-    crate::execution::regression::spawn_publish_triggered_suites(
-        &state, &sub, &app_id, &board_id, published,
-    );
-
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "board.version",
-        "board",
-        board_id,
-        serde_json::json!({
-            "version": crate::routes::app::events::dotted_version_key(version),
-        })
-    );
-    Ok(Json(version))
 }
 
 /// Build one immutable artifact per Page. A damaged Page does not prevent the

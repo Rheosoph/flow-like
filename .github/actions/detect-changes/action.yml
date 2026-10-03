@@ -11,6 +11,9 @@ outputs:
   dsql:
     description: Whether DSQL migrations or their generator changed
     value: ${{ steps.changes.outputs.dsql }}
+  browser:
+    description: Whether the browser crate, the automation nodes, a local crate they depend on or the toolchain changed
+    value: ${{ steps.changes.outputs.browser }}
 
 runs:
   using: composite

@@ -17,6 +17,9 @@ pub mod audio;
 pub mod batch;
 /// ONNX Image Classification Nodes
 pub mod classification;
+/// Typed decision model selection and local GLiNER classification
+#[cfg(feature = "execute")]
+pub(crate) mod decision;
 /// ONNX Depth Estimation Nodes
 pub mod depth;
 /// ONNX Image Object Detection Nodes

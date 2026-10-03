@@ -15,6 +15,7 @@ import {
 	parseExpiry,
 	publicResourceBinding,
 	revokeDeviceGrant,
+	serviceCloudAccess,
 } from "./device-resources";
 
 const grant: ResourceGrant = {
@@ -383,5 +384,119 @@ describe("device resource consent", () => {
 		expect(inventory.instances[0]).not.toHaveProperty("registration_jws");
 		purpose = "unknown";
 		await expect(loadDeviceResources(api, profile, "device")).rejects.toThrow();
+	});
+	test("keeps the newer hub's approval facts and tolerates their absence or malformed values", async () => {
+		const profile = { id: "profile" } as IProfile;
+		const effective = {
+			effective_expires_at: 1500,
+			effective_limit: "access_rules",
+			online_write_blocked: "storage_full",
+			approved_by_user_id: "owner",
+			created_at: 900,
+		};
+		let grants: unknown[] = [{ ...grant, ...effective }];
+		let billings: unknown[] = [
+			{ ...billing, approved_by_user_id: "payer", created_at: 950 },
+		];
+		const api = {
+			get: async (_profile: unknown, path: string) =>
+				path.endsWith("/resource-grants")
+					? grants
+					: path.endsWith("/billing-grants")
+						? billings
+						: [],
+		} as unknown as IApiState;
+		const newer = await loadDeviceResources(api, profile, "device");
+		expect(newer.grants[0]).toEqual({ ...grant, ...effective } as never);
+		expect(newer.billing[0]).toMatchObject({
+			approved_by_user_id: "payer",
+			created_at: 950,
+		});
+
+		grants = [grant];
+		billings = [billing];
+		const older = await loadDeviceResources(api, profile, "device");
+		expect(older.grants[0]).toEqual(grant);
+		expect(older.grants[0].effective_limit).toBeUndefined();
+		expect(older.billing[0].approved_by_user_id).toBeUndefined();
+
+		grants = [
+			{
+				...grant,
+				effective_limit: "future_limit",
+				online_write_blocked: "quota",
+				created_at: -1,
+			},
+		];
+		const odd = await loadDeviceResources(api, profile, "device");
+		expect(odd.grants[0].effective_limit).toBeUndefined();
+		expect(odd.grants[0].online_write_blocked).toBeUndefined();
+		expect(odd.grants[0].created_at).toBeUndefined();
+		expect(odd.grants[0].grant_id).toBe("grant");
+	});
+});
+
+describe("the cloud access of one service", () => {
+	const NOW = 1000;
+	const other = "someone-else";
+	const owner = { id: "owner", owner: true };
+	const guest = { id: "owner", owner: false };
+	const resources = (grants: ResourceGrant[], limits: BillingGrant[] = []) => ({
+		grants,
+		billing: limits,
+		instances: [],
+	});
+
+	test("unknown until the list is read; nothing listed is none for the owner and hidden for a guest", () => {
+		expect(serviceCloudAccess(undefined, "placement", owner, NOW)).toEqual({
+			state: "unknown",
+			approvals: [],
+			limits: [],
+		});
+		const elsewhere = resources([{ ...grant, placement_id: "another" }]);
+		expect(serviceCloudAccess(elsewhere, "placement", owner, NOW).state).toBe(
+			"none",
+		);
+		expect(serviceCloudAccess(elsewhere, "placement", guest, NOW).state).toBe(
+			"hidden",
+		);
+	});
+
+	test("revoked and ended approvals are not cloud access that stays", () => {
+		const ended = resources([
+			{ ...grant, status: "revoked" },
+			{ ...grant, grant_id: "late", expires_at: NOW },
+			{ ...grant, grant_id: "cut", effective_expires_at: NOW - 60 },
+		]);
+		expect(serviceCloudAccess(ended, "placement", owner, NOW).state).toBe(
+			"none",
+		);
+	});
+
+	test("the owner may end every approval, a guest the ones they gave; limits are the ones this account pays", () => {
+		const listed = resources(
+			[grant, { ...grant, grant_id: "theirs", delegating_user_id: other }],
+			[
+				billing,
+				{
+					...billing,
+					billing_grant_id: "paid-by-them",
+					grant_id: "theirs",
+					payer_id: other,
+				},
+				{ ...billing, billing_grant_id: "revoked", status: "revoked" },
+				{ ...billing, billing_grant_id: "elsewhere", grant_id: "another" },
+			],
+		);
+		expect(serviceCloudAccess(listed, "placement", owner, NOW)).toEqual({
+			state: "listed",
+			approvals: ["grant", "theirs"],
+			limits: ["billing"],
+		});
+		expect(serviceCloudAccess(listed, "placement", guest, NOW)).toEqual({
+			state: "listed",
+			approvals: ["grant"],
+			limits: ["billing"],
+		});
 	});
 });

@@ -3,6 +3,7 @@ use ed25519_dalek::{Signature, Signer as _, VerifyingKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest as _, Sha256};
+use unicode_normalization::UnicodeNormalization as _;
 use url::{Host, Url};
 
 use crate::{
@@ -203,6 +204,15 @@ pub fn verify_client_assertion(
     Ok(claims)
 }
 
+/// The signed `iat` of a client assertion whose type, key and signature are valid.
+/// It explains an assertion already rejected with `InvalidTime` and authorizes nothing.
+pub fn client_assertion_signed_iat(
+    compact: &str,
+    registered_key: &Ed25519PublicKey,
+) -> Result<i64> {
+    Ok(verify_pinned::<ClientAssertion>(compact, registered_key, CLIENT_ASSERTION_JWS_TYPE)?.iat)
+}
+
 pub fn sign_enrollment_proof(claims: &EnrollmentProof, key: &SigningKey) -> Result<String> {
     validate_enrollment_proof(claims)?;
     sign_pinned(claims, key, ENROLLMENT_PROOF_JWS_TYPE)
@@ -248,16 +258,7 @@ pub fn verify_dpop(
     registered_key: &Ed25519PublicKey,
     context: &DpopContext<'_>,
 ) -> Result<DpopProof> {
-    let segments = split_compact(compact)?;
-    let header: DpopHeader = decode_json(segments[0], 2048)?;
-    if header.typ != DPOP_JWS_TYPE {
-        return Err(ProtocolError::Invalid("DPoP JOSE type"));
-    }
-    if header.jwk != *registered_key || header.jwk.thumbprint()? != context.key_thumbprint {
-        return Err(ProtocolError::KeyMismatch);
-    }
-    verify_signature(&segments, registered_key)?;
-    let claims: DpopProof = decode_json(segments[1], MAX_COMPACT_JWS_BYTES)?;
+    let claims = signed_dpop(compact, registered_key, Some(context.key_thumbprint))?;
     validate_dpop_shape(&claims)?;
     if claims.htm != context.method || claims.htu != canonical_dpop_htu(context.url)? {
         return Err(ProtocolError::BindingMismatch);
@@ -279,6 +280,35 @@ pub fn verify_dpop(
         return Err(ProtocolError::InvalidTime);
     }
     Ok(claims)
+}
+
+/// The signed `iat` of a DPoP proof whose type, embedded key and signature are valid.
+/// It explains a proof already rejected with `InvalidTime` and authorizes nothing.
+pub fn dpop_signed_iat(compact: &str, registered_key: &Ed25519PublicKey) -> Result<i64> {
+    Ok(signed_dpop(compact, registered_key, None)?.iat)
+}
+
+/// Claims signed by the registered key, not yet bound to a request or a time window.
+fn signed_dpop(
+    compact: &str,
+    registered_key: &Ed25519PublicKey,
+    key_thumbprint: Option<&str>,
+) -> Result<DpopProof> {
+    let segments = split_compact(compact)?;
+    let header: DpopHeader = decode_json(segments[0], 2048)?;
+    if header.typ != DPOP_JWS_TYPE {
+        return Err(ProtocolError::Invalid("DPoP JOSE type"));
+    }
+    if header.jwk != *registered_key {
+        return Err(ProtocolError::KeyMismatch);
+    }
+    if let Some(expected) = key_thumbprint
+        && header.jwk.thumbprint()? != expected
+    {
+        return Err(ProtocolError::KeyMismatch);
+    }
+    verify_signature(&segments, registered_key)?;
+    decode_json(segments[1], MAX_COMPACT_JWS_BYTES)
 }
 
 pub fn compact_digest(compact: &str) -> String {
@@ -588,6 +618,22 @@ pub(crate) fn bounded_text(value: &str, max: usize) -> Result<()> {
         return Err(ProtocolError::Invalid("text field"));
     }
     Ok(())
+}
+
+pub const MAX_DISPLAY_NAME_CHARS: usize = 64;
+
+/// Owner-chosen labels are stored trimmed and NFC-normalized, so every client renders
+/// and compares the same text.
+pub fn normalize_display_name(value: &str) -> Result<String> {
+    let normalized = value.nfc().collect::<String>();
+    let normalized = normalized.trim();
+    if normalized.is_empty()
+        || normalized.chars().count() > MAX_DISPLAY_NAME_CHARS
+        || normalized.chars().any(char::is_control)
+    {
+        return Err(ProtocolError::Invalid("display name"));
+    }
+    Ok(normalized.to_owned())
 }
 
 fn nonce(value: &str) -> Result<()> {
@@ -1038,5 +1084,92 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn signed_issue_times_are_read_only_from_proofs_of_the_registered_key() {
+        let key = SigningKey::generate();
+        let other = SigningKey::generate();
+        let thumbprint = key.public_key().thumbprint().unwrap();
+        let ahead = DpopProof {
+            jti: "0123456789abcdef-dpop-proof".into(),
+            htm: "POST".into(),
+            htu: TOKEN_ENDPOINT.into(),
+            iat: NOW + 300,
+            ath: None,
+            nonce: None,
+        };
+        let dpop = sign_dpop(&ahead, &key).unwrap();
+        let context = DpopContext {
+            method: "POST",
+            url: TOKEN_ENDPOINT,
+            access_token: None,
+            nonce: None,
+            key_thumbprint: &thumbprint,
+            now: NOW,
+        };
+        assert!(matches!(
+            verify_dpop(&dpop, &key.public_key(), &context),
+            Err(ProtocolError::InvalidTime)
+        ));
+        assert_eq!(
+            dpop_signed_iat(&dpop, &key.public_key()).unwrap(),
+            NOW + 300
+        );
+        assert!(dpop_signed_iat(&dpop, &other.public_key()).is_err());
+        let mut forged = dpop.split('.').map(str::to_owned).collect::<Vec<_>>();
+        forged[1] = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&DpopProof {
+                iat: NOW,
+                ..ahead.clone()
+            })
+            .unwrap(),
+        );
+        assert!(matches!(
+            dpop_signed_iat(&forged.join("."), &key.public_key()),
+            Err(ProtocolError::InvalidSignature)
+        ));
+
+        let stale = sign_client_assertion(&assertion(), &key).unwrap();
+        assert!(matches!(
+            verify_client_assertion(&stale, &key.public_key(), DEVICE, TOKEN_ENDPOINT, NOW + 600),
+            Err(ProtocolError::InvalidTime)
+        ));
+        assert_eq!(
+            client_assertion_signed_iat(&stale, &key.public_key()).unwrap(),
+            NOW
+        );
+        assert!(client_assertion_signed_iat(&stale, &other.public_key()).is_err());
+        assert!(client_assertion_signed_iat(&dpop, &key.public_key()).is_err());
+        assert!(dpop_signed_iat(&stale, &key.public_key()).is_err());
+    }
+
+    #[test]
+    fn display_names_are_trimmed_normalized_and_bounded() {
+        assert_eq!(
+            normalize_display_name("  Lab GPU (rack 2) ").unwrap(),
+            "Lab GPU (rack 2)"
+        );
+        assert_eq!(normalize_display_name("Cafe\u{301}").unwrap(), "Caf\u{e9}");
+        let longest = "\u{e9}".repeat(MAX_DISPLAY_NAME_CHARS);
+        assert_eq!(normalize_display_name(&longest).unwrap(), longest);
+        // Decomposed input is measured after composition.
+        assert_eq!(
+            normalize_display_name(&"e\u{301}".repeat(MAX_DISPLAY_NAME_CHARS)).unwrap(),
+            longest
+        );
+        for invalid in [
+            "",
+            "   ",
+            "tab\tinside",
+            "line\nbreak",
+            "bell\u{7}",
+            &"x".repeat(MAX_DISPLAY_NAME_CHARS + 1),
+        ] {
+            assert!(
+                normalize_display_name(invalid).is_err(),
+                "{invalid:?} must be rejected"
+            );
+        }
     }
 }

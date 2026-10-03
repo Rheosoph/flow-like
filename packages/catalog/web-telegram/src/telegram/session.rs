@@ -12,16 +12,68 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "execute")]
 use {
-    flow_like_types::{Cacheable, json::json},
+    flow_like_types::{Cacheable, Value, json::json},
     std::{
         any::Any,
         collections::HashMap,
-        sync::{Arc, OnceLock},
+        sync::{
+            Arc, LazyLock, Mutex, OnceLock, PoisonError,
+            atomic::{AtomicU64, Ordering},
+        },
     },
     teloxide::prelude::*,
     teloxide::types::ChatId,
-    tokio::sync::{RwLock, broadcast},
+    tokio::sync::{RwLock, broadcast, oneshot},
 };
+
+// ============================================================================
+// Device bot handles
+// ============================================================================
+// A device never hands a flow its bot token: `local_session.bot_token` carries
+// a handle that resolves to the token inside the placement process only.
+
+#[cfg(feature = "execute")]
+static BOT_CREDENTIALS: LazyLock<std::sync::RwLock<HashMap<String, String>>> =
+    LazyLock::new(Default::default);
+
+/// Lets `handle` stand for `token` in this process. The token then has a
+/// poller: waiting nodes never call `getUpdates` for it.
+#[cfg(feature = "execute")]
+pub fn register_bot_credential(handle: &str, token: &str) {
+    BOT_CREDENTIALS
+        .write()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(handle.to_string(), token.to_string());
+}
+
+#[cfg(feature = "execute")]
+pub fn forget_bot_credential(handle: &str) {
+    BOT_CREDENTIALS
+        .write()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(handle);
+}
+
+/// The token behind a registered handle; any other value is returned unchanged.
+#[cfg(feature = "execute")]
+pub fn resolve(value: &str) -> String {
+    BOT_CREDENTIALS
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(value)
+        .cloned()
+        .unwrap_or_else(|| value.to_string())
+}
+
+/// True while a registered handle owns `token`, i.e. a device poller reads its updates.
+#[cfg(feature = "execute")]
+pub fn has_poller(token: &str) -> bool {
+    BOT_CREDENTIALS
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .values()
+        .any(|registered| registered == token)
+}
 
 // ============================================================================
 // Telegram Update Broadcaster
@@ -36,6 +88,123 @@ use {
 pub enum TelegramBroadcastEvent {
     Message(Box<teloxide::types::Message>),
     CallbackQuery(Box<teloxide::types::CallbackQuery>),
+}
+
+#[cfg(feature = "execute")]
+impl TelegramBroadcastEvent {
+    pub fn from_update(update: teloxide::types::Update) -> Option<Self> {
+        match update.kind {
+            teloxide::types::UpdateKind::Message(message) => Some(Self::Message(Box::new(message))),
+            teloxide::types::UpdateKind::CallbackQuery(query) => {
+                Some(Self::CallbackQuery(Box::new(query)))
+            }
+            _ => None,
+        }
+    }
+}
+
+// ============================================================================
+// Updates from a device poller
+// ============================================================================
+// On a device the bot's own poller reads every update of its token. A waiting
+// node queues for the first update it matches instead of polling itself, and
+// the poller learns whether a node took an update.
+
+#[cfg(feature = "execute")]
+pub type UpdateMatch = Arc<dyn Fn(&TelegramBroadcastEvent) -> bool + Send + Sync>;
+
+#[cfg(feature = "execute")]
+struct Waiter {
+    id: u64,
+    matches: UpdateMatch,
+    deliver: oneshot::Sender<TelegramBroadcastEvent>,
+}
+
+#[cfg(feature = "execute")]
+static WAITERS: LazyLock<Mutex<HashMap<String, Vec<Waiter>>>> = LazyLock::new(Default::default);
+
+#[cfg(feature = "execute")]
+static NEXT_WAITER: AtomicU64 = AtomicU64::new(0);
+
+/// A node's place in the queue of its bot's updates. Dropping it leaves the queue.
+#[cfg(feature = "execute")]
+pub struct UpdateWaiter {
+    token: String,
+    id: u64,
+}
+
+#[cfg(feature = "execute")]
+impl Drop for UpdateWaiter {
+    fn drop(&mut self) {
+        let mut waiters = WAITERS.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(queue) = waiters.get_mut(&self.token) {
+            queue.retain(|waiter| waiter.id != self.id);
+            if queue.is_empty() {
+                waiters.remove(&self.token);
+            }
+        }
+    }
+}
+
+/// Queues for the first update of `token`'s device poller that `matches`.
+#[cfg(feature = "execute")]
+pub fn wait_for_update(
+    token: &str,
+    matches: UpdateMatch,
+) -> (UpdateWaiter, oneshot::Receiver<TelegramBroadcastEvent>) {
+    let id = NEXT_WAITER.fetch_add(1, Ordering::Relaxed);
+    let (deliver, received) = oneshot::channel();
+    WAITERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .entry(token.to_string())
+        .or_default()
+        .push(Waiter {
+            id,
+            matches,
+            deliver,
+        });
+    (
+        UpdateWaiter {
+            token: token.to_string(),
+            id,
+        },
+        received,
+    )
+}
+
+/// teloxide reads an update only from JSON text: from a `Value` its kind is lost.
+#[cfg(feature = "execute")]
+fn parse_update(update: &Value) -> Option<teloxide::types::Update> {
+    let text = flow_like_types::json::to_string(update).ok()?;
+    flow_like_types::json::from_str(&text).ok()
+}
+
+/// Hands an update that a device poller read to the nodes waiting on `token`.
+/// True when one of them took it: the update then starts no run of its own.
+#[cfg(feature = "execute")]
+pub fn broadcast_update_json(token: &str, update: &Value) -> bool {
+    let Some(update) = parse_update(update) else {
+        return false;
+    };
+    let Some(event) = TelegramBroadcastEvent::from_update(update) else {
+        return false;
+    };
+    let mut waiters = WAITERS.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(queue) = waiters.get_mut(token) else {
+        return false;
+    };
+    let Some(index) = queue
+        .iter()
+        .position(|waiter| !waiter.deliver.is_closed() && (waiter.matches)(&event))
+    else {
+        return false;
+    };
+    let waiter = queue.remove(index);
+    if queue.is_empty() {
+        waiters.remove(token);
+    }
+    waiter.deliver.send(event).is_ok()
 }
 
 #[cfg(feature = "execute")]
@@ -147,7 +316,7 @@ impl Cacheable for CachedTelegramBot {
 #[cfg(feature = "execute")]
 impl CachedTelegramBot {
     pub fn new(token: &str) -> Self {
-        let bot = Bot::new(token);
+        let bot = Bot::new(resolve(token));
         Self {
             bot,
             bot_username: None,
@@ -155,7 +324,7 @@ impl CachedTelegramBot {
     }
 
     pub async fn with_bot_info(token: &str) -> flow_like_types::Result<Self> {
-        let bot = Bot::new(token);
+        let bot = Bot::new(resolve(token));
         let me = bot.get_me().await?;
         Ok(Self {
             bot,
@@ -276,5 +445,51 @@ impl NodeLogic for ToTelegramSessionNode {
         Err(flow_like_types::anyhow!(
             "Telegram functionality requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_handle_resolves_until_forgotten() {
+        let handle = "device-bot:evt_session_handle";
+        let token = "700100200:session-handle-test-secret-abcdefghij";
+        assert!(!has_poller(token));
+
+        register_bot_credential(handle, token);
+        assert_eq!(resolve(handle), token);
+        assert!(has_poller(token));
+        assert_eq!(CachedTelegramBot::new(handle).bot.token(), token);
+
+        assert_eq!(
+            resolve("device-bot:evt_never_registered"),
+            "device-bot:evt_never_registered"
+        );
+        assert_eq!(resolve("700100201:plain-token"), "700100201:plain-token");
+        assert_eq!(
+            CachedTelegramBot::new("700100201:plain-token").bot.token(),
+            "700100201:plain-token"
+        );
+        assert!(!has_poller("700100201:plain-token"));
+
+        forget_bot_credential(handle);
+        assert_eq!(resolve(handle), handle);
+        assert!(!has_poller(token));
+    }
+
+    #[test]
+    fn shared_token_keeps_its_poller_while_one_handle_remains() {
+        let token = "700100300:session-shared-test-secret-abcdefghij";
+        register_bot_credential("device-bot:evt_session_shared_a", token);
+        register_bot_credential("device-bot:evt_session_shared_b", token);
+
+        forget_bot_credential("device-bot:evt_session_shared_a");
+        assert!(has_poller(token));
+        assert_eq!(resolve("device-bot:evt_session_shared_b"), token);
+
+        forget_bot_credential("device-bot:evt_session_shared_b");
+        assert!(!has_poller(token));
     }
 }

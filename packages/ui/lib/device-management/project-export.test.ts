@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { type ExportCommands, prepareDesktopProject } from "./project-export";
+import {
+	type ExportCommands,
+	parseExportedLatestEvents,
+	prepareDesktopProject,
+} from "./project-export";
 
 function fixture() {
 	const manifest = new TextEncoder().encode("snapshot manifest");
@@ -95,4 +99,62 @@ test("the exporter cannot smuggle files from another project", async () => {
 	await expect(prepareDesktopProject("project", f.commands)).rejects.toThrow();
 	expect(f.reads).toHaveLength(0);
 	expect(f.releases()).toBe(1);
+});
+
+test("the export says what it did with each event that follows Latest", async () => {
+	const f = fixture();
+	// An export from before Latest events could be deployed says nothing.
+	expect(
+		(await prepareDesktopProject("project", f.commands)).latestEvents,
+	).toBeNull();
+	const prepare = f.commands.prepare;
+	// The literal of run-more-design §1.8.
+	const latest_events = [
+		{
+			event_id: "evt_a",
+			board_id: "board_a",
+			board_version: [0, 0, 8],
+			problem: null,
+		},
+		{
+			event_id: "evt_b",
+			board_id: "board_b",
+			board_version: null,
+			problem: "edited",
+		},
+		{
+			event_id: "evt_c",
+			board_id: "board_c",
+			board_version: null,
+			problem: "target_missing",
+		},
+	];
+	f.commands.prepare = async (id) => ({
+		...(await prepare(id)),
+		latest_events,
+	});
+	expect(
+		(await prepareDesktopProject("project", f.commands)).latestEvents,
+	).toEqual(latest_events as never);
+	expect(parseExportedLatestEvents([])).toEqual([]);
+	// A cause this client does not know loses only the cause; an entry it can't read is dropped, not the list.
+	expect(
+		parseExportedLatestEvents([
+			{
+				event_id: "evt_d",
+				board_id: "board_d",
+				board_version: null,
+				problem: "locked",
+			},
+			{ event_id: "evt_e" },
+			"evt_f",
+		]),
+	).toEqual([
+		{
+			event_id: "evt_d",
+			board_id: "board_d",
+			board_version: null,
+			problem: null,
+		},
+	]);
 });

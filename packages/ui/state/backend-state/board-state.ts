@@ -76,6 +76,8 @@ export interface IFlowIrCommitReadback {
 	app_id: string;
 	board_id: string;
 	graph_fingerprint: string;
+	/** Original fingerprint algorithm for receipts issued before version 2. */
+	legacy_graph_fingerprint?: string;
 	flowscript: string;
 }
 

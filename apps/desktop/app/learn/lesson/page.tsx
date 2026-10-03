@@ -6,6 +6,7 @@ import {
 	type IOAuthProvider,
 	type IStoredOAuthToken,
 	LessonActionButton,
+	LessonAppPackages,
 	LessonContent,
 	LessonWorkspace,
 	type PaneTarget,
@@ -16,6 +17,7 @@ import {
 	useHub,
 	useInvoke,
 	useIsWideScreen,
+	useLessonPackageCheckouts,
 	useLessonWorkspaceLayout,
 } from "@flow-like/flow-like-ui";
 import type {
@@ -241,6 +243,13 @@ function LessonContentPage() {
 		},
 		[profile, courseId, getProfile, auth, queryClient],
 	);
+
+	const syncCopyPackages = useCallback(
+		(alias: string) =>
+			learnApi.syncSharedAppPackages(getProfile(), auth, courseId, alias),
+		[getProfile, auth, courseId],
+	);
+	const packageCheckouts = useLessonPackageCheckouts();
 
 	const buildPaneTarget = useCallback(
 		async (action: LessonAction): Promise<PaneTarget | null> => {
@@ -588,6 +597,18 @@ function LessonContentPage() {
 						))}
 					</div>
 				</section>
+			)}
+
+			{profile && (
+				<LessonAppPackages
+					courseId={courseId}
+					profileId={profileId}
+					appRefs={appRefs}
+					challenges={challenges}
+					linkedAppIds={linkedAppIds}
+					syncCopyPackages={syncCopyPackages}
+					checkouts={packageCheckouts}
+				/>
 			)}
 
 			{challenges.length > 0 && (

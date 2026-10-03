@@ -54,11 +54,11 @@ export async function verifyAtomicBoardReadback({
 		| Pick<IApplyFlowIrCommitResponse, "status" | "persisted_board_fingerprint">
 		| undefined;
 }): Promise<Verification> {
+	const expectedFingerprint = result?.persisted_board_fingerprint;
 	if (
 		result?.status !== "applied" ||
-		!/^flowpilot-board-v1:[0-9a-f]{64}$/.test(
-			result.persisted_board_fingerprint ?? "",
-		)
+		typeof expectedFingerprint !== "string" ||
+		!/^flowpilot-board-v[12]:[0-9a-f]{64}$/.test(expectedFingerprint)
 	) {
 		return {
 			verified: false,
@@ -82,7 +82,10 @@ export async function verifyAtomicBoardReadback({
 					"PERSISTED_BOARD_IDENTITY_MISMATCH: The saved board readback belongs to another app or board.",
 			};
 		}
-		if (readback.graph_fingerprint !== result.persisted_board_fingerprint) {
+		const fingerprint = expectedFingerprint.startsWith("flowpilot-board-v1:")
+			? (readback.legacy_graph_fingerprint ?? readback.graph_fingerprint)
+			: readback.graph_fingerprint;
+		if (fingerprint !== expectedFingerprint) {
 			return {
 				verified: false,
 				diagnostic:

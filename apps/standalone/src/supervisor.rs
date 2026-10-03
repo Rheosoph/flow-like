@@ -4,6 +4,7 @@
 use crate::{
     broker::{WorkloadBroker, drain_retirements},
     config::{PlacementConfig, RestartPolicy},
+    diagnostics::ReplicaRestarts,
     enrollment::DeviceSession,
     state::{DesiredState, ObservedState, PlacementRecord, StateStore},
 };
@@ -138,6 +139,8 @@ struct RetryState {
     failures: u32,
     next_attempt: Instant,
     configuration_failed: bool,
+    max_restarts: u32,
+    last_started_at: Option<i64>,
 }
 
 struct DataPreparation {
@@ -314,13 +317,33 @@ impl RetryState {
             failures: 0,
             next_attempt: Instant::now(),
             configuration_failed: false,
+            max_restarts: RestartPolicy::default().max_restarts,
+            last_started_at: None,
         }
     }
 
     fn failed(&mut self, policy: &RestartPolicy) -> bool {
         self.failures = self.failures.saturating_add(1);
         self.next_attempt = Instant::now() + backoff(policy, self.failures);
+        self.max_restarts = policy.max_restarts;
         self.failures <= policy.max_restarts
+    }
+
+    /// Two failures without a stable run in between count as a crash loop.
+    fn restarts(&self, running_since: Option<Instant>, now: Instant) -> ReplicaRestarts {
+        let stable = running_since
+            .is_some_and(|started| now.saturating_duration_since(started) >= STABLE_UPTIME);
+        let waiting = running_since.is_none()
+            && self.failures > 0
+            && self.failures <= self.max_restarts
+            && self.next_attempt > now;
+        ReplicaRestarts {
+            failures: self.failures,
+            max_restarts: self.max_restarts,
+            crash_looping: self.failures >= 2 && !stable,
+            retry_at: waiting.then_some(self.next_attempt),
+            last_started_at: self.last_started_at,
+        }
     }
 }
 
@@ -588,6 +611,7 @@ impl Reconciler<'_> {
         for record in &records {
             self.reconcile_placement(record).await;
         }
+        self.publish_restarts();
         // Rollout reconciliation takes the write lock; skip it while idle.
         let rollouts = self.store.has_active_rollouts().and_then(|active| {
             if active {
@@ -602,6 +626,19 @@ impl Reconciler<'_> {
             rollouts,
         );
         Ok(())
+    }
+
+    fn publish_restarts(&self) {
+        let now = Instant::now();
+        crate::diagnostics::global().set_replicas(
+            self.retries
+                .iter()
+                .map(|(key, retry)| {
+                    let running_since = self.children.get(key).map(|child| child.started);
+                    (key.clone(), retry.restarts(running_since, now))
+                })
+                .collect(),
+        );
     }
 
     async fn reconcile_placement(&mut self, record: &PlacementRecord) {
@@ -947,6 +984,8 @@ impl Reconciler<'_> {
             let _ = force_kill(&mut child);
             return Err(error);
         }
+        retry.max_restarts = config.restart.max_restarts;
+        retry.last_started_at = Some(now);
         let mut running = RunningChild {
             child,
             isolation,
@@ -1404,6 +1443,43 @@ pub fn require_supported_supervision() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_state_reports_crash_loops_countdowns_and_the_restart_limit() {
+        let policy = RestartPolicy {
+            initial_backoff_secs: 40,
+            max_backoff_secs: 60,
+            max_restarts: 2,
+        };
+        let mut retry = RetryState::new((1, 1));
+        let now = Instant::now();
+        assert_eq!(retry.restarts(None, now).failures, 0);
+        assert!(!retry.restarts(None, now).crash_looping);
+        retry.last_started_at = Some(1000);
+        assert!(retry.failed(&policy));
+        let once = retry.restarts(None, Instant::now());
+        assert_eq!(once.max_restarts, 2);
+        assert!(!once.crash_looping);
+        assert!(once.retry_at.is_some());
+        assert_eq!(once.last_started_at, Some(1000));
+        assert!(retry.failed(&policy));
+        let twice = retry.restarts(None, Instant::now());
+        assert!(twice.crash_looping);
+        let restarting = retry.restarts(Some(Instant::now()), Instant::now());
+        assert!(restarting.crash_looping);
+        assert!(restarting.retry_at.is_none());
+        let stable = Instant::now();
+        assert!(
+            !retry
+                .restarts(Some(stable), stable + STABLE_UPTIME)
+                .crash_looping
+        );
+        assert!(!retry.failed(&policy));
+        let exhausted = retry.restarts(None, Instant::now());
+        assert_eq!(exhausted.failures, 3);
+        assert!(exhausted.crash_looping);
+        assert!(exhausted.retry_at.is_none());
+    }
 
     #[test]
     fn online_rollout_waits_for_retirement_without_failing_or_blocking_offline() -> Result<()> {

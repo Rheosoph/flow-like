@@ -123,6 +123,12 @@ pub struct CompilationTarget {
     pub cwasm_upload_url: String,
     /// Presigned PUT URL for the blake3 checksum file.
     pub checksum_upload_url: String,
+    /// Read the existing generation artifact when a duplicate upload loses creation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwasm_download_url: Option<String>,
+    /// Verify an existing generation checksum before acknowledging a retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checksum_download_url: Option<String>,
     /// Storage implementation that authenticated both PUT URLs.
     pub upload_provider: CompilationStorageProvider,
 }

@@ -8,7 +8,7 @@ import type {
 	IVersionType,
 	PageTrigger,
 } from "@flow-like/flow-like-ui";
-import type { IUserSchedules } from "../event-state";
+import type { IEventUpsertOptions, IUserSchedules } from "../event-state";
 
 export class EmptyEventState implements IEventState {
 	getEvent(
@@ -46,6 +46,7 @@ export class EmptyEventState implements IEventState {
 		versionType?: IVersionType,
 		personalAccessToken?: string,
 		oauthTokens?: Record<string, IOAuthToken>,
+		options?: IEventUpsertOptions,
 	): Promise<IEvent> {
 		throw new Error("Method not implemented.");
 	}

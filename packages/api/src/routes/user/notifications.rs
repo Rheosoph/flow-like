@@ -5,6 +5,7 @@ use crate::{
     push_notifications::{
         DispatchNotificationInput, PushDispatchStatus, dispatch_notification_with_status,
     },
+    routes::registry::users::pending_package_invitations,
     state::AppState,
 };
 use axum::{
@@ -13,8 +14,9 @@ use axum::{
 };
 use flow_like_types::tokio::try_join;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, sea_query::Expr,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait,
+    DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -72,10 +74,20 @@ pub async fn notification_overview(
     db: &DatabaseConnection,
     sub: &str,
 ) -> Result<NotificationOverview, sea_orm::DbErr> {
-    let (invites_count, notifications_count, unread_count) = try_join!(
+    Ok(notification_counts(db, sub).await?.0)
+}
+
+/// The overview includes package invitations; bootstrap's app invitation page
+/// needs the separate app-only total for pagination.
+pub(super) async fn notification_counts(
+    db: &impl ConnectionTrait,
+    sub: &str,
+) -> Result<(NotificationOverview, u64), sea_orm::DbErr> {
+    let (app_invites_count, package_invites_count, notifications_count, unread_count) = try_join!(
         invitation::Entity::find()
             .filter(invitation::Column::UserId.eq(sub))
             .count(db),
+        pending_package_invitations(sub, chrono::Utc::now().fixed_offset()).count(db),
         notification::Entity::find()
             .filter(notification::Column::UserId.eq(sub))
             .count(db),
@@ -85,11 +97,14 @@ pub async fn notification_overview(
             .count(db),
     )?;
 
-    Ok(NotificationOverview {
-        invites_count,
-        notifications_count,
-        unread_count,
-    })
+    Ok((
+        NotificationOverview {
+            invites_count: app_invites_count + package_invites_count,
+            notifications_count,
+            unread_count,
+        },
+        app_invites_count,
+    ))
 }
 
 #[utoipa::path(
@@ -345,6 +360,82 @@ pub async fn create_user_notification(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires FLOW_LIKE_INVITATION_TEST_DATABASE_URL pointing to a disposable PostgreSQL database"]
+    async fn package_invitation_counts_match_the_inbox_and_keep_app_pagination_separate() {
+        use crate::entity::wasm_package_invitation;
+        use sea_orm::{Database, DatabaseBackend, Schema, TransactionTrait, sea_query::Table};
+
+        let url = std::env::var("FLOW_LIKE_INVITATION_TEST_DATABASE_URL")
+            .expect("set FLOW_LIKE_INVITATION_TEST_DATABASE_URL to a disposable database");
+        let db = Database::connect(url).await.unwrap();
+        let txn = db.begin().await.unwrap();
+        let schema = Schema::new(DatabaseBackend::Postgres);
+        for source in [
+            schema.create_table_from_entity(invitation::Entity),
+            schema.create_table_from_entity(notification::Entity),
+            schema.create_table_from_entity(wasm_package_invitation::Entity),
+        ] {
+            // Only these three tables participate in the inbox and count queries.
+            let mut table = Table::create();
+            table.table(source.get_table_name().unwrap().clone());
+            for column in source.get_columns() {
+                table.col(column.clone());
+            }
+            txn.execute(&table).await.unwrap();
+        }
+
+        txn.execute_unprepared(
+            r#"INSERT INTO "Invitation"
+            (id,"userId","appId",name,"byMemberId","createdAt","updatedAt")
+            VALUES ('app-invite','recipient','app','App','member',now(),now()),
+                   ('other-app-invite','other','app','App','member',now(),now());
+            INSERT INTO "Notification" (id,"userId",title,read,type,"createdAt")
+            VALUES ('notice-unread','recipient','Invitation',false,'SYSTEM',now()),
+                   ('notice-read','recipient','Workflow',true,'WORKFLOW',now()),
+                   ('other-notice','other','Other',false,'SYSTEM',now());
+            INSERT INTO "WasmPackageInvitation"
+            (id,"packageId","invitedById","inviteeId",permission,status,"createdAt","expiresAt")
+            VALUES
+              ('recent','recent-package','owner','recipient',4,'PENDING',now(),now()+interval '1 day'),
+              ('no-expiry','older-package','owner','recipient',4,'PENDING',now()-interval '1 day',null),
+              ('expired','expired-package','owner','recipient',4,'PENDING',now(),now()-interval '1 day'),
+              ('accepted','accepted-package','owner','recipient',4,'ACCEPTED',now(),null),
+              ('rejected','rejected-package','owner','recipient',4,'REJECTED',now(),null),
+              ('expired-status','old-package','owner','recipient',4,'EXPIRED',now(),null),
+              ('other-user','other-package','owner','other',4,'PENDING',now(),null)"#,
+        )
+        .await
+        .unwrap();
+
+        let live = pending_package_invitations("recipient", chrono::Utc::now().fixed_offset())
+            .all(&txn)
+            .await
+            .unwrap();
+        assert_eq!(
+            live.iter()
+                .map(|invite| invite.id.as_str())
+                .collect::<Vec<_>>(),
+            ["recent", "no-expiry"]
+        );
+
+        let (overview, app_total) = notification_counts(&txn, "recipient").await.unwrap();
+        assert_eq!(app_total, 1);
+        assert_eq!(overview.invites_count, app_total + live.len() as u64);
+        assert_eq!(overview.notifications_count, 2);
+        assert_eq!(overview.unread_count, 1);
+
+        txn.execute_unprepared(
+            r#"UPDATE "WasmPackageInvitation" SET status='ACCEPTED' WHERE id='recent'"#,
+        )
+        .await
+        .unwrap();
+        let (overview, app_total) = notification_counts(&txn, "recipient").await.unwrap();
+        assert_eq!(overview.invites_count, 2);
+        assert_eq!(app_total, 1);
+        txn.rollback().await.unwrap();
+    }
 
     #[test]
     fn known_kinds_parse_case_insensitively() {

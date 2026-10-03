@@ -435,9 +435,14 @@ export async function scoutGetTemplatePreview(
 	}
 }
 
+const NO_PURCHASE_NOTE =
+	"This app cannot sell packages. A package the preview blocks as `paid` cannot be bought here, so report it as one the user cannot get.";
+
+/** `purchasingAllowed` is false on builds that may not sell anything. */
 export async function scoutForkPreview(
 	backend: IBackendState,
 	args: Record<string, unknown>,
+	purchasingAllowed: boolean,
 ): Promise<ScoutToolResult> {
 	const appId = typeof args.app_id === "string" ? args.app_id : "";
 	if (!appId) {
@@ -454,6 +459,7 @@ export async function scoutForkPreview(
 			// a 403, so `user_can_fork: false` is a normal answer to relay — not an
 			// error to retry.
 			preview,
+			...(purchasingAllowed ? {} : { note: NO_PURCHASE_NOTE }),
 		};
 	} catch (error) {
 		return {

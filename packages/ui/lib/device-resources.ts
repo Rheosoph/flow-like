@@ -11,6 +11,13 @@ const identifier = z
 	.refine((value) => value !== "." && value !== "..");
 const expiry = integer.max(253402300799);
 const status = z.enum(["active", "revoked"]);
+/** Hub additions (BG32/33/36) that older hubs omit; a malformed value reads as absent. */
+const optional = <T extends z.ZodTypeAny>(schema: T) =>
+	schema.optional().catch(undefined);
+const approvalAudit = {
+	approved_by_user_id: optional(z.string().min(1)),
+	created_at: optional(expiry),
+};
 const resourceSchema = z.object({
 	grant_id: identifier,
 	device_id: identifier,
@@ -25,6 +32,12 @@ const resourceSchema = z.object({
 	max_instances: integer.min(1).max(100),
 	expires_at: expiry,
 	status,
+	effective_expires_at: optional(expiry),
+	effective_limit: optional(
+		z.enum(["approval", "sharing_grant", "access_rules"]),
+	),
+	online_write_blocked: optional(z.literal("storage_full")),
+	...approvalAudit,
 });
 const billingSchema = z.object({
 	billing_grant_id: identifier,
@@ -36,6 +49,7 @@ const billingSchema = z.object({
 	reserved_micros: integer,
 	expires_at: expiry,
 	status,
+	...approvalAudit,
 });
 const instanceSchema = z.object({
 	instance_id: identifier,
@@ -221,6 +235,57 @@ export function isActiveGrant(
 	now = Date.now() / 1000,
 ): boolean {
 	return grant.status === "active" && grant.expires_at > now;
+}
+
+export interface ServiceCloudAccess {
+	/**
+	 * `listed`: the hub lists cloud access that still runs for this service.
+	 * `none`: the viewer owns the device, so the list is complete, and it has none.
+	 * `hidden`: nothing is listed on someone else's device, where approvals of other people aren't shown.
+	 * `unknown`: the list wasn't read.
+	 */
+	state: "listed" | "none" | "hidden" | "unknown";
+	/** Approvals the viewer may revoke: every one on a device they own, else the ones they gave. */
+	approvals: string[];
+	/** Spending limits of those approvals that the viewer pays. */
+	limits: string[];
+}
+
+const withoutCloudAccess = (
+	state: ServiceCloudAccess["state"],
+): ServiceCloudAccess => ({ state, approvals: [], limits: [] });
+
+/** What the hub lists as cloud access of one service, and what of it the viewer may end. */
+export function serviceCloudAccess(
+	resources: DeviceResources | undefined,
+	serviceId: string,
+	viewer: { id: string; owner: boolean },
+	nowS: number,
+): ServiceCloudAccess {
+	if (!resources) return withoutCloudAccess("unknown");
+	const running = resources.grants.filter(
+		(grant) =>
+			grant.placement_id === serviceId &&
+			grant.status === "active" &&
+			(grant.effective_expires_at ?? grant.expires_at) > nowS,
+	);
+	if (!running.length)
+		return withoutCloudAccess(viewer.owner ? "none" : "hidden");
+	const ids = new Set(running.map((grant) => grant.grant_id));
+	return {
+		state: "listed",
+		approvals: running
+			.filter((grant) => viewer.owner || grant.delegating_user_id === viewer.id)
+			.map((grant) => grant.grant_id),
+		limits: resources.billing
+			.filter(
+				(limit) =>
+					limit.status === "active" &&
+					limit.payer_id === viewer.id &&
+					ids.has(limit.grant_id),
+			)
+			.map((limit) => limit.billing_grant_id),
+	};
 }
 
 export function publicResourceBinding(

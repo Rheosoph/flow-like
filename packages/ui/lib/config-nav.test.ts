@@ -183,6 +183,54 @@ describe("host capabilities", () => {
 	});
 });
 
+describe("devices host capability", () => {
+	const DEVICES = "/library/config/devices";
+	const DEVICES_ON = new Set(["devices"]);
+
+	it("leaves Devices out while the hub has device support off or unknown", () => {
+		expect(resolve().find((item) => item.href === DEVICES)).toBeUndefined();
+		expect(
+			resolve({ hostCapabilities: new Set(["offlineWrites"]) }).find(
+				(item) => item.href === DEVICES,
+			),
+		).toBeUndefined();
+	});
+
+	it("lists Devices in the Build group when the hub has device support on", () => {
+		const devices = find(resolve({ hostCapabilities: DEVICES_ON }), DEVICES);
+		expect(devices.lock).toBeUndefined();
+		expect(devices.group).toBe("Build");
+		expect(devices.description).toBe(
+			"Run this app on your own devices and see where it runs",
+		);
+	});
+
+	it("is not a developer tool and stays for a local-only app", () => {
+		expect(
+			resolve({
+				hostCapabilities: DEVICES_ON,
+				developerMode: false,
+				visibility: IAppVisibility.Offline,
+			}).find((item) => item.href === DEVICES),
+		).toBeDefined();
+	});
+
+	it("locks behind ReadBoards", () => {
+		const withoutBoards = (...permissions: RolePermissions[]) =>
+			!permissions.some((p) => p.equals(RolePermissions.ReadBoards));
+		expect(
+			find(
+				resolve({ hostCapabilities: DEVICES_ON, can: withoutBoards }),
+				DEVICES,
+			).lock,
+		).toEqual({
+			kind: "permission",
+			reason: "locked:Devices",
+			missing: [RolePermissions.ReadBoards],
+		});
+	});
+});
+
 describe("isConfigRouteActive", () => {
 	it("matches the dashboard only on an exact route", () => {
 		expect(isConfigRouteActive("/library/config", "/library/config")).toBe(

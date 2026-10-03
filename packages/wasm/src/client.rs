@@ -5,30 +5,236 @@ use crate::{
     registry::{
         CachedPackage, DownloadRequest, DownloadResponse, InstalledPackage, InstalledVersion,
         LocalRegistryState, PackageSource, PackageVersion, PublishRequest, PublishResponse,
-        RegistryConfig, RegistryEntry, SearchFilters, SearchResults,
+        RegistryConfig, RegistryEntry, SearchFilters, SearchResults, OFFICIAL_REGISTRY_URL,
     },
     widget_bundle::{sha256_hex, widget_store_dir, WidgetBundleReader},
+    widget_frame::is_valid_package_id,
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, PoisonError,
+    },
 };
 use tokio::sync::RwLock;
+
+/// The packages whose files an install is replacing right now, by the name of
+/// their directory, each with its id and the number of installs writing there.
+type DirectoryClaims = Arc<Mutex<HashMap<String, (String, usize)>>>;
+
+/// Holds a package's directory for one install; see
+/// [`RegistryClient::claim_directory`].
+struct DirectoryClaim {
+    claims: DirectoryClaims,
+    name: String,
+}
+
+impl Drop for DirectoryClaim {
+    fn drop(&mut self) {
+        let mut claims = self.claims.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((_, installs)) = claims.get_mut(&self.name) {
+            *installs -= 1;
+            if *installs == 0 {
+                claims.remove(&self.name);
+            }
+        }
+    }
+}
 
 /// Registry client for managing WASM packages
 #[derive(Clone)]
 pub struct RegistryClient {
     config: RegistryConfig,
     state: Arc<RwLock<LocalRegistryState>>,
+    writing: DirectoryClaims,
+    /// Held while the widget store is pruned, and from the unpacking of a
+    /// bundle to the record that names it: a prune removes what no record
+    /// names. Taken before the state lock, never while holding it.
+    widget_store: Arc<tokio::sync::Mutex<()>>,
     http_client: reqwest::Client,
 }
 
 impl RegistryClient {
     fn target_platform_for_download() -> Option<String> {
         Some(crate::aot_cache::host_platform_key())
+    }
+
+    /// A precompiled artifact is native code that is loaded without the
+    /// sandbox's validation, so only the registry Flow-Like runs may deliver
+    /// one. Every other registry delivers the portable `.wasm`, which this
+    /// device compiles itself.
+    fn trusts_precompiled(registry_url: &str) -> bool {
+        registry_url == OFFICIAL_REGISTRY_URL
+    }
+
+    fn source_trusts_precompiled(source: &PackageSource) -> bool {
+        matches!(
+            source,
+            PackageSource::Remote { registry_url, .. } if Self::trusts_precompiled(registry_url)
+        )
+    }
+
+    /// Whether an installed copy came from the registry this client talks to.
+    /// Another registry may publish other bytes under the same id and version.
+    pub fn from_current_registry(&self, installed: &InstalledPackage) -> bool {
+        match &installed.source {
+            PackageSource::Remote { registry_url, .. } => {
+                registry_url == &self.config.default_registry
+            }
+            _ => true,
+        }
+    }
+
+    /// Whether an installed copy answers an install request without asking
+    /// the registry: the requested version from this registry, complete on
+    /// disk and with its nodes.
+    fn satisfies_install(&self, installed: &InstalledPackage, version: Option<&str>) -> bool {
+        version.is_none_or(|version| version == installed.version)
+            && self.from_current_registry(installed)
+            && !installed.manifest.nodes_withheld()
+            && self.installed_package_ready(installed)
+    }
+
+    /// A version string that is one plain path segment.
+    fn is_safe_version(version: &str) -> bool {
+        !version.is_empty()
+            && version != "."
+            && version != ".."
+            && version
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'+'))
+    }
+
+    /// How a package id or version names its directory where the file system
+    /// ignores letter case (macOS, Windows) or trailing dots (Windows).
+    fn directory_name(name: &str) -> String {
+        name.trim_end_matches('.').to_ascii_lowercase()
+    }
+
+    /// Whether two different names lead to the same directory.
+    fn shares_directory(name: &str, other: &str) -> bool {
+        name != other && Self::directory_name(name) == Self::directory_name(other)
+    }
+
+    /// The installed package whose files `package_id` would overwrite.
+    async fn directory_rival(&self, package_id: &str) -> Option<String> {
+        let state = self.state.read().await;
+        state
+            .installed
+            .keys()
+            .find(|installed| Self::shares_directory(installed, package_id))
+            .cloned()
+    }
+
+    fn shared_directory_error(package_id: &str, rival: &str) -> anyhow::Error {
+        anyhow!(
+            "Package '{}' cannot be installed next to '{}': both names lead to the same directory on this device",
+            package_id,
+            rival
+        )
+    }
+
+    /// Holds the directory of `package_id` until the claim is dropped. Of two
+    /// installs whose names share it, the one that claims second is refused,
+    /// whether the first is still writing or has left its record.
+    async fn claim_directory(&self, package_id: &str) -> Result<DirectoryClaim> {
+        let name = Self::directory_name(package_id);
+        let writing_rival = {
+            let mut claims = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+            match claims.get_mut(&name) {
+                Some((holder, _)) if holder != package_id => Some(holder.clone()),
+                Some((_, installs)) => {
+                    *installs += 1;
+                    None
+                }
+                None => {
+                    claims.insert(name.clone(), (package_id.to_string(), 1));
+                    None
+                }
+            }
+        };
+        if let Some(rival) = writing_rival {
+            return Err(Self::shared_directory_error(package_id, &rival));
+        }
+        let claim = DirectoryClaim {
+            claims: self.writing.clone(),
+            name,
+        };
+        match self.directory_rival(package_id).await {
+            Some(rival) => Err(Self::shared_directory_error(package_id, &rival)),
+            None => Ok(claim),
+        }
+    }
+
+    /// Clears the way for the files of `package_id`@`version`. When the node
+    /// binary of a copy another registry installed is about to be replaced,
+    /// that copy leaves the record first: should the install fail after the
+    /// write, nothing still names those bytes as that registry's. A copy whose
+    /// files stay as they are stays on record until the install succeeded. A
+    /// held version whose name leads to the same directory is refused.
+    async fn release_version_directory(
+        &self,
+        package_id: &str,
+        version: &str,
+        replaces_nodes: bool,
+    ) -> Result<()> {
+        let mut state = self.state.write().await;
+        let Some(installed) = state.installed.get(package_id) else {
+            return Ok(());
+        };
+        let same_directory = |held: &str| held == version || Self::shares_directory(held, version);
+        if !self.from_current_registry(installed) {
+            let holds_directory = same_directory(&installed.version)
+                || installed.versions.keys().any(|held| same_directory(held));
+            if !(replaces_nodes && holds_directory) {
+                return Ok(());
+            }
+            state.installed.remove(package_id);
+            drop(state);
+            return self.save_state().await;
+        }
+        if let Some(held) = installed
+            .versions
+            .keys()
+            .find(|held| Self::shares_directory(held, version))
+        {
+            anyhow::bail!(
+                "Version {} of package '{}' cannot be installed next to {}: both names lead to the same directory on this device",
+                version,
+                package_id,
+                held
+            );
+        }
+        Ok(())
+    }
+
+    /// The directory this client keeps its packages in.
+    pub fn cache_dir(&self) -> &Path {
+        &self.config.cache_dir
+    }
+
+    /// Replace a file in one step, so a write that fails halfway leaves the
+    /// earlier file under the name an installed entry points at.
+    async fn write_replacing(path: &Path, bytes: &[u8]) -> Result<()> {
+        static STAGED: AtomicU64 = AtomicU64::new(0);
+        let staged = path.with_extension(format!(
+            "{}-{}.part",
+            std::process::id(),
+            STAGED.fetch_add(1, Ordering::Relaxed)
+        ));
+        let written = async {
+            tokio::fs::write(&staged, bytes).await?;
+            tokio::fs::rename(&staged, path).await
+        }
+        .await;
+        if written.is_err() {
+            let _ = tokio::fs::remove_file(&staged).await;
+        }
+        Ok(written?)
     }
 
     fn cwasm_sidecar_path(wasm_path: &Path) -> PathBuf {
@@ -100,6 +306,8 @@ impl RegistryClient {
         Ok(Self {
             config,
             state: Arc::new(RwLock::new(LocalRegistryState::default())),
+            writing: DirectoryClaims::default(),
+            widget_store: Arc::default(),
             http_client,
         })
     }
@@ -222,6 +430,7 @@ impl RegistryClient {
     /// Remove unpacked widget-store directories for a package that are no
     /// longer referenced by any installed version. Best-effort.
     async fn prune_widget_store(&self, package_id: &str) {
+        let _store = self.widget_store.lock().await;
         let referenced: std::collections::HashSet<String> = {
             let state = self.state.read().await;
             state
@@ -297,6 +506,12 @@ impl RegistryClient {
     /// Get the current auth token (if any)
     pub fn auth_token(&self) -> Option<&String> {
         self.config.auth_token.as_ref()
+    }
+
+    /// Point searches, downloads and publishes at another registry, such as
+    /// the hub the signed-in profile uses.
+    pub fn set_default_registry(&mut self, registry_url: String) {
+        self.config.default_registry = registry_url;
     }
 
     fn build_search_url(&self, filters: &SearchFilters, include_own: bool) -> String {
@@ -384,6 +599,8 @@ impl RegistryClient {
 
     /// Versions accumulate only onto an entry from the same registry. Any other
     /// entry is replaced wholesale so a bundle never inherits another source.
+    /// A widgets-only copy never displaces a complete one: it joins the
+    /// versions, and the nodes this device holds stay the active copy.
     fn merge_registry_install(
         existing: Option<InstalledPackage>,
         fresh: InstalledPackage,
@@ -404,22 +621,36 @@ impl RegistryClient {
         let Some(mut existing) = existing.filter(same_registry) else {
             return fresh;
         };
-        existing.version = fresh.version;
-        existing.installed_at = fresh.installed_at;
-        existing.wasm_path = fresh.wasm_path;
-        existing.manifest = fresh.manifest;
-        existing.metadata = fresh.metadata;
-        existing.versions.extend(fresh.versions);
+        let widgets_only = fresh.manifest.nodes_withheld();
+        if !widgets_only || existing.manifest.nodes_withheld() {
+            existing.version = fresh.version;
+            existing.installed_at = fresh.installed_at;
+            existing.wasm_path = fresh.wasm_path;
+            existing.wasm_hash = fresh.wasm_hash;
+            existing.manifest = fresh.manifest;
+            existing.metadata = fresh.metadata;
+        }
+        for (version, installed) in fresh.versions {
+            let complete = existing
+                .versions
+                .get(&version)
+                .is_some_and(|held| !held.manifest.nodes_withheld());
+            if !(widgets_only && complete) {
+                existing.versions.insert(version, installed);
+            }
+        }
         existing
     }
 
     /// Fetch the exact portable node package for a deployment without changing
     /// the desktop's installed version or downloading host-specific code.
+    /// With `app_id` the registry authorizes it through that project's licence.
     pub async fn export_package_version(
         &self,
         package_id: &str,
         version: &str,
         maximum_bytes: usize,
+        app_id: Option<&str>,
     ) -> Result<(PackageManifest, Vec<u8>)> {
         anyhow::ensure!(
             maximum_bytes > 0 && maximum_bytes <= 64 * 1024 * 1024,
@@ -433,7 +664,7 @@ impl RegistryClient {
             package_id: package_id.to_owned(),
             version: Some(version.to_owned()),
             target_platform: None,
-            app_id: None,
+            app_id: app_id.map(String::from),
         };
         let mut request = client
             .post(format!("{}/download", self.config.default_registry))
@@ -453,6 +684,12 @@ impl RegistryClient {
                 && download.manifest.id == package_id
                 && download.manifest.version == version,
             "Registry returned a different package version than the project pin"
+        );
+        anyhow::ensure!(
+            !download.manifest.nodes_withheld(),
+            "The registry kept the nodes of {}@{} back: deploying them needs access to the project's flows or to the package",
+            package_id,
+            version
         );
         download
             .manifest
@@ -542,9 +779,7 @@ impl RegistryClient {
     ) -> Result<CachedPackage> {
         let state = self.state.read().await;
         if let Some(installed) = state.installed.get(package_id) {
-            if (version.is_none() || version == Some(&installed.version))
-                && self.installed_package_ready(installed)
-            {
+            if self.satisfies_install(installed, version) {
                 let wasm_data = if Self::manifest_has_wasm(&installed.manifest) {
                     tokio::fs::read(&installed.wasm_path).await?
                 } else {
@@ -584,10 +819,17 @@ impl RegistryClient {
         }
         drop(state);
 
+        if let Some(rival) = self.directory_rival(package_id).await {
+            return Err(Self::shared_directory_error(package_id, &rival));
+        }
+
+        let precompiled = Self::trusts_precompiled(&self.config.default_registry);
         let request = DownloadRequest {
             package_id: package_id.to_string(),
             version: version.map(String::from),
-            target_platform: Self::target_platform_for_download(),
+            target_platform: precompiled
+                .then(Self::target_platform_for_download)
+                .flatten(),
             app_id: app_id.map(String::from),
         };
 
@@ -606,6 +848,18 @@ impl RegistryClient {
         }
 
         let download: DownloadResponse = response.json().await?;
+        // The answer names files on this device and the entry it replaces, so
+        // it must be the package that was asked for.
+        anyhow::ensure!(
+            is_valid_package_id(package_id)
+                && download.package_id == package_id
+                && download.manifest.id == package_id
+                && Self::is_safe_version(&download.version)
+                && version.is_none_or(|requested| requested == download.version),
+            "Registry returned a different or malformed package than {}@{}",
+            package_id,
+            version.unwrap_or("latest")
+        );
         let has_wasm = Self::manifest_has_wasm(&download.manifest);
 
         // Fetch WASM data - either from download_url or decode from base64
@@ -637,35 +891,10 @@ impl RegistryClient {
             return Err(anyhow!("No download URL or WASM data in response"));
         };
 
-        let wasm_path = self.versioned_wasm_path(&download.package_id, &download.version);
-        if let Some(parent) = wasm_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        if has_wasm {
-            tokio::fs::write(&wasm_path, &wasm_data).await?;
-
-            // If the server provided a precompiled .cwasm, download and store it
-            // alongside the raw .wasm so `load_nodes` can inject it into the AOT cache.
-            if let Some(cwasm_url) = &download.cwasm_download_url {
-                match self
-                    .download_cwasm(cwasm_url, download.cwasm_checksum.as_deref(), &wasm_path)
-                    .await
-                {
-                    Ok(()) => {
-                        tracing::info!("Downloaded precompiled cwasm for {}", download.package_id)
-                    }
-                    Err(e) => tracing::error!(
-                        "Failed to download cwasm for {}: {}",
-                        download.package_id,
-                        e
-                    ),
-                }
-            }
-        }
-
-        // Download, verify, and unpack the widget bundle when the manifest declares widgets
-        let mut widget_bundle_path: Option<PathBuf> = None;
-        let mut widget_bundle_hash: Option<String> = None;
+        // Everything the registry can still fail happens before a file of this
+        // version is replaced. The bundle is verified and unpacked first: its
+        // store directory is named by its hash, so it stands in for nothing.
+        let mut widget_bundle: Option<(Vec<u8>, String)> = None;
         let mut widget_bundle_size: Option<u64> = None;
         if !download.manifest.widgets.is_empty() {
             let expected_hash = download
@@ -705,12 +934,64 @@ impl RegistryClient {
                 .to_vec();
             widget_bundle_size = Some(bundle_bytes.len() as u64);
 
+            let _store = self.widget_store.lock().await;
+            let (hash, _store_dir) = self
+                .install_widget_bundle(
+                    &download.package_id,
+                    bundle_bytes.clone(),
+                    Some(expected_hash),
+                )
+                .await?;
+            widget_bundle = Some((bundle_bytes, hash));
+        }
+
+        // Held until the record is written: the check before the request saw
+        // only installs that had finished by then.
+        let _writing = self.claim_directory(package_id).await?;
+        self.release_version_directory(package_id, &download.version, has_wasm)
+            .await?;
+
+        let wasm_path = self.versioned_wasm_path(&download.package_id, &download.version);
+        if let Some(parent) = wasm_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        if has_wasm {
+            // A sidecar left by an earlier install belongs to other bytes, so
+            // it goes before they are replaced.
+            let _ = tokio::fs::remove_file(Self::cwasm_sidecar_path(&wasm_path)).await;
+            Self::write_replacing(&wasm_path, &wasm_data).await?;
+
+            // If the server provided a precompiled .cwasm, download and store it
+            // alongside the raw .wasm so `load_nodes` can inject it into the AOT cache.
+            if let Some(cwasm_url) = download.cwasm_download_url.as_ref().filter(|_| precompiled) {
+                match self
+                    .download_cwasm(cwasm_url, download.cwasm_checksum.as_deref(), &wasm_path)
+                    .await
+                {
+                    Ok(()) => {
+                        tracing::info!("Downloaded precompiled cwasm for {}", download.package_id)
+                    }
+                    Err(e) => tracing::error!(
+                        "Failed to download cwasm for {}: {}",
+                        download.package_id,
+                        e
+                    ),
+                }
+            }
+        }
+
+        let mut widget_bundle_path: Option<PathBuf> = None;
+        let mut widget_bundle_hash: Option<String> = None;
+        let mut store = None;
+        if let Some((bundle_bytes, hash)) = widget_bundle {
             let bundle_path =
                 self.versioned_widget_bundle_path(&download.package_id, &download.version);
-            tokio::fs::write(&bundle_path, &bundle_bytes).await?;
-
-            let (hash, _store_dir) = self
-                .install_widget_bundle(&download.package_id, bundle_bytes, Some(expected_hash))
+            Self::write_replacing(&bundle_path, &bundle_bytes).await?;
+            // No record names the unpacked bundle yet, so an install or
+            // uninstall of this package that pruned the store since removed
+            // it. It is put back, and no prune runs until the record is written.
+            store = Some(self.widget_store.lock().await);
+            self.install_widget_bundle(&download.package_id, bundle_bytes, Some(hash.clone()))
                 .await?;
             widget_bundle_path = Some(bundle_path);
             widget_bundle_hash = Some(hash);
@@ -750,6 +1031,7 @@ impl RegistryClient {
             Self::merge_registry_install(existing, fresh),
         );
         drop(state);
+        drop(store);
         self.save_state().await?;
         self.prune_widget_store(&download.package_id).await;
 
@@ -1061,12 +1343,14 @@ impl RegistryClient {
         wasm_path: &Path,
         mut manifest: PackageManifest,
     ) -> Result<InstalledPackage> {
+        let _writing = self.claim_directory(&manifest.id).await?;
         let now = Utc::now();
         let wasm_hash = match tokio::fs::read(wasm_path).await {
             Ok(bytes) => Some(blake3::hash(&bytes).to_hex().to_string()),
             Err(_) => None,
         };
 
+        let store = self.widget_store.lock().await;
         let (widget_bundle_path, widget_bundle_hash, bundle_widgets) = self
             .prepare_local_widget_bundle(wasm_path, &manifest)
             .await?;
@@ -1106,6 +1390,7 @@ impl RegistryClient {
             .installed
             .insert(installed.id.clone(), installed.clone());
         drop(state);
+        drop(store);
         self.save_state().await?;
         self.prune_widget_store(&installed.id).await;
 
@@ -1298,8 +1583,9 @@ impl RegistryClient {
             )
         })?;
 
-        // Inject precompiled .cwasm into AOT cache if available
-        Self::inject_precompiled_if_available(&wasm_bytes, &installed.wasm_path, &engine);
+        if Self::source_trusts_precompiled(&installed.source) {
+            Self::inject_precompiled_if_available(&wasm_bytes, &installed.wasm_path, &engine);
+        }
 
         let manifest_security: crate::WasmSecurityConfig =
             installed.manifest.permissions.to_security_config();
@@ -1359,8 +1645,9 @@ impl RegistryClient {
         let manifest_security: crate::WasmSecurityConfig =
             iv.manifest.permissions.to_security_config();
 
-        // Inject precompiled .cwasm into AOT cache if available
-        Self::inject_precompiled_if_available(&wasm_bytes, &iv.wasm_path, &engine);
+        if Self::source_trusts_precompiled(&installed.source) {
+            Self::inject_precompiled_if_available(&wasm_bytes, &iv.wasm_path, &engine);
+        }
 
         let loaded = engine.load_auto(&wasm_bytes).await?;
         let wasm_hash = loaded.hash().to_string();
@@ -2050,7 +2337,7 @@ mod tests {
             let mut client = registry_client(temporary.path(), &base);
             client.set_auth_token(Some("selected-account".into()));
             let result = client
-                .export_package_version(package_id, "1.0.0", limit)
+                .export_package_version(package_id, "1.0.0", limit, None)
                 .await;
             assert_eq!(result.is_ok(), accepted, "{result:?}");
             server.await.unwrap();
@@ -2164,6 +2451,231 @@ mod tests {
         assert!(widget_store_dir(&cache_dir, package_id, &hash_v2).is_dir());
     }
 
+    async fn spawn_mock_routes(build: impl FnOnce(&str) -> HashMap<String, Vec<u8>>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let routes = Arc::new(build(&base));
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(serve_mock_request(stream, routes.clone()));
+            }
+        });
+        base
+    }
+
+    /// A registry answer for the manifest's version with the node binary inline.
+    fn inline_answer(manifest: PackageManifest, wasm: &[u8]) -> DownloadResponse {
+        DownloadResponse {
+            package_id: manifest.id.clone(),
+            version: manifest.version.clone(),
+            wasm_base64: base64_encode(wasm),
+            download_url: None,
+            manifest,
+            metadata: None,
+            cwasm_download_url: None,
+            cwasm_checksum: None,
+            widget_bundle_download_url: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_install_rejects_another_package_than_requested() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let (release, _) = registry_release("com.acme.other", "1.0.0", "other");
+        let registry = spawn_mock_registry(vec![release]).await;
+
+        let client = registry_client(&cache_dir, &registry);
+        client.init().await.unwrap();
+        let error = client
+            .install("com.acme.maps", Some("1.0.0"), None)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("different or malformed package"),
+            "{error}"
+        );
+        assert!(client.list_installed().await.unwrap().is_empty());
+        let nodes = cache_dir.join("wasm").join("nodes");
+        assert!(!nodes.join("com.acme.other").exists());
+        assert!(!nodes.join("com.acme.maps").exists());
+        assert!(!cache_dir.join("widgets").exists());
+    }
+
+    #[tokio::test]
+    async fn test_install_rejects_a_version_that_is_not_a_plain_segment() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let package_id = "com.acme.maps";
+        let (mut release, _) = registry_release(package_id, "1.0.0", "v1");
+        release.manifest.version = "../../escape".to_string();
+        let registry = spawn_mock_routes(|_| {
+            HashMap::from([(
+                String::new(),
+                serde_json::to_vec(&inline_answer(release.manifest, &[])).unwrap(),
+            )])
+        })
+        .await;
+
+        let client = registry_client(&cache_dir, &registry);
+        client.init().await.unwrap();
+        let error = client.install(package_id, None, None).await.unwrap_err();
+        assert!(
+            error.to_string().contains("different or malformed package"),
+            "{error}"
+        );
+        assert!(client.list_installed().await.unwrap().is_empty());
+        assert!(!cache_dir.join("wasm").join("escape").exists());
+        for (version, safe) in [
+            ("1.2.0", true),
+            ("1.2.0-rc.1+build.5", true),
+            ("", false),
+            ("..", false),
+            ("1.0/../x", false),
+            ("1.0\\x", false),
+        ] {
+            assert_eq!(
+                RegistryClient::is_safe_version(version),
+                safe,
+                "{version:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_install_does_not_reuse_a_copy_from_another_registry() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let package_id = "com.acme.maps";
+        let (release_a, hash_a) = registry_release(package_id, "1.0.0", "registry a");
+        let (release_b, hash_b) = registry_release(package_id, "1.0.0", "registry b");
+        assert_ne!(hash_a, hash_b);
+        let registry_a = spawn_mock_registry(vec![release_a]).await;
+        let registry_b = spawn_mock_registry(vec![release_b]).await;
+
+        let client_a = registry_client(&cache_dir, &registry_a);
+        client_a.init().await.unwrap();
+        client_a
+            .install(package_id, Some("1.0.0"), None)
+            .await
+            .unwrap();
+        let from_a = client_a.get_installed(package_id).await.unwrap();
+        assert!(client_a.satisfies_install(&from_a, Some("1.0.0")));
+        assert!(client_a.satisfies_install(&from_a, None));
+        assert!(!client_a.satisfies_install(&from_a, Some("2.0.0")));
+
+        let mut client_b = registry_client(&cache_dir, &registry_a);
+        client_b.init().await.unwrap();
+        client_b.set_default_registry(registry_b.clone());
+        assert!(!client_b.satisfies_install(&from_a, Some("1.0.0")));
+        client_b
+            .install(package_id, Some("1.0.0"), None)
+            .await
+            .unwrap();
+        let from_b = client_b.get_installed(package_id).await.unwrap();
+        assert!(matches!(
+            &from_b.source,
+            PackageSource::Remote { registry_url, .. } if registry_url == &registry_b
+        ));
+        assert_eq!(
+            from_b.manifest.widget_bundle_hash.as_deref(),
+            Some(hash_b.as_str())
+        );
+        assert!(widget_store_dir(&cache_dir, package_id, &hash_b).is_dir());
+    }
+
+    #[tokio::test]
+    async fn test_a_copy_without_its_nodes_asks_the_registry_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let package_id = "com.acme.maps";
+        let (mut release, hash) = registry_release(package_id, "1.0.0", "widgets");
+        release.manifest.wasm_path = Some("node.wasm".into());
+        release.manifest.wasm_hash = Some("abc".into());
+        release.manifest.withhold_nodes();
+        assert!(release.manifest.nodes_withheld());
+        assert!(!RegistryClient::manifest_has_wasm(&release.manifest));
+        let registry = spawn_mock_registry(vec![release]).await;
+
+        let client = registry_client(&cache_dir, &registry);
+        client.init().await.unwrap();
+        client
+            .install(package_id, Some("1.0.0"), None)
+            .await
+            .unwrap();
+        let installed = client.get_installed(package_id).await.unwrap();
+        assert!(widget_store_dir(&cache_dir, package_id, &hash).is_dir());
+        assert!(client.installed_package_ready(&installed));
+        assert!(
+            !client.satisfies_install(&installed, Some("1.0.0")),
+            "a widgets-only view must not stand in for the full package"
+        );
+    }
+
+    #[test]
+    fn test_precompiled_code_is_trusted_from_the_official_registry_only() {
+        assert!(RegistryClient::trusts_precompiled(OFFICIAL_REGISTRY_URL));
+        assert!(!RegistryClient::trusts_precompiled(
+            "https://hub.example.org/api/v1/registry"
+        ));
+        assert!(RegistryClient::source_trusts_precompiled(&remote_source(
+            OFFICIAL_REGISTRY_URL
+        )));
+        assert!(!RegistryClient::source_trusts_precompiled(&remote_source(
+            "https://hub.example.org/api/v1/registry"
+        )));
+        assert!(!RegistryClient::source_trusts_precompiled(
+            &PackageSource::Local {
+                path: PathBuf::from("/dev/node.wasm")
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_precompiled_code_of_another_registry_is_neither_stored_nor_kept() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let package_id = "com.acme.nodes";
+        let wasm = vec![0, b'a', b's', b'm', 1, 0, 0, 0];
+        let precompiled = b"native code".to_vec();
+        let checksum = blake3::hash(&precompiled).to_hex().to_string();
+        let registry = spawn_mock_routes(|base| {
+            HashMap::from([
+                (
+                    "/download@1.0.0".to_string(),
+                    serde_json::to_vec(&DownloadResponse {
+                        cwasm_download_url: Some(format!("{base}/precompiled.cwasm")),
+                        cwasm_checksum: Some(checksum),
+                        ..inline_answer(
+                            PackageManifest::new(package_id, "Nodes", "1.0.0", "nodes"),
+                            &wasm,
+                        )
+                    })
+                    .unwrap(),
+                ),
+                ("/precompiled.cwasm".to_string(), precompiled),
+            ])
+        })
+        .await;
+
+        let client = registry_client(&cache_dir, &registry);
+        client.init().await.unwrap();
+        let wasm_path = client.versioned_wasm_path(package_id, "1.0.0");
+        let sidecar = RegistryClient::cwasm_sidecar_path(&wasm_path);
+        std::fs::create_dir_all(wasm_path.parent().unwrap()).unwrap();
+        std::fs::write(&sidecar, b"left by an earlier install").unwrap();
+
+        client
+            .install(package_id, Some("1.0.0"), None)
+            .await
+            .unwrap();
+        assert!(wasm_path.exists());
+        assert!(
+            !sidecar.exists(),
+            "another registry's precompiled code must not be stored, and a stale sidecar must go"
+        );
+    }
+
     fn installed_entry(
         version: &str,
         bundle_hash: &str,
@@ -2258,5 +2770,586 @@ mod tests {
         let mut versions = merged.versions.keys().cloned().collect::<Vec<_>>();
         versions.sort();
         assert_eq!(versions, vec!["1.0.0", "2.0.0"]);
+    }
+
+    fn widgets_only_copy(mut entry: InstalledPackage) -> InstalledPackage {
+        entry.manifest.withhold_nodes();
+        for installed in entry.versions.values_mut() {
+            installed.manifest.withhold_nodes();
+        }
+        entry
+    }
+
+    #[test]
+    fn test_merge_registry_install_keeps_complete_copies_over_widgets_only_ones() {
+        let complete = |version: &str| {
+            let mut entry = installed_entry(
+                version,
+                &format!("hash-{version}"),
+                remote_source("https://registry.example"),
+            );
+            entry.wasm_hash = Some(format!("wasm-{version}"));
+            entry
+        };
+        let merge = |existing: InstalledPackage, fresh: InstalledPackage| {
+            RegistryClient::merge_registry_install(Some(existing), fresh)
+        };
+
+        let merged = merge(complete("1.0.0"), widgets_only_copy(complete("2.0.0")));
+        assert_eq!(merged.version, "1.0.0");
+        assert_eq!(merged.wasm_hash.as_deref(), Some("wasm-1.0.0"));
+        assert!(!merged.manifest.nodes_withheld());
+        assert!(!merged.versions["1.0.0"].manifest.nodes_withheld());
+        assert!(merged.versions["2.0.0"].manifest.nodes_withheld());
+
+        let merged = merge(complete("1.0.0"), widgets_only_copy(complete("1.0.0")));
+        assert!(!merged.manifest.nodes_withheld());
+        assert!(!merged.versions["1.0.0"].manifest.nodes_withheld());
+
+        let both = merge(complete("1.0.0"), complete("2.0.0"));
+        assert_eq!(both.version, "2.0.0");
+        assert_eq!(both.wasm_hash.as_deref(), Some("wasm-2.0.0"));
+        let merged = merge(both, widgets_only_copy(complete("1.0.0")));
+        assert_eq!(merged.version, "2.0.0");
+        assert!(!merged.versions["1.0.0"].manifest.nodes_withheld());
+
+        let merged = merge(widgets_only_copy(complete("1.0.0")), complete("1.0.0"));
+        assert!(!merged.manifest.nodes_withheld());
+        assert!(!merged.versions["1.0.0"].manifest.nodes_withheld());
+
+        let merged = merge(
+            widgets_only_copy(complete("1.0.0")),
+            widgets_only_copy(complete("2.0.0")),
+        );
+        assert_eq!(merged.version, "2.0.0");
+        assert!(merged.manifest.nodes_withheld());
+    }
+
+    /// A registry whose `com.acme.nodes@1.0.0` carries nodes and declares a
+    /// widget bundle that cannot be installed, in the way `failure` names.
+    async fn spawn_registry_with_a_broken_bundle(failure: &'static str) -> String {
+        let mut manifest = widgets_only_manifest("com.acme.nodes", "live-map");
+        manifest.wasm_hash = Some("declared".into());
+        manifest.widget_bundle_path = None;
+        manifest.widget_bundle_hash = Some("ab".repeat(32));
+        spawn_mock_routes(|base| {
+            let link = (failure != "no link").then(|| format!("{base}/bundle.flwb"));
+            let mut routes = HashMap::from([(
+                "/download@1.0.0".to_string(),
+                serde_json::to_vec(&DownloadResponse {
+                    widget_bundle_download_url: link,
+                    ..inline_answer(manifest, b"registry b")
+                })
+                .unwrap(),
+            )]);
+            if failure == "other bytes" {
+                routes.insert(
+                    "/bundle.flwb".to_string(),
+                    b"not the declared bundle".to_vec(),
+                );
+            }
+            routes
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_a_failed_install_from_another_registry_leaves_the_installed_copy_alone() {
+        let package_id = "com.acme.nodes";
+        for (failure, message) in [
+            ("no link", "no widget bundle download URL"),
+            ("missing", "Failed to download widget bundle"),
+            ("other bytes", "hash mismatch"),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let cache_dir = temp.path().join("cache");
+            let complete = PackageManifest::new(package_id, "Nodes", "1.0.0", "nodes");
+            let registry_a = spawn_mock_routes(|_| {
+                HashMap::from([(
+                    "/download@1.0.0".to_string(),
+                    serde_json::to_vec(&inline_answer(complete, b"registry a")).unwrap(),
+                )])
+            })
+            .await;
+            let client_a = registry_client(&cache_dir, &registry_a);
+            client_a.init().await.unwrap();
+            client_a
+                .install(package_id, Some("1.0.0"), None)
+                .await
+                .unwrap();
+            let wasm_path = client_a.versioned_wasm_path(package_id, "1.0.0");
+
+            let registry_b = spawn_registry_with_a_broken_bundle(failure).await;
+            let client_b = registry_client(&cache_dir, &registry_b);
+            client_b.init().await.unwrap();
+            let error = client_b
+                .install(package_id, Some("1.0.0"), None)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains(message), "{failure}: {error}");
+
+            assert_eq!(
+                std::fs::read(&wasm_path).unwrap(),
+                b"registry a",
+                "{failure}: a failed install must not put its bytes under the earlier registry's record"
+            );
+            let kept = client_b.get_installed(package_id).await.unwrap();
+            assert!(matches!(
+                &kept.source,
+                PackageSource::Remote { registry_url, .. } if registry_url == &registry_a
+            ));
+            assert_eq!(file_names(wasm_path.parent().unwrap()), vec!["node.wasm"]);
+        }
+    }
+
+    fn file_names(directory: &Path) -> Vec<String> {
+        let mut names = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn test_another_registrys_copy_leaves_the_record_before_its_files_are_replaced() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let package_id = "com.acme.maps";
+        let registry_a = "https://a.example/registry";
+
+        let client_a = registry_client(&cache_dir, registry_a);
+        client_a.init().await.unwrap();
+        client_a.state.write().await.installed.insert(
+            package_id.to_string(),
+            installed_entry("1.0.0-rc1", "hash", remote_source(registry_a)),
+        );
+        client_a.save_state().await.unwrap();
+
+        for version in ["1.0.0-rc1", "2.0.0"] {
+            client_a
+                .release_version_directory(package_id, version, true)
+                .await
+                .unwrap();
+        }
+        assert!(client_a.get_installed(package_id).await.is_some());
+        for rival in ["1.0.0-RC1", "1.0.0-rc1."] {
+            let error = client_a
+                .release_version_directory(package_id, rival, true)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("same directory"), "{error}");
+        }
+
+        let mut client_b = registry_client(&cache_dir, registry_a);
+        client_b.init().await.unwrap();
+        client_b.set_default_registry("https://b.example/registry".to_string());
+        for (version, replaces_nodes) in [("1.0.0-rc1", false), ("2.0.0", true)] {
+            client_b
+                .release_version_directory(package_id, version, replaces_nodes)
+                .await
+                .unwrap();
+            assert!(
+                client_b.get_installed(package_id).await.is_some(),
+                "a copy whose node binary stays as it is stays on record"
+            );
+        }
+        client_b
+            .release_version_directory(package_id, "1.0.0-RC1", true)
+            .await
+            .unwrap();
+        assert!(client_b.get_installed(package_id).await.is_none());
+
+        let reloaded = registry_client(&cache_dir, registry_a);
+        reloaded.init().await.unwrap();
+        assert!(
+            reloaded.get_installed(package_id).await.is_none(),
+            "the saved state must not name the replaced files as the earlier registry's either"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_record_holds_a_version_as_its_active_copy_or_among_its_versions() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry_a = "https://a.example/registry";
+        let mut client = registry_client(&temp.path().join("cache"), registry_a);
+        client.init().await.unwrap();
+        // A state file from before versions were recorded names only the active copy.
+        let mut active_only = installed_entry("1.0.0", "hash", remote_source(registry_a));
+        active_only.versions.clear();
+        // The held version is not the active one.
+        let mut among_versions = installed_entry("1.0.0", "hash", remote_source(registry_a));
+        among_versions.version = "2.0.0".to_string();
+        {
+            let mut state = client.state.write().await;
+            state.installed.insert("active.only".into(), active_only);
+            state
+                .installed
+                .insert("among.versions".into(), among_versions);
+        }
+
+        client.set_default_registry("https://b.example/registry".to_string());
+        for package_id in ["active.only", "among.versions"] {
+            client
+                .release_version_directory(package_id, "1.0.0", true)
+                .await
+                .unwrap();
+            assert!(
+                client.get_installed(package_id).await.is_none(),
+                "{package_id}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_a_failed_install_keeps_the_other_registrys_record_when_its_nodes_stay() {
+        let package_id = "com.acme.nodes";
+        let registry_a = "https://a.example/registry";
+        for answers_nodes in [true, false] {
+            let temp = tempfile::tempdir().unwrap();
+            let cache_dir = temp.path().join("cache");
+            let seeded = registry_client(&cache_dir, registry_a);
+            seeded.init().await.unwrap();
+            let mut held = installed_entry("1.0.0", "hash", remote_source(registry_a));
+            held.id = package_id.to_string();
+            seeded
+                .state
+                .write()
+                .await
+                .installed
+                .insert(package_id.to_string(), held);
+            seeded.save_state().await.unwrap();
+
+            // Another version with nodes, or the held version without them: a
+            // directory in the way makes the write after the release fail.
+            let (version, blocked, registry_b) = if answers_nodes {
+                let manifest = PackageManifest::new(package_id, "Nodes", "2.0.0", "nodes");
+                let registry = spawn_mock_routes(|_| {
+                    HashMap::from([(
+                        "/download@2.0.0".to_string(),
+                        serde_json::to_vec(&inline_answer(manifest, b"registry b")).unwrap(),
+                    )])
+                })
+                .await;
+                let blocked = seeded.versioned_wasm_path(package_id, "2.0.0");
+                ("2.0.0", blocked, registry)
+            } else {
+                let (release, _) = registry_release(package_id, "1.0.0", "widgets");
+                let blocked = seeded.versioned_widget_bundle_path(package_id, "1.0.0");
+                ("1.0.0", blocked, spawn_mock_registry(vec![release]).await)
+            };
+            std::fs::create_dir_all(&blocked).unwrap();
+
+            let client_b = registry_client(&cache_dir, &registry_b);
+            client_b.init().await.unwrap();
+            assert!(client_b
+                .install(package_id, Some(version), None)
+                .await
+                .is_err());
+            let reloaded = registry_client(&cache_dir, registry_a);
+            reloaded.init().await.unwrap();
+            for client in [&client_b, &reloaded] {
+                let kept = client.get_installed(package_id).await.unwrap();
+                assert!(
+                    matches!(&kept.source, PackageSource::Remote { registry_url, .. } if registry_url == registry_a),
+                    "answers_nodes={answers_nodes}: {:?}",
+                    kept.source
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_install_is_refused_while_another_name_writes_the_same_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let package_id = "com.acme.maps";
+        let (release, _) = registry_release(package_id, "1.0.0", "v1");
+        let registry = spawn_mock_registry(vec![release]).await;
+        let client = registry_client(&cache_dir, &registry);
+        client.init().await.unwrap();
+
+        let rival = client.claim_directory("Com.Acme.Maps").await.unwrap();
+        let error = client
+            .install(package_id, Some("1.0.0"), None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("same directory"), "{error}");
+        assert!(!cache_dir.join("wasm/nodes").join(package_id).exists());
+        let mut local = widgets_only_manifest(package_id, "live-map");
+        local.widget_bundle_path = None;
+        local.widgets.clear();
+        let error = client
+            .register_local_package(&temp.path().join("node.wasm"), local)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("same directory"), "{error}");
+        assert!(client.list_installed().await.unwrap().is_empty());
+
+        drop(rival);
+        client
+            .install(package_id, Some("1.0.0"), None)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_the_widget_store_is_not_pruned_while_an_install_holds_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let client = test_client(&cache_dir);
+        client.init().await.unwrap();
+        let unpacked = widget_store_dir(&cache_dir, "com.acme.maps", "not-on-record-yet");
+        std::fs::create_dir_all(&unpacked).unwrap();
+
+        let held = client.widget_store.lock().await;
+        let pruned = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            client.prune_widget_store("com.acme.maps"),
+        )
+        .await;
+        assert!(pruned.is_err(), "the prune waits for the install");
+        assert!(unpacked.is_dir());
+
+        drop(held);
+        client.prune_widget_store("com.acme.maps").await;
+        assert!(!unpacked.exists());
+    }
+
+    #[tokio::test]
+    async fn test_a_write_that_fails_leaves_no_record_of_the_other_registrys_copy() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let package_id = "com.acme.nodes";
+        let registry_a = "https://a.example/registry";
+        let seeded = registry_client(&cache_dir, registry_a);
+        seeded.init().await.unwrap();
+        let mut held = installed_entry("1.0.0", "hash", remote_source(registry_a));
+        held.id = package_id.to_string();
+        seeded
+            .state
+            .write()
+            .await
+            .installed
+            .insert(package_id.to_string(), held);
+        seeded.save_state().await.unwrap();
+        // A directory in the node binary's place makes the write fail after the record left.
+        let wasm_path = seeded.versioned_wasm_path(package_id, "1.0.0");
+        std::fs::create_dir_all(&wasm_path).unwrap();
+        let sidecar = RegistryClient::cwasm_sidecar_path(&wasm_path);
+        std::fs::write(&sidecar, b"compiled from the earlier bytes").unwrap();
+
+        let manifest = PackageManifest::new(package_id, "Nodes", "1.0.0", "nodes");
+        let registry_b = spawn_mock_routes(|_| {
+            HashMap::from([(
+                "/download@1.0.0".to_string(),
+                serde_json::to_vec(&inline_answer(manifest, b"registry b")).unwrap(),
+            )])
+        })
+        .await;
+        let client_b = registry_client(&cache_dir, &registry_b);
+        client_b.init().await.unwrap();
+        assert!(client_b
+            .install(package_id, Some("1.0.0"), None)
+            .await
+            .is_err());
+
+        assert!(client_b.get_installed(package_id).await.is_none());
+        let reloaded = registry_client(&cache_dir, registry_a);
+        reloaded.init().await.unwrap();
+        assert!(reloaded.get_installed(package_id).await.is_none());
+        assert!(
+            !sidecar.exists(),
+            "the sidecar goes before the bytes it was compiled from"
+        );
+        assert_eq!(file_names(wasm_path.parent().unwrap()), vec!["node.wasm"]);
+    }
+
+    #[tokio::test]
+    async fn test_install_refuses_a_version_that_shares_a_directory_with_a_held_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let package_id = "com.acme.maps";
+        let (held, _) = registry_release(package_id, "1.0.0-rc1", "held");
+        let (rival, _) = registry_release(package_id, "1.0.0-RC1", "rival");
+        let registry = spawn_mock_registry(vec![held, rival]).await;
+
+        let client = registry_client(&cache_dir, &registry);
+        client.init().await.unwrap();
+        client
+            .install(package_id, Some("1.0.0-rc1"), None)
+            .await
+            .unwrap();
+        let error = client
+            .install(package_id, Some("1.0.0-RC1"), None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("same directory"), "{error}");
+        let installed = client.get_installed(package_id).await.unwrap();
+        assert_eq!(installed.versions.keys().collect::<Vec<_>>(), ["1.0.0-rc1"]);
+    }
+
+    #[tokio::test]
+    async fn test_two_names_for_one_directory_are_not_written_at_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let client = registry_client(&temp.path().join("cache"), "https://registry.example");
+        client.init().await.unwrap();
+
+        let first = client.claim_directory("com.acme.maps").await.unwrap();
+        let other_window = client.clone();
+        let again = other_window.claim_directory("com.acme.maps").await.unwrap();
+        let error = client.claim_directory("Com.Acme.Maps").await.err().unwrap();
+        assert!(error.to_string().contains("same directory"), "{error}");
+
+        drop(first);
+        assert!(
+            client.claim_directory("Com.Acme.Maps").await.is_err(),
+            "the other install of the same package still writes there"
+        );
+        drop(again);
+        assert!(client.claim_directory("Com.Acme.Maps").await.is_ok());
+        assert!(client.claim_directory("com.acme.maps").await.is_ok());
+    }
+
+    /// A registry that answers `com.acme.nodes@1.0.0` with nodes and widgets.
+    async fn spawn_nodes_and_widgets_registry(body: &'static str) -> (String, Vec<u8>) {
+        let (mut release, _) = registry_release("com.acme.nodes", "1.0.0", body);
+        release.manifest.wasm_hash = Some("declared".into());
+        let bundle = release.bundle.clone();
+        let registry = spawn_mock_routes(|base| {
+            HashMap::from([
+                (
+                    "/download@1.0.0".to_string(),
+                    serde_json::to_vec(&DownloadResponse {
+                        widget_bundle_download_url: Some(format!("{base}/bundle.flwb")),
+                        ..inline_answer(release.manifest, body.as_bytes())
+                    })
+                    .unwrap(),
+                ),
+                ("/bundle.flwb".to_string(), release.bundle),
+            ])
+        })
+        .await;
+        (registry, bundle)
+    }
+
+    #[tokio::test]
+    async fn test_an_install_replaces_files_instead_of_writing_into_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let package_id = "com.acme.nodes";
+        let (registry_a, bundle_a) = spawn_nodes_and_widgets_registry("registry a").await;
+        let (registry_b, bundle_b) = spawn_nodes_and_widgets_registry("registry b").await;
+
+        let client_a = registry_client(&cache_dir, &registry_a);
+        client_a.init().await.unwrap();
+        client_a
+            .install(package_id, Some("1.0.0"), None)
+            .await
+            .unwrap();
+        // A second name for each file: a write into the file would show through it.
+        let wasm_path = client_a.versioned_wasm_path(package_id, "1.0.0");
+        let bundle_path = client_a.versioned_widget_bundle_path(package_id, "1.0.0");
+        let (kept_wasm, kept_bundle) = (temp.path().join("wasm"), temp.path().join("bundle"));
+        std::fs::hard_link(&wasm_path, &kept_wasm).unwrap();
+        std::fs::hard_link(&bundle_path, &kept_bundle).unwrap();
+
+        let client_b = registry_client(&cache_dir, &registry_b);
+        client_b.init().await.unwrap();
+        client_b
+            .install(package_id, Some("1.0.0"), None)
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(&wasm_path).unwrap(), b"registry b");
+        assert_eq!(std::fs::read(&kept_wasm).unwrap(), b"registry a");
+        assert_eq!(std::fs::read(&bundle_path).unwrap(), bundle_b);
+        assert_eq!(std::fs::read(&kept_bundle).unwrap(), bundle_a);
+    }
+
+    #[tokio::test]
+    async fn test_install_refuses_a_name_that_shares_a_directory_with_an_installed_package() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let package_id = "com.acme.maps";
+        let (release, hash) = registry_release(package_id, "1.0.0", "v1");
+        let registry = spawn_mock_registry(vec![release]).await;
+
+        let client = registry_client(&cache_dir, &registry);
+        client.init().await.unwrap();
+        client
+            .install(package_id, Some("1.0.0"), None)
+            .await
+            .unwrap();
+
+        for rival in ["Com.Acme.Maps", "com.acme.maps."] {
+            let error = client
+                .install(rival, Some("1.0.0"), None)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("same directory"), "{error}");
+        }
+        let mut local = widgets_only_manifest("COM.ACME.MAPS", "live-map");
+        local.widget_bundle_path = None;
+        local.widgets.clear();
+        let error = client
+            .register_local_package(&temp.path().join("node.wasm"), local)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("same directory"), "{error}");
+
+        let installed = client.list_installed().await.unwrap();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].id, package_id);
+        assert!(widget_store_dir(&cache_dir, package_id, &hash).is_dir());
+
+        assert!(!RegistryClient::shares_directory(package_id, package_id));
+        assert!(!RegistryClient::shares_directory(
+            package_id,
+            "com.acme.map"
+        ));
+        assert!(RegistryClient::shares_directory(
+            package_id,
+            "COM.ACME.MAPS"
+        ));
+        assert!(RegistryClient::shares_directory(
+            package_id,
+            "com.acme.maps.."
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_export_names_a_widgets_only_answer_instead_of_calling_it_broken() {
+        let temp = tempfile::tempdir().unwrap();
+        let package_id = "com.acme.maps";
+        let (mut release, _) = registry_release(package_id, "1.0.0", "widgets");
+        release.manifest.withhold_nodes();
+        let registry = spawn_mock_registry(vec![release]).await;
+
+        let client = registry_client(&temp.path().join("cache"), &registry);
+        let error = client
+            .export_package_version(package_id, "1.0.0", 1024, Some("app-1"))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("kept the nodes"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn test_write_replacing_swaps_the_file_and_leaves_nothing_staged() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("node.wasm");
+        std::fs::write(&path, b"earlier").unwrap();
+        RegistryClient::write_replacing(&path, b"fresh")
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"fresh");
+
+        let blocked = temp.path().join("blocked.wasm");
+        std::fs::create_dir(&blocked).unwrap();
+        assert!(RegistryClient::write_replacing(&blocked, b"fresh")
+            .await
+            .is_err());
+        assert!(blocked.is_dir());
+        assert_eq!(file_names(temp.path()), vec!["blocked.wasm", "node.wasm"]);
     }
 }

@@ -1,4 +1,6 @@
+import { z } from "zod";
 import { base64url, unbase64url } from "./crypto";
+import type { ArchiveRecordingStatus } from "./model/types";
 import {
 	type DeviceAccountScope,
 	commitMlsSnapshot,
@@ -95,6 +97,107 @@ export async function readTelemetryChunks(
 	if ((await digestText(text)) !== digest)
 		throw new Error("Group telemetry digest changed.");
 	return { text, latest, sequence };
+}
+
+/** BG24: which controller key relayed each confirmed reader's receipts (owner only). */
+export interface ReaderBinding {
+	endpoint_id: string;
+	controller_key_thumbprint: string;
+}
+
+const readerId = z.string().regex(/^[A-Za-z0-9_:.-]{1,128}$/u);
+const confirmedReadersSchema = z.array(readerId).max(256);
+const readerBindingsSchema: z.ZodType<ReaderBinding[]> = z
+	.array(
+		z.object({
+			endpoint_id: readerId,
+			controller_key_thumbprint: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+		}),
+	)
+	.max(256);
+const archiveStatusSchema: z.ZodType<ArchiveRecordingStatus> = z.object({
+	state: z.enum(["recording", "paused"]),
+	reason: z
+		.enum([
+			"rules_expired",
+			"rules_changed",
+			"roster_expired",
+			"outbox_full",
+			"quota_reached",
+			"tier_without_history",
+		])
+		.nullable(),
+	since: z.number().int().nonnegative().safe(),
+});
+
+function optionalField<T>(schema: z.ZodType<T>, value: unknown): T | undefined {
+	const parsed = schema.safeParse(value);
+	return parsed.success ? parsed.data : undefined;
+}
+
+/** Absent on older agents and for non-owners; a malformed list reads as absent. */
+export function parseReaderBindings(
+	result: Record<string, unknown>,
+): ReaderBinding[] | undefined {
+	return optionalField(readerBindingsSchema, result.reader_bindings);
+}
+
+/** BG30: absent on older agents; a malformed value reads as absent. */
+export function parseArchiveRecordingStatus(
+	result: Record<string, unknown>,
+): ArchiveRecordingStatus | undefined {
+	return optionalField(archiveStatusSchema, result.status);
+}
+
+/** Chunked roster read that also keeps the optional fields the device attaches to a chunk result. */
+async function readRosterChunks<T>(
+	call: ManagementCall,
+	command: Record<string, unknown>,
+	extras: (result: Record<string, unknown>) => T,
+): Promise<{ text: string | null } & T> {
+	let first: Record<string, unknown> | undefined;
+	const tapped: ManagementCall = async (request, operationId) => {
+		const response = await call(request, operationId);
+		if (!first && response.state === "completed") first = response.result;
+		return response;
+	};
+	const { text } = await readTelemetryChunks(tapped, command, 16_384);
+	return { text, ...extras(first ?? {}) };
+}
+
+/** The signed group roster (verify `text` before use) plus the confirmed readers and, for the owner, their bindings. */
+export function readTelemetryRoster(
+	call: ManagementCall,
+	scope: string,
+): Promise<{
+	text: string | null;
+	confirmed_readers?: string[];
+	reader_bindings?: ReaderBinding[];
+}> {
+	return readRosterChunks(
+		call,
+		{ type: "telemetry_roster_read", scope },
+		(result) => ({
+			confirmed_readers: optionalField(
+				confirmedReadersSchema,
+				result.confirmed_readers,
+			),
+			reader_bindings: parseReaderBindings(result),
+		}),
+	);
+}
+
+/** The signed archive roster head (verify `text` before use) plus whether the device is recording. */
+export function readArchiveRoster(
+	call: ManagementCall,
+	scope: string,
+	kind: "logs" | "metrics",
+): Promise<{ text: string | null; status?: ArchiveRecordingStatus }> {
+	return readRosterChunks(
+		call,
+		{ type: "archive_roster_read", scope, kind },
+		(result) => ({ status: parseArchiveRecordingStatus(result) }),
+	);
 }
 
 export interface ReaderPosition {

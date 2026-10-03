@@ -30,6 +30,36 @@ export interface VerifiedRelease {
 	signerFingerprint: string;
 	targets: ReleaseTarget[];
 }
+export type ReleaseCheck =
+	| "signature"
+	| "sequence"
+	| "not_yet_valid"
+	| "expired"
+	| "lifetime"
+	| "invalid";
+/** What a genuinely signed release list says about itself. */
+export interface ReleaseFacts {
+	release_version: string;
+	sequence: number;
+	issued_at: number;
+	expires_at: number;
+}
+/**
+ * The release list arrived and failed one check. Screens read `check`; the
+ * message stays English for diagnostics. `facts` is set only for checks that
+ * run after the signature verified.
+ */
+export class ReleaseVerificationError extends Error {
+	readonly check: ReleaseCheck;
+	readonly facts?: ReleaseFacts;
+
+	constructor(check: ReleaseCheck, message: string, facts?: ReleaseFacts) {
+		super(message);
+		this.name = "ReleaseVerificationError";
+		this.check = check;
+		if (facts) this.facts = facts;
+	}
+}
 export interface StandalonePackageInput {
 	manifest: unknown;
 	manifest_jws: string;
@@ -48,6 +78,8 @@ const TARGETS: readonly ReleaseTarget[] = [
 	"x86_64-apple-darwin",
 	"aarch64-apple-darwin",
 ];
+export const MAX_RELEASE_LIFETIME_S = 1_825 * 86_400;
+export const RELEASE_NOT_YET_VALID_TOLERANCE_S = 300;
 const MAX_JWS = 16 * 1024;
 const MAX_BROWSER_BINARY = 256 * 1024 * 1024;
 const MAX_RELEASE_BINARY = 2 * 1024 ** 3;
@@ -56,6 +88,8 @@ const decoder = new TextDecoder("utf-8", { fatal: true });
 const fail = (message: string): never => {
 	throw new Error(message);
 };
+/** No trusted key signed these bytes. */
+class UntrustedSignature extends Error {}
 const assert: (condition: unknown, message: string) => asserts condition = (
 	condition,
 	message,
@@ -279,28 +313,123 @@ async function verifyJws(
 		const key = await crypto.subtle.importKey("raw", bytes, "Ed25519", false, [
 			"verify",
 		]);
-		assert(
-			await crypto.subtle.verify(
-				"Ed25519",
-				key,
-				signature,
-				encoder.encode(`${encodedHeader}.${encodedPayload}`),
-			),
-			"Release signature verification failed.",
+		const genuine = await crypto.subtle.verify(
+			"Ed25519",
+			key,
+			signature,
+			encoder.encode(`${encodedHeader}.${encodedPayload}`),
 		);
+		if (!genuine)
+			throw new UntrustedSignature("Release signature verification failed.");
 		return {
 			payload: strictJson(decoder.decode(decode(encodedPayload))),
 			fingerprint,
 		};
 	}
-	return fail("The package signature does not match a configured release key.");
+	throw new UntrustedSignature(
+		"The package signature does not match a configured release key.",
+	);
 }
 
-function validateManifest(
-	input: unknown,
-	config: ReleaseConfig,
-	now: number,
-): StandaloneRelease {
+const RELEASE_VERSION =
+	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][A-Za-z\d-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][A-Za-z\d-]*))*)?(?:\+[A-Za-z\d-]+(?:\.[A-Za-z\d-]+)*)?$/;
+const CONTAINER_PLATFORMS: readonly unknown[] = ["linux/amd64", "linux/arm64"];
+
+function validateReleaseNumbers(value: Record<string, unknown>) {
+	assert(
+		value.version === 1 &&
+			Number.isSafeInteger(value.state_schema_version) &&
+			Number(value.state_schema_version) > 0 &&
+			Number(value.state_schema_version) <= 0xffffffff &&
+			Number.isSafeInteger(value.sequence) &&
+			Number(value.sequence) > 0,
+		"Invalid release version, schema version or sequence.",
+	);
+}
+
+function validateReleaseVersion(version: unknown) {
+	assert(
+		typeof version === "string" &&
+			version.length <= 64 &&
+			RELEASE_VERSION.test(version),
+		"Invalid standalone release version.",
+	);
+	assert(
+		version
+			.split(/[-+]/)[0]
+			?.split(".")
+			.every((part) => BigInt(part) <= 18_446_744_073_709_551_615n),
+		"Release version component exceeds its limit.",
+	);
+}
+
+function validateReleaseDates(value: Record<string, unknown>) {
+	assert(
+		Number.isSafeInteger(value.issued_at) &&
+			Number.isSafeInteger(value.expires_at) &&
+			Number(value.issued_at) >= 0 &&
+			Number(value.expires_at) > Number(value.issued_at),
+		"Invalid release validity dates.",
+	);
+}
+
+function validateArtifact(item: unknown, targets: Set<unknown>) {
+	const artifact = record(item);
+	exact(artifact, ["target", "url", "size", "sha256"]);
+	assert(
+		TARGETS.includes(artifact.target as ReleaseTarget) &&
+			!targets.has(artifact.target),
+		"Unsupported or duplicate release target.",
+	);
+	targets.add(artifact.target);
+	assert(typeof artifact.url === "string", "Invalid release artifact URL.");
+	https(artifact.url);
+	assert(
+		Number.isSafeInteger(artifact.size) &&
+			Number(artifact.size) > 0 &&
+			Number(artifact.size) <= MAX_RELEASE_BINARY &&
+			typeof artifact.sha256 === "string" &&
+			/^[a-f0-9]{64}$/.test(artifact.sha256),
+		"Invalid release artifact digest or size.",
+	);
+}
+
+function validateArtifacts(artifacts: unknown) {
+	assert(
+		Array.isArray(artifacts) && artifacts.length > 0 && artifacts.length <= 4,
+		"Invalid release artifact count.",
+	);
+	const targets = new Set<unknown>();
+	for (const item of artifacts) validateArtifact(item, targets);
+}
+
+function validPlatforms(platforms: unknown) {
+	return (
+		Array.isArray(platforms) &&
+		platforms.length > 0 &&
+		platforms.length <= 2 &&
+		platforms.every((platform) => CONTAINER_PLATFORMS.includes(platform)) &&
+		new Set(platforms).size === platforms.length
+	);
+}
+
+function validateContainer(value: unknown) {
+	if (value === null) return;
+	const container = record(value);
+	exact(container, ["image", "platforms"]);
+	assert(
+		typeof container.image === "string" &&
+			/^[a-z0-9][a-z0-9/._:-]{1,254}@sha256:[a-f0-9]{64}$/.test(
+				container.image,
+			) &&
+			container.image.split("@")[0]?.includes("/"),
+		"The container image must be pinned to an exact digest.",
+	);
+	assert(validPlatforms(container.platforms), "Invalid container platforms.");
+}
+
+/** The shape of a release list, whatever the clock and the hub's minimum say. */
+function validateManifest(input: unknown): StandaloneRelease {
 	const value = record(input);
 	exact(value, [
 		"version",
@@ -312,91 +441,52 @@ function validateManifest(
 		"artifacts",
 		"container",
 	]);
-	assert(
-		value.version === 1 &&
-			Number.isSafeInteger(value.state_schema_version) &&
-			Number(value.state_schema_version) > 0 &&
-			Number(value.state_schema_version) <= 0xffffffff &&
-			Number.isSafeInteger(value.sequence) &&
-			Number(value.sequence) > 0 &&
-			Number(value.sequence) >= config.minimumSequence,
-		"Release version or sequence is invalid or older than the configured minimum.",
-	);
-	assert(
-		typeof value.release_version === "string" &&
-			value.release_version.length <= 64 &&
-			/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][A-Za-z\d-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][A-Za-z\d-]*))*)?(?:\+[A-Za-z\d-]+(?:\.[A-Za-z\d-]+)*)?$/.test(
-				value.release_version,
-			),
-		"Invalid standalone release version.",
-	);
-	assert(
-		value.release_version
-			.split(/[-+]/)[0]
-			?.split(".")
-			.every((part) => BigInt(part) <= 18_446_744_073_709_551_615n),
-		"Release version component exceeds its limit.",
-	);
-	assert(
-		Number.isSafeInteger(value.issued_at) &&
-			Number.isSafeInteger(value.expires_at) &&
-			Number(value.issued_at) >= 0 &&
-			Number(value.issued_at) <= now &&
-			Number(value.expires_at) > now &&
-			Number(value.expires_at) - Number(value.issued_at) <= 30 * 86400,
-		"The release manifest has expired or has an invalid lifetime.",
-	);
-	assert(
-		Array.isArray(value.artifacts) &&
-			value.artifacts.length > 0 &&
-			value.artifacts.length <= 4,
-		"Invalid release artifact count.",
-	);
-	const targets = new Set<unknown>();
-	for (const item of value.artifacts) {
-		const artifact = record(item);
-		exact(artifact, ["target", "url", "size", "sha256"]);
-		assert(
-			TARGETS.includes(artifact.target as ReleaseTarget) &&
-				!targets.has(artifact.target),
-			"Unsupported or duplicate release target.",
-		);
-		targets.add(artifact.target);
-		assert(typeof artifact.url === "string", "Invalid release artifact URL.");
-		https(artifact.url);
-		assert(
-			Number.isSafeInteger(artifact.size) &&
-				Number(artifact.size) > 0 &&
-				Number(artifact.size) <= MAX_RELEASE_BINARY &&
-				typeof artifact.sha256 === "string" &&
-				/^[a-f0-9]{64}$/.test(artifact.sha256),
-			"Invalid release artifact digest or size.",
-		);
-	}
-	if (value.container !== null) {
-		const container = record(value.container);
-		exact(container, ["image", "platforms"]);
-		assert(
-			typeof container.image === "string" &&
-				/^[a-z0-9][a-z0-9/._:-]{1,254}@sha256:[a-f0-9]{64}$/.test(
-					container.image,
-				) &&
-				container.image.split("@")[0]?.includes("/"),
-			"The container image must be pinned to an exact digest.",
-		);
-		assert(
-			Array.isArray(container.platforms) &&
-				container.platforms.length > 0 &&
-				container.platforms.length <= 2 &&
-				container.platforms.every(
-					(platform) =>
-						platform === "linux/amd64" || platform === "linux/arm64",
-				) &&
-				new Set(container.platforms).size === container.platforms.length,
-			"Invalid container platforms.",
-		);
-	}
+	validateReleaseNumbers(value);
+	validateReleaseVersion(value.release_version);
+	validateReleaseDates(value);
+	validateArtifacts(value.artifacts);
+	validateContainer(value.container);
 	return value as unknown as StandaloneRelease;
+}
+
+/** Every failure after the list arrived is a failed check; nothing else reaches the caller. */
+function releaseFailure(error: unknown) {
+	if (error instanceof ReleaseVerificationError) return error;
+	return new ReleaseVerificationError(
+		error instanceof UntrustedSignature ? "signature" : "invalid",
+		error instanceof Error ? error.message : String(error),
+	);
+}
+
+/** A well-formed, genuinely signed list against the hub's minimum and the clock. The first failing check is the reason. */
+function checkRelease(
+	release: StandaloneRelease,
+	config: ReleaseConfig,
+	now: number,
+) {
+	const facts: ReleaseFacts = {
+		release_version: release.release_version,
+		sequence: release.sequence,
+		issued_at: release.issued_at,
+		expires_at: release.expires_at,
+	};
+	const refuse = (check: ReleaseCheck, message: string): never => {
+		throw new ReleaseVerificationError(check, message, facts);
+	};
+	if (release.sequence < config.minimumSequence)
+		refuse(
+			"sequence",
+			"The release sequence is older than the configured minimum.",
+		);
+	if (release.expires_at - release.issued_at > MAX_RELEASE_LIFETIME_S)
+		refuse(
+			"lifetime",
+			"The release manifest is valid for longer than this app accepts.",
+		);
+	if (release.issued_at > now + RELEASE_NOT_YET_VALID_TOLERANCE_S)
+		refuse("not_yet_valid", "The release manifest is not valid yet.");
+	if (release.expires_at <= now)
+		refuse("expired", "The release manifest has expired.");
 }
 
 export async function verifyReleaseManifest(
@@ -405,18 +495,23 @@ export async function verifyReleaseManifest(
 	now = Math.floor(Date.now() / 1000),
 ): Promise<VerifiedRelease> {
 	const config = validateReleaseConfig(input);
-	const { payload, fingerprint } = await verifyJws(
-		manifestJws,
-		config.publicKeys,
-		"flow-like-standalone-release+jws",
-	);
-	const manifest = validateManifest(payload, config, now);
-	return {
-		manifest,
-		manifestJws,
-		signerFingerprint: fingerprint,
-		targets: manifest.artifacts.map((artifact) => artifact.target),
-	};
+	try {
+		const { payload, fingerprint } = await verifyJws(
+			manifestJws,
+			config.publicKeys,
+			"flow-like-standalone-release+jws",
+		);
+		const manifest = validateManifest(payload);
+		checkRelease(manifest, config, now);
+		return {
+			manifest,
+			manifestJws,
+			signerFingerprint: fingerprint,
+			targets: manifest.artifacts.map((artifact) => artifact.target),
+		};
+	} catch (error) {
+		throw releaseFailure(error);
+	}
 }
 
 function containerPlatform(target: ReleaseTarget): string | null {

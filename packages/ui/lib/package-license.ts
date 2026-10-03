@@ -1,4 +1,9 @@
-import type { AppPackage, PackageSummary } from "./schema/wasm";
+import type {
+	AppPackage,
+	InstalledPackage,
+	PackageManifest,
+	PackageSummary,
+} from "./schema/wasm";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -41,6 +46,45 @@ export function packagePinState(
 
 export function isExpiredPin(pkg: Pick<AppPackage, "license">): boolean {
 	return pkg.license?.status === "expired";
+}
+
+/** Package id → pinned version of an app's packages; expired pins are disabled for the project. */
+export function usablePackagePins(
+	packages: readonly Pick<AppPackage, "packageId" | "version" | "license">[],
+): Record<string, string> {
+	return Object.fromEntries(
+		packages
+			.filter((pkg) => !isExpiredPin(pkg))
+			.map((pkg) => [pkg.packageId, pkg.version]),
+	);
+}
+
+/** The node binary as the desktop registry names it: Rust serialises the manifest in snake_case. */
+interface NativeNodeBinary {
+	wasm_path?: unknown;
+	wasm_hash?: unknown;
+}
+
+/**
+ * Whether an installed copy holds the package's widgets without its nodes: the
+ * registry keeps the node binary back from a project member who cannot open
+ * the project's flows, and marks the manifest it sends instead. As in the
+ * native client (`PackageManifest::nodes_withheld`), a manifest that names its
+ * node binary holds it, whatever the mark says: the mark alone is the
+ * publisher's to set.
+ */
+export function isWidgetsOnlyCopy(
+	pkg: Pick<InstalledPackage, "manifest">,
+): boolean {
+	const manifest: (PackageManifest & NativeNodeBinary) | undefined =
+		pkg.manifest;
+	if (manifest?.metadata?.nodes_withheld !== true) return false;
+	return ![
+		manifest.wasmPath,
+		manifest.wasm_path,
+		manifest.wasmHash,
+		manifest.wasm_hash,
+	].some((name) => typeof name === "string" && name !== "");
 }
 
 export function licenseTimeLeft(

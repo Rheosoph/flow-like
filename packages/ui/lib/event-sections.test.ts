@@ -293,6 +293,17 @@ describe("getSectionGuidance", () => {
 		expect(getSectionGuidance(event, "channels")?.mistake).toContain("empty");
 	});
 
+	test("bot behaviour guidance names what makes a bot answer every message", () => {
+		const mistake = (event_type: string) =>
+			getSectionGuidance(baseEvent({ event_type }), "behaviour")?.mistake;
+		// Without a prefix a Telegram bot answers everything; a Discord bot only with mentions off as well.
+		expect(mistake("telegram")).toContain("command prefix empty");
+		expect(mistake("discord")).toContain("command prefix is empty");
+		expect(mistake("discord")).toContain("Respond to Mentions off");
+		for (const type of ["telegram", "discord"])
+			expect(mistake(type)).not.toContain("mention-only");
+	});
+
 	test("page events get bootstrap-aware canary guidance, other sections shared", () => {
 		const page = baseEvent({ event_type: "page", default_page_id: "page-1" });
 		expect(getSectionGuidance(page, "canary")?.mistake).toContain("reload");

@@ -2,7 +2,11 @@ use super::{
     IO_TIMEOUT, NoiseConnection, SessionRegistry, rtc,
     wire::{self, Channel, NoiseEnvelope, ServerFrame, SignalEnvelope},
 };
-use crate::{enrollment::unix_time, management::ManagementService};
+use crate::{
+    diagnostics::{MANAGEMENT_TRANSPORT, TaskFailure},
+    enrollment::unix_time,
+    management::ManagementService,
+};
 use anyhow::{Context, Result, ensure};
 use flow_like_device_protocol::DeviceSignalingResponse;
 use futures_util::{SinkExt, StreamExt};
@@ -219,9 +223,7 @@ pub(super) async fn run(
             Ok(()) => failures = 0,
             Err(error) => {
                 failures = failures.saturating_add(1);
-                tracing::warn!(
-                    "Device signaling connection interrupted; reconnecting without stopping workloads or management sessions: {error:#}"
-                );
+                interrupted(&error);
             }
         }
         let jitter = uuid::Uuid::new_v4().as_bytes()[0] as u64 % 500;
@@ -235,6 +237,43 @@ pub(super) async fn run(
     }
     relayed.shutdown().await;
     Ok(())
+}
+
+fn interrupted(error: &anyhow::Error) {
+    crate::diagnostics::global().report(MANAGEMENT_TRANSPORT, Err(socket_failure(error)));
+    tracing::warn!(
+        "Device signaling connection interrupted; reconnecting without stopping workloads or management sessions: {error:#}"
+    );
+}
+
+/// Ends of a socket are typed as I/O errors, so task health reads them as an unreachable
+/// relay like any other broken socket.
+fn heartbeat_expired() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "Signaling admission or heartbeat expired",
+    )
+}
+
+fn socket_closed() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "Signaling socket closed")
+}
+
+/// A socket that cannot be opened, breaks or stops answering means the relay is out of
+/// reach; only an HTTP 4xx answer to the upgrade is a refusal.
+fn socket_failure(error: &anyhow::Error) -> TaskFailure {
+    use tokio_tungstenite::tungstenite::Error as Socket;
+    error
+        .chain()
+        .find_map(|cause| match cause.downcast_ref::<Socket>() {
+            Some(Socket::Http(response)) if response.status().is_client_error() => {
+                Some(TaskFailure::HubRefused)
+            }
+            Some(_) => Some(TaskFailure::HubUnreachable),
+            None => (cause.is::<std::io::Error>() || cause.is::<tokio::time::error::Elapsed>())
+                .then_some(TaskFailure::HubUnreachable),
+        })
+        .unwrap_or_else(|| TaskFailure::classify(error))
 }
 
 async fn connection(
@@ -293,6 +332,8 @@ async fn connection(
         ),
         _ => anyhow::bail!("Signaling did not confirm admission"),
     }
+    // The one point where both the admission and the socket are known to be good.
+    crate::diagnostics::global().report(MANAGEMENT_TRANSPORT, Ok(()));
     let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_pong = tokio::time::Instant::now();
@@ -302,7 +343,7 @@ async fn connection(
                 _ = cancel.cancelled() => break,
                 changed = admission.changed() => { changed?; break; }
                 _ = heartbeat.tick() => {
-                    ensure!(unix_time()? < current.expires_at && last_pong.elapsed() < Duration::from_secs(60), "Signaling admission or heartbeat expired");
+                    ensure!(unix_time()? < current.expires_at && last_pong.elapsed() < Duration::from_secs(60), heartbeat_expired());
                     tokio::time::timeout(IO_TIMEOUT, sender.send(Message::Text("{\"type\":\"ping\"}".into()))).await??;
                     relayed.inputs.retain(|_, (_, sender)| !sender.is_closed());
                 }
@@ -311,7 +352,7 @@ async fn connection(
                     tokio::time::timeout(IO_TIMEOUT, sender.send(Message::Text(value.into()))).await??;
                 }
                 value = receiver.next() => {
-                    let value = value.context("Signaling socket closed")??;
+                    let value = value.ok_or_else(socket_closed)??;
                     let text = match value {
                         Message::Text(value) => value,
                         Message::Ping(bytes) => { tokio::time::timeout(IO_TIMEOUT, sender.send(Message::Pong(bytes))).await??; continue; }
@@ -418,12 +459,89 @@ mod tests {
         registry.slots.lock().unwrap().sessions.len()
     }
 
+    #[test]
+    fn socket_failures_separate_an_unreachable_relay_from_a_refusal() {
+        use tokio_tungstenite::tungstenite::{Error as Socket, http::Response};
+        let answered = |status: u16| {
+            let response = Response::builder().status(status).body(None).unwrap();
+            anyhow::Error::new(Socket::Http(Box::new(response))).context("Open signaling socket")
+        };
+        let reset = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
+        for (error, category) in [
+            (answered(401), TaskFailure::HubRefused),
+            (answered(403), TaskFailure::HubRefused),
+            (answered(503), TaskFailure::HubUnreachable),
+            (
+                anyhow::Error::new(Socket::Io(reset)),
+                TaskFailure::HubUnreachable,
+            ),
+            (
+                anyhow::Error::new(Socket::ConnectionClosed),
+                TaskFailure::HubUnreachable,
+            ),
+            (
+                anyhow::anyhow!(heartbeat_expired()),
+                TaskFailure::HubUnreachable,
+            ),
+            (
+                anyhow::Error::from(socket_closed()),
+                TaskFailure::HubUnreachable,
+            ),
+            (
+                anyhow::anyhow!("Signaling route mismatch"),
+                TaskFailure::Internal,
+            ),
+        ] {
+            assert_eq!(socket_failure(&error), category, "{error:#}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_socket_counts_as_an_unreachable_relay() {
+        let elapsed = tokio::time::timeout(Duration::ZERO, std::future::pending::<()>())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            socket_failure(&anyhow::Error::new(elapsed)),
+            TaskFailure::HubUnreachable
+        );
+    }
+
+    /// Renewal against a hub nobody listens on marks the transport task failing.
+    async fn fail_a_renewal(management: Arc<ManagementService>) -> Result<()> {
+        use flow_like_device_protocol::SigningKey;
+        let cancel = CancellationToken::new();
+        let renewal = tokio::spawn(super::super::renew_admission(
+            Arc::new(crate::enrollment::DeviceSession::test_management_session(
+                "http://127.0.0.1:1/api/v1".into(),
+                "device".into(),
+                SigningKey::generate(),
+                SigningKey::generate().public_key(),
+            )),
+            management,
+            watch::channel(None).0,
+            cancel.clone(),
+        ));
+        assert_eq!(
+            crate::diagnostics::test_support::reported(MANAGEMENT_TRANSPORT).await,
+            (
+                crate::diagnostics::TaskState::Failing,
+                Some(TaskFailure::HubUnreachable)
+            )
+        );
+        cancel.cancel();
+        Ok(renewal.await?)
+    }
+
     #[tokio::test]
     async fn relayed_sessions_survive_socket_replacement_and_release_with_their_admission()
     -> Result<()> {
+        use crate::diagnostics::{TaskState, test_support::health};
         let fixture = super::super::tests::fixture()?;
         let _directory = fixture.directory;
         let mut initiator = fixture.initiator;
+        // No other test drives the transport, so its task health is this test's alone.
+        fail_a_renewal(fixture.management.clone()).await?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("ws://{}/ws/devices", listener.local_addr()?);
         let now = unix_time()?;
@@ -476,6 +594,7 @@ mod tests {
         let NoiseEnvelope::Handshake { data, .. } = response(&mut socket).await? else {
             anyhow::bail!("No Noise handshake");
         };
+        assert_eq!(health(MANAGEMENT_TRANSPORT), Some((TaskState::Ok, None)));
         initiator.read(&wire::decode(&data)?)?;
         deliver(
             &mut socket,

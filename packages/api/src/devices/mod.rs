@@ -7,9 +7,11 @@ pub(crate) mod fleet;
 pub(crate) mod inventory;
 pub(crate) mod jwt;
 pub(crate) mod management;
+pub(crate) mod openapi_registry;
 pub(crate) mod readiness;
 pub(crate) mod recovery;
 pub(crate) mod repository;
+pub(crate) mod view;
 
 use crate::{
     backend_jwt::{self, TokenType},
@@ -22,7 +24,7 @@ use axum::http::HeaderMap;
 use flow_like::hub::StandaloneConfig;
 use flow_like_device_protocol::*;
 use jwt::{Confirmation, EnrollmentClaims, SessionClaims};
-use repository::{Device, Enrollment, Repository};
+use repository::{AuthRejectionCode, Device, Enrollment, Repository};
 use std::result::Result;
 
 /// Device registration needs registry storage and public policy only. Keeping
@@ -94,6 +96,58 @@ pub(crate) fn device_proof_invalid(reason: impl std::fmt::Display) -> ApiError {
         DEVICE_PROOF_INVALID,
         "Device proof is invalid or outside its validity window; check that the device clock is synchronized",
     )
+}
+
+/// JSON readers keep integers exact only up to 2^53 - 1.
+const MAX_REPORTED_SKEW_SECONDS: i64 = (1 << 53) - 1;
+
+/// Tells the owner why the hub refuses their device. Best effort: the response the
+/// device receives never depends on this write.
+async fn note_rejection(
+    state: &DeviceContext<'_>,
+    device: &DeviceStatus,
+    code: AuthRejectionCode,
+    skew_seconds: Option<i64>,
+    now: i64,
+) {
+    if let Err(error) = repository(state)
+        .record_auth_rejection(
+            &device.device_id,
+            code,
+            skew_seconds,
+            device.last_seen_at,
+            now,
+        )
+        .await
+    {
+        tracing::warn!(
+            device_id = %device.device_id,
+            ?error,
+            "Device authentication rejection was not recorded"
+        );
+    }
+}
+
+/// The device's answer to a proof that failed verification. A proof that only missed
+/// its time window also tells the owner how far the device clock is off: its issue time
+/// is read only from a proof signed by the registered key, so nobody else can plant
+/// that diagnosis.
+async fn refused_proof(
+    state: &DeviceContext<'_>,
+    device: &DeviceStatus,
+    error: ProtocolError,
+    signed_issue_time: impl FnOnce() -> Result<i64, ProtocolError>,
+    now: i64,
+) -> ApiError {
+    if matches!(error, ProtocolError::InvalidTime)
+        && let Ok(issued_at) = signed_issue_time()
+    {
+        let skew = issued_at
+            .saturating_sub(now)
+            .clamp(-MAX_REPORTED_SKEW_SECONDS, MAX_REPORTED_SKEW_SECONDS);
+        note_rejection(state, device, AuthRejectionCode::ClockSkew, Some(skew), now).await;
+    }
+    device_proof_invalid(error)
 }
 
 pub(crate) fn api_base_url(state: &DeviceContext<'_>) -> Result<String, ApiError> {
@@ -202,6 +256,27 @@ pub(crate) async fn create_enrollment(
         enrollment_token: token,
         manifest,
     })
+}
+
+/// Sets or clears the owner's label. The name in the signed setup package, which the
+/// agent asserts on every heartbeat, is never touched.
+pub(crate) async fn rename(
+    state: &DeviceContext<'_>,
+    owner: &str,
+    id: &str,
+    display_name: Option<&str>,
+) -> Result<view::DeviceView, ApiError> {
+    enabled(state)?;
+    let display_name = display_name
+        .map(normalize_display_name)
+        .transpose()
+        .map_err(|_| {
+            ApiError::bad_request(format!(
+                "A device name needs 1 to {MAX_DISPLAY_NAME_CHARS} characters and no control characters"
+            ))
+        })?;
+    repository(state).rename(owner, id, display_name).await?;
+    view::get(state, owner, id).await
 }
 
 async fn pending_enrollment(
@@ -355,14 +430,18 @@ pub(crate) async fn registered_assertion(
 ) -> Result<Device, ApiError> {
     enabled(state)?;
     let registered = repository(state).device(id).await?;
-    let proof = verify_client_assertion(
-        assertion,
-        &registered.status.identity.auth_key,
-        id,
-        &endpoint(state, path)?,
-        chrono::Utc::now().timestamp(),
-    )
-    .map_err(device_proof_invalid)?;
+    let auth_key = &registered.status.identity.auth_key;
+    let now = chrono::Utc::now().timestamp();
+    let proof = match verify_client_assertion(assertion, auth_key, id, &endpoint(state, path)?, now)
+    {
+        Ok(proof) => proof,
+        Err(error) => {
+            let signed_issue_time = || client_assertion_signed_iat(assertion, auth_key);
+            return Err(
+                refused_proof(state, &registered.status, error, signed_issue_time, now).await,
+            );
+        }
+    };
     repository(state)
         .authorize_proof(
             id,
@@ -484,25 +563,38 @@ pub(crate) async fn device_principal(
         return Err(ApiError::FORBIDDEN);
     }
     let registered = repository(state).device(id).await?;
+    let now = chrono::Utc::now().timestamp();
     if claims.owner_id != registered.status.owner_id
         || claims.auth_epoch != registered.status.auth_epoch
     {
+        note_rejection(
+            state,
+            &registered.status,
+            AuthRejectionCode::RevokedCredential,
+            None,
+            now,
+        )
+        .await;
         return Err(ApiError::UNAUTHORIZED);
     }
-    let now = chrono::Utc::now().timestamp();
-    let proof = verify_dpop(
-        dpop,
-        &registered.status.identity.auth_key,
-        &DpopContext {
-            method,
-            url: &endpoint(state, path)?,
-            access_token: Some(token),
-            nonce: None,
-            key_thumbprint: &claims.cnf.jkt,
-            now,
-        },
-    )
-    .map_err(device_proof_invalid)?;
+    let auth_key = &registered.status.identity.auth_key;
+    let context = DpopContext {
+        method,
+        url: &endpoint(state, path)?,
+        access_token: Some(token),
+        nonce: None,
+        key_thumbprint: &claims.cnf.jkt,
+        now,
+    };
+    let proof = match verify_dpop(dpop, auth_key, &context) {
+        Ok(proof) => proof,
+        Err(error) => {
+            let signed_issue_time = || dpop_signed_iat(dpop, auth_key);
+            return Err(
+                refused_proof(state, &registered.status, error, signed_issue_time, now).await,
+            );
+        }
+    };
     let current = repository(state)
         .authorize_proof(
             id,

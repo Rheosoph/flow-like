@@ -159,6 +159,15 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
         with:
           persist-credentials: false
+      - name: Add memory headroom for the web build and type checker
+        run: |
+          swapfile="$RUNNER_TEMP/flow-like-build.swap"
+          sudo fallocate -l 8G "$swapfile"
+          sudo chmod 600 "$swapfile"
+          sudo mkswap "$swapfile"
+          sudo swapon "$swapfile"
+          free -h
+          df -h "$RUNNER_TEMP"
       # Both recipes share their build stages, so the second build reuses the first's layers.
       - name: Build each web recipe through its static export and require the bundle
         run: |
@@ -229,6 +238,16 @@ jobs:
           arch="${PLATFORM#linux/}"
           tag="sha-${GITHUB_SHA}-${arch}-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "ref=${IMAGE_REPOSITORY}:${tag}" >> "$GITHUB_OUTPUT"
+      - name: Add memory headroom for large builds
+        if: matrix.workload == 'web' || matrix.cargo_build_jobs == 1
+        run: |
+          swapfile="$RUNNER_TEMP/flow-like-build.swap"
+          sudo fallocate -l 8G "$swapfile"
+          sudo chmod 600 "$swapfile"
+          sudo mkswap "$swapfile"
+          sudo swapon "$swapfile"
+          free -h
+          df -h "$RUNNER_TEMP"
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
         id: buildx
 
@@ -266,7 +285,7 @@ jobs:
           sbom: false
           tags: ${{ steps.image.outputs.ref }}
           build-args: |
-            CARGO_BUILD_JOBS=2
+            CARGO_BUILD_JOBS=${{ matrix.cargo_build_jobs }}
             CRDB_CA_URL=
             AUDIT_FEATURES=${{ matrix.audit_features || 'aws' }}
           labels: |

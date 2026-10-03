@@ -92,6 +92,10 @@ pub struct WidgetPolicyQuery {
     /// media or microphone access.
     #[serde(default)]
     pub preview: bool,
+    /// Project the widget runs in. Members of a project that uses this
+    /// version may describe it without access to the package itself.
+    #[serde(default)]
+    pub app_id: Option<String>,
 }
 
 /// Describe a widget including the addresses the host found in its inputs.
@@ -179,7 +183,7 @@ impl WidgetRequestError {
         }
     }
 
-    fn into_response(self) -> Response {
+    pub(crate) fn into_response(self) -> Response {
         widget_error_response(StatusCode::BAD_REQUEST, self.code, &self.message)
     }
 }
@@ -231,13 +235,18 @@ pub fn validate_runtime_request(
             "Store previews never get network access; send runtimeSources only without preview",
         ));
     }
-    if let Some(app_id) = app_id.filter(|app_id| !is_valid_widget_app_id(app_id)) {
-        return Err(WidgetRequestError::new(
-            INVALID_APP_ID_CODE,
-            format!("App id {app_id:?} must match [A-Za-z0-9_-]{{1,64}}"),
-        ));
-    }
-    Ok(())
+    invalid_app_id(app_id).map_or(Ok(()), Err)
+}
+
+pub(crate) fn invalid_app_id(app_id: Option<&str>) -> Option<WidgetRequestError> {
+    app_id
+        .filter(|app_id| !is_valid_widget_app_id(app_id))
+        .map(|app_id| {
+            WidgetRequestError::new(
+                INVALID_APP_ID_CODE,
+                format!("App id {app_id:?} must match [A-Za-z0-9_-]{{1,64}}"),
+            )
+        })
 }
 
 /// Entries of [`WIDGET_RESERVED_HOSTS_ENV`], without a leading `*.`.
@@ -652,6 +661,7 @@ fn grant_response(response: WidgetGrantResponse) -> Response {
     ),
     responses(
         (status = 200, description = "The widget's declared policy as the server enforces it (private, no-store)", body = WidgetPolicyDescriptor),
+        (status = 400, description = "Malformed app id (INVALID_APP_ID)"),
         (status = 403, description = "No access to this package"),
         (status = 404, description = "Package, version, or widget not found"),
         (status = 503, description = "WASM registry not configured")
@@ -666,7 +676,17 @@ pub async fn describe_widget_policy(
     Query(query): Query<WidgetPolicyQuery>,
 ) -> Result<Response, ApiError> {
     ensure_widget_ids(&package_id, &widget_id)?;
-    authorize_widget_version(&state, &user, &package_id, &version).await?;
+    if let Some(error) = invalid_app_id(query.app_id.as_deref()) {
+        return Ok(error.into_response());
+    }
+    authorize_widget_version(
+        &state,
+        &user,
+        &package_id,
+        &version,
+        query.app_id.as_deref(),
+    )
+    .await?;
     let target = WidgetTarget {
         package_id: &package_id,
         version: &version,
@@ -718,7 +738,14 @@ pub async fn describe_widget_runtime_policy(
     ) {
         return Ok(error.into_response());
     }
-    authorize_widget_version(&state, &user, &package_id, &version).await?;
+    authorize_widget_version(
+        &state,
+        &user,
+        &package_id,
+        &version,
+        request.app_id.as_deref(),
+    )
+    .await?;
     let target = WidgetTarget {
         package_id: &package_id,
         version: &version,
@@ -778,7 +805,14 @@ pub async fn mint_widget_grant(
     ) {
         return Ok(error.into_response());
     }
-    let authorized = authorize_widget_version(&state, &user, &package_id, &request.version).await?;
+    let authorized = authorize_widget_version(
+        &state,
+        &user,
+        &package_id,
+        &request.version,
+        request.app_id.as_deref(),
+    )
+    .await?;
     let target = WidgetTarget {
         package_id: &package_id,
         version: &request.version,

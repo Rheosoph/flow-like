@@ -89,7 +89,10 @@ import {
 	type IFlowScriptApplyFailureReport,
 	flowScriptApplyOutcome,
 } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
-import { isExpiredPin } from "@flow-like/flow-like-ui/lib/package-license";
+import {
+	isExpiredPin,
+	isWidgetsOnlyCopy,
+} from "@flow-like/flow-like-ui/lib/package-license";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { timeRunStep } from "@flow-like/flow-like-ui/lib/run-timing";
 import {
@@ -97,7 +100,6 @@ import {
 	normalizeBoardVersion,
 } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import type { IElementDemand } from "@flow-like/flow-like-ui/lib/schema/flow/element-demand";
-import type { AppPackage } from "@flow-like/flow-like-ui/lib/schema/wasm";
 import type {
 	IBoardRunRequirements,
 	IFlowIrCommitReadback,
@@ -124,6 +126,7 @@ import {
 } from "../../lib/request-deadline";
 import { requestRpaAutomationConsent } from "../rpa";
 import type { TauriBackend } from "../tauri-provider";
+import { type RemoteAppPackage, syncRemoteAppPackages } from "./app-state";
 import {
 	getRemoteBoardSkipReason,
 	shouldApplyRemoteBoard,
@@ -518,9 +521,6 @@ const summarizeBoardElementRefs = (board: IBoard) => {
 	return summaries;
 };
 
-type RemoteAppPackage = Pick<AppPackage, "packageId" | "version"> &
-	Partial<Pick<AppPackage, "packageName" | "license">>;
-
 /** Expired pins are disabled for the project: running their nodes locally would bypass the licence. */
 const assertNoExpiredPackagesUsed = (
 	packageIds: readonly string[],
@@ -534,6 +534,27 @@ const assertNoExpiredPackagesUsed = (
 	throw new Error(
 		`${blocked.packageName ?? blocked.packageId} is disabled in this project: its licence expired because no admin or owner has the package. An admin or the owner needs to get it and reactivate it on the Packages page.`,
 	);
+};
+
+/**
+ * Every install refreshes the catalog, which installs the app's packages
+ * again: a registry that keeps answering with a widgets-only copy is asked for
+ * the whole package once in this long instead of without end.
+ */
+const WIDGETS_ONLY_REINSTALL_MS = 5 * 60_000;
+/** When the whole package was last asked for in place of a widgets-only copy, per `{packageId}@{version}`. */
+const widgetsOnlyReinstalls = new Map<string, number>();
+
+/** Whether a pin's widgets-only copy is due for another install, which this remembers. */
+const claimWidgetsOnlyReinstall = (pkg: RemoteAppPackage): boolean => {
+	const key = `${pkg.packageId}@${pkg.version}`;
+	const last = widgetsOnlyReinstalls.get(key);
+	const now = Date.now();
+	if (last !== undefined && now - last < WIDGETS_ONLY_REINSTALL_MS) {
+		return false;
+	}
+	widgetsOnlyReinstalls.set(key, now);
+	return true;
 };
 
 export class BoardState implements IBoardState {
@@ -763,74 +784,6 @@ export class BoardState implements IBoardState {
 		}
 	}
 
-	/** Every remote pin, expired ones included; only usable pins reach the local package map. */
-	private async syncRemoteAppPackages(
-		appId: string,
-	): Promise<RemoteAppPackage[]> {
-		const isOffline = await this.backend.isOffline(appId);
-
-		if (
-			isOffline ||
-			!this.backend.profile ||
-			!this.backend.auth ||
-			!this.backend.appState.listPackages ||
-			!this.backend.appState.addPackage ||
-			!this.backend.appState.removePackage
-		) {
-			return [];
-		}
-
-		try {
-			const [remotePackages, localPackages] = await Promise.all([
-				fetcher<RemoteAppPackage[]>(
-					this.backend.profile,
-					`apps/${appId}/packages`,
-					{ timeoutMs: HUB_REFRESH_TIMEOUT_MS },
-					this.backend.auth,
-				),
-				this.backend.appState.listPackages(appId),
-			]);
-
-			const remotePackageMap = new Map(
-				remotePackages
-					.filter((pkg) => !isExpiredPin(pkg))
-					.map((pkg) => [pkg.packageId, pkg.version]),
-			);
-
-			const syncTasks: Promise<void>[] = [];
-
-			for (const [packageId, version] of remotePackageMap) {
-				if (localPackages[packageId] === version) {
-					continue;
-				}
-
-				syncTasks.push(
-					this.backend.appState.addPackage(appId, packageId, version),
-				);
-			}
-
-			for (const packageId of Object.keys(localPackages)) {
-				if (remotePackageMap.has(packageId)) {
-					continue;
-				}
-
-				syncTasks.push(this.backend.appState.removePackage(appId, packageId));
-			}
-
-			if (syncTasks.length > 0) {
-				await Promise.all(syncTasks);
-			}
-
-			return remotePackages;
-		} catch (error) {
-			console.warn(
-				"Failed to sync remote app packages into local catalog state:",
-				error,
-			);
-			return [];
-		}
-	}
-
 	async ensureRemoteAppPackagesInstalled(
 		appId: string,
 		remotePackages: RemoteAppPackage[],
@@ -849,16 +802,29 @@ export class BoardState implements IBoardState {
 				"packages.install.list_installed",
 				() => this.backend.registryState.getInstalledPackages(),
 			);
-			const installedVersionMap = new Map(
-				installedPackages.map((pkg) => [pkg.id, pkg.version]),
-			);
+			const installed = new Map(installedPackages.map((pkg) => [pkg.id, pkg]));
+			// A widgets-only copy holds no nodes: whoever lists the project's pins
+			// may run its flows, so the registry now sends the whole package. The
+			// native client files such a copy beside a complete active copy of
+			// another version, so the pin's copy is judged wherever it is held.
+			const needsInstall = (pkg: RemoteAppPackage): boolean => {
+				const local = installed.get(pkg.packageId);
+				if (!local) return true;
+				const versions = local.versions;
+				const held =
+					local.version === pkg.version
+						? local
+						: versions && Object.hasOwn(versions, pkg.version)
+							? versions[pkg.version]
+							: undefined;
+				if (held && isWidgetsOnlyCopy(held)) {
+					return claimWidgetsOnlyReinstall(pkg);
+				}
+				return local.version !== pkg.version;
+			};
 
 			const installTasks = packages
-				.filter(
-					(pkg) =>
-						options.forceReload ||
-						installedVersionMap.get(pkg.packageId) !== pkg.version,
-				)
+				.filter((pkg) => options.forceReload || needsInstall(pkg))
 				.map((pkg) =>
 					timeRunStep(`packages.install.${pkg.packageId}`, () =>
 						this.backend.registryState.installPackage(
@@ -899,7 +865,7 @@ export class BoardState implements IBoardState {
 			);
 		}
 		const remotePackages = await timeRunStep("packages.remote_list", () =>
-			this.syncRemoteAppPackages(appId),
+			syncRemoteAppPackages(this.backend, appId),
 		);
 		assertNoExpiredPackagesUsed(
 			requirements?.wasm_package_ids ?? [],
@@ -1232,7 +1198,7 @@ export class BoardState implements IBoardState {
 		// The packages read goes to the same hub; waiting on it again only delays the editor.
 		const remotePackages = hubUnavailable
 			? []
-			: await this.syncRemoteAppPackages(appId);
+			: await syncRemoteAppPackages(this.backend, appId);
 		await this.ensureRemoteAppPackagesInstalled(appId, remotePackages);
 		const nodes: INode[] = await invoke("get_catalog", { appId });
 		return nodes;

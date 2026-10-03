@@ -128,8 +128,8 @@ function packageContractPins(
 }
 
 /**
- * Package widgets of the app, resolved from installed manifests. Returns an empty list on hosts
- * without per-app package listing (web) and never throws: a widget-source failure must not take
+ * Package widgets of the app, resolved from package manifests. Returns an empty list on hosts
+ * without per-app package listing and never throws: a widget-source failure must not take
  * down the page/widget inspection the model actually asked for.
  */
 async function loadUiInspectPackageWidgets(
@@ -140,7 +140,8 @@ async function loadUiInspectPackageWidgets(
 		const packageWidgets = await listAppPackageWidgets(
 			{
 				listPackages: backend.appState.listPackages?.bind(backend.appState),
-				getPackage: (packageId) => backend.registryState.getPackage(packageId),
+				getPackage: (packageId, packageAppId) =>
+					backend.registryState.getPackage(packageId, packageAppId),
 			},
 			appId,
 		);

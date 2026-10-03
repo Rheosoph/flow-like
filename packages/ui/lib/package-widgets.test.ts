@@ -181,6 +181,21 @@ describe("listAppPackageWidgets", () => {
 		expect(result[0].widget.id).toBe("sales-chart");
 	});
 
+	test("resolves each package through the app so members see what it pins", async () => {
+		const asked: [string, string][] = [];
+		await listAppPackageWidgets(
+			{
+				listPackages: async () => ({ "com.example.pack": "1.2.0" }),
+				getPackage: async (packageId, appId) => {
+					asked.push([packageId, appId]);
+					return installed;
+				},
+			},
+			"app-1",
+		);
+		expect(asked).toEqual([["com.example.pack", "app-1"]]);
+	});
+
 	test("falls back to the installed version when the pin is empty", async () => {
 		const result = await listAppPackageWidgets(
 			{
@@ -192,7 +207,7 @@ describe("listAppPackageWidgets", () => {
 		expect(result[0].packageVersion).toBe("1.2.3");
 	});
 
-	test("returns empty without listPackages support (web wiring gap)", async () => {
+	test("returns empty without listPackages support", async () => {
 		const result = await listAppPackageWidgets(
 			{ getPackage: async () => installed },
 			"app-1",

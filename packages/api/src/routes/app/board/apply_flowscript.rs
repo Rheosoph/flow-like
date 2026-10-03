@@ -68,6 +68,7 @@ pub struct ApplyFlowScriptBody {
         (status = 400, description = "Invalid FlowScript or generated command plan, or an invalid `module`/`current_layer`/`scope_anchors` combination"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
+        (status = 404, description = "Board not found"),
         (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
     )
 )]

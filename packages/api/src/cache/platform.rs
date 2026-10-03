@@ -49,6 +49,18 @@ impl std::fmt::Debug for CacheBackendHandle {
 }
 
 impl CacheBackendHandle {
+    #[cfg(test)]
+    pub(crate) fn memory_for_test() -> Self {
+        Self::from_store_for_test(Arc::new(tests::MemoryStore::default()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_store_for_test(store: Arc<dyn CacheStore>) -> Self {
+        let handle = Self::new(Arc::new(DatabaseConnection::default()));
+        assert!(handle.store.set(store).is_ok());
+        handle
+    }
+
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self {
             db,
@@ -217,7 +229,7 @@ impl PlatformCache {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::cache::CacheEntry;
     use async_trait::async_trait;
@@ -226,7 +238,7 @@ mod tests {
     use std::sync::Mutex;
 
     #[derive(Debug, Default)]
-    struct MemoryStore {
+    pub(crate) struct MemoryStore {
         entries: Mutex<HashMap<String, CacheEntry>>,
         now_ms: Mutex<i64>,
     }
@@ -236,7 +248,7 @@ mod tests {
             format!("{}|{}", key.app_id, key.sort_key())
         }
 
-        fn advance(&self, ms: i64) {
+        pub(crate) fn advance(&self, ms: i64) {
             *self.now_ms.lock().unwrap() += ms;
         }
 
@@ -335,7 +347,7 @@ mod tests {
         Done { run_id: String },
     }
 
-    fn cache() -> (Arc<MemoryStore>, PlatformCache) {
+    pub(crate) fn cache() -> (Arc<MemoryStore>, PlatformCache) {
         let store = Arc::new(MemoryStore::default());
         // Wall-clock expiries from `PlatformCache::entry` are far in the future relative
         // to the double's synthetic clock, so tests expire entries explicitly.

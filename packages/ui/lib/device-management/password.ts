@@ -2,10 +2,12 @@ import { withPassword } from "./crypto";
 import {
 	type DeviceAccountScope,
 	type LocalDeviceVault,
-	acquireDeviceLock,
+	holdDeviceLock,
+	markPasswordChangedSinceBackup,
 	replaceRewrappedVault,
 } from "./storage";
 import type { DeviceCrypto } from "./types";
+import type { VaultLease } from "./workspace/types";
 
 /** Only ciphertext reaches storage. No request to the device or hub is needed. */
 export async function changeDevicePassword(
@@ -15,14 +17,15 @@ export async function changeDevicePassword(
 	newPassword: string,
 	crypto: Pick<DeviceCrypto, "rewrapControllerVaults">,
 	signal?: AbortSignal,
+	lease?: VaultLease,
 ): Promise<LocalDeviceVault> {
 	if (currentPassword === newPassword)
 		throw new Error("Choose a different password.");
 	signal?.throwIfAborted();
-	const release = await acquireDeviceLock(scope, previous.deviceId);
+	const release = await holdDeviceLock(scope, previous.deviceId, lease);
 	try {
 		signal?.throwIfAborted();
-		return await withPassword(currentPassword, (current) =>
+		const replacement = await withPassword(currentPassword, (current) =>
 			withPassword(newPassword, async (next) => {
 				const changed = crypto.rewrapControllerVaults(
 					previous.deviceId,
@@ -51,6 +54,12 @@ export async function changeDevicePassword(
 				return replacement;
 			}),
 		);
+		lease?.replace(replacement);
+		// The new envelopes are committed; losing this flag only hides the backup reminder.
+		await markPasswordChangedSinceBackup(scope, previous.deviceId, true).catch(
+			() => undefined,
+		);
+		return replacement;
 	} finally {
 		release();
 	}

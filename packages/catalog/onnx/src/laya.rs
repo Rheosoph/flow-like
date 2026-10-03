@@ -1,5 +1,5 @@
-//! Laya answers a typed question about text with calibrated option probabilities.
-//! Prompt layout and calibration follow https://github.com/mizchi/laya-mlx.
+//! Typed decisions answer choice, rubric score, and true-probability questions about text.
+//! The Laya backend follows https://github.com/mizchi/laya-mlx for prompts and calibration.
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -115,9 +115,9 @@ pub struct LayaOptions {
 
 impl LayaOptions {
     #[cfg(any(feature = "execute", test))]
-    fn rendered_options(&self) -> Result<Vec<String>> {
+    pub(crate) fn rendered_options(&self) -> Result<Vec<String>> {
         if self.instructions.trim().is_empty() {
-            return Err(anyhow!("Laya Instructions must contain a question"));
+            return Err(anyhow!("Decision Instructions must contain a question"));
         }
         match self.question_type {
             LayaQuestionType::Choice | LayaQuestionType::Score => {
@@ -125,13 +125,13 @@ impl LayaOptions {
                     || self.criteria.iter().any(|value| value.trim().is_empty())
                 {
                     return Err(anyhow!(
-                        "Laya choice and score questions need non-empty Criteria"
+                        "Decision choice and score questions need non-empty Criteria"
                     ));
                 }
                 if self.question_type == LayaQuestionType::Choice {
                     let unique: std::collections::HashSet<_> = self.criteria.iter().collect();
                     if unique.len() != self.criteria.len() {
-                        return Err(anyhow!("Laya choice labels must be unique"));
+                        return Err(anyhow!("Decision choice labels must be unique"));
                     }
                     Ok(self.criteria.clone())
                 } else {
@@ -146,7 +146,7 @@ impl LayaOptions {
             LayaQuestionType::Noul => {
                 if !self.criteria.is_empty() && self.criteria.len() != 2 {
                     return Err(anyhow!(
-                        "Laya noul Criteria must be empty or contain false and true descriptions, in that order"
+                        "Decision noul Criteria must be empty or contain false and true descriptions, in that order"
                     ));
                 }
                 let description = |index: usize, fallback: &str| {
@@ -187,8 +187,8 @@ pub struct LayaResult {
     pub probabilities: Vec<LayaProbability>,
     /// One minus normalized entropy; for noul, the larger of P(false) and P(true).
     pub confidence: f64,
-    /// Probability of action index zero from the model's separate action head.
-    pub act_probability: f64,
+    /// Laya's probability of action index zero; absent for models without an action head.
+    pub act_probability: Option<f64>,
     pub input_tokens: usize,
 }
 
@@ -407,7 +407,7 @@ fn decode_laya(
             })
             .collect(),
         confidence: round(confidence),
-        act_probability: round(act_probability),
+        act_probability: Some(round(act_probability)),
         input_tokens,
     })
 }
@@ -452,6 +452,35 @@ pub fn infer_laya(
     )
 }
 
+#[cfg(feature = "execute")]
+pub(crate) async fn infer_laya_directory(
+    context: &mut ExecutionContext,
+    model_dir: &FlowPath,
+    text: &str,
+    options: &LayaOptions,
+    custom: bool,
+) -> Result<LayaResult> {
+    let loaded = if custom {
+        loading::load_laya_custom(context, model_dir).await?
+    } else {
+        loading::load_laya(context, model_dir).await?
+    };
+    let text = text.to_owned();
+    let options = options.clone();
+    flow_like_types::tokio::task::spawn_blocking(move || {
+        let mut session = loaded.session.blocking_lock();
+        infer_laya(
+            &mut session,
+            &loaded.tokenizer,
+            &text,
+            &options,
+            &loaded.config,
+        )
+    })
+    .await
+    .map_err(|error| anyhow!("Laya inference task failed: {error}"))?
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct LayaNode {}
@@ -462,7 +491,36 @@ impl LayaNode {
     }
 }
 
-const MODEL_DIR_DESCRIPTION: &str = "Directory containing model.onnx, tokenizer/tokenizer.json (or tokenizer.json), and rl_agent_config.json. Missing files download automatically into this directory's managed cache (about 681 MB for the complete bundle)";
+pub(crate) const DEFAULT_DECISION_MODEL: &str = "mizchi/laya-multilingual-onnx";
+pub(crate) const DECISION_MODELS: &[&str] = &[
+    DEFAULT_DECISION_MODEL,
+    "fastino/GLiNER2.5-Decide",
+    "fastino/GLiNER2.5-multi-Decide",
+    "fastino/GLiNER2.5-Decide-1B",
+    "fastino/gliner2.5-multi-v1",
+    "fastino/gliner2.5-base-v1",
+    "fastino/gliner2.5-small-v1",
+    "custom",
+];
+
+const MODEL_DIR_DESCRIPTION: &str = "FlowPath directory for downloaded ONNX models and reusable cache. Place your exported weights here for custom. Custom requires a complete Laya or GLiNER2 classification bundle and never downloads missing files";
+
+fn ensure_model_input(node: &mut Node) {
+    if node.get_pin_by_name("model").is_none() {
+        node.add_input_pin(
+            "model",
+            "Model",
+            "Model weights to use. ONNX presets download once and reuse the Model Directory cache. Custom loads your own complete bundle",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!(DEFAULT_DECISION_MODEL)))
+        .set_options(
+            PinOptions::new()
+                .set_valid_values(DECISION_MODELS.iter().map(|model| (*model).into()).collect())
+                .build(),
+        );
+    }
+}
 
 fn ensure_mode_input(
     node: &mut Node,
@@ -536,24 +594,24 @@ fn reconcile_mode_pins(node: &mut Node, mode: Option<LayaQuestionType>) {
                 "Choice labels or ordered score levels. Unused for noul questions",
             ),
         };
-        ensure_mode_input(node, "criteria", label, description, true, 6);
+        ensure_mode_input(node, "criteria", label, description, true, 7);
     }
     if noul {
         ensure_mode_input(
             node,
             "false_description",
             "False Description",
-            "Optional description of when the statement is false. Leave empty for Laya's default",
+            "Optional description of when the statement is false. Leave empty to use the model default",
             false,
-            7,
+            8,
         );
         ensure_mode_input(
             node,
             "true_description",
             "True Description",
-            "Optional description of when the statement is true. Leave empty for Laya's default",
+            "Optional description of when the statement is true. Leave empty to use the model default",
             false,
-            8,
+            9,
         );
     }
     if choices {
@@ -632,6 +690,7 @@ fn normalize_pin_order(node: &mut Node) {
     let inputs = [
         "exec_in",
         "model_dir",
+        "model",
         "text",
         "instructions",
         "question_type",
@@ -675,12 +734,12 @@ impl NodeLogic for LayaNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
             "onnx_laya",
-            "Typed Decision (Laya)",
-            "Answer a choice, rubric score, or true-probability question about text using Laya multilingual. Connect one Model Directory; existing model files are loaded and missing files download automatically from mizchi/laya-multilingual-onnx. Loaded models are reused within the execution cache.",
+            "Typed Decision",
+            "Answer a choice, rubric score, or true-probability question about text with Laya or GLiNER2.5. Select ONNX model weights and connect a Model Directory to cache downloads and reuse them across runs. Select custom to load your own complete bundle without downloading missing files.",
             "AI/ML/ONNX/NLP",
         );
         node.set_flowscript_name("onnx", "laya");
-        node.set_version(2);
+        node.set_version(3);
         node.add_icon("/flow/icons/type.svg");
         node.add_input_pin(
             "exec_in",
@@ -696,6 +755,7 @@ impl NodeLogic for LayaNode {
         )
         .set_schema::<FlowPath>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
+        ensure_model_input(&mut node);
         node.add_input_pin(
             "text",
             "Text",
@@ -726,7 +786,7 @@ impl NodeLogic for LayaNode {
             "Decision complete",
             VariableType::Execution,
         );
-        node.add_output_pin("result", "Result", "Typed answer, calibrated probabilities, confidence, action probability and token count", VariableType::Struct).set_schema::<LayaResult>();
+        node.add_output_pin("result", "Result", "Typed answer, option probabilities, confidence and token count. act_probability is Laya's action probability and null for models without an action head", VariableType::Struct).set_schema::<LayaResult>();
         node.add_output_pin(
             "confidence",
             "Confidence",
@@ -735,13 +795,22 @@ impl NodeLogic for LayaNode {
         )
         .index = 6;
         reconcile_mode_pins(&mut node, Some(LayaQuestionType::Choice));
+        normalize_pin_order(&mut node);
         node
     }
 
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         node.error = None;
         migrate_model_directory(node);
+        ensure_model_input(node);
         normalize_pin_order(node);
+        let model = node.get_pin_by_name("model").unwrap();
+        if model.depends_on.is_empty()
+            && dynamic_pin_source_literal(node, "model")
+                .is_none_or(|value| !DECISION_MODELS.contains(&value.as_str()))
+        {
+            node.error = Some("Select a supported decision model or custom".into());
+        }
         let Some(selector) = node.get_pin_by_name("question_type") else {
             return;
         };
@@ -753,7 +822,7 @@ impl NodeLogic for LayaNode {
             flow_like_types::json::from_value::<LayaQuestionType>(json!(value)).ok()
         });
         let Some(mode) = mode else {
-            node.error = Some("Select choice, score, or noul as the Laya question type".into());
+            node.error = Some("Select choice, score, or noul as the decision question type".into());
             return;
         };
         reconcile_mode_pins(node, Some(mode));
@@ -782,19 +851,10 @@ impl NodeLogic for LayaNode {
             options.rendered_options()?;
             let text: String = context.evaluate_pin("text").await?;
             let model_dir: FlowPath = context.evaluate_pin("model_dir").await?;
-            let loaded = loading::load_laya(context, &model_dir).await?;
-            let result = flow_like_types::tokio::task::spawn_blocking(move || {
-                let mut session = loaded.session.blocking_lock();
-                infer_laya(
-                    &mut session,
-                    &loaded.tokenizer,
-                    &text,
-                    &options,
-                    &loaded.config,
-                )
-            })
-            .await
-            .map_err(|error| anyhow!("Laya inference task failed: {error}"))??;
+            let model: String = context.evaluate_pin("model").await?;
+            let result =
+                crate::onnx::decision::infer_decision(context, &model, &model_dir, &text, &options)
+                    .await?;
             // Wired selectors expose all outputs. Reset inactive answers so a previous
             // invocation's value cannot survive a mode change.
             for (name, value) in [
@@ -839,7 +899,8 @@ mod tests {
         let result = decode_laya(&[0.0, 2.0], &[0.0, 0.0], 10, &options, &config).unwrap();
         assert_eq!(result.choice.as_deref(), Some("sales"));
         assert_eq!(result.probabilities[1].probability, 0.7311);
-        assert_eq!(result.act_probability, 0.5);
+        assert_eq!(result.act_probability, Some(0.5));
+        assert_eq!(json!(result)["act_probability"], json!(0.5));
         let tied = decode_laya(&[1000.0, 1000.0], &[0.0, 0.0], 10, &options, &config).unwrap();
         assert_eq!(tied.choice.as_deref(), Some("billing"));
         assert_eq!(tied.confidence, 0.0);

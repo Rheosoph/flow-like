@@ -996,7 +996,7 @@ const SPLIT_GUIDANCE: Record<string, ISectionGuidance> = {
 	"discord.behaviour": {
 		what: "How the bot decides a message is meant for it.",
 		mistake:
-			"Turning mention-only off in a busy channel, which is how a bot gets muted.",
+			"Turning Respond to Mentions off while the command prefix is empty: the bot then answers every message, which in a busy channel is how a bot gets muted.",
 	},
 	"cron.schedule": {
 		what: "Decides when the flow runs.",
@@ -1021,7 +1021,7 @@ const SPLIT_GUIDANCE: Record<string, ISectionGuidance> = {
 	"telegram.behaviour": {
 		what: "Identity, and what counts as talking to the bot.",
 		mistake:
-			"Leaving mention-only off in a busy group, so the bot replies to everything.",
+			"Leaving the command prefix empty in a busy group, so the bot replies to every message.",
 	},
 	"api.endpoint": {
 		what: "The URL callers hit.",

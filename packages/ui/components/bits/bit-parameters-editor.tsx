@@ -7,7 +7,7 @@ import {
 	SlidersHorizontal,
 	Trash2,
 } from "lucide-react";
-import { createContext, useContext, useId, useState } from "react";
+import { createContext, useContext, useState } from "react";
 import { isHostedLlmProviderName } from "../../lib/bit/local-model-filter";
 import { IBitTypes } from "../../lib/schema/bit/bit";
 import { useBackend } from "../../state/backend-state";
@@ -18,11 +18,12 @@ import { Textarea } from "../ui/textarea";
 import { EditorField, EditorSection, StringList } from "./bit-editor-fields";
 import {
 	HOSTED_PRICING_FIELDS,
-	microUsdToUsd,
 	record,
 	updateBitPricingField,
 	validateBitPricing,
 } from "./bit-editor-model";
+import { HostedEmbeddingConfiguration } from "./hosted-embedding-configuration";
+import { HostedPricingField } from "./hosted-pricing-field";
 
 const LABELS: Record<string, string> = {
 	context_length: "Context length",
@@ -416,41 +417,6 @@ function ParameterObject({
 	);
 }
 
-function PricingField({
-	label,
-	value,
-	optional,
-	onChange,
-}: {
-	label: string;
-	value: unknown;
-	optional: boolean;
-	onChange: (text: string) => void;
-}) {
-	const id = useId();
-	const [editing, setEditing] = useState<string | null>(null);
-	return (
-		<div className="space-y-2">
-			<label htmlFor={id} className="text-sm font-medium">
-				{label}
-				{optional ? " (optional)" : " *"}
-			</label>
-			<Input
-				id={id}
-				inputMode="decimal"
-				value={editing ?? microUsdToUsd(value)}
-				placeholder={optional ? "No request fee" : "Enter an amount"}
-				onFocus={() => setEditing(microUsdToUsd(value))}
-				onBlur={() => setEditing(null)}
-				onChange={(event) => {
-					setEditing(event.target.value);
-					onChange(event.target.value);
-				}}
-			/>
-		</div>
-	);
-}
-
 function HostedPricing({
 	parameters,
 	onChange,
@@ -489,7 +455,7 @@ function HostedPricing({
 				<>
 					<div className="grid gap-4 sm:grid-cols-2">
 						{HOSTED_PRICING_FIELDS.map(({ key, label, optional }) => (
-							<PricingField
+							<HostedPricingField
 								key={key}
 								label={label}
 								optional={optional}
@@ -554,6 +520,8 @@ export function BitParametersEditor({
 	const [mode, setMode] = useState<"form" | "json">("form");
 	const params = record(value);
 	const isModel = [IBitTypes.Llm, IBitTypes.Vlm].includes(bitType);
+	const showHostedEmbedding =
+		scope === "admin" && bitType === IBitTypes.Embedding;
 	const providerName = record(params.provider).provider_name;
 	const showPricing =
 		scope === "admin" &&
@@ -632,6 +600,12 @@ export function BitParametersEditor({
 					</div>
 				) : (
 					<div className="space-y-5">
+						{showHostedEmbedding && (
+							<HostedEmbeddingConfiguration
+								parameters={params}
+								onChange={onChange}
+							/>
+						)}
 						{showPricing && (
 							<HostedPricing parameters={params} onChange={onChange} />
 						)}
@@ -650,7 +624,13 @@ export function BitParametersEditor({
 								value={params}
 								onChange={onChange}
 								path="parameter"
-								hiddenKeys={showPricing ? ["pricing"] : []}
+								hiddenKeys={
+									showHostedEmbedding
+										? ["remote", "pricing"]
+										: showPricing
+											? ["pricing"]
+											: []
+								}
 							/>
 						) : (
 							<div className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">

@@ -4,7 +4,7 @@ use crate::jwt::{verify_jwt_async, CompilerClaims};
 use crate::metadata::extract_nodes;
 use flow_like_types_contracts::dispatch::{
     compilation_job_payload_hash, CompilationJob, CompilationResult, CompilationStatus,
-    CompilationStorageProvider,
+    CompilationStorageProvider, CompilationTarget,
 };
 use flow_like_wasm::aot_cache::WASMTIME_MAJOR_VERSION;
 use flow_like_wasm::{WasmConfig, WasmEngine};
@@ -46,7 +46,12 @@ pub async fn compile(
     let storage_client = storage_client(config)?;
     let result = tokio::time::timeout(
         config.compilation_timeout(),
-        compile_inner(&job, config, &storage_client),
+        compile_inner(
+            &job,
+            config,
+            &storage_client,
+            claims.artifact_generation.is_some(),
+        ),
     )
     .await;
 
@@ -118,20 +123,21 @@ fn storage_client(config: &CompilerConfig) -> Result<Client, CompilerError> {
         .map_err(|_| CompilerError::Config("failed to build hardened storage client".to_string()))
 }
 
-async fn download_wasm(
+async fn download_bytes(
     client: &Client,
     url: &str,
     max_bytes: u64,
+    purpose: &str,
 ) -> Result<bytes::Bytes, CompilerError> {
     let mut response = client
         .get(url)
         .send()
         .await
-        .map_err(|_| CompilerError::Download("signed WASM GET request failed".to_string()))?;
+        .map_err(|_| CompilerError::Download(format!("signed {purpose} GET request failed")))?;
 
     if !response.status().is_success() {
         return Err(CompilerError::Download(format!(
-            "signed WASM GET returned {}",
+            "signed {purpose} GET returned {}",
             response.status()
         )));
     }
@@ -140,9 +146,9 @@ async fn download_wasm(
         .content_length()
         .is_some_and(|length| length > max_bytes)
     {
-        return Err(CompilerError::Download(
-            "signed WASM response exceeds the configured size limit".to_string(),
-        ));
+        return Err(CompilerError::Download(format!(
+            "signed {purpose} response exceeds the configured size limit"
+        )));
     }
 
     let mut body =
@@ -150,15 +156,15 @@ async fn download_wasm(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| CompilerError::Download("failed to read signed WASM body".to_string()))?
+        .map_err(|_| CompilerError::Download(format!("failed to read signed {purpose} body")))?
     {
         let next_len = body.len().checked_add(chunk.len()).ok_or_else(|| {
-            CompilerError::Download("signed WASM response length overflow".to_string())
+            CompilerError::Download(format!("signed {purpose} response length overflow"))
         })?;
         if next_len as u64 > max_bytes {
-            return Err(CompilerError::Download(
-                "signed WASM response exceeds the configured size limit".to_string(),
-            ));
+            return Err(CompilerError::Download(format!(
+                "signed {purpose} response exceeds the configured size limit"
+            )));
         }
         body.extend_from_slice(&chunk);
     }
@@ -172,7 +178,8 @@ async fn upload_artifact(
     provider: CompilationStorageProvider,
     data: Vec<u8>,
     max_bytes: u64,
-) -> Result<(), CompilerError> {
+    create_only: bool,
+) -> Result<bool, CompilerError> {
     if data.len() as u64 > max_bytes {
         return Err(CompilerError::Upload(
             "compiled artifact exceeds the configured size limit".to_string(),
@@ -182,7 +189,7 @@ async fn upload_artifact(
     let mut request = client
         .put(url)
         .header("Content-Type", "application/octet-stream");
-    for (name, value) in required_upload_headers(provider) {
+    for (name, value) in required_upload_headers(provider, create_only)? {
         request = request.header(*name, *value);
     }
     let response = request
@@ -193,20 +200,97 @@ async fn upload_artifact(
 
     if !response.status().is_success() {
         let status = response.status();
+        if create_only && status == reqwest::StatusCode::PRECONDITION_FAILED {
+            return Ok(false);
+        }
         return Err(CompilerError::Upload(format!(
             "signed artifact PUT returned {status}"
         )));
     }
-    Ok(())
+    Ok(true)
 }
 
 fn required_upload_headers(
     provider: CompilationStorageProvider,
-) -> &'static [(&'static str, &'static str)] {
-    match provider {
-        CompilationStorageProvider::AzureBlob => &[("x-ms-blob-type", "BlockBlob")],
-        CompilationStorageProvider::AwsS3 | CompilationStorageProvider::GoogleCloudStorage => &[],
+    create_only: bool,
+) -> Result<&'static [(&'static str, &'static str)], CompilerError> {
+    Ok(match (provider, create_only) {
+        (CompilationStorageProvider::AzureBlob, true) => {
+            &[("x-ms-blob-type", "BlockBlob"), ("If-None-Match", "*")]
+        }
+        (CompilationStorageProvider::AwsS3, true) => &[("If-None-Match", "*")],
+        (CompilationStorageProvider::GoogleCloudStorage, true) => {
+            // GCS requires x-goog-if-generation-match: 0 to be included in the
+            // signed headers. Our URL signer cannot bind that header yet.
+            return Err(CompilerError::Compilation(
+                "artifact generations are not supported by the GCS URL signer".to_string(),
+            ));
+        }
+        (CompilationStorageProvider::AzureBlob, false) => &[("x-ms-blob-type", "BlockBlob")],
+        (_, false) => &[],
+    })
+}
+
+async fn upload_compiled_artifacts(
+    client: &Client,
+    target: &CompilationTarget,
+    serialized: Vec<u8>,
+    max_bytes: u64,
+    create_only: bool,
+) -> Result<(), CompilerError> {
+    let mut checksum = blake3::hash(&serialized).to_hex().to_string();
+    let artifact = upload_artifact(
+        client,
+        &target.cwasm_upload_url,
+        target.upload_provider,
+        serialized,
+        max_bytes,
+        create_only,
+    );
+    if !create_only {
+        let checksum = upload_artifact(
+            client,
+            &target.checksum_upload_url,
+            target.upload_provider,
+            checksum.into_bytes(),
+            64,
+            false,
+        );
+        tokio::try_join!(artifact, checksum)?;
+        return Ok(());
     }
+    if !artifact.await? {
+        let url = target
+            .cwasm_download_url
+            .as_deref()
+            .ok_or_else(|| invalid_job("generation target has no artifact retry GET URL"))?;
+        // Another delivery may have compiled different bytes. The checksum
+        // must describe the artifact that won creation in storage.
+        let stored = download_bytes(client, url, max_bytes, "compiled artifact").await?;
+        checksum = blake3::hash(&stored).to_hex().to_string();
+    }
+    let created_checksum = upload_artifact(
+        client,
+        &target.checksum_upload_url,
+        target.upload_provider,
+        checksum.clone().into_bytes(),
+        64,
+        create_only,
+    )
+    .await?;
+    if !created_checksum {
+        let url = target
+            .checksum_download_url
+            .as_deref()
+            .ok_or_else(|| invalid_job("generation target has no checksum retry GET URL"))?;
+        let stored = download_bytes(client, url, 64, "compiled checksum").await?;
+        if stored.as_ref() != checksum.as_bytes() {
+            return Err(CompilerError::Compilation(
+                "existing generation checksum does not match its stored artifact".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -236,6 +320,14 @@ fn validate_job_envelope(
         return Err(invalid_job(
             "compiler JWT claims do not match the queued job",
         ));
+    }
+    if let Some(generation) = &claims.artifact_generation {
+        validate_identifier("artifact_generation", generation, 128)?;
+        if generation != &job.job_id {
+            return Err(invalid_job(
+                "compiler JWT artifact generation must match the queued job",
+            ));
+        }
     }
     if !is_lower_hex(&job.wasm_hash, 64) {
         return Err(invalid_job("WASM hash must be 64 lowercase hex characters"));
@@ -288,10 +380,14 @@ fn validate_job_envelope(
             validate_identifier("cross_triple", triple, 128)?;
         }
 
-        let artifact_path = format!(
-            "wasm-compiled/{}/{}/{}.cwasm",
-            job.package_id, job.version, target.platform_key
-        );
+        let artifact_root = match &claims.artifact_generation {
+            Some(generation) => format!(
+                "wasm-compiled/{}/{}/generations/{}",
+                job.package_id, job.version, generation
+            ),
+            None => format!("wasm-compiled/{}/{}", job.package_id, job.version),
+        };
+        let artifact_path = format!("{artifact_root}/{}.cwasm", target.platform_key);
         let checksum_path = format!("{artifact_path}.b3");
         validate_storage_url(
             &target.cwasm_upload_url,
@@ -309,6 +405,26 @@ fn validate_job_envelope(
             config.azure_meta_container.as_deref(),
             config,
         )?;
+        for (url, path) in [
+            (target.cwasm_download_url.as_deref(), artifact_path.as_str()),
+            (
+                target.checksum_download_url.as_deref(),
+                checksum_path.as_str(),
+            ),
+        ] {
+            if let Some(url) = url {
+                validate_storage_url(
+                    url,
+                    target.upload_provider,
+                    StorageOperation::Download,
+                    path,
+                    config.azure_meta_container.as_deref(),
+                    config,
+                )?;
+            } else if claims.artifact_generation.is_some() {
+                return Err(invalid_job("generation target is missing a retry GET URL"));
+            }
+        }
     }
 
     Ok(())
@@ -693,11 +809,13 @@ async fn compile_inner(
     job: &CompilationJob,
     config: &CompilerConfig,
     storage_client: &Client,
+    create_only: bool,
 ) -> Result<(Vec<String>, Option<serde_json::Value>), CompilerError> {
-    let wasm_bytes = download_wasm(
+    let wasm_bytes = download_bytes(
         storage_client,
         &job.wasm_download_url,
         config.max_wasm_bytes,
+        "WASM",
     )
     .await?;
 
@@ -743,9 +861,7 @@ async fn compile_inner(
         let bytes = wasm_bytes.clone();
         let platform_key = target.platform_key.clone();
         let cross_triple = target.cross_triple.clone();
-        let cwasm_url = target.cwasm_upload_url.clone();
-        let checksum_url = target.checksum_upload_url.clone();
-        let upload_provider = target.upload_provider;
+        let target = target.clone();
         let storage_client = storage_client.clone();
         let max_artifact_bytes = config.max_artifact_bytes;
 
@@ -783,24 +899,14 @@ async fn compile_inner(
             .await
             .map_err(|e| CompilerError::Compilation(format!("Spawn-blocking panicked: {e}")))??;
 
-            let hash = blake3::hash(&serialized).to_hex().to_string();
-
-            tokio::try_join!(
-                upload_artifact(
-                    &storage_client,
-                    &cwasm_url,
-                    upload_provider,
-                    serialized,
-                    max_artifact_bytes,
-                ),
-                upload_artifact(
-                    &storage_client,
-                    &checksum_url,
-                    upload_provider,
-                    hash.into_bytes(),
-                    64,
-                ),
-            )?;
+            upload_compiled_artifacts(
+                &storage_client,
+                &target,
+                serialized,
+                max_artifact_bytes,
+                create_only,
+            )
+            .await?;
 
             info!(platform = %platform_key, "Target compiled and uploaded");
             Ok::<String, CompilerError>(platform_key)
@@ -918,6 +1024,8 @@ mod tests {
                     "https://flowlikedevdata.blob.core.windows.net/metadata/wasm-compiled/{package_id}/{version}/{platform}.cwasm.b3?{}",
                     sas_query("w")
                 ),
+                cwasm_download_url: None,
+                checksum_download_url: None,
                 upload_provider: CompilationStorageProvider::AzureBlob,
             }],
             compiler_jwt: "not-part-of-payload-hash".to_string(),
@@ -931,6 +1039,7 @@ mod tests {
             package_id: job.package_id.clone(),
             version: job.version.clone(),
             payload_hash: compilation_job_payload_hash(job).unwrap(),
+            artifact_generation: None,
             callback_url: "https://flow-like.example/api/v1/registry/compilation-callback"
                 .to_string(),
             token_type: "compiler".to_string(),
@@ -961,6 +1070,103 @@ mod tests {
             .replace("/metadata/", "/content/");
         let claims = claims_for(&wrong_path);
         assert!(validate_job_envelope(&wrong_path, &claims, &azure_config()).is_err());
+    }
+
+    #[test]
+    fn legacy_claims_without_generation_keep_exact_legacy_paths() {
+        let job = azure_job();
+        let mut json = serde_json::to_value(claims_for(&job)).unwrap();
+        json.as_object_mut().unwrap().remove("artifact_generation");
+        let claims: CompilerClaims = serde_json::from_value(json).unwrap();
+        assert!(claims.artifact_generation.is_none());
+        assert!(validate_job_envelope(&job, &claims, &azure_config()).is_ok());
+        let target = serde_json::to_value(&job.targets[0]).unwrap();
+        assert!(target.get("cwasm_download_url").is_none());
+        assert!(target.get("checksum_download_url").is_none());
+    }
+
+    fn generation_job() -> CompilationJob {
+        let mut job = azure_job();
+        let old_prefix = format!("/{}/", job.version);
+        let new_prefix = format!("/{}/generations/{}/", job.version, job.job_id);
+        for target in &mut job.targets {
+            target.cwasm_upload_url = target.cwasm_upload_url.replace(&old_prefix, &new_prefix);
+            target.checksum_upload_url =
+                target.checksum_upload_url.replace(&old_prefix, &new_prefix);
+            target.cwasm_download_url = Some(target.cwasm_upload_url.replace("sp=w", "sp=r"));
+            target.checksum_download_url = Some(target.checksum_upload_url.replace("sp=w", "sp=r"));
+        }
+        job
+    }
+
+    #[test]
+    fn generation_paths_require_the_matching_signed_claim() {
+        let job = generation_job();
+        let mut claims = claims_for(&job);
+        assert!(validate_job_envelope(&job, &claims, &azure_config()).is_err());
+        claims.artifact_generation = Some(job.job_id.clone());
+        assert!(validate_job_envelope(&job, &claims, &azure_config()).is_ok());
+
+        for generation in ["other-job", "", "../job_123"] {
+            let mut changed = claims.clone();
+            changed.artifact_generation = Some(generation.into());
+            assert!(validate_job_envelope(&job, &changed, &azure_config()).is_err());
+        }
+
+        let legacy = azure_job();
+        let mut claims = claims_for(&legacy);
+        claims.artifact_generation = Some(legacy.job_id.clone());
+        assert!(validate_job_envelope(&legacy, &claims, &azure_config()).is_err());
+    }
+
+    #[test]
+    fn generation_claim_does_not_allow_foreign_artifact_or_checksum_paths() {
+        let job = generation_job();
+        for checksum in [false, true] {
+            let mut tampered = job.clone();
+            let target = &mut tampered.targets[0];
+            let url = if checksum {
+                &mut target.checksum_upload_url
+            } else {
+                &mut target.cwasm_upload_url
+            };
+            *url = url.replace("/generations/job_123/", "/generations/other-job/");
+            let mut claims = claims_for(&tampered);
+            claims.artifact_generation = Some(tampered.job_id.clone());
+            // Rebind the payload to exercise path validation independently of
+            // the existing signed-envelope tampering check.
+            assert!(validate_job_envelope(&tampered, &claims, &azure_config()).is_err());
+        }
+    }
+
+    #[test]
+    fn generation_retry_reads_are_required_scoped_and_signed() {
+        let job = generation_job();
+        let mut claims = claims_for(&job);
+        claims.artifact_generation = Some(job.job_id.clone());
+        for checksum in [false, true] {
+            for replacement in [None, Some("foreign-path"), Some("write-permission")] {
+                let mut changed = job.clone();
+                let target = &mut changed.targets[0];
+                let url = if checksum {
+                    &mut target.checksum_download_url
+                } else {
+                    &mut target.cwasm_download_url
+                };
+                *url = replacement.map(|kind| {
+                    let url = url.as_ref().unwrap();
+                    if kind == "foreign-path" {
+                        url.replace("/generations/job_123/", "/generations/other-job/")
+                    } else {
+                        url.replace("sp=r", "sp=w")
+                    }
+                });
+                assert!(validate_job_envelope(&changed, &claims, &azure_config()).is_err());
+                let mut rebound = claims_for(&changed);
+                rebound.artifact_generation = Some(job.job_id.clone());
+                assert!(validate_job_envelope(&changed, &rebound, &azure_config()).is_err());
+            }
+        }
     }
 
     #[test]
@@ -1087,13 +1293,365 @@ mod tests {
     }
 
     #[test]
-    fn azure_upload_header_is_provider_aware() {
+    fn upload_headers_preserve_legacy_and_require_create_only_generation_writes() {
         assert_eq!(
-            required_upload_headers(CompilationStorageProvider::AzureBlob),
+            required_upload_headers(CompilationStorageProvider::AzureBlob, false).unwrap(),
             &[("x-ms-blob-type", "BlockBlob")]
         );
-        assert!(required_upload_headers(CompilationStorageProvider::AwsS3).is_empty());
-        assert!(required_upload_headers(CompilationStorageProvider::GoogleCloudStorage).is_empty());
+        for provider in [
+            CompilationStorageProvider::AwsS3,
+            CompilationStorageProvider::GoogleCloudStorage,
+        ] {
+            assert!(required_upload_headers(provider, false).unwrap().is_empty());
+        }
+        assert_eq!(
+            required_upload_headers(CompilationStorageProvider::AwsS3, true).unwrap(),
+            &[("If-None-Match", "*")],
+        );
+        assert_eq!(
+            required_upload_headers(CompilationStorageProvider::AzureBlob, true).unwrap(),
+            &[("x-ms-blob-type", "BlockBlob"), ("If-None-Match", "*")],
+        );
+        assert!(
+            required_upload_headers(CompilationStorageProvider::GoogleCloudStorage, true).is_err()
+        );
+    }
+
+    struct CapturedUpload {
+        path: String,
+        headers: axum::http::HeaderMap,
+        body: bytes::Bytes,
+    }
+
+    async fn upload_capture_server(
+        artifact_status: axum::http::StatusCode,
+        checksum_status: axum::http::StatusCode,
+        artifact_gate: Option<Arc<tokio::sync::Semaphore>>,
+    ) -> (
+        String,
+        tokio::sync::mpsc::Receiver<CapturedUpload>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let app = axum::Router::new().route(
+            "/{name}",
+            axum::routing::put(
+                move |axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+                      headers: axum::http::HeaderMap,
+                      body: bytes::Bytes| {
+                    let tx = tx.clone();
+                    let gate = artifact_gate.clone();
+                    async move {
+                        let artifact = uri.path() == "/artifact";
+                        tx.send(CapturedUpload {
+                            path: uri.path().to_owned(),
+                            headers,
+                            body,
+                        })
+                        .await
+                        .unwrap();
+                        if artifact {
+                            if let Some(gate) = gate {
+                                gate.acquire().await.unwrap().forget();
+                            }
+                            artifact_status
+                        } else {
+                            checksum_status
+                        }
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (url, rx, server)
+    }
+
+    fn capture_target(url: &str, provider: CompilationStorageProvider) -> CompilationTarget {
+        CompilationTarget {
+            platform_key: format!("linux-x86_64-wt{WASMTIME_MAJOR_VERSION}"),
+            cross_triple: None,
+            cwasm_upload_url: format!("{url}/artifact"),
+            checksum_upload_url: format!("{url}/checksum"),
+            cwasm_download_url: Some(format!("{url}/artifact")),
+            checksum_download_url: Some(format!("{url}/checksum")),
+            upload_provider: provider,
+        }
+    }
+
+    #[tokio::test]
+    async fn generation_checksum_waits_for_successful_artifact_creation() {
+        for provider in [
+            CompilationStorageProvider::AwsS3,
+            CompilationStorageProvider::AzureBlob,
+        ] {
+            let gate = Arc::new(tokio::sync::Semaphore::new(0));
+            let (url, mut requests, server) = upload_capture_server(
+                axum::http::StatusCode::CREATED,
+                axum::http::StatusCode::CREATED,
+                Some(gate.clone()),
+            )
+            .await;
+            let target = capture_target(&url, provider);
+            let client = Client::new();
+            let bytes = b"compiled target".to_vec();
+            let expected_checksum = blake3::hash(&bytes).to_hex().to_string();
+            let upload = tokio::spawn(async move {
+                upload_compiled_artifacts(&client, &target, bytes, 1024, true).await
+            });
+
+            let artifact = tokio::time::timeout(Duration::from_secs(2), requests.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(artifact.path, "/artifact");
+            assert_eq!(artifact.body.as_ref(), b"compiled target");
+            assert_eq!(artifact.headers["if-none-match"], "*");
+            // The artifact response is held open. A parallel checksum PUT
+            // would arrive before this permit is released.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(30), requests.recv())
+                    .await
+                    .is_err()
+            );
+            gate.add_permits(1);
+            let checksum = tokio::time::timeout(Duration::from_secs(2), requests.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(checksum.path, "/checksum");
+            assert_eq!(checksum.body.as_ref(), expected_checksum.as_bytes());
+            assert_eq!(checksum.headers["if-none-match"], "*");
+            if provider == CompilationStorageProvider::AzureBlob {
+                assert_eq!(artifact.headers["x-ms-blob-type"], "BlockBlob");
+                assert_eq!(checksum.headers["x-ms-blob-type"], "BlockBlob");
+            }
+            tokio::time::timeout(Duration::from_secs(2), upload)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn existing_generation_artifact_read_failure_remains_retryable() {
+        let (url, mut requests, server) = upload_capture_server(
+            axum::http::StatusCode::PRECONDITION_FAILED,
+            axum::http::StatusCode::CREATED,
+            None,
+        )
+        .await;
+        let error = upload_compiled_artifacts(
+            &Client::new(),
+            &capture_target(&url, CompilationStorageProvider::AwsS3),
+            b"different retry output".to_vec(),
+            1024,
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(requests.recv().await.unwrap().path, "/artifact");
+        assert!(requests.try_recv().is_err());
+        assert!(matches!(error, CompilerError::Download(_)));
+        assert!(is_retryable(&error));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn existing_generation_checksum_read_failure_remains_retryable() {
+        let (url, mut requests, server) = upload_capture_server(
+            axum::http::StatusCode::CREATED,
+            axum::http::StatusCode::PRECONDITION_FAILED,
+            None,
+        )
+        .await;
+        let error = upload_compiled_artifacts(
+            &Client::new(),
+            &capture_target(&url, CompilationStorageProvider::AzureBlob),
+            b"compiled target".to_vec(),
+            1024,
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(requests.recv().await.unwrap().path, "/artifact");
+        assert_eq!(requests.recv().await.unwrap().path, "/checksum");
+        assert!(matches!(error, CompilerError::Download(_)));
+        assert!(is_retryable(&error));
+        server.abort();
+    }
+
+    type StoredArtifacts = Arc<tokio::sync::Mutex<HashMap<String, bytes::Bytes>>>;
+
+    async fn generation_store(
+        fail_checksum_once: bool,
+    ) -> (String, StoredArtifacts, tokio::task::JoinHandle<()>) {
+        use axum::{body::Bytes, http::StatusCode, response::IntoResponse};
+        let stored = StoredArtifacts::default();
+        let failed = Arc::new(std::sync::atomic::AtomicBool::new(!fail_checksum_once));
+        let put_store = stored.clone();
+        let get_store = stored.clone();
+        let app = axum::Router::new().route(
+            "/{name}",
+            axum::routing::put(
+                move |axum::extract::Path(name): axum::extract::Path<String>,
+                      headers: axum::http::HeaderMap,
+                      body: Bytes| {
+                    let stored = put_store.clone();
+                    let failed = failed.clone();
+                    async move {
+                        assert_eq!(headers["if-none-match"], "*");
+                        if name == "checksum"
+                            && !failed.swap(true, std::sync::atomic::Ordering::SeqCst)
+                        {
+                            return StatusCode::SERVICE_UNAVAILABLE;
+                        }
+                        match stored.lock().await.entry(name) {
+                            std::collections::hash_map::Entry::Occupied(_) => {
+                                StatusCode::PRECONDITION_FAILED
+                            }
+                            std::collections::hash_map::Entry::Vacant(entry) => {
+                                entry.insert(body);
+                                StatusCode::CREATED
+                            }
+                        }
+                    }
+                },
+            )
+            .get(
+                move |axum::extract::Path(name): axum::extract::Path<String>| {
+                    let stored = get_store.clone();
+                    async move {
+                        match stored.lock().await.get(&name).cloned() {
+                            Some(bytes) => bytes.into_response(),
+                            None => StatusCode::NOT_FOUND.into_response(),
+                        }
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (url, stored, server)
+    }
+
+    #[tokio::test]
+    async fn generation_retry_repairs_partial_upload_and_reuses_stored_bytes() {
+        for provider in [
+            CompilationStorageProvider::AwsS3,
+            CompilationStorageProvider::AzureBlob,
+        ] {
+            let (url, stored, server) = generation_store(true).await;
+            let target = capture_target(&url, provider);
+            let client = Client::new();
+            let original = b"first artifact".to_vec();
+            let error = upload_compiled_artifacts(&client, &target, original.clone(), 1024, true)
+                .await
+                .unwrap_err();
+            assert!(is_retryable(&error));
+            assert!(!stored.lock().await.contains_key("checksum"));
+            upload_compiled_artifacts(
+                &client,
+                &target,
+                b"different retry output".to_vec(),
+                1024,
+                true,
+            )
+            .await
+            .unwrap();
+            // A completed upload is also reusable after a callback outage.
+            upload_compiled_artifacts(&client, &target, b"third output".to_vec(), 1024, true)
+                .await
+                .unwrap();
+            let stored = stored.lock().await;
+            assert_eq!(stored["artifact"].as_ref(), original.as_slice());
+            assert_eq!(
+                stored["checksum"].as_ref(),
+                blake3::hash(&original).to_hex().as_bytes()
+            );
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn overlapping_generation_deliveries_publish_one_matching_pair() {
+        let (url, stored, server) = generation_store(false).await;
+        let target = capture_target(&url, CompilationStorageProvider::AwsS3);
+        let client = Client::new();
+        let (first, second) = tokio::join!(
+            upload_compiled_artifacts(&client, &target, b"first".to_vec(), 1024, true),
+            upload_compiled_artifacts(&client, &target, b"second".to_vec(), 1024, true),
+        );
+        first.unwrap();
+        second.unwrap();
+        let stored = stored.lock().await;
+        assert_eq!(
+            stored["checksum"].as_ref(),
+            blake3::hash(&stored["artifact"]).to_hex().as_bytes()
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn generation_retry_rejects_a_conflicting_stored_checksum() {
+        let (url, stored, server) = generation_store(false).await;
+        stored
+            .lock()
+            .await
+            .insert("checksum".into(), "a".repeat(64).into());
+        let error = upload_compiled_artifacts(
+            &Client::new(),
+            &capture_target(&url, CompilationStorageProvider::AwsS3),
+            b"artifact".to_vec(),
+            1024,
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(!is_retryable(&error));
+        assert!(error.to_string().contains("does not match"));
+        assert_eq!(
+            stored.lock().await["checksum"].as_ref(),
+            "a".repeat(64).as_bytes()
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn legacy_uploads_keep_unconditional_puts_for_every_provider() {
+        for provider in [
+            CompilationStorageProvider::AwsS3,
+            CompilationStorageProvider::AzureBlob,
+            CompilationStorageProvider::GoogleCloudStorage,
+        ] {
+            let (url, mut requests, server) = upload_capture_server(
+                axum::http::StatusCode::CREATED,
+                axum::http::StatusCode::CREATED,
+                None,
+            )
+            .await;
+            upload_compiled_artifacts(
+                &Client::new(),
+                &capture_target(&url, provider),
+                b"compiled target".to_vec(),
+                1024,
+                false,
+            )
+            .await
+            .unwrap();
+            for _ in 0..2 {
+                let request = requests.recv().await.unwrap();
+                assert!(!request.headers.contains_key("if-none-match"));
+                assert!(!request.headers.contains_key("x-goog-if-generation-match"));
+            }
+            server.abort();
+        }
     }
 
     #[test]

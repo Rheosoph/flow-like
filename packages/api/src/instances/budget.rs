@@ -1,6 +1,26 @@
 use super::*;
-use flow_like::hub::UserTiers;
-use sea_orm::{DatabaseTransaction, QueryResult};
+use crate::entity::sea_orm_active_enums::BitType;
+use flow_like::hub::{UserTier, UserTiers};
+use sea_orm::{ActiveEnum, DatabaseTransaction, QueryResult};
+use std::{collections::HashMap, sync::Arc};
+
+/// Whether the caller's plan covers the hosted models of an approval they would pay for.
+#[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+pub(crate) struct BillingEligibility {
+    pub payer_id: String,
+    pub plan: String,
+    /// The plan covers every model the approval allows.
+    pub eligible: bool,
+    pub models: Vec<ModelEligibility>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+pub(crate) struct ModelEligibility {
+    pub model_id: String,
+    /// The plan tier the model requires; `null` when it requires none or is no longer offered.
+    pub tier: Option<String>,
+    pub allowed: bool,
+}
 
 struct Admission {
     authority: VerifiedInstanceUsage,
@@ -54,18 +74,8 @@ async fn model_and_tier(
     if tier != expected_tier {
         return Err(ApiError::conflict("Model policy changed before dispatch"));
     }
-    let account = tx
-        .query_one_raw(sql(
-            r#"SELECT tier::text AS tier FROM "User" WHERE id=$1 AND status='ACTIVE'"#,
-            [usage.payer_id.clone().into()],
-        ))
-        .await?
-        .ok_or(ApiError::FORBIDDEN)?;
-    let plan = account.try_get::<String>("", "tier")?.to_uppercase();
-    let policy = tiers
-        .get(&plan)
-        .ok_or_else(|| ApiError::internal("Missing payer plan policy"))?;
-    if !tier.is_empty() && !policy.llm_tiers.contains(&tier) {
+    let (plan, policy) = payer_plan(tx, &usage.payer_id, tiers).await?;
+    if !plan_covers(policy, &tier) {
         return Err(ApiError::hosted_model_unavailable(
             &usage.payer_id,
             &plan,
@@ -73,6 +83,124 @@ async fn model_and_tier(
         ));
     }
     Ok(())
+}
+
+/// The plan an active account is on and what it includes.
+async fn payer_plan<'a>(
+    tx: &DatabaseTransaction,
+    payer_id: &str,
+    tiers: &'a UserTiers,
+) -> Result<(String, &'a UserTier), ApiError> {
+    let account = tx
+        .query_one_raw(sql(
+            r#"SELECT tier::text AS tier FROM "User" WHERE id=$1 AND status='ACTIVE'"#,
+            [payer_id.into()],
+        ))
+        .await?
+        .ok_or(ApiError::FORBIDDEN)?;
+    let plan = account.try_get::<String>("", "tier")?.to_uppercase();
+    let policy = tiers
+        .get(&plan)
+        .ok_or_else(|| ApiError::internal("Missing payer plan policy"))?;
+    Ok((plan, policy))
+}
+
+/// Embeddings require no tier and are open to every plan.
+fn plan_covers(policy: &UserTier, tier: &str) -> bool {
+    tier.is_empty() || crate::model_tier::tier_allows(policy, tier)
+}
+
+/// The tier the hosted endpoint serving this model requires, as its requests are judged
+/// at use; `None` when no endpoint serves it any more.
+async fn hosted_model_tier(
+    tx: &DatabaseTransaction,
+    model_id: &str,
+    bit_type: &str,
+) -> Result<Option<String>, ApiError> {
+    let paths: &[&str] = if bit_type == BitType::Embedding.to_value() {
+        &[EMBEDDINGS_PATH]
+    } else {
+        &[CHAT_PATH, RESPONSES_PATH]
+    };
+    for path in paths {
+        match crate::routes::chat::current_instance_model_tier(tx, model_id, path).await {
+            Ok(tier) => return Ok(Some(tier)),
+            Err(refusal) if refusal.status().is_client_error() => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(None)
+}
+
+async fn model_types(
+    tx: &DatabaseTransaction,
+    model_ids: &[String],
+) -> Result<HashMap<String, String>, ApiError> {
+    if model_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    tx.query_all_raw(sql(
+        &format!(
+            r#"SELECT id,type::text AS type FROM "Bit" WHERE id IN ({})"#,
+            placeholders(1, model_ids.len())
+        ),
+        model_ids.iter().map(|id| id.clone().into()),
+    ))
+    .await?
+    .into_iter()
+    .map(|row| Ok((row.try_get("", "id")?, row.try_get("", "type")?)))
+    .collect()
+}
+
+/// What the hosted endpoints would decide for each model of an approval if the caller
+/// paid for it. Reads only: nothing is reserved and no approval changes.
+pub(crate) async fn billing_eligibility(
+    state: &DeviceContext<'_>,
+    tiers: &UserTiers,
+    payer: &str,
+    device_id: &str,
+    grant_id: &str,
+) -> Result<BillingEligibility, ApiError> {
+    let (_, grant) = visible_grant(state, payer, device_id, grant_id).await?;
+    let payer = payer.to_owned();
+    let model_ids = Arc::new(grant.model_ids);
+    let tiers = Arc::new(tiers.clone());
+    retry_transaction(
+        state.db,
+        state.dialect,
+        None,
+        &RetryPolicy::default(),
+        move |tx| {
+            let payer = payer.clone();
+            let model_ids = model_ids.clone();
+            let tiers = tiers.clone();
+            Box::pin(async move {
+                let (plan, policy) = payer_plan(tx, &payer, &tiers).await?;
+                let types = model_types(tx, &model_ids).await?;
+                let mut models = Vec::with_capacity(model_ids.len());
+                for model_id in model_ids.iter() {
+                    let tier = match types.get(model_id) {
+                        Some(bit_type) => hosted_model_tier(tx, model_id, bit_type).await?,
+                        None => None,
+                    };
+                    models.push(ModelEligibility {
+                        model_id: model_id.clone(),
+                        allowed: tier
+                            .as_deref()
+                            .is_some_and(|tier| plan_covers(policy, tier)),
+                        tier: tier.filter(|tier| !tier.is_empty()),
+                    });
+                }
+                Ok(BillingEligibility {
+                    payer_id: payer,
+                    plan,
+                    eligible: !models.is_empty() && models.iter().all(|model| model.allowed),
+                    models,
+                })
+            })
+        },
+    )
+    .await
 }
 
 /// The caller holds account-quota and invokes this within the quota reservation

@@ -8,6 +8,7 @@ import type {
 	DeviceReceipt,
 	Ed25519PublicKey,
 	FleetLocalState,
+	InventoryScope,
 	OnboardingManifest,
 	ProtectedSnapshot,
 } from "./types";
@@ -351,13 +352,190 @@ interface DeviceIdentityPin {
 	identity: string;
 	pinnedAt: number;
 }
+export interface DeviceIdentityPinRecord extends DeviceIdentityPin {
+	enrollmentId: string;
+}
 
-function identityFingerprint(identity: DeviceReceipt["identity"]): string {
+function pinRecord(enrollmentId: string | undefined, value: unknown) {
+	const pin = value as Partial<DeviceIdentityPin> | undefined;
+	if (!enrollmentId || typeof pin?.identity !== "string") return undefined;
+	return typeof pin.pinnedAt === "number"
+		? { enrollmentId, identity: pin.identity, pinnedAt: pin.pinnedAt }
+		: undefined;
+}
+
+/** The pins among the rows of `keys`, per device and newest first. */
+function pinsByDevice(keys: string[], values: unknown[]) {
+	const result = new Map<string, DeviceIdentityPinRecord[]>();
+	for (const [index, key] of keys.entries()) {
+		const [, deviceId, kind, enrollmentId] = keyParts(key);
+		const pin = kind === "identity" && pinRecord(enrollmentId, values[index]);
+		if (pin) result.set(deviceId, [...(result.get(deviceId) ?? []), pin]);
+	}
+	for (const pins of result.values())
+		pins.sort((left, right) => right.pinnedAt - left.pinnedAt);
+	return result;
+}
+
+/** The comparable form a pin stores; equal keys mean the same device identity. */
+export function deviceIdentityKey(identity: DeviceReceipt["identity"]): string {
 	return JSON.stringify([
 		identity.auth_key.x,
 		identity.telemetry_key.x,
 		Array.from(identity.management_key),
 	]);
+}
+
+export function pinnedDeviceIdentity(
+	pin: Pick<DeviceIdentityPin, "identity">,
+): DeviceReceipt["identity"] | undefined {
+	try {
+		const [auth, telemetry, management] = JSON.parse(pin.identity) as [
+			unknown,
+			unknown,
+			unknown,
+		];
+		if (
+			typeof auth !== "string" ||
+			typeof telemetry !== "string" ||
+			!Array.isArray(management) ||
+			!management.every(
+				(byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255,
+			)
+		)
+			return undefined;
+		const key = (x: string) => ({
+			kty: "OKP" as const,
+			crv: "Ed25519" as const,
+			x,
+		});
+		return {
+			auth_key: key(auth),
+			telemetry_key: key(telemetry),
+			management_key: management as number[],
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+function prefixRange(...parts: string[]): IDBKeyRange {
+	const prefix = `${JSON.stringify(parts).slice(0, -1)},`;
+	return IDBKeyRange.bound(prefix, `${prefix}\uffff`);
+}
+function accountRange(scope: DeviceAccountScope): IDBKeyRange {
+	return prefixRange(accountStorageKey(scope));
+}
+function deviceRange(scope: DeviceAccountScope, deviceId: string): IDBKeyRange {
+	return prefixRange(accountStorageKey(scope), deviceId);
+}
+
+/** Reads keys and values of one range in a single transaction, in key order. */
+function readRange<T>(
+	storeName: string,
+	range: IDBKeyRange,
+): Promise<[string[], T[]]> {
+	return transact(storeName, "readonly", (store, set) => {
+		const keys = store.getAllKeys(range);
+		const values = store.getAll(range);
+		values.onsuccess = () =>
+			set([keys.result as string[], values.result as T[]]);
+	});
+}
+function keyParts(key: string): string[] {
+	const parts = JSON.parse(key) as unknown;
+	return Array.isArray(parts) && parts.every((part) => typeof part === "string")
+		? parts
+		: [];
+}
+
+/** Newest first. Pins are keyed by enrollment, so a device set up again has one pin per setup. */
+export async function readDeviceIdentityPins(
+	scope: DeviceAccountScope,
+	deviceId: string,
+): Promise<DeviceIdentityPinRecord[]> {
+	const [keys, values] = await readRange<unknown>(
+		"vaults",
+		prefixRange(accountStorageKey(scope), deviceId, "identity"),
+	);
+	return pinsByDevice(keys, values).get(deviceId) ?? [];
+}
+
+/** Every pin of this scope in one read, per device and newest first. */
+export async function listDeviceIdentityPins(
+	scope: DeviceAccountScope,
+): Promise<Map<string, DeviceIdentityPinRecord[]>> {
+	const [keys, values] = await readRange<unknown>(
+		"vaults",
+		accountRange(scope),
+	);
+	return pinsByDevice(keys, values);
+}
+
+/** Without an enrollment id every pin of the device is forgotten. */
+export function forgetDeviceIdentityPin(
+	scope: DeviceAccountScope,
+	deviceId: string,
+	enrollmentId?: string,
+): Promise<void> {
+	return transact(
+		"vaults",
+		"readwrite",
+		(store, set) => {
+			store.delete(
+				enrollmentId === undefined
+					? prefixRange(accountStorageKey(scope), deviceId, "identity")
+					: itemKey(scope, deviceId, "identity", enrollmentId),
+			);
+			set(undefined);
+		},
+		{ durability: "strict" },
+	);
+}
+
+function isVaultRow(value: unknown): value is LocalDeviceVault {
+	const row = value as LocalDeviceVault | undefined;
+	return (
+		!!row &&
+		typeof row.deviceId === "string" &&
+		row.controllerVault instanceof Uint8Array &&
+		typeof row.grantId === "string"
+	);
+}
+
+export async function listDeviceVaults(
+	scope: DeviceAccountScope,
+): Promise<LocalDeviceVault[]> {
+	const [keys, values] = await readRange<unknown>(
+		"vaults",
+		accountRange(scope),
+	);
+	return values.filter(
+		(value, index): value is LocalDeviceVault =>
+			isVaultRow(value) && keys[index] === itemKey(scope, value.deviceId),
+	);
+}
+
+const DEVICE_STORES = ["vaults", "recovery", "fleet", "snapshots"] as const;
+
+/** Removes the vault, identity pins, backup watermark, fleet anchors and MLS snapshots of one device. */
+export function deleteDeviceVault(
+	scope: DeviceAccountScope,
+	deviceId: string,
+): Promise<void> {
+	return transactStores(
+		[...DEVICE_STORES],
+		"readwrite",
+		(transaction, set) => {
+			for (const name of DEVICE_STORES) {
+				const store = transaction.objectStore(name);
+				store.delete(itemKey(scope, deviceId));
+				store.delete(deviceRange(scope, deviceId));
+			}
+			set(undefined);
+		},
+		{ durability: "strict" },
+	);
 }
 
 /** Call only with a verified receipt: its first-seen keys become the device's pinned identity. */
@@ -372,7 +550,7 @@ export function pinDeviceIdentity(
 				`The device identity for ${receipt.device_id} cannot be pinned for device ${deviceId}.`,
 			),
 		);
-	const identity = identityFingerprint(receipt.identity);
+	const identity = deviceIdentityKey(receipt.identity);
 	return transact(
 		"vaults",
 		"readwrite",
@@ -405,6 +583,18 @@ export function deviceStorageWarning(
 	return persistence && persistence !== "persisted"
 		? "This browser has not granted persistent storage, so it may delete this app's encrypted device keys when space runs low or after a period without use. Keep a controller backup or an account backup to restore management."
 		: undefined;
+}
+
+/** Passive status read: never calls `persist()`, so it never prompts. "denied" means not granted yet. */
+export async function readStoragePersistence(): Promise<DeviceStoragePersistence> {
+	if (isTauri()) return "persisted";
+	const storage = globalThis.navigator?.storage;
+	if (!storage?.persisted) return "unavailable";
+	try {
+		return (await storage.persisted()) ? "persisted" : "denied";
+	} catch {
+		return "unavailable";
+	}
 }
 
 /** Browsers may evict unpersisted IndexedDB data, which holds the only copy of these keys. */
@@ -450,8 +640,7 @@ export function readCertificateAuthorities(
 	scope: DeviceAccountScope,
 ): Promise<LocalCertificateAuthority[]> {
 	return transact("authorities", "readonly", (store, set) => {
-		const prefix = `${JSON.stringify([accountStorageKey(scope)]).slice(0, -1)},`;
-		const request = store.getAll(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
+		const request = store.getAll(accountRange(scope));
 		request.onsuccess = () =>
 			set(
 				(request.result as LocalCertificateAuthority[]).filter(
@@ -698,15 +887,53 @@ export async function commitMlsSnapshot(
 	return endpoint.confirmCommit(prepared.checkpoint);
 }
 
+export class DeviceLockHeldError extends Error {
+	constructor() {
+		super("This device is unlocked in another tab. Lock it there first.");
+		this.name = "DeviceLockHeldError";
+	}
+}
+export class DeviceLockUnsupportedError extends Error {
+	constructor() {
+		super(
+			"This browser cannot exclusively lock device keys. Use a supported browser.",
+		);
+		this.name = "DeviceLockUnsupportedError";
+	}
+}
+
+export interface DeviceLockOptions {
+	/** Web Locks `steal`: the previous holder's request rejects and its `onLost` runs. */
+	steal?: boolean;
+	/** Runs once when another window steals this lock before it was released. */
+	onLost?: () => void;
+}
+export type DeviceLockHolder =
+	| "free"
+	| "held_here"
+	| "held_elsewhere"
+	| "unsupported";
+
+const locksHeldHere = new Map<string, number>();
+function countHeldHere(name: string, delta: 1 | -1) {
+	const next = (locksHeldHere.get(name) ?? 0) + delta;
+	if (next > 0) locksHeldHere.set(name, next);
+	else locksHeldHere.delete(name);
+}
+function deviceLockName(scope: DeviceAccountScope, deviceId: string) {
+	return itemKey(scope, deviceId, "unlock");
+}
+
 /** Hold this lock until the controller and all its derived sessions are closed. */
 export async function acquireDeviceLock(
 	scope: DeviceAccountScope,
 	deviceId: string,
+	options: DeviceLockOptions = {},
 ): Promise<() => void> {
-	if (!navigator.locks)
-		throw new Error(
-			"This browser cannot exclusively lock device keys. Use a supported browser.",
-		);
+	const locks = globalThis.navigator?.locks;
+	if (!locks) throw new DeviceLockUnsupportedError();
+	const name = deviceLockName(scope, deviceId);
+	let state: "waiting" | "held" | "released" | "lost" = "waiting";
 	let release!: () => void;
 	let acquired!: () => void;
 	let rejected!: (error: unknown) => void;
@@ -715,34 +942,88 @@ export async function acquireDeviceLock(
 		rejected = reject;
 	});
 	const hold = new Promise<void>((resolve) => {
-		release = resolve;
+		release = () => {
+			if (state === "held") {
+				state = "released";
+				countHeldHere(name, -1);
+			}
+			resolve();
+		};
 	});
-	void navigator.locks
+	void locks
 		.request(
-			itemKey(scope, deviceId, "unlock"),
-			{ mode: "exclusive", ifAvailable: true },
+			name,
+			options.steal
+				? { mode: "exclusive", steal: true }
+				: { mode: "exclusive", ifAvailable: true },
 			async (lock) => {
 				if (!lock) {
-					rejected(
-						new Error(
-							"This device is unlocked in another tab. Lock it there first.",
-						),
-					);
+					rejected(new DeviceLockHeldError());
 					return;
 				}
+				state = "held";
+				countHeldHere(name, 1);
 				acquired();
 				await hold;
 			},
 		)
-		.catch(rejected);
+		.catch((error) => {
+			if (state !== "held") {
+				rejected(error);
+				return;
+			}
+			state = "lost";
+			countHeldHere(name, -1);
+			options.onLost?.();
+		});
 	await ready;
 	return release;
+}
+
+/** A key-session lease already holds this device's lock; without one the lock is taken for a single call. */
+export async function holdDeviceLock(
+	scope: DeviceAccountScope,
+	deviceId: string,
+	lease?: { vault: LocalDeviceVault },
+): Promise<() => void> {
+	if (!lease) return acquireDeviceLock(scope, deviceId);
+	if (lease.vault.deviceId !== deviceId)
+		throw new Error(
+			`The key session for device ${lease.vault.deviceId} cannot lend its lock to device ${deviceId}.`,
+		);
+	return () => undefined;
+}
+
+/** "held_here" counts only locks taken through `acquireDeviceLock` in this window. */
+export async function queryDeviceLock(
+	scope: DeviceAccountScope,
+	deviceId: string,
+): Promise<DeviceLockHolder> {
+	const locks = globalThis.navigator?.locks;
+	if (!locks) return "unsupported";
+	const name = deviceLockName(scope, deviceId);
+	if (locksHeldHere.has(name)) return "held_here";
+	try {
+		const snapshot = await locks.query();
+		return snapshot.held?.some((lock) => lock.name === name)
+			? "held_elsewhere"
+			: "free";
+	} catch {
+		return "free";
+	}
 }
 
 export interface AccountRecoveryState {
 	revision: number;
 	sourceDigest?: string;
-	pending?: { sourceDigest: string; request: AccountRecoveryWrite };
+	pending?: {
+		sourceDigest: string;
+		request: AccountRecoveryWrite;
+		/** Sealed before a later password change, so publishing it keeps the flag. */
+		sealedBeforePasswordChange?: boolean;
+	};
+	/** Set by a password change, cleared once a backup sealed after it is published. */
+	passwordChangedSinceBackup?: boolean;
 }
 
 export function readAccountRecoveryState(
@@ -753,6 +1034,57 @@ export function readAccountRecoveryState(
 		const request = store.get(itemKey(scope, deviceId));
 		request.onsuccess = () => set(request.result ?? { revision: 0 });
 	});
+}
+
+/** Keyed by device id; devices without a backup watermark are absent. */
+export async function listAccountRecoveryStates(
+	scope: DeviceAccountScope,
+): Promise<Record<string, AccountRecoveryState>> {
+	const [keys, values] = await readRange<AccountRecoveryState>(
+		"recovery",
+		accountRange(scope),
+	);
+	const result: Record<string, AccountRecoveryState> = {};
+	for (const [index, key] of keys.entries()) {
+		const parts = keyParts(key);
+		if (parts.length === 2 && parts[0] === accountStorageKey(scope))
+			result[parts[1]] = values[index];
+	}
+	return result;
+}
+
+export function markPasswordChangedSinceBackup(
+	scope: DeviceAccountScope,
+	deviceId: string,
+	changed: boolean,
+): Promise<void> {
+	return transact(
+		"recovery",
+		"readwrite",
+		(store, set) => {
+			const key = itemKey(scope, deviceId);
+			const read = store.get(key);
+			read.onsuccess = () => {
+				const { passwordChangedSinceBackup: _, ...rest }: AccountRecoveryState =
+					read.result ?? { revision: 0 };
+				store.put(
+					changed
+						? {
+								...rest,
+								passwordChangedSinceBackup: true,
+								pending: rest.pending && {
+									...rest.pending,
+									sealedBeforePasswordChange: true,
+								},
+							}
+						: rest,
+					key,
+				);
+				set(undefined);
+			};
+		},
+		{ durability: "strict" },
+	);
 }
 
 export function stageAccountRecovery(
@@ -814,6 +1146,10 @@ export function completeAccountRecovery(
 					{
 						revision: request.revision,
 						sourceDigest: current.pending.sourceDigest,
+						...(current.pending.sealedBeforePasswordChange &&
+							current.passwordChangedSinceBackup && {
+								passwordChangedSinceBackup: true,
+							}),
 					},
 					key,
 				);
@@ -822,6 +1158,18 @@ export function completeAccountRecovery(
 		},
 		{ durability: "strict" },
 	);
+}
+
+/** Kept local envelopes keep their password-change flag; restored ones open with the backup's password. */
+function restoredWatermark(
+	current: AccountRecoveryState,
+	revision: number,
+	sourceDigest: string,
+	keptLocalVault: boolean,
+): AccountRecoveryState {
+	return keptLocalVault && current.passwordChangedSinceBackup
+		? { revision, sourceDigest, passwordChangedSinceBackup: true }
+		: { revision, sourceDigest };
 }
 
 /** Restored keys and their rollback watermark become visible in one durable commit. */
@@ -888,9 +1236,76 @@ export function restoreAccountRecoveryVault(
 					// A verified cloud copy may reconcile a concurrent browser's
 					// revision; keep this browser's password envelopes and endpoint.
 					if (!existing) vaults.add(vault, key);
-					recovery.put({ revision, sourceDigest }, key);
+					recovery.put(
+						restoredWatermark(current, revision, sourceDigest, !!existing),
+						key,
+					);
 					set(existing ?? vault);
 				};
+			};
+		},
+		{ durability: "strict" },
+	);
+}
+
+export interface InventoryAnchor {
+	scope: InventoryScope;
+	revision: number;
+	digest: string;
+}
+/** Keyed by `inventoryScopeKey(scope)`. */
+export type InventoryAnchors = Record<string, InventoryAnchor>;
+
+function inventoryAnchorKey(
+	scope: DeviceAccountScope,
+	deviceId: string,
+	controllerKey: string,
+): string {
+	return itemKey(scope, deviceId, controllerKey, "inventory");
+}
+
+export function readInventoryAnchors(
+	scope: DeviceAccountScope,
+	deviceId: string,
+	controllerKey: string,
+): Promise<InventoryAnchors> {
+	return transact("fleet", "readonly", (store, set) => {
+		const request = store.get(
+			inventoryAnchorKey(scope, deviceId, controllerKey),
+		);
+		request.onsuccess = () => set(request.result ?? {});
+	});
+}
+
+/** Compare-and-set in one transaction; `update` throws to abort. `stored` is false before the first write (one-time import). */
+export function updateInventoryAnchors(
+	scope: DeviceAccountScope,
+	deviceId: string,
+	controllerKey: string,
+	update: (current: InventoryAnchors, stored: boolean) => InventoryAnchors,
+): Promise<InventoryAnchors> {
+	return transact(
+		"fleet",
+		"readwrite",
+		(store, set, fail) => {
+			const key = inventoryAnchorKey(scope, deviceId, controllerKey);
+			const read = store.get(key);
+			read.onsuccess = () => {
+				try {
+					const next = update(read.result ?? {}, read.result !== undefined);
+					if (JSON.stringify(next).length > 128 * 1024)
+						throw new Error(
+							"Saved inventory anchors exceed their local limit.",
+						);
+					store.put(next, key);
+					set(next);
+				} catch (error) {
+					fail(
+						error instanceof Error
+							? error
+							: new Error("Saved inventory anchor update failed."),
+					);
+				}
 			};
 		},
 		{ durability: "strict" },

@@ -1,0 +1,19 @@
+{
+  "identity": {
+    "auth_key": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w"
+    },
+    "management_key": [
+      93, 254, 221, 59, 107, 212, 127, 111, 162, 142, 225, 93, 150, 157, 91, 176,
+      234, 83, 119, 77, 72, 139, 218, 249, 223, 28, 110, 1, 36, 179, 239, 34
+    ],
+    "telemetry_key": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q"
+    }
+  },
+  "fingerprint": "Pw7Ujrh8KDSAJGjP"
+}

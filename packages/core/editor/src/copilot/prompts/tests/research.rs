@@ -164,6 +164,13 @@ fn scout_prompt_carries_the_read_only_composite_plan_contract() {
     assert!(prompt.contains("Two refusals are common"));
     assert!(prompt.contains("only by the app's OWNER widening the default"));
 
+    // An allowed fork still leaves out packages the user does not hold. The
+    // plan has to say so before the user approves it, because the fork tool
+    // only reports them once the copy exists.
+    assert!(prompt.contains("`blocked_packages` lists the packages"));
+    assert!(prompt.contains("Name each left-out package in `blockers`"));
+    assert!(prompt.contains("`repinned_packages` come"));
+
     // Building from scratch has to stay available as an honest answer.
     assert!(prompt.contains("is a legitimate, and sometimes correct, answer"));
 

@@ -1,11 +1,14 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import type { IApiState } from "../../state/backend-state/api-state";
 import type { IProfile } from "../../types";
+import { ApiResponseError } from "../api-error";
 import { base64url } from "./crypto";
 import {
 	openControllerBackup,
+	readAccountBackupStatus,
 	readControllerBackupFile,
 	restoreAccountRecovery,
+	retryPendingAccountBackup,
 	saveAccountRecovery,
 	sealedControllerBackup,
 } from "./recovery";
@@ -608,4 +611,72 @@ test("legacy plaintext backups import only owner authority that unlock can verif
 			"for device device",
 		);
 	}
+});
+
+test("a key-session lease saves, retries and restores without a second lock", async () => {
+	const stored = fixture();
+	await addDeviceVault(scope, stored);
+	const server = services();
+	const { api, profile } = server.input;
+	const replaced: LocalDeviceVault[] = [];
+	const lease = {
+		vault: stored,
+		replace: (next: LocalDeviceVault) => replaced.push(next),
+	};
+	lockHeld = true;
+	await expect(saveAccountRecovery(server.input)).rejects.toThrow(
+		"another tab",
+	);
+	server.loseNextAcknowledgement();
+	await expect(saveAccountRecovery({ ...server.input, lease })).rejects.toThrow(
+		"after commit",
+	);
+	const sealed = server.passwords.length;
+	expect(
+		await retryPendingAccountBackup(api, profile, scope, "device", lease),
+	).toBe(1);
+	expect(server.passwords).toHaveLength(sealed);
+	expect(server.calls).toHaveLength(2);
+	expect(server.calls[1]).toEqual(server.calls[0]);
+	expect(
+		(await readAccountRecoveryState(scope, "device")).pending,
+	).toBeUndefined();
+	expect(
+		await retryPendingAccountBackup(api, profile, scope, "device", lease),
+	).toBe(1);
+	expect(server.calls).toHaveLength(2);
+	expect(await restoreAccountRecovery({ ...server.input, lease })).toEqual(
+		stored,
+	);
+	expect(replaced).toEqual([stored]);
+	await expect(
+		retryPendingAccountBackup(api, profile, scope, "other-device", lease),
+	).rejects.toThrow("cannot lend");
+	expect(lockHeld).toBe(true);
+});
+
+test("the account backup status reads only the revision and treats a missing copy as none", async () => {
+	await addDeviceVault(scope, fixture());
+	const server = services();
+	const { api, profile } = server.input;
+	await expect(readAccountBackupStatus(api, profile, "device")).rejects.toThrow(
+		"No backup",
+	);
+	const missing = {
+		async fetch() {
+			throw new ApiResponseError({
+				status: 404,
+				code: "NOT_FOUND",
+				message: "No account backup",
+			});
+		},
+	} as unknown as IApiState;
+	expect(
+		await readAccountBackupStatus(missing, profile, "device"),
+	).toBeUndefined();
+	await saveAccountRecovery(server.input);
+	expect(await readAccountBackupStatus(api, profile, "device")).toEqual({
+		revision: 1,
+	});
+	expect(server.passwords).toHaveLength(1);
 });

@@ -683,6 +683,11 @@ async fn execute_prepared(
 
     if let Some(event_id) = &event_id {
         let intermediate_event = app.get_event(event_id, None).await?;
+        if intermediate_event.is_device_source() {
+            return Err(TauriFunctionError::new(
+                "This event runs on its deployed devices. Open Devices to run it.",
+            ));
+        }
         timer.lap("get_event");
         version = intermediate_event.board_version;
         board_id = intermediate_event.board_id.clone();

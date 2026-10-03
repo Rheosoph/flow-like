@@ -64,6 +64,33 @@ pub struct BucketIdentity {
 }
 
 impl BucketIdentity {
+    /// Stable, non-secret scope for shared object metadata. Unknown stores
+    /// cannot safely share entries across replicas.
+    pub fn cache_scope(&self) -> Option<String> {
+        if self.name.is_empty()
+            || matches!(
+                self.provider,
+                StorageProviderKind::Other
+                    | StorageProviderKind::Memory
+                    | StorageProviderKind::Local
+            )
+        {
+            return None;
+        }
+        let value = serde_json::json!([
+            self.provider.as_str(),
+            self.name,
+            self.region,
+            self.account,
+            self.endpoint
+        ]);
+        Some(
+            blake3::hash(value.to_string().as_bytes())
+                .to_hex()
+                .to_string(),
+        )
+    }
+
     /// Human-readable identity for the dashboard card.
     pub fn describe(&self) -> String {
         let mut qualifiers = Vec::new();
@@ -130,7 +157,12 @@ fn identity_for(credentials: &RuntimeCredentials, role: BucketRole) -> BucketIde
             },
             region: non_empty(&aws.region),
             account: None,
-            endpoint: env_non_empty("AWS_ENDPOINT"),
+            endpoint: env_non_empty(match role {
+                BucketRole::Meta => "META_BUCKET_ENDPOINT",
+                BucketRole::Content => "CONTENT_BUCKET_ENDPOINT",
+            })
+            .or_else(|| env_non_empty("S3_PUBLIC_ENDPOINT"))
+            .or_else(|| env_non_empty("AWS_ENDPOINT")),
         },
         #[cfg(feature = "azure")]
         RuntimeCredentials::Azure(azure) => BucketIdentity {

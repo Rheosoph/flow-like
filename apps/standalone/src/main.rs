@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use flow_like_standalone::{
     config::PlacementConfig,
-    enrollment, release,
+    diagnostics, enrollment, release,
     state::{DesiredState, StateStore},
     supervisor, vault,
 };
@@ -170,13 +170,14 @@ async fn main() -> Result<()> {
     // Transitive deps enable both ring and aws-lc-rs, so rustls cannot infer a default for
     // libraries that call ClientConfig::builder() (tokio-tungstenite wss://).
     let _ = flow_like_standalone::crypto::tls_provider().install_default();
+    let cli = Cli::parse();
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
+        .with_env_filter(flow_like_standalone::log_filter(
+            std::env::var("RUST_LOG").ok().as_deref(),
+            matches!(cli.command, Commands::RunPlacement { .. }),
+        ))
         .with_writer(std::io::stderr)
         .init();
-    let cli = Cli::parse();
     if let Commands::RunPlacement {
         placement,
         replica_slot,
@@ -431,6 +432,7 @@ async fn main() -> Result<()> {
             stopped,
             variables_env,
         } => {
+            #[cfg_attr(not(feature = "runtime"), allow(unused_mut))]
             let mut config = PlacementConfig::load(&manifest)?;
             store.check_placement_identity(&config.id, &serde_json::to_value(&config)?)?;
             if let Some(path) = variables_env {
@@ -512,14 +514,20 @@ async fn main() -> Result<()> {
                     })
                 })
                 .unwrap_or(serde_json::Value::String("not_configured".into()));
+            let identity = registration
+                .as_ref()
+                .and_then(|record| record.receipt.as_ref())
+                .map(|receipt| diagnostics::identity_summary(&receipt.identity))
+                .transpose()?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(
-                    &serde_json::json!({"device_id":store.device_id(),"enrollment":enrollment,"agent_running":agent_running,"observations_current":agent_running,"placements":placements})
+                    &serde_json::json!({"device_id":store.device_id(),"enrollment":enrollment,"identity":identity,"agent_running":agent_running,"observations_current":agent_running,"placements":placements})
                 )?
             );
         }
         Commands::Run => {
+            let diagnostics = diagnostics::global();
             let _runtime_lock = supervisor::lock_file(&state_dir.join("runtime.lock"))?;
             supervisor::require_supported_supervision()?;
             ensure!(
@@ -540,8 +548,8 @@ async fn main() -> Result<()> {
             let presence_cancel = cancel.child_token();
             let mut background = Vec::new();
             if let Some(device) = &session {
-                background.push(spawn_background(
-                    "device presence",
+                background.push(diagnostics.spawn_monitored(
+                    diagnostics::DEVICE_PRESENCE,
                     &cancel,
                     enrollment::maintain_presence_with_session(
                         state_dir.clone(),
@@ -554,8 +562,8 @@ async fn main() -> Result<()> {
                     device.clone(),
                     boot_id.clone(),
                 );
-                background.push(spawn_background(
-                    "management transport",
+                background.push(diagnostics.spawn_monitored(
+                    diagnostics::MANAGEMENT_TRANSPORT,
                     &cancel,
                     flow_like_standalone::transport::run(
                         device.clone(),
@@ -563,8 +571,8 @@ async fn main() -> Result<()> {
                         cancel.child_token(),
                     ),
                 ));
-                background.push(spawn_background(
-                    "fleet publisher",
+                background.push(diagnostics.spawn_monitored(
+                    diagnostics::FLEET_PUBLISHER,
                     &cancel,
                     flow_like_standalone::fleet::publish(
                         state_dir.clone(),
@@ -573,8 +581,8 @@ async fn main() -> Result<()> {
                         cancel.child_token(),
                     ),
                 ));
-                background.push(spawn_background(
-                    "certificate inventory publisher",
+                background.push(diagnostics.spawn_monitored(
+                    diagnostics::CERTIFICATE_INVENTORY_PUBLISHER,
                     &cancel,
                     flow_like_standalone::certificate_inventory::publish(
                         state_dir.clone(),
@@ -583,32 +591,32 @@ async fn main() -> Result<()> {
                     ),
                 ));
             }
-            background.push(spawn_background(
-                "certificate renewal",
+            background.push(diagnostics.spawn_monitored(
+                diagnostics::CERTIFICATE_RENEWAL,
                 &cancel,
                 flow_like_standalone::certificate_issuers::run(
                     state_dir.clone(),
                     cancel.child_token(),
                 ),
             ));
-            background.push(spawn_background(
-                "ACME renewal",
+            background.push(diagnostics.spawn_monitored(
+                diagnostics::ACME_RENEWAL,
                 &cancel,
                 flow_like_standalone::acme::run(state_dir.clone(), cancel.child_token()),
             ));
-            background.push(spawn_background(
-                "telemetry sampler",
+            background.push(diagnostics.spawn_monitored(
+                diagnostics::TELEMETRY_SAMPLER,
                 &cancel,
                 flow_like_standalone::telemetry::sample(state_dir.clone(), cancel.child_token()),
             ));
-            background.push(spawn_background(
-                "secret publisher",
+            background.push(diagnostics.spawn_monitored(
+                diagnostics::SECRET_PUBLISHER,
                 &cancel,
                 flow_like_standalone::secrets::publish(state_dir.clone(), cancel.child_token()),
             ));
             if let Some(device) = &session {
-                background.push(spawn_background(
-                    "live telemetry publisher",
+                background.push(diagnostics.spawn_monitored(
+                    diagnostics::LIVE_TELEMETRY_PUBLISHER,
                     &cancel,
                     flow_like_standalone::telemetry_groups::publish_live(
                         state_dir.clone(),
@@ -616,8 +624,8 @@ async fn main() -> Result<()> {
                         cancel.child_token(),
                     ),
                 ));
-                background.push(spawn_background(
-                    "archive publisher",
+                background.push(diagnostics.spawn_monitored(
+                    diagnostics::ARCHIVE_PUBLISHER,
                     &cancel,
                     flow_like_standalone::archives::publish(
                         state_dir.clone(),
@@ -630,9 +638,11 @@ async fn main() -> Result<()> {
                 let root = state_dir.clone();
                 let boot = boot_id.clone();
                 let stop = cancel.clone();
-                background.push(spawn_background("reboot watcher", &cancel, async move {
-                    flow_like_standalone::host::watch_reboot(&root, &boot, stop).await
-                }));
+                background.push(
+                    diagnostics.spawn_monitored(diagnostics::REBOOT_WATCHER, &cancel, async move {
+                        flow_like_standalone::host::watch_reboot(&root, &boot, stop).await
+                    }),
+                );
             }
             if let Some(device) = &session {
                 let root = state_dir.clone();
@@ -640,9 +650,14 @@ async fn main() -> Result<()> {
                 let run = run_id.clone();
                 let id = device.manifest().device_id.clone();
                 let stop = cancel.clone();
-                background.push(spawn_background("update watcher", &cancel, async move {
-                    flow_like_standalone::host::watch_update(&root, &id, &boot, &run, stop).await
-                }));
+                background.push(diagnostics.spawn_monitored(
+                    diagnostics::UPDATE_WATCHER,
+                    &cancel,
+                    async move {
+                        flow_like_standalone::host::watch_update(&root, &id, &boot, &run, stop)
+                            .await
+                    },
+                ));
             }
             let result = supervisor::run_with_session_and_ready(
                 &state_dir,
@@ -734,6 +749,10 @@ async fn run_child(
         } else {
             None
         };
+        let data_root = bootstrap
+            .data_root
+            .as_deref()
+            .context("Supervisor did not provide the placement data root")?;
         let result = flow_like_standalone::runtime::run_supervised_with_ready(
             &bootstrap.config,
             cancel.clone(),
@@ -747,8 +766,16 @@ async fn run_child(
                 config_revision: bootstrap.config_revision,
                 slot: bootstrap.replica_slot,
             }),
-            Some(bootstrap.data_root.as_deref().context("Supervisor did not provide the placement data root")?),
+            Some(data_root),
             bootstrap.config.tls_certificate_id.as_ref().map(|_| flow_like_standalone::service_tls::ManagedTls::new(broker.clone()) as std::sync::Arc<dyn flow_like_runtime::flow::execution::service::ServiceTlsProvider>),
+            Some(flow_like_standalone::schedule::ScheduleContext::supervised(
+                data_root,
+                &bootstrap.config,
+                bootstrap.config_revision,
+                bootstrap.intent_revision,
+                broker.clone(),
+            )),
+            flow_like_standalone::runtime::PersonStartedRuns::supervised(broker.clone()),
             || async {
                 broker.ready().await?;
                 {
@@ -818,46 +845,6 @@ async fn run_child(
     _placement_lock_fd: i32,
 ) -> Result<()> {
     anyhow::bail!("Standalone workload credential channels currently require Unix")
-}
-
-trait TaskOutcome {
-    fn failure(self) -> Option<String>;
-}
-
-impl TaskOutcome for () {
-    fn failure(self) -> Option<String> {
-        None
-    }
-}
-
-impl<E: std::fmt::Display> TaskOutcome for std::result::Result<(), E> {
-    fn failure(self) -> Option<String> {
-        self.err().map(|error| format!("{error:#}"))
-    }
-}
-
-/// Report a background task as soon as it fails or stops before agent shutdown.
-fn spawn_background<F>(
-    name: &'static str,
-    shutdown: &CancellationToken,
-    task: F,
-) -> tokio::task::JoinHandle<()>
-where
-    F: std::future::Future + Send + 'static,
-    F::Output: TaskOutcome + Send + 'static,
-{
-    let shutdown = shutdown.clone();
-    let task = tokio::spawn(task);
-    tokio::spawn(async move {
-        match task.await.map(TaskOutcome::failure) {
-            Ok(Some(error)) => tracing::error!(task = name, "Background task failed: {error}"),
-            Ok(None) if !shutdown.is_cancelled() => {
-                tracing::error!(task = name, "Background task stopped before agent shutdown")
-            }
-            Ok(None) => {}
-            Err(error) => tracing::error!(task = name, "Background task panicked: {error}"),
-        }
-    })
 }
 
 /// Resolve symlinks like `prepare_state_dir`, so installed units match update verification.
@@ -1093,22 +1080,5 @@ mod tests {
             .unwrap_err();
         assert!(format!("{error:#}").contains("/srv/state/"));
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn background_outcomes_distinguish_failures_from_shutdown() {
-        assert_eq!(().failure(), None);
-        assert_eq!(Ok::<(), anyhow::Error>(()).failure(), None);
-        let failure = Err::<(), _>(anyhow::anyhow!("database is locked").context("Sample metrics"))
-            .failure()
-            .unwrap();
-        assert!(failure.contains("Sample metrics") && failure.contains("database is locked"));
-        let shutdown = CancellationToken::new();
-        shutdown.cancel();
-        assert!(
-            spawn_background("test", &shutdown, async { Ok::<(), anyhow::Error>(()) })
-                .await
-                .is_ok()
-        );
     }
 }

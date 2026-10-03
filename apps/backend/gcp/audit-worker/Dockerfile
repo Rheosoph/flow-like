@@ -3,7 +3,7 @@
 FROM rust:1.97.1-bookworm AS builder
 COPY rust-toolchain.toml /rust-toolchain.toml
 RUN rustup toolchain install
-RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev protobuf-compiler libprotobuf-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
 ARG CARGO_BUILD_JOBS=2

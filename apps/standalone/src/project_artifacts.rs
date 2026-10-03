@@ -6,8 +6,10 @@ use flow_like_device_protocol::{
     ArtifactTransferState, ArtifactTransferStatus, PROJECT_ARTIFACT_CHUNK_BYTES,
     PROJECT_ARTIFACT_TTL_SECONDS, ProjectArtifactDescriptor, ProjectArtifactManifest,
     artifact_sha256, validate_artifact_digest, validate_artifact_project_id,
+    validate_artifact_prune,
 };
 use rusqlite::{OptionalExtension, params};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
@@ -42,6 +44,24 @@ impl std::fmt::Display for ArtifactLimitExceeded {
 }
 
 impl std::error::Error for ArtifactLimitExceeded {}
+
+/// Why listed revisions stay on the device. Nothing was removed.
+#[derive(Debug)]
+pub enum PruneRefused {
+    /// An upload or a restart is under way; the same request can succeed shortly.
+    Busy(String),
+    /// A placement or an update in progress still uses a listed revision.
+    InUse(String),
+}
+
+impl std::fmt::Display for PruneRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (Self::Busy(message) | Self::InUse(message)) = self;
+        f.write_str(message)
+    }
+}
+
+impl std::error::Error for PruneRefused {}
 
 type FileStamp = (u64, u64, u64, i64, i64, i64, i64);
 
@@ -151,10 +171,13 @@ impl ArtifactUsage {
     }
 }
 
+#[derive(Default)]
 struct ArtifactAccounting {
     device: ArtifactUsage,
     projects: std::collections::BTreeMap<String, ArtifactUsage>,
     scanned: usize,
+    /// A project whose retained revisions are also charged one by one, by manifest digest.
+    detail: Option<(String, std::collections::BTreeMap<String, ArtifactUsage>)>,
 }
 
 fn entry_exists(path: &Path) -> Result<bool> {
@@ -216,11 +239,7 @@ fn reconcile_expired_reservations(store: &StateStore, root: &Path) -> Result<()>
         return Ok(());
     }
     directory(&staging)?;
-    let mut accounting = ArtifactAccounting {
-        device: Default::default(),
-        projects: Default::default(),
-        scanned: 0,
-    };
+    let mut accounting = ArtifactAccounting::default();
     for (index, entry) in std::fs::read_dir(&staging)?.enumerate() {
         ensure!(
             index < 2_000_000,
@@ -275,6 +294,16 @@ impl ArtifactAccounting {
             .add(usage)
     }
 
+    /// Charges part of a retained revision to its project.
+    fn retain(&mut self, project: &str, digest: &str, usage: ArtifactUsage) -> Result<()> {
+        if let Some((detailed, revisions)) = &mut self.detail
+            && detailed == project
+        {
+            revisions.entry(digest.to_owned()).or_default().add(usage)?;
+        }
+        self.add(project, usage)
+    }
+
     fn entry(&mut self, path: &Path) -> Result<(std::fs::Metadata, ArtifactUsage)> {
         self.scanned += 1;
         ensure!(
@@ -325,9 +354,8 @@ impl ArtifactAccounting {
     }
 }
 
-/// Reconstruct usage from durable receipts and directories, rather than expiring
-/// transfer rows. The artifact lock serializes admissions with commit/abort.
-/// Existing revision reads do not need this scan or a budget increase.
+/// Admits one more upload within the device and project budgets. Existing revision
+/// reads do not need this scan or a budget increase.
 fn admit_artifact(
     store: &StateStore,
     root: &Path,
@@ -335,39 +363,77 @@ fn admit_artifact(
     recovered: Option<&str>,
 ) -> Result<()> {
     let budgets = crate::isolation::artifact_budgets(root)?;
+    crate::config::ensure_unaliased_child(
+        &directory(&root.join("projects"))?,
+        &descriptor.project_id,
+    )?;
+    let (mut accounting, resumed) = charged(store, root, recovered, None)?;
+    accounting.add(
+        &descriptor.project_id,
+        resumed.unwrap_or_else(|| ArtifactUsage::reservation(descriptor)),
+    )?;
+    accounting.device.enforce(budgets.device, "device")?;
+    accounting.projects[&descriptor.project_id].enforce(budgets.project, "project")
+}
+
+/// Reconstruct what admission charges from durable receipts and directories, rather
+/// than expiring transfer rows. The artifact lock serializes it with commit/abort.
+/// `recovered` names the staging directory of a transfer that resumes: its charge is
+/// returned instead of added. `detail` names a project whose revisions are also charged
+/// one by one.
+fn charged(
+    store: &StateStore,
+    root: &Path,
+    recovered: Option<&str>,
+    detail: Option<&str>,
+) -> Result<(ArtifactAccounting, Option<ArtifactUsage>)> {
     reconcile_expired_reservations(store, root)?;
     let mut accounting = ArtifactAccounting {
-        device: ArtifactUsage::default(),
-        projects: Default::default(),
-        scanned: 0,
+        detail: detail.map(|project| (project.to_owned(), Default::default())),
+        ..Default::default()
     };
-    let projects = directory(&root.join("projects"))?;
-    crate::config::ensure_unaliased_child(&projects, &descriptor.project_id)?;
-    let mut project_count = 0;
-    for project in std::fs::read_dir(&projects)? {
-        let project = project?;
-        project_count += 1;
-        ensure!(
-            project_count <= 16_384,
-            "Artifact accounting exceeds 16384 project directories"
-        );
-        let id = project
-            .file_name()
-            .into_string()
-            .map_err(|_| anyhow::anyhow!("Invalid managed project name"))?;
-        validate_artifact_project_id(&id)?;
-        let (metadata, usage) = accounting.entry(&project.path())?;
-        ensure!(metadata.is_dir(), "Managed project is not a directory");
-        accounting.add(&id, usage)?;
-        let revisions = project.path().join("revisions");
-        if !entry_exists(&revisions)? {
-            continue;
+    accounting.charge_projects(root)?;
+    let tracked = accounting.charge_transfers(store, root)?;
+    let resumed = accounting.charge_staging(root, &tracked, recovered)?;
+    Ok((accounting, resumed))
+}
+
+impl ArtifactAccounting {
+    /// Every managed project's directory and what it retains.
+    fn charge_projects(&mut self, root: &Path) -> Result<()> {
+        let projects = directory(&root.join("projects"))?;
+        let mut project_count = 0;
+        for project in std::fs::read_dir(&projects)? {
+            let project = project?;
+            project_count += 1;
+            ensure!(
+                project_count <= 16_384,
+                "Artifact accounting exceeds 16384 project directories"
+            );
+            let id = project
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("Invalid managed project name"))?;
+            validate_artifact_project_id(&id)?;
+            let (metadata, usage) = self.entry(&project.path())?;
+            ensure!(metadata.is_dir(), "Managed project is not a directory");
+            self.add(&id, usage)?;
+            let revisions = project.path().join("revisions");
+            if !entry_exists(&revisions)? {
+                continue;
+            }
+            let (metadata, usage) = self.entry(&revisions)?;
+            ensure!(metadata.is_dir(), "Managed revisions must be a directory");
+            self.add(&id, usage)?;
+            self.charge_revisions(&id, &revisions)?;
         }
-        let (metadata, usage) = accounting.entry(&revisions)?;
-        ensure!(metadata.is_dir(), "Managed revisions must be a directory");
-        accounting.add(&id, usage)?;
+        Ok(())
+    }
+
+    /// One project's receipts and the revision directories they vouch for.
+    fn charge_revisions(&mut self, id: &str, revisions: &Path) -> Result<()> {
         let mut revision_count = 0;
-        for revision in std::fs::read_dir(&revisions)? {
+        for revision in std::fs::read_dir(revisions)? {
             let revision = revision?;
             revision_count += 1;
             ensure!(
@@ -380,7 +446,7 @@ fn admit_artifact(
                 .map_err(|_| anyhow::anyhow!("Invalid revision name"))?;
             if let Some(digest) = name.strip_suffix(".manifest.json") {
                 validate_artifact_digest(digest)?;
-                let (metadata, mut usage) = accounting.entry(&revision.path())?;
+                let (metadata, mut usage) = self.entry(&revision.path())?;
                 ensure!(
                     metadata.is_file()
                         && metadata.len()
@@ -400,7 +466,7 @@ fn admit_artifact(
                     "Retained artifact receipt cannot be reconciled"
                 );
                 usage.revisions = 1;
-                accounting.add(&id, usage)?;
+                self.retain(id, digest, usage)?;
             } else {
                 validate_artifact_digest(&name)
                     .context("Unknown retained revision entry; operator reconciliation required")?;
@@ -412,61 +478,82 @@ fn admit_artifact(
                     std::fs::symlink_metadata(revision.path())?.is_dir(),
                     "Retained revision must be a directory"
                 );
-                let usage = accounting.tree(&revision.path(), 0)?;
-                accounting.add(&id, usage)?;
+                let usage = self.tree(&revision.path(), 0)?;
+                self.retain(id, &name, usage)?;
             }
         }
+        Ok(())
     }
 
-    let mut known = std::collections::HashSet::new();
-    let mut statement = store.connection.prepare("SELECT transfer_id,project_id,descriptor_json,state FROM project_artifact_transfers LIMIT 4097")?;
-    let mut rows = statement.query([])?;
-    while let Some(row) = rows.next()? {
-        ensure!(
-            known.len() < 4096,
-            "Artifact transfer inventory exceeds its bound"
-        );
-        let id: String = row.get(0)?;
-        uuid(&id)?;
-        known.insert(id.clone());
-        let project: String = row.get(1)?;
-        let descriptor: ProjectArtifactDescriptor =
-            serde_json::from_str(&row.get::<_, String>(2)?)?;
-        descriptor.validate()?;
-        ensure!(
-            descriptor.project_id == project,
-            "Artifact transfer accounting binding differs"
-        );
-        let state: String = row.get(3)?;
-        let path = root.join("artifact-transfers").join(&id);
-        let actual = if entry_exists(&path)? {
-            accounting.tree(&path, 0)?
-        } else {
-            ArtifactUsage::default()
-        };
-        let usage = match state.as_str() {
-            "receiving" => {
-                let reserved = ArtifactUsage::reservation(&descriptor);
-                ArtifactUsage {
-                    bytes: actual.bytes.max(reserved.bytes),
-                    files: actual.files.max(reserved.files),
-                    revisions: 1,
+    /// Every transfer the device tracks, by its staging directory; an upload in flight
+    /// holds its whole reservation. Returns the tracked transfer IDs.
+    fn charge_transfers(
+        &mut self,
+        store: &StateStore,
+        root: &Path,
+    ) -> Result<std::collections::HashSet<String>> {
+        let mut known = std::collections::HashSet::new();
+        let mut statement = store.connection.prepare("SELECT transfer_id,project_id,descriptor_json,state FROM project_artifact_transfers LIMIT 4097")?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            ensure!(
+                known.len() < 4096,
+                "Artifact transfer inventory exceeds its bound"
+            );
+            let id: String = row.get(0)?;
+            uuid(&id)?;
+            known.insert(id.clone());
+            let project: String = row.get(1)?;
+            let descriptor: ProjectArtifactDescriptor =
+                serde_json::from_str(&row.get::<_, String>(2)?)?;
+            descriptor.validate()?;
+            ensure!(
+                descriptor.project_id == project,
+                "Artifact transfer accounting binding differs"
+            );
+            let state: String = row.get(3)?;
+            let path = root.join("artifact-transfers").join(&id);
+            let actual = if entry_exists(&path)? {
+                self.tree(&path, 0)?
+            } else {
+                ArtifactUsage::default()
+            };
+            let usage = match state.as_str() {
+                "receiving" => {
+                    let reserved = ArtifactUsage::reservation(&descriptor);
+                    ArtifactUsage {
+                        bytes: actual.bytes.max(reserved.bytes),
+                        files: actual.files.max(reserved.files),
+                        revisions: 1,
+                    }
                 }
-            }
-            "committed" | "aborted" => actual,
-            _ => anyhow::bail!("Invalid artifact transfer state during accounting"),
-        };
-        accounting.add(&project, usage)?;
+                "committed" | "aborted" => actual,
+                _ => anyhow::bail!("Invalid artifact transfer state during accounting"),
+            };
+            self.add(&project, usage)?;
+        }
+        Ok(known)
     }
-    let mut incoming = ArtifactUsage::reservation(descriptor);
-    let staging = root.join("artifact-transfers");
-    if entry_exists(&staging)? {
-        let (metadata, usage) = accounting.entry(&staging)?;
+
+    /// Staging directories without a transfer row. Returns the charge of the one that
+    /// `recovered` names instead of adding it.
+    fn charge_staging(
+        &mut self,
+        root: &Path,
+        tracked: &std::collections::HashSet<String>,
+        recovered: Option<&str>,
+    ) -> Result<Option<ArtifactUsage>> {
+        let mut resumed = None;
+        let staging = root.join("artifact-transfers");
+        if !entry_exists(&staging)? {
+            return Ok(resumed);
+        }
+        let (metadata, usage) = self.entry(&staging)?;
         ensure!(metadata.is_dir(), "Artifact staging must be a directory");
-        accounting.device.add(usage)?;
+        self.device.add(usage)?;
         for entry in std::fs::read_dir(&staging)? {
             let entry = entry?;
-            if known.contains(&entry.file_name().to_string_lossy().into_owned()) {
+            if tracked.contains(&entry.file_name().to_string_lossy().into_owned()) {
                 continue;
             }
             let id = entry
@@ -475,12 +562,12 @@ fn admit_artifact(
                 .map_err(|_| anyhow::anyhow!("Invalid untracked transfer ID"))?;
             uuid(&id)?;
             ensure!(
-                accounting.entry(&entry.path())?.0.is_dir(),
+                self.entry(&entry.path())?.0.is_dir(),
                 "Untracked artifact staging must be a directory"
             );
-            let actual = accounting.tree(&entry.path(), 0)?;
+            let actual = self.tree(&entry.path(), 0)?;
             if std::fs::read_dir(entry.path())?.next().is_none() {
-                accounting.device.add(actual)?;
+                self.device.add(actual)?;
                 continue;
             }
             // A durable marker survives a crash before the enclosing SQLite
@@ -500,16 +587,404 @@ fn admit_artifact(
                 revisions: 1,
             };
             if recovered == Some(id.as_str()) {
-                incoming = usage;
+                resumed = Some(usage);
             } else {
-                accounting.add(&pending.descriptor.project_id, usage)?;
+                self.add(&pending.descriptor.project_id, usage)?;
             }
         }
+        Ok(resumed)
     }
-    accounting.add(&descriptor.project_id, incoming)?;
-    accounting.device.enforce(budgets.device, "device")?;
-    accounting.projects[&descriptor.project_id].enforce(budgets.project, "project")?;
+}
+
+/// A transfer past its lifetime no longer holds staging or budget.
+fn drop_expired_transfers(store: &StateStore, root: &Path, now: i64) -> Result<()> {
+    let expired: Vec<String> = {
+        let mut statement = store.connection.prepare(
+            "SELECT transfer_id FROM project_artifact_transfers WHERE expires_at<=?1 LIMIT 4096",
+        )?;
+        statement
+            .query_map([now], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?
+    };
+    for id in expired {
+        uuid(&id)?;
+        let dir = transfer_dir(root, &id)?;
+        if entry_exists(&dir.join("reservation.json"))? {
+            let pending = reservation(&dir)?;
+            if pending.expires_at <= now {
+                remove_expired_orphan_receipt(root, &pending)?;
+            }
+        }
+        std::fs::remove_dir_all(dir)?;
+        File::open(root.join("artifact-transfers"))?.sync_all()?;
+        store.connection.execute(
+            "DELETE FROM project_artifact_transfers WHERE transfer_id=?1",
+            [id],
+        )?;
+    }
     Ok(())
+}
+
+fn budget_json(used: ArtifactUsage, limit: crate::isolation::ArtifactLimits) -> Value {
+    json!({
+        "bytes": {"used": used.bytes, "max": limit.bytes},
+        "entries": {"used": used.files, "max": limit.files},
+        "revisions": {"used": used.revisions, "max": limit.revisions},
+    })
+}
+
+pub(crate) struct StorageUse {
+    /// What the whole device is charged, next to its budget.
+    pub device: Value,
+    /// The same for the requested project, and what each of its retained revisions is
+    /// charged, in digest order.
+    pub project: Option<(Value, Vec<(String, u64)>)>,
+}
+
+/// What uploads are charged right now, exactly as the next admission counts it, so
+/// transfers past their lifetime are dropped first. It walks every retained file: ask on
+/// demand only.
+pub(crate) fn usage(store: &StateStore, root: &Path, project: Option<&str>) -> Result<StorageUse> {
+    project.map(validate_artifact_project_id).transpose()?;
+    private_root(root)?;
+    let _lock = artifact_lock(root)?;
+    drop_expired_transfers(store, root, unix_time()?)?;
+    let budgets = crate::isolation::artifact_budgets(root)?;
+    let (accounting, _) = charged(store, root, None, project)?;
+    let project = project.map(|project| {
+        let used = accounting
+            .projects
+            .get(project)
+            .copied()
+            .unwrap_or_default();
+        let revisions = accounting.detail.map_or_else(Vec::new, |(_, revisions)| {
+            revisions
+                .into_iter()
+                .map(|(digest, charge)| (digest, charge.bytes))
+                .collect()
+        });
+        (budget_json(used, budgets.project), revisions)
+    });
+    Ok(StorageUse {
+        device: budget_json(accounting.device, budgets.device),
+        project,
+    })
+}
+
+/// A project path that a placement runs from, or that an update in progress may switch
+/// to or back to.
+struct Pin {
+    placement: Option<String>,
+    path: PathBuf,
+    resolved: Option<PathBuf>,
+}
+
+impl Pin {
+    fn new(placement: Option<String>, path: String) -> Self {
+        let path = PathBuf::from(path);
+        Self {
+            placement,
+            resolved: path.canonicalize().ok(),
+            path,
+        }
+    }
+
+    /// At or below the directory, by its spelling or by where the filesystem resolves it.
+    fn within(&self, directory: &Path, resolved: Option<&Path>) -> bool {
+        self.path.starts_with(directory)
+            || self
+                .resolved
+                .as_deref()
+                .zip(resolved)
+                .is_some_and(|(pin, directory)| pin.starts_with(directory))
+    }
+}
+
+fn pins(store: &StateStore) -> Result<Vec<Pin>> {
+    let mut placements = store.connection.prepare(
+        "SELECT id,json_extract(config_json,'$.project_path') FROM placements ORDER BY id",
+    )?;
+    let mut pins = placements
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })?
+        .filter_map(|placement| {
+            placement
+                .map(|(id, path)| path.map(|path| Pin::new(Some(id), path)))
+                .transpose()
+        })
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let updating = store.active_rollout_project_paths()?;
+    pins.extend(updating.into_iter().map(|path| Pin::new(None, path)));
+    Ok(pins)
+}
+
+/// The placements named for one revision; more can use it.
+const NAMED_PLACEMENTS: usize = 32;
+
+#[derive(serde::Serialize)]
+pub(crate) struct RevisionUse {
+    pub revision: String,
+    pub bytes: u64,
+    /// Placements whose configuration runs from this revision.
+    pub referenced_by: Vec<String>,
+    /// An update in progress may still switch to it or back to it.
+    pub rollout: bool,
+}
+
+impl RevisionUse {
+    fn new(pins: &[Pin], revisions: &Path, revision: &str, bytes: u64) -> Self {
+        let directory = revisions.join(revision);
+        let resolved = directory.canonicalize().ok();
+        let mut used = Self {
+            revision: revision.to_owned(),
+            bytes,
+            referenced_by: Vec::new(),
+            rollout: false,
+        };
+        for pin in pins
+            .iter()
+            .filter(|pin| pin.within(&directory, resolved.as_deref()))
+        {
+            match &pin.placement {
+                Some(placement) if used.referenced_by.len() < NAMED_PLACEMENTS => {
+                    used.referenced_by.push(placement.clone())
+                }
+                Some(_) => (),
+                None => used.rollout = true,
+            }
+        }
+        used
+    }
+
+    fn pinned(&self) -> bool {
+        self.rollout || !self.referenced_by.is_empty()
+    }
+}
+
+/// Who still uses each listed revision of a project. The caller holds the management write
+/// transaction when the answer has to stay true.
+pub(crate) fn revision_uses(
+    store: &StateStore,
+    root: &Path,
+    project: &str,
+    revisions: &[(String, u64)],
+) -> Result<Vec<RevisionUse>> {
+    validate_artifact_project_id(project)?;
+    let directory = root.join("projects").join(project).join("revisions");
+    let pins = pins(store)?;
+    Ok(revisions
+        .iter()
+        .map(|(revision, bytes)| RevisionUse::new(&pins, &directory, revision, *bytes))
+        .collect())
+}
+
+/// Where removed revisions wait until their files are deleted. It lies outside
+/// `revisions`, whose entries every agent version accounts for by name.
+const PRUNED: &str = ".pruned";
+
+/// An existing private directory; unlike `directory`, never creates one.
+fn existing_directory(path: &Path) -> Result<Option<PathBuf>> {
+    if entry_exists(path)? {
+        directory(path).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+/// Deletes what a removal moved aside. A crash can leave it behind.
+fn discard_pruned(home: &Path) -> Result<()> {
+    if let Some(pruned) = existing_directory(&home.join(PRUNED))? {
+        std::fs::remove_dir_all(pruned)?;
+        File::open(home)?.sync_all()?;
+    }
+    Ok(())
+}
+
+/// What a retained revision is charged: its receipt and its directory, whichever exist.
+fn retained_bytes(revisions: &Path, revision: &str) -> Result<Option<u64>> {
+    let mut accounting = ArtifactAccounting::default();
+    let mut charge = None::<ArtifactUsage>;
+    for path in [
+        revisions.join(format!("{revision}.manifest.json")),
+        revisions.join(revision),
+    ] {
+        if entry_exists(&path)? {
+            charge
+                .get_or_insert_default()
+                .add(accounting.tree(&path, 0)?)?;
+        }
+    }
+    Ok(charge.map(|charge| charge.bytes))
+}
+
+/// A project's own directory when it has one. Never creates it, and refuses a spelling
+/// that the filesystem would resolve to another project.
+fn project_home(root: &Path, project: &str) -> Result<Option<PathBuf>> {
+    validate_artifact_project_id(project)?;
+    let projects = directory(&root.join("projects"))?;
+    crate::config::ensure_unaliased_child(&projects, project)?;
+    existing_directory(&projects.join(project))
+}
+
+/// The listed revisions a project still retains, with what each is charged. What an
+/// interrupted removal left behind is deleted first.
+fn retained(home: &Path, revisions: &[String]) -> Result<Vec<(String, u64)>> {
+    discard_pruned(home)?;
+    let Some(directory) = existing_directory(&home.join("revisions"))? else {
+        return Ok(Vec::new());
+    };
+    let mut retained = Vec::new();
+    for revision in revisions {
+        if let Some(bytes) = retained_bytes(&directory, revision)? {
+            retained.push((revision.clone(), bytes));
+        }
+    }
+    Ok(retained)
+}
+
+fn sync_directory(path: &Path) -> Result<()> {
+    File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+/// Listed revisions of one project that are held for removal under the artifact lock,
+/// which keeps uploads from committing or measuring in between.
+pub(crate) struct Prune {
+    _lock: File,
+    project: String,
+    home: Option<PathBuf>,
+    retained: Vec<(String, u64)>,
+}
+
+impl Prune {
+    /// Takes the artifact lock and measures the listed revisions that are still retained.
+    /// Call it before the management write transaction begins, so that uploads never wait
+    /// for the lock behind an open transaction.
+    pub(crate) fn prepare(root: &Path, project: &str, revisions: &[String]) -> Result<Self> {
+        validate_artifact_prune(revisions)?;
+        private_root(root)?;
+        let lock = artifact_lock(root)?;
+        let home = project_home(root, project)?;
+        let retained = home
+            .as_deref()
+            .map(|home| retained(home, revisions))
+            .transpose()?
+            .unwrap_or_default();
+        Ok(Self {
+            _lock: lock,
+            project: project.to_owned(),
+            home,
+            retained,
+        })
+    }
+
+    /// Inside the management write transaction: nothing can pin a revision between this
+    /// check and the removal. Refuses as a whole while an upload of the project is in
+    /// flight, while a process still runs a superseded configuration, or when a listed
+    /// revision is in use. Otherwise every listed revision leaves the project; revisions
+    /// that were already gone are skipped. Returns what was removed and the bytes it was
+    /// charged.
+    pub(crate) fn remove(&self, store: &StateStore, now: i64) -> Result<(Vec<String>, u64)> {
+        let Some(home) = self.home.as_deref().filter(|_| !self.retained.is_empty()) else {
+            return Ok((Vec::new(), 0));
+        };
+        self.refuse_while_busy(store, now)?;
+        let revisions = home.join("revisions");
+        self.refuse_in_use(store, &revisions)?;
+        self.set_aside(home, &revisions)?;
+        self.remove_receipts(&revisions)?;
+        Ok((
+            self.retained
+                .iter()
+                .map(|(revision, _)| revision.clone())
+                .collect(),
+            self.retained.iter().map(|(_, bytes)| bytes).sum(),
+        ))
+    }
+
+    /// An upload in flight may be about to reuse a listed revision, and a process that
+    /// still runs a superseded configuration may still run from one.
+    fn refuse_while_busy(&self, store: &StateStore, now: i64) -> Result<()> {
+        let project = &self.project;
+        let receiving: bool = store.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM project_artifact_transfers WHERE project_id=?1 AND state='receiving' AND expires_at>?2)",
+            params![project, now],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            !receiving,
+            PruneRefused::Busy(format!(
+                "An upload for project {project} is in progress; wait for it to finish or cancel it before removing revisions"
+            ))
+        );
+        let replacing: bool = store.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM placement_replicas r JOIN placements p ON p.id=r.placement_id WHERE json_extract(p.config_json,'$.project_id')=?1 AND r.process_id IS NOT NULL AND r.config_revision<>p.config_revision)",
+            [project],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            !replacing,
+            PruneRefused::Busy(format!(
+                "A service of project {project} still replaces processes that run an earlier configuration; retry shortly"
+            ))
+        );
+        Ok(())
+    }
+
+    fn refuse_in_use(&self, store: &StateStore, revisions: &Path) -> Result<()> {
+        let pins = pins(store)?;
+        for (revision, bytes) in &self.retained {
+            let used = RevisionUse::new(&pins, revisions, revision, *bytes);
+            let user = if used.referenced_by.is_empty() {
+                "an update in progress".to_owned()
+            } else {
+                format!("placement {}", used.referenced_by.join(", "))
+            };
+            ensure!(
+                !used.pinned(),
+                PruneRefused::InUse(format!(
+                    "Revision {revision} of project {} is still used by {user}; nothing was removed",
+                    self.project
+                ))
+            );
+        }
+        Ok(())
+    }
+
+    /// A directory is durably gone before its receipt is: a revision directory without a
+    /// receipt would stop every upload until an operator reconciles it.
+    fn set_aside(&self, home: &Path, revisions: &Path) -> Result<()> {
+        let pruned = directory(&home.join(PRUNED))?;
+        for (revision, _) in &self.retained {
+            let retained = revisions.join(revision);
+            if entry_exists(&retained)? {
+                std::fs::rename(retained, pruned.join(revision))?;
+            }
+        }
+        sync_directory(&pruned)?;
+        sync_directory(revisions)
+    }
+
+    fn remove_receipts(&self, revisions: &Path) -> Result<()> {
+        for (revision, _) in &self.retained {
+            let receipt = revisions.join(format!("{revision}.manifest.json"));
+            if entry_exists(&receipt)? {
+                std::fs::remove_file(receipt)?;
+            }
+        }
+        sync_directory(revisions)
+    }
+
+    /// Deletes the removed files once the transaction has ended. The next removal in the
+    /// project deletes what this one could not.
+    pub(crate) fn discard(self) {
+        if let Some(home) = &self.home
+            && let Err(error) = discard_pruned(home)
+        {
+            tracing::warn!(project_id = %self.project, "Removed project revisions could not be deleted yet: {error:#}");
+        }
+    }
 }
 
 fn uuid(value: &str) -> Result<()> {
@@ -909,30 +1384,7 @@ fn begin_transfer(
     } else {
         None
     };
-    let expired: Vec<String> = {
-        let mut statement = store.connection.prepare(
-            "SELECT transfer_id FROM project_artifact_transfers WHERE expires_at<=?1 LIMIT 4096",
-        )?;
-        statement
-            .query_map([now], |r| r.get(0))?
-            .collect::<std::result::Result<_, _>>()?
-    };
-    for id in expired {
-        uuid(&id)?;
-        let dir = transfer_dir(root, &id)?;
-        if entry_exists(&dir.join("reservation.json"))? {
-            let pending = reservation(&dir)?;
-            if pending.expires_at <= now {
-                remove_expired_orphan_receipt(root, &pending)?;
-            }
-        }
-        std::fs::remove_dir_all(dir)?;
-        File::open(root.join("artifact-transfers"))?.sync_all()?;
-        store.connection.execute(
-            "DELETE FROM project_artifact_transfers WHERE transfer_id=?1",
-            [id],
-        )?;
-    }
+    drop_expired_transfers(store, root, now)?;
     enforce_staging_limits(store, owner, descriptor, device_owner)?;
     admit_artifact(
         store,
@@ -2095,11 +2547,7 @@ mod tests {
             .unwrap();
         }
         let uploaded = commit(&store, dir.path(), "project", &id, "controller").unwrap();
-        let mut accounting = ArtifactAccounting {
-            device: ArtifactUsage::default(),
-            projects: Default::default(),
-            scanned: 0,
-        };
+        let mut accounting = ArtifactAccounting::default();
         let actual = accounting
             .tree(Path::new(uploaded.project_path.as_deref().unwrap()), 0)
             .unwrap();
@@ -2587,5 +3035,307 @@ mod tests {
         let receipt = import_local(&store, dir.path(), "project", source.path()).unwrap();
         let path = PathBuf::from(receipt.project_path.unwrap());
         assert!(!path.join("apps/other").exists());
+    }
+
+    fn digest(m: &ProjectArtifactManifest) -> String {
+        m.descriptor().unwrap().manifest_sha256
+    }
+
+    fn retained(used: &StorageUse) -> Vec<String> {
+        let (_, revisions) = used.project.as_ref().unwrap();
+        revisions.iter().map(|(digest, _)| digest.clone()).collect()
+    }
+
+    /// Two committed revisions of `project`, one of `other`, and an upload of `project`
+    /// that is still in flight.
+    fn stocked() -> (
+        tempfile::TempDir,
+        StateStore,
+        ProjectArtifactManifest,
+        [String; 2],
+    ) {
+        let (dir, store, m) = setup();
+        let second = variant(&m, "project", b"next!");
+        upload(&store, dir.path(), &m, b"hello");
+        upload(&store, dir.path(), &second, b"next!");
+        upload(
+            &store,
+            dir.path(),
+            &variant(&m, "other", b"hello"),
+            b"hello",
+        );
+        start(&store, dir.path(), &variant(&m, "project", b"third"));
+        let mut committed = [digest(&m), digest(&second)];
+        committed.sort();
+        (dir, store, m, committed)
+    }
+
+    #[test]
+    fn usage_is_what_the_next_upload_is_admitted_against() {
+        let (dir, store, m, committed) = stocked();
+        let root = dir.path();
+        let used = usage(&store, root, Some("project")).unwrap();
+        assert_eq!(retained(&used), committed);
+        let (project, revisions) = used.project.as_ref().unwrap();
+        let directory = root.join("projects/project/revisions");
+        for (revision, bytes) in revisions {
+            assert_eq!(retained_bytes(&directory, revision).unwrap(), Some(*bytes));
+            assert!(*bytes > 4096);
+        }
+        assert_eq!(project["revisions"], json!({"used":3,"max":128}));
+        assert_eq!(used.device["revisions"], json!({"used":4,"max":1024}));
+        assert_eq!(used.device["bytes"]["max"], 64 * 1024_u64.pow(3));
+        assert!(used.device["entries"]["used"].as_u64() > project["entries"]["used"].as_u64());
+
+        let next = variant(&m, "project", b"fourth").descriptor().unwrap();
+        let charged =
+            project["bytes"]["used"].as_u64().unwrap() + ArtifactUsage::reservation(&next).bytes;
+        let attempt = |limit: u64| {
+            configure_budget(root, &format!("FLOW_LIKE_PROJECT_ARTIFACT_BYTES={limit}\n"));
+            let id = uuid::Uuid::new_v4().to_string();
+            begin(&store, root, &id, "controller", &next)
+        };
+        let refused = attempt(charged - 1).unwrap_err();
+        assert!(refused.downcast_ref::<ArtifactLimitExceeded>().is_some());
+        attempt(charged).unwrap();
+    }
+
+    #[test]
+    fn usage_drops_transfers_past_their_lifetime_and_creates_nothing() {
+        let (dir, store, _, committed) = stocked();
+        let root = dir.path();
+        store
+            .connection
+            .execute("UPDATE project_artifact_transfers SET expires_at=0", [])
+            .unwrap();
+        let settled = usage(&store, root, Some("project")).unwrap();
+        assert_eq!(retained(&settled), committed);
+        assert_eq!(settled.project.unwrap().0["revisions"]["used"], 2);
+        let tracked: u64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM project_artifact_transfers",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tracked, 0);
+
+        let device = usage(&store, root, None).unwrap();
+        assert!(device.project.is_none());
+        assert_eq!(device.device["revisions"]["used"], 3);
+        let unknown = usage(&store, root, Some("unknown")).unwrap();
+        let (budget, revisions) = unknown.project.unwrap();
+        assert_eq!(budget["bytes"]["used"], 0);
+        assert!(revisions.is_empty() && !root.join("projects/unknown").exists());
+        assert!(usage(&store, root, Some("../project")).is_err());
+    }
+
+    fn refusal(error: &anyhow::Error) -> (&'static str, String) {
+        match error.downcast_ref::<PruneRefused>() {
+            Some(PruneRefused::Busy(message)) => ("busy", message.clone()),
+            Some(PruneRefused::InUse(message)) => ("in use", message.clone()),
+            None => ("other", format!("{error:#}")),
+        }
+    }
+
+    /// Three revisions of `project`: placement `api` runs from `kept`, an update in progress
+    /// may switch it to `staged`, and nothing uses `unused`.
+    struct Revisions {
+        dir: tempfile::TempDir,
+        store: StateStore,
+        m: ProjectArtifactManifest,
+        kept: String,
+        unused: String,
+        staged: String,
+    }
+
+    impl Revisions {
+        fn new() -> Self {
+            let (dir, mut store, m) = setup();
+            let root = dir.path();
+            let (next, third) = (
+                variant(&m, "project", b"next!"),
+                variant(&m, "project", b"third"),
+            );
+            let kept = upload(&store, root, &m, b"hello").project_path;
+            upload(&store, root, &next, b"next!");
+            let staged = upload(&store, root, &third, b"third").project_path;
+            let config = |path: &Option<String>| json!({"id":"api","project_id":"project","deployment_id":"deployment","revision":"release-1","source":"offline","project_path":path,"events":[{"event_id":"event","event_version":[1,0,0],"board_version":[1,0,0]}],"variables":{"public-listen-port":8080}});
+            store
+                .upsert_placement("api", &config(&kept), crate::state::DesiredState::Running)
+                .unwrap();
+            store.connection.execute(
+                "INSERT INTO placement_rollouts(rollout_id,placement_id,project_id,previous_config_json,candidate_config_json,base_revision,base_intent,previous_replicas,candidate_replicas,state,stabilization_seconds,deadline_seconds,created_at,updated_at) VALUES('rollout','api','project',?1,?2,1,1,1,1,'staged',30,600,1,1)",
+                params![config(&kept).to_string(), config(&staged).to_string()],
+            ).unwrap();
+            Self {
+                kept: digest(&m),
+                unused: digest(&next),
+                staged: digest(&third),
+                dir,
+                store,
+                m,
+            }
+        }
+
+        fn root(&self) -> &Path {
+            self.dir.path()
+        }
+
+        fn directory(&self) -> PathBuf {
+            self.root().join("projects/project/revisions")
+        }
+
+        /// Whether a revision still has its directory and its receipt.
+        fn exists(&self, revision: &str) -> (bool, bool) {
+            let receipt = format!("{revision}.manifest.json");
+            (
+                self.directory().join(revision).exists(),
+                self.directory().join(receipt).exists(),
+            )
+        }
+
+        fn remove(&self, revisions: &[&String]) -> Result<(Vec<String>, u64)> {
+            let listed: Vec<String> = revisions.iter().map(|digest| (*digest).clone()).collect();
+            let prune = Prune::prepare(self.root(), "project", &listed)?;
+            let removed = prune.remove(&self.store, unix_time()?);
+            prune.discard();
+            removed
+        }
+
+        fn refused(&self, revisions: &[&String]) -> (&'static str, String) {
+            refusal(&self.remove(revisions).unwrap_err())
+        }
+    }
+
+    #[test]
+    fn revisions_in_use_stay_on_the_device_with_everything_listed_next_to_them() {
+        let revisions = Revisions::new();
+        let (kept, unused, staged) = (&revisions.kept, &revisions.unused, &revisions.staged);
+        let all = revisions.remove(&[]).unwrap_err();
+        assert!(
+            all.downcast_ref::<flow_like_device_protocol::ProtocolError>()
+                .is_some()
+        );
+        let (cause, message) = revisions.refused(&[unused, kept]);
+        assert_eq!(cause, "in use", "{message}");
+        assert!(message.contains(kept.as_str()) && message.contains("placement api"));
+        let (cause, message) = revisions.refused(&[staged]);
+        assert_eq!(cause, "in use", "{message}");
+        assert!(message.contains("an update in progress"));
+        let uses = revision_uses(
+            &revisions.store,
+            revisions.root(),
+            "project",
+            &[(kept.clone(), 1), (staged.clone(), 2), (unused.clone(), 3)],
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&uses).unwrap(),
+            json!([
+                {"revision":kept,"bytes":1,"referenced_by":["api"],"rollout":true},
+                {"revision":staged,"bytes":2,"referenced_by":[],"rollout":true},
+                {"revision":unused,"bytes":3,"referenced_by":[],"rollout":false},
+            ])
+        );
+        assert!(Prune::prepare(revisions.root(), "Project", std::slice::from_ref(unused)).is_err());
+        for revision in [kept, unused, staged] {
+            assert_eq!(revisions.exists(revision), (true, true));
+        }
+    }
+
+    #[test]
+    fn nothing_is_removed_while_an_upload_or_a_restart_is_under_way() {
+        let revisions = Revisions::new();
+        let (root, store) = (revisions.root(), &revisions.store);
+        let unused = &revisions.unused;
+        let flying = start(store, root, &variant(&revisions.m, "project", b"fourth"));
+        assert_eq!(revisions.refused(&[unused]).0, "busy");
+        abort(store, root, "project", &flying, "controller").unwrap();
+        store.connection.execute(
+            "INSERT INTO placement_replicas(placement_id,slot,config_revision,intent_revision,observed_state,applied_revision,process_id) VALUES('api',0,7,7,'stopping',7,4242)",
+            [],
+        ).unwrap();
+        assert_eq!(revisions.refused(&[unused]).0, "busy");
+        assert_eq!(revisions.exists(unused), (true, true));
+        store
+            .connection
+            .execute("UPDATE placement_replicas SET process_id=NULL", [])
+            .unwrap();
+        assert_eq!(
+            revisions.remove(&[unused]).unwrap().0,
+            std::slice::from_ref(unused)
+        );
+    }
+
+    #[test]
+    fn listed_unused_revisions_leave_the_project_and_can_be_uploaded_again() {
+        let revisions = Revisions::new();
+        let (root, store) = (revisions.root(), &revisions.store);
+        let (kept, unused, staged) = (&revisions.kept, &revisions.unused, &revisions.staged);
+        let bytes = retained_bytes(&revisions.directory(), unused)
+            .unwrap()
+            .unwrap();
+        let left = directory(&root.join("projects/project").join(PRUNED)).unwrap();
+        directory(&left.join(staged)).unwrap();
+        let unknown = artifact_sha256(b"never uploaded");
+        assert_eq!(
+            revisions.remove(&[unused, &unknown]).unwrap(),
+            (vec![unused.clone()], bytes)
+        );
+        assert_eq!(revisions.exists(unused), (false, false));
+        assert!(!root.join("projects/project").join(PRUNED).exists());
+        assert!(managed_revision(root, "project", unused).is_err());
+        for revision in [kept, staged] {
+            assert!(managed_revision(root, "project", revision).is_ok());
+        }
+        assert_eq!(revisions.remove(&[unused]).unwrap(), (Vec::new(), 0));
+        let mut left = [kept.clone(), staged.clone()];
+        left.sort();
+        assert_eq!(
+            retained(&usage(store, root, Some("project")).unwrap()),
+            left
+        );
+        let again = upload(
+            store,
+            root,
+            &variant(&revisions.m, "project", b"next!"),
+            b"next!",
+        );
+        assert_eq!(again.state, ArtifactTransferState::Committed);
+        assert!(managed_revision(root, "project", unused).is_ok());
+    }
+
+    #[test]
+    fn a_receipt_left_by_an_interrupted_removal_is_listed_and_removable() {
+        let revisions = Revisions::new();
+        let (root, store) = (revisions.root(), &revisions.store);
+        let staged = &revisions.staged;
+        store
+            .connection
+            .execute("UPDATE placement_rollouts SET state='healthy'", [])
+            .unwrap();
+        std::fs::remove_dir_all(revisions.directory().join(staged)).unwrap();
+        let receipt = retained_bytes(&revisions.directory(), staged)
+            .unwrap()
+            .unwrap();
+        let used = usage(store, root, Some("project")).unwrap();
+        assert!(retained(&used).contains(staged));
+        assert_eq!(
+            revisions.remove(&[staged]).unwrap(),
+            (vec![staged.clone()], receipt)
+        );
+        assert_eq!(revisions.exists(staged), (false, false));
+        begin(
+            store,
+            root,
+            &uuid::Uuid::new_v4().to_string(),
+            "controller",
+            &variant(&revisions.m, "project", b"fifth")
+                .descriptor()
+                .unwrap(),
+        )
+        .unwrap();
     }
 }

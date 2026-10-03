@@ -1,4 +1,6 @@
 import type {
+	WidgetAccessRequest,
+	WidgetAccessResponse,
 	WidgetGrantRequest,
 	WidgetGrantResponse,
 	WidgetPolicyDescriptor,
@@ -9,7 +11,9 @@ import type {
 	CachedPackage,
 	InstalledPackage,
 	PackageCommentsResponse,
+	PackageInvitation,
 	PackageUpdate,
+	PackageUser,
 	RequestAccessParams,
 	RequestAccessResponse,
 	SearchFilters,
@@ -24,7 +28,14 @@ export interface IRegistryState {
 	init(registryUrl?: string): Promise<void>;
 	searchPackages(filters?: SearchFilters): Promise<SearchResults>;
 	getOwnedPackages(filters?: SearchFilters): Promise<SearchResults>;
-	getPackage(packageId: string): Promise<InstalledPackage | null>;
+	/**
+	 * With `appId` a project member may read a package the project pins without
+	 * access of their own, and gets the manifest of the pinned version.
+	 */
+	getPackage(
+		packageId: string,
+		appId?: string,
+	): Promise<InstalledPackage | null>;
 	/**
 	 * `appId` downloads through that project's licence, so members can install
 	 * a paid package an admin or the owner holds for the project.
@@ -56,6 +67,9 @@ export interface IRegistryState {
 	listAccessRequests(packageId: string): Promise<AccessRequest[]>;
 	acceptAccessRequest(packageId: string, requestId: string): Promise<void>;
 	rejectAccessRequest(packageId: string, requestId: string): Promise<void>;
+	listMyInvitations(): Promise<PackageInvitation[]>;
+	acceptInvitation(invitationId: string): Promise<PackageUser>;
+	rejectInvitation(invitationId: string): Promise<void>;
 	setAuthToken?(token: string | null): Promise<void>;
 	getPackageComments(
 		packageId: string,
@@ -83,6 +97,12 @@ export interface IRegistryState {
 	 * derives another policy. Web grants with runtime sources carry `runtime`.
 	 */
 	mintWidgetGrant?(request: WidgetGrantRequest): Promise<WidgetGrantResponse>;
+	/**
+	 * Web only: the token that opens a package's widget sandbox for this viewer,
+	 * carried as its own path segment. `access: null` loads it anonymously, and
+	 * a backend without this method always does.
+	 */
+	getWidgetAccess?(request: WidgetAccessRequest): Promise<WidgetAccessResponse>;
 	/** Drop issued grants so remounts run at baseline. Desktop only; web tokens expire. */
 	revokeWidgetGrants?(packageId: string, widgetId?: string): Promise<void>;
 }

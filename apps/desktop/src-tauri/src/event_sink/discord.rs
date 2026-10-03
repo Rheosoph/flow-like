@@ -1,5 +1,6 @@
 use anyhow::Result;
 use flow_like::flow_like_model_provider::response::Response;
+use flow_like_bots::{BotSettings, BotSpec, Provider};
 use flow_like_catalog::events::chat_event::{
     Attachment, ChatResponse, ChatStreamingResponse, Reasoning,
 };
@@ -7,7 +8,7 @@ use flow_like_types::{intercom::BufferedInterComHandler, sync::Mutex};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serenity::all::{
-    Colour, CreateAttachment, CreateEmbed, CreateMessage, EditMessage, GatewayIntents,
+    Colour, CreateAttachment, CreateEmbed, CreateMessage, EditMessage, GatewayIntents, UserId,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,11 +33,12 @@ pub struct DiscordSink {
     pub channel_whitelist: Option<Vec<String>>,
     #[serde(default)]
     pub channel_blacklist: Option<Vec<String>>,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", deserialize_with = "deserialize_flag")]
     pub respond_to_mentions: bool,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", deserialize_with = "deserialize_flag")]
     pub respond_to_dms: bool,
-    #[serde(default = "default_command_prefix")]
+    /// Empty: no prefix is set. A config without the key or with `null` has none.
+    #[serde(default, deserialize_with = "deserialize_prefix")]
     pub command_prefix: String,
 }
 
@@ -44,8 +46,19 @@ fn default_true() -> bool {
     true
 }
 
-fn default_command_prefix() -> String {
-    "!".to_string()
+/// A flag that is `null` is on, like one without a key.
+fn deserialize_flag<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<bool>::deserialize(deserializer)?.unwrap_or_else(default_true))
+}
+
+fn deserialize_prefix<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 fn deserialize_intents<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
@@ -53,6 +66,24 @@ where
     D: serde::Deserializer<'de>,
 {
     Option::<Vec<String>>::deserialize(deserializer)
+}
+
+impl DiscordSink {
+    /// Which messages start the event: the rule a device applies, without a device's bounds
+    /// on the lists and the prefix.
+    fn spec(&self, event_id: &str) -> BotSpec {
+        BotSpec::unbounded(
+            event_id,
+            Provider::Discord,
+            BotSettings {
+                allow: self.channel_whitelist.clone().unwrap_or_default(),
+                deny: self.channel_blacklist.clone().unwrap_or_default(),
+                respond_to_mentions: self.respond_to_mentions,
+                respond_to_private: self.respond_to_dms,
+                command_prefix: self.command_prefix.clone(),
+            },
+        )
+    }
 }
 
 fn parse_intents(intent_names: &[String]) -> GatewayIntents {
@@ -105,15 +136,9 @@ struct BotInstance {
 
 #[derive(Clone)]
 struct EventHandler {
-    event_id: String,
     app_id: String,
-    channel_whitelist: Vec<String>,
-    channel_blacklist: Vec<String>,
-    respond_to_mentions: bool,
-    respond_to_dms: bool,
-    #[allow(dead_code)]
-    // configured + persisted prefix; the live should_process_message path does not consult it yet
-    command_prefix: String,
+    /// The event's id and its message rule.
+    spec: BotSpec,
 }
 
 struct DiscordClientManager {
@@ -149,13 +174,8 @@ impl DiscordClientManager {
         };
 
         let handler = EventHandler {
-            event_id: registration.event_id.clone(),
             app_id: registration.app_id.clone(),
-            channel_whitelist: config.channel_whitelist.clone().unwrap_or_default(),
-            channel_blacklist: config.channel_blacklist.clone().unwrap_or_default(),
-            respond_to_mentions: config.respond_to_mentions,
-            respond_to_dms: config.respond_to_dms,
-            command_prefix: config.command_prefix.clone(),
+            spec: config.spec(&registration.event_id),
         };
 
         // Check if bot already exists
@@ -303,26 +323,29 @@ impl serenity::client::EventHandler for DiscordEventHandler {
         drop(bot);
 
         // Get bot user id from cache
-        let bot_user_id = ctx.cache.current_user().id.get();
+        let bot_user = ctx.cache.current_user().id;
 
         for handler in handlers {
+            let event_id = &handler.spec.event_id;
+
             // Check if should process this message
-            if !should_process_message(&ctx, &msg, &handler) {
+            if !should_process_message(&msg, &handler, bot_user) {
                 println!(
                     "Skipping message from channel {} for event {}",
-                    msg.channel_id, handler.event_id
+                    msg.channel_id, event_id
                 );
                 continue;
             }
 
             // Prepare payload with context
-            let payload = prepare_message_payload(&ctx, &msg, &bot_token, Some(bot_user_id)).await;
+            let payload =
+                prepare_message_payload(&ctx, &msg, &bot_token, Some(bot_user.get())).await;
 
             // Fire the event (parallelism handled by event bus consumer)
             if let Err(e) = fire_discord_event(
                 &self.app_handle,
                 &self.db,
-                &handler.event_id,
+                event_id,
                 &handler.app_id,
                 payload,
                 &ctx,
@@ -330,7 +353,7 @@ impl serenity::client::EventHandler for DiscordEventHandler {
             )
             .await
             {
-                eprintln!("Failed to fire Discord event {}: {}", handler.event_id, e);
+                eprintln!("Failed to fire Discord event {}: {}", event_id, e);
             }
         }
     }
@@ -340,74 +363,19 @@ impl serenity::client::EventHandler for DiscordEventHandler {
     }
 }
 
-fn is_channel_allowed(channel_id: &str, handler: &EventHandler) -> bool {
-    // Check whitelist
-    if !handler.channel_whitelist.is_empty()
-        && !handler.channel_whitelist.contains(&channel_id.to_string())
-    {
-        return false;
-    }
-
-    // Check blacklist
-    if handler.channel_blacklist.contains(&channel_id.to_string()) {
-        return false;
-    }
-
-    true
-}
-
-#[allow(dead_code)] // prefix/mention targeting, superseded by should_process_message which does not check the prefix
-fn is_message_targeted(msg: &serenity::model::channel::Message, handler: &EventHandler) -> bool {
-    // Check if message starts with prefix
-    if msg.content.starts_with(&handler.command_prefix) {
-        return true;
-    }
-
-    // Check if bot is mentioned
-    !msg.mentions.is_empty()
-}
-
+/// Whether `msg` starts a run of the handler's event. The bot's own messages never do; the
+/// channel lists, direct messages and the rule for server channels are those of a device.
 fn should_process_message(
-    ctx: &serenity::client::Context,
     msg: &serenity::model::channel::Message,
     handler: &EventHandler,
+    bot: UserId,
 ) -> bool {
-    let channel_id = msg.channel_id.to_string();
-
-    // Check channel whitelist/blacklist
-    if !is_channel_allowed(&channel_id, handler) {
-        println!(
-            "Channel {} is not allowed for event {}",
-            channel_id, handler.event_id
-        );
+    if msg.author.id == bot {
         return false;
     }
 
-    // Check if DM (guild_id is None for DMs)
-    if msg.guild_id.is_none() {
-        return handler.respond_to_dms;
-    }
-
-    let author = &msg.author;
-    let me = ctx.cache.current_user();
-    if author.id == me.id {
-        return false;
-    }
-
-    if let Some(referenced) = msg.referenced_message.as_ref()
-        && referenced.author.id == me.id
-    {
-        return true;
-    }
-
-    let only_respond_to_mentions = handler.respond_to_mentions;
-    let includes_mention = msg.mentions.iter().any(|u| u.id == me.id);
-
-    if only_respond_to_mentions && !includes_mention {
-        return false;
-    }
-
-    true
+    let facts = flow_like_bots::discord::facts_of(msg, Some(bot));
+    handler.spec.admits(&facts)
 }
 
 async fn prepare_message_payload(
@@ -1031,6 +999,7 @@ impl DiscordSink {
             [],
         )?;
 
+        // `add_bot_and_handler` binds every column: the default prefix here is never applied.
         conn.execute(
             "CREATE TABLE IF NOT EXISTS discord_handlers (
                 event_id TEXT PRIMARY KEY,
@@ -1329,5 +1298,284 @@ impl EventSink for DiscordSink {
         tracing::info!("Unregistered Discord handler: {}", registration.event_id);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event_sink::EventConfig;
+    use serde_json::{Value, json};
+
+    const BOT: u64 = 900;
+    const EVENT: &str = "evt_dc";
+
+    fn with(mut base: Value, extra: Value) -> Value {
+        for (key, value) in extra.as_object().expect("an object") {
+            base[key] = value.clone();
+        }
+        base
+    }
+
+    /// A sink read from an event's config: a token and `settings`.
+    fn sink(settings: Value) -> DiscordSink {
+        serde_json::from_value(with(json!({"token": "a-token"}), settings))
+            .expect("a Discord config")
+    }
+
+    fn handler(settings: Value) -> EventHandler {
+        EventHandler {
+            app_id: "app".to_string(),
+            spec: sink(settings).spec(EVENT),
+        }
+    }
+
+    /// A message of a person in channel 300 of a server, as the gateway sends it.
+    fn message_json() -> Value {
+        json!({
+            "id": "1000",
+            "channel_id": "300",
+            "guild_id": "400",
+            "author": {"id": "500", "username": "alice", "discriminator": "0"},
+            "content": "hello",
+            "timestamp": "2026-10-02T10:00:00.000000+00:00",
+            "edited_timestamp": null,
+            "tts": false,
+            "mention_everyone": false,
+            "mentions": [],
+            "mention_roles": [],
+            "attachments": [],
+            "embeds": [],
+            "pinned": false,
+            "type": 0
+        })
+    }
+
+    fn bot_user() -> Value {
+        json!({"id": BOT.to_string(), "username": "helper", "bot": true})
+    }
+
+    fn bob() -> Value {
+        json!({"id": "502", "username": "bob"})
+    }
+
+    /// A reply to an earlier message of `author`.
+    fn reply_to(author: Value) -> Value {
+        let replied = with(message_json(), json!({"id": "990", "author": author}));
+        json!({"type": 19, "referenced_message": replied})
+    }
+
+    /// Whether the message with `extra` keys replaced starts a run under `settings`.
+    fn starts(settings: Value, extra: Value) -> bool {
+        let message = serde_json::from_value(with(message_json(), extra)).expect("a message");
+        should_process_message(&message, &handler(settings), UserId::new(BOT))
+    }
+
+    #[test]
+    fn a_config_without_a_prefix_has_none() {
+        let unset = [
+            json!({}),
+            json!({"command_prefix": null}),
+            json!({"command_prefix": ""}),
+        ];
+        for settings in unset {
+            assert_eq!(sink(settings.clone()).command_prefix, "", "{settings}");
+        }
+        assert_eq!(sink(json!({"command_prefix": "!"})).command_prefix, "!");
+        assert_eq!(sink(json!({"command_prefix": " "})).command_prefix, " ");
+    }
+
+    #[test]
+    fn flags_are_on_unless_the_config_turns_them_off() {
+        let nulls = json!({"respond_to_mentions": null, "respond_to_dms": null});
+        for settings in [json!({}), nulls] {
+            let read = sink(settings);
+            assert!(read.respond_to_mentions && read.respond_to_dms);
+        }
+        let off = sink(json!({"respond_to_mentions": false, "respond_to_dms": false}));
+        assert!(!off.respond_to_mentions && !off.respond_to_dms);
+    }
+
+    /// A registration is saved as tagged JSON, which serde reads through a buffer.
+    #[test]
+    fn a_saved_registration_reads_like_an_event_config() {
+        let read = |settings: Value| {
+            let tagged = json!({"sink_type": "discord", "token": "a-token"});
+            let saved = with(tagged, settings).to_string();
+            match serde_json::from_str(&saved).expect("a saved config") {
+                EventConfig::Discord(sink) => sink,
+                other => panic!("a Discord config, not {other:?}"),
+            }
+        };
+        let unset = read(json!({"command_prefix": null, "respond_to_mentions": null}));
+        assert_eq!(unset.command_prefix, "");
+        assert!(unset.respond_to_mentions && read(json!({})).respond_to_dms);
+
+        let saved = serde_json::to_value(EventConfig::Discord(sink(json!({})))).expect("JSON");
+        assert_eq!(saved["command_prefix"], "");
+        assert_eq!(read(saved).command_prefix, "");
+        assert_eq!(read(json!({"command_prefix": "!"})).command_prefix, "!");
+    }
+
+    #[test]
+    fn the_spec_takes_the_settings_without_the_bounds_of_a_device() {
+        let channels: Vec<String> = (1..=300).map(|id| id.to_string()).collect();
+        let prefix = "?".repeat(40);
+        let settings = json!({
+            "channel_whitelist": channels,
+            "channel_blacklist": ["7", "8"],
+            "respond_to_mentions": false,
+            "command_prefix": prefix,
+        });
+        let spec = sink(settings.clone()).spec(EVENT);
+        assert_eq!(spec.event_id, EVENT);
+        assert_eq!(spec.provider, Provider::Discord);
+        assert_eq!(spec.allow, channels);
+        assert_eq!(spec.deny, ["7", "8"]);
+        assert!(!spec.respond_to_mentions && spec.respond_to_private);
+        assert_eq!(spec.command_prefix, prefix);
+
+        let content = format!("{prefix} now");
+        let prefixed = |channel: &str| json!({"channel_id": channel, "content": content});
+        assert!(starts(settings.clone(), prefixed("300")));
+        assert!(!starts(settings, prefixed("301")), "a channel off the list");
+
+        let dms_off = sink(json!({"respond_to_dms": false})).spec(EVENT);
+        assert!(dms_off.respond_to_mentions && !dms_off.respond_to_private);
+        assert!(dms_off.allow.is_empty() && dms_off.deny.is_empty());
+        assert_eq!(dms_off.command_prefix, "");
+    }
+
+    /// Rule R in a server channel: what a plain message, one with the prefix, a mention and a
+    /// reply to the bot do under each pair of settings.
+    #[test]
+    fn server_channels_follow_the_rule_of_a_device() {
+        let prefix_only = json!({"command_prefix": "!", "respond_to_mentions": false});
+        let every = json!({"respond_to_mentions": false});
+        let rows = [
+            (json!({"command_prefix": "!"}), [false, true, true, true]),
+            (prefix_only, [false, true, false, false]),
+            (json!({}), [false, false, true, true]),
+            (every, [true, true, true, true]),
+        ];
+        for (settings, expected) in rows {
+            let messages = [
+                json!({}),
+                json!({"content": "!ask now"}),
+                json!({"mentions": [bot_user()]}),
+                reply_to(bot_user()),
+            ];
+            let started = messages.map(|extra| starts(settings.clone(), extra));
+            assert_eq!(started, expected, "{settings}");
+        }
+    }
+
+    #[test]
+    fn only_this_bot_is_addressed() {
+        assert!(!starts(json!({}), json!({"mentions": [bob()]})));
+        assert!(!starts(json!({}), reply_to(bob())));
+        assert!(starts(json!({}), json!({"mentions": [bob(), bot_user()]})));
+    }
+
+    #[test]
+    fn direct_messages_follow_respond_to_dms() {
+        let direct = || json!({"guild_id": null});
+        assert!(starts(json!({"command_prefix": "!"}), direct()));
+        assert!(!starts(json!({"respond_to_dms": false}), direct()));
+        let servers_only = json!({"respond_to_dms": false, "respond_to_mentions": false});
+        assert!(!starts(servers_only, direct()));
+    }
+
+    #[test]
+    fn channel_lists_come_before_everything_else() {
+        let mention = || json!({"mentions": [bot_user()]});
+        let allow = || json!({"channel_whitelist": ["301"]});
+        assert!(!starts(allow(), mention()));
+        let elsewhere = with(mention(), json!({"channel_id": "301"}));
+        assert!(starts(allow(), elsewhere));
+
+        let deny = || json!({"channel_blacklist": ["300"]});
+        assert!(!starts(deny(), mention()));
+        assert!(!starts(deny(), json!({"guild_id": null})));
+    }
+
+    #[test]
+    fn the_bots_own_messages_start_nothing() {
+        let every = || json!({"respond_to_mentions": false});
+        assert!(starts(every(), json!({})));
+        assert!(!starts(every(), json!({"author": bot_user()})));
+        let direct = json!({"author": bot_user(), "guild_id": null});
+        assert!(!starts(every(), direct));
+    }
+
+    /// A device ignores a message without text or image; the desktop app considers every one.
+    #[test]
+    fn messages_without_text_are_considered() {
+        let no_text = || json!({"content": ""});
+        assert!(starts(json!({"respond_to_mentions": false}), no_text()));
+        assert!(!starts(json!({"command_prefix": "!"}), no_text()));
+        let mention = with(no_text(), json!({"mentions": [bot_user()]}));
+        assert!(starts(json!({"command_prefix": "!"}), mention));
+    }
+
+    /// Stores the handler of `event_id` as registering the event does, with a bot of its own.
+    fn store(db: &DbConnection, event_id: &str, settings: Value) -> DiscordSink {
+        let token = json!({"token": format!("token-of-{event_id}")});
+        let config = sink(with(settings, token));
+        let registration =
+            DiscordSink::create_event_registration(event_id.to_string(), config.clone());
+        DiscordSink::add_bot_and_handler(db, &registration, &config).expect("a stored handler");
+        config
+    }
+
+    /// What a restart does: `start` builds a handler from every row of the sink's tables.
+    #[tokio::test]
+    async fn a_restart_restores_the_prefix_as_it_was_saved() {
+        let connection = rusqlite::Connection::open_in_memory().expect("a database");
+        let db: DbConnection = Arc::new(std::sync::Mutex::new(connection));
+        DiscordSink::init_tables(&db).expect("the tables");
+        let none = store(&db, "evt_none", json!({}));
+        let prefix_only = json!({"command_prefix": "!", "respond_to_mentions": false});
+        let bang = store(&db, "evt_bang", prefix_only);
+
+        let stored = DiscordSink::load_handlers_from_db(&db)
+            .await
+            .expect("the stored handlers");
+        let mut restored: Vec<BotSpec> = stored
+            .iter()
+            .map(|(registration, config)| config.spec(&registration.event_id))
+            .collect();
+        restored.sort_by(|a, b| a.event_id.cmp(&b.event_id));
+
+        assert_eq!(restored, [bang.spec("evt_bang"), none.spec("evt_none")]);
+        assert_eq!(restored[1].command_prefix, "");
+    }
+
+    /// TEMPORARY probe, removed before the lane ends: what storing a second event of the same
+    /// bot does to the first event's row.
+    #[tokio::test]
+    async fn probe_two_events_of_one_bot() {
+        let connection = rusqlite::Connection::open_in_memory().expect("a database");
+        let db: DbConnection = Arc::new(std::sync::Mutex::new(connection));
+        DiscordSink::init_tables(&db).expect("the tables");
+        for event_id in ["evt_one", "evt_two"] {
+            let config = sink(json!({}));
+            let registration =
+                DiscordSink::create_event_registration(event_id.to_string(), config.clone());
+            DiscordSink::add_bot_and_handler(&db, &registration, &config).expect("stored");
+        }
+        let stored = DiscordSink::load_handlers_from_db(&db)
+            .await
+            .expect("the stored handlers");
+        let ids: Vec<&str> = stored
+            .iter()
+            .map(|(registration, _)| registration.event_id.as_str())
+            .collect();
+        let foreign_keys: i64 = db
+            .lock()
+            .unwrap()
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .expect("the pragma");
+        eprintln!("PROBE discord: foreign_keys={foreign_keys}, restored handlers={ids:?}");
     }
 }

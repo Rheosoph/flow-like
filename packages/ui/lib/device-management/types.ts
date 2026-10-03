@@ -5,6 +5,7 @@ import type {
 	CertificateAuthoritySpec,
 	SignedCertificateChain,
 } from "./certificate-authority";
+import type { AgentFeatures } from "./model/types";
 export interface Ed25519PublicKey {
 	kty: "OKP";
 	crv: "Ed25519";
@@ -182,8 +183,41 @@ export interface BrowserController {
 		snapshot: ProtectedSnapshot,
 		checkpoint: Checkpoint,
 	): BrowserMlsEndpoint;
+	/**
+	 * Held owner key. Bundles built before it lack these five methods, so check
+	 * `typeof controller.attachInvitation === "function"` before relying on them.
+	 * The key is cleared by `detachInvitation`, `close` and `free`.
+	 */
+	attachInvitation?(password: Uint8Array, invitationVault: Uint8Array): void;
+	detachInvitation?(): void;
+	signManagementPolicyHeld?(policy: ManagementPolicy): string;
+	signTelemetryRosterHeld?(roster: TelemetryRoster): string;
+	signArchiveRosterHeld?(roster: ArchiveRoster): string;
 	close(): void;
 	free(): void;
+}
+/** A controller whose bundle can hold the owner's invitation key for signing. */
+export type HeldSignerController = BrowserController &
+	Required<
+		Pick<
+			BrowserController,
+			| "attachInvitation"
+			| "detachInvitation"
+			| "signManagementPolicyHeld"
+			| "signTelemetryRosterHeld"
+			| "signArchiveRosterHeld"
+		>
+	>;
+export function supportsHeldSigner(
+	controller: BrowserController,
+): controller is HeldSignerController {
+	return (
+		typeof controller.attachInvitation === "function" &&
+		typeof controller.detachInvitation === "function" &&
+		typeof controller.signManagementPolicyHeld === "function" &&
+		typeof controller.signTelemetryRosterHeld === "function" &&
+		typeof controller.signArchiveRosterHeld === "function"
+	);
 }
 export interface DeviceCrypto {
 	createCertificateAuthorityVault(
@@ -456,6 +490,34 @@ export function managementRejection(response: {
 				: code === "busy" || code === "failed",
 	};
 }
+/** Commands of person-started runs (design R2 §1.8): sent only to an agent with `on_demand_events`, each needs `start`. */
+export const ON_DEMAND_COMMANDS = [
+	"run_event",
+	"cancel_run",
+	"event_form",
+] as const;
+export type OnDemandCommand = (typeof ON_DEMAND_COMMANDS)[number];
+/** Journaled; answered `accepted` with a run id at once. */
+export interface RunEventCommand {
+	type: "run_event";
+	placement_id: string;
+	event_id: string;
+	/** The placement's configuration revision, as for `start`. */
+	expected_revision: number;
+	/** Field name → value: at most 64 keys and 12,288 bytes serialised. */
+	payload?: Record<string, unknown>;
+}
+/** Journaled; only the run's issuer or the owner may send it. */
+export interface CancelRunCommand {
+	type: "cancel_run";
+	operation_id: string;
+}
+/** A read: the fields of the flow version the service runs. */
+export interface EventFormCommand {
+	type: "event_form";
+	placement_id: string;
+	event_id: string;
+}
 export interface PlacementStatus {
 	id: string;
 	project_id: string;
@@ -486,6 +548,50 @@ export interface Inspection {
 	certificate_issuance?: 1;
 	certificate_acme?: 1;
 	can_delegate_certificate_renewal?: boolean;
+}
+
+/** Raw `inspect_page` result. Every field after `next` is absent on older agents (plan §3.4). */
+export interface InspectionPageWire {
+	device_id: string;
+	boot_id: string | null;
+	placements: unknown[];
+	next: string | null;
+	certificate_management?: 1;
+	can_manage_certificates?: boolean;
+	certificate_issuance?: 1;
+	certificate_acme?: 1;
+	can_delegate_certificate_renewal?: boolean;
+	agent_version?: string;
+	host_operations?: { reboot: boolean; update_agent: boolean };
+	host_isolation?: "required" | "optional" | "none" | null;
+	isolation?: Record<string, unknown> | null;
+	features?: Record<string, 1>;
+	agent?: {
+		version: string;
+		release_version: string | null;
+		release_sequence: number | null;
+	};
+	host?: { booted_at: number | null; agent_started_at: number };
+	tasks?: unknown[];
+	host_operation?: unknown;
+	network?: { interfaces: unknown[] };
+}
+
+const FEATURE_FLAG = /^[a-z][a-z0-9_]{0,63}$/;
+const MAX_FEATURE_FLAGS = 64;
+
+/** The `features` map (plan §3.4.1). A missing or malformed map means an older agent without flags. */
+export function agentFeatures(value: unknown): AgentFeatures {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	const flags: Record<string, 1> = {};
+	let count = 0;
+	for (const [flag, enabled] of Object.entries(value)) {
+		if (count >= MAX_FEATURE_FLAGS) break;
+		if (enabled !== 1 || !FEATURE_FLAG.test(flag)) continue;
+		flags[flag] = 1;
+		count++;
+	}
+	return flags as AgentFeatures;
 }
 
 export type InventoryScope = ManagementGrant["scope"];

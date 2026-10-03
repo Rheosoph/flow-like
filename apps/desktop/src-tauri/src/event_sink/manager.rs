@@ -827,6 +827,9 @@ impl EventSinkManager {
     /// registration would fire them here without a token and, for cron, retry
     /// them forever.
     pub fn local_sink_config(event: &Event) -> Result<EventConfig, String> {
+        if event.is_device_source() {
+            return Err("event is deployed to another device".to_owned());
+        }
         if !Self::supports_sink_registration(&event.event_type) {
             return Err("event type has no local sink".to_owned());
         }
@@ -1469,7 +1472,7 @@ impl EventSinkManager {
                             channel_blacklist: None,
                             respond_to_mentions: true,
                             respond_to_dms: true,
-                            command_prefix: "!".to_string(),
+                            command_prefix: String::new(),
                         };
                         manager
                             .ensure_sink_started("discord", &app_handle, &discord_sink)
@@ -1484,7 +1487,7 @@ impl EventSinkManager {
                             chat_blacklist: None,
                             respond_to_mentions: true,
                             respond_to_private: true,
-                            command_prefix: "/".to_string(),
+                            command_prefix: String::new(),
                         };
                         manager
                             .ensure_sink_started("telegram", &app_handle, &telegram_sink)
@@ -1700,6 +1703,17 @@ mod tests {
         assert!(
             reason.starts_with("sink config could not be parsed"),
             "{reason}"
+        );
+    }
+
+    #[test]
+    fn device_source_never_registers_a_local_trigger() {
+        let mut event = flow_event("cron", true, EventExecutionMode::Local);
+        event.config = br#"{"expression":"0 9 * * *"}"#.to_vec();
+        event.set_device_source().unwrap();
+        assert_eq!(
+            blocker(&event).as_deref(),
+            Some("event is deployed to another device")
         );
     }
 

@@ -28,6 +28,17 @@ use axum::{
 
 use crate::{error::ApiError, middleware::jwt::AppUser, state::AppState};
 
+pub(crate) fn ensure_source_execution_allowed(
+    event: &flow_like::flow::event::Event,
+) -> Result<(), ApiError> {
+    if event.is_device_source() {
+        return Err(ApiError::bad_request(
+            "This event runs on its deployed devices. Open Devices to run it.",
+        ));
+    }
+    Ok(())
+}
+
 /// Parse a version string in `MAJOR_MINOR_PATCH` (or dotted `MAJOR.MINOR.PATCH`)
 /// form into a numeric tuple. Returns `None` for malformed input (wrong arity or
 /// non-numeric components) so callers can surface a 400 instead of a 500.

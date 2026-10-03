@@ -67,13 +67,26 @@ pub struct FlowIrCommitReadback {
     pub app_id: String,
     pub board_id: String,
     pub graph_fingerprint: String,
+    /// The original algorithm remains available for receipts issued before graph fingerprint v2.
+    pub legacy_graph_fingerprint: String,
     pub flowscript: String,
 }
 
 /// Hash the storage representation, including every node/pin identity and connection. FlowScript
 /// can inline distinct getter nodes into identical expressions, so source text cannot prove the
-/// compiled graph was persisted. Internal receipt refs are excluded by Board's JSON serializer.
+/// compiled graph was persisted. Derived cache hashes can change on reload without a graph edit.
+/// Internal receipt refs are excluded by Board's JSON serializer.
 pub(super) fn persisted_board_graph_fingerprint(board: &Board) -> Result<String, String> {
+    let mut value = persisted_board_graph_value(board)?;
+    remove_graph_cache_hashes(&mut value);
+    hash_persisted_board_graph(value, "flowpilot-board-v2")
+}
+
+pub(super) fn legacy_persisted_board_graph_fingerprint(board: &Board) -> Result<String, String> {
+    hash_persisted_board_graph(persisted_board_graph_value(board)?, "flowpilot-board-v1")
+}
+
+fn persisted_board_graph_value(board: &Board) -> Result<serde_json::Value, String> {
     let stored = Board::from_proto(board.to_proto());
     let mut value = serde_json::to_value(stored).map_err(|error| error.to_string())?;
     let fields = value
@@ -82,12 +95,36 @@ pub(super) fn persisted_board_graph_fingerprint(board: &Board) -> Result<String,
     for key in ["created_at", "updated_at", "hash"] {
         fields.remove(key);
     }
+    Ok(value)
+}
+
+fn remove_graph_cache_hashes(container: &mut serde_json::Value) {
+    // Restrict removal to the model's cache fields. User schemas and values remain exact.
+    for key in ["nodes", "variables", "comments", "layers"] {
+        let Some(entities) = container
+            .get_mut(key)
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            continue;
+        };
+        for entity in entities.values_mut() {
+            if let Some(fields) = entity.as_object_mut() {
+                fields.remove("hash");
+            }
+            if key == "layers" {
+                remove_graph_cache_hashes(entity);
+            }
+        }
+    }
+}
+
+fn hash_persisted_board_graph(
+    mut value: serde_json::Value,
+    version: &str,
+) -> Result<String, String> {
     value.sort_all_objects();
     let bytes = serde_json::to_vec(&value).map_err(|error| error.to_string())?;
-    Ok(format!(
-        "flowpilot-board-v1:{}",
-        blake3::hash(&bytes).to_hex()
-    ))
+    Ok(format!("{version}:{}", blake3::hash(&bytes).to_hex()))
 }
 
 /// Read the saved object directly. Loading a registered board or running catalog migrations here
@@ -136,6 +173,7 @@ pub async fn flowpilot_read_flow_ir_commit_board(
         app_id,
         board_id,
         graph_fingerprint: persisted_board_graph_fingerprint(&board)?,
+        legacy_graph_fingerprint: legacy_persisted_board_graph_fingerprint(&board)?,
         flowscript: flow_like::flow::ast::board_to_flowscript(
             &board,
             &flow_like::flow::ast::RenderOptions {

@@ -27,6 +27,9 @@ pub struct EventUpsertBody {
     /// Optional profile ID to use for the sink (the user's currently active profile)
     #[serde(default)]
     profile_id: Option<String>,
+    /// False saves a deployable event without starting a trigger or publishing endpoints on the hub.
+    #[serde(default)]
+    register_source: Option<bool>,
 }
 
 #[utoipa::path(
@@ -66,6 +69,11 @@ pub async fn upsert_event(
     let user_context = permission.to_user_context();
 
     let mut event = params.event;
+    if params.register_source == Some(false) {
+        event
+            .set_device_source()
+            .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    }
     event.id = event_id.clone();
     let saved_event = super::db::get_event_from_db_opt(&state.db, &event_id, &app_id).await?;
     crate::teams::management::validate_event_type(&state, saved_event.as_ref(), &event).await?;
@@ -108,7 +116,11 @@ pub async fn upsert_event(
     let mut app = super::editable_event_app(&state, &sub, &app_id).await?;
 
     // Upsert to bucket (handles versioning)
-    let event = app.upsert_event(event, params.version_type, None).await?;
+    let preserve_id = event.is_device_source().then_some(true);
+    let event = app
+        .upsert_event(event, params.version_type, preserve_id)
+        .await?;
+    let register_source = !event.is_device_source();
     app.save().await?;
 
     // Fetch the updater's profile for the sink (so triggers can use their bits/hubs)
@@ -142,7 +154,7 @@ pub async fn upsert_event(
     // contract is "if the upsert returns 200, the event is live", so we
     // can't defer this. On failure for a fresh create we roll back the
     // whole event so we don't leave a dead /r/{slug} behind.
-    if matches!(event.event_type.as_str(), "rest" | "mcp") {
+    if register_source && matches!(event.event_type.as_str(), "rest" | "mcp") {
         let setup_result = super::setup_event::run_event_setup(
             state.clone(),
             sub.clone(),

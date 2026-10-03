@@ -1,6 +1,7 @@
 import {
 	type BulkUploadProgressCallback,
 	type IStorageItem,
+	type IStorageListOptions,
 	type IStorageState,
 	type IStorageUploadOptions,
 	assertBulkUploadSucceeded,
@@ -83,9 +84,10 @@ export class WebStorageState implements IStorageState {
 	async listStorageItems(
 		appId: string,
 		prefix: string,
+		options?: IStorageListOptions,
 	): Promise<IStorageItem[]> {
 		return await apiPost<IStorageItem[]>(
-			`apps/${appId}/data/list`,
+			`apps/${appId}/data/list${options?.refresh ? "?refresh=true" : ""}`,
 			{ prefix },
 			this.backend.auth,
 		);
@@ -94,9 +96,10 @@ export class WebStorageState implements IStorageState {
 	async listStorageItemsUser(
 		appId: string,
 		prefix: string,
+		options?: IStorageListOptions,
 	): Promise<IStorageItem[]> {
 		return await apiPost<IStorageItem[]>(
-			`apps/${appId}/data/user/list`,
+			`apps/${appId}/data/user/list${options?.refresh ? "?refresh=true" : ""}`,
 			{ prefix },
 			this.backend.auth,
 		);

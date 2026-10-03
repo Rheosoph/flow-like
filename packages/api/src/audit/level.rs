@@ -24,6 +24,8 @@ const MINIMAL_PREFIXES: &[&str] = &[
     "app_group.request.",
     "sink.",
     "event.teams.",
+    "event.schedule.",
+    "device.delegation.",
 ];
 
 /// Lifecycle, publication and irreversible deletions of primary resources.
@@ -190,6 +192,10 @@ mod tests {
         ("database.rows.update", AuditLevel::Standard),
         ("database.table.create", AuditLevel::Standard),
         ("database.table.drop", AuditLevel::Minimal),
+        ("device.delegation.billing.approve", AuditLevel::Minimal),
+        ("device.delegation.billing.revoke", AuditLevel::Minimal),
+        ("device.delegation.grant.create", AuditLevel::Minimal),
+        ("device.delegation.grant.revoke", AuditLevel::Minimal),
         ("event.alias.delete", AuditLevel::Standard),
         ("event.alias.upsert", AuditLevel::Standard),
         ("event.canary.abort", AuditLevel::Standard),
@@ -203,6 +209,8 @@ mod tests {
         ("event.regression.run", AuditLevel::Standard),
         ("event.regression.suite.update", AuditLevel::Standard),
         ("event.restore", AuditLevel::Standard),
+        ("event.schedule.give_back", AuditLevel::Minimal),
+        ("event.schedule.release", AuditLevel::Minimal),
         ("event.setup", AuditLevel::Standard),
         ("event.teams.disconnect", AuditLevel::Minimal),
         ("event.teams.orphaned", AuditLevel::Minimal),
@@ -224,6 +232,9 @@ mod tests {
         ("graph.overlay.delete", AuditLevel::Minimal),
         ("graph.overlay.update", AuditLevel::Standard),
         ("graph.relationships.update", AuditLevel::Standard),
+        ("instance.register", AuditLevel::Standard),
+        ("instance.schedules.claim", AuditLevel::Standard),
+        ("instance.storage.lease", AuditLevel::Standard),
         ("invite.create", AuditLevel::Minimal),
         ("invite.delete", AuditLevel::Minimal),
         ("membership.accept", AuditLevel::Minimal),

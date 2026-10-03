@@ -125,10 +125,17 @@ the buckets share a key.
 Setting these variables has a second effect: the configured key is sent as an
 explicit SSE-KMS header on every write. That is what a bucket policy denying
 writes without `x-amz-server-side-encryption` needs, and it is unnecessary
-otherwise, since a bucket's default encryption applies the key on its own. Add
-`S3_KMS_BUCKET_KEY=true` to request an S3 Bucket Key and collapse the
-per-object KMS calls. S3 Express One Zone buckets take their key from the
+otherwise, since a bucket's default encryption applies the key on its own.
+Writes with an explicit KMS key request an S3 Bucket Key by default to reduce
+KMS calls. `S3_KMS_BUCKET_KEY=false` opts out of that request. An unset or empty
+value keeps the default. S3 Express One Zone buckets take their key from the
 bucket and reject these headers, so they are left alone.
+
+When upgrading an existing KMS deployment, check policies that constrain
+`kms:EncryptionContext:aws:s3:arn`. Bucket Keys use the bucket ARN as the
+encryption context, so an object-ARN-only grant will deny these writes. Keep
+`S3_KMS_BUCKET_KEY=false` until the policy permits the bucket ARN. See the
+[AWS Bucket Key compatibility guidance](https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucket-key.html#bucket-key-changes).
 
 ## Azure Blob Storage
 
@@ -281,6 +288,101 @@ suite in `packages/api/src/credentials/r2_credentials.rs`.
 Integration tests can write objects and may incur cloud charges. Use dedicated
 development buckets or containers and least-privilege credentials.
 :::
+
+## Run log summaries
+
+The API reads the summary sidecar written when a run finishes. For older runs
+without a sidecar, it computes the summary and caches results up to 256 KiB for
+24 hours in the configured `CACHE_BACKEND`. The existing server-only platform
+partition shares these entries across API replicas and Lambda instances.
+
+Every request still checks log permissions and opens the table with scoped
+credentials. The cache key includes the reader, run, and exact Lance manifest,
+so new log writes or a recreated table require a fresh summary. Cache errors
+fall back to scanning the logs.
+
+## Shared metadata caches
+
+API replicas use the configured platform cache for these small results:
+
+| Result | Maximum lifetime | Freshness check |
+| --- | --- | --- |
+| Page payloads and template previews | 24 hours | Current object identity, including ETag or object version |
+| Board preflight format metadata | 1 hour | Current board ETag, supported format, and native catalog fingerprint |
+| File listings | 10 seconds | Age measured from the start of the storage read; explicit refresh bypasses the cache |
+| OIDC discovery URL | 60 seconds | Auth configuration identity and any shorter provider cache limit |
+| Compiled WASM checksum | 7 days | Published compilation generation and storage identity |
+
+Authorization is checked before serving protected data. Page, template and
+preflight reads still validate storage existence. A rewrite selects a different
+cache key, so correctness does not depend on a delete reaching every replica.
+TTL removes old revisions. Cache operations time out after 250 milliseconds,
+including backend initialization; failed reads fall back to the source, and
+values larger than 256 KiB are not written to these caches.
+
+Uploads and workflow writes can bypass the API, so file listings use a short
+lifetime. Both listing endpoints accept `?refresh=true` to read storage and
+replace the cached listing. The browser uses it after an upload or deletion
+and for explicit refreshes, including collapsed folders.
+OIDC discovery does not cache failed responses or extend the existing JWKS key
+lifetime. Configure the cache backend's encryption to meet the deployment's data
+protection requirements.
+
+### Compiled WASM generation rollout
+
+Apply the `20261001120000_compiled_artifact_generation` database migration
+before deploying the updated API. Deploy both API and compiler replicas with
+`COMPILED_ARTIFACT_GENERATIONS_ENABLED=false`, which is the default. Once all
+replicas support generation paths and old replicas have drained, set it to
+`true`.
+
+New AWS and Azure compilations then publish into their own generation
+directory. The signed compiler job binds that directory to its job ID and
+includes read URLs for retry recovery. Uploads use `If-None-Match: *` to prevent
+a retry from replacing published bytes. If a file already exists, the worker
+reads it and verifies or completes its checksum before reporting success.
+The callback publishes the generation and version metadata in one transaction.
+Recompilation selects a new checksum cache entry. Existing versions keep their
+legacy paths and direct checksum reads until they are recompiled.
+
+A generation advertises only the Wasmtime version compiled by its worker.
+Recompiling with a newer worker does not copy targets from older generations.
+
+Partial uploads and overlapping deliveries of the same job reuse the files
+already stored. A retry can finish a missing checksum or redeliver a callback
+after a temporary outage. Conflicting checksums fail the job without replacing
+existing files. A failed recompile preserves the last successful generation,
+and duplicate callbacks cannot change a generation that the same job already
+published. GCS continues using legacy paths because its upload signer does not
+yet bind the required create-only precondition.
+
+Disabling the flag stops creating new generation paths; updated readers still
+support generations already published. Returning to an older API requires
+republishing those versions at legacy paths first. Do not remove a generation
+while queued executions can still refer to it. Package deletion removes all
+its generations; there is no automatic cleanup of older generations yet, so
+repeated recompilation adds stored artifacts.
+
+## Execution log batching
+
+Executors read these optional environment settings when a run starts:
+
+| Setting | Default | Accepted values |
+| --- | --- | --- |
+| `FLOW_LIKE_RUN_LOG_FLUSH_INTERVAL_SECONDS` | `5` | Whole seconds from `1` to `60` |
+| `FLOW_LIKE_CONTEXT_LOG_SPILL_THRESHOLD` | `500` | Message counts from `1` to `500` |
+
+Invalid or missing values use the corresponding default. An explicit per-run
+policy, including desktop log settings, takes precedence. For development,
+an interval of `15` with the threshold kept at `500` reduces periodic object
+storage writes at the cost of slower live log visibility. Contexts check the
+time threshold when a log arrives, and the run writes on its own timer, so
+the interval is not a maximum visibility delay. The message threshold moves
+logs into the shared run buffer; it is not a total memory limit.
+
+Run completion, errors, cancellation, and explicit flush requests still flush
+buffered logs without waiting for that timer. Short runs therefore retain
+their final diagnostics even when they never reach a periodic flush.
 
 ## Troubleshooting
 

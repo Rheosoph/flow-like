@@ -14,7 +14,8 @@ use flow_like::{
             ensure_module_layer, validate_module_apply_params,
         },
         board::{
-            Board, BoardCell, BoardVersionInfo, BoardWriter, VersionType,
+            Board, BoardCell, BoardVersionCurrent, BoardVersionInfo, BoardVersionPublished,
+            BoardWriter, DRAFT_NOT_COMPARABLE, VersionType,
             commands::GenericCommand,
             sync::{BoardSyncRequest, BoardSyncResponse, BoardSyncSnapshot},
         },
@@ -58,6 +59,36 @@ pub async fn save_board(handler: AppHandle, board_id: String) -> Result<(), Taur
     Err(TauriFunctionError::new("Board not found"))
 }
 
+/// The board the editor has open, else the stored draft, which is then registered.
+async fn open_draft(
+    handler: &AppHandle,
+    app_id: String,
+    board_id: String,
+) -> Result<Arc<BoardCell>, TauriFunctionError> {
+    let board_state = TauriFlowLikeState::construct(handler).await?;
+    if let Ok(board) = board_state.get_board(&board_id, None) {
+        return Ok(board);
+    }
+    let app = App::load(app_id, board_state)
+        .await
+        .map_err(|_| TauriFunctionError::new("Board not found"))?;
+    Ok(app.open_board(board_id, Some(true), None).await?)
+}
+
+async fn record_publisher(board: &Board, published: (u32, u32, u32), published_by: Option<String>) {
+    if let Err(error) = board
+        .record_version_publisher(published, published_by, None)
+        .await
+    {
+        tracing::warn!(
+            board_id = %board.id,
+            version = ?published,
+            error = %error,
+            "Publisher of the published board version could not be recorded"
+        );
+    }
+}
+
 #[tauri::command(async)]
 pub async fn create_board_version(
     handler: AppHandle,
@@ -66,36 +97,52 @@ pub async fn create_board_version(
     version_type: VersionType,
     published_by: Option<String>,
 ) -> Result<(u32, u32, u32), TauriFunctionError> {
-    let board_state = TauriFlowLikeState::construct(&handler).await?;
-    let board = match board_state.get_board(&board_id, None) {
-        Ok(board) => board,
-        Err(_) => {
-            let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
-            let app = App::load(app_id, flow_like_state)
-                .await
-                .map_err(|_| TauriFunctionError::new("Board not found"))?;
-            app.open_board(board_id, Some(true), None).await?
-        }
-    };
-
+    let board = open_draft(&handler, app_id, board_id).await?;
     let (version, published) = board
         .write()
         .await
         .create_version_returning_published(version_type, None)
         .await?;
-    let snapshot = board.snapshot();
-    if let Err(error) = snapshot
-        .record_version_publisher(published, published_by, None)
-        .await
-    {
-        tracing::warn!(
-            board_id = %snapshot.id,
-            version = ?published,
-            error = %error,
-            "Publisher of the published board version could not be recorded"
-        );
-    }
+    record_publisher(&board.snapshot(), published, published_by).await;
     Ok(version)
+}
+
+/// The published version that holds the flow as it is stored, and the newest one.
+#[tauri::command(async)]
+pub async fn get_board_version_current(
+    handler: AppHandle,
+    app_id: String,
+    board_id: String,
+) -> Result<BoardVersionCurrent, TauriFunctionError> {
+    let board = open_draft(&handler, app_id, board_id).await?;
+    Ok(board.snapshot().version_current(None).await?)
+}
+
+/// Publishes the stored flow as a Patch version unless its newest version already holds it.
+#[tauri::command(async)]
+pub async fn publish_board_version_current(
+    handler: AppHandle,
+    app_id: String,
+    board_id: String,
+    published_by: Option<String>,
+) -> Result<BoardVersionPublished, TauriFunctionError> {
+    let board = open_draft(&handler, app_id, board_id).await?;
+    if let Some(version) = board.snapshot().published_version_of_draft(None).await? {
+        return Ok(BoardVersionPublished {
+            version,
+            created: false,
+        });
+    }
+    let (version, created) = board.write().await.publish_if_changed(None).await?;
+    if !created {
+        return Ok(BoardVersionPublished { version, created });
+    }
+    let snapshot = board.snapshot();
+    record_publisher(&snapshot, version, published_by).await;
+    if snapshot.published_version_of_draft(None).await? != Some(version) {
+        return Err(TauriFunctionError::new(DRAFT_NOT_COMPARABLE));
+    }
+    Ok(BoardVersionPublished { version, created })
 }
 
 #[tauri::command(async)]

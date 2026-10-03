@@ -265,6 +265,102 @@ Model-provider keys and endpoint variables are listed in `.env.example`.
 Populate only the providers your installation uses, and keep their secrets out
 of hub JSON.
 
+### Hosted embedding providers
+
+Hosted embedding Bits send document and query requests through the API. The API
+selects the upstream provider from `parameters.remote` and resolves credentials
+from its server secret store. Install provider credentials on the API; runners
+use their existing authenticated model proxy connection.
+
+Set the required variables below in the deployment's private `.env`, then
+recreate the API container. Compose and Swarm pass these variables to the API.
+Custom secret names also need explicit entries in the API's environment.
+
+| `remote.implementation` | Default API key secret | Endpoint configuration |
+| --- | --- | --- |
+| `Internal` | `INTERNAL_EMBEDDING_SECRET` | `INTERNAL_EMBEDDING_ENDPOINT` |
+| `CloudflareWorkersAI` | `HOSTED_CLOUDFLARE_API_TOKEN` | Fixed Cloudflare API; account ID from `HOSTED_CLOUDFLARE_ACCOUNT_ID` |
+| `OpenAI` | `HOSTED_OPENAI_API_KEY` | Fixed `https://api.openai.com/v1/embeddings` |
+| `AzureOpenAI` | `HOSTED_AZURE_API_KEY` | `HOSTED_AZURE_ENDPOINT`; `remote.model_id` is the Azure deployment name |
+| `HuggingfaceEndpoint` | `HOSTED_HUGGINGFACE_API_KEY` | `HOSTED_HUGGINGFACE_EMBEDDING_ENDPOINT`, a Text Embeddings Inference service with `/v1/embeddings` support |
+| `OpenAICompatible` | `HOSTED_OPENAI_COMPATIBLE_API_KEY` | `HOSTED_OPENAI_COMPATIBLE_EMBEDDING_ENDPOINT` |
+| `Cohere` | `HOSTED_COHERE_API_KEY` | Fixed `https://api.cohere.com/v2/embed` |
+| `VoyageAI` | `HOSTED_VOYAGE_API_KEY` | Fixed `https://api.voyageai.com/v1/embeddings` |
+
+For configurable endpoints, supply the service base URL, its `/v1` URL, or the
+complete `/v1/embeddings` URL. Azure also accepts a resource base URL and uses
+`/openai/v1/embeddings`. `remote.secret_name` can select another API key secret.
+`remote.endpoint_secret_name` can select another endpoint secret for Internal,
+Azure, Hugging Face, or a compatible service. The legacy `remote.endpoint` URL
+does not select the destination.
+
+Before upgrading, review existing Bits that use `CloudflareWorkersAI` or
+`HuggingfaceEndpoint`. Earlier releases treated these names as aliases for
+`Internal`; they now select the named provider. If a Bit should continue using
+the internal gateway, set its implementation to `Internal` and preserve its
+model ID. Bits intended for Cloudflare or Hugging Face need the provider secrets
+listed above.
+
+For example, this fragment routes an embedding Bit through Cloudflare:
+
+```json
+{
+  "remote": {
+    "implementation": "CloudflareWorkersAI",
+    "model_id": "@cf/qwen/qwen3-embedding-0.6b"
+  }
+}
+```
+
+Keep the Bit's `vector_length`, `input_length`, query prefix, and document prefix
+consistent with the selected deployment. The API adds the appropriate prefix
+once and validates the returned vector dimensions and item count. Evaluate a
+provider change before using its vectors with an existing index; matching
+dimensions alone do not establish compatibility.
+
+Cloudflare Qwen3 accepts at most 32 inputs per request. Cloudflare
+EmbeddingGemma and BGE Large accept at most 100. The API rejects larger batches
+before reserving usage. Cloudflare BGE Large requires `pooling: "Mean"`; create a
+separate Bit and re-embed data when migrating an existing CLS index.
+
+Cohere and Voyage AI receive the query or document task type through their native
+API fields. Leave the Bit prefixes empty unless the deployment specifically needs
+additional text. Cohere accepts at most 96 items per request; Voyage AI accepts
+at most 1,000. Requests disable upstream truncation so oversized inputs return an
+error instead of silently losing text.
+
+External providers require an explicit `parameters.pricing` object. Choose
+exactly one input tariff, expressed as integer micro-USD per million tokens or
+million UTF-8 bytes. For example, a rate of USD 0.10 per million tokens is:
+
+```json
+{
+  "pricing": {
+    "input_micro_usd_per_million_tokens": 100000
+  }
+}
+```
+
+Set the amount to the deployment's actual tariff. Before dispatch, token pricing
+reserves an allowance equal to the submitted UTF-8 byte count, including
+prefixes, plus the configured input limit for every item. Settlement uses the
+provider's reported token usage. If the provider omits usage, the cost remains
+unresolved and the reservation is retained.
+
+For an explicitly estimated byte tariff, use
+`input_micro_usd_per_million_bytes` and a positive `max_input_bytes` limit for the
+whole request, including prefixes. This mode settles from submitted bytes.
+`request_micro_usd` optionally adds a fee for each request. All prices must be
+nonnegative integers; an explicit zero means zero provider cost. Output token
+pricing must be omitted or zero. Internal embeddings continue to use their
+built-in estimated byte tariff.
+
+Embedding responses expose `usage_available` when the provider reports token
+usage. `usage_estimated` marks token counts estimated from submitted bytes. A
+response with both flags false has no token usage to report; its zero counts do
+not establish that inference was free. The Node.js and Python SDKs expose both
+flags, with absent values when connected to older servers.
+
 ## Runtime cost estimates
 
 App analytics and the admin usage dashboard price every run from its measured

@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -11,6 +12,7 @@ import {
 	ExternalLink,
 	LoaderCircle,
 	MailOpen,
+	Package,
 	RefreshCcw,
 	Trash2,
 	TriangleAlert,
@@ -30,7 +32,9 @@ import {
 import { addAppToProfile } from "../../lib/add-app-to-profile";
 import { apiErrorMessage } from "../../lib/api-error";
 import { formatRelativeTime } from "../../lib/date";
+import { isMaintainer } from "../../lib/permission/wasm-package-permission";
 import { asArray } from "../../lib/response-shape";
+import type { PackageInvitation } from "../../lib/schema/wasm";
 import { userDisplayName } from "../../lib/user-display";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
@@ -53,6 +57,7 @@ export function NotificationsPageScreen() {
 	const backend = useBackend();
 	const auth = useAuth();
 	const invalidate = useInvalidateInvoke();
+	const queryClient = useQueryClient();
 	const [activeTab, setActiveTab] = useState<NotificationsTab>("all");
 	const authQueryDeps = [auth?.user?.profile?.sub, auth?.isAuthenticated];
 
@@ -68,6 +73,16 @@ export function NotificationsPageScreen() {
 	const invitations: IInvite[] = asArray(invitationsQuery.data?.pages).flatMap(
 		(page) => asArray(page),
 	);
+	const packageInvitationsQuery = useInvoke(
+		backend.registryState.listMyInvitations,
+		backend.registryState,
+		[],
+		Boolean(auth?.isAuthenticated),
+		authQueryDeps,
+		0,
+	);
+	const packageInvitations = asArray(packageInvitationsQuery.data);
+	const invitationCount = invitations.length + packageInvitations.length;
 
 	const notificationsQuery = useInfiniteInvoke(
 		backend.userState.listNotifications,
@@ -86,58 +101,69 @@ export function NotificationsPageScreen() {
 
 	const isInvitationsBootLoading =
 		Boolean(auth?.isAuthenticated) &&
-		!invitationsQuery.data &&
-		invitationsQuery.isLoading;
+		((!invitationsQuery.data && invitationsQuery.isLoading) ||
+			(!packageInvitationsQuery.data && packageInvitationsQuery.isLoading));
 	const isNotificationsBootLoading =
 		!notificationsQuery.data && notificationsQuery.isLoading;
 	const isSummaryLoading =
-		invitations.length + notifications.length === 0 &&
+		invitationCount + notifications.length === 0 &&
 		(Boolean(auth?.isLoading) ||
 			isInvitationsBootLoading ||
 			isNotificationsBootLoading);
 	const isRefreshing =
 		!isSummaryLoading &&
-		(notificationsQuery.isFetching || invitationsQuery.isFetching);
+		(notificationsQuery.isFetching ||
+			invitationsQuery.isFetching ||
+			packageInvitationsQuery.isFetching);
 	const isFetchingMore =
 		notificationsQuery.isFetchingNextPage ||
 		invitationsQuery.isFetchingNextPage;
-	const hasLoadError =
-		notificationsQuery.isError ||
-		(Boolean(auth?.isAuthenticated) && invitationsQuery.isError);
+	const hasInvitationLoadError =
+		Boolean(auth?.isAuthenticated) &&
+		(invitationsQuery.isError || packageInvitationsQuery.isError);
+	const hasLoadError = notificationsQuery.isError || hasInvitationLoadError;
 
-	const totalCount = invitations.length + notifications.length;
+	const totalCount = invitationCount + notifications.length;
 	const unreadCount = notifications.filter(
 		(notification) => !notification.read,
 	).length;
 	const subtitle = isSummaryLoading
-		? t(
-				"pullingTogetherWorkflowActivityAndTeamInvites",
-				"Pulling together workflow activity and team invites...",
-			)
+		? t("loadingActivityAndInvitations", "Loading activity and invitations...")
 		: totalCount > 0
 			? t(
 					"lengthInvitationvalLength2WorkflowNotificationval2",
 					"{{length}} invitation{{val}}, {{length2}} workflow notification{{val2}}",
 					{
-						length: invitations.length,
-						val: invitations.length !== 1 ? "s" : "",
+						length: invitationCount,
+						val: invitationCount !== 1 ? "s" : "",
 						length2: notifications.length,
 						val2: notifications.length !== 1 ? "s" : "",
 					},
 				)
 			: t(
-					"youAreCaughtUpNewWorkflowActivityAndTeamInvitesWillLandHere",
-					"You are caught up. New workflow activity and team invites will land here.",
+					"newActivityAndInvitationsWillAppearHere",
+					"You are caught up. New activity and invitations will appear here.",
 				);
 
 	const handleRefresh = useCallback(async () => {
 		await Promise.allSettled([
 			notificationsQuery.refetch(),
+			invalidate(backend.userState.getNotifications, []),
 			auth?.isAuthenticated
 				? invitationsQuery.refetch()
 				: Promise.resolve(undefined),
+			auth?.isAuthenticated
+				? packageInvitationsQuery.refetch()
+				: Promise.resolve(undefined),
 		]);
-	}, [auth?.isAuthenticated, invitationsQuery, notificationsQuery]);
+	}, [
+		auth?.isAuthenticated,
+		backend.userState,
+		invalidate,
+		invitationsQuery,
+		notificationsQuery,
+		packageInvitationsQuery,
+	]);
 
 	const syncOverview = useCallback(async () => {
 		await invalidate(backend.userState.getNotifications, []);
@@ -179,7 +205,59 @@ export function NotificationsPageScreen() {
 				await Promise.allSettled([invitationsQuery.refetch(), syncOverview()]);
 			}
 		},
-		[backend, invalidate, invitationsQuery, syncOverview],
+		[backend, invalidate, invitationsQuery, syncOverview, t],
+	);
+
+	const handlePackageInviteAction = useCallback(
+		async (id: string, action: "accept" | "decline") => {
+			try {
+				if (action === "accept") {
+					await backend.registryState.acceptInvitation(id);
+					const packageId = packageInvitations.find(
+						(invite) => invite.id === id,
+					)?.packageId;
+					await Promise.allSettled([
+						queryClient.invalidateQueries({ queryKey: ["registry-library"] }),
+						queryClient.invalidateQueries({
+							queryKey: ["mine-registry-maintained"],
+						}),
+						...(packageId
+							? [
+									queryClient.invalidateQueries({
+										queryKey: ["registry-package", packageId],
+									}),
+								]
+							: []),
+					]);
+				} else {
+					await backend.registryState.rejectInvitation(id);
+				}
+			} catch (error) {
+				toast.error(
+					apiErrorMessage(
+						error,
+						t(
+							"failedToActionPackageInvitation",
+							"Failed to {{action}} package invitation. Please try again.",
+							{ action },
+						),
+					),
+				);
+			} finally {
+				await Promise.allSettled([
+					packageInvitationsQuery.refetch(),
+					syncOverview(),
+				]);
+			}
+		},
+		[
+			backend.registryState,
+			packageInvitations,
+			packageInvitationsQuery,
+			queryClient,
+			syncOverview,
+			t,
+		],
 	);
 
 	const handleMarkAsRead = useCallback(
@@ -237,13 +315,13 @@ export function NotificationsPageScreen() {
 			console.error("Failed to mark all as read:", error);
 			toast.error("Failed to mark all as read");
 		}
-	}, [backend, notificationsQuery, syncOverview]);
+	}, [backend, notificationsQuery, syncOverview, t]);
 
 	const showAllSkeleton =
 		totalCount === 0 &&
 		(isNotificationsBootLoading || isInvitationsBootLoading);
 	const showInvitationsSkeleton =
-		invitations.length === 0 && isInvitationsBootLoading;
+		invitationCount === 0 && isInvitationsBootLoading;
 	const showNotificationsSkeleton =
 		notifications.length === 0 && isNotificationsBootLoading;
 
@@ -321,7 +399,7 @@ export function NotificationsPageScreen() {
 						/>
 						<SummaryTile
 							label="Invitations"
-							value={invitations.length}
+							value={invitationCount}
 							icon={UserPlus}
 							loading={isSummaryLoading}
 							iconClassName="text-amber-600"
@@ -356,8 +434,8 @@ export function NotificationsPageScreen() {
 							>
 								<UserPlus className="size-4" />
 								{t("invitations", "Invitations")}
-								{invitations.length > 0 && (
-									<Badge variant="secondary">{invitations.length}</Badge>
+								{invitationCount > 0 && (
+									<Badge variant="secondary">{invitationCount}</Badge>
 								)}
 							</TabsTrigger>
 							<TabsTrigger
@@ -387,8 +465,8 @@ export function NotificationsPageScreen() {
 									? t("everythingInOneStream", "Everything in one stream")
 									: activeTab === "invitations"
 										? t(
-												"teamAccessRequestsAndInvites",
-												"Team access requests and invites",
+												"teamAndPackageInvitations",
+												"Team and package invitations",
 											)
 										: t(
 												"workflowAndSystemUpdates",
@@ -424,21 +502,35 @@ export function NotificationsPageScreen() {
 									<>
 										{invitations.map((invite, index) => (
 											<InvitationCard
-												key={invite.id}
+												key={`app-${invite.id}`}
 												invite={invite}
 												index={index}
 												onAction={handleInviteAction}
+											/>
+										))}
+										{packageInvitations.map((invite, index) => (
+											<InvitationCard
+												key={`package-${invite.id}`}
+												invite={invite}
+												index={invitations.length + index}
+												onAction={handlePackageInviteAction}
 											/>
 										))}
 										{notifications.map((notification, index) => (
 											<NotificationCard
 												key={notification.id}
 												notification={notification}
-												index={invitations.length + index}
+												index={invitationCount + index}
 												onMarkRead={handleMarkAsRead}
 												onDelete={handleDeleteNotification}
 											/>
 										))}
+										{hasLoadError && (
+											<NotificationsErrorState
+												onRetry={() => void handleRefresh()}
+												retrying={isRefreshing}
+											/>
+										)}
 										{(invitationsQuery.hasNextPage ||
 											notificationsQuery.hasNextPage) && (
 											<LoadMoreButton
@@ -467,12 +559,17 @@ export function NotificationsPageScreen() {
 							<AnimatePresence mode="popLayout">
 								{showInvitationsSkeleton ? (
 									<NotificationsListSkeleton variant="invitations" />
-								) : invitations.length === 0 ? (
+								) : invitationCount === 0 && hasInvitationLoadError ? (
+									<NotificationsErrorState
+										onRetry={() => void handleRefresh()}
+										retrying={isRefreshing}
+									/>
+								) : invitationCount === 0 ? (
 									<NotificationsEmptyState
 										title={t("noPendingInvitations", "No pending invitations")}
 										description={t(
-											"whenSomeoneInvitesYouIntoAWorkspaceOrProjectItWillShowUpHereFirst",
-											"When someone invites you into a workspace or project, it will show up here first.",
+											"workspaceProjectAndPackageInvitationsAppearHere",
+											"Invitations to workspaces, projects, and packages appear here.",
 										)}
 										icon={UserPlus}
 									/>
@@ -480,12 +577,26 @@ export function NotificationsPageScreen() {
 									<>
 										{invitations.map((invite, index) => (
 											<InvitationCard
-												key={invite.id}
+												key={`app-${invite.id}`}
 												invite={invite}
 												index={index}
 												onAction={handleInviteAction}
 											/>
 										))}
+										{packageInvitations.map((invite, index) => (
+											<InvitationCard
+												key={`package-${invite.id}`}
+												invite={invite}
+												index={invitations.length + index}
+												onAction={handlePackageInviteAction}
+											/>
+										))}
+										{hasInvitationLoadError && (
+											<NotificationsErrorState
+												onRetry={() => void handleRefresh()}
+												retrying={isRefreshing}
+											/>
+										)}
 										{invitationsQuery.hasNextPage && (
 											<LoadMoreButton
 												onClick={() => void invitationsQuery.fetchNextPage()}
@@ -718,9 +829,9 @@ function LoadMoreButton({
 }
 
 type InvitationCardProps = {
-	invite: IInvite;
+	invite: IInvite | PackageInvitation;
 	index: number;
-	onAction: (id: string, action: "accept" | "decline") => void;
+	onAction: (id: string, action: "accept" | "decline") => Promise<void>;
 };
 
 function InvitationCard({
@@ -730,11 +841,29 @@ function InvitationCard({
 }: Readonly<InvitationCardProps>) {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
+	const [pendingAction, setPendingAction] = useState<
+		"accept" | "decline" | null
+	>(null);
+	const packageInvite = "packageId" in invite ? invite : undefined;
+	const appInvite = "app_id" in invite ? invite : undefined;
+	const inviterId =
+		"packageId" in invite ? invite.invitedById : invite.by_member_id;
+	const createdAt =
+		"packageId" in invite ? invite.createdAt : invite.created_at;
 	const userLookup = useInvoke(
 		backend.userState.lookupUser,
 		backend.userState,
-		[invite.by_member_id],
+		[inviterId],
 	);
+	const handleAction = async (action: "accept" | "decline") => {
+		if (pendingAction) return;
+		setPendingAction(action);
+		try {
+			await onAction(invite.id, action);
+		} finally {
+			setPendingAction(null);
+		}
+	};
 
 	const inviterLabel = userLookup.data
 		? userDisplayName(userLookup.data)
@@ -751,16 +880,22 @@ function InvitationCard({
 			<div className="rounded-xl border border-border/50 bg-background/85 px-4 py-3 transition-colors hover:border-primary/20 hover:bg-background/95">
 				<div className="flex items-start gap-3">
 					<div className="mt-0.5 rounded-lg border border-amber-500/20 bg-amber-500/8 p-2">
-						<UserPlus className="size-4 text-amber-600" />
+						{packageInvite ? (
+							<Package className="size-4 text-amber-600" />
+						) : (
+							<UserPlus className="size-4 text-amber-600" />
+						)}
 					</div>
 
 					<div className="min-w-0 flex-1">
 						<div className="flex items-center justify-between gap-2">
 							<p className="truncate text-sm font-medium text-foreground">
-								{invite.name ?? "New invitation"}
+								{packageInvite?.packageId ??
+									appInvite?.name ??
+									"New invitation"}
 							</p>
 							<span className="shrink-0 text-xs text-muted-foreground">
-								{formatRelativeTime(invite.created_at)}
+								{formatRelativeTime(createdAt)}
 							</span>
 						</div>
 
@@ -769,7 +904,9 @@ function InvitationCard({
 								variant="outline"
 								className="border-amber-500/20 bg-amber-500/5 px-1.5 py-0 text-[10px] text-amber-700"
 							>
-								{t("invitation", "Invitation")}
+								{packageInvite
+									? t("packageInvitation", "Package invitation")
+									: t("invitation", "Invitation")}
 							</Badge>
 							<span>from</span>
 							{inviterLabel ? (
@@ -785,15 +922,23 @@ function InvitationCard({
 							)}
 						</div>
 
-						{invite.message && (
+						{packageInvite && (
+							<p className="mt-1 text-xs text-muted-foreground">
+								{isMaintainer(packageInvite.permission)
+									? t("packageMaintainerAccess", "Maintainer access")
+									: t("packageUserAccess", "User access")}
+							</p>
+						)}
+						{appInvite?.message && (
 							<p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
-								{invite.message}
+								{appInvite.message}
 							</p>
 						)}
 
 						<div className="mt-2 flex flex-wrap gap-2">
 							<Button
-								onClick={() => onAction(invite.id, "accept")}
+								onClick={() => void handleAction("accept")}
+								disabled={pendingAction !== null}
 								size="sm"
 								className="h-9 gap-1.5 px-3 text-xs md:h-7"
 							>
@@ -801,7 +946,8 @@ function InvitationCard({
 								{t("accept", "Accept")}
 							</Button>
 							<Button
-								onClick={() => onAction(invite.id, "decline")}
+								onClick={() => void handleAction("decline")}
+								disabled={pendingAction !== null}
 								variant="ghost"
 								size="sm"
 								className="h-9 gap-1.5 px-3 text-xs md:h-7"

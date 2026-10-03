@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
 import {
 	CERTIFICATE_WARNING_SECONDS,
+	type DeviceCertificate,
 	certificateStatus,
 	certificateWarnings,
 	deleteCertificate,
 	putCertificate,
 	readCertificates,
 	validateCertificateImport,
-	type DeviceCertificate,
 } from "./certificates";
 import type { ManagementCall } from "./telemetry";
 
@@ -83,7 +83,7 @@ test("certificate listing retries an inventory revision change and strips unexpe
 	];
 	const call: ManagementCall = async (command) => {
 		commands.push(command);
-		return response(pages.shift()!);
+		return response(pages.shift() ?? {});
 	};
 	const actual = await readCertificates(call);
 	expect(actual.certificates).toHaveLength(2);

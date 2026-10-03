@@ -20,6 +20,7 @@ pub(crate) async fn page_id_mutation_guard(
 }
 
 pub mod bootstrap;
+mod cached_page;
 pub mod delete_page;
 pub mod get_page;
 pub mod get_page_by_route;

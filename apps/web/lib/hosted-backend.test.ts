@@ -1,8 +1,16 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { isWidgetAccessRefusedError } from "@flow-like/flow-like-ui/components/a2ui/micro-widget-policy";
+import {
+	HUB_REFRESH_TIMEOUT_MS,
+	RequestTimeoutError,
+	WRITE_REQUEST_TIMEOUT_MS,
+} from "@flow-like/flow-like-ui/lib/request-deadline";
 import {
 	type HostedBootstrap,
+	HostedHttpError,
 	createHostedBackend,
 	createHostedRequest,
+	hostedErrorCode,
 	hostedErrorMessage,
 } from "./hosted-backend";
 
@@ -212,6 +220,335 @@ describe("hosted API contract", () => {
 		await expect(
 			backend.eventState.cancelExecution("run-1"),
 		).resolves.toBeUndefined();
+	});
+	describe("package widgets", () => {
+		const ACCESS = "eyJhbGciOiJFUzI1NiJ9.eyJwa2ciOiJ4In0.YWNjZXNz";
+		const DIGEST = `sha256:${"a".repeat(64)}`;
+		const widget = {
+			packageId: "com.example.maps",
+			packageVersion: "1.2.0",
+			widgetId: "map",
+			preview: false,
+			appId: "published-app",
+		};
+		const hosting = (auth_proxy: boolean) =>
+			({
+				app_id: "published-app",
+				auth_proxy,
+				bootstrap: { event: { id: "published-event" } },
+			}) as HostedBootstrap;
+		const unusedRequest = async () => new Response("{}");
+
+		function recordRegistry() {
+			const requests: { path: string; init?: RequestInit }[] = [];
+			globalThis.fetch = (async (
+				input: string | URL | Request,
+				init?: RequestInit,
+			) => {
+				const path = new URL(String(input)).pathname;
+				requests.push({ path, init });
+				if (path.endsWith("/widget-access"))
+					return Response.json({ access: ACCESS, expiresIn: 43_200 });
+				if (path.endsWith("/widget-grant"))
+					return Response.json({
+						grant: null,
+						expiresIn: 86_400,
+						policyDigest: DIGEST,
+					});
+				return Response.json({
+					source: "registry:api.flow-like.com",
+					packageId: widget.packageId,
+					packageVersion: widget.packageVersion,
+					bundleHash: "b".repeat(64),
+					widgetId: widget.widgetId,
+					preview: false,
+					status: "ok",
+					policy: {},
+					policyDigest: DIGEST,
+					networkInputs: [],
+				});
+			}) as typeof fetch;
+			return requests;
+		}
+
+		async function openWidget(backend: ReturnType<typeof createHostedBackend>) {
+			await backend.registryState.describeWidgetPolicy?.(widget);
+			await backend.registryState.mintWidgetGrant?.({
+				...widget,
+				policyDigest: DIGEST,
+			});
+			return backend.registryState.getWidgetAccess?.({
+				packageId: widget.packageId,
+				packageVersion: widget.packageVersion,
+				appId: widget.appId,
+			});
+		}
+
+		const authorizations = (requests: { init?: RequestInit }[]) =>
+			requests.map(({ init }) =>
+				new Headers(init?.headers).get("Authorization"),
+			);
+
+		it("a sign-in interface opens them as its viewer, with the token current at each call", async () => {
+			const requests = recordRegistry();
+			let token: string | undefined = "viewer-token-1";
+			const backend = createHostedBackend(
+				hosting(true),
+				unusedRequest,
+				() => token,
+			);
+
+			await expect(openWidget(backend)).resolves.toEqual({
+				access: ACCESS,
+				expiresIn: 43_200,
+			});
+			expect(requests.map(({ path }) => path)).toEqual([
+				"/api/v1/registry/package/com.example.maps/widget-policy/1.2.0/map",
+				"/api/v1/registry/package/com.example.maps/widget-grant",
+				"/api/v1/registry/package/com.example.maps/widget-access",
+			]);
+			expect(authorizations(requests)).toEqual([
+				"Bearer viewer-token-1",
+				"Bearer viewer-token-1",
+				"Bearer viewer-token-1",
+			]);
+			for (const { init } of requests) {
+				expect(init?.credentials).toBe("omit");
+				expect(JSON.parse(String(init?.body)).appId).toBe("published-app");
+			}
+
+			token = "viewer-token-2";
+			await openWidget(backend);
+			expect(authorizations(requests.slice(3))).toEqual([
+				"Bearer viewer-token-2",
+				"Bearer viewer-token-2",
+				"Bearer viewer-token-2",
+			]);
+
+			token = undefined;
+			await openWidget(backend);
+			expect(authorizations(requests.slice(6))).toEqual([null, null, null]);
+		});
+
+		it("an anonymous interface never borrows the viewer's login", async () => {
+			const requests = recordRegistry();
+			await openWidget(
+				createHostedBackend(
+					hosting(false),
+					unusedRequest,
+					() => "viewer-token",
+				),
+			);
+			await openWidget(createHostedBackend(hosting(true), unusedRequest));
+			expect(requests).toHaveLength(6);
+			expect(authorizations(requests)).toEqual([
+				null,
+				null,
+				null,
+				null,
+				null,
+				null,
+			]);
+			for (const { init } of requests) expect(init?.credentials).toBe("omit");
+		});
+
+		describe("when the API answers with an error", () => {
+			const answer = (response: () => unknown) => {
+				globalThis.fetch = (async () => response()) as unknown as typeof fetch;
+			};
+			const apiError = (status: number, code: string) => () =>
+				Response.json({ error: { code, message: "refused" } }, { status });
+			const registry = () =>
+				createHostedBackend(hosting(true), unusedRequest, () => "viewer-token")
+					.registryState;
+			const access = (state = registry()) =>
+				state.getWidgetAccess?.({
+					packageId: widget.packageId,
+					packageVersion: widget.packageVersion,
+					appId: widget.appId,
+				});
+
+			it("only an API without the access route loads the sandbox anonymously", async () => {
+				answer(() => new Response(null, { status: 404 }));
+				await expect(access()).resolves.toEqual({
+					access: null,
+					expiresIn: 3600,
+				});
+				answer(() => new Response("Not Found", { status: 404 }));
+				await expect(access()).resolves.toEqual({
+					access: null,
+					expiresIn: 3600,
+				});
+				answer(() => new Response(null, { status: 405 }));
+				await expect(access()).resolves.toEqual({
+					access: null,
+					expiresIn: 3600,
+				});
+			});
+
+			it("an API that answered an access request has the route, so a later bare 404 or 405 fails instead of loading anonymously", async () => {
+				const state = registry();
+				answer(() => Response.json({ ok: true }));
+				await expect(access(state)).rejects.toThrow("malformed access token");
+				answer(() => new Response(null, { status: 404 }));
+				await expect(access(state)).resolves.toMatchObject({ access: null });
+
+				answer(() => Response.json({ access: ACCESS, expiresIn: 43_200 }));
+				await expect(access(state)).resolves.toMatchObject({ access: ACCESS });
+				for (const status of [404, 405]) {
+					answer(() => new Response(null, { status }));
+					const failure = await access(state)?.catch((error: unknown) => error);
+					expect(failure).toMatchObject({ status, code: undefined });
+					expect(isWidgetAccessRefusedError(failure)).toBe(false);
+				}
+				answer(() => new Response(null, { status: 404 }));
+				await expect(access()).resolves.toMatchObject({ access: null });
+			});
+
+			it("a refusal keeps its status and code instead of passing as anonymous access", async () => {
+				answer(apiError(404, "NOT_FOUND"));
+				await expect(access()).rejects.toMatchObject({
+					status: 404,
+					code: "NOT_FOUND",
+					message: "The widget is not available for public hosting.",
+				});
+				answer(apiError(403, "FORBIDDEN"));
+				await expect(access()).rejects.toMatchObject({
+					status: 403,
+					code: "FORBIDDEN",
+				});
+			});
+
+			it("a failure the API did not explain carries its status and no code", async () => {
+				answer(() => new Response("<html>Bad Gateway</html>", { status: 502 }));
+				const failure = await access()?.then(
+					() => undefined,
+					(error: unknown) => error,
+				);
+				expect(failure).toBeInstanceOf(HostedHttpError);
+				expect(failure).toMatchObject({ status: 502, code: undefined });
+
+				answer(() => ({
+					ok: false,
+					status: 503,
+					text: async () => {
+						throw new TypeError("Load failed");
+					},
+				}));
+				await expect(access()).rejects.toMatchObject({
+					status: 503,
+					code: undefined,
+				});
+			});
+
+			it("describe and mint errors carry the code too", async () => {
+				answer(apiError(400, "INVALID_RUNTIME_SOURCES"));
+				await expect(
+					registry().describeWidgetPolicy?.(widget),
+				).rejects.toMatchObject({
+					status: 400,
+					code: "INVALID_RUNTIME_SOURCES",
+				});
+				await expect(
+					registry().mintWidgetGrant?.({ ...widget, policyDigest: DIGEST }),
+				).rejects.toMatchObject({
+					status: 400,
+					code: "INVALID_RUNTIME_SOURCES",
+				});
+			});
+		});
+
+		describe("when the API never answers", () => {
+			/** Requests hang and deadlines are collected instead of awaited; `expire` is what the timer would run. */
+			function hang() {
+				const deadlines: { ms: number; expire: () => void }[] = [];
+				const timers = spyOn(globalThis, "setTimeout").mockImplementation(((
+					expire: () => void,
+					ms: number,
+				) => {
+					deadlines.push({ ms, expire });
+					return 0;
+				}) as unknown as typeof setTimeout);
+				const signals: (AbortSignal | null | undefined)[] = [];
+				globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+					signals.push(init?.signal);
+					return new Promise(() => {});
+				}) as unknown as typeof fetch;
+				return { deadlines, signals, restore: () => timers.mockRestore() };
+			}
+			const outcomeOf = (request: Promise<unknown> | undefined) =>
+				request?.then(
+					() => undefined,
+					(error: unknown) => error,
+				);
+			const registry = () =>
+				createHostedBackend(hosting(true), unusedRequest).registryState;
+
+			it("an access request fails at the hub refresh deadline without a ruling, so it is asked again", async () => {
+				const { deadlines, signals, restore } = hang();
+				try {
+					const outcome = outcomeOf(
+						registry().getWidgetAccess?.({
+							packageId: widget.packageId,
+							packageVersion: widget.packageVersion,
+							appId: widget.appId,
+						}),
+					);
+					expect(deadlines.map(({ ms }) => ms)).toEqual([
+						HUB_REFRESH_TIMEOUT_MS,
+					]);
+					expect(signals.map((signal) => signal?.aborted)).toEqual([false]);
+
+					deadlines[0].expire();
+					const failure = await outcome;
+					expect(failure).toBeInstanceOf(RequestTimeoutError);
+					expect(failure).not.toHaveProperty("status");
+					expect(isWidgetAccessRefusedError(failure)).toBe(false);
+					expect(signals[0]?.aborted).toBe(true);
+				} finally {
+					restore();
+				}
+			});
+
+			it("describe and mint fail at the API's write deadline", async () => {
+				const { deadlines, restore } = hang();
+				try {
+					const outcomes = [
+						outcomeOf(registry().describeWidgetPolicy?.(widget)),
+						outcomeOf(
+							registry().mintWidgetGrant?.({ ...widget, policyDigest: DIGEST }),
+						),
+					];
+					expect(deadlines.map(({ ms }) => ms)).toEqual([
+						WRITE_REQUEST_TIMEOUT_MS,
+						WRITE_REQUEST_TIMEOUT_MS,
+					]);
+					for (const { expire } of deadlines) expire();
+					for (const outcome of outcomes) {
+						expect(await outcome).toBeInstanceOf(RequestTimeoutError);
+					}
+				} finally {
+					restore();
+				}
+			});
+		});
+	});
+	it("reads the API error code and nothing else", () => {
+		expect(
+			hostedErrorCode('{"error":{"code":"NOT_FOUND","message":"Not Found"}}'),
+		).toBe("NOT_FOUND");
+		expect(hostedErrorCode('{"code":"FORBIDDEN"}')).toBe("FORBIDDEN");
+		for (const body of [
+			"",
+			"null",
+			"Not Found",
+			"<html>404</html>",
+			'{"error":"Not Found"}',
+			'{"error":{"code":" "}}',
+			'{"error":{"code":404}}',
+		]) {
+			expect(hostedErrorCode(body)).toBeUndefined();
+		}
 	});
 	it("reads the API error envelope instead of printing a bare status", () => {
 		expect(

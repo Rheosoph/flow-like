@@ -45,6 +45,10 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/result", get(progress::executor_result))
         .route("/apps/{app_id}/widgets", get(widgets::get_app_widgets))
+        .route(
+            "/apps/{app_id}/package-widgets",
+            get(widgets::get_app_package_widgets),
+        )
         // User endpoints (require user JWT)
         .route("/poll", get(progress::poll_status))
         // App-auth endpoints (require normal app access)

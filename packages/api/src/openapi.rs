@@ -78,9 +78,29 @@ impl Modify for SecurityAddon {
     }
 }
 
+/// Device route documents owned by their modules, merged so `ApiDoc` lists every path.
+struct DeviceDocs;
+
+impl Modify for DeviceDocs {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        for doc in device_docs() {
+            openapi.merge(doc);
+        }
+    }
+}
+
+fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
+    [
+        crate::devices::openapi_registry::RegistryApi::openapi(),
+        crate::devices::certificates::CertificatesApi::openapi(),
+        crate::instances::routes::CloudApprovalsApi::openapi(),
+        crate::routes::app::device_metadata::DeviceMetadataApi::openapi(),
+    ]
+}
+
 #[derive(OpenApi)]
 #[openapi(
-    modifiers(&SecurityAddon),
+    modifiers(&SecurityAddon, &DeviceDocs),
     info(
         title = "Flow-Like API",
         version = "1.0.0",
@@ -130,7 +150,8 @@ impl Modify for SecurityAddon {
         (name = "ai-act", description = "EU AI Act conformity assessment and model governance"),
         (name = "audit", description = "Audit trail: records, verification, heads and per-app export"),
         (name = "telemetry", description = "Anonymous, opt-in product telemetry"),
-        (name = "payments", description = "Payment accounts, purchases, flow payments and recovery")
+        (name = "payments", description = "Payment accounts, purchases, flow payments and recovery"),
+        (name = "devices", description = "Self-hosted devices: registry, access, certificate reminders and cloud approvals")
     ),
     paths(
         crate::payments::accounts::get_account,
@@ -283,6 +304,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::upsert_board::upsert_board,
         crate::routes::app::board::delete_board::delete_board,
         crate::routes::app::board::version_board::version_board,
+        crate::routes::app::board::version_current::get_version_current,
+        crate::routes::app::board::version_current::publish_version_current,
         crate::routes::app::board::execute_commands::execute_commands,
         crate::routes::app::board::undo_redo_board::undo_board,
         crate::routes::app::board::undo_redo_board::redo_board,
@@ -577,6 +600,8 @@ impl Modify for SecurityAddon {
         crate::teams::lookup::members,
         crate::routes::app::mail::executor_send_mail,
         crate::routes::app::mail::executor_reply_mail,
+        crate::routes::execution::widgets::get_app_widgets,
+        crate::routes::execution::widgets::get_app_package_widgets,
         crate::routes::execution::progress::poll_status,
         crate::routes::execution::progress::get_run_status,
         crate::routes::execution::cancel::cancel_run,
@@ -600,6 +625,7 @@ impl Modify for SecurityAddon {
         crate::routes::registry::widget_policy::describe_widget_policy,
         crate::routes::registry::widget_policy::describe_widget_runtime_policy,
         crate::routes::registry::widget_policy::mint_widget_grant,
+        crate::routes::registry::widget_access::mint_widget_access,
         // Bit routes
         crate::routes::bit::get_bit::get_bit,
         crate::routes::bit::get_with_dependencies::get_with_dependencies,
@@ -735,6 +761,7 @@ impl Modify for SecurityAddon {
         crate::routes::course::app_refs::upsert_app_ref,
         crate::routes::course::app_refs::delete_app_ref,
         crate::routes::course::shared_app::open_shared_app,
+        crate::routes::course::shared_app::sync_shared_app_packages,
         crate::routes::course::translate::translate,
         crate::routes::course::enrollment::enroll,
         crate::routes::course::enrollment::get_my_enrollments,
@@ -955,6 +982,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::summaries::BoardSummary,
         crate::routes::app::board::get_board_variables::BoardVariables,
         flow_like::flow::board::BoardVersionInfo,
+        flow_like::flow::board::BoardVersionCurrent,
+        flow_like::flow::board::BoardVersionPublished,
         crate::routes::app::board::render_flowscript::RenderFlowScriptRequest,
         crate::routes::app::board::get_flowscript::FlowScriptResponse,
         crate::routes::app::page::get_pages::PageInfo,
@@ -1181,6 +1210,8 @@ impl Modify for SecurityAddon {
         crate::routes::registry::widget_policy::WidgetPolicyDescribeRequest,
         crate::routes::registry::widget_policy::WidgetGrantRequest,
         crate::routes::registry::widget_policy::WidgetGrantResponse,
+        crate::routes::registry::widget_access::WidgetAccessRequest,
+        crate::routes::registry::widget_access::WidgetAccessResponse,
         // Realtime
         crate::routes::app::board::realtime::RealtimeParams,
         crate::realtime_ice::RealtimeIceServer,
@@ -1232,6 +1263,7 @@ impl Modify for SecurityAddon {
         crate::routes::course::weekly::CurrentWeekly,
         crate::routes::course::shared_app::OpenSharedAppResponse,
         crate::routes::course::shared_app::OpenSharedAppQuery,
+        crate::routes::course::shared_app::SharedAppPackagesResponse,
         crate::routes::course::translate::TranslateQuery,
         crate::routes::course::translate::TranslateResponse,
         // Telemetry
@@ -1367,7 +1399,7 @@ pub struct ApiDoc;
 
 #[cfg(test)]
 mod tests {
-    use super::ApiDoc;
+    use super::{ApiDoc, device_docs};
     use flow_like_types::Value;
     use utoipa::OpenApi;
 
@@ -1678,6 +1710,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn executor_widget_paths_are_documented() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        for path in [
+            "/execution/apps/{app_id}/widgets",
+            "/execution/apps/{app_id}/package-widgets",
+        ] {
+            assert!(
+                spec.pointer(&format!("/paths/{}/get", path.replace('/', "~1")))
+                    .is_some(),
+                "missing OpenAPI operation get {path}"
+            );
+        }
+    }
+
     /// The admin dashboard, the app audit page and the SDKs read these shapes.
     #[test]
     fn audit_paths_are_documented() {
@@ -1794,5 +1841,102 @@ mod tests {
                 "{path} documents '{name}' as {schema}"
             );
         }
+    }
+
+    #[test]
+    fn device_docs_are_merged_into_api_doc() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        assert!(
+            spec.pointer("/tags")
+                .and_then(Value::as_array)
+                .is_some_and(|tags| tags
+                    .iter()
+                    .any(|tag| tag.get("name") == Some(&Value::from("devices")))),
+            "the devices tag is missing"
+        );
+        for doc in device_docs() {
+            let doc: Value = serde_json::to_value(doc).expect("device doc serializes");
+            assert_eq!(
+                shadowed(&spec, &doc),
+                Vec::<String>::new(),
+                "device operations or schemas are missing from ApiDoc or clash with another name"
+            );
+        }
+    }
+
+    /// Operations and schemas of `doc` that `spec` lacks or documents differently. `merge`
+    /// keeps the first operation and schema of a name, so a clash documents the wrong body.
+    fn shadowed(spec: &Value, doc: &Value) -> Vec<String> {
+        const METHODS: [&str; 8] = [
+            "get", "put", "post", "delete", "patch", "head", "options", "trace",
+        ];
+        let entries = |pointer: &str| doc.pointer(pointer).and_then(Value::as_object);
+        let operations = entries("/paths")
+            .into_iter()
+            .flatten()
+            .flat_map(|(path, item)| {
+                item.as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter(|(method, _)| METHODS.contains(&method.as_str()))
+                    .map(move |(method, operation)| {
+                        (
+                            format!("/paths/{}/{method}", path.replace('/', "~1")),
+                            format!("{method} {path}"),
+                            operation,
+                        )
+                    })
+            });
+        let schemas = entries("/components/schemas")
+            .into_iter()
+            .flatten()
+            .map(|(name, schema)| {
+                (
+                    format!("/components/schemas/{name}"),
+                    format!("schema {name}"),
+                    schema,
+                )
+            });
+        operations
+            .chain(schemas)
+            .filter(|(pointer, _, expected)| spec.pointer(pointer) != Some(*expected))
+            .map(|(_, label, _)| label)
+            .collect()
+    }
+
+    #[test]
+    fn a_device_doc_that_clashes_with_an_earlier_one_is_detected() {
+        use utoipa::openapi::{
+            ComponentsBuilder, HttpMethod, ObjectBuilder, OpenApiBuilder, PathItem, PathsBuilder,
+            path::OperationBuilder,
+        };
+        let doc = |text: &str| {
+            OpenApiBuilder::new()
+                .paths(PathsBuilder::new().path(
+                    "/devices/usage",
+                    PathItem::new(
+                        HttpMethod::Get,
+                        OperationBuilder::new().description(Some(text)),
+                    ),
+                ))
+                .components(Some(
+                    ComponentsBuilder::new()
+                        .schema("Usage", ObjectBuilder::new().description(Some(text)))
+                        .build(),
+                ))
+                .build()
+        };
+        let value = |doc| serde_json::to_value(doc).expect("doc serializes");
+        let mut merged = doc("first");
+        merged.merge(doc("second"));
+        let merged = value(merged);
+        assert_eq!(
+            shadowed(&merged, &value(doc("first"))),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            shadowed(&merged, &value(doc("second"))),
+            ["get /devices/usage", "schema Usage"]
+        );
     }
 }

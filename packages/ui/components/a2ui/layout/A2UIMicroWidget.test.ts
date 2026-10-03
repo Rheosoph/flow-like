@@ -397,6 +397,38 @@ describe("microWidgetFrameSrc", () => {
 		);
 	});
 
+	test("web frames carry the viewer's sandbox access; desktop and legacy frames never do", () => {
+		const token = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl";
+		const access = "eyJhbGciOiJFUzI1NiJ9.eyJwa2ciOiJ4In0.YWNjZXNz";
+		expect(
+			microWidgetFrameSrc(mount({ grant: token }), { ...web, access }),
+		).toBe(
+			`https://api.example.com/api/v1/registry/package/com.example.sales/widget-sandbox/1.0.0/~${access}/frame/chart/${token}`,
+		);
+		expect(
+			microWidgetFrameSrc(mount({ grant: null }), { ...web, access: null }),
+		).toBe(
+			"https://api.example.com/api/v1/registry/package/com.example.sales/widget-sandbox/1.0.0/frame/chart/0",
+		);
+		expect(() =>
+			microWidgetFrameSrc(mount({ grant: token }), {
+				...web,
+				access: "a.b",
+			}),
+		).toThrow("malformed access token");
+		expect(microWidgetFrameSrc(mount(), { ...desktop, access })).toBe(
+			`flow-widget://localhost/com.example.sales/${hash}/frame/chart/${grant}`,
+		);
+		expect(
+			microWidgetFrameSrc(mount({ kind: "legacy", grant: null, policy: {} }), {
+				...web,
+				access,
+			}),
+		).toBe(
+			"https://api.example.com/api/v1/registry/package/com.example.sales/widget-asset/1.0.0/frame/chart",
+		);
+	});
+
 	test("a grant of the wrong platform shape is refused", () => {
 		expect(() => microWidgetFrameSrc(mount(), web)).toThrow("malformed grant");
 		expect(() =>

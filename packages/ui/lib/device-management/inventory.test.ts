@@ -2,41 +2,129 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { IApiState } from "../../state/backend-state/api-state";
 import type { IProfile } from "../../types";
 import {
+	SnapshotIntegrityError,
 	checkInventoryAnchor,
 	createInventoryWriter,
 	inventoryObservation,
 	inventoryScopeContains,
+	legacyInventoryAnchorKey,
 	openInventoryView,
+	readSavedInventory,
 	visibleInventory,
 } from "./inventory";
-import { accountStorageKey } from "./storage";
+import {
+	type InventoryAnchors,
+	readInventoryAnchors,
+	updateInventoryAnchors,
+} from "./storage";
 import type {
 	BrowserController,
 	EncryptedInventory,
 	InventoryBinding,
+	InventoryScope,
 	InventoryView,
 	PlacementStatus,
 } from "./types";
 
-const storageDescriptor = Object.getOwnPropertyDescriptor(
-	globalThis,
-	"localStorage",
-);
-beforeEach(() => {
-	const values = new Map<string, string>();
+const originals = {
+	indexedDB: Object.getOwnPropertyDescriptor(globalThis, "indexedDB"),
+	localStorage: Object.getOwnPropertyDescriptor(globalThis, "localStorage"),
+};
+let rows = new Map<string, unknown>();
+let legacy = new Map<string, string>();
+let tail: Promise<void> = Promise.resolve();
+
+/** Transactions on the one store run one after another and commit atomically, as in IndexedDB. */
+function transaction() {
+	let release!: () => void;
+	const turn = tail;
+	tail = new Promise((resolve) => {
+		release = resolve;
+	});
+	let staged = rows;
+	let aborted = false;
+	const tx = {
+		oncomplete: undefined as (() => void) | undefined,
+		onabort: undefined as (() => void) | undefined,
+		abort() {
+			aborted = true;
+			queueMicrotask(() => {
+				tx.onabort?.();
+				release();
+			});
+		},
+		objectStore: () => ({
+			get(key: string) {
+				const request = {
+					result: undefined as unknown,
+					onsuccess: undefined as (() => void) | undefined,
+				};
+				void turn.then(() => {
+					staged = new Map(rows);
+					request.result = structuredClone(staged.get(key));
+					request.onsuccess?.();
+					queueMicrotask(() => {
+						if (aborted) return;
+						rows = staged;
+						tx.oncomplete?.();
+						release();
+					});
+				});
+				return request;
+			},
+			put(value: unknown, key: string) {
+				staged.set(key, structuredClone(value));
+			},
+		}),
+	};
+	return tx;
+}
+const fakeIndexedDb = {
+	open() {
+		const request = {
+			result: { close() {}, transaction },
+			onsuccess: undefined as (() => void) | undefined,
+		};
+		queueMicrotask(() => request.onsuccess?.());
+		return request;
+	},
+};
+function setLocalStorage(blocked: boolean) {
 	Object.defineProperty(globalThis, "localStorage", {
 		configurable: true,
-		value: {
-			getItem: (key: string) => values.get(key) ?? null,
-			setItem: (key: string, value: string) => values.set(key, value),
+		get() {
+			if (blocked) throw new Error("The operation is insecure.");
+			return {
+				getItem: (key: string) => legacy.get(key) ?? null,
+				setItem: (key: string, value: string) => legacy.set(key, value),
+				removeItem: (key: string) => legacy.delete(key),
+			};
 		},
 	});
+}
+beforeEach(() => {
+	rows = new Map();
+	legacy = new Map();
+	tail = Promise.resolve();
+	Object.defineProperty(globalThis, "indexedDB", {
+		configurable: true,
+		value: fakeIndexedDb,
+	});
+	setLocalStorage(false);
 });
 afterEach(() => {
-	if (storageDescriptor)
-		Object.defineProperty(globalThis, "localStorage", storageDescriptor);
-	else Reflect.deleteProperty(globalThis, "localStorage");
+	for (const [name, descriptor] of Object.entries(originals))
+		if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+		else Reflect.deleteProperty(globalThis, name);
 });
+
+const account = {
+	issuer: "issuer",
+	account: "account",
+	apiOrigin: "https://api.example",
+	profileId: "profile",
+};
+const anchors = () => readInventoryAnchors(account, "device", "key");
 
 const row: PlacementStatus = {
 	id: "placement",
@@ -179,12 +267,7 @@ function writerFixture() {
 			createInventoryWriter(
 				api as unknown as IApiState,
 				{} as IProfile,
-				{
-					issuer: "issuer",
-					account: "account",
-					apiOrigin: "https://api.example",
-					profileId: "profile",
-				},
+				account,
 				controller,
 				"owner",
 				() => active,
@@ -237,59 +320,149 @@ test("closing during inventory preparation never accesses a freed controller", a
 	expect(fixture.sealed).toHaveLength(0);
 });
 
-test("reading inventory cannot lower an anchor advanced by a queued write during decryption", async () => {
-	const account = {
-		issuer: "issuer",
-		account: "account",
-		apiOrigin: "https://api.example",
-		profileId: "profile",
-	};
-	const key = `flow-like/inventory/${JSON.stringify([accountStorageKey(account), "device", "key"])}`;
-	const floor = {
-		scope: { kind: "project" as const, project_id: "project" },
-		revision: 2,
-		digest: "newer-ciphertext",
-	};
-	const encrypted: EncryptedInventory = {
+const projectScope: InventoryScope = { kind: "project", project_id: "project" };
+function sealed(revision: number, scope = projectScope): EncryptedInventory {
+	return {
 		binding: {
 			issuer: account.issuer,
 			api_origin: account.apiOrigin,
 			account_id: account.account,
 			device_id: "device",
 			controller_key: { kty: "OKP", crv: "Ed25519", x: "key" },
-			scope: floor.scope,
-			revision: 1,
+			scope,
+			revision,
 		},
-		ciphertext: "old-ciphertext",
+		ciphertext: `ciphertext-${revision}`,
 	};
-	let concurrent: Record<string, typeof floor> = { "project/project": floor };
-	const controller = {
+}
+function reader(onOpen: () => void = () => undefined) {
+	return {
 		publicBundle: () => ({
 			device_id: "device",
-			controller_key: encrypted.binding.controller_key,
+			controller_key: { kty: "OKP", crv: "Ed25519", x: "key" },
 		}),
 		openInventory: () => {
-			localStorage.setItem(key, JSON.stringify(concurrent));
+			onOpen();
 			return new TextEncoder().encode(JSON.stringify(observation(10)));
 		},
 	} as unknown as BrowserController;
-	const view = { scopes: [floor.scope], observations: [encrypted] };
-	await expect(openInventoryView(account, controller, view)).rejects.toThrow(
-		"backwards",
-	);
-	expect(
-		JSON.parse(localStorage.getItem(key) ?? "{}")["project/project"],
-	).toEqual(floor);
-	// An unrelated, currently unreadable scope still keeps its newer floor.
-	concurrent = {
-		"project/other": {
-			...floor,
-			scope: { kind: "project", project_id: "other" },
-		},
+}
+const viewOf = (...observations: EncryptedInventory[]): InventoryView => ({
+	scopes: [projectScope],
+	observations,
+});
+
+test("reading inventory cannot lower an anchor advanced by a queued write during decryption", async () => {
+	const floor = {
+		scope: projectScope,
+		revision: 2,
+		digest: "newer-ciphertext",
 	};
-	localStorage.setItem(key, "{}");
-	await openInventoryView(account, controller, view);
-	const anchors = JSON.parse(localStorage.getItem(key) ?? "{}");
-	expect(anchors["project/other"]).toEqual(concurrent["project/other"]);
-	expect(anchors["project/project"].revision).toBe(1);
+	let concurrent: InventoryAnchors = { "project/project": floor };
+	let write: Promise<unknown> = Promise.resolve();
+	const controller = reader(() => {
+		write = updateInventoryAnchors(account, "device", "key", (current) => ({
+			...current,
+			...concurrent,
+		}));
+	});
+	await expect(
+		openInventoryView(account, controller, viewOf(sealed(1))),
+	).rejects.toThrow("backwards");
+	await write;
+	expect((await anchors())["project/project"]).toEqual(floor);
+	// An unrelated, currently unreadable scope still keeps its newer floor.
+	const other = { ...floor, scope: { kind: "project", project_id: "other" } };
+	concurrent = { "project/other": other as InventoryAnchors[string] };
+	rows = new Map();
+	await openInventoryView(account, controller, viewOf(sealed(1)));
+	await write;
+	const stored = await anchors();
+	expect(stored["project/other"]).toEqual(concurrent["project/other"]);
+	expect(stored["project/project"].revision).toBe(1);
+});
+
+test("rollback and access failures are integrity errors; unavailable storage is not", async () => {
+	await openInventoryView(account, reader(), viewOf(sealed(2)));
+	const rollback = await openInventoryView(
+		account,
+		reader(),
+		viewOf(sealed(1)),
+	).catch((error: unknown) => error);
+	expect(rollback).toBeInstanceOf(SnapshotIntegrityError);
+	const outside = await openInventoryView(account, reader(), {
+		scopes: [projectScope],
+		observations: [sealed(3, { kind: "device" })],
+	}).catch((error: unknown) => error);
+	expect(outside).toBeInstanceOf(SnapshotIntegrityError);
+	Reflect.deleteProperty(globalThis, "indexedDB");
+	const storage = await openInventoryView(
+		account,
+		reader(),
+		viewOf(sealed(3)),
+	).catch((error: unknown) => error);
+	expect((storage as Error).message).toContain("unavailable");
+	expect(storage).not.toBeInstanceOf(SnapshotIntegrityError);
+});
+
+test("old localStorage floors are enforced, imported once into IndexedDB and then removed", async () => {
+	const key = legacyInventoryAnchorKey(account, "device", "key");
+	const legacyFloor = { scope: projectScope, revision: 2, digest: "legacy" };
+	legacy.set(
+		key,
+		JSON.stringify({
+			"project/project": legacyFloor,
+			"project/broken": { revision: "two" },
+		}),
+	);
+	await expect(
+		openInventoryView(account, reader(), viewOf(sealed(1))),
+	).rejects.toThrow("backwards");
+	expect(legacy.has(key)).toBe(true);
+	await openInventoryView(account, reader(), viewOf(sealed(3)));
+	expect(legacy.has(key)).toBe(false);
+	const imported = await anchors();
+	expect(Object.keys(imported)).toEqual(["project/project"]);
+	expect(imported["project/project"].revision).toBe(3);
+	legacy.set(
+		key,
+		JSON.stringify({ "project/project": { ...legacyFloor, revision: 9 } }),
+	);
+	await expect(
+		openInventoryView(account, reader(), viewOf(sealed(3))),
+	).resolves.toHaveLength(1);
+	expect((await anchors())["project/project"].revision).toBe(3);
+});
+
+test("blocked localStorage never fails a read and the floor still lands in IndexedDB", async () => {
+	setLocalStorage(true);
+	await expect(
+		openInventoryView(account, reader(), viewOf(sealed(1))),
+	).resolves.toHaveLength(1);
+	expect((await anchors())["project/project"].revision).toBe(1);
+	await expect(
+		openInventoryView(account, reader(), viewOf(sealed(0))),
+	).rejects.toBeInstanceOf(SnapshotIntegrityError);
+});
+
+test("the saved inventory is read for the vault's grant and opened with its floors", async () => {
+	const gets: string[] = [];
+	const api = {
+		get: async (_profile: IProfile, url: string) => {
+			gets.push(url);
+			return viewOf(sealed(1));
+		},
+	} as unknown as IApiState;
+	const saved = await readSavedInventory(
+		api,
+		{} as IProfile,
+		account,
+		reader(),
+		"grant one",
+	);
+	expect(gets).toEqual(["devices/device/inventory/key?grant_id=grant%20one"]);
+	expect(saved).toEqual([
+		{ ...observation(10), scope: projectScope, placements: [row] },
+	]);
+	expect((await anchors())["project/project"].revision).toBe(1);
 });

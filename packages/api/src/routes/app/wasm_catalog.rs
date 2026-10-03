@@ -72,11 +72,7 @@ pub async fn app_wasm_nodes_cached(
 /// catalog resolve; the expensive half is [`wasm_nodes_for_packages`], which the cache is
 /// there to skip. An expiring pin leaves the set, so the pin epoch moves with it.
 async fn app_packages(state: &AppState, app_id: &str) -> Result<Vec<app_package::Model>, ApiError> {
-    Ok(app_package::Entity::find()
-        .filter(app_package::Column::AppId.eq(app_id))
-        .filter(crate::package_license::usable_pins(chrono::Utc::now()))
-        .all(&state.db)
-        .await?)
+    Ok(crate::package_license::usable_app_pins(&state.db, app_id).await?)
 }
 
 /// Identity of an app's package pins: any install, removal or version change moves it.

@@ -30,6 +30,7 @@ pub mod undo_redo_board;
 pub mod upload_run_logs;
 pub mod upsert_board;
 pub mod version_board;
+pub mod version_current;
 pub mod workspace;
 
 use axum::{
@@ -86,6 +87,11 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{board_id}/version/info",
             get(get_board_version_infos::get_board_version_infos),
+        )
+        .route(
+            "/{board_id}/version/current",
+            get(version_current::get_version_current)
+                .post(version_current::publish_version_current),
         )
         .route(
             "/{board_id}/flowscript",
@@ -172,11 +178,12 @@ mod tests {
 
     /// Canonical writes: every one of these replaces the whole board (or app manifest) object, so
     /// a stale writer overwrites, never merges.
-    const CANONICAL_WRITES: [&str; 4] = [
+    const CANONICAL_WRITES: [&str; 5] = [
         ".save(None).await",
         "save_board_and_refresh_summary(",
         "app.save().await",
         ".create_version_returning_published(",
+        ".publish_if_changed(",
     ];
     /// Helpers that legitimately write without holding a guard: the rollback path only runs after
     /// this request's own guarded save already failed.
@@ -205,7 +212,13 @@ mod tests {
             .into_iter()
             .chain(source_files("src/routes/app/page"))
             .map(|path| {
-                let body = std::fs::read_to_string(&path).expect("readable source file");
+                let source = std::fs::read_to_string(&path).expect("readable source file");
+                // A file's own tests name the writes they assert on without making them.
+                let body = source
+                    .split("\n#[cfg(test)]\nmod tests")
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
                 (path, body)
             })
             .filter(|(_, body)| {
@@ -256,7 +269,8 @@ mod tests {
     }
 
     /// M5: a guarded route answers 423 BOARD_LOCKED, not a 409 that is byte-identical to an OCC
-    /// conflict; the generated SDKs only learn that from the utoipa annotation.
+    /// conflict; the generated SDKs only learn that from the utoipa annotation. A read takes no
+    /// lease, so a `get` beside a guarded write documents none.
     #[test]
     fn every_guarded_route_documents_the_locked_status() {
         for (path, body) in guarded_sources() {
@@ -264,7 +278,11 @@ mod tests {
                 continue;
             }
             let documented = body.matches("status = 423").count();
-            let handlers = body.matches("#[utoipa::path(").count();
+            let handlers = body
+                .split("#[utoipa::path(")
+                .skip(1)
+                .filter(|annotation| !annotation.trim_start().starts_with("get,"))
+                .count();
             assert_eq!(
                 documented,
                 handlers,

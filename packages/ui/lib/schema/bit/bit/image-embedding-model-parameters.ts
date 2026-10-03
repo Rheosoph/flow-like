@@ -24,6 +24,7 @@ export interface IModelProvider {
 
 export interface IRemoteExecutionConfig {
 	endpoint?: null | string;
+	endpoint_secret_name?: null | string;
 	implementation?: null | IRemoteEmbeddingProvider;
 	model_id?: null | string;
 	secret_name?: null | string;
@@ -32,6 +33,13 @@ export interface IRemoteExecutionConfig {
 
 export enum IRemoteEmbeddingProvider {
 	Internal = "Internal",
+	CloudflareWorkersAI = "CloudflareWorkersAI",
+	OpenAI = "OpenAI",
+	AzureOpenAI = "AzureOpenAI",
+	HuggingfaceEndpoint = "HuggingfaceEndpoint",
+	OpenAICompatible = "OpenAICompatible",
+	Cohere = "Cohere",
+	VoyageAI = "VoyageAI",
 }
 
 export enum IModelApiSurface {

@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1080" viewBox="0 0 1200 1080" role="img" aria-labelledby="title desc">
+  <title id="title">A brief, ready every morning</title>
+  <desc id="desc">Conceptual workflow for a local Flow-Like assistant. At 09:00 on weekdays, a local schedule starts the flow. The flow reads chosen notes and the previous brief, sends them to a local model, and writes brief.md outside the notes folder. The saved brief becomes context for the next run. Review the result before any external action. Flow-Like Desktop and the local model service must stay running, and the device must remain awake.</desc>
+  <defs>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" fill="none" stroke="#8db0ba" stroke-opacity=".055"/></pattern>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#152b2a"/><stop offset="1" stop-color="#101e24"/></linearGradient>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="m1 1 5.5 3.5L1 8" fill="none" stroke="#74efc2" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="blue-arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="m1 1 5.5 3.5L1 8" fill="none" stroke="#7db6ff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+  <rect width="1200" height="1080" rx="24" fill="#081219"/>
+  <rect width="1200" height="1080" rx="24" fill="url(#grid)"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="52" y="61" fill="#9aadb8" font-size="23" font-weight="700" letter-spacing="3">CONCEPTUAL WORKFLOW</text>
+    <text x="52" y="124" fill="#f4f3ea" font-size="56" font-weight="700" letter-spacing="-1.6">A brief, ready every morning</text>
+    <text x="52" y="171" fill="#b2c1c9" font-size="29">One recurring job, with context from the last run.</text>
+
+    <g fill="none" stroke="#74efc2" stroke-width="3" marker-end="url(#arrow)">
+      <path d="M650 334v30"/><path d="M650 490v30"/><path d="M650 646v30"/>
+    </g>
+    <g fill="url(#panel)" stroke="#74efc2" stroke-opacity=".3">
+      <rect x="172" y="216" width="976" height="118" rx="20"/>
+      <rect x="172" y="372" width="976" height="118" rx="20"/>
+      <rect x="172" y="528" width="976" height="118" rx="20"/>
+      <rect x="172" y="684" width="976" height="118" rx="20"/>
+    </g>
+    <g fill="#74efc2" fill-opacity=".1" stroke="#74efc2" stroke-opacity=".32">
+      <circle cx="231" cy="275" r="31"/><circle cx="231" cy="431" r="31"/>
+      <circle cx="231" cy="587" r="31"/><circle cx="231" cy="743" r="31"/>
+    </g>
+    <g fill="#74efc2" font-size="26" font-weight="700" text-anchor="middle">
+      <text x="231" y="284">01</text><text x="231" y="440">02</text><text x="231" y="596">03</text><text x="231" y="752">04</text>
+    </g>
+    <g fill="#f4f3ea" font-size="37" font-weight="700">
+      <text x="288" y="266">09:00 · Local schedule</text>
+      <text x="288" y="422">Chosen notes + previous brief</text>
+      <text x="288" y="578">Local model</text>
+      <text x="288" y="734" font-family="Menlo, Consolas, monospace">brief.md</text>
+    </g>
+    <g fill="#b4cdc4" font-size="29">
+      <text x="288" y="310">Weekdays, in your chosen timezone</text>
+      <text x="288" y="466">Read the files you selected</text>
+      <text x="288" y="622">Ollama or LM Studio on this machine</text>
+      <text x="288" y="778">Save outside the notes folder</text>
+    </g>
+    <g fill="none" stroke="#74efc2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="1086" cy="273" r="22"/><path d="M1086 259v15l10 7"/>
+      <path d="M1066 417v32h39v-26h-22l-6-6Z"/>
+      <rect x="1069" y="568" width="34" height="34" rx="6"/><path d="M1078 562v6m16-6v6m-16 34v6m16-6v6m-31-29h6m-6 16h6m34-16h6m-6 16h6"/>
+      <path d="M1074 720h21l12 12v30h-33Zm21 0v12h12m-24 11h15m-15 9h15"/>
+    </g>
+
+    <path d="M172 743h-52a20 20 0 0 1-20-20V451a20 20 0 0 1 20-20h41" fill="none" stroke="#7db6ff" stroke-width="3" marker-end="url(#blue-arrow)"/>
+    <text transform="translate(71 588) rotate(-90)" fill="#7db6ff" font-size="27" text-anchor="middle">Context for the next run</text>
+
+    <path d="M650 802v33" fill="none" stroke="#7db6ff" stroke-width="3" marker-end="url(#blue-arrow)"/>
+    <rect x="172" y="849" width="976" height="105" rx="20" fill="#121f2c" stroke="#7db6ff" stroke-opacity=".35"/>
+    <path d="m214 902 11 11 22-24" fill="none" stroke="#7db6ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="288" y="889" fill="#7db6ff" font-size="23" font-weight="700" letter-spacing="1.8">HUMAN REVIEW</text>
+    <text x="288" y="932" fill="#f4f3ea" font-size="33">Before any external action</text>
+
+    <circle cx="64" cy="1009" r="6" fill="#74efc2"/>
+    <text x="84" y="1019" fill="#b2c1c9" font-size="27">Desktop + local model service must stay running.</text>
+    <text x="84" y="1053" fill="#b2c1c9" font-size="27">Keep the device awake.</text>
+  </g>
+</svg>

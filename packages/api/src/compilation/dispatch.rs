@@ -886,6 +886,13 @@ pub async fn build_compilation_job(
     let job_id = create_id();
     let wasm_download_provider = compilation_storage_provider(content_bucket)?;
     let upload_provider = compilation_storage_provider(meta_bucket)?;
+    let artifact_generation = compilation_artifact_generation(
+        &job_id,
+        std::env::var("COMPILED_ARTIFACT_GENERATIONS_ENABLED")
+            .ok()
+            .as_deref(),
+        upload_provider,
+    );
 
     let wasm_download_url = content_bucket
         .sign(
@@ -904,13 +911,13 @@ pub async fn build_compilation_job(
     let raw_targets = all_known_targets();
     let mut targets = Vec::with_capacity(raw_targets.len());
 
-    let base = Path::from(WASM_COMPILED_PATH)
-        .join(params.package_id.as_str())
-        .join(params.version.as_str());
-
     for t in &raw_targets {
-        let cwasm_path = base.clone().join(format!("{}.cwasm", t.platform_key));
-        let checksum_path = base.clone().join(format!("{}.cwasm.b3", t.platform_key));
+        let (cwasm_path, checksum_path) = compiled_artifact_paths(
+            &params.package_id,
+            &params.version,
+            &t.platform_key,
+            artifact_generation.as_deref(),
+        );
 
         let cwasm_upload_url = meta_bucket
             .sign("PUT", &cwasm_path, Duration::from_secs(URL_TTL_SECS))
@@ -934,11 +941,37 @@ pub async fn build_compilation_job(
             })?
             .to_string();
 
+        let (cwasm_download_url, checksum_download_url) = if artifact_generation.is_some() {
+            let artifact = meta_bucket
+                .sign("GET", &cwasm_path, Duration::from_secs(URL_TTL_SECS))
+                .await
+                .map_err(|e| {
+                    CompilationDispatchError::Configuration(format!(
+                        "Failed to sign cwasm retry GET URL for {}: {e}",
+                        t.platform_key
+                    ))
+                })?;
+            let checksum = meta_bucket
+                .sign("GET", &checksum_path, Duration::from_secs(URL_TTL_SECS))
+                .await
+                .map_err(|e| {
+                    CompilationDispatchError::Configuration(format!(
+                        "Failed to sign checksum retry GET URL for {}: {e}",
+                        t.platform_key
+                    ))
+                })?;
+            (Some(artifact.to_string()), Some(checksum.to_string()))
+        } else {
+            (None, None)
+        };
+
         targets.push(CompilationTarget {
             platform_key: t.platform_key.clone(),
             cross_triple: t.cross_triple.clone(),
             cwasm_upload_url,
             checksum_upload_url,
+            cwasm_download_url,
+            checksum_download_url,
             upload_provider,
         });
     }
@@ -969,11 +1002,127 @@ pub async fn build_compilation_job(
         version: job.version.clone(),
         payload_hash,
         callback_url,
+        artifact_generation,
         ttl_seconds: None,
     })
     .map_err(|e| CompilationDispatchError::Jwt(format!("Failed to sign compiler JWT: {e}")))?;
 
     Ok(job)
+}
+
+fn compilation_artifact_generation(
+    job_id: &str,
+    enabled: Option<&str>,
+    upload_provider: CompilationStorageProvider,
+) -> Option<String> {
+    // Enable only after every API reader/callback and compiler accepts the new
+    // paths. An older callback would otherwise lose the published generation.
+    if !enabled
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("true") || value.trim() == "1")
+    {
+        return None;
+    }
+    if upload_provider == CompilationStorageProvider::GoogleCloudStorage {
+        tracing::warn!(
+            "Compiled artifact generations remain disabled for GCS: the URL signer cannot bind the create-only upload header"
+        );
+        return None;
+    }
+    Some(job_id.to_owned())
+}
+
+/// Published generations stay addressable when another job recompiles the
+/// same package version. Legacy rows continue to use their original paths.
+pub(crate) fn compiled_artifact_paths(
+    package_id: &str,
+    version: &str,
+    target: &str,
+    generation: Option<&str>,
+) -> (Path, Path) {
+    let mut base = Path::from(WASM_COMPILED_PATH)
+        .join(package_id)
+        .join(version);
+    if let Some(generation) = generation {
+        base = base.join("generations").join(generation);
+    }
+    (
+        base.clone().join(format!("{target}.cwasm")),
+        base.join(format!("{target}.cwasm.b3")),
+    )
+}
+
+#[cfg(test)]
+mod artifact_generation_tests {
+    use super::{
+        CompilationStorageProvider, compilation_artifact_generation, compiled_artifact_paths,
+    };
+
+    #[test]
+    fn generation_rollout_defaults_to_legacy_until_explicitly_enabled() {
+        for value in [None, Some("false"), Some("0"), Some(""), Some("invalid")] {
+            let generation = compilation_artifact_generation(
+                "job-one",
+                value,
+                CompilationStorageProvider::AwsS3,
+            );
+            assert!(generation.is_none());
+            assert_eq!(
+                compiled_artifact_paths("p", "1", "linux", generation.as_deref())
+                    .0
+                    .as_ref(),
+                "wasm-compiled/p/1/linux.cwasm",
+            );
+        }
+        for value in ["true", "TRUE", " true ", "1"] {
+            let generation = compilation_artifact_generation(
+                "job-one",
+                Some(value),
+                CompilationStorageProvider::AwsS3,
+            );
+            assert_eq!(generation.as_deref(), Some("job-one"));
+            assert_eq!(
+                compiled_artifact_paths("p", "1", "linux", generation.as_deref())
+                    .0
+                    .as_ref(),
+                "wasm-compiled/p/1/generations/job-one/linux.cwasm",
+            );
+        }
+    }
+
+    #[test]
+    fn generation_uploads_require_provider_create_only_support() {
+        assert!(
+            compilation_artifact_generation(
+                "job-one",
+                Some("true"),
+                CompilationStorageProvider::GoogleCloudStorage,
+            )
+            .is_none()
+        );
+        for provider in [
+            CompilationStorageProvider::AwsS3,
+            CompilationStorageProvider::AzureBlob,
+        ] {
+            assert_eq!(
+                compilation_artifact_generation("job-one", Some("true"), provider).as_deref(),
+                Some("job-one"),
+            );
+        }
+    }
+
+    #[test]
+    fn recompilation_gets_separate_paths_and_legacy_paths_still_resolve() {
+        let legacy = compiled_artifact_paths("p", "1.0.0", "linux-wt48", None);
+        assert_eq!(legacy.0.as_ref(), "wasm-compiled/p/1.0.0/linux-wt48.cwasm");
+        let first = compiled_artifact_paths("p", "1.0.0", "linux-wt48", Some("job-one"));
+        let second = compiled_artifact_paths("p", "1.0.0", "linux-wt48", Some("job-two"));
+        assert_ne!(first, second);
+        assert_ne!(first, legacy);
+        assert_eq!(
+            first.1.as_ref(),
+            "wasm-compiled/p/1.0.0/generations/job-one/linux-wt48.cwasm.b3"
+        );
+    }
 }
 
 /// Declares which signing scheme authenticated the presigned URLs in a job.

@@ -45,6 +45,11 @@ export interface IEventSinkStatusContext {
 	event: IEvent;
 }
 
+export interface IEventUpsertOptions {
+	/** Save a deployable definition without starting its trigger on this computer or hub. */
+	source?: "device";
+}
+
 export interface IEventRegistration {
 	id: string;
 	event_id: string;
@@ -501,6 +506,7 @@ export interface IEventState {
 		versionType?: IVersionType,
 		personalAccessToken?: string,
 		oauthTokens?: Record<string, IOAuthToken>,
+		options?: IEventUpsertOptions,
 	): Promise<IEvent>;
 	/** Check OAuth requirements for an event's board. Returns missing providers. */
 	checkEventOAuth?(appId: string, event: IEvent): Promise<IOAuthCheckResult>;

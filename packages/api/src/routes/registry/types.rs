@@ -164,6 +164,10 @@ pub struct RegistryEntry {
     /// The caller's permission bits on this package (None if unauthenticated)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_user_permission: Option<i32>,
+    /// The version the `app_id` project pins, when the caller read the entry
+    /// as a member of that project. The manifest then describes this version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_version: Option<String>,
 }
 
 impl RegistryEntry {

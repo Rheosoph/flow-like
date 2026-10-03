@@ -3,6 +3,7 @@
 import { Trans, useTranslation } from "@flow-like/locales";
 import { Cloud, ExternalLink, Info, Laptop } from "lucide-react";
 import { useMemo, useState } from "react";
+import { BotAnswersLine } from "../../settings/devices/copy/bot-answers-line";
 import {
 	Accordion,
 	AccordionContent,
@@ -152,7 +153,7 @@ export function DiscordConfig({
 	const channelBlacklist: string[] = config?.channel_blacklist ?? [];
 	const respondToMentions = config?.respond_to_mentions ?? true;
 	const respondToDMs = config?.respond_to_dms ?? true;
-	const commandPrefix = config?.command_prefix ?? "!";
+	const commandPrefix = config?.command_prefix ?? "";
 
 	// Compute webhook URLs
 	const supportsRemote = hub?.supported_sinks?.discord === true;
@@ -648,7 +649,7 @@ export function DiscordConfig({
 							</div>
 						)}
 						<Label htmlFor="respond_to_mentions">
-							{t("respondOnlyToMentions", "Respond only to Mentions")}
+							{t("respondToMentions", "Respond to Mentions")}
 						</Label>
 					</div>
 
@@ -683,7 +684,6 @@ export function DiscordConfig({
 								value={commandPrefix}
 								onChange={(e) => setValue("command_prefix", e.target.value)}
 								id="command_prefix"
-								placeholder="!"
 								maxLength={5}
 								className="flex h-10 w-32 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
 							/>
@@ -698,6 +698,11 @@ export function DiscordConfig({
 								"Prefix for bot commands (e.g., !help)",
 							)}
 						</p>
+						<BotAnswersLine
+							eventType="discord"
+							config={config}
+							className="text-sm text-muted-foreground"
+						/>
 					</div>
 				</div>
 			)}

@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { certificateFailureFields } from "./certificate-acme";
 import {
+	type DeviceCertificate,
 	MAX_CERTIFICATE_PEM_BYTES,
 	certificateMetadataSchema,
-	type DeviceCertificate,
 } from "./certificates";
 import type { ManagementCall } from "./telemetry";
 
@@ -33,6 +34,7 @@ export const certificateIssuerSchema = z.object({
 	last_renewed_at: timestamp.nullable(),
 	next_renewal_at: timestamp,
 	last_error: z.string().max(4096).nullable(),
+	...certificateFailureFields,
 });
 export type CertificateIssuer = z.infer<typeof certificateIssuerSchema>;
 

@@ -129,6 +129,8 @@ const MAX_ERROR_BODY_BYTES: usize = 16 * 1024;
 struct ApiStatus {
     status: StatusCode,
     code: Option<String>,
+    /// Compared with fixed hub sentences only. Never displayed: it can name customers.
+    message: Option<String>,
 }
 
 impl std::fmt::Display for ApiStatus {
@@ -155,8 +157,22 @@ async fn status_error(mut response: reqwest::Response) -> anyhow::Error {
     ApiStatus {
         status,
         code: error_code(&body),
+        message: error_message(&body),
     }
     .into()
+}
+
+fn error_message(body: &[u8]) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Body {
+        error: Worded,
+    }
+    #[derive(Deserialize)]
+    struct Worded {
+        message: String,
+    }
+    let message = serde_json::from_slice::<Body>(body).ok()?.error.message;
+    (!message.is_empty() && message.len() <= 128).then_some(message)
 }
 
 fn error_code(body: &[u8]) -> Option<String> {
@@ -199,6 +215,12 @@ pub(crate) fn api_status(error: &anyhow::Error) -> Option<StatusCode> {
 /// The `error.code` of a failed device API response, when the server sent one.
 pub fn api_error_code(error: &anyhow::Error) -> Option<&str> {
     error.downcast_ref::<ApiStatus>()?.code.as_deref()
+}
+
+/// The short `error.message` of a failed device API response, for hubs that tell two
+/// refusals apart only by their sentence.
+pub(crate) fn api_error_message(error: &anyhow::Error) -> Option<&str> {
+    error.downcast_ref::<ApiStatus>()?.message.as_deref()
 }
 
 /// A proof or time-window failure is transient; it usually means the device clock is skewed.
@@ -1249,6 +1271,7 @@ pub async fn maintain_presence_with_session(
             uptime_seconds: started.elapsed().as_secs(),
         };
         let result = tokio::select! { _ = cancel.cancelled() => return Ok(()), result = session.heartbeat(&heartbeat) => result };
+        crate::diagnostics::global().report_error(crate::diagnostics::DEVICE_PRESENCE, &result);
         let (status, wait) = match &result {
             Ok(()) => {
                 delay = 2;
@@ -1660,6 +1683,7 @@ mod tests {
         ApiStatus {
             status,
             code: error_code(body.as_bytes()),
+            message: error_message(body.as_bytes()),
         }
         .into()
     }
@@ -1673,7 +1697,14 @@ mod tests {
         assert!(device_proof_rejected(&proof));
         assert!(!is_access_denied(&proof));
         assert_eq!(api_error_code(&proof), Some(DEVICE_PROOF_INVALID));
+        assert_eq!(api_error_message(&proof), Some("Proof time window"));
         assert!(proof.to_string().contains("DEVICE_PROOF_INVALID"));
+        assert!(!format!("{proof:#} {proof:?}").contains("Proof time window"));
+        let long = format!(
+            r#"{{"error":{{"code":"X","message":"{}"}}}}"#,
+            "m".repeat(129)
+        );
+        assert_eq!(error_message(long.as_bytes()), None);
         let context = proof.context("Renew device admission");
         assert!(device_proof_rejected(&context));
         for (code, body) in [
@@ -1704,6 +1735,24 @@ mod tests {
             error_code(format!(r#"{{"error":{{"code":"{}"}}}}"#, "A".repeat(65)).as_bytes()),
             None
         );
+    }
+
+    #[test]
+    fn task_health_separates_hub_outages_from_refusals() {
+        use crate::diagnostics::TaskFailure;
+        let outage = status(StatusCode::BAD_GATEWAY, "").context("Renew device admission");
+        assert_eq!(TaskFailure::classify(&outage), TaskFailure::HubUnreachable);
+        for refusal in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::PAYMENT_REQUIRED,
+        ] {
+            assert_eq!(
+                TaskFailure::classify(&status(refusal, "")),
+                TaskFailure::HubRefused,
+                "{refusal}"
+            );
+        }
     }
 
     #[test]
