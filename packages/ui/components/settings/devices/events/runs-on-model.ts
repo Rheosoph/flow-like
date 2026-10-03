@@ -76,6 +76,8 @@ export interface RunsOnRow {
 	once?: OnceSchedule;
 	/** A schedule or bot of an online app: where it runs; absent while the hub's list is not known. */
 	where?: ScheduleWhere;
+	/** A schedule or bot saved for devices only: the hub and this computer never run it. */
+	deviceOnly?: true;
 }
 
 const serviceKey = (deviceId: string, serviceId: string) =>
@@ -137,6 +139,7 @@ function rowOf(row: MatrixRow, cols: string[], sources: RowSources): RunsOnRow {
 		...(schedule ? { schedule } : {}),
 		...(once ? { once } : {}),
 		...(row.where ? { where: row.where } : {}),
+		...(row.deviceOnly ? { deviceOnly: true as const } : {}),
 	};
 	for (const deviceId of cols) {
 		const cell = row.cells[deviceId];

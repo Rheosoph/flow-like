@@ -1195,6 +1195,20 @@ export class WidgetPolicyChangedError extends Error {
 	}
 }
 
+/** The widget bundle could not be made available, so a baseline frame cannot load either. */
+export class WidgetBundleUnavailableError extends Error {
+	readonly code = "widget_bundle_unavailable";
+
+	constructor(message: string) {
+		super(message);
+		this.name = "WidgetBundleUnavailableError";
+	}
+}
+
+export function isWidgetBundleUnavailableError(error: unknown): boolean {
+	return isRecord(error) && error.code === "widget_bundle_unavailable";
+}
+
 function startsWithCode(text: unknown, code: string): boolean {
 	return typeof text === "string" && text.trimStart().startsWith(code);
 }

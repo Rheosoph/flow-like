@@ -1550,32 +1550,4 @@ mod tests {
         assert_eq!(restored, [bang.spec("evt_bang"), none.spec("evt_none")]);
         assert_eq!(restored[1].command_prefix, "");
     }
-
-    /// TEMPORARY probe, removed before the lane ends: what storing a second event of the same
-    /// bot does to the first event's row.
-    #[tokio::test]
-    async fn probe_two_events_of_one_bot() {
-        let connection = rusqlite::Connection::open_in_memory().expect("a database");
-        let db: DbConnection = Arc::new(std::sync::Mutex::new(connection));
-        DiscordSink::init_tables(&db).expect("the tables");
-        for event_id in ["evt_one", "evt_two"] {
-            let config = sink(json!({}));
-            let registration =
-                DiscordSink::create_event_registration(event_id.to_string(), config.clone());
-            DiscordSink::add_bot_and_handler(&db, &registration, &config).expect("stored");
-        }
-        let stored = DiscordSink::load_handlers_from_db(&db)
-            .await
-            .expect("the stored handlers");
-        let ids: Vec<&str> = stored
-            .iter()
-            .map(|(registration, _)| registration.event_id.as_str())
-            .collect();
-        let foreign_keys: i64 = db
-            .lock()
-            .unwrap()
-            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
-            .expect("the pragma");
-        eprintln!("PROBE discord: foreign_keys={foreign_keys}, restored handlers={ids:?}");
-    }
 }

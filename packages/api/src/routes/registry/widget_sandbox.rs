@@ -61,8 +61,10 @@ pub const WIDGET_ASSET_ROUTE: &str = "widget-asset";
 const API_BASE_PATH: &str = "/api/v1";
 const HTML_CONTENT_TYPE: &str = "text/html; charset=utf-8";
 const NO_STORE: &str = "no-store";
-const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable";
-const ACCESS_ASSET_CACHE: &str = "private, max-age=43200, immutable";
+// Edge script rewriting can break the widget bridge under its pinned CSP.
+const DOCUMENT_CACHE: &str = "no-store, no-transform";
+const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable, no-transform";
+const ACCESS_ASSET_CACHE: &str = "private, max-age=43200, immutable, no-transform";
 const SEC_FETCH_DEST: &str = "sec-fetch-dest";
 /// `Sec-Fetch-Dest` values of Fetch navigation requests, whose response the
 /// browser renders as a document.
@@ -270,7 +272,7 @@ fn html_headers(csp: String) -> [(HeaderName, String); 5] {
     [
         (header::CONTENT_TYPE, HTML_CONTENT_TYPE.to_string()),
         (header::CONTENT_SECURITY_POLICY, csp),
-        (header::CACHE_CONTROL, NO_STORE.to_string()),
+        (header::CACHE_CONTROL, DOCUMENT_CACHE.to_string()),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
         (header::REFERRER_POLICY, "no-referrer".to_string()),
     ]
@@ -1255,7 +1257,10 @@ mod tests {
         );
         let response = frame_response("../../", &sources, WIDGET, JWT, true).unwrap();
 
-        assert_eq!(header(&response, header::CACHE_CONTROL), "no-store");
+        assert_eq!(
+            header(&response, header::CACHE_CONTROL),
+            "no-store, no-transform"
+        );
         assert_eq!(header(&response, header::X_CONTENT_TYPE_OPTIONS), "nosniff");
         assert_eq!(header(&response, header::REFERRER_POLICY), "no-referrer");
         let csp = header(&response, header::CONTENT_SECURITY_POLICY).to_string();
@@ -1332,7 +1337,7 @@ mod tests {
         let asset = with_private_cache(asset_response("assets/app.js", b"0".to_vec()));
         assert_eq!(
             header(&asset, header::CACHE_CONTROL),
-            "private, max-age=43200, immutable"
+            "private, max-age=43200, immutable, no-transform"
         );
     }
 
@@ -1381,7 +1386,10 @@ mod tests {
         let response = document_response(&sources, &policy, entry, true);
 
         assert_eq!(header(&response, header::CONTENT_TYPE), HTML_CONTENT_TYPE);
-        assert_eq!(header(&response, header::CACHE_CONTROL), "no-store");
+        assert_eq!(
+            header(&response, header::CACHE_CONTROL),
+            "no-store, no-transform"
+        );
         assert_eq!(header(&response, header::X_CONTENT_TYPE_OPTIONS), "nosniff");
         assert_eq!(header(&response, header::REFERRER_POLICY), "no-referrer");
         assert!(header(&response, header::VARY).eq_ignore_ascii_case("user-agent"));
@@ -1418,7 +1426,10 @@ mod tests {
             WIDGET_ASSET_CSP
         );
         assert_eq!(header(&response, header::X_CONTENT_TYPE_OPTIONS), "nosniff");
-        assert_eq!(header(&response, header::CACHE_CONTROL), IMMUTABLE_CACHE);
+        assert_eq!(
+            header(&response, header::CACHE_CONTROL),
+            "public, max-age=31536000, immutable, no-transform"
+        );
 
         let html = asset_response("widgets/live-map/extra.html", b"<script>".to_vec());
         assert_eq!(

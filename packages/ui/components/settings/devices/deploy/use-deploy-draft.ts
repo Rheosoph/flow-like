@@ -170,7 +170,7 @@ function writeSaved(storageKey: string, saved: SavedDraft | null): void {
 	}
 }
 
-const newTarget = (deviceId: string): DeployTargetDraft => ({
+export const newTarget = (deviceId: string): DeployTargetDraft => ({
 	deviceId,
 	choices: {},
 	serveBoth: [],
@@ -317,6 +317,7 @@ function useDraftStore(
 	storageKey: string,
 	ready: boolean,
 	entry: EntryInput,
+	persist: boolean,
 ): DraftStore {
 	const entryRef = useRef(entry);
 	entryRef.current = entry;
@@ -339,8 +340,8 @@ function useDraftStore(
 
 	const saved = current?.saved;
 	useEffect(() => {
-		if (saved) writeSaved(storageKey, saved);
-	}, [storageKey, saved]);
+		if (saved && persist) writeSaved(storageKey, saved);
+	}, [storageKey, saved, persist]);
 
 	const mutate = useCallback(
 		(next: (entry: StoreEntry) => StoreEntry) =>
@@ -483,6 +484,7 @@ function useDraftActions(change: DraftStore["change"]) {
 export function useDeployDraft(
 	route: DeployRoute,
 	scope: DevicesScope,
+	options: Readonly<{ persist?: boolean }> = {},
 ): DeployDraftState {
 	const backend = useBackend();
 	const { workspace, input, tokenScopeAll, items } = useAttentionState();
@@ -525,14 +527,19 @@ export function useDeployDraft(
 		() => (noFlowEdits ? { ...appRead.hub, canEditFlows: false } : appRead.hub),
 		[appRead.hub, noFlowEdits],
 	);
-	const store = useDraftStore(storageKey, !appId || !!app, {
-		route,
-		scope,
-		app: baseApp,
-		now: input.now,
-		runsNewest: upToDate,
-		hub,
-	});
+	const store = useDraftStore(
+		storageKey,
+		!appId || !!app,
+		{
+			route,
+			scope,
+			app: baseApp,
+			now: input.now,
+			runsNewest: upToDate,
+			hub,
+		},
+		options.persist ?? true,
+	);
 	const { saved, change } = store;
 	const { draft } = saved;
 	const mode = baseApp ? appMode(baseApp.visibility) : null;

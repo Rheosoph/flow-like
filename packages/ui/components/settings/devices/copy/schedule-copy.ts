@@ -407,8 +407,20 @@ function finishedText(
 			);
 }
 
+/** A schedule or bot saved for devices only that no service holds. */
+export function deviceOnlyText(t: DevicesT): string {
+	return t(
+		"devices:events.pop.deviceOnly",
+		"Runs only on the devices you deploy it to. Not deployed yet.",
+	);
+}
+
 /** Where a bot runs: the forms of the schedule sentences for something that stays connected. */
-function botWhereText(t: DevicesT, where: ScheduleWhere, names: WhereNames) {
+function botWhereText(
+	t: DevicesT,
+	where: Exclude<ScheduleWhere, { fact: "device_only" }>,
+	names: WhereNames,
+) {
 	switch (where.fact) {
 		case "hub":
 			return t("devices:events.pop.botHub", "No device runs it.");
@@ -451,6 +463,7 @@ export function scheduleWhereText(
 	names: WhereNames,
 	kind: WhereKind = "schedule",
 ): string {
+	if (where.fact === "device_only") return deviceOnlyText(t);
 	if (kind === "bot") return botWhereText(t, where, names);
 	if (where.fact === "hub")
 		return kind === "once"

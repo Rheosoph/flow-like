@@ -86,6 +86,8 @@ export interface IRegistryState {
 	 * widget grants. With `runtimeSources` the descriptor also covers addresses
 	 * the host extracted from the widget's props; a refused request shape
 	 * rejects with a `WidgetRuntimeSourcesError`.
+	 * A missing bundle that cannot be installed rejects with
+	 * `WidgetBundleUnavailableError` so the host can show the load failure.
 	 */
 	describeWidgetPolicy?(
 		request: WidgetPolicyRequest,

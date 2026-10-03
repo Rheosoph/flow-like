@@ -1,5 +1,6 @@
 import type { IProfile } from "@flow-like/flow-like-ui";
 import {
+	WidgetBundleUnavailableError,
 	type WidgetGrantRequest,
 	type WidgetGrantResponse,
 	WidgetPolicyChangedError,
@@ -374,7 +375,13 @@ export class RegistryState implements IRegistryState {
 
 	private async canInstallThroughProject(appId: string): Promise<boolean> {
 		if (!this.backend.profile || !this.sessionToken) return false;
-		return !(await this.backend.isOffline(appId).catch(() => true));
+		return !(await this.isLocalOnly(appId));
+	}
+
+	private async isLocalOnly(appId: string): Promise<boolean> {
+		return (
+			this.backend.isLocalOnly?.(appId) ?? this.backend.isOffline(appId)
+		).catch(() => true);
 	}
 
 	/**
@@ -730,6 +737,11 @@ export class RegistryState implements IRegistryState {
 		try {
 			descriptor = await this.describeInstalledWidget(request, bundleHash);
 		} catch (error) {
+			if (isBundleNotInstalledError(error)) {
+				throw new WidgetBundleUnavailableError(
+					getErrorMessage(error, "Widget bundle is not installed"),
+				);
+			}
 			throw runtimeSourcesError(error, request) ?? error;
 		}
 		return parseWidgetPolicyDescriptor(descriptor, {
@@ -766,6 +778,20 @@ export class RegistryState implements IRegistryState {
 				!appId ||
 				!version ||
 				!isBundleNotInstalledError(error) ||
+				(await this.isLocalOnly(appId))
+			) {
+				throw error;
+			}
+			// The backend is published before profile/auth bootstrap completes. Only
+			// a missing project bundle needs that session to decide whether to install.
+			try {
+				await this.backend.waitForPackageSession?.();
+			} catch (profileError) {
+				throw new WidgetBundleUnavailableError(
+					`Could not load the profile for widget package ${request.packageId}: ${getErrorMessage(profileError, "Profile unavailable")}`,
+				);
+			}
+			if (
 				!(await this.canInstallThroughProject(appId)) ||
 				!(await this.isProjectPin(appId, request.packageId, version))
 			) {
@@ -778,7 +804,9 @@ export class RegistryState implements IRegistryState {
 					`[Registry] Could not install ${request.packageId}@${version} through project ${appId}:`,
 					installError,
 				);
-				throw error;
+				throw new WidgetBundleUnavailableError(
+					`Could not install ${request.packageId}@${version}: ${getErrorMessage(installError, "Package installation failed")}`,
+				);
 			}
 			return describe();
 		}

@@ -1,3 +1,4 @@
+import { isDeviceEventSource } from "../../event-source";
 import type { IAppVisibility } from "../../schema/app/app";
 import {
 	type EligibilityEvent,
@@ -68,6 +69,16 @@ export interface AppEventInput extends EligibilityEvent {
 	ownToken?: boolean;
 	/** A form or quick action: its fields per the record. */
 	form?: AppEventForm;
+	/** Saved for devices only (the record's source marker): the hub and this computer never run it. Read from `config` when absent. */
+	deviceOnly?: boolean;
+}
+
+/** Whether the event is saved for devices only. */
+export function isDeviceOnly(event: AppEventInput): boolean {
+	return (
+		event.deviceOnly ??
+		isDeviceEventSource({ config: [...(event.config ?? [])] })
+	);
 }
 
 /** Kinds that run in one place: a person moves each one off the hub to one service (a claim). */
@@ -409,6 +420,8 @@ export interface MatrixRow {
 	cells: Record<string, MatrixCell>;
 	/** A schedule or bot of an online app: where it runs. Absent while the hub's list is not known. */
 	where?: ScheduleWhere;
+	/** A schedule or bot saved for devices only: no hub or computer runs it. */
+	deviceOnly?: true;
 	/** An event that follows Latest: its flow as a version, once read. */
 	flow?: EventFlowState;
 }
@@ -976,8 +989,10 @@ function buildMatrix(
 	for (const event of input.app.events) {
 		const eligibility = appEventRule(event, hub);
 		const pin = eventPin(event, versions[0]);
-		const where = isClaimedKind(eligibility.kind)
-			? whereOf(schedules, event.id)
+		const claimed = isClaimedKind(eligibility.kind);
+		const deviceOnly = claimed && isDeviceOnly(event);
+		const where = claimed
+			? whereOf(schedules, event.id, deviceOnly)
 			: undefined;
 		const cells: Record<string, MatrixCell> = {};
 		for (const id of cols) {
@@ -1002,6 +1017,7 @@ function buildMatrix(
 			newIn: newInLabel(event.id, versions),
 			cells,
 			...(where ? { where } : {}),
+			...(deviceOnly ? { deviceOnly: true as const } : {}),
 			...(eligibility.followsLatest && event.flow ? { flow: event.flow } : {}),
 		});
 	}

@@ -2,9 +2,17 @@ import { expect, test } from "bun:test";
 import { createDeployRun } from "../../../lib/device-management/model/deploy-run";
 import type { DeployDevice } from "../devices/deploy/deploy-facts";
 import {
+	type CreateBlockInput,
+	createBlock,
+	defaultDeviceFilter,
 	deploymentIsBusy,
+	deviceFilterCounts,
 	deviceReadyForEvent,
+	indexDevices,
+	listDevices,
 	matchesDeviceFilter,
+	pickableDevices,
+	stepTab,
 	unavailableSelectedDevice,
 } from "./new-event-device-choice";
 
@@ -89,14 +97,109 @@ test("Runs this app requires a known running service for this app", () => {
 	).toBe(true);
 });
 
+const GATE = { code: "offline" } as DeployDevice["gate"];
+
 test("a selection becoming blocked or disappearing is rejected", () => {
 	const selected = new Set(["edge"]);
-	expect(unavailableSelectedDevice(selected, [device()])).toBeUndefined();
 	expect(
-		unavailableSelectedDevice(selected, [
-			device({ gate: { code: "offline" } as DeployDevice["gate"] }),
-		]),
+		unavailableSelectedDevice(selected, indexDevices([device()])),
+	).toBeUndefined();
+	expect(
+		unavailableSelectedDevice(selected, indexDevices([device({ gate: GATE })])),
 	).toBe("edge");
-	expect(unavailableSelectedDevice(selected, [])).toBe("edge");
-	expect(unavailableSelectedDevice(new Set(), [])).toBeUndefined();
+	expect(unavailableSelectedDevice(selected, indexDevices([]))).toBe("edge");
+	expect(
+		unavailableSelectedDevice(new Set(), indexDevices([])),
+	).toBeUndefined();
+});
+
+test("filter counts come from one pass and Ready is the default only when something is ready", () => {
+	const service = {
+		projectId: "app",
+		desired: "running",
+	} as NonNullable<DeployDevice["services"]>[number];
+	const fleet = [
+		device({ id: "a" }),
+		device({ id: "b", services: [service] }),
+		device({ id: "c", presence: { kind: "offline" } }),
+		device({ id: "d", gate: GATE }),
+	];
+	const counts = deviceFilterCounts(fleet, "app");
+	expect(counts).toEqual({ ready: 2, app: 1, all: 4 });
+	expect(defaultDeviceFilter(counts)).toBe("ready");
+	expect(
+		defaultDeviceFilter(deviceFilterCounts([fleet[2] as DeployDevice], "app")),
+	).toBe("all");
+	expect(defaultDeviceFilter(deviceFilterCounts([], "app"))).toBe("all");
+});
+
+test("the list narrows by filter, search and the selected-only view", () => {
+	const fleet = [
+		device({ id: "a", name: "Edge Berlin", platform: "linux" }),
+		device({ id: "b", name: "Studio", platform: "macos" }),
+		device({ id: "c", name: "Offline box", presence: { kind: "offline" } }),
+	];
+	const base = {
+		filter: "all",
+		appId: "app",
+		search: "",
+		selectedOnly: false,
+		selected: new Set<string>(),
+	} as const;
+	const ids = (query: Partial<Parameters<typeof listDevices>[1]>) =>
+		listDevices(fleet, { ...base, ...query }).map((row) => row.id);
+	expect(ids({})).toEqual(["a", "b", "c"]);
+	expect(ids({ filter: "ready" })).toEqual(["a", "b"]);
+	expect(ids({ search: "mac" })).toEqual(["b"]);
+	expect(ids({ selectedOnly: true, selected: new Set(["c"]) })).toEqual(["c"]);
+});
+
+test("Pick all takes the ready devices of the list that are not selected yet", () => {
+	const fleet = [
+		device({ id: "a" }),
+		device({ id: "b" }),
+		device({ id: "c", gate: GATE }),
+		device({ id: "d", locked: true }),
+	];
+	expect(pickableDevices(fleet, new Set())).toEqual(["a", "b"]);
+	expect(pickableDevices(fleet, new Set(["a"]))).toEqual(["b"]);
+	expect(pickableDevices(fleet, new Set(["a", "b"]))).toEqual([]);
+});
+
+const READY: CreateBlockInput = {
+	hubBlocked: false,
+	hubLoading: false,
+	hubFailed: false,
+	devicesLoading: false,
+	devicesFailed: false,
+	unsupported: false,
+	selected: 1,
+	singleDevice: false,
+	unavailable: undefined,
+};
+
+test("the footer names the first reason Create & deploy cannot run", () => {
+	const block = (patch: Partial<CreateBlockInput>) =>
+		createBlock({ ...READY, ...patch });
+	expect(block({})).toBeNull();
+	expect(block({ hostDisabled: true })).toBe("form_incomplete");
+	expect(block({ hostDisabled: true, selected: 0 })).toBe("form_incomplete");
+	expect(block({ selected: 0 })).toBe("no_device");
+	expect(block({ selected: 0, unsupported: true })).toBe("unsupported");
+	expect(block({ devicesLoading: true, selected: 0 })).toBe("devices_loading");
+	expect(block({ devicesFailed: true })).toBe("devices_failed");
+	expect(block({ hubBlocked: true, hubLoading: true })).toBe("hub_loading");
+	expect(block({ hubBlocked: true, hubFailed: true })).toBe("hub_failed");
+	expect(block({ hubBlocked: true })).toBe("hub_outdated");
+	expect(block({ singleDevice: true, selected: 2 })).toBe("too_many");
+	expect(block({ unavailable: "edge" })).toBe("device_blocked");
+	expect(block({ singleDevice: true, selected: 1 })).toBeNull();
+});
+
+test("a saved event opens on the first step that needs input, else Review", () => {
+	expect(stepTab(undefined)).toBe("review");
+	expect(stepTab("access_cost")).toBe("access_cost");
+	expect(stepTab("settings")).toBe("settings");
+	expect(stepTab("what")).toBe("where");
+	expect(stepTab("how")).toBe("where");
 });

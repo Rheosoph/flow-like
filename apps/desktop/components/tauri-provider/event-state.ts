@@ -35,8 +35,10 @@ import {
 } from "@flow-like/flow-like-ui/lib/device-bridge";
 import {
 	isDeviceEventSource,
+	resolveEventSourceIntent,
 	withDeviceEventSource,
 } from "@flow-like/flow-like-ui/lib/event-source";
+import { ensureDeviceEventCreation } from "@flow-like/flow-like-ui/lib/event-source-capability";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import {
 	recordNativePreamble,
@@ -968,9 +970,17 @@ export class EventState implements IEventState {
 		oauthTokens?: Record<string, IOAuthToken>,
 		options?: IEventUpsertOptions,
 	): Promise<IEvent> {
-		const deviceSource =
-			options?.source === "device" || isDeviceEventSource(inputEvent);
-		const event = deviceSource ? withDeviceEventSource(inputEvent) : inputEvent;
+		const resolved = resolveEventSourceIntent(inputEvent, options?.source);
+		let { event } = resolved;
+		let { intent } = resolved;
+		if (
+			intent === "keep" &&
+			(await this.storedEventIsDeviceOnly(appId, event))
+		) {
+			event = withDeviceEventSource(event);
+			intent = "device";
+		}
+		const deviceSource = intent === "device";
 		if (!deviceSource && event.board_id && event.execution_mode !== "Remote") {
 			await this.ensureRpaApprovalForEvent(
 				appId,
@@ -1007,16 +1017,17 @@ export class EventState implements IEventState {
 				"Profile, auth or query client not set. Cannot upsert event.",
 			);
 		}
-		if (deviceSource) {
-			const capabilities = await fetcher<{ device_event_creation?: boolean }>(
-				this.backend.profile,
-				`apps/${appId}/device-placements`,
-				{ method: "GET" },
-				this.backend.auth,
+		if (options?.source === "device") {
+			const profile = this.backend.profile;
+			const auth = this.backend.auth;
+			await ensureDeviceEventCreation(`${profile.hub}|${appId}`, () =>
+				fetcher<{ device_event_creation?: boolean }>(
+					profile,
+					`apps/${appId}/device-placements`,
+					{ method: "GET" },
+					auth,
+				),
 			);
-			if (capabilities?.device_event_creation !== true) {
-				throw new Error("Update the hub to create events directly on devices.");
-			}
 		}
 		const response = await fetcher<IEvent>(
 			this.backend.profile,
@@ -1030,6 +1041,7 @@ export class EventState implements IEventState {
 					pat: personalAccessToken,
 					oauth_tokens: oauthTokens,
 					...(deviceSource ? { register_source: false } : {}),
+					...(intent === "clear" ? { register_source: true } : {}),
 				}),
 			},
 			this.backend.auth,
@@ -1050,6 +1062,25 @@ export class EventState implements IEventState {
 			registerSink,
 		});
 		return response;
+	}
+
+	/**
+	 * A trigger editor may hand back settings without the device-only marker. The stored copy
+	 * still decides, because the backend keeps the marker and never starts a trigger for it.
+	 */
+	private async storedEventIsDeviceOnly(
+		appId: string,
+		event: IEvent,
+	): Promise<boolean> {
+		try {
+			const stored = await invoke<IEvent>("get_event", {
+				appId,
+				eventId: event.id,
+			});
+			return isDeviceEventSource(stored);
+		} catch {
+			return false;
+		}
 	}
 
 	/**

@@ -13,6 +13,7 @@ import {
 } from "./micro-widget-capability-consent";
 import {
 	type WidgetAccessRequest,
+	WidgetBundleUnavailableError,
 	type WidgetGrantRequest,
 	type WidgetPolicy,
 	WidgetPolicyChangedError,
@@ -794,6 +795,33 @@ describe("updates while the widget runs", () => {
 });
 
 describe("fallbacks", () => {
+	for (const legacyAllowed of [true, false]) {
+		test(`a missing bundle shows its load error with legacy fallback ${legacyAllowed ? "enabled" : "disabled"}`, async () => {
+			const backend = stubBackend();
+			const detail = "Could not install com.example.maps@1.0.0: access denied";
+			backend.registry.describeWidgetPolicy = async () => {
+				throw new WidgetBundleUnavailableError(detail);
+			};
+			const view = mount(backend, {}, { legacyAllowed });
+			await flush();
+			expect(view.grant.state).toEqual({
+				status: "error",
+				reason: "bundle_unavailable",
+				detail,
+			});
+			expect(view.grant.prompt).toBeNull();
+			expect(backend.calls.mint).toEqual([]);
+		});
+	}
+
+	test("a backend without widget policy support still permits a legacy baseline frame", async () => {
+		const backend = stubBackend();
+		backend.registry.describeWidgetPolicy = undefined;
+		const view = mount(backend, {}, { legacyAllowed: true });
+		await flush();
+		expect(frameOf(view.grant)).toMatchObject({ kind: "legacy", policy: {} });
+	});
+
 	test("a second policy conflict with runtime sources runs declared-only", async () => {
 		grantRuntime(A);
 		const backend = stubBackend({

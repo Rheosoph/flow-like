@@ -836,7 +836,7 @@ impl EventSinkManager {
         if !event.active {
             return Err("event is inactive".to_owned());
         }
-        if event.execution_mode == EventExecutionMode::Remote {
+        if Self::runs_remotely(event) {
             return Err("event runs remotely".to_owned());
         }
         let config = Self::parse_event_config(&event.event_type, &event.config)
@@ -845,6 +845,16 @@ impl EventSinkManager {
             return Err("sink is configured for remote execution".to_owned());
         }
         Ok(config)
+    }
+
+    fn runs_remotely(event: &Event) -> bool {
+        event.execution_mode == EventExecutionMode::Remote
+    }
+
+    /// Whether a registration of `event` on this device is stale regardless of
+    /// the event's other settings: it runs remotely or on another device.
+    fn registration_is_stale(event: &Event) -> bool {
+        Self::runs_remotely(event) || event.is_device_source()
     }
 
     /// Why `event` must not have a sink registration on this device, if anything.
@@ -1210,10 +1220,10 @@ impl EventSinkManager {
     /// which runs while the manager lock blocks every other sink operation.
     const PRUNE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
-    /// Ids among `event_ids` whose live event in `app_id` runs remotely. An
-    /// app or event that does not load counts as local, so its registration
-    /// stays untouched.
-    async fn remote_event_ids(
+    /// Ids among `event_ids` whose live event in `app_id` runs remotely or on
+    /// another device. An app or event that does not load counts as local, so
+    /// its registration stays untouched.
+    async fn stale_event_ids(
         state: Arc<FlowLikeState>,
         app_id: String,
         event_ids: Vec<String>,
@@ -1233,9 +1243,7 @@ impl EventSinkManager {
         let mut remote = Vec::new();
         for event_id in event_ids {
             match app.get_event(&event_id, None).await {
-                Ok(event) if event.execution_mode == EventExecutionMode::Remote => {
-                    remote.push(event_id)
-                }
+                Ok(event) if Self::registration_is_stale(&event) => remote.push(event_id),
                 Ok(_) => {}
                 Err(err) => tracing::debug!(
                     event_id = %event_id,
@@ -1247,10 +1255,10 @@ impl EventSinkManager {
         remote
     }
 
-    /// Drops registrations whose live event now runs remotely. Such rows are
-    /// left behind by events switched to Remote elsewhere (the server, another
-    /// device) or saved before Remote events were excluded; the sinks would
-    /// otherwise keep firing them locally. Apps are resolved concurrently,
+    /// Drops registrations whose live event now runs remotely or only on
+    /// another device. Such rows are left behind by events switched to Remote
+    /// or device-only elsewhere (the server, another device) or saved before
+    /// those were excluded; the sinks would otherwise keep firing them locally. Apps are resolved concurrently,
     /// each within [`Self::PRUNE_LOOKUP_TIMEOUT`].
     async fn prune_remote_registrations(
         &self,
@@ -1281,7 +1289,7 @@ impl EventSinkManager {
             async move {
                 match flow_like_types::tokio::time::timeout(
                     Self::PRUNE_LOOKUP_TIMEOUT,
-                    Self::remote_event_ids(state, app_id.clone(), event_ids),
+                    Self::stale_event_ids(state, app_id.clone(), event_ids),
                 )
                 .await
                 {
@@ -1715,6 +1723,90 @@ mod tests {
             blocker(&event).as_deref(),
             Some("event is deployed to another device")
         );
+    }
+
+    #[test]
+    fn registrations_of_remote_and_device_only_events_are_stale() {
+        let mut device = flow_event("cron", true, EventExecutionMode::Local);
+        device.config = br#"{"expression":"0 9 * * *"}"#.to_vec();
+        device.set_device_source().unwrap();
+        assert!(EventSinkManager::registration_is_stale(&device));
+        assert!(EventSinkManager::registration_is_stale(&flow_event(
+            "cron",
+            true,
+            EventExecutionMode::Remote
+        )));
+        assert!(!EventSinkManager::registration_is_stale(&flow_event(
+            "cron",
+            true,
+            EventExecutionMode::Local
+        )));
+    }
+
+    #[test]
+    fn registrations_of_inactive_events_are_not_pruned() {
+        assert!(!EventSinkManager::registration_is_stale(&flow_event(
+            "cron",
+            false,
+            EventExecutionMode::Local
+        )));
+    }
+
+    #[test]
+    fn device_only_upsert_skips_the_sink_whatever_was_requested() {
+        use crate::functions::flow::event::{SinkRegistration, effective_sink_mode};
+
+        let mut device = flow_event("cron", true, EventExecutionMode::Local);
+        device.config = br#"{"expression":"0 9 * * *"}"#.to_vec();
+        device.set_device_source().unwrap();
+        for requested in [
+            SinkRegistration::Register,
+            SinkRegistration::Keep,
+            SinkRegistration::Skip,
+        ] {
+            assert_eq!(
+                effective_sink_mode(&device, requested),
+                SinkRegistration::Skip
+            );
+        }
+
+        let ordinary = flow_event("cron", true, EventExecutionMode::Local);
+        for requested in [
+            SinkRegistration::Register,
+            SinkRegistration::Keep,
+            SinkRegistration::Skip,
+        ] {
+            assert_eq!(effective_sink_mode(&ordinary, requested), requested);
+        }
+    }
+
+    #[test]
+    fn event_registers_again_once_the_device_marker_is_cleared() {
+        let mut event = flow_event("cron", true, EventExecutionMode::Local);
+        event.config = br#"{"expression":"0 9 * * *","__flow_like_source":"device"}"#.to_vec();
+        assert!(blocker(&event).is_some());
+
+        event.config = br#"{"expression":"0 9 * * *"}"#.to_vec();
+        assert!(!event.is_device_source());
+        assert!(matches!(
+            EventSinkManager::local_sink_config(&event),
+            Ok(EventConfig::Cron(_))
+        ));
+    }
+
+    #[test]
+    fn marker_bearing_configs_still_parse() {
+        let cron = EventSinkManager::parse_event_config(
+            "cron",
+            br#"{"expression":"0 9 * * *","__flow_like_source":"device"}"#,
+        );
+        assert!(matches!(cron, Ok(EventConfig::Cron(_))), "{cron:?}");
+
+        let http = EventSinkManager::parse_event_config(
+            "http",
+            br#"{"path":"/hook","method":"POST","auth_token":null,"__flow_like_source":"device"}"#,
+        );
+        assert!(matches!(http, Ok(EventConfig::Http(_))), "{http:?}");
     }
 
     #[test]

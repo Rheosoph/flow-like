@@ -158,6 +158,7 @@ describe("listAppPackageWidgets", () => {
 	const installed = {
 		version: "1.2.3",
 		manifest: {
+			version: "1.2.3",
 			name: "Example Pack",
 			widgets: [WIDGET_ENTRY],
 			widget_bundle_hash: "deadbeef",
@@ -165,7 +166,7 @@ describe("listAppPackageWidgets", () => {
 		metadata: { name: "Example Pack Meta" },
 	};
 
-	test("resolves widgets from installed manifests of app packages", async () => {
+	test("keeps the resolved version with its contract and bundle when the listed pin is stale", async () => {
 		const result = await listAppPackageWidgets(
 			{
 				listPackages: async () => ({ "com.example.pack": "1.2.0" }),
@@ -176,9 +177,10 @@ describe("listAppPackageWidgets", () => {
 		expect(result).toHaveLength(1);
 		expect(result[0].packageId).toBe("com.example.pack");
 		expect(result[0].packageName).toBe("Example Pack Meta");
-		expect(result[0].packageVersion).toBe("1.2.0");
+		expect(result[0].packageVersion).toBe(installed.manifest.version);
 		expect(result[0].bundleHash).toBe("deadbeef");
 		expect(result[0].widget.id).toBe("sales-chart");
+		expect(result[0].widget.contract).toEqual(WIDGET_ENTRY.contract);
 	});
 
 	test("resolves each package through the app so members see what it pins", async () => {
@@ -196,7 +198,7 @@ describe("listAppPackageWidgets", () => {
 		expect(asked).toEqual([["com.example.pack", "app-1"]]);
 	});
 
-	test("falls back to the installed version when the pin is empty", async () => {
+	test("uses the resolved version when the pin is empty", async () => {
 		const result = await listAppPackageWidgets(
 			{
 				listPackages: async () => ({ "com.example.pack": "" }),
@@ -205,6 +207,17 @@ describe("listAppPackageWidgets", () => {
 			"app-1",
 		);
 		expect(result[0].packageVersion).toBe("1.2.3");
+	});
+
+	test("falls back to the listed pin when the resolved version is empty", async () => {
+		const result = await listAppPackageWidgets(
+			{
+				listPackages: async () => ({ "com.example.pack": "1.2.0" }),
+				getPackage: async () => ({ ...installed, version: "" }),
+			},
+			"app-1",
+		);
+		expect(result[0].packageVersion).toBe("1.2.0");
 	});
 
 	test("returns empty without listPackages support", async () => {

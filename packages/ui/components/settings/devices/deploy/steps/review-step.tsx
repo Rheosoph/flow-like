@@ -50,6 +50,7 @@ import { nextRuns } from "../../../../../lib/device-management/schedule";
 import { formatEuroMicros } from "../../../../../lib/device-resources";
 import { isDeviceEventSource } from "../../../../../lib/event-source";
 import { humanFileSize } from "../../../../../lib/utils";
+import { Button } from "../../../../ui/button";
 import { agentTooOldCopy } from "../../copy/eligibility-copy";
 import { gateCopy } from "../../copy/gate-copy";
 import {
@@ -2328,7 +2329,68 @@ function DeployReason({
 	);
 }
 
+/** The host dialog's footer: a real disabled button while something blocks, the reason and the way to fix it beside it. */
+function FooterDeploy({
+	control,
+	container,
+}: Readonly<{ control: DeployControl; container: HTMLElement }>) {
+	const { t } = control.c;
+	const { goTo } = control.props;
+	const { blocker, deploy, started } = useDeploy(control);
+	if (started) return null;
+	return createPortal(
+		<div
+			className="flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-2"
+			data-deploy-action=""
+		>
+			{blocker ? (
+				<p
+					id="dp-deploy-reason"
+					className="flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-muted-foreground"
+				>
+					<span>{blocker.text}</span>
+					{blocker.step ? (
+						<DvButton
+							variant="link"
+							size="xs"
+							className="min-h-11"
+							onClick={() => blocker.step && goTo(blocker.step)}
+						>
+							{t(
+								"devices:deployShip.block.openRequired",
+								"Open required settings",
+							)}
+						</DvButton>
+					) : null}
+				</p>
+			) : null}
+			<Button
+				type="button"
+				className="h-11"
+				disabled={!!blocker}
+				aria-describedby={blocker ? "dp-deploy-reason" : undefined}
+				onClick={deploy}
+			>
+				<Rocket aria-hidden className="size-4" />
+				{control.label}
+			</Button>
+		</div>,
+		container,
+	);
+}
+
 function DeployButton(control: Readonly<DeployControl>) {
+	if (control.props.footerContainer)
+		return (
+			<FooterDeploy
+				control={control}
+				container={control.props.footerContainer}
+			/>
+		);
+	return <InlineDeploy {...control} />;
+}
+
+function InlineDeploy(control: Readonly<DeployControl>) {
 	const { t } = control.c;
 	const { goTo } = control.props;
 	const bucket = useWidthBucket();
