@@ -2015,7 +2015,7 @@ describe("service rows and app pieces", () => {
 		);
 		const cell = container.querySelector("[data-event-cell]");
 		expect(cell?.textContent).toBe(
-			"Extract invoiceWeb requestNew in v1.5.0event 1.5.0 · flow 2.2.0Served by the device · checks its web server",
+			"Extract invoiceEndpointNew in v1.5.0event 1.5.0 · flow 2.2.0Served by the device · checks its web server",
 		);
 		expect(
 			cell?.querySelector("[data-event-tile] svg.lucide-globe"),

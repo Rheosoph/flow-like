@@ -1,8 +1,9 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { holdsSchedule } from "../../../../lib/device-management/model/schedule-where";
 import type { DevicesRoute } from "../../../../lib/device-management/model/types";
-import { blockShort, cantRun } from "./events-copy";
+import { blockShort, cantRun, heldText } from "./events-copy";
 import { type EventsDevicesLink, useEventsDevices } from "./events-devices";
 import { EVENTS_BLOCK_ID } from "./on-devices-strip";
 import { runsOnExplains, runsOnReasonId } from "./runs-on-cell";
@@ -35,7 +36,8 @@ export function useRunOnDevice(eventId: string): RunOnDevice {
 	const devices = useEventsDevices();
 	const event = devices.events.get(eventId)?.name ?? "";
 	const cant = cantRun(t, devices, eventId);
-	const served = Boolean(devices.live?.rows.get(eventId)?.served.length);
+	const row = devices.live?.rows.get(eventId);
+	const served = Boolean(row?.served.length);
 	const route: DevicesRoute = {
 		screen: "deploy",
 		deviceIds: [],
@@ -43,11 +45,14 @@ export function useRunOnDevice(eventId: string): RunOnDevice {
 		eventId,
 		from: "events",
 	};
+	const cellId = runsOnReasonId(eventId);
 	const off = devices.block
 		? { reason: blockShort(t, devices.block), by: EVENTS_BLOCK_ID }
 		: cant
-			? { reason: cant.sentence, by: runsOnReasonId(eventId) }
-			: null;
+			? { reason: cant.sentence, by: cellId }
+			: row && holdsSchedule(row.where)
+				? { reason: heldText(t, row), by: cellId }
+				: null;
 	return {
 		label: served
 			? t("events.pop.runAnother", "Run on another device…")

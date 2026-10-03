@@ -170,13 +170,14 @@ async fn main() -> Result<()> {
     // Transitive deps enable both ring and aws-lc-rs, so rustls cannot infer a default for
     // libraries that call ClientConfig::builder() (tokio-tungstenite wss://).
     let _ = flow_like_standalone::crypto::tls_provider().install_default();
+    let cli = Cli::parse();
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
+        .with_env_filter(flow_like_standalone::log_filter(
+            std::env::var("RUST_LOG").ok().as_deref(),
+            matches!(cli.command, Commands::RunPlacement { .. }),
+        ))
         .with_writer(std::io::stderr)
         .init();
-    let cli = Cli::parse();
     if let Commands::RunPlacement {
         placement,
         replica_slot,
@@ -431,6 +432,7 @@ async fn main() -> Result<()> {
             stopped,
             variables_env,
         } => {
+            #[cfg_attr(not(feature = "runtime"), allow(unused_mut))]
             let mut config = PlacementConfig::load(&manifest)?;
             store.check_placement_identity(&config.id, &serde_json::to_value(&config)?)?;
             if let Some(path) = variables_env {
@@ -747,6 +749,10 @@ async fn run_child(
         } else {
             None
         };
+        let data_root = bootstrap
+            .data_root
+            .as_deref()
+            .context("Supervisor did not provide the placement data root")?;
         let result = flow_like_standalone::runtime::run_supervised_with_ready(
             &bootstrap.config,
             cancel.clone(),
@@ -760,8 +766,16 @@ async fn run_child(
                 config_revision: bootstrap.config_revision,
                 slot: bootstrap.replica_slot,
             }),
-            Some(bootstrap.data_root.as_deref().context("Supervisor did not provide the placement data root")?),
+            Some(data_root),
             bootstrap.config.tls_certificate_id.as_ref().map(|_| flow_like_standalone::service_tls::ManagedTls::new(broker.clone()) as std::sync::Arc<dyn flow_like_runtime::flow::execution::service::ServiceTlsProvider>),
+            Some(flow_like_standalone::schedule::ScheduleContext::supervised(
+                data_root,
+                &bootstrap.config,
+                bootstrap.config_revision,
+                bootstrap.intent_revision,
+                broker.clone(),
+            )),
+            flow_like_standalone::runtime::PersonStartedRuns::supervised(broker.clone()),
             || async {
                 broker.ready().await?;
                 {

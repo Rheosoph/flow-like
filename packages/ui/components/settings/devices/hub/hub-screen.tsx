@@ -28,13 +28,14 @@ import {
 } from "../primitives/area-context";
 import { Banner } from "../primitives/banner";
 import { Block, PageHeader } from "../primitives/block";
+import { dayText } from "../primitives/day";
 import { DvButton } from "../primitives/dv-button";
 import { type Gate, GatedAction } from "../primitives/gate-notice";
 import { Headline } from "../primitives/headline";
 import { InlineResult } from "../primitives/inline-result";
 import { KeyValueList, KvRow } from "../primitives/key-value-list";
 import { StatusChip } from "../primitives/status-chip";
-import { type ChipTone, TONE_TEXT, cx } from "../primitives/tone";
+import { type ChipTone, TONE_TEXT, type Tone, cx } from "../primitives/tone";
 import { useDevicesRoute, useRouteLink } from "../routing/use-devices-route";
 import type { ScreenProps } from "../screen-props";
 import { useDeviceWorkspace } from "../workspace";
@@ -43,16 +44,18 @@ import { FeaturesBlock } from "./features-block";
 import { HistoryBlock } from "./history-block";
 import { Hint, HubReadStamp, Tech, UrlLine } from "./hub-parts";
 import {
-	DAY,
 	type HubView,
-	type ReleaseState,
+	type ReleaseVerdict,
+	type ReleaseVerdictKind,
 	firstFailing,
 	jumpTo,
 	planName,
 	useHubView,
+	useReleaseVerdict,
 } from "./hub-view";
 import { HubLimitsUsage } from "./limits-usage";
 import { ReadinessList, checkCopy } from "./readiness-list";
+import { isLastDay } from "./release-copy";
 import { ReleaseTrust } from "./release-trust";
 import type { DeviceSlots } from "./use-hub-facts";
 
@@ -194,41 +197,53 @@ const failingHeadline = (t: DevicesT, view: HubView) => {
 	};
 };
 
-/** "All 6 checks pass" continued by what the agent release adds to it. */
+const beingVerified = (t: DevicesT, all: string) =>
+	t(
+		"devices:hub.headline.verifying",
+		"{{all}}. The agent release is being verified.",
+		{ all },
+	);
+
+const notVerified = (t: DevicesT, all: string) =>
+	t(
+		"devices:hub.headline.unverified",
+		"{{all}}, but the agent release couldn't be verified, so setup can't create a package.",
+		{ all },
+	);
+
+/** "All 6 checks pass" continued by what the agent release adds to it; `until` is the day the release ends. */
 const RELEASE_REST: Record<
-	ReleaseState,
+	ReleaseVerdictKind,
 	(t: DevicesT, all: string, until: string) => string
 > = {
-	verified: (t, all, until) =>
+	ok: (t, all, until) =>
 		t(
 			"devices:hub.headline.verified",
 			"{{all}} and the current agent release is verified until {{until}}.",
 			{ all, until },
 		),
-	verifying: (t, all) =>
+	ends_soon: (t, all, until) =>
 		t(
-			"devices:hub.headline.verifying",
-			"{{all}}. The agent release is being verified.",
-			{ all },
+			"devices:hub.headline.endsSoon",
+			"{{all}}, but the agent release runs out on {{until}}.",
+			{ all, until },
 		),
-	waiting: (t, all) =>
+	expired: (t, all, until) =>
 		t(
-			"devices:hub.headline.verifying",
-			"{{all}}. The agent release is being verified.",
-			{ all },
+			"devices:hub.headline.expired",
+			"{{all}}, but the agent release ran out on {{until}}, so setup can't create a package.",
+			{ all, until },
 		),
+	checking: beingVerified,
+	waiting: beingVerified,
 	missing: (t, all) =>
 		t(
 			"devices:hub.headline.noRelease",
 			"{{all}}, but the hub has no signed agent releases, so setup can't create a package.",
 			{ all },
 		),
-	failed: (t, all) =>
-		t(
-			"devices:hub.headline.unverified",
-			"{{all}}, but the agent release couldn't be verified, so setup can't create a package.",
-			{ all },
-		),
+	failed: notVerified,
+	unfetched: notVerified,
 };
 
 const slotsRest = (t: DevicesT, slots: DeviceSlots | undefined) => {
@@ -269,18 +284,45 @@ const readyLead = (t: DevicesT, view: HubView, time: AreaTime) => {
 	);
 };
 
-const readyHeadline = (t: DevicesT, view: HubView, time: AreaTime) => {
+/** Passing checks make the hub ready only with a usable release; until then the lead doesn't say "ready". */
+const releaseLead = (
+	t: DevicesT,
+	view: HubView,
+	verdict: ReleaseVerdict,
+	time: AreaTime,
+) => {
+	if (verdict.kind === "ok" || verdict.kind === "ends_soon")
+		return readyLead(t, view, time);
+	if (verdict.kind === "checking" || verdict.kind === "waiting")
+		return t("devices:hub.headline.checking", "Checking {{host}}…", {
+			host: view.host,
+		});
+	return t(
+		"devices:hub.headline.releaseBlocks",
+		"{{host}} can't set up devices right now.",
+		{ host: view.host },
+	);
+};
+
+const readyHeadline = (
+	t: DevicesT,
+	view: HubView,
+	verdict: ReleaseVerdict,
+	time: AreaTime,
+) => {
 	const total = view.summary ? view.summary.total : 0;
 	const all = t(
 		"devices:hub.headline.allPass",
 		"All {{total, number}} checks pass",
 		{ total },
 	);
-	const manifest = view.release.data?.manifest;
-	const until = manifest ? time.at(manifest.expires_at) : "";
-	const release = RELEASE_REST[view.releaseState](t, all, until);
+	const until =
+		"facts" in verdict && verdict.facts
+			? dayText(time, verdict.facts.expires_at)
+			: "";
+	const release = RELEASE_REST[verdict.kind](t, all, until);
 	return {
-		lead: readyLead(t, view, time),
+		lead: releaseLead(t, view, verdict, time),
 		rest: [release, slotsRest(t, view.slots)].filter(Boolean).join(" "),
 	};
 };
@@ -288,10 +330,11 @@ const readyHeadline = (t: DevicesT, view: HubView, time: AreaTime) => {
 function useHeadline(view: HubView): HeadlineText {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
+	const verdict = useReleaseVerdict(view);
 	const { state } = view.hub.support;
 	if (state !== "on") return STATE_HEADLINE[state](t, view.host);
 	if (!view.summary) return noChecksHeadline(t, view);
-	return failingHeadline(t, view) ?? readyHeadline(t, view, time);
+	return failingHeadline(t, view) ?? readyHeadline(t, view, verdict, time);
 }
 
 /* Block: Hub. Four answers at a glance, each jumping to its block. */
@@ -301,11 +344,20 @@ function SummaryCell({
 	label,
 	value,
 	sub,
-}: Readonly<{ to: string; label: string; value: ReactNode; sub: ReactNode }>) {
+	verdict,
+}: Readonly<{
+	to: string;
+	label: string;
+	value: ReactNode;
+	sub: ReactNode;
+	/** The release verdict this cell states. */
+	verdict?: ReleaseVerdictKind;
+}>) {
 	return (
 		<button
 			type="button"
 			data-jump={to}
+			data-verdict={verdict}
 			onClick={() => jumpTo(to)}
 			className="flex min-w-0 cursor-pointer flex-col gap-1 bg-card px-4 py-3 text-left hover:bg-row-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring @max-[480px]/devices:px-3 @max-[480px]/devices:py-2.5"
 		>
@@ -438,81 +490,119 @@ function ChecksCell({ view }: Readonly<{ view: HubView }>) {
 	);
 }
 
-function VerifiedReleaseCell({
-	view,
-	label,
-}: Readonly<{ view: HubView; label: string }>) {
-	const { t } = useTranslation("devices");
-	const time = useAreaTime();
-	const manifest = view.release.data?.manifest;
-	if (!manifest) return null;
-	const days = Math.ceil((manifest.expires_at - time.nowS) / DAY);
-	return (
-		<SummaryCell
-			to="releases"
-			label={label}
-			value={
-				<>
-					<span className="font-mono text-[15px]">
-						{manifest.release_version}
-					</span>
-					<BadgeCheck aria-hidden className={cx("size-4", TONE_TEXT.good)} />
-					{t("hub.sum.verified", "Verified")}
-				</>
-			}
-			sub={t("hub.sum.until", {
-				when: time.at(manifest.expires_at),
-				count: Math.max(0, days),
-				defaultValue_one: "until {{when}} · {{count, number}} day left",
-				defaultValue_other: "until {{when}} · {{count, number}} days left",
-			})}
-		/>
-	);
-}
-
 interface ReleaseLook {
-	icon?: LucideIcon;
-	word?: string;
+	/** The agent the release names, once a genuinely signed list is in hand. */
+	version?: string;
+	/** Icon, its tone and the word beside it; without them the cell shows a dash. */
+	mark?: { icon: LucideIcon; tone: Tone; word: string };
 	sub: string;
 }
 
-/** Icon, word and sub line of a hub without a verified release. */
-const unverifiedRelease = (t: DevicesT, state: ReleaseState): ReleaseLook => {
-	if (state === "missing")
-		return {
-			icon: PackageX,
-			word: t("devices:hub.sum.none", "None"),
-			sub: t("devices:hub.sum.noneSub", "No signed agent releases"),
-		};
-	if (state === "failed")
-		return {
-			icon: TriangleAlert,
-			word: t("devices:hub.sum.unverified", "Not verified"),
-			sub: t("devices:hub.sum.unverifiedSub", "Setup and agent updates wait"),
-		};
-	return {
-		sub:
-			state === "verifying"
-				? t("devices:hub.sum.verifying", "Verifying the release…")
-				: t("devices:hub.sum.waiting", "Waiting for the hub"),
-	};
+/** The agent release at a glance; the icon is green only for a verified release with time left. */
+const releaseLook = (
+	t: DevicesT,
+	time: AreaTime,
+	verdict: ReleaseVerdict,
+): ReleaseLook => {
+	const notVerified = t("devices:hub.sum.unverified", "Not verified");
+	const waits = t(
+		"devices:hub.sum.unverifiedSub",
+		"Setup and agent updates wait",
+	);
+	switch (verdict.kind) {
+		case "ok":
+			return {
+				version: verdict.facts.release_version,
+				mark: {
+					icon: BadgeCheck,
+					tone: "good",
+					word: t("devices:hub.sum.verified", "Verified"),
+				},
+				sub: t("devices:hub.sum.untilDate", "until {{when}}", {
+					when: dayText(time, verdict.facts.expires_at),
+				}),
+			};
+		case "ends_soon":
+			return {
+				version: verdict.facts.release_version,
+				mark: {
+					icon: TriangleAlert,
+					tone: "warning",
+					word: t("devices:hub.sum.endsSoon", "Ends soon"),
+				},
+				sub: isLastDay(verdict.facts.expires_at, time.nowS)
+					? t(
+							"devices:hub.sum.untilLastDay",
+							"until {{when}} · less than a day left",
+							{ when: time.at(verdict.facts.expires_at) },
+						)
+					: t("devices:hub.sum.until", {
+							when: dayText(time, verdict.facts.expires_at),
+							count: verdict.daysLeft,
+							defaultValue_one: "until {{when}} · {{count, number}} day left",
+							defaultValue_other:
+								"until {{when}} · {{count, number}} days left",
+						}),
+			};
+		case "expired":
+			return {
+				version: verdict.facts.release_version,
+				mark: {
+					icon: OctagonX,
+					tone: "critical",
+					word: t("devices:hub.release.expired", "Expired"),
+				},
+				sub: t("devices:hub.sum.expiredSub", "ran out on {{when}}", {
+					when: dayText(time, verdict.facts.expires_at),
+				}),
+			};
+		case "failed":
+			return {
+				mark: { icon: OctagonX, tone: "critical", word: notVerified },
+				sub: waits,
+			};
+		case "unfetched":
+			return {
+				mark: { icon: TriangleAlert, tone: "warning", word: notVerified },
+				sub: waits,
+			};
+		case "missing":
+			return {
+				mark: {
+					icon: PackageX,
+					tone: "warning",
+					word: t("devices:hub.sum.none", "None"),
+				},
+				sub: t("devices:hub.sum.noneSub", "No signed agent releases"),
+			};
+		case "checking":
+			return { sub: t("devices:hub.sum.verifying", "Verifying the release…") };
+		default:
+			return { sub: t("devices:hub.sum.waiting", "Waiting for the hub") };
+	}
 };
 
 function ReleaseCell({ view }: Readonly<{ view: HubView }>) {
 	const { t } = useTranslation("devices");
-	const label = t("hub.sum.release", "Agent release");
-	if (view.releaseState === "verified")
-		return <VerifiedReleaseCell view={view} label={label} />;
-	const { icon: Icon, word, sub } = unverifiedRelease(t, view.releaseState);
+	const time = useAreaTime();
+	const verdict = useReleaseVerdict(view);
+	const { version, mark, sub } = releaseLook(t, time, verdict);
 	return (
 		<SummaryCell
 			to="releases"
-			label={label}
+			verdict={verdict.kind}
+			label={t("hub.sum.release", "Agent release")}
 			value={
-				Icon ? (
+				mark ? (
 					<>
-						<Icon aria-hidden className={cx("size-4", TONE_TEXT.warning)} />
-						{word}
+						{version ? (
+							<span className="font-mono text-[15px]">{version}</span>
+						) : null}
+						<mark.icon
+							aria-hidden
+							className={cx("size-4", TONE_TEXT[mark.tone])}
+						/>
+						{mark.word}
 					</>
 				) : (
 					DASH

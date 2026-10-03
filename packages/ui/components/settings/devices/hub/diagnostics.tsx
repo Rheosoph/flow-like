@@ -3,11 +3,15 @@
 import { useTranslation } from "@flow-like/locales";
 import { useState } from "react";
 import type { HubStandalone } from "../../../../lib/device-management/hub/endpoints";
+import type {
+	ReleaseFacts,
+	VerifiedRelease,
+} from "../../../../lib/device-package";
 import { type AreaTime, useAreaTime } from "../primitives/area-context";
 import { InlineResult } from "../primitives/inline-result";
 import { copyText } from "../primitives/use-copy";
-import { type ReleaseTrustRead, useDeviceWorkspace } from "../workspace";
-import type { HubView } from "./hub-view";
+import { useDeviceWorkspace } from "../workspace";
+import { type HubView, releaseVerdictOf } from "./hub-view";
 import type { HubLimits } from "./use-hub-facts";
 
 /* The report is plain English for the hub operator and never translated (SPEC §3.10). */
@@ -71,14 +75,14 @@ const trustLines = (record: HubStandalone | undefined) => {
 	];
 };
 
-const releaseLines = (release: ReleaseTrustRead, time: AreaTime) => {
-	const manifest = release.data?.manifest;
-	if (!manifest) {
-		const { error } = release;
-		return error
-			? [`Current release: not verified (${error.code}: ${error.message})`]
-			: [];
-	}
+const factsText = (facts: ReleaseFacts, time: AreaTime) =>
+	`${facts.release_version} · sequence ${facts.sequence} · issued ${time.abs(facts.issued_at)} · expires ${time.abs(facts.expires_at)}`;
+
+const manifestLines = (
+	{ manifest }: VerifiedRelease,
+	state: string,
+	time: AreaTime,
+) => {
 	const targets = manifest.artifacts.map(
 		(artifact) =>
 			`${artifact.target} (${artifact.size} B, sha256 ${artifact.sha256})`,
@@ -88,10 +92,37 @@ const releaseLines = (release: ReleaseTrustRead, time: AreaTime) => {
 		? [`  container: ${image.image} [${image.platforms.join(", ")}]`]
 		: [];
 	return [
-		`Current release: ${manifest.release_version} · sequence ${manifest.sequence} · state_schema_version ${manifest.state_schema_version} · issued ${time.abs(manifest.issued_at)} · expires ${time.abs(manifest.expires_at)}`,
+		`Current release (${state}): ${factsText(manifest, time)} · state_schema_version ${manifest.state_schema_version}`,
 		`  targets: ${targets.join("; ")}`,
 		...container,
 	];
+};
+
+/** The same verdict the page shows: a list that failed a check is never reported as the current release. */
+const releaseLines = (view: HubView, time: AreaTime) => {
+	const verdict = releaseVerdictOf(view.record, view.release, time.nowS);
+	switch (verdict.kind) {
+		case "ok":
+		case "ends_soon": {
+			const { unreached } = verdict;
+			const state = `verified${verdict.kind === "ends_soon" ? `, ${verdict.daysLeft} days left` : ""}${unreached ? `, last check did not reach the list (${unreached.code})` : ""}`;
+			return manifestLines(verdict.release, state, time);
+		}
+		case "expired":
+			return verdict.release
+				? manifestLines(verdict.release, "expired", time)
+				: [`Current release: expired · ${factsText(verdict.facts, time)}`];
+		case "failed":
+			return [
+				`Current release: failed check "${verdict.check}" (${verdict.detail})${verdict.facts ? ` · ${factsText(verdict.facts, time)}` : ""}`,
+			];
+		case "unfetched":
+			return [
+				`Current release: not fetched (${verdict.error.code}: ${verdict.error.message})`,
+			];
+		default:
+			return [];
+	}
 };
 
 const tierLines = (record: HubStandalone | undefined) => {
@@ -110,7 +141,7 @@ export const diagnosticsText = (view: HubView, time: AreaTime) =>
 		"",
 		limitsLine(view.limits),
 		...trustLines(view.record),
-		...releaseLines(view.release, time),
+		...releaseLines(view, time),
 		...tierLines(view.record),
 		"",
 		"Contains no keys, passwords or device data.",

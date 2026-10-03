@@ -1,22 +1,32 @@
 import {
+	botTokenEventId,
+	botTokenKey,
+	savedBotToken,
+} from "../../../../lib/device-management/bot-config";
+import {
 	type DeploymentVariable,
 	type PlacementConfiguration,
 	changedSecretType,
-	eventEligibility,
 	placementResourcesSchema,
 	validateVariableValue,
 } from "../../../../lib/device-management/deployment";
-import type { AppMode } from "../../../../lib/device-management/model/app-plan";
+import {
+	type AppEventInput,
+	type AppMode,
+	resolvedPin,
+} from "../../../../lib/device-management/model/app-plan";
 import { buildDeviceView } from "../../../../lib/device-management/model/attention";
-import type {
-	DeployDraft,
-	DeployPlan,
-	DeployTargetDraft,
-	PlanApp,
-	PlanDevice,
-	PlanFacts,
-	PlanTarget,
-	PlanTargetService,
+import {
+	type DeployDraft,
+	type DeployPlan,
+	type DeployTargetDraft,
+	type PlanApp,
+	type PlanDevice,
+	type PlanFacts,
+	type PlanTarget,
+	type PlanTargetService,
+	isBot,
+	resolvePlan,
 } from "../../../../lib/device-management/model/deploy-plan";
 import {
 	deviceName,
@@ -40,6 +50,7 @@ import type {
 	KeyState,
 	LiveState,
 } from "../../../../lib/device-management/workspace/types";
+import { parseUint8ArrayToJson } from "../../../../lib/uint8";
 import { type GateSources, buildGateContext } from "../workspace/use-attention";
 import type { DeployDeviceCheck } from "./step-props";
 
@@ -225,6 +236,8 @@ function deployDevice(
 	const agent = view.agent?.version;
 	const platform = inspection?.isolation?.platform;
 	const isolation = inspection?.hostIsolation ?? undefined;
+	// The live read's flags, else the ones of the status the services come from; none = unknown.
+	const features = inspection?.features ?? view.features;
 	return {
 		id: row.device_id,
 		name,
@@ -238,7 +251,7 @@ function deployDevice(
 		...(platform ? { platform } : {}),
 		...(agent ? { agent } : {}),
 		...(isolation ? { isolation } : {}),
-		...(inspection ? { features: inspection.features } : {}),
+		...(features ? { features } : {}),
 		canManageCertificates:
 			inspection?.certificate_management === 1 &&
 			inspection.can_manage_certificates === true,
@@ -303,14 +316,20 @@ export function planDevice(
 				projectId: service.projectId,
 				events: service.events?.map((event) => event.event_id) ?? null,
 				desired: service.desired,
+				maxInstances: service.instances.max,
 			})) ?? null,
 		...(extras.check ? { refusals: extras.check.refusals } : {}),
 		...(ports.length ? { portsInUse: ports } : {}),
 		...(device.isolation ? { isolation: device.isolation } : {}),
+		...(device.features ? { features: device.features } : {}),
 	};
 }
 
-export interface PlanFactsInput {
+export interface PlanFactsInput
+	extends Pick<
+		PlanFacts,
+		"hub" | "schedules" | "canEditEvents" | "localTriggers"
+	> {
 	app: PlanApp | null;
 	devices: readonly DeployDevice[];
 	configurations: Readonly<Record<string, readonly PlacementConfiguration[]>>;
@@ -335,13 +354,26 @@ export function buildPlanFacts(input: PlanFactsInput): PlanFacts {
 		platform: input.platform,
 		now: input.now,
 		...(input.isAppOwner === undefined ? {} : { isAppOwner: input.isAppOwner }),
+		...(input.hub ? { hub: input.hub } : {}),
+		...(input.schedules === undefined ? {} : { schedules: input.schedules }),
+		...(input.canEditEvents === undefined
+			? {}
+			: { canEditEvents: input.canEditEvents }),
+		...(input.localTriggers?.length
+			? { localTriggers: input.localTriggers }
+			: {}),
 	};
 }
 
-const samePin = (now: readonly number[] | null, pinned: readonly number[]) =>
-	now !== null && now.join(".") === pinned.join(".");
+const samePin = (now: readonly number[], pinned: readonly number[]) =>
+	now.join(".") === pinned.join(".");
 
-/** A service whose events are all pinned to what the app publishes now: an update has nothing to upload. Unknown counts as no. */
+/**
+ * A service whose events are all pinned to what the app publishes now: an
+ * update has nothing to upload. An event that follows Latest counts by the
+ * flow version that equals its flow; unknown, and flow edits no version holds,
+ * count as no.
+ */
 export function runsNewest(
 	events: PlanApp["events"],
 	served: readonly PlacementEvent[] | null | undefined,
@@ -349,11 +381,11 @@ export function runsNewest(
 	if (!served?.length) return false;
 	return served.every((pin) => {
 		const event = events.find((row) => row.id === pin.event_id);
-		if (!event) return false;
-		const rule = eventEligibility(event);
+		const newest = event ? resolvedPin(event) : null;
 		return (
-			samePin(rule.eventVersion, pin.event_version) &&
-			samePin(rule.boardVersion, pin.board_version)
+			!!newest &&
+			samePin(newest.eventVersion, pin.event_version) &&
+			samePin(newest.boardVersion, pin.board_version)
 		);
 	});
 }
@@ -496,8 +528,10 @@ function targetUnresolved(
 		...Object.keys(existing.config.variables),
 		...Object.keys(existing.config.secret_overrides),
 	];
+	// The stored token of a bot the update drops is removed with it (`wirePlan`): nothing to decide.
+	const dropped = new Set(service.removedEvents);
 	return stored.flatMap((id) => {
-		if (removed.has(id)) return [];
+		if (removed.has(id) || dropped.has(botTokenEventId(id) ?? "")) return [];
 		const variable = definitions.find((row) => row.id === id);
 		const found = storedIssue(existing, variable, id, {
 			replaced: variable ? replaced(plan.draft, own, variable) : false,
@@ -534,4 +568,83 @@ export function unresolvedOverrides(
 			.filter((service) => service.kind !== "new")
 			.flatMap((service) => targetUnresolved(plan, target, service, facts)),
 	);
+}
+
+/** The token saved on a bot event's record, for Settings only; null for any other event. */
+export function savedTokenOf(event: AppEventInput | undefined): string | null {
+	if (!event || !isBot(event) || !event.config?.length) return null;
+	return savedBotToken(
+		event.event_type,
+		parseUint8ArrayToJson(event.config as number[]),
+	);
+}
+
+/** Whether the person entered a token for this bot, shared or for one device (an empty one counts: "Enter a token"). */
+export function enteredBotToken(draft: DeployDraft, eventId: string): boolean {
+	const key = botTokenKey(eventId);
+	return (
+		draft.secrets[key] !== undefined ||
+		draft.targets.some((target) => target.over.secrets?.[key] !== undefined)
+	);
+}
+
+function withToken(
+	draft: DeployDraft,
+	key: string,
+	token: string,
+	deviceIds: ReadonlySet<string>,
+): DeployDraft {
+	if (draft.secretsMode === "same")
+		return { ...draft, secrets: { ...draft.secrets, [key]: token } };
+	return {
+		...draft,
+		targets: draft.targets.map((target) =>
+			deviceIds.has(target.deviceId)
+				? {
+						...target,
+						over: {
+							...target.over,
+							secrets: { ...target.over.secrets, [key]: token },
+						},
+					}
+				: target,
+		),
+	};
+}
+
+/**
+ * "Use the token saved in Events", the default of a bot whose record has a
+ * token: for every device this deploy adds the bot to, the record's token
+ * stands where the plan reads typed secrets, as long as nobody entered one.
+ * It lives in the plan only: the saved draft never holds it, and it leaves
+ * this computer only inside `set_secret` or `rollout_secret`. A service that
+ * keeps its bot keeps its stored token.
+ */
+export function withSavedBotTokens(
+	draft: DeployDraft,
+	facts: PlanFacts,
+): DeployDraft {
+	const saved = (facts.app?.events ?? []).flatMap((event) => {
+		const token = draft.events.includes(event.id) ? savedTokenOf(event) : null;
+		return token && !enteredBotToken(draft, event.id)
+			? [{ eventId: event.id, token }]
+			: [];
+	});
+	if (!saved.length) return draft;
+	const plan = resolvePlan(draft, facts);
+	let next = draft;
+	for (const { eventId, token } of saved) {
+		const adding = new Set(
+			plan.targets
+				.filter((target) =>
+					target.services.some((service) =>
+						service.addedBots.includes(eventId),
+					),
+				)
+				.map((target) => target.deviceId),
+		);
+		if (adding.size)
+			next = withToken(next, botTokenKey(eventId), token, adding);
+	}
+	return next;
 }

@@ -501,6 +501,27 @@ mod tests {
     }
 
     #[test]
+    fn a_release_signed_for_a_year_verifies_and_stays_fresh() -> Result<()> {
+        const YEAR: i64 = 365 * 24 * 60 * 60;
+        let key = SigningKey::generate();
+        let trust = ReleaseTrust {
+            manifest_url: "https://releases.example/release.jws".into(),
+            public_keys: vec![URL_SAFE_NO_PAD.encode(key.public_key().to_bytes()?)],
+            minimum_sequence: 3,
+        };
+        let now = unix_time()?;
+        // The signer dates a list 300 seconds back; this device's clock may still be behind the signer's.
+        for issued_at in [now - 300, now + 120] {
+            let manifest = release_manifest(3, issued_at, issued_at + YEAR);
+            let release =
+                VerifiedRelease::verify(sign_standalone_release(&manifest, &key)?, &trust)?;
+            assert_eq!(release.manifest(), &manifest);
+            release.check_fresh()?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn pinned_release_and_file_check_reject_changed_and_linked_artifacts() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let binary = directory.path().join("binary");

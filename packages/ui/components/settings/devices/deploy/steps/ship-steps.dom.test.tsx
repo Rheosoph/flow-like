@@ -1260,6 +1260,199 @@ describe("Review (APP §3.12)", () => {
 		);
 		expect(sent(fakeFirst.fake, STUDIO, "stage_rollout")).toEqual([]);
 	});
+
+	const reportDraft = (change: Partial<DeployDraft> = {}) =>
+		draftOf(
+			VISITOR_PLAN_APP,
+			{ deviceIds: [STUDIO], eventId: "evt_visitor_report" },
+			{
+				approval: {
+					files: "read_write",
+					ownerConsent: true,
+					models: [],
+					maxInstances: 1,
+					expiresAt: NOW0 + 30 * 86_400,
+				},
+				...change,
+			},
+		);
+
+	test("a schedule that moves to a device: when it runs there, that the hub stops running it, and the way back", async () => {
+		const bundle = await bundleOf(
+			"app_visitor_checkin",
+			"online",
+			VISITOR_CATALOG,
+		);
+		await mountStage({
+			app: VISITOR_PLAN_APP,
+			initial: reportDraft(),
+			start: "review",
+			prepared: bundle,
+		});
+		const before = text(block("dp-conseq"));
+		expect(before).toContain(
+			"Daily visitor report runs on studio-mac-mini at 18:00 every day (Europe/Berlin). First run 18:00 GMT+2 · in 4 hr. · 16:00 your time. Missed runs are not made up.",
+		);
+		expect(before).toContain(
+			"The hub stops running Daily visitor report when studio-mac-mini starts it.",
+		);
+		expect(before).toContain(
+			"Remove it from the service, or choose Run it on the hub again in Events: the hub runs it again a few minutes later.",
+		);
+		// Read-write access and no spending limit: neither of the two warnings applies.
+		expect(before).not.toContain("read-only");
+		expect(before).not.toContain("Each run can use hosted models");
+		expect(before).not.toContain("falls into the switch");
+	});
+
+	test("a schedule with read-only cloud access or a spending limit says what that means for its runs", async () => {
+		const bundle = await bundleOf(
+			"app_visitor_checkin",
+			"online",
+			VISITOR_CATALOG,
+		);
+		const base = reportDraft();
+		await mountStage({
+			app: VISITOR_PLAN_APP,
+			initial: {
+				...base,
+				approval: { ...base.approval, files: "read_only" },
+				spending: {
+					limitMicros: 25_000_000,
+					expiresAt: NOW0 + 30 * 86_400,
+					consent: true,
+				},
+			},
+			start: "review",
+			prepared: bundle,
+		});
+		const before = text(block("dp-conseq"));
+		expect(before).toContain(
+			"daily-visitor-report's cloud access is read-only. Runs that change the app's data will fail.",
+		);
+		expect(before).toContain(
+			"Each run can use hosted models within daily-visitor-report's spending limit. When the limit is used up, this service's other events lose hosted models too.",
+		);
+	});
+
+	test("a flow version the preparation created is said before anything is uploaded, with what can't be undone", async () => {
+		const bundle = await bundleOf(
+			"app_visitor_checkin",
+			"online",
+			VISITOR_CATALOG,
+		);
+		await mountStage({
+			app: VISITOR_PLAN_APP,
+			initial: visitorDraft([EDGE]),
+			start: "review",
+			prepared: {
+				...bundle,
+				flows: [
+					{ boardId: "flow_main", version: [0, 4, 1], created: true },
+					{ boardId: "flow_report", version: [0, 2, 0], created: false },
+				],
+				latest: { evt_visitor_page: [0, 4, 1] },
+			},
+		});
+		const before = text(block("dp-conseq"));
+		expect(before).toContain(
+			"Created flow version 0.4.1 of Main flow from the current edits. The event keeps following Latest.",
+		);
+		expect(before).toContain(
+			"A created flow version stays in the flow's history.",
+		);
+		// A flow that already had a version equal to it created nothing.
+		expect(before).not.toContain("Report flow");
+	});
+
+	describe("Endpoints, forms, one-time schedules and bots (R2 §6.4)", () => {
+		const SHOP = APPS.app_shop_assistant;
+		const shopDraft = (events: string[]) =>
+			draftOf(
+				SHOP,
+				{ deviceIds: [EDGE] },
+				{
+					scope: "events",
+					events,
+					approval: {
+						files: "read_only",
+						ownerConsent: true,
+						models: [],
+						maxInstances: 1,
+						expiresAt: NOW0 + 30 * 86_400,
+					},
+					targets: [
+						{
+							deviceId: EDGE,
+							choices: {},
+							serveBoth: [],
+							over: { trustAgent: true },
+						},
+					],
+				},
+			);
+
+		test("an Endpoint, a form and a bot: where it answers, who may call or run it, and how the bot is undone", async () => {
+			await mountStage({
+				app: SHOP,
+				initial: shopDraft([
+					"evt_shop_orders",
+					"evt_shop_return",
+					"evt_shop_telegram",
+				]),
+				start: "review",
+			});
+			const before = text(block("dp-conseq"));
+			expect(before).toContain(
+				"Orders answers GET http://127.0.0.1:8080/orders.",
+			);
+			expect(before).toContain(
+				"Callers need shop-assistant's access token. The token set in Events is not used on a device.",
+			);
+			expect(before).toContain(
+				"A failed run answers 502, and a run is stopped at shop-assistant's time limit (300 s).",
+			);
+			expect(before).toContain(
+				"The hub keeps answering Orders at its own address.",
+			);
+			expect(before).toContain(
+				"Return request can be run from Devices by people who may start shop-assistant.",
+			);
+			expect(before).toContain(
+				"Anyone with shop-assistant's access token can also run it from the service page.",
+			);
+			expect(before).toContain(
+				"Shop helper answers from edge-berlin-01 while shop-assistant runs.",
+			);
+			expect(before).toContain(
+				"edge-berlin-01 removes the bot's Telegram webhook when it first connects.",
+			);
+			expect(before).toContain(
+				"Remove Shop helper from the service, or take it back in Events. Nothing else runs it afterwards until you start it somewhere.",
+			);
+			// One served event: nothing else shares its token.
+			expect(before).not.toContain("can call all of its endpoints");
+			expect(prose(block("dp-conseq"))).not.toMatch(MACHINE_WORDS);
+		});
+
+		test("a Discord bot's gap and a one-time schedule's single run are said before deploying", async () => {
+			await mountStage({
+				app: SHOP,
+				initial: shopDraft(["evt_shop_discord", "evt_shop_prices"]),
+				start: "review",
+			});
+			const before = text(block("dp-conseq"));
+			expect(before).toContain(
+				"Discord messages sent while shop-assistant restarts or updates are not answered.",
+			);
+			expect(before).toContain(
+				"Price update runs once on edge-berlin-01 at 2026-10-15 09:00 (Europe/Berlin). If edge-berlin-01 isn't running then, or within 15 minutes after, it doesn't run at all.",
+			);
+			expect(before).toContain("After that nothing runs it again.");
+			// A one-time schedule has no repeating times to describe.
+			expect(before).not.toContain("Missed runs are not made up");
+		});
+	});
 });
 
 async function deployStage(

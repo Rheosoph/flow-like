@@ -35,6 +35,10 @@ const { cleanupDevices, mountDevices, preloadDevices } = await import(
 );
 await preloadDevices();
 const { act, useState } = await import("react");
+const { createFakeWorkspace } = await import("../testing/fake-workspace");
+const { serveNightlyOnEdge, serveReviewOnEdge, serveShopOnEdge } = await import(
+	"../testing/schedule-scenarios"
+);
 const { AppDevicesScreen } = await import("./app-devices-screen");
 const { useAppRole } = await import("./use-app-devices");
 const { useDevicesRoute } = await import("../routing/use-devices-route");
@@ -56,6 +60,7 @@ const SCANNER = "app_warehouse_scan";
 const NOTES = "app_field_notes";
 const VISITOR = "app_visitor_checkin";
 const PARTNER = "app_partner_reports";
+const SHOP_APP = "app_shop_assistant";
 const ID = SAMPLE_IDS;
 
 const apps = APPS as Record<string, AppInput>;
@@ -335,7 +340,7 @@ describe("App › Devices · normal (online app, one update running)", () => {
 		expect(rows).toHaveLength(2);
 		expect(text(rows[0])).toContain("v1.5.0");
 		expect(text(rows[0])).toContain("Newest");
-		expect(text(rows[0])).toContain("3 events");
+		expect(text(rows[0])).toContain("5 events");
 		// The same wording as the strip above it ("built today 13:00").
 		expect(text(rows[0])).toMatch(/Built today \d\d:\d\d/);
 		expect(text(container.querySelector("[data-where-foot]"))).toMatch(
@@ -522,15 +527,18 @@ describe("App › Devices · header actions", () => {
 		const items = allByRole("menuitem", undefined, menu).map((item) =>
 			text(item),
 		);
-		expect(items.slice(0, 3)).toEqual([
+		// A Latest event and a schedule can run on a device like the others.
+		expect(items.slice(0, 5)).toEqual([
+			"Review queuenot on a device",
 			"Extract invoiceon 1 device",
 			"Extract invoice (GPU)not on a device",
 			"Invoice tools (MCP)not on a device",
+			"Nightly reconciliationnot on a device",
 		]);
 		expect(items.at(-1)).toBe("Manage events");
-		const blocked = allByRole("menuitem", /Nightly reconciliation/, menu)[0];
+		const blocked = allByRole("menuitem", /Invoice mailbox/, menu)[0];
 		expect(blocked.getAttribute("aria-disabled")).toBe("true");
-		expect(text(blocked)).toContain("Schedules can't run on a device yet.");
+		expect(text(blocked)).toContain("Inbound email is handled by the hub.");
 		expect(
 			allByRole("menuitem", /Extract invoice \(GPU\)/, menu)[0].getAttribute(
 				"href",
@@ -602,11 +610,10 @@ describe("App › Devices · by event", () => {
 		expect(heads).toEqual([ID.edge, ID.lab]);
 		const extract = matrix.querySelector('[data-event="evt_extract_http"]');
 		expect(text(extract)).toContain("Extract invoice");
-		expect(text(extract)).toContain("Web request");
+		expect(text(extract)).toContain("Endpoint");
 		expect(text(extract)).toContain("event 1.5.0 · flow 2.2.0");
-		expect(text(extract)).toContain(
-			"Served by the device · checks its web server",
-		);
+		// An Endpoint's line is its method and path (design R2 §6.4).
+		expect(text(extract)).toContain("POST /extract");
 		const served = extract?.querySelector('[data-matrix-cell="served"]');
 		expect(text(served)).toContain("invoice-extractor");
 		expect(text(served)).toContain("1.4.0 · flow 2.1.0");
@@ -646,19 +653,86 @@ describe("App › Devices · by event", () => {
 	});
 
 	test("Can't run on devices is collapsed and gives the plain reason with its fix", async () => {
-		const { container } = await mountApp(INVOICE, { query: "by=event" });
-		const toggle = byRole("button", "Can't run on devices · 3", container);
+		const { container } = await mountApp(CRM, { query: "by=event" });
+		const toggle = byRole("button", "Can't run on devices · 1", container);
 		expect(toggle.getAttribute("aria-expanded")).toBe("false");
 		expect(
-			present(container.querySelector('[data-event="evt_invoice_review"]')),
+			present(container.querySelector('[data-event="evt_crm_rest"]')),
 		).toBe(false);
 		await click(toggle);
-		const review = container.querySelector('[data-event="evt_invoice_review"]');
-		expect(text(review)).toContain("Follows the latest flow edits.");
-		expect(hrefOf("Pin a flow version in Events", review)).toBe(
-			`/library/config/events?id=${INVOICE}&event=evt_invoice_review`,
+		const rest = container.querySelector('[data-event="evt_crm_rest"]');
+		expect(text(rest)).toContain(
+			"Splits traffic with a canary. A device can't split traffic; end the canary first.",
 		);
-		expect(text(review)).toContain("Not offered when you deploy");
+		expect(hrefOf("Open Events", rest)).toBe(
+			`/library/config/events?id=${CRM}&event=evt_crm_rest`,
+		);
+		expect(text(rest)).toContain("Not offered when you deploy");
+	});
+
+	test("a schedule and an event that follows Latest are rows of the matrix, not of Can't run", async () => {
+		const { container } = await mountApp(INVOICE, { query: "by=event" });
+		const matrix = block(container, "ad-where");
+		expect(
+			present(byRole("button", "Can't run on devices · 1", container)),
+		).toBe(true);
+		const nightly = matrix.querySelector(
+			'[data-event="evt_invoice_reconcile"]',
+		);
+		expect(text(nightly)).toContain("Nightly reconciliation");
+		expect(text(nightly)).toContain("Schedule");
+		expect(text(nightly)).toContain("At 02:00 every day · Europe/Berlin");
+		expect(text(nightly)).not.toContain("Runs on its own");
+		const review = matrix.querySelector('[data-event="evt_invoice_review"]');
+		expect(text(review)).toContain("event 0.9.0 · flow 0.9.2");
+		expect(text(review?.querySelector("[data-follows-latest]"))).toBe(
+			"Follows Latest",
+		);
+		expect(
+			present(review?.querySelector('[data-matrix-cell="not_served"]')),
+		).toBe(true);
+	});
+
+	test("a schedule a device runs: the service says when it runs next, by device and by event", async () => {
+		const fake = await createFakeWorkspace();
+		expect(await serveNightlyOnEdge(fake)).toBeNull();
+		const { container } = await mountApp(INVOICE, { fake });
+		const service = block(container, "ad-where").querySelector(
+			'[data-service="invoice-extractor"]',
+		);
+		expect(text(service?.querySelector("[data-schedule]"))).toMatch(
+			/^Runs on a schedule · next Oct 1 at 02:00 GMT\+2 · in 12 hr\./,
+		);
+		await click(byRole("tab", "By event", container));
+		const cell = container
+			.querySelector('[data-event="evt_invoice_reconcile"]')
+			?.querySelector('[data-matrix-cell="served"]');
+		expect(text(cell?.querySelector("[data-schedule-run]"))).toMatch(
+			/^Next run( by its schedule:)? Oct 1 at 02:00 GMT\+2 · in 12 hr\./,
+		);
+	});
+
+	test("a schedule nobody moved to the service: the cell says it is not running there, never a next run", async () => {
+		const fake = await createFakeWorkspace();
+		expect(await serveNightlyOnEdge(fake, { release: false })).toBe(
+			"not_released",
+		);
+		const { container } = await mountApp(INVOICE, { fake, query: "by=event" });
+		const cell = container
+			.querySelector('[data-event="evt_invoice_reconcile"]')
+			?.querySelector('[data-matrix-cell="served"]');
+		expect(text(cell?.querySelector("[data-schedule-run]"))).toBe(
+			"Not running here: nobody who can edit this app's events has moved it to this service. The hub runs it.",
+		);
+		expect(text(cell)).not.toContain("Next run");
+	});
+
+	test("a schedule without a time zone says that a device runs it in UTC", async () => {
+		const { container } = await mountApp(CRM, { query: "by=event" });
+		const hourly = container.querySelector('[data-event="evt_crm_hourly"]');
+		expect(text(hourly)).toContain(
+			"At :00 past every hour · UTC (the event sets no time zone)",
+		);
 	});
 
 	test("switching the view replaces the URL; event= marks its row", async () => {
@@ -761,6 +835,23 @@ describe("App › Devices · local-only app", () => {
 		expect(text(versions)).toContain("Changed on this computer");
 		expect(text(block(container, "ad-where"))).toContain(
 			"Changes on this computer reach a device only when you update it.",
+		);
+	});
+
+	test("versions: flow edits of an event that follows Latest read as the current edits, never as a hash the next deploy replaces", async () => {
+		const fake = await createFakeWorkspace();
+		fake.hub.flows.edit(INVOICE, "flow_review");
+		const { container } = await mountApp(INVOICE, { fake });
+		const versions = block(container, "ad-versions");
+		const [newest, older] = versions.querySelectorAll("[data-version]");
+		expect(text(newest?.querySelector("[data-version-unpublished]"))).toBe(
+			"Current edits (no version yet)",
+		);
+		expect(present(newest?.querySelector("[data-idref]"))).toBe(false);
+		// An older version keeps its hash.
+		expect(present(older?.querySelector("[data-idref]"))).toBe(true);
+		expect(text(versions)).toContain(
+			"An event that follows Latest is deployed as the flow is at that moment.",
 		);
 	});
 
@@ -1004,12 +1095,15 @@ describe("App › Devices · never deployed", () => {
 		expect(headline).toContain(
 			"Visitor Check-in isn't on any device you can see yet.",
 		);
-		expect(headline).toContain("2 of its 4 events can run on a device.");
+		expect(headline).toContain("3 of its 4 events can run on a device.");
 		expect(
 			[...container.querySelectorAll("[data-block]")].map((entry) => entry.id),
 		).toEqual(["ad-can-run", "ad-mode", "ad-else"]);
 		const canRun = block(container, "ad-can-run");
-		expect(text(canRun.querySelector("h2"))).toContain("2 of 4");
+		expect(text(canRun.querySelector("h2"))).toContain("3 of 4");
+		expect(
+			text(canRun.querySelector('[data-event="evt_visitor_report"]')),
+		).toContain("At 18:00 every day · Europe/Berlin");
 		expect(text(canRun.querySelector("header [data-stamp]"))).toContain(
 			"events · checked",
 		);
@@ -1018,7 +1112,7 @@ describe("App › Devices · never deployed", () => {
 		).toContain("app settings · checked");
 		expect(text(canRun)).toContain("Check-in page");
 		expect(
-			present(queryByRole("button", "Can't run on devices · 2", canRun)),
+			present(queryByRole("button", "Can't run on devices · 1", canRun)),
 		).toBe(true);
 		expect(present(canRun.querySelector("[data-matrix-cell]"))).toBe(false);
 		expect(
@@ -1279,6 +1373,34 @@ describe("App › Devices · Update everywhere sheet", () => {
 		expect(fake.api.commands.length).toBe(commands);
 	});
 
+	test("a served event that follows Latest with flow edits: the review says a flow version is created, and names no version", async () => {
+		const fake = await createFakeWorkspace(undefined, { viewFacts: false });
+		const agent = fake.agent(ID.edge);
+		// The sample's update of this service is over, so it can be updated again.
+		agent.rollouts.length = 0;
+		await serveReviewOnEdge(fake);
+		const row = agent.placement("invoice-extractor");
+		Object.assign(row ?? {}, { applied_revision: row?.config_revision });
+		fake.api.hub.publishStatus(ID.edge, agent);
+		fake.hub.flows.edit(INVOICE, "flow_review");
+		const { settle } = await mountApp(INVOICE, {
+			fake,
+			query: "action=update-all",
+		});
+		await click(byRole("button", "Next: strategy", inPortal("dialog")));
+		await click(byRole("button", "Next: review", inPortal("dialog")));
+		await settle();
+		const review = inPortal("dialog");
+		expect(text(review)).toContain(
+			"invoice-extractor switches to the app as it is now with a safe update.",
+		);
+		expect(text(review.querySelector("[data-creates-flow]")).trim()).toBe(
+			"Starting it creates a flow version of Review flow from the current edits. The version stays in the flow's history.",
+		);
+		// Nothing is created before the last button.
+		expect(fake.api.sent("POST", /version\/current/).length).toBe(0);
+	});
+
 	test("starting shows the run on the page, one row per device", async () => {
 		const { container, settle } = await openSheet();
 		await click(byRole("button", "Next: strategy", inPortal("dialog")));
@@ -1397,6 +1519,81 @@ describe("App › Devices · service row menu", () => {
 		expect(
 			present(container.querySelector('[data-service="support-bot"]')),
 		).toBe(false);
+	});
+
+	describe("a service that runs a schedule", () => {
+		const SERVICE = "invoice-extractor";
+		const GIVE_BACK = `apps/${INVOICE}/device-schedules/evt_invoice_reconcile`;
+
+		/** invoice-extractor on edge-berlin-01 holds the nightly schedule, with no update in progress. */
+		const nightly = async () => {
+			const fake = await createFakeWorkspace();
+			fake.api.agent(ID.edge).rollouts.length = 0;
+			await serveNightlyOnEdge(fake);
+			return mountApp(INVOICE, { fake });
+		};
+		type Mounted = Awaited<ReturnType<typeof nightly>>;
+		const givenBack = ({ fake }: Mounted) =>
+			fake.api.sent("DELETE", /device-schedules/).map(([, path]) => path);
+		const sentSince = ({ fake }: Mounted, before: number) =>
+			fake.api.commands.slice(before).map(([, type]) => type);
+
+		async function removal(view: Mounted) {
+			const menu = await openMenu(view.container, SERVICE);
+			await click(allByRole("menuitem", "Remove service…", menu)[0]);
+			const sheet = inPortal();
+			await typeInto(byRole("textbox", undefined, sheet), SERVICE);
+			return sheet;
+		}
+		const confirm = (sheet: HTMLElement) =>
+			click(byRole("button", `Stop and remove ${SERVICE}`, sheet));
+
+		test("removing it hands the schedule back to the hub once it stopped, then removes it", async () => {
+			const view = await nightly();
+			const atRemove: string[][] = [];
+			view.fake.api.agent(ID.edge).handle("remove", () => {
+				atRemove.push(givenBack(view));
+				return { state: "completed", result: { removed: true } };
+			});
+			const before = view.fake.api.commands.length;
+			const sheet = await removal(view);
+			expect(text(sheet)).toContain(
+				"Run its schedules on the hub again (Nightly reconciliation)",
+			);
+			expect(givenBack(view)).toEqual([]);
+			await confirm(sheet);
+			await view.settle();
+			expect(atRemove).toEqual([[GIVE_BACK]]);
+			const sent = sentSince(view, before);
+			expect(sent.indexOf("remove")).toBeGreaterThan(sent.indexOf("stop"));
+		});
+
+		test("with the box unticked the service goes and the schedule stays where it is", async () => {
+			const view = await nightly();
+			const before = view.fake.api.commands.length;
+			const sheet = await removal(view);
+			await click(sheet.querySelector("#app-remove-give-back") as HTMLElement);
+			await confirm(sheet);
+			await view.settle();
+			expect(sentSince(view, before)).toContain("remove");
+			expect(givenBack(view)).toEqual([]);
+		});
+
+		test("a give-back the hub refuses keeps the service, stopped, and says what to do", async () => {
+			const view = await nightly();
+			view.fake.api.hub.schedules.canEditEvents = false;
+			const before = view.fake.api.commands.length;
+			await confirm(await removal(view));
+			await view.settle();
+			expect(
+				text(view.container.querySelector("[data-remove-note]")),
+			).toContain(
+				`The hub didn't take its schedules back, so ${SERVICE} wasn't removed. It stays stopped.`,
+			);
+			const sent = sentSince(view, before);
+			expect(sent).toContain("stop");
+			expect(sent).not.toContain("remove");
+		});
 	});
 
 	test("without a live connection the commands keep their reason and send nothing; the wizard links stay", async () => {
@@ -1769,7 +1966,7 @@ describe("App › Devices · a larger fleet (long lists are capped)", () => {
 			"Event",
 			"Runs on",
 		]);
-		expect(view.querySelectorAll("tr[data-event]").length).toBe(3);
+		expect(view.querySelectorAll("tr[data-event]").length).toBe(5);
 	});
 
 	test("more than two unknown devices are one row, one sentence and one Unlock several…", async () => {
@@ -1794,5 +1991,133 @@ describe("App › Devices · a larger fleet (long lists are capped)", () => {
 			'[data-ver-runs] [data-ver-fold="devices"]',
 		);
 		expect(text(fold)).toMatch(/^\d+ devices unknown until unlocked$/);
+	});
+});
+
+describe("App › Devices · round two kinds (design R2 §6.4)", () => {
+	const SHOP_SERVICE = "shop-assistant";
+	const within = (root: ParentNode, selector: string) => {
+		const found = root.querySelector<HTMLElement>(selector);
+		if (!found) throw new Error(`no ${selector}`);
+		return found;
+	};
+	const eventRow = (container: HTMLElement, eventId: string) =>
+		within(container, `[data-event="${eventId}"]`);
+
+	test("by event: every new kind is a runnable row with its own line; inbound email is the one that can't", async () => {
+		const fake = await createFakeWorkspace();
+		await serveShopOnEdge(fake);
+		const { container } = await mountApp(SHOP_APP, {
+			fake,
+			query: "by=event",
+		});
+		const orders = eventRow(container, "evt_shop_orders");
+		expect(text(orders)).toContain("OrdersEndpoint");
+		expect(text(orders)).toContain("GET /orders");
+		const form = eventRow(container, "evt_shop_return");
+		expect(text(form)).toContain("Return requestForm");
+		expect(text(form)).toContain(
+			"Started by a person · from Devices or the service page",
+		);
+		const telegram = eventRow(container, "evt_shop_telegram");
+		expect(text(telegram)).toContain("Shop helperTelegram bot");
+		expect(text(telegram)).toContain(
+			"Runs on its own · stays connected to Telegram",
+		);
+		expect(
+			text(telegram.querySelector('[data-matrix-cell="served"]')),
+		).toContain("Connected as Shop helper");
+		expect(text(eventRow(container, "evt_shop_discord"))).toContain(
+			"Runs on its own · stays connected to Discord",
+		);
+		const once = eventRow(container, "evt_shop_prices");
+		expect(text(once)).toContain("Price updateSchedule");
+		expect(text(once)).toContain("Once on 2026-10-15 at 09:00 · Europe/Berlin");
+		expect(text(once.querySelector("[data-schedule-run]"))).toMatch(
+			/^Runs once Oct 15 at 09:00 GMT\+2 · in 2 wk\./,
+		);
+		// Only a person-started event offers Run now… in its cell.
+		expect(present(form.querySelector("[data-run-now]"))).toBe(true);
+		for (const other of [orders, telegram, once])
+			expect(present(other.querySelector("[data-run-now]"))).toBe(false);
+		await click(byRole("button", "Can't run on devices · 1", container));
+		expect(text(eventRow(container, "evt_shop_mail"))).toContain(
+			"Inbound email is handled by the hub.",
+		);
+	});
+
+	test("by device: the service row says what its schedules and bots do, and offers Run {event} now…", async () => {
+		const fake = await createFakeWorkspace();
+		await serveShopOnEdge(fake);
+		const { container, navigations } = await mountApp(SHOP_APP, { fake });
+		const row = within(
+			block(container, "ad-where"),
+			`[data-service="${SHOP_SERVICE}"]`,
+		);
+		const lines = [...row.querySelectorAll("[data-kind-line]")].map((line) => [
+			line.getAttribute("data-kind-line"),
+			text(line),
+		]);
+		expect(lines).toEqual([
+			[
+				"scheduled",
+				expect.stringMatching(
+					/^Price update · Runs once Oct 15 at 09:00 GMT\+2 · in 2 wk\./,
+				),
+			],
+			["bot", "Shop helper · Connected as Shop helper"],
+			["bot", "Shop support · Connected as Shop support"],
+		]);
+		// A web endpoint serves the Endpoint and the form: not "only from Devices", never "in the background".
+		expect(text(row)).not.toContain("Started by a person · from Devices");
+		expect(text(row)).not.toContain("Runs in the background");
+		await click(byRole("button", `More for ${SHOP_SERVICE}`, container));
+		const item = inPortal("menu").querySelector<HTMLElement>(
+			'[data-menu-item="run-now-evt_shop_return"]',
+		);
+		expect(text(item)).toBe("Run Return request now…");
+		expect(attr(item, "aria-disabled")).not.toBe("true");
+		const before = navigations.length;
+		if (item) await click(item);
+		expect(useOverlayStore.getState().overlay).toEqual({
+			kind: "run_now",
+			deviceId: ID.edge,
+			serviceId: SHOP_SERVICE,
+			eventId: "evt_shop_return",
+		});
+		expect(navigations.length).toBe(before);
+	});
+
+	test("a service that only holds a form runs it from Devices; Run now… is off with the reason while it is stopped", async () => {
+		const fake = await createFakeWorkspace();
+		await serveShopOnEdge(fake, { events: ["evt_shop_return"] });
+		const { container, settle } = await mountApp(SHOP_APP, { fake });
+		const row = within(
+			block(container, "ad-where"),
+			`[data-service="${SHOP_SERVICE}"]`,
+		);
+		expect(text(row.querySelector('[data-kind-line="on_demand"]'))).toBe(
+			"Started by a person · from Devices",
+		);
+		await click(byRole("button", `More for ${SHOP_SERVICE}`, container));
+		await click(allByRole("menuitem", "Stop…", inPortal("menu"))[0]);
+		await click(
+			byRole(
+				"button",
+				`Stop ${SHOP_SERVICE}`,
+				container.querySelector<HTMLElement>("[data-confirm-row]") ?? undefined,
+			),
+		);
+		await settle();
+		await click(byRole("tab", "By event", container));
+		const runNow = within(
+			eventRow(container, "evt_shop_return"),
+			"[data-run-now]",
+		);
+		expect(attr(runNow, "aria-disabled")).toBe("true");
+		const reason = document.getElementById(
+			attr(runNow, "aria-describedby") ?? "",
+		);
+		expect(text(reason)).toBe("shop-assistant needs to be running.");
 	});
 });

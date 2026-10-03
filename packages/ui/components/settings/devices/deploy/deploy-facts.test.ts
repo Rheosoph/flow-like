@@ -4,9 +4,14 @@ import type {
 	PlacementConfiguration,
 } from "../../../../lib/device-management/deployment";
 import {
+	APPS,
+	configBytes,
+} from "../../../../lib/device-management/model/__fixtures__/apps";
+import {
 	type DeployDraft,
 	type PlanApp,
 	type PlanFacts,
+	draftWithoutSecrets,
 	makePlan,
 	resolvePlan,
 } from "../../../../lib/device-management/model/deploy-plan";
@@ -16,8 +21,10 @@ import {
 	mergeEventVariables,
 	portsInUse,
 	runsNewest,
+	savedTokenOf,
 	unresolvedOverrides,
 	variableUsers,
+	withSavedBotTokens,
 } from "./deploy-facts";
 
 const NOW = 1_790_769_600;
@@ -52,6 +59,7 @@ const APP: PlanApp = {
 			event_type: "http",
 			event_version: [2, 0, 0],
 			board_version: [3, 0, 0],
+			config: configBytes({ method: "GET", path: "/notes" }),
 		},
 		{
 			id: "evt_sync",
@@ -60,6 +68,7 @@ const APP: PlanApp = {
 			event_type: "http",
 			event_version: [1, 0, 0],
 			board_version: [3, 0, 0],
+			config: configBytes({ method: "POST", path: "/sync" }),
 		},
 	],
 	variables: {
@@ -318,6 +327,25 @@ describe("a service that already runs the newest version", () => {
 			runsNewest([{ ...first, board_version: null }, ...rest], [page]),
 		).toBe(false);
 	});
+
+	test("an event that follows Latest counts by the flow version that equals its flow", () => {
+		const [first, ...rest] = APP.events;
+		const latest = (flow: PlanApp["events"][number]["flow"]) => [
+			{ ...first, board_version: null, flow },
+			...rest,
+		];
+		expect(
+			runsNewest(latest({ current: [3, 0, 0], newest: [3, 0, 0] }), [page]),
+		).toBe(true);
+		// A newer version equals the flow, or edits no version holds: the update has something to send.
+		expect(
+			runsNewest(latest({ current: [3, 0, 1], newest: [3, 0, 1] }), [page]),
+		).toBe(false);
+		expect(
+			runsNewest(latest({ current: null, newest: [3, 0, 0] }), [page]),
+		).toBe(false);
+		expect(runsNewest(latest("missing_on_hub"), [page])).toBe(false);
+	});
 });
 
 describe("sandbox limits", () => {
@@ -398,4 +426,98 @@ test("ports in use come from the services that listen", () => {
 	expect(portsInUse([listening, configuration({})])).toEqual([
 		{ port: 8090, serviceId: "notes" },
 	]);
+});
+
+describe("bot tokens (R2 §1.10)", () => {
+	const SHOP = APPS.app_shop_assistant;
+	const TELEGRAM = "evt_shop_telegram";
+	const DISCORD = "evt_shop_discord";
+	const ORDERS = "evt_shop_orders";
+	const KEY = `event.${TELEGRAM}.bot_token`;
+	const SAVED = "123456789:AAHfixture-token-0123456789abcdef";
+
+	const factsOf = (services: string[] | null): PlanFacts => ({
+		app: SHOP,
+		platform: "desktop",
+		now: NOW,
+		devices: {
+			d1: {
+				id: "d1",
+				name: "edge",
+				gate: null,
+				locked: false,
+				services: services
+					? [{ serviceId: "shop", projectId: SHOP.id, events: services }]
+					: [],
+			},
+		},
+	});
+	const draftOf = (eventId: string, serviceId?: string) =>
+		makePlan({
+			scope: { kind: "app", appId: SHOP.id },
+			route: {
+				deviceIds: ["d1"],
+				eventId,
+				...(serviceId ? { serviceId } : {}),
+			},
+			app: SHOP,
+			deploymentId: "dep-bot",
+			now: NOW,
+		});
+
+	test("the token saved in Events stands where the bot is added; the draft that is saved never holds it", () => {
+		const facts = factsOf(null);
+		const draft = draftOf(TELEGRAM);
+		const planned = withSavedBotTokens(draft, facts);
+		expect(planned.secrets).toEqual({ [KEY]: SAVED });
+		expect(draft.secrets).toEqual({});
+		expect(JSON.stringify(draftWithoutSecrets(planned))).not.toContain(
+			"AAHfixture",
+		);
+		// Secrets per device: it lands on the device that gets the bot.
+		const perDevice = withSavedBotTokens(
+			{ ...draft, secretsMode: "per_device" },
+			facts,
+		);
+		expect(perDevice.secrets).toEqual({});
+		expect(perDevice.targets[0]?.over.secrets).toEqual({ [KEY]: SAVED });
+		expect(
+			savedTokenOf(SHOP.events.find((event) => event.id === TELEGRAM)),
+		).toBe(SAVED);
+	});
+
+	test("an entered token, a bot without a saved one, and a bot the service keeps take nothing from Events", () => {
+		const facts = factsOf(null);
+		const entered = { ...draftOf(TELEGRAM), secrets: { [KEY]: "" } };
+		expect(withSavedBotTokens(entered, facts)).toBe(entered);
+		const discord = draftOf(DISCORD);
+		expect(withSavedBotTokens(discord, facts)).toBe(discord);
+		expect(
+			savedTokenOf(SHOP.events.find((event) => event.id === DISCORD)),
+		).toBeNull();
+		const kept = draftOf(TELEGRAM, "shop");
+		expect(withSavedBotTokens(kept, factsOf([TELEGRAM])).secrets).toEqual({});
+	});
+
+	test("the stored token of a bot the update drops goes with it: nothing to decide", () => {
+		const facts = factsOf([TELEGRAM, ORDERS]);
+		const draft = {
+			...draftOf(ORDERS, "shop"),
+			events: [ORDERS],
+			acceptRemovedEvents: true,
+		};
+		const plan = resolvePlan(draft, facts);
+		expect(plan.targets[0]?.services[0]?.removedEvents).toEqual([TELEGRAM]);
+		const existing: PlacementConfiguration = {
+			...configuration({}, { [KEY]: "secret-telegram" }),
+			placement_id: "shop",
+			project_id: SHOP.id,
+		};
+		expect(
+			unresolvedOverrides(plan, {
+				configurations: { d1: [existing] },
+				previous: {},
+			}),
+		).toEqual([]);
+	});
 });

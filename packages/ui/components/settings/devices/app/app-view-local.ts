@@ -1,11 +1,16 @@
-import type {
-	AppServiceRow,
-	AppVersionView,
-	AppView,
-	LocalServiceChange,
-	MatrixRow,
+import {
+	type AppServiceRow,
+	type AppVersionView,
+	type AppView,
+	type LocalServiceChange,
+	type MatrixRow,
+	isClaimedKind,
 } from "../../../../lib/device-management/model/app-plan";
 import { versionName } from "../../../../lib/device-management/model/app-versions";
+import {
+	type DeployPlan,
+	planLatestFlows,
+} from "../../../../lib/device-management/model/deploy-plan";
 import { rolloutEndsAt } from "../../../../lib/device-management/model/device-view";
 import type { HeadlineApp } from "../../../../lib/device-management/model/headline";
 import type {
@@ -172,11 +177,18 @@ function servedSomewhere(row: MatrixRow): boolean | null {
 	return cells.some((cell) => cell.state === "unknown") ? null : false;
 }
 
-/** Eligible events no readable device serves; an unknown cell keeps an event out (unknown ≠ not deployed). */
+/**
+ * Eligible events no readable device serves; an unknown cell keeps an event
+ * out (unknown ≠ not deployed). A schedule or a bot is never one: the hub or
+ * the desktop app runs it until someone moves it to a device.
+ */
 export function eventsNowhere(view: AppView): string[] {
 	if (!view.services.length) return [];
 	return view.events.rows
-		.filter((row) => servedSomewhere(row) === false)
+		.filter(
+			(row) =>
+				!isClaimedKind(row.eligibility.kind) && servedSomewhere(row) === false,
+		)
 		.map((row) => row.name);
 }
 
@@ -254,6 +266,22 @@ export function updateAllGate(
 	const rows = updateRows(view);
 	if (!rows.length) return "all_newest";
 	return rows.every((row) => row.blocked === "staged") ? "all_staged" : null;
+}
+
+/**
+ * The flows an update turns into a version when it starts: an event that
+ * follows Latest is updated to the flow as it is now, and a flow with edits
+ * no published version holds gets one. Said before the update starts.
+ */
+export function flowsToPublish(plans: readonly DeployPlan[]): string[] {
+	const boards = new Set<string>();
+	for (const plan of plans)
+		for (const { eventId, boardId } of planLatestFlows(plan)) {
+			const event = plan.app?.events.find((row) => row.id === eventId);
+			const flow = typeof event?.flow === "object" ? event.flow : null;
+			if (flow && flow.current === null) boards.add(boardId);
+		}
+	return [...boards].sort();
 }
 
 /**

@@ -7,11 +7,13 @@ import {
 } from "../../testing/dom-harness";
 
 const dom = installDom();
-const { mountDevices, cleanupDevices, preloadDevices } = await import(
-	"../../testing/mount-devices"
-);
+const { mountDevices, cleanupDevices, fakeBackend, preloadDevices } =
+	await import("../../testing/mount-devices");
 const { createFakeWorkspace } = await import("../../testing/fake-workspace");
 const { useOverlayStore } = await import("../../workspace/overlay-store");
+const { APPS, configBytes } = await import(
+	"../../../../../lib/device-management/model/__fixtures__/apps"
+);
 const kit = await import("../deploy-test-kit");
 const { EDGE, STUDIO, LAB, WAREHOUSE, COLD, VISITOR, CRM, INVOICE, text } = kit;
 await preloadDevices();
@@ -288,5 +290,307 @@ describe("Where · older agent and older hub", () => {
 			path.endsWith("/my-access"),
 		);
 		expect(asked.length).toBeLessThanOrEqual(1);
+	});
+});
+
+describe("Where · Endpoints, one-time schedules and bots (R2 §6.2)", () => {
+	const SHOP = "app_shop_assistant";
+	const ORDERS = "evt_shop_orders";
+	const TELEGRAM = "evt_shop_telegram";
+	const ONCE = "evt_shop_prices";
+	const ackBox = (root: ParentNode, code: string, deviceId: string) =>
+		root.querySelector<HTMLButtonElement>(
+			`[id="deploy-acknowledge-${code}-${deviceId}"]`,
+		);
+	/** Shop Assistant with a change to its events. */
+	const shop = (
+		change: (
+			events: (typeof APPS.app_shop_assistant.events)[number][],
+		) => (typeof APPS.app_shop_assistant.events)[number][],
+	) => ({
+		...APPS,
+		[SHOP]: {
+			...APPS.app_shop_assistant,
+			events: change([...APPS.app_shop_assistant.events]),
+		},
+	});
+
+	test("a bot this computer runs blocks the deploy until it is stopped here; then the bot's warnings ask for a yes", async () => {
+		const view = await where(
+			SHOP,
+			{ event: TELEGRAM, device: EDGE },
+			{ platform: "desktop", localTriggers: [TELEGRAM] },
+		);
+		await view.settle();
+		const blocked =
+			"This computer runs Shop helper while Flow-Like is open. Two programs can't use one bot: stop it here first.";
+		expect(text(card(view.container, EDGE))).toContain(blocked);
+		expect(kit.footBlocking(view.container)).toBe(blocked);
+		// An acknowledgement can't stand in for the fix: two programs can't share one bot.
+		expect(view.container.textContent).not.toContain(
+			"Run it here as well: it then runs in more than one place",
+		);
+		await click(
+			byRole(
+				"button",
+				"Stop running it on this computer",
+				card(view.container, EDGE),
+			),
+		);
+		await view.settle();
+		expect(view.fake.sinks.removed).toEqual([TELEGRAM]);
+		expect(text(view.container)).not.toContain(blocked);
+		// An open bot and other computers that can't be seen: one yes each.
+		const page = text(view.container);
+		expect(page).toContain(
+			"Anyone who can message Shop helper can start runs on edge-berlin-01. Allowed chats are set in Events.",
+		);
+		expect(page).toContain(
+			"Other computers that run Shop helper in the desktop app can't be seen from here. Stop it there too.",
+		);
+		expect(kit.footBlocking(view.container)).toBe(
+			"Confirm on edge-berlin-01 that anyone who can message its bot can start runs, or set allowed chats in Events.",
+		);
+		await click(ackBox(view.container, "bot_open", EDGE) as Element);
+		expect(kit.footBlocking(view.container)).toBe(
+			"Confirm on edge-berlin-01 that no other computer keeps running its bot in the desktop app.",
+		);
+		await click(ackBox(view.container, "bot_other_computers", EDGE) as Element);
+		expect(kit.footBlocking(view.container)).toBeNull();
+		expect(kit.copyOf(view.container)).not.toMatch(kit.MACHINE_WORDS);
+	});
+
+	test("an Endpoint with its own token in a shared service needs a yes; as its own service it doesn't", async () => {
+		const apps = shop((events) => [
+			...events,
+			{
+				...events[0],
+				id: "evt_shop_status",
+				name: "Status",
+				ownToken: false,
+				config: configBytes({ method: "GET", path: "/status" }),
+			},
+		]);
+		const view = await where(SHOP, { device: EDGE }, { apps });
+		await view.settle();
+		const sentence =
+			"Orders has its own token in Events. On edge-berlin-01 everyone with shop-assistant's access token can call it, like every other endpoint, page and chat of shop-assistant.";
+		expect(text(view.container)).toContain(sentence);
+		expect(kit.footBlocking(view.container)).toBe(
+			"Confirm on edge-berlin-01 that an Endpoint with its own token shares the service's access token, or deploy it as its own service.",
+		);
+		await click(
+			byRole("button", "Deploy it as its own service", view.container),
+		);
+		await view.settle();
+		expect(text(view.container)).not.toContain(sentence);
+		expect(kit.footBlocking(view.container)).toBeNull();
+		expect(text(card(view.container, EDGE))).toContain("New service orders");
+	});
+
+	test("an agent without a flag leaves the event out there, with that flag's sentence and fix", async () => {
+		const view = await where(
+			SHOP,
+			{ event: ORDERS, device: [EDGE, STUDIO] },
+			{
+				agentFeatures: {
+					[STUDIO]: {
+						placement_events: 1,
+						placement_diagnostics: 1,
+						scheduled_events: 1,
+					},
+				},
+			},
+		);
+		const studio = card(view.container, STUDIO);
+		expect(text(studio)).toContain(
+			"Leaves out Orders: studio-mac-mini's agent is too old to serve Endpoints.",
+		);
+		expect(text(card(view.container, EDGE))).not.toContain("Leaves out");
+		await click(
+			byRole("button", "Update the device agent to serve Endpoints", studio),
+		);
+		expect(view.navigations.at(-1)?.href).toContain(
+			`device=${STUDIO}&tab=settings`,
+		);
+	});
+
+	test("a one-time schedule due in less than 5 minutes needs a yes on its device", async () => {
+		const apps = shop((events) =>
+			events.map((event) =>
+				event.id === ONCE
+					? {
+							...event,
+							schedule: {
+								scheduled_for: { date: "2026-09-30", time: "14:02" },
+								timezone: "Europe/Berlin",
+							},
+						}
+					: event,
+			),
+		);
+		const view = await where(SHOP, { event: ONCE, device: EDGE }, { apps });
+		await view.settle();
+		expect(text(view.container)).toMatch(
+			/Price update runs at .+, in less than 5 minutes\. If the deploy isn't finished by then, it doesn't run\./,
+		);
+		expect(kit.footBlocking(view.container)).toBe(
+			"Confirm on edge-berlin-01 that a one-time schedule runs in less than 5 minutes, or set a later time in Events.",
+		);
+		await click(ackBox(view.container, "once_soon", EDGE) as Element);
+		expect(kit.footBlocking(view.container)).toBeNull();
+	});
+});
+
+describe("Where · schedules (one place per schedule)", () => {
+	const REPORT = "evt_visitor_report";
+	const RECONCILE = "evt_invoice_reconcile";
+	const HOURLY = "evt_crm_hourly";
+	const twiceBox = (root: ParentNode, deviceId: string) =>
+		root.querySelector<HTMLButtonElement>(
+			`[id="deploy-schedule-twice-${deviceId}"]`,
+		);
+
+	test("an agent that is too old to run schedules: the schedule is left out there, with the way to update it", async () => {
+		const view = await where(
+			VISITOR,
+			{ event: REPORT, device: [EDGE, STUDIO] },
+			{
+				agentFeatures: {
+					[STUDIO]: { placement_events: 1, placement_diagnostics: 1 },
+				},
+			},
+		);
+		const studio = card(view.container, STUDIO);
+		expect(text(studio)).toContain(
+			"Leaves out Daily visitor report: studio-mac-mini's agent is too old to run schedules.",
+		);
+		expect(text(card(view.container, EDGE))).not.toContain("Leaves out");
+		await click(
+			byRole("button", "Update the device agent to run schedules", studio),
+		);
+		expect(view.navigations.at(-1)?.href).toContain(
+			`device=${STUDIO}&tab=settings`,
+		);
+	});
+
+	test("online: a schedule another service runs can't be planned for a second place, and the card says who has it", async () => {
+		const fake = await createFakeWorkspace();
+		fake.api.hub.schedules.release(
+			INVOICE,
+			RECONCILE,
+			EDGE,
+			"invoice-extractor",
+		);
+		fake.api.hub.schedules.claim(EDGE, "invoice-extractor", [RECONCILE]);
+		const view = await where(
+			INVOICE,
+			{ event: RECONCILE, device: STUDIO },
+			{ fake },
+		);
+		const sentence =
+			"Nightly reconciliation is already assigned to edge-berlin-01 › invoice-extractor. A schedule runs in one place: remove it there first, or run it on the hub again in Events.";
+		expect(text(card(view.container, STUDIO))).toContain(sentence);
+		expect(kit.footBlocking(view.container)).toBe(sentence);
+	});
+
+	test("online: a role that may not edit the app's events is told before anything runs", async () => {
+		const view = await where(
+			VISITOR,
+			{ event: REPORT, device: STUDIO },
+			{
+				backend: {
+					roleState: {
+						// Read boards without Write events.
+						getOwnRole: async () => ({
+							role_id: "role-reader",
+							role_name: "Reader",
+							permissions: 256,
+							is_owner: false,
+							can_leave: true,
+						}),
+					},
+				} as never,
+			},
+		);
+		expect(kit.footBlocking(view.container)).toBe(
+			"Moving Daily visitor report off the hub needs the right to edit this app's events. Ask someone who has it, or leave the schedule out.",
+		);
+	});
+
+	test("local-only: a schedule on two devices runs once on each, and the person says yes per device", async () => {
+		const view = await where(
+			CRM,
+			{ event: HOURLY, device: [EDGE, STUDIO] },
+			{ platform: "desktop" },
+		);
+		const page = text(view.container);
+		expect(page).toContain(
+			"Hourly sync will run on 2 devices. Each runs it on its own copy of the app's data; emails and other outside effects happen once per device.",
+		);
+		expect(kit.footBlocking(view.container)).toBe(
+			"Confirm on edge-berlin-01 that its schedule may run in more than one place, or leave it out.",
+		);
+		await click(twiceBox(view.container, EDGE) as Element);
+		expect(kit.footBlocking(view.container)).toBe(
+			"Confirm on studio-mac-mini that its schedule may run in more than one place, or leave it out.",
+		);
+		await click(twiceBox(view.container, STUDIO) as Element);
+		expect(kit.footBlocking(view.container)).toBeNull();
+		// A schedule is never served by two services of one device.
+		expect(page).not.toContain("Serve it in both");
+	});
+
+	test("local-only: one device takes a schedule without a question", async () => {
+		const view = await where(
+			CRM,
+			{ event: HOURLY, device: STUDIO },
+			{ platform: "desktop" },
+		);
+		expect(twiceBox(view.container, STUDIO)).toBeNull();
+		expect(kit.footBlocking(view.container)).toBeNull();
+	});
+
+	test("this computer runs the schedule too: say yes, or stop it here with one click", async () => {
+		const running = new Set([HOURLY]);
+		const removed: string[] = [];
+		const fake = await createFakeWorkspace(undefined, { platform: "desktop" });
+		const base = fakeBackend(fake);
+		const view = await where(
+			CRM,
+			{ event: HOURLY, device: STUDIO },
+			{
+				fake,
+				backend: {
+					eventState: {
+						getEvents: (appId: string) => base.eventState.getEvents(appId),
+						isEventSinkActive: async (eventId: string) => running.has(eventId),
+					},
+					sinkState: {
+						listEventSinks: async () => [],
+						isEventSinkActive: async (eventId: string) => running.has(eventId),
+						removeEventSink: async (eventId: string) => {
+							removed.push(eventId);
+							running.delete(eventId);
+						},
+					},
+				} as never,
+			},
+		);
+		await view.settle();
+		expect(text(view.container)).toContain(
+			"This computer also runs Hourly sync",
+		);
+		expect(kit.footBlocking(view.container)).toBe(
+			"Confirm on studio-mac-mini that its schedule may run in more than one place, or leave it out.",
+		);
+		await click(
+			byRole("button", "Stop running it on this computer", view.container),
+		);
+		await view.settle();
+		expect(removed).toEqual([HOURLY]);
+		expect(text(view.container)).not.toContain("This computer also runs");
+		expect(twiceBox(view.container, STUDIO)).toBeNull();
+		expect(kit.footBlocking(view.container)).toBeNull();
 	});
 });

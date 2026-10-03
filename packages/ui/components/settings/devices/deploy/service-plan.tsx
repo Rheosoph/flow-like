@@ -15,11 +15,34 @@ import { eventName, issueText, planNames } from "./deploy-copy";
 
 /* APP §3.5 item 5: which services the chosen events become. Forced splits and limits are stated, never silent. */
 
-function whyText(t: DevicesT, plan: DeployPlan, why: ServiceWhy): string {
+/** Why a service is limited to one instance, or split from another: the plan's reason as a sentence. */
+export function serviceWhyText(
+	t: DevicesT,
+	plan: DeployPlan,
+	why: ServiceWhy,
+): string {
 	if (why.code === "background")
 		return t(
-			"devices:deploy.services.whyBackground",
-			"{{event}} runs on its own, so this service runs 1 instance. Only Web request, Chat and Page events can run several.",
+			"devices:deploy.services.whyRunsAlone",
+			"{{event}} runs on its own, so this service runs 1 instance. Only services with a Page, chat or Endpoint can run several.",
+			{ event: eventName(plan, why.eventId) },
+		);
+	if (why.code === "scheduled")
+		return t(
+			"devices:deploy.services.whyScheduled",
+			"{{event}} runs on a schedule, so this service runs 1 instance. Two instances would start every run twice.",
+			{ event: eventName(plan, why.eventId) },
+		);
+	if (why.code === "bot")
+		return t(
+			"devices:deploy.services.whyBot",
+			"{{event}} is a bot, so this service runs 1 instance. Two instances would answer every message twice.",
+			{ event: eventName(plan, why.eventId) },
+		);
+	if (why.code === "on_demand")
+		return t(
+			"devices:deploy.services.whyOnDemand",
+			"{{event}} is started by a person and nothing in this service is served on the web, so it runs 1 instance. More instances need a Page, chat or Endpoint.",
 			{ event: eventName(plan, why.eventId) },
 		);
 	if (why.code === "writes")
@@ -76,7 +99,7 @@ function ServiceRow({
 		(row) => row.step !== "where" && row.serviceKey === service.key,
 	);
 	const notes = [
-		...service.why.map((why) => whyText(t, plan, why)),
+		...service.why.map((why) => serviceWhyText(t, plan, why)),
 		...renameNotes(t, plan, service),
 	];
 	return (

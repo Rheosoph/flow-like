@@ -35,6 +35,7 @@ import {
 	fleetFacts,
 	isLastKnown,
 } from "../../../../lib/device-management/model/device-view";
+import { nextScheduledRun } from "../../../../lib/device-management/model/schedule-where";
 import type {
 	DevicesRoute,
 	DevicesScope,
@@ -50,6 +51,7 @@ import type {
 import { appCopy } from "../copy/app-copy";
 import { formatMoney } from "../copy/attention-copy";
 import { enumLabel } from "../copy/enum-labels";
+import { scheduledLine } from "../copy/schedule-copy";
 import { DriftChip, MODE_ICON, VersionCell } from "../primitives/app-chips";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import { Block } from "../primitives/block";
@@ -76,6 +78,8 @@ import {
 	useDevicesRoute,
 	useRouteLink,
 } from "../routing/use-devices-route";
+import { BotLine, OnceLines } from "../service/event-lines";
+import { type ScheduleRow, scheduleRows } from "../service/schedules-block";
 import { stampOf, useAppNames } from "../shell/attention-popover";
 import { plainClick } from "../shell/rail-row";
 import {
@@ -509,9 +513,34 @@ function AppLine(context: Readonly<RowContext>) {
 				events={row?.events ?? service.events}
 				names={read.app?.events}
 			/>
+			<ScheduleLine service={service} read={read} />
+			<OnceLines service={service} app={read} />
+			<BotLine service={service} app={read} />
 		</>
 	);
 }
+
+const LINE = "basis-full text-xs text-muted-foreground";
+
+/** "Runs on a schedule · next …" for its repeating schedules; one-time schedules have lines of their own. */
+function ScheduleLine({
+	service,
+	read,
+}: Readonly<Pick<RowContext, "service" | "read">>) {
+	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	const ids = scheduleRows(service, read)
+		.filter(isRepeating)
+		.map((row) => row.eventId);
+	if (!ids.length) return null;
+	return (
+		<span data-schedule="" className={LINE}>
+			{scheduledLine(t, nextScheduledRun(service, ids, time.nowS), time)}
+		</span>
+	);
+}
+
+const isRepeating = (row: ScheduleRow) => !row.once;
 
 const SERVES_SHOWN = 2;
 

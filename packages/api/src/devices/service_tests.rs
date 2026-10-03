@@ -139,6 +139,7 @@ impl TestDatabase {
             include_str!("../../prisma/migrations/20260921140000_instance_resources/migration.sql"),
             include_str!("../../prisma/migrations/20260922120000_device_management/migration.sql"),
             include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
+            include_str!("../../prisma/migrations/20261002120000_device_schedules/migration.sql"),
         ]
         .into_iter()
         .flat_map(|migration| migration.split(';'))

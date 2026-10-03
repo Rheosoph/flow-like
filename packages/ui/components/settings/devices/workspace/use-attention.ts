@@ -75,6 +75,7 @@ import type {
 } from "../../../../lib/device-management/workspace/types";
 import type { VerifiedRelease } from "../../../../lib/device-package";
 import type { DeviceResources } from "../../../../lib/device-resources";
+import { releaseVerdictOf, usableRelease } from "../hub/release-verdict";
 
 /** IA §6.5 dwell conditions ("for > 2 min") are re-checked on this tick, never on the 1 s clock. */
 export const DWELL_TICK_MS = 30_000;
@@ -280,6 +281,12 @@ function myAccess(workspace: DeviceWorkspace): AttentionInput["myAccess"] {
 const known = <K extends string, V>(key: K, value: V | undefined) =>
 	(value === undefined ? {} : { [key]: value }) as { [P in K]?: V };
 
+/** How long the hub's release list is valid in all; unknown when it doesn't say. */
+const lifetimeOf = (manifest: VerifiedRelease["manifest"]) => {
+	const seconds = manifest.expires_at - manifest.issued_at;
+	return Number.isFinite(seconds) ? seconds : undefined;
+};
+
 /** Fleet-wide hub reads; a route the hub lacks or has not answered leaves its field out. */
 function hubFields(
 	workspace: DeviceWorkspace,
@@ -297,6 +304,7 @@ function hubFields(
 			manifest && {
 				version: manifest.release_version,
 				sequence: manifest.sequence,
+				...known("validForS", lifetimeOf(manifest)),
 			},
 		),
 		...known("usage", usage && { limits: usage.limits, usage: usage.usage }),
@@ -793,6 +801,16 @@ export function AttentionProvider({
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `version` and `tick` stand for the manager snapshots and the dwell clock
 	const computed = useMemo(() => {
+		const usable = usableRelease(
+			releaseVerdictOf(
+				hubQuery.data,
+				{
+					data: release.data,
+					...(release.error ? { error: toHubError(release.error) } : {}),
+				},
+				Math.floor(workspace.clock.now() / 1000),
+			),
+		);
 		const input = buildAttentionInput(workspace, {
 			hub,
 			rows: list.data,
@@ -803,7 +821,7 @@ export function AttentionProvider({
 			certInventoryAll: certificates.data,
 			resourceSummary: resourceSummary.data,
 			archiveUsage: archiveUsage.data,
-			release: release.data,
+			release: usable,
 			verifyPolicy,
 		});
 		const sources: GateSources = { workspace, input, tokenScopeAll };
@@ -826,7 +844,9 @@ export function AttentionProvider({
 		certificates.data,
 		resourceSummary.data,
 		archiveUsage.data,
+		hubQuery.data,
 		release.data,
+		release.error,
 	]);
 
 	const state = useMemo<AttentionState>(

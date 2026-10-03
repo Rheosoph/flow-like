@@ -28,6 +28,7 @@ import type { DeployRoute } from "../../../../../lib/device-management/model/typ
 import type { DeviceWorkspace } from "../../../../../lib/device-management/workspace/types";
 import { humanFileSize } from "../../../../../lib/utils";
 import { CloudApprovalFields } from "../../cloud/approval-fields";
+import { eligibilityCopy } from "../../copy/eligibility-copy";
 import { errorCopy } from "../../copy/error-copy";
 import { gateCopy } from "../../copy/gate-copy";
 import {
@@ -186,8 +187,15 @@ function deviceCheckOf(t: DevicesT, check: CopyEventCheck): DeployDeviceCheck {
 		"devices:deployShip.copy.refusedNoReason",
 		"The device can't run this event.",
 	);
+	// A copy prepared elsewhere can't carry a flow version for an event that follows Latest: the cause is known, whatever the device words.
+	const latestCopy = eligibilityCopy(t, {
+		code: "latest_flow",
+		eventType: "",
+		latestFlow: "copy",
+	}).long;
 	for (const event of check.refused)
-		refusals[event.id] = event.reason || fallback;
+		refusals[event.id] =
+			event.cause === "latest_copy" ? latestCopy : event.reason || fallback;
 	return { refusals, variables: check.variables };
 }
 

@@ -61,26 +61,84 @@ pub struct DeviceExportFile {
     pub size: u64,
 }
 
+/// Why the staged copy of an event that follows Latest carries no flow version.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LatestEventProblem {
+    /// No published version holds the flow as it is stored.
+    Edited,
+    /// A version holds the flow, but not the event's Page or start node.
+    TargetMissing,
+}
+
+/// An event that follows Latest and the flow version its staged copy was pinned to.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct DeviceLatestEvent {
+    pub event_id: String,
+    pub board_id: String,
+    pub board_version: Option<(u32, u32, u32)>,
+    pub problem: Option<LatestEventProblem>,
+}
+
+/// The flow version a staged event that follows Latest is pinned to.
+struct LatestPin {
+    event_version: (u32, u32, u32),
+    board_id: String,
+    board_version: (u32, u32, u32),
+}
+
+impl LatestPin {
+    /// The live document and the archive of the same event version, while they follow Latest.
+    fn applies_to(&self, staged: &Event) -> bool {
+        staged.board_version.is_none()
+            && staged.event_version == self.event_version
+            && staged.board_id == self.board_id
+    }
+}
+
+/// The version an event that follows Latest is pinned to, or why it stays unpinned.
+/// `published` is the version that holds the event's flow as stored.
+fn latest_resolution(
+    event: &Event,
+    published: Option<&Board>,
+) -> (Option<(u32, u32, u32)>, Option<LatestEventProblem>) {
+    match published {
+        None => (None, Some(LatestEventProblem::Edited)),
+        Some(board)
+            if board.holds_event_target(event.default_page_id.as_deref(), &event.node_id) =>
+        {
+            (Some(board.version), None)
+        }
+        Some(_) => (None, Some(LatestEventProblem::TargetMissing)),
+    }
+}
+
 /// Owns staged bytes until upload completes or its owning session expires.
 pub struct DeviceProjectSnapshot {
     directory: tempfile::TempDir,
     files: BTreeMap<String, u64>,
     bytes: u64,
+    latest_events: Vec<DeviceLatestEvent>,
 }
 
 impl DeviceProjectSnapshot {
-    pub async fn online_dependencies(project: &str) -> Result<Self> {
-        validate_path(project)?;
-        if project.contains('/') {
-            bail!("Invalid project identifier");
-        }
-        let mut snapshot = Self {
+    fn empty() -> Result<Self> {
+        Ok(Self {
             directory: tempfile::Builder::new()
                 .prefix("flow-like-device-export-")
                 .tempdir()?,
             files: BTreeMap::new(),
             bytes: 0,
-        };
+            latest_events: Vec::new(),
+        })
+    }
+
+    pub async fn online_dependencies(project: &str) -> Result<Self> {
+        validate_path(project)?;
+        if project.contains('/') {
+            bail!("Invalid project identifier");
+        }
+        let mut snapshot = Self::empty()?;
         snapshot
             .add_bytes(
                 &format!("apps/{project}/online-source.json"),
@@ -99,6 +157,12 @@ impl DeviceProjectSnapshot {
                 size: *size,
             })
             .collect()
+    }
+
+    /// Every event of the project that follows Latest, ordered by id. Empty for an online
+    /// project, whose events are resolved by its hub.
+    pub fn latest_events(&self) -> &[DeviceLatestEvent] {
+        &self.latest_events
     }
 
     pub fn read_chunk(&self, path: &str, offset: u64, length: usize) -> Result<Vec<u8>> {
@@ -393,9 +457,73 @@ impl DeviceProjectSnapshot {
         Ok(())
     }
 
+    fn staged_event(&self, path: &str) -> Result<Event> {
+        let plain = self.read_compressed(path)?;
+        let proto = flow_like_types::proto::Event::decode(plain.as_slice()).map_err(|error| {
+            anyhow!("Cannot decode event {path} for deployment export: {error}")
+        })?;
+        Ok(Event::from_proto(proto))
+    }
+
+    /// Resolves every staged event that follows Latest to the published version that holds its
+    /// flow as stored, and checks that the version still holds what the event points at. Reads
+    /// the source store: the export's final inventory check fails when a flow changed meanwhile.
+    async fn resolve_latest_events(
+        &mut self,
+        base: &Path,
+        event_ids: &[String],
+        store: Arc<dyn ObjectStore>,
+    ) -> Result<BTreeMap<String, LatestPin>> {
+        let mut flows: BTreeMap<String, Option<Board>> = BTreeMap::new();
+        let mut pins = BTreeMap::new();
+        self.latest_events.clear();
+        for id in event_ids.iter().collect::<std::collections::BTreeSet<_>>() {
+            let Some(event) = self.staged_latest_event(base, id)? else {
+                continue;
+            };
+            if !flows.contains_key(&event.board_id) {
+                let published = published_flow(store.clone(), base, &event.board_id).await;
+                flows.insert(event.board_id.clone(), published);
+            }
+            let published = flows.get(&event.board_id).and_then(Option::as_ref);
+            let (board_version, problem) = latest_resolution(&event, published);
+            pins.extend(board_version.map(|board_version| {
+                let pin = LatestPin {
+                    event_version: event.event_version,
+                    board_id: event.board_id.clone(),
+                    board_version,
+                };
+                (id.clone(), pin)
+            }));
+            self.latest_events.push(DeviceLatestEvent {
+                event_id: id.clone(),
+                board_id: event.board_id,
+                board_version,
+                problem,
+            });
+        }
+        Ok(pins)
+    }
+
+    /// The staged live document of an event, when that event follows Latest.
+    fn staged_latest_event(&self, base: &Path, id: &str) -> Result<Option<Event>> {
+        let path = format!("{base}/events/{id}.event");
+        if !self.files.contains_key(&path) {
+            return Ok(None);
+        }
+        let event = self.staged_event(&path)?;
+        Ok((event.id == id && event.board_version.is_none()).then_some(event))
+    }
+
     /// Rewrites staged live and archived events before the client hashes them.
     /// Pinned-version loads compare decoded events, so re-encoding keeps them valid.
-    async fn redact_events(&mut self, base: &Path) -> Result<()> {
+    /// An event that follows Latest gets its resolved flow version on the live document and
+    /// on the archive of the same event version, so the device finds both equal.
+    async fn redact_events(
+        &mut self,
+        base: &Path,
+        latest: &BTreeMap<String, LatestPin>,
+    ) -> Result<()> {
         let prefix = format!("{base}/");
         let paths = self
             .files
@@ -404,23 +532,50 @@ impl DeviceProjectSnapshot {
             .cloned()
             .collect::<Vec<_>>();
         for path in paths {
-            let plain = self.read_compressed(&path)?;
-            let proto =
-                flow_like_types::proto::Event::decode(plain.as_slice()).map_err(|error| {
-                    anyhow!("Cannot decode event {path} for deployment export: {error}")
-                })?;
-            let stored = Event::from_proto(proto);
+            let stored = self.staged_event(&path)?;
             let original = stored.to_proto();
-            let redacted = device_event(stored)?.to_proto();
-            if redacted != original {
+            let mut staged = device_event(stored)?;
+            let pin = latest.get(&staged.id).filter(|pin| pin.applies_to(&staged));
+            staged.board_version = pin.map(|pin| pin.board_version).or(staged.board_version);
+            let staged = staged.to_proto();
+            if staged != original {
                 self.replace_bytes(
                     &path,
-                    &lz4_flex::compress_prepend_size(&redacted.encode_to_vec()),
+                    &lz4_flex::compress_prepend_size(&staged.encode_to_vec()),
                 )
                 .await?;
             }
         }
         Ok(())
+    }
+}
+
+/// The published version that holds a flow as it is stored. A flow that was never published,
+/// was edited since, or cannot be read or compared has none; the last case is logged.
+async fn published_flow(store: Arc<dyn ObjectStore>, base: &Path, board_id: &str) -> Option<Board> {
+    let published = async {
+        let Some(version) =
+            Board::published_version_of_stored_draft(store.clone(), base, board_id).await?
+        else {
+            return Ok(None);
+        };
+        let board =
+            Board::from_proto(Board::load_proto(store, base, board_id, Some(version)).await?);
+        if board.id != board_id || board.version != version {
+            bail!("Published version of flow {board_id} carries another identity");
+        }
+        Result::<Option<Board>>::Ok(Some(board))
+    };
+    match published.await {
+        Ok(board) => board,
+        Err(error) => {
+            tracing::warn!(
+                board_id,
+                error = %error,
+                "Flow cannot be compared with its published versions; its events that follow Latest stay unpinned in this deployment export"
+            );
+            None
+        }
     }
 }
 
@@ -490,13 +645,7 @@ impl App {
         if !before.contains_key("manifest.app") {
             bail!("Project manifest is missing");
         }
-        let mut snapshot = DeviceProjectSnapshot {
-            directory: tempfile::Builder::new()
-                .prefix("flow-like-device-export-")
-                .tempdir()?,
-            files: BTreeMap::new(),
-            bytes: 0,
-        };
+        let mut snapshot = DeviceProjectSnapshot::empty()?;
         for (relative, (store, metadata)) in &before {
             validate_local_source(&sources[*store], &metadata.location)?;
             snapshot
@@ -507,7 +656,10 @@ impl App {
                 )
                 .await?;
         }
-        snapshot.redact_events(&base).await?;
+        let latest = snapshot
+            .resolve_latest_events(&base, &self.events, stores[0].clone())
+            .await?;
+        snapshot.redact_events(&base, &latest).await?;
         // Export exactly the selected account. The target runs offline as `local`;
         // placement initialization remaps this project-scoped payload to that identity.
         let user_source = FlowLikeState::user_store(&state).await?;
@@ -851,10 +1003,7 @@ mod tests {
     }
 
     fn staged_event(snapshot: &DeviceProjectSnapshot, path: &str) -> Result<Event> {
-        let plain = snapshot.read_compressed(path)?;
-        Ok(Event::from_proto(flow_like_types::proto::Event::decode(
-            plain.as_slice(),
-        )?))
+        snapshot.staged_event(path)
     }
 
     #[test]
@@ -1065,11 +1214,7 @@ mod tests {
         let path = Path::from("apps/test/upload/file");
         store.put(&path, "original".into()).await?;
         let metadata = store.head(&path).await?;
-        let mut snapshot = DeviceProjectSnapshot {
-            directory: tempfile::tempdir()?,
-            files: BTreeMap::new(),
-            bytes: 0,
-        };
+        let mut snapshot = DeviceProjectSnapshot::empty()?;
         snapshot
             .add_object(path.as_ref(), store.clone(), &metadata)
             .await?;
@@ -1093,11 +1238,7 @@ mod tests {
         store.put(&path, "first".into()).await?;
         let metadata = store.head(&path).await?;
         store.put(&path, "other".into()).await?;
-        let mut snapshot = DeviceProjectSnapshot {
-            directory: tempfile::tempdir()?,
-            files: BTreeMap::new(),
-            bytes: 0,
-        };
+        let mut snapshot = DeviceProjectSnapshot::empty()?;
         assert!(
             snapshot
                 .add_object(path.as_ref(), store, &metadata)
@@ -1106,6 +1247,207 @@ mod tests {
         );
         assert!(!included("storage/db/table.lance/_versions/1.manifest"));
         assert!(!included("logs/run.json"));
+        Ok(())
+    }
+
+    async fn latest_project() -> Result<(Arc<FlowLikeState>, App)> {
+        use crate::{bit::Metadata, state::FlowLikeConfig, utils::http::HTTPClient};
+        use flow_like_storage::files::store::FlowLikeStore;
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(FlowLikeStore::Memory(Arc::new(InMemory::new()))),
+            HTTPClient::new_without_refetch(),
+        ));
+        let app = App::new(
+            Some("project".into()),
+            Metadata::default(),
+            vec![],
+            state.clone(),
+        )
+        .await?;
+        Ok((state, app))
+    }
+
+    /// A stored flow of the project with one start node, and that node's id.
+    async fn stored_flow(
+        state: &Arc<FlowLikeState>,
+        app: &mut App,
+        id: &str,
+    ) -> Result<(Board, String)> {
+        let mut board = Board::new(Some(id.into()), Path::from("apps/project"), state.clone());
+        let node = Node::new("start", "Start", "", "test");
+        let node_id = node.id.clone();
+        board.nodes.insert(node_id.clone(), node);
+        board.mark_changed();
+        board.save(None).await?;
+        app.boards.push(id.into());
+        Ok((board, node_id))
+    }
+
+    /// A live event that follows Latest.
+    async fn latest_event(app: &mut App, id: &str, board_id: &str, node_id: &str) -> Result<Event> {
+        let mut event = test_event(id);
+        event.board_id = board_id.into();
+        event.board_version = None;
+        event.node_id = node_id.into();
+        event.save(app, None).await?;
+        app.events.push(id.into());
+        Ok(event)
+    }
+
+    /// The export of a project whose flow is published as 0.0.1: `with-archive` and
+    /// `live-only` follow Latest, the first with an archive of its own event version and one
+    /// of an older version; `pinned` is pinned to the published version.
+    async fn exported_latest_project() -> Result<(App, DeviceProjectSnapshot)> {
+        let (state, mut app) = latest_project().await?;
+        let (mut flow, node) = stored_flow(&state, &mut app, "flow").await?;
+        assert_eq!(flow.publish_if_changed(None).await?, ((0, 0, 1), true));
+
+        let archived = latest_event(&mut app, "with-archive", "flow", &node).await?;
+        archived.save(&app, Some(archived.event_version)).await?;
+        let mut older = archived.clone();
+        older.event_version = (0, 9, 0);
+        older.save(&app, Some(older.event_version)).await?;
+        latest_event(&mut app, "live-only", "flow", &node).await?;
+        let mut pinned = latest_event(&mut app, "pinned", "flow", &node).await?;
+        pinned.board_version = Some((0, 0, 1));
+        pinned.save(&app, None).await?;
+        app.save().await?;
+
+        let snapshot = app.export_device_snapshot("auth0|selected").await?;
+        Ok((app, snapshot))
+    }
+
+    #[tokio::test]
+    async fn latest_events_are_staged_at_the_version_that_holds_their_flow() -> Result<()> {
+        let (_, snapshot) = exported_latest_project().await?;
+        let live = staged_event(&snapshot, "apps/project/events/with-archive.event")?;
+        let same_version =
+            staged_event(&snapshot, "apps/project/events/versions/with-archive/1.0.0")?;
+        assert_eq!(live.board_version, Some((0, 0, 1)));
+        assert_eq!(
+            serde_json::to_value(&live)?,
+            serde_json::to_value(&same_version)?,
+            "the device compares the pinned archive with the live record"
+        );
+        assert_eq!(
+            staged_event(&snapshot, "apps/project/events/live-only.event")?.board_version,
+            Some((0, 0, 1))
+        );
+        assert_eq!(
+            staged_event(&snapshot, "apps/project/events/versions/with-archive/0.9.0")?
+                .board_version,
+            None,
+            "an archive of another event version is history and stays as it was"
+        );
+        assert!(
+            snapshot
+                .files()
+                .iter()
+                .any(|file| file.path == "apps/project/versions/flow/0_0_1.board"),
+            "the copy holds the flow version its events were pinned to"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn latest_events_are_reported_and_their_records_keep_following_latest() -> Result<()> {
+        let (app, snapshot) = exported_latest_project().await?;
+        assert_eq!(
+            serde_json::to_value(snapshot.latest_events())?,
+            serde_json::json!([
+                {"event_id": "live-only", "board_id": "flow", "board_version": [0, 0, 1], "problem": null},
+                {"event_id": "with-archive", "board_id": "flow", "board_version": [0, 0, 1], "problem": null},
+            ]),
+            "a pinned event is not reported"
+        );
+        for id in ["with-archive", "live-only"] {
+            assert_eq!(
+                Event::load(id, &app, None).await?.board_version,
+                None,
+                "the export changes only the staged copy"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn latest_events_stay_unpinned_without_a_version_that_holds_their_flow() -> Result<()> {
+        let (state, mut app) = latest_project().await?;
+        let (_, never_node) = stored_flow(&state, &mut app, "never-published").await?;
+        let (mut edited, edited_node) = stored_flow(&state, &mut app, "edited-since").await?;
+        edited.publish_if_changed(None).await?;
+        edited.name = "Edited after its newest version".into();
+        edited.mark_changed();
+        edited.save(None).await?;
+
+        latest_event(&mut app, "never", "never-published", &never_node).await?;
+        latest_event(&mut app, "edited", "edited-since", &edited_node).await?;
+        latest_event(&mut app, "no-flow", "missing-flow", "node").await?;
+        app.save().await?;
+
+        let snapshot = app.export_device_snapshot("auth0|selected").await?;
+        for id in ["never", "edited", "no-flow"] {
+            assert_eq!(
+                staged_event(&snapshot, &format!("apps/project/events/{id}.event"))?.board_version,
+                None,
+                "a version that does not hold the flow is never shipped"
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(snapshot.latest_events())?,
+            serde_json::json!([
+                {"event_id": "edited", "board_id": "edited-since", "board_version": null, "problem": "edited"},
+                {"event_id": "never", "board_id": "never-published", "board_version": null, "problem": "edited"},
+                {"event_id": "no-flow", "board_id": "missing-flow", "board_version": null, "problem": "edited"},
+            ])
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn latest_events_stay_unpinned_when_the_version_lost_their_target() -> Result<()> {
+        use crate::a2ui::widget::Page;
+
+        let (state, mut app) = latest_project().await?;
+        let (mut flow, node) = stored_flow(&state, &mut app, "flow").await?;
+        flow.save_page(&Page::new("page", "Start", "/"), None)
+            .await?;
+        flow.save(None).await?;
+        let (version, _) = flow.publish_if_changed(None).await?;
+
+        latest_event(&mut app, "fits", "flow", &node).await?;
+        latest_event(&mut app, "node-gone", "flow", "removed-node").await?;
+        let mut page_event = latest_event(&mut app, "page-gone", "flow", &node).await?;
+        page_event.default_page_id = Some("removed-page".into());
+        page_event.save(&app, None).await?;
+        let mut page_fits = latest_event(&mut app, "page-fits", "flow", "removed-node").await?;
+        page_fits.default_page_id = Some("page".into());
+        page_fits.save(&app, None).await?;
+        app.save().await?;
+
+        let snapshot = app.export_device_snapshot("auth0|selected").await?;
+        assert_eq!(
+            serde_json::to_value(snapshot.latest_events())?,
+            serde_json::json!([
+                {"event_id": "fits", "board_id": "flow", "board_version": [0, 0, 1], "problem": null},
+                {"event_id": "node-gone", "board_id": "flow", "board_version": null, "problem": "target_missing"},
+                {"event_id": "page-fits", "board_id": "flow", "board_version": [0, 0, 1], "problem": null},
+                {"event_id": "page-gone", "board_id": "flow", "board_version": null, "problem": "target_missing"},
+            ])
+        );
+        assert_eq!(version, (0, 0, 1));
+        for (id, staged) in [
+            ("fits", Some(version)),
+            ("page-fits", Some(version)),
+            ("node-gone", None),
+            ("page-gone", None),
+        ] {
+            assert_eq!(
+                staged_event(&snapshot, &format!("apps/project/events/{id}.event"))?.board_version,
+                staged,
+                "{id}"
+            );
+        }
         Ok(())
     }
 }

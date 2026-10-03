@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { PreparedProjectArtifact } from "../../../../lib/device-management/artifacts";
 import type { DeploymentVariable } from "../../../../lib/device-management/deployment";
+import type { PreparedFlow } from "../../../../lib/device-management/latest-flows";
 import type {
 	DeployDraft,
 	DeployPlan,
@@ -23,6 +24,10 @@ export interface DeployPrepared {
 	artifact: PreparedProjectArtifact;
 	approved?: ApprovedOnlineMetadata;
 	preparedAt: number;
+	/** What preparing did for the flows of the events that follow Latest: created a version, or found one equal to the flow. */
+	flows?: readonly PreparedFlow[];
+	/** The flow version each of those events is shipped at, by event id. */
+	latest?: Readonly<Record<string, [number, number, number]>>;
 }
 
 /** What a device said about the copy once it arrived (offline apps): events it refuses and the settings of the events it accepts. */

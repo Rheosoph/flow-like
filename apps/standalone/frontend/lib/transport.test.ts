@@ -44,9 +44,104 @@ describe("standalone service transport", () => {
 			"/pages/../bootstrap",
 			"/instances/project/storage/files",
 			"/channels/run",
+			"/run/",
+			"/run/..",
+			"/run/evt_a/x",
+			"/runs/evt_a",
+			"/run/evt_a?debug=1",
 		])
 			await expect(request(path)).rejects.toThrow("Unsupported");
 		expect(sent).toHaveLength(1);
+		for (const path of ["/run/evt_a", "/chat/evt_b", "/pages/p-1/invoke"])
+			await request(path, { method: "POST" });
+		expect(sent.map((call) => call.path)).toEqual([
+			"/services",
+			"/run/evt_a",
+			"/chat/evt_b",
+			"/pages/p-1/invoke",
+		]);
+	});
+	test("forms and quick actions run at /run/{id}: the fields as the body, refused fields named", async () => {
+		const event = (id: string, event_type: string, more = {}) =>
+			({ id, event_type, name: id, node_id: "", ...more }) as unknown as IEvent;
+		const inventory: Inventory = {
+			project_id: "project",
+			events: [
+				event("form", "generic_form"),
+				event("action", "quick_action"),
+				event("paged", "generic_form", { default_page_id: "page" }),
+				event("mail", "email"),
+			],
+		};
+		const posted: Array<{ path: string; body: unknown }> = [];
+		let refuse = false;
+		const request = createServiceRequest("t".repeat(32), (async (
+			path,
+			init,
+		) => {
+			posted.push({ path: String(path), body: JSON.parse(String(init?.body)) });
+			if (refuse)
+				return Response.json(
+					{ code: "invalid_fields", fields: ["title", "x".repeat(80)] },
+					{ status: 400 },
+				);
+			return new Response(
+				stream(
+					'event: generic_result\ndata: {"id":42}\n\nevent: done\ndata: {"completed":true}\n\n',
+				),
+			);
+		}) as typeof fetch);
+		const { backend } = createServiceBackend(
+			inventory,
+			request,
+			new AbortController().signal,
+		);
+		const results: IIntercomEvent[] = [];
+		await backend.eventState.executeEvent(
+			"project",
+			"form",
+			{ id: "", payload: { title: "Hello", receipt: "data:text/plain,hi" } },
+			false,
+			undefined,
+			(events) => results.push(...events),
+		);
+		await backend.eventState.executeEvent("project", "action", { id: "" });
+		expect(posted).toEqual([
+			{
+				path: "/run/form",
+				body: { title: "Hello", receipt: "data:text/plain,hi" },
+			},
+			{ path: "/run/action", body: {} },
+		]);
+		expect(results[0]).toMatchObject({
+			event_type: "generic_result",
+			payload: { id: 42 },
+		});
+		await expect(
+			backend.eventState.executeEvent(
+				"project",
+				"form",
+				{ id: "", payload: {} },
+				false,
+				undefined,
+				undefined,
+				false,
+				{ kind: "special", specialEvent: "load", manifestRevision: "r" },
+			),
+		).rejects.toThrow("cannot run through this interface");
+		await expect(
+			backend.eventState.executeEvent("project", "mail", { id: "" }),
+		).rejects.toThrow("cannot run through this interface");
+		refuse = true;
+		await expect(
+			backend.eventState.executeEvent("project", "form", {
+				id: "",
+				payload: { title: 1 },
+			}),
+		).rejects.toThrow(
+			`The service refused these fields: title, ${"x".repeat(64)}.`,
+		);
+		expect(posted).toHaveLength(3);
 	});
 	test("preserves fragmented SSE payloads and requires explicit successful completion", async () => {
 		const events: IIntercomEvent[] = [];

@@ -11,9 +11,10 @@ import {
 	svc,
 	v,
 } from "./__fixtures__/apps";
-import { buildAppView } from "./app-plan";
+import { type AppEventInput, buildAppView } from "./app-plan";
 import {
 	definitionHash,
+	hasUnpublishedEdits,
 	newestPins,
 	refineView,
 	revisionsSent,
@@ -52,13 +53,131 @@ function invoiceView(options: { labUnlocked?: boolean } = {}) {
 describe("versions without a hub history", () => {
 	test("the newest version pins every event that can run on a device", () => {
 		expect(newestPins(INVOICE.events).map((pin) => pin.eventId)).toEqual([
+			"evt_invoice_review",
 			"evt_extract_http",
 			"evt_gpu_extract",
 			"evt_invoice_mcp",
+			"evt_invoice_reconcile",
 		]);
 		expect(versionLabel("1.5.0")).toBe("v1.5.0");
 		expect(versionLabel("Autumn")).toBe("Autumn");
 		expect(versionLabel(" ")).toBeNull();
+	});
+
+	test("an event that follows Latest is pinned to the flow version that equals its flow", () => {
+		const [review, ...pinned] = INVOICE.events;
+		const withFlow = (flow: AppEventInput["flow"]) => [
+			{ ...review, flow },
+			...pinned,
+		];
+		expect(newestPins(INVOICE.events)[0]).toEqual({
+			eventId: "evt_invoice_review",
+			eventVersion: [0, 9, 0],
+			boardVersion: [0, 9, 2],
+		});
+		expect(hasUnpublishedEdits(INVOICE.events)).toBe(false);
+		// Unpublished edits: no version holds the flow yet, so the event has no pin and the newest row is "current edits".
+		const edited = withFlow({ current: null, newest: [0, 9, 2] });
+		expect(newestPins(edited).map((pin) => pin.eventId)).not.toContain(
+			"evt_invoice_review",
+		);
+		expect(hasUnpublishedEdits(edited)).toBe(true);
+		expect(versionInputs({ events: edited, services: [] })[0].unpublished).toBe(
+			true,
+		);
+		expect(
+			versionInputs({ events: INVOICE.events, services: [] })[0],
+		).not.toHaveProperty("unpublished");
+		// Not read yet, or a hub that can't say: unknown, never "no edits" and never "edits".
+		for (const flow of [undefined, "missing_on_hub"] as const) {
+			const unknown = withFlow(flow);
+			expect(newestPins(unknown).map((pin) => pin.eventId)).not.toContain(
+				"evt_invoice_review",
+			);
+			expect(hasUnpublishedEdits(unknown)).toBe(false);
+			// A service that serves it is neither on the newest version nor behind it.
+			const serving = {
+				appVersion: { hash: "a".repeat(64) },
+				events: [
+					{
+						event_id: "evt_invoice_review",
+						event_version: [0, 9, 0] as [number, number, number],
+						board_version: [0, 9, 1] as [number, number, number],
+					},
+				],
+			};
+			expect(
+				versionInputs({ events: unknown, services: [serving] }).map(
+					(version) => version.hash,
+				),
+			).not.toContain(serving.appVersion.hash);
+			expect(
+				versionInputs({ events: INVOICE.events, services: [serving] }).map(
+					(version) => version.hash,
+				),
+			).toContain(serving.appVersion.hash);
+		}
+		// A paused Latest event with edits does not make the app's newest version "current edits".
+		expect(
+			hasUnpublishedEdits([
+				{
+					...review,
+					active: false,
+					flow: { current: null, newest: [0, 9, 2] },
+				},
+			]),
+		).toBe(false);
+		// An older hub can't hand schedules over: its schedule is in no version.
+		expect(
+			newestPins(INVOICE.events, { hubSchedules: false }).map(
+				(pin) => pin.eventId,
+			),
+		).not.toContain("evt_invoice_reconcile");
+	});
+
+	test("a version of unpublished edits alone is still listed", () => {
+		const [review] = INVOICE.events;
+		const versions = versionInputs({
+			label: "1.5.0",
+			events: [{ ...review, flow: { current: null, newest: null } }],
+			services: [],
+		});
+		expect(versions).toMatchObject([{ pins: [], unpublished: true }]);
+		const view = buildAppView({
+			app: { ...INVOICE, events: [review], versions },
+			devices: [],
+		});
+		expect(view.versions[0].unpublished).toBe(true);
+	});
+
+	test("against an older version, an event with flow edits reads as edited, never as removed", () => {
+		const [review, ...rest] = INVOICE.events;
+		const pinned = [
+			{ ...review, flow: { current: [0, 9, 2], newest: [0, 9, 2] } },
+			...rest,
+		] as typeof INVOICE.events;
+		const edited = [
+			{ ...review, flow: { current: null, newest: [0, 9, 2] } },
+			...rest,
+		] as typeof INVOICE.events;
+		const older = versionInputs({ events: pinned, services: [] })[0];
+		const [current] = versionInputs({ events: edited, services: [] });
+		expect(current.edited).toEqual(["evt_invoice_review"]);
+		const view = buildAppView({
+			app: {
+				...INVOICE,
+				events: edited,
+				versions: [current, { ...older, hash: "b".repeat(64) }],
+			},
+			devices: [],
+		});
+		const rows = view.versions[0].diff ?? [];
+		expect(rows.find((row) => row.eventId === "evt_invoice_review")).toEqual({
+			eventId: "evt_invoice_review",
+			kind: "edits",
+			from: { eventVersion: [0, 9, 0], boardVersion: [0, 9, 2] },
+		});
+		expect(rows.some((row) => row.kind === "removed")).toBe(false);
 	});
 
 	test("the definition hash is stable and order-independent", () => {

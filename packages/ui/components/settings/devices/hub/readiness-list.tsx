@@ -57,8 +57,13 @@ export interface CheckCopy {
 /**
  * BG37: the hub's check results in the viewer's language. The hub sends
  * English sentences; the ids are stable, so each one maps to its own copy.
+ * `compact` is the setup wizard, where the release is verified in its own block.
  */
-export function checkCopy(t: DevicesT, id: CheckId): CheckCopy {
+export function checkCopy(
+	t: DevicesT,
+	id: CheckId,
+	compact = false,
+): CheckCopy {
 	const copies: Record<CheckId, () => CheckCopy> = {
 		policy: () => ({
 			label: t("devices:hub.readiness.policy.label", "Device limits"),
@@ -153,14 +158,19 @@ export function checkCopy(t: DevicesT, id: CheckId): CheckCopy {
 			),
 		}),
 		release: () => ({
-			label: t("devices:hub.readiness.release.label", "Signed agent releases"),
+			label: t("devices:hub.readiness.release.label", "Release settings"),
 			what: t(
 				"devices:hub.readiness.release.what",
 				"Checks that the hub says where agent releases are published and which keys sign them.",
 			),
 			ready: t(
 				"devices:hub.readiness.release.ready",
-				"The release address and its signing keys are set. This app verifies the signed release before it creates a package.",
+				"The hub names where releases are published and which keys sign them. This app verifies the release itself; see {{block}}.",
+				{
+					block: compact
+						? t("devices:setup.check.release.title", "Agent release")
+						: t("devices:hub.release.title", "Signed agent releases"),
+				},
 			),
 			failed: t(
 				"devices:hub.readiness.release.failed",
@@ -206,10 +216,13 @@ const isKnown = (id: string): id is CheckId =>
 	(CHECK_IDS as readonly string[]).includes(id);
 
 /** The translated result of a known check; the hub's own sentence only for a check this app doesn't know. */
-function CheckMessage({ check }: Readonly<{ check: Check }>) {
+function CheckMessage({
+	check,
+	compact = false,
+}: Readonly<{ check: Check; compact?: boolean }>) {
 	const { t } = useTranslation("devices");
 	if (isKnown(check.id)) {
-		const copy = checkCopy(t, check.id);
+		const copy = checkCopy(t, check.id, compact);
 		return check.ready ? copy.ready : copy.failed;
 	}
 	return (
@@ -220,7 +233,8 @@ function CheckMessage({ check }: Readonly<{ check: Check }>) {
 	);
 }
 
-function labelOf(t: DevicesT, id: string): string {
+/** A hub check's name in the viewer's words, also for a check this app doesn't know. */
+export function checkLabel(t: DevicesT, id: string): string {
 	return isKnown(id)
 		? checkCopy(t, id).label
 		: t("devices:hub.checks.other", "Another hub check");
@@ -276,7 +290,7 @@ function fullItem(t: DevicesT, check: Check): ChecklistItem {
 			<span className="flex items-start justify-between gap-3">
 				<span className="min-w-0">
 					<b className="font-semibold text-foreground">
-						{labelOf(t, check.id)}
+						{checkLabel(t, check.id)}
 					</b>
 					<Tech>{check.id}</Tech>
 					{known ? (
@@ -301,7 +315,7 @@ function compactItem(t: DevicesT, check: Check): ChecklistItem {
 		state: check.ready ? "pass" : "fail",
 		label: (
 			<>
-				<b className="font-semibold">{labelOf(t, check.id)}</b>
+				<b className="font-semibold">{checkLabel(t, check.id)}</b>
 				{" · "}
 				{check.ready
 					? t("devices:hub.checks.ready", "Ready")
@@ -309,7 +323,7 @@ function compactItem(t: DevicesT, check: Check): ChecklistItem {
 				<Tech>{check.id}</Tech>
 			</>
 		),
-		note: <CheckMessage check={check} />,
+		note: <CheckMessage check={check} compact />,
 		...(check.ready
 			? {}
 			: {
@@ -402,7 +416,7 @@ function RecheckResultLine({ recheck }: Readonly<{ recheck: Recheck }>) {
 			{t(
 				"hub.checks.result.failing",
 				"Checked again at {{time}}. {{passed, number}} of {{total, number}} pass; {{check}} still fails. Only the hub operator can fix it.",
-				{ time: at, passed, total, check: labelOf(t, failing[0]) },
+				{ time: at, passed, total, check: checkLabel(t, failing[0]) },
 			)}
 		</InlineResult>
 	) : (

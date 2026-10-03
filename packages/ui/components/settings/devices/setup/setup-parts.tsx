@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import { Check, Copy, type LucideIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { groupFingerprint } from "../../../../lib/device-management/fingerprint";
+import type { AreaTime, DevicesT } from "../primitives/area-context";
 import { DvButton } from "../primitives/dv-button";
 import { FreshnessStamp } from "../primitives/freshness-stamp";
 import { TONE_TEXT, cx } from "../primitives/tone";
@@ -24,6 +25,31 @@ export function PendingSetupsStamp() {
 	) : (
 		<FreshnessStamp {...stampOf(enrollments.freshness)} />
 	);
+}
+
+/**
+ * The agent release inside a package runs out before the package would: the
+ * device refuses the package from then on, so this is the time to start it by.
+ * `made` tells a package that exists from one that would be made now.
+ */
+export function startByReleaseText(
+	t: DevicesT,
+	time: Pick<AreaTime, "at">,
+	at: number,
+	made: boolean,
+): string {
+	const values = { time: time.at(at) };
+	return made
+		? t(
+				"devices:setup.startBy",
+				"Start it on the device before {{time}}: the hub's agent release runs out then.",
+				values,
+			)
+		: t(
+				"devices:setup.startByNew",
+				"A package made now has to be started on the device before {{time}}: the hub's agent release runs out then.",
+				values,
+			);
 }
 
 /** A device, file or host name inside a sentence. */

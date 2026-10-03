@@ -6,6 +6,7 @@ import {
 	lookupOfflineOperation,
 	pruneArtifactRevisions,
 	readArtifactUsage,
+	readEventForm,
 	readHostOperation,
 	readMetricsHistory,
 	readOfflineOperations,
@@ -88,6 +89,11 @@ const READS: {
 		read: (c, f) =>
 			pruneArtifactRevisions(c, f, { projectId: "app", revisions: [revision] }),
 	},
+	{
+		feature: "on_demand_events",
+		read: (c, f) =>
+			readEventForm(c, f, { placementId: "notes", eventId: "evt_notes_form" }),
+	},
 ];
 
 describe("older agents", () => {
@@ -111,6 +117,118 @@ describe("older agents", () => {
 			});
 			expect(sent).toHaveLength(1);
 		});
+});
+
+/* run-more-2-design §1.8: the `event_form` literal; the agent's test carries the same. */
+const EVENT_FORM = JSON.parse(
+	`{"placement_id":"notes","config_revision":7,"event_id":"evt_notes_form","event_version":[1,0,0],"board_version":[3,0,1],
+ "kind":"form","name":"New note","description":"",
+ "fields":[{"name":"title","label":"Title","description":"","data_type":"String","value_type":"Normal",
+            "optional":false,"sensitive":false,"default":null,"options":null}],
+ "fields_truncated":false,"file_fields":0,"navigate_to_routes":[]}`,
+);
+const FORM_ON = { on_demand_events: 1 } as const;
+const readForm = (reply: () => ManagementResponse) => {
+	const { call, sent } = recorder(reply);
+	return {
+		sent,
+		read: readEventForm(call, FORM_ON, {
+			placementId: "notes",
+			eventId: "evt_notes_form",
+		}),
+	};
+};
+
+test("the form of a run comes from the flow version the service runs", async () => {
+	const { read, sent } = readForm(() => completed(EVENT_FORM));
+	expect(await read).toEqual({ kind: "ok", data: EVENT_FORM });
+	expect(sent).toEqual([
+		{ type: "event_form", placement_id: "notes", event_id: "evt_notes_form" },
+	]);
+	const action = {
+		...EVENT_FORM,
+		kind: "action",
+		fields: [],
+		navigate_to_routes: ["/notes"],
+	};
+	expect(await readForm(() => completed(action)).read).toEqual({
+		kind: "ok",
+		data: action,
+	});
+});
+
+test("a field keeps words this client does not know; a sensitive default is never shown", async () => {
+	const [title] = EVENT_FORM.fields;
+	const fields = [
+		{ ...title, name: "where", data_type: "Geometry", value_type: "HashMap" },
+		{ ...title, name: "pin", sensitive: true, default: "1234" },
+		{ ...title, name: "size", options: ["S", "M"], default: "M" },
+		{ ...title, name: "big", default: null, default_omitted: true },
+	];
+	const { read } = readForm(() => completed({ ...EVENT_FORM, fields }));
+	const result = await read;
+	if (result.kind !== "ok") throw new Error("expected a form");
+	expect(result.data.fields.map((field) => field.default)).toEqual([
+		null,
+		null,
+		"M",
+		null,
+	]);
+	expect(result.data.fields[0]).toMatchObject({
+		data_type: "Geometry",
+		value_type: "HashMap",
+	});
+	expect(result.data.fields[3].default_omitted).toBe(true);
+});
+
+test("texts are bounded in characters as a device cuts them, so an emoji counts once", async () => {
+	const [title] = EVENT_FORM.fields;
+	const emoji = (count: number) => "😀".repeat(count);
+	const form = {
+		...EVENT_FORM,
+		description: emoji(480),
+		fields: [
+			{
+				...title,
+				name: emoji(120),
+				label: emoji(120),
+				description: emoji(480),
+				options: [emoji(64)],
+			},
+		],
+	};
+	expect(await readForm(() => completed(form)).read).toEqual({
+		kind: "ok",
+		data: form,
+	});
+	const over = { ...form, fields: [{ ...form.fields[0], label: emoji(121) }] };
+	await expect(readForm(() => completed(over)).read).rejects.toThrow(
+		"invalid form of event evt_notes_form",
+	);
+});
+
+test("a form over its bounds or of another event is an invalid answer; a changed service is a coded refusal", async () => {
+	const [title] = EVENT_FORM.fields;
+	for (const form of [
+		{ ...EVENT_FORM, event_id: "evt_other" },
+		{ ...EVENT_FORM, kind: "wizard" },
+		{ ...EVENT_FORM, fields: [{ ...title, data_type: "Str ing" }] },
+		{ ...EVENT_FORM, fields: [{ ...title, label: "x".repeat(121) }] },
+		{ ...EVENT_FORM, fields: [{ ...title, default: "x".repeat(1025) }] },
+		{
+			...EVENT_FORM,
+			fields: [{ ...title, options: Array.from({ length: 33 }, () => "a") }],
+		},
+		{ ...EVENT_FORM, fields: Array.from({ length: 65 }, () => title) },
+	])
+		await expect(readForm(() => completed(form)).read).rejects.toThrow(
+			"invalid form of event evt_notes_form",
+		);
+	const error = await readForm(() =>
+		rejected("revision_conflict", "The service changed."),
+	).read.catch((e) => e);
+	expect(error).toBeInstanceOf(LiveCallError);
+	expect(error.code).toBe("rejected_revision_conflict");
 });
 
 test("other refusals throw a coded live error", async () => {

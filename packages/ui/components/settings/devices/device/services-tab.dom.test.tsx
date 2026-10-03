@@ -13,10 +13,14 @@ const dom = installDom();
 const kit = await import("./device-test-kit");
 const { act } = await import("react");
 const { mountDevices } = await import("../testing/mount-devices");
+const { createFakeWorkspace } = await import("../testing/fake-workspace");
+const { SHOP, serveNightlyOnEdge, serveShopOnEdge } = await import(
+	"../testing/schedule-scenarios"
+);
 const { useDevicesRoute } = await import("../routing/use-devices-route");
 const { DeviceDataState } = await import("./services-tab");
 const { useDevicePage } = await import("./use-device-page");
-const { sampleFleet } = await import(
+const { SAMPLE_NOW, sampleFleet } = await import(
 	"../../../../lib/device-management/model/__fixtures__/sample-fleet"
 );
 
@@ -90,6 +94,68 @@ describe("services table", () => {
 		).not.toBeNull();
 		expect(primaries()).toBe(1);
 		expect(text(view.container)).not.toMatch(MACHINE);
+	});
+
+	test("a service that runs a schedule says when it runs next; one without a schedule has no such line", async () => {
+		const fake = await createFakeWorkspace();
+		await serveNightlyOnEdge(fake);
+		const view = await open(IDS.edge, { fake });
+		const line = row(view, "invoice-extractor").querySelector(
+			"[data-schedule]",
+		);
+		expect(line?.textContent).toMatch(
+			/^Runs on a schedule · next Oct 1 at 02:00 GMT\+2 · in 12 hr\./,
+		);
+		expect(
+			row(view, "support-bot").querySelector("[data-schedule]") === null,
+		).toBe(true);
+	});
+
+	test("a service with bots and a one-time schedule: each bot's state, and when it runs once", async () => {
+		const fake = await createFakeWorkspace();
+		await serveShopOnEdge(fake, {
+			events: [SHOP.telegram, SHOP.discord, SHOP.once],
+		});
+		const agent = fake.agent(SHOP.device);
+		// A refused token raises an attention item, whose rail words are not in this tree yet (rail-row.tsx, reviewer).
+		agent.botFacts.set(SHOP.discord, { state: "reconnecting" });
+		const shop = agent.placement(SHOP.service);
+		if (shop) agent.report(shop);
+		const view = await open(IDS.edge, { fake });
+		const cells = row(view, SHOP.service);
+		const said = (node: Element | null) => (node ? text(node) : "");
+		expect(said(cells.querySelector("[data-bots-line]"))).toBe(
+			"Telegram bot · connected; Discord bot · connecting",
+		);
+		expect(
+			said(cells.querySelector(`[data-once-line="${SHOP.once}"]`)),
+		).toMatch(/^Runs once Oct 15 at 09:00 GMT\+2 · in /);
+		// A one-time schedule is not "on a schedule": it has its own line.
+		expect(cells.querySelector("[data-schedule]")).toBeNull();
+	});
+
+	test("a one-time schedule that ran says so, also after the service stopped", async () => {
+		const fake = await createFakeWorkspace();
+		await serveShopOnEdge(fake, { events: [SHOP.once] });
+		const agent = fake.agent(SHOP.device);
+		const shop = agent.placement(SHOP.service);
+		Object.assign(shop?.schedules?.[0] ?? {}, {
+			once_state: "ran",
+			next_at: null,
+			last_at: SAMPLE_NOW - 3_600,
+			last_outcome: "succeeded",
+		});
+		Object.assign(shop ?? {}, {
+			desired_state: "stopped",
+			observed_state: "stopped",
+			running_replicas: 0,
+			ready_replicas: 0,
+		});
+		const view = await open(IDS.edge, { fake });
+		const line = row(view, SHOP.service).querySelector("[data-once-line]");
+		expect(line ? text(line) : "").toMatch(
+			/^Ran once 13:00 GMT\+2 · 1 hr\. ago/,
+		);
 	});
 
 	test("the actions follow the requested state; an update in progress leaves only Stop", async () => {

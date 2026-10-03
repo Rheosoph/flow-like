@@ -12,6 +12,7 @@ import type {
 	DeviceRow,
 	GateContext,
 	GateFailure,
+	GateFeatures,
 	GateReason,
 	GateResult,
 	SourcePlane,
@@ -60,7 +61,7 @@ const ctx = (patch: Partial<GateContext> = {}): GateContext => ({
 	keys: keys(),
 	live: LIVE,
 	features: {
-		flags: {},
+		flags: { on_demand_events: 1 },
 		hostOperations: { reboot: true, update_agent: true },
 		certificateManagement: true,
 		certificateIssuance: true,
@@ -158,6 +159,7 @@ const IA_MATRIX: Record<ActionId, Row> = {
 	restart: p3(["restart"]),
 	scale: p3(["scale"]),
 	remove_service: p3(["remove"]),
+	run_event: p3(["start"]),
 	upload_revision: p3(["deploy"]),
 	create_service: p3(["deploy"]),
 	update_service: p3(["deploy"]),
@@ -910,7 +912,47 @@ describe("gate ladder", () => {
 			"cloud_approval_required",
 		],
 		["agent_update", { releaseTrust: false }, "release_trust_missing"],
+		["run_event", { desiredState: "stopped" }, "service_must_be_running"],
+		["run_event", { observedState: "starting" }, "service_must_be_running"],
+		["run_event", { activeRollout: true }, "rollout_in_progress"],
+		["run_event", { hostOperationActive: true }, "host_operation_running"],
 	];
+
+	test("run_event: an agent without person-started runs, locked keys, no Start, no live session", () => {
+		const flags = (value: GateFeatures["flags"]) =>
+			ctx({
+				features: {
+					flags: value,
+					source: { src: "live", age: "live" },
+					agentVersion: "0.1.1",
+				},
+			});
+		expect(failure(evaluateGate("run_event", flags({}))).copy.code).toBe(
+			"agent_update_needed",
+		);
+		expect(evaluateGate("run_event", flags({ on_demand_events: 1 })).ok).toBe(
+			true,
+		);
+		const locked = failure(
+			evaluateGate("run_event", ctx({ keys: keys({ state: "locked" }) })),
+		);
+		expect(locked.gate).toBe("G7");
+		expect(locked.copy.code).toBe("locked_run");
+		expect(
+			failure(evaluateGate("run_event", recipient(["status"]))).need,
+		).toEqual(["start"]);
+		expect(evaluateGate("run_event", recipient(["start"])).ok).toBe(true);
+		expect(
+			failure(evaluateGate("run_event", ctx({ live: { kind: "idle" } }))).gate,
+		).toBe("G8");
+		// A running service whose state is known runs it; one that is running passes.
+		expect(
+			evaluateGate(
+				"run_event",
+				ctx({ extra: { desiredState: "running", observedState: "running" } }),
+			).ok,
+		).toBe(true);
+	});
 
 	test("action preconditions name the state that blocks them", () => {
 		for (const [action, extra, reason] of PRECONDITIONS)

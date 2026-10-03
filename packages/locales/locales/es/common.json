@@ -1844,6 +1844,7 @@
 	"offlineProjectsAreNeverListedSoNoConformityAssessmentOrPublicationReviewIsRequiredBringTheProjectOnlineToStart": "Los proyectos sin conexión nunca se listan, así que no se requiere evaluación de conformidad ni revisión de publicación. Conecta el proyecto para empezar.",
 	"offlineUsingCachedData": "Sin conexión: usando datos en caché",
 	"offOnThisDevice": "Desactivado en este dispositivo",
+	"onADeviceLatestMeansTheFlowAsItWasWhenYouLastDeployedOrUpdated": "",
 	"onCompletion": "Al completarse",
 	"onDisk": "en disco",
 	"oneModelfileDependencyBitPerLineOrCommaSeparated": "Un bit de dependencia de archivo de modelo por línea, o separados por comas",

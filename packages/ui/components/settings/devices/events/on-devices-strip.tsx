@@ -201,7 +201,10 @@ function CountLine({
 	const { view, rows, coverage } = live;
 	const eligible = view.events.rows.length;
 	const total = eligible + view.events.ineligible.length;
-	const served = [...rows.values()].filter((row) => row.served.length).length;
+	// "Of them": only events that can run; one that can't and is still served says so in its own cell.
+	const served = view.events.rows.filter(
+		(row) => rows.get(row.eventId)?.served.length,
+	).length;
 	const devices = new Set(view.services.map((row) => row.deviceId)).size;
 	const unknown = coverage.unknown.length - coverage.never.length;
 	return (
@@ -331,7 +334,7 @@ function DeployAction({
 				{...link({ screen: "deploy", deviceIds: [], mode: "new" })}
 				title={t(
 					"events.strip.deployTitle",
-					"Opens deploy with every event of {{app}} that can run on a device. You pick one or more devices next.",
+					"Opens deploy with every event of {{app}} that can run on a device; schedules and bots start unticked. You pick one or more devices next.",
 					{ app },
 				)}
 			>

@@ -31,6 +31,8 @@ import type {
 import { deviceName as nameOfRow } from "../../../../lib/device-management/model/device-view";
 import { Checkbox } from "../../../ui/checkbox";
 import { appCopy } from "../copy/app-copy";
+import { flowLabel, runRefusalText } from "../deploy/deploy-copy";
+import { useFlowNames } from "../deploy/use-deploy-reads";
 import { type DeployRunHandle, useDeployRun } from "../deploy/use-deploy-run";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import { Banner } from "../primitives/banner";
@@ -62,6 +64,7 @@ import {
 import {
 	type UpdateRow,
 	blocksDeploy,
+	flowsToPublish,
 	pinText,
 	updateBatches,
 	updateRows,
@@ -103,8 +106,10 @@ export function planFacts(
 						projectId: service.projectId,
 						events: service.events?.map((event) => event.event_id) ?? null,
 						desired: service.desired,
+						maxInstances: service.instances.max,
 					}))
 				: null,
+			...(device.features ? { features: device.features } : {}),
 		};
 	}
 	return {
@@ -120,6 +125,8 @@ export function planFacts(
 		platform,
 		now,
 		...(data.role.known ? { isAppOwner: data.role.isOwner } : {}),
+		hub: data.hub,
+		...(data.view ? { schedules: data.view.schedules } : {}),
 	};
 }
 
@@ -140,6 +147,7 @@ export function updatePlans(
 			app: facts.app,
 			deploymentId: idOf(index),
 			now: facts.now,
+			...(facts.hub ? { hub: facts.hub } : {}),
 		});
 		return resolvePlan(
 			{
@@ -566,7 +574,7 @@ export function UpdateEverywhereSheet({
 		[usable, picked],
 	);
 	const newest = view.versions[0];
-	const to = newest ? versionName(newest) : "";
+	const newestName = newest ? versionName(newest) : "";
 	const fromNames = [
 		...new Set(ticked.map((row) => (row.from ? versionName(row.from) : ""))),
 	];
@@ -589,6 +597,29 @@ export function UpdateEverywhereSheet({
 	);
 	const checks = plans.map((plan) => checkPlan(plan, facts));
 	const removed = removedEvents(plans);
+	// No flow version is created without this sentence having been on screen first.
+	const publishes = useMemo(() => flowsToPublish(plans), [plans]);
+	const flowNames = useFlowNames(data.appId, publishes.length > 0);
+	const [firstPlan] = plans;
+	// A flow version this update creates makes an app version that has no name yet.
+	const to = publishes.length
+		? t("app.updateAll.toNow", "the app as it is now")
+		: newestName;
+	const createsFlows =
+		firstPlan && publishes.length
+			? t("app.updateAll.createsFlow", {
+					count: publishes.length,
+					flows: new Intl.ListFormat(undefined, { type: "conjunction" }).format(
+						publishes.map((boardId) =>
+							flowLabel(t, firstPlan, flowNames, boardId),
+						),
+					),
+					defaultValue_one:
+						"Starting it creates a flow version of {{flows}} from the current edits. The version stays in the flow's history.",
+					defaultValue_other:
+						"Starting it creates flow versions of {{flows}} from the current edits. They stay in the flows' history.",
+				})
+			: null;
 	const blocking = checks
 		.map((check) => check.firstBlocking)
 		.find((issue) => issue && issue.code !== "removed_events");
@@ -704,15 +735,22 @@ export function UpdateEverywhereSheet({
 				<div className="flex flex-col gap-3">
 					<ConsequencePreview
 						rows={{
-							what: t("app.updateAll.what", {
-								count: services,
-								to,
-								list,
-								defaultValue_one:
-									"{{list}} switches to {{to}} with a safe update.",
-								defaultValue_other:
-									"{{count, number}} services switch to {{to}} with a safe update: {{list}}.",
-							}),
+							what: (
+								<>
+									{t("app.updateAll.what", {
+										count: services,
+										to,
+										list,
+										defaultValue_one:
+											"{{list}} switches to {{to}} with a safe update.",
+										defaultValue_other:
+											"{{count, number}} services switch to {{to}} with a safe update: {{list}}.",
+									})}
+									{createsFlows ? (
+										<span data-creates-flow=""> {createsFlows}</span>
+									) : null}
+								</>
+							),
 							who: t(
 								"app.updateAll.who",
 								"The current version keeps answering until the new one is healthy.",
@@ -802,6 +840,7 @@ function phaseLabels(t: DevicesT): Record<DeployPhase, string> {
 			"Checking events",
 		),
 		install: t("devices:app.updateAll.phase.install", "Installing"),
+		schedules: t("devices:app.updateAll.phase.schedules", "Moving schedules"),
 		create: t("devices:app.updateAll.phase.create", "Creating"),
 		secrets: t("devices:app.updateAll.phase.secrets", "Secrets"),
 		start: t("devices:app.updateAll.phase.start", "Starting"),
@@ -849,6 +888,7 @@ const failedIn = (state: DeployRunState) =>
 
 /** What a run row tells about itself, apart from its state and the versions. */
 function rowFacts(
+	t: DevicesT,
 	row: DeployRunRow,
 	labels: Record<DeployPhase, string>,
 ): Pick<
@@ -856,12 +896,16 @@ function rowFacts(
 	"service" | "phases" | "step" | "at" | "reason" | "failedWhile" | "progress"
 > {
 	const at = row.finishedAt ?? row.at;
+	// A schedule or a Latest event that stopped the run has its own sentence; anything else is the device's.
+	const reason = row.error
+		? (runRefusalText(t, row.error) ?? row.error.detail)
+		: undefined;
 	return {
 		...(row.serviceId ? { service: row.serviceId } : {}),
 		phases: row.phases.map((phase) => labels[phase]),
 		step: Math.min(row.phase, Math.max(0, row.phases.length - 1)),
 		...(at ? { at } : {}),
-		...(row.error?.detail ? { reason: row.error.detail } : {}),
+		...(reason ? { reason } : {}),
 		...(row.error
 			? { failedWhile: labels[row.error.phase].toLowerCase() }
 			: {}),
@@ -976,7 +1020,7 @@ export function UpdateRun({
 			return {
 				id: row.target,
 				device: deviceName(row.deviceId),
-				...rowFacts(row, labels),
+				...rowFacts(t, row, labels),
 				state,
 				...(spec.from ? { from: spec.from } : {}),
 				version: spec.to,

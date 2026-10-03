@@ -1,19 +1,21 @@
 "use client";
 
 import { Trans, useTranslation } from "@flow-like/locales";
-import { enumLabel } from "../copy/enum-labels";
 import { gateCopy } from "../copy/gate-copy";
+import { checkLabel } from "../hub/readiness-list";
+import { releaseCheckText } from "../hub/release-copy";
 import { useAreaTime } from "../primitives/area-context";
+import { dayText } from "../primitives/day";
 import { Headline } from "../primitives/headline";
 import { useSetup } from "./setup-context";
-import { Mono } from "./setup-parts";
+import { Mono, startByReleaseText } from "./setup-parts";
 import {
 	CREATE_STEP,
 	type CreatedSetup,
 	SAVE_STEP,
 	START_STEP,
+	startBy,
 } from "./setup-state";
-import { releaseReason } from "./steps/check-step";
 import { WAIT_POLL_MS } from "./use-setup-wait";
 
 /* SPEC §4.24: the one conclusion sentence of the step. Steps 1–3 are plain forms and have none. */
@@ -81,21 +83,36 @@ function CheckHeadline() {
 				rest={t(
 					"setup.headline.notReadyRest",
 					"{{check}} isn't ready, so a new device couldn't be set up. Nothing was created and no slot is used.",
-					{ check: enumLabel(t, "readinessCheck", failing.id) },
+					{ check: checkLabel(t, failing.id) },
 				)}
+			/>
+		);
+	if (release.state === "rejected" && release.check === "expired")
+		return (
+			<Headline
+				lead={t(
+					"setup.headline.ranOut",
+					"The hub's agent release has run out.",
+				)}
+				rest={
+					release.facts
+						? t(
+								"setup.headline.ranOutRest",
+								"It ran out on {{date}}, so no package can be built until the hub operator publishes or renews a release. Nothing was created.",
+								{ date: dayText(time, release.facts.expires_at) },
+							)
+						: undefined
+				}
 			/>
 		);
 	if (release.state === "rejected")
 		return (
 			<Headline
-				lead={t(
-					"setup.headline.rejected",
-					"The agent release can't be verified.",
-				)}
+				lead={t("setup.headline.rejected", "The agent release failed a check.")}
 				rest={t(
 					"setup.headline.rejectedRest",
-					"It can't be traced to the keys the hub operator pinned ({{reason}}), so no package can be built. Nothing was created.",
-					{ reason: releaseReason(t, release.detail) },
+					"The reason: {{reason}}. No package can be built from it, and nothing was created.",
+					{ reason: releaseCheckText(t, release.check) },
 				)}
 			/>
 		);
@@ -231,14 +248,18 @@ function SaveHeadline({ created }: Readonly<{ created: CreatedSetup }>) {
 					t={t}
 					i18nKey="setup.headline.save"
 					defaults="The package for <1/> works until {{until}}."
-					values={{ until: time.at(created.expiresAt) }}
+					values={{ until: time.at(startBy(created)) }}
 					components={{ 1: name }}
 				/>
 			}
-			rest={t(
-				"setup.headline.saveRest",
-				"Start it on the device before then. It can't be downloaded again once you leave this setup.",
-			)}
+			rest={
+				created.releaseEndsAt === undefined
+					? t(
+							"setup.headline.saveRest",
+							"Start it on the device before then. It can't be downloaded again once you leave this setup.",
+						)
+					: startByReleaseText(t, time, created.releaseEndsAt, true)
+			}
 		/>
 	) : (
 		<Headline
@@ -279,7 +300,7 @@ function StartHeadline({ created }: Readonly<{ created: CreatedSetup }>) {
 				"Its package was made {{when}} and works until {{until}}. Only the steps from here on apply.",
 				{
 					when: time.at(created.createdAt),
-					until: time.at(created.expiresAt),
+					until: time.at(startBy(created)),
 				},
 			)}
 		/>
@@ -292,7 +313,7 @@ function WaitHeadline({ created }: Readonly<{ created: CreatedSetup }>) {
 	const time = useAreaTime();
 	const { draft, expired } = useSetup();
 	const name = <Mono>{draft.name}</Mono>;
-	const until = time.at(created.expiresAt);
+	const until = time.at(startBy(created));
 	if (expired)
 		return (
 			<Headline
@@ -363,11 +384,15 @@ function WaitHeadline({ created }: Readonly<{ created: CreatedSetup }>) {
 					components={{ 1: name }}
 				/>
 			}
-			rest={t(
-				"setup.headline.waitingRest",
-				"Start the package on the device before {{until}}. This page checks the hub every {{count, number}} s.",
-				{ until, count: WAIT_POLL_MS / 1000 },
-			)}
+			rest={
+				created.releaseEndsAt === undefined
+					? t(
+							"setup.headline.waitingRest",
+							"Start the package on the device before {{until}}. This page checks the hub every {{count, number}} s.",
+							{ until, count: WAIT_POLL_MS / 1000 },
+						)
+					: startByReleaseText(t, time, created.releaseEndsAt, true)
+			}
 		/>
 	);
 }

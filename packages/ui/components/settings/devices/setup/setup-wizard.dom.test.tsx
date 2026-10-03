@@ -1,8 +1,12 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
-import type { ReleaseTarget } from "../../../../lib/device-management/package";
 import type { DeviceSetupInput } from "../../../../lib/device-management/setup";
 import type { OnboardingManifest } from "../../../../lib/device-management/types";
+import {
+	DAY_S,
+	type TestReleaseOptions,
+	publishTestRelease,
+} from "../hub/release-test-kit";
 import {
 	allByRole,
 	byRole,
@@ -33,6 +37,7 @@ const { deviceKeys } = await import(
 const { accountStorageKey } = await import(
 	"../../../../lib/device-management/storage"
 );
+const { formatMoment } = await import("../../../../lib/date");
 
 let restoreFetch: (() => void) | undefined;
 afterEach(async () => {
@@ -251,89 +256,30 @@ const b64url = (bytes: Uint8Array) =>
 		.replaceAll("+", "-")
 		.replaceAll("/", "_")
 		.replace(/=+$/, "");
-const utf8 = (value: string) => new TextEncoder().encode(value);
-
-/** A signed release as the client verifies it, with the artifacts a test needs. */
-async function publishRelease(
-	fake: FakeWorkspace,
-	artifacts: { target: ReleaseTarget; size: number }[],
-	platforms: string[] | null,
-) {
-	const pair = (await crypto.subtle.generateKey("Ed25519", true, [
-		"sign",
-		"verify",
-	])) as CryptoKeyPair;
-	const key = b64url(
-		new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)),
-	);
-	const kid = b64url(
-		new Uint8Array(
-			await crypto.subtle.digest(
-				"SHA-256",
-				utf8(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: key })),
-			),
-		),
-	);
-	const url = "https://releases.flow-like.com/standalone/stable/release.jws";
-	const now = Math.floor(fake.clock.now() / 1000);
-	const manifest = {
-		version: 1,
-		state_schema_version: 12,
-		sequence: 44,
-		release_version: "0.9.4",
-		issued_at: now - 3_600,
-		expires_at: now + 7 * 86_400,
-		artifacts: artifacts.map(({ target, size }) => ({
-			target,
-			url: `https://releases.flow-like.com/standalone/0.9.4/${target}`,
-			size,
-			sha256: "0".repeat(64),
-		})),
-		container: platforms
-			? {
-					image: `ghcr.io/tm9657/flow-like-standalone@sha256:${"2b".repeat(32)}`,
-					platforms,
-				}
-			: null,
-	};
-	const header = {
-		alg: "EdDSA",
-		typ: "flow-like-standalone-release+jws",
-		kid,
-	};
-	const signed = [header, manifest]
-		.map((part) => b64url(utf8(JSON.stringify(part))))
-		.join(".");
-	const signature = await crypto.subtle.sign(
-		"Ed25519",
-		pair.privateKey,
-		utf8(signed),
-	);
-	fake.hub.release = {
-		url,
-		jws: `${signed}.${b64url(new Uint8Array(signature))}`,
-	};
-	fake.hub.releaseTrust = {
-		manifest_url: url,
-		public_keys: [key],
-		minimum_sequence: 41,
-	};
-	return url;
-}
 
 /** A release whose agents are too large to pack, with a Linux-only image. */
 async function largeAgentHub() {
 	const fake = await createFakeWorkspace();
-	await publishRelease(
-		fake,
-		[
+	await publishTestRelease(fake, {
+		artifacts: [
 			{ target: "x86_64-unknown-linux-gnu", size: 512 * MIB },
 			{ target: "aarch64-apple-darwin", size: 512 * MIB },
 		],
-		["linux/amd64"],
-	);
+		platforms: ["linux/amd64"],
+	});
 	return fake;
 }
+
+/** A hub whose release list this file signed, with the validity the test chooses. */
+async function hubWithRelease(release: TestReleaseOptions) {
+	const fake = await createFakeWorkspace();
+	const published = await publishTestRelease(fake, release);
+	return { fake, published };
+}
+
+/** A moment as the wizard writes it: the time today, the day and time otherwise. */
+const moment = (fake: FakeWorkspace, atS: number) =>
+	formatMoment(atS * 1000, { now: fake.clock.now(), locale: "en" });
 
 interface HeldFetch {
 	signal: AbortSignal | undefined;
@@ -958,17 +904,236 @@ describe("hub checks", () => {
 		};
 		const { settle } = await mountSetup({ fake });
 		await settle();
-		expect(text()).toContain("The agent release can't be verified.");
+		expect(text()).toContain("The agent release failed a check.");
 		expect(text()).toContain(
-			"The hub's agent release couldn't be verified: the signature doesn't match.",
+			"The hub's agent release failed a check: it isn't signed by a key the hub operator pinned.",
 		);
-		expect(text()).toContain("Ask your hub operator.");
+		expect(text()).toContain(
+			"Ask your hub operator. Nothing on this computer can work around it, and nothing was created.",
+		);
+		expect(text()).toContain("This release can't be used");
 		expect(text()).toContain("Details");
+		expect(text()).toContain(
+			"The package signature does not match a configured release key.",
+		);
+		expect(text()).not.toContain("Signed by");
 		expect(gated()).toBe(true);
 		await next();
 		await submit();
 		expect(stepOf()).toBe(0);
 		expect(posts(fake)).toHaveLength(0);
+	});
+
+	const FAILED_CHECK = (reason: string) => [
+		"The agent release failed a check.",
+		`The reason: ${reason}. No package can be built from it, and nothing was created.`,
+	];
+	const REFUSED: readonly {
+		name: string;
+		release: TestReleaseOptions;
+		reason: string;
+		/** The headline's two sentences. */
+		headline: readonly (string | RegExp)[];
+		next: string;
+		chip: string;
+	}[] = [
+		{
+			name: "a list that has run out",
+			release: { issuedAgoS: 40 * DAY_S, endsInS: -DAY_S },
+			reason: "it has run out",
+			headline: [
+				"The hub's agent release has run out.",
+				/It ran out on .+, so no package can be built until the hub operator publishes or renews a release\. Nothing was created\./,
+			],
+			next: "Ask your hub operator to publish or renew a release. Nothing was created.",
+			chip: "Expired",
+		},
+		{
+			name: "a list dated in the future",
+			release: { issuedAgoS: -3_600 },
+			reason: "it isn't valid yet; check this computer's clock",
+			headline: FAILED_CHECK("it isn't valid yet; check this computer's clock"),
+			next: "This can be fixed on this computer; then check again. Nothing was created.",
+			chip: "Can't be verified",
+		},
+		{
+			name: "a list valid for longer than this app accepts",
+			release: { endsInS: 6 * 365 * DAY_S },
+			reason: "it is valid for longer than this app accepts; update the app",
+			headline: FAILED_CHECK(
+				"it is valid for longer than this app accepts; update the app",
+			),
+			next: "This can be fixed on this computer; then check again. Nothing was created.",
+			chip: "Can't be verified",
+		},
+	];
+
+	for (const {
+		name,
+		release,
+		reason,
+		headline,
+		next: nextStep,
+		chip,
+	} of REFUSED)
+		test(`${name} stops the setup with its own reason`, async () => {
+			const { fake } = await hubWithRelease(release);
+			const { settle } = await mountSetup({ fake });
+			await settle();
+			const lead = String(
+				document.querySelector("[data-headline]")?.textContent,
+			);
+			for (const sentence of headline)
+				if (typeof sentence === "string") expect(lead).toContain(sentence);
+				else expect(lead).toMatch(sentence);
+			expect(text()).toContain(
+				`The hub's agent release failed a check: ${reason}.`,
+			);
+			expect(text()).toContain(nextStep);
+			expect(text()).toContain(
+				`It failed a check: ${reason}. No package is built from it.`,
+			);
+			expect(text()).toContain(`Agent release${chip}`);
+			expect(text()).toContain(
+				"The agent release failed a check, so no package can be built.",
+			);
+			expect(gated()).toBe(true);
+			await next();
+			await submit();
+			expect(stepOf()).toBe(0);
+			expect(posts(fake)).toHaveLength(0);
+			expectClean();
+		});
+
+	test("a release address that doesn't answer is a failed load, not a failed check", async () => {
+		const { fake } = await hubWithRelease({});
+		fake.hub.release = undefined;
+		const { settle } = await mountSetup({ fake });
+		await settle();
+		expect(text()).toContain("The agent release couldn't be loaded");
+		expect(text()).not.toContain("failed a check");
+		expect(gated()).toBe(true);
+	});
+
+	test("a list valid for a year passes and shows its end without a day count", async () => {
+		const { fake, published } = await hubWithRelease({});
+		await mountSetup({ fake });
+		expect(text()).toContain("All 6 hub checks pass, agent 0.9.4 is verified");
+		expect(text()).toContain(
+			`valid until ${moment(fake, published.manifest.expires_at)}`,
+		);
+		expect(text()).toContain("release number 44");
+		expect(text()).not.toMatch(/days? left/);
+		expect(text()).not.toContain("runs out");
+		expect(text()).not.toContain("30 days");
+		expect(gated()).toBe(false);
+		expectClean();
+	});
+
+	test("inside the last 30 days the check says until when setup works", async () => {
+		const { fake } = await hubWithRelease({ endsInS: 12 * DAY_S });
+		await mountSetup({ fake });
+		expect(text()).toMatch(/valid until .+ \(12 days left\)/);
+		expect(text()).toMatch(
+			/This hub's agent release runs out on .+\. Setup works until then\./,
+		);
+		// A day's package still fits: the usual time to start it stays.
+		expect(text()).toContain("24 h to start the package once it's made.");
+		expect(gated()).toBe(false);
+		expectClean();
+	});
+
+	test("a release that ends before the package would is the time to start by, on every step", async () => {
+		const { fake, published } = await hubWithRelease({ endsInS: 5 * 3_600 });
+		const end = moment(fake, published.manifest.expires_at);
+		const startBy = `before ${end}: the hub's agent release runs out then.`;
+		const { settle } = await mountSetup({ fake });
+		expect(text()).toContain(
+			`A package made now has to be started on the device ${startBy}`,
+		);
+		expect(text()).toContain(
+			`About 10 minutes. A package made now has to be started on the device ${startBy}`,
+		);
+		expect(text()).not.toContain("24 h to start the package");
+		expect(text()).toContain(`valid until ${end} (less than a day left)`);
+
+		await toCreateStep();
+		expect(text()).toContain(
+			`Usually under a minute. A package made now has to be started on the device ${startBy}`,
+		);
+		expect(text()).not.toContain("The package then works for");
+		await next();
+		await settle();
+		expect(text()).toContain(
+			`factory-line-4 is registered and waits for its first start until ${end}.`,
+		);
+		expect(storedDrafts(fake)).toContain(
+			`"releaseEndsAt":${published.manifest.expires_at}`,
+		);
+		expect(trayItems(fake)[0]?.deadlineAt).toBe(
+			published.manifest.expires_at * 1000,
+		);
+
+		await next();
+		expect(stepOf()).toBe(5);
+		expect(text()).toContain(
+			`The package for factory-line-4 works until ${end}.`,
+		);
+		expect(text()).toContain(`Start it on the device ${startBy}`);
+		expect(text()).toContain("then the hub's agent release runs out");
+		expect(text()).toContain(`works until ${end}`);
+
+		const download = byRole("link", /Download setup package/);
+		download.addEventListener("click", (event) => event.preventDefault());
+		await click(download);
+		await next();
+		await next();
+		await settle();
+		expect(stepOf()).toBe(7);
+		expect(text()).toContain(`Start it on the device ${startBy}`);
+		expectClean();
+	});
+
+	test("a package whose agent release ran out can't be started, also after a reload, and its setup can still be cancelled", async () => {
+		const { fake, published } = await hubWithRelease({ endsInS: 5 * 3_600 });
+		const first = await mountSetup({ fake });
+		await create(first.settle);
+		await next();
+		expect(stepOf()).toBe(5);
+		await first.unmount();
+
+		// An hour after the release in the package ran out; the setup at the hub has 18 hours left.
+		const reloaded = await mountSetup({
+			search: "flow=setup&step=5",
+			now: (published.manifest.expires_at + 3_600) * 1000,
+		});
+		expect(stepOf()).toBe(7);
+		expect(text()).toContain(
+			`The package for factory-line-4 expired unused on ${moment(reloaded.fake, published.manifest.expires_at)}.`,
+		);
+		expect(primary().textContent).toContain("Create a new one");
+		expect(byRole("button", /Cancel setup/)).toBeTruthy();
+		expect(reloaded.calls).toHaveLength(0);
+	});
+
+	test("a release that runs out while the wizard is open stops the setup", async () => {
+		const { fake } = await hubWithRelease({ endsInS: 2 * 3_600 });
+		const { settle, unmount } = await mountSetup({ fake, tickMs: 100 });
+		expect(gated()).toBe(false);
+		fake.clock.advance(3 * 3_600_000);
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 300));
+		});
+		expect(text()).toContain(
+			"The hub's agent release failed a check: it has run out.",
+		);
+		expect(gated()).toBe(true);
+		await next();
+		await settle();
+		expect(stepOf()).toBe(0);
+		expect(posts(fake)).toHaveLength(0);
+		// The clock is live here: stop it before the test hands back to the runner.
+		await unmount();
 	});
 
 	test("large agents stay selectable with the first-start download explained; Intel Mac and Docker on a Mac are disabled with reasons", async () => {

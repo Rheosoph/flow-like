@@ -77,6 +77,12 @@ const ALL_FEATURES = {
 	acme_failure_detail: 1,
 	archive_status: 1,
 	artifact_capacity: 1,
+	scheduled_events: 1,
+	api_events: 1,
+	scheduled_once: 1,
+	on_demand_events: 1,
+	telegram_bots: 1,
+	discord_bots: 1,
 } as const;
 
 export function ed25519(x: string): Ed25519PublicKey {
@@ -1075,12 +1081,15 @@ const FLEET: AttentionInputExt["fleet"] = {
 	[ID.edge]: fleetState(ID.edge, {
 		status: {
 			observations: [
-				observation(
-					ID.edge,
-					EDGE_PLACEMENTS,
-					1_790_769_560,
-					"f30e158c6645af7e",
-				),
+				{
+					...observation(
+						ID.edge,
+						EDGE_PLACEMENTS,
+						1_790_769_560,
+						"f30e158c6645af7e",
+					),
+					features: ALL_FEATURES,
+				},
 			],
 			observedAt: 1_790_769_560,
 			bootId: "f30e158c6645af7e",
@@ -1092,19 +1101,22 @@ const FLEET: AttentionInputExt["fleet"] = {
 	[ID.warehouse]: fleetState(ID.warehouse, {
 		status: {
 			observations: [
-				observation(
-					ID.warehouse,
-					[
-						placement({
-							...SCANNER,
-							observed_state: "backoff",
-							running_replicas: 0,
-							ready_replicas: 0,
-						}),
-					],
-					1_790_758_790,
-					"a676b4383ab59238",
-				),
+				{
+					...observation(
+						ID.warehouse,
+						[
+							placement({
+								...SCANNER,
+								observed_state: "backoff",
+								running_replicas: 0,
+								ready_replicas: 0,
+							}),
+						],
+						1_790_758_790,
+						"a676b4383ab59238",
+					),
+					features: ALL_FEATURES,
+				},
 			],
 			observedAt: 1_790_758_790,
 			bootId: "a676b4383ab59238",
@@ -1400,6 +1412,12 @@ function olderAgentPlacement(row: PlacementStatusPlus): PlacementStatusPlus {
 		events: _events,
 		events_truncated: _truncated,
 		online_metadata_sha256: _metadata,
+		schedules: _schedules,
+		schedules_truncated: _schedulesTruncated,
+		bots: _bots,
+		bots_truncated: _botsTruncated,
+		actions: _actions,
+		actions_truncated: _actionsTruncated,
 		...rest
 	} = row;
 	return rest;
@@ -1446,10 +1464,12 @@ export function sampleFleetOlderAgent(): AttentionInputExt {
 						...state,
 						status: {
 							...state.status,
-							observations: state.status.observations.map((entry) => ({
-								...entry,
-								placements: entry.placements.map(olderAgentPlacement),
-							})),
+							observations: state.status.observations.map(
+								({ features: _features, ...entry }) => ({
+									...entry,
+									placements: entry.placements.map(olderAgentPlacement),
+								}),
+							),
 						},
 					}
 				: state,

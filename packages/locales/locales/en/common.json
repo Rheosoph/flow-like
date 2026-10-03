@@ -1807,6 +1807,7 @@
 	"offlineProjectsAreNeverListedSoNoConformityAssessmentOrPublicationReviewIsRequiredBringTheProjectOnlineToStart": "Offline projects are never listed, so no conformity assessment or publication review is required. Bring the project online to start.",
 	"offlineUsingCachedData": "Offline - Using Cached Data",
 	"offOnThisDevice": "Off on this device",
+	"onADeviceLatestMeansTheFlowAsItWasWhenYouLastDeployedOrUpdated": "On a device, Latest means the flow as it was when you last deployed or updated.",
 	"onCompletion": "On completion",
 	"onDisk": "on disk",
 	"oneModelfileDependencyBitPerLineOrCommaSeparated": "One model-file dependency bit per line or comma separated",

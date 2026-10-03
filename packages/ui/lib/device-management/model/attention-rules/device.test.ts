@@ -334,6 +334,39 @@ describe("status, agent and host", () => {
 		expect(studio?.copy.params?.running).toBe("0.9.4");
 	});
 
+	test("agent update: an agent from before 0.1.1 can't take a list valid for more than 30 days, so no update is offered from here", () => {
+		const DAY = 86_400;
+		const warehouseItem = (running: string, validForS: number | undefined) => {
+			const input = sampleFleet();
+			input.agentLastRead = {
+				...input.agentLastRead,
+				[SAMPLE_IDS.warehouse]: { version: running, at: SAMPLE_NOW - 60 },
+			};
+			input.latestRelease = {
+				version: "0.9.4",
+				sequence: null,
+				...(validForS === undefined ? {} : { validForS }),
+			};
+			return evaluate("agent_update_available", input).find(
+				(item) =>
+					item.subject.kind === "device" &&
+					item.subject.deviceId === SAMPLE_IDS.warehouse,
+			);
+		};
+		const refused = warehouseItem("0.1.0", 365 * DAY);
+		expect(refused?.action?.code).toBe("how_to_update");
+		expect(refused?.copy.params?.needsShortRelease).toBe(1);
+		// A list of 30 days, an agent that takes long lists, and a list whose lifetime isn't known: the update is offered.
+		for (const item of [
+			warehouseItem("0.1.0", 30 * DAY),
+			warehouseItem("0.1.1", 365 * DAY),
+			warehouseItem("0.1.0", undefined),
+		]) {
+			expect(item?.action?.code).toBe("update_agent");
+			expect(item?.copy.params?.needsShortRelease).toBeUndefined();
+		}
+	});
+
 	test("agent update compares release sequences, never the agent's constant crate version", () => {
 		const live = (input: ReturnType<typeof sampleFleet>) =>
 			evaluate("agent_update_available", input).filter(

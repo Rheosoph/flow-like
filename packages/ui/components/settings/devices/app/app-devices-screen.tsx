@@ -198,8 +198,7 @@ function useDeployGate(view: AppView, data: AppDevicesData): Gate | null {
 					<>
 						{t(
 							"app.gate.noEvents",
-							"None of {{app}}'s events can run on a device. Pin a flow version or add a Web request, Chat, Page, REST, MCP or Background event.",
-							{ app: view.app.name },
+							"No event of this app can run on a device yet. Most types can: add one in Events. Inbound email, Teams and deep-link events can't.",
 						)}{" "}
 						<HostLink
 							href={appEventsHref(data.appId)}

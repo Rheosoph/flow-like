@@ -474,6 +474,10 @@ export function EventForm({
 				{t(
 					"latestFollowsTheCurrentFlowAPinnedVersionAlwaysRunsThatExactSnapshot",
 					"Latest follows the current flow. A pinned version always runs that exact snapshot.",
+				)}{" "}
+				{t(
+					"onADeviceLatestMeansTheFlowAsItWasWhenYouLastDeployedOrUpdated",
+					"On a device, Latest means the flow as it was when you last deployed or updated.",
 				)}
 			</p>
 		</div>

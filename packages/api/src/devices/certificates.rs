@@ -2129,6 +2129,7 @@ mod tests {
                 "../../prisma/migrations/20260925120000_device_certificates/migration.sql"
             ),
             include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
+            include_str!("../../prisma/migrations/20261002120000_device_schedules/migration.sql"),
         ] {
             for statement in migration
                 .split(';')

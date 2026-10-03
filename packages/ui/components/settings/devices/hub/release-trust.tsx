@@ -6,6 +6,9 @@ import {
 	BadgeCheck,
 	CircleCheck,
 	List,
+	LoaderCircle,
+	LockOpen,
+	type LucideIcon,
 	OctagonX,
 	PackageCheck,
 	PackageX,
@@ -13,23 +16,21 @@ import {
 	TriangleAlert,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
+import type { HubStandalone } from "../../../../lib/device-management/hub/endpoints";
+import {
+	deviceName,
+	keysLocked,
+} from "../../../../lib/device-management/model/device-view";
+import type { DeviceViewModel } from "../../../../lib/device-management/model/types";
 import type {
-	HubError,
-	HubStandalone,
-} from "../../../../lib/device-management/hub/endpoints";
-import { deviceName } from "../../../../lib/device-management/model/device-view";
-import type {
-	DeviceViewModel,
-	HubErrorCode,
-} from "../../../../lib/device-management/model/types";
-import type {
+	ReleaseFacts,
 	ReleaseTarget,
-	StandaloneRelease,
 	VerifiedRelease,
 } from "../../../../lib/device-package";
 import { enumLabel } from "../copy/enum-labels";
-import { type DevicesT, useAreaTime } from "../primitives/area-context";
+import { useAreaTime } from "../primitives/area-context";
 import { Block } from "../primitives/block";
+import { dayText } from "../primitives/day";
 import { DvButton } from "../primitives/dv-button";
 import { CellSub, DvTable, Td, Th, Tr } from "../primitives/dv-table";
 import { FreshnessStamp } from "../primitives/freshness-stamp";
@@ -39,7 +40,13 @@ import { KeyValueList, KvRow } from "../primitives/key-value-list";
 import { PresenceGlyph } from "../primitives/presence-glyph";
 import { StateView } from "../primitives/state-view";
 import { StatusChip } from "../primitives/status-chip";
-import { TONE_TEXT, cx } from "../primitives/tone";
+import {
+	TONE_SOLID,
+	TONE_SURFACE,
+	TONE_TEXT,
+	type Tone,
+	cx,
+} from "../primitives/tone";
 import { useRouteLink } from "../routing/use-devices-route";
 import { stampOf } from "../shell/attention-popover";
 import {
@@ -49,6 +56,7 @@ import {
 	useDeviceRows,
 	useDeviceViews,
 	useHubSupport,
+	useOverlay,
 	useReleaseTrust,
 } from "../workspace";
 import {
@@ -60,10 +68,29 @@ import {
 	UrlLine,
 	useLocale,
 } from "./hub-parts";
+import {
+	type ReleaseVerdict,
+	releaseCheckFailure,
+	releaseVerdictOf,
+	usableRelease,
+} from "./hub-view";
 import { checkCopy } from "./readiness-list";
+import {
+	type ShownVerdict,
+	isLastDay,
+	releaseCheckText,
+	releaseFetchCause,
+	releaseLeftText,
+	verdictSentence,
+} from "./release-copy";
 import { bytesText, useHubRecord, useReverify } from "./use-hub-facts";
 
 type ReleaseTrustConfig = NonNullable<HubStandalone["release_trust"]>;
+/** A verdict about a list whose own dates are known. */
+type DatedVerdict = Extract<
+	ReleaseVerdict,
+	{ kind: "ok" | "ends_soon" | "expired" }
+>;
 
 const TARGETS: readonly { target: ReleaseTarget; docker: string | null }[] = [
 	{ target: "x86_64-unknown-linux-gnu", docker: "linux/amd64" },
@@ -73,86 +100,105 @@ const TARGETS: readonly { target: ReleaseTarget; docker: string | null }[] = [
 ];
 /** Above this a setup package downloads the agent on the device instead of carrying it. */
 const PACKAGE_BINARY_MAX = 268_435_456;
-const DAY = 86_400;
 /** A cell without a value shows a dash in the table and drops out of the stacked card. */
 const NO_VALUE = "empty:before:content-['–']";
 const DEVICES_SHOWN = 6;
 const DEVICES_STEP = 20;
-const TRANSPORT: ReadonlySet<HubErrorCode> = new Set([
-	"network",
-	"timeout",
-	"server_error",
-	"rate_limited",
-]);
 
-/** Why a release failed verification, in plain words; the verifier's own sentence stays in the hover. */
-function rejectionReason(t: DevicesT, detail: string): string {
-	if (/signature/i.test(detail))
-		return t(
-			"devices:hub.release.reason.signature",
-			"its signature doesn't match a key the hub operator pinned",
-		);
-	if (/expired/i.test(detail))
-		return t("devices:hub.release.reason.expired", "it has expired");
-	if (/older than the configured minimum/i.test(detail))
-		return t(
-			"devices:hub.release.reason.sequence",
-			"it's older than the hub's minimum release",
-		);
-	return t("devices:hub.release.reason.invalid", "it isn't a valid release");
+/* The verdict: what the release means for the viewer, in one sentence. */
+
+const VERDICT_LOOK: Record<
+	ShownVerdict["kind"],
+	{ tone?: Tone; icon: LucideIcon }
+> = {
+	ok: { tone: "good", icon: BadgeCheck },
+	ends_soon: { tone: "warning", icon: TriangleAlert },
+	expired: { tone: "critical", icon: OctagonX },
+	failed: { tone: "critical", icon: OctagonX },
+	unfetched: { tone: "warning", icon: TriangleAlert },
+	checking: { icon: LoaderCircle },
+};
+
+function VerdictLine({ verdict }: Readonly<{ verdict: ShownVerdict }>) {
+	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	const { tone, icon: Icon } = VERDICT_LOOK[verdict.kind];
+	return (
+		<p
+			role={tone === "critical" ? "alert" : "status"}
+			data-verdict={verdict.kind}
+			data-tone={tone ?? "neutral"}
+			title={verdict.kind === "failed" ? verdict.detail : undefined}
+			className={cx(
+				"flex items-start gap-2.5 border-b px-4 py-3 text-sm/5 text-foreground",
+				tone ? TONE_SURFACE[tone] : "border-hairline bg-surface-sunken",
+			)}
+		>
+			<Icon
+				aria-hidden
+				className={cx(
+					"mt-0.5 size-4 shrink-0",
+					tone ? TONE_TEXT[tone] : "animate-spin text-muted-foreground",
+				)}
+			/>
+			<span className="max-w-[88ch] min-w-0 text-pretty">
+				{verdictSentence(t, time, verdict)}
+			</span>
+		</p>
+	);
 }
-
-interface ReleaseFailure {
-	/** The release list didn't arrive, as opposed to arriving and failing verification. */
-	transport: boolean;
-	text: string;
-	detail?: string;
-}
-
-function failureOf(t: DevicesT, error: HubError): ReleaseFailure {
-	if (TRANSPORT.has(error.code))
-		return { transport: true, text: hubErrorCopy(t, error.code) };
-	const detail =
-		error.cause instanceof Error ? error.cause.message : error.message;
-	return { transport: false, text: rejectionReason(t, detail), detail };
-}
-
-/** Days left of a validity window, never negative. */
-const daysLeft = (expiresAt: number, nowS: number) =>
-	Math.max(0, Math.ceil((expiresAt - nowS) / DAY));
 
 /* The current release: version, validity window, trust facts. */
 
-function ValidityTrack({
-	manifest,
-}: Readonly<{ manifest: StandaloneRelease }>) {
+const TRACK_TONE: Record<DatedVerdict["kind"], Tone | undefined> = {
+	ok: undefined,
+	ends_soon: "warning",
+	expired: "critical",
+};
+
+function ValidityTrack({ verdict }: Readonly<{ verdict: DatedVerdict }>) {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
-	const span = Math.max(1, manifest.expires_at - manifest.issued_at);
+	const { facts, kind } = verdict;
+	const span = Math.max(1, facts.expires_at - facts.issued_at);
 	const elapsed = Math.max(
 		0,
-		Math.min(1, (time.nowS - manifest.issued_at) / span),
+		Math.min(1, (time.nowS - facts.issued_at) / span),
 	);
-	const left = daysLeft(manifest.expires_at, time.nowS);
 	const percent = `${(elapsed * 100).toFixed(1)}%`;
-	const expired = manifest.expires_at <= time.nowS;
+	const dates = {
+		from: time.at(facts.issued_at),
+		until: time.at(facts.expires_at),
+	};
+	const tone = TRACK_TONE[kind];
 	return (
-		<div className="flex w-full max-w-[560px] min-w-0 flex-col gap-1.5 justify-self-end @max-[1080px]/devices:max-w-none @max-[1080px]/devices:justify-self-stretch">
+		<div className="flex w-full max-w-140 min-w-0 flex-col gap-1.5 justify-self-end @max-[1080px]/devices:max-w-none @max-[1080px]/devices:justify-self-stretch">
 			<div
 				role="img"
-				aria-label={t(
-					"hub.release.window",
-					"Valid from {{from}} to {{until}}; {{count, number}} days left",
-					{
-						from: time.at(manifest.issued_at),
-						until: time.at(manifest.expires_at),
-						count: left,
-					},
-				)}
+				aria-label={
+					verdict.kind === "ends_soon" &&
+					!isLastDay(facts.expires_at, time.nowS)
+						? t("hub.release.window", {
+								...dates,
+								count: verdict.daysLeft,
+								defaultValue_one:
+									"Valid from {{from}} to {{until}}; {{count, number}} day left",
+								defaultValue_other:
+									"Valid from {{from}} to {{until}}; {{count, number}} days left",
+							})
+						: t(
+								"hub.release.windowDates",
+								"Valid from {{from}} to {{until}}",
+								dates,
+							)
+				}
 				className="relative h-1.5 rounded-[3px] bg-muted"
 			>
 				<i
-					className="absolute inset-y-0 left-0 rounded-l-[3px] bg-border-strong"
+					className={cx(
+						"absolute inset-y-0 left-0 rounded-l-[3px]",
+						tone ? TONE_SOLID[tone] : "bg-border-strong",
+					)}
 					style={{ width: percent }}
 				/>
 				<b
@@ -161,58 +207,46 @@ function ValidityTrack({
 				/>
 			</div>
 			<div className="flex justify-between gap-2 text-xs text-muted-foreground">
-				<span title={time.abs(manifest.issued_at)}>
-					{t("hub.release.issued", "Issued {{when}}", {
-						when: time.at(manifest.issued_at),
-					})}
+				<span title={time.abs(facts.issued_at)}>
+					{t("hub.release.issued", "Issued {{when}}", { when: dates.from })}
 				</span>
-				<b
-					className={cx(
-						"font-medium",
-						expired ? TONE_TEXT.critical : "text-foreground",
-					)}
-				>
-					{expired
-						? t("hub.release.expired", "Expired")
-						: t("hub.release.daysLeft", {
-								count: left,
-								defaultValue_one: "{{count, number}} day left",
-								defaultValue_other: "{{count, number}} days left",
+				{tone ? (
+					<b className={cx("font-medium", TONE_TEXT[tone])}>
+						{kind === "expired"
+							? t("hub.release.expired", "Expired")
+							: releaseLeftText(t, facts.expires_at, time.nowS)}
+					</b>
+				) : null}
+				<span title={time.abs(facts.expires_at)}>
+					{kind === "expired"
+						? t("hub.release.ranOut", "Ran out {{when}}", {
+								when: dates.until,
+							})
+						: t("hub.release.expires", "Valid until {{when}}", {
+								when: dates.until,
 							})}
-				</b>
-				<span title={time.abs(manifest.expires_at)}>
-					{t("hub.release.expires", "Expires {{when}}", {
-						when: time.at(manifest.expires_at),
-					})}
 				</span>
 			</div>
 		</div>
 	);
 }
 
-function Hero({ release }: Readonly<{ release: VerifiedRelease }>) {
+function Hero({ verdict }: Readonly<{ verdict: DatedVerdict }>) {
 	const { t } = useTranslation("devices");
-	const time = useAreaTime();
-	const { manifest } = release;
-	// A release verified earlier can run out while the page is open.
-	const expired = manifest.expires_at <= time.nowS;
+	const { facts } = verdict;
 	return (
 		<div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-8 gap-y-3 border-b border-hairline px-4 py-3.5 @max-[1080px]/devices:grid-cols-1">
 			<div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
 				<span className="font-mono text-2xl/[30px] font-semibold tracking-[-0.01em] @max-[480px]/devices:text-[21px]/[26px]">
-					{manifest.release_version}
+					{facts.release_version}
 				</span>
 				<span className="text-ui text-muted-foreground">
-					{t("hub.release.number", "release #{{sequence}}", {
-						sequence: manifest.sequence,
+					{t("hub.release.number", "release number {{sequence}}", {
+						sequence: facts.sequence,
 					})}
 				</span>
-				{expired ? (
-					<StatusChip
-						tone="warning"
-						icon={TriangleAlert}
-						className="self-center"
-					>
+				{verdict.kind === "expired" ? (
+					<StatusChip tone="critical" icon={OctagonX} className="self-center">
 						{t("hub.release.expired", "Expired")}
 					</StatusChip>
 				) : (
@@ -221,7 +255,7 @@ function Hero({ release }: Readonly<{ release: VerifiedRelease }>) {
 					</StatusChip>
 				)}
 			</div>
-			<ValidityTrack manifest={manifest} />
+			<ValidityTrack verdict={verdict} />
 		</div>
 	);
 }
@@ -230,19 +264,71 @@ function KvHint({ children }: Readonly<{ children: ReactNode }>) {
 	return <Hint className="mt-0.5">{children}</Hint>;
 }
 
+/** Older releases a hub still accepts while its minimum is behind the current release: said to the one who can raise it. */
+function MinimumBehind({
+	minimum,
+	sequence,
+}: Readonly<{ minimum: number; sequence: number }>) {
+	const { t } = useTranslation("devices");
+	const below = sequence - 1;
+	return (
+		<KvHint>
+			{below === minimum
+				? t(
+						"hub.release.minimumBehindOne",
+						"For the hub operator: release {{minimum}} is still accepted. Raise the minimum to {{sequence}} so that only the current release is.",
+						{ minimum, sequence },
+					)
+				: t(
+						"hub.release.minimumBehind",
+						"For the hub operator: releases {{minimum}} to {{below}} are still accepted. Raise the minimum to {{sequence}} so that only the current release is.",
+						{ minimum, below, sequence },
+					)}
+		</KvHint>
+	);
+}
+
+function ValidRow({
+	facts,
+	usable,
+}: Readonly<{ facts: ReleaseFacts; usable: boolean }>) {
+	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	return (
+		<KvRow label={t("hub.release.valid", "Valid")}>
+			<span title={time.abs(facts.issued_at)}>{time.at(facts.issued_at)}</span>
+			{" → "}
+			<span title={time.abs(facts.expires_at)}>
+				{time.at(facts.expires_at)}
+			</span>
+			<Tech>{`issued_at ${facts.issued_at} · expires_at ${facts.expires_at}`}</Tech>
+			{usable ? (
+				<KvHint>
+					{t(
+						"hub.release.validHint",
+						"For the hub operator: publish or renew a release before {{date}}. Running devices are not affected.",
+						{ date: dayText(time, facts.expires_at) },
+					)}
+				</KvHint>
+			) : null}
+		</KvRow>
+	);
+}
+
 function TrustFacts({
 	trust,
-	release,
+	verdict,
 	verifiedAt,
 }: Readonly<{
 	trust: ReleaseTrustConfig;
-	release?: VerifiedRelease;
+	verdict: ShownVerdict;
 	/** Unix seconds of the verification on this computer. */
 	verifiedAt?: number;
 }>) {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
-	const manifest = release?.manifest;
+	const release = usableRelease(verdict);
+	const facts = "facts" in verdict ? verdict.facts : undefined;
 	return (
 		<KeyValueList>
 			<KvRow label={t("hub.release.publishedAt", "Published at")}>
@@ -275,47 +361,45 @@ function TrustFacts({
 					)}
 				</KvHint>
 			</KvRow>
+			{facts ? (
+				<KvRow label={t("hub.release.sequence", "Release number")}>
+					<span className="tabular-nums">{facts.sequence}</span>
+					<Tech>sequence</Tech>
+					<KvHint>
+						{t(
+							"hub.release.sequenceHint",
+							"Release numbers only go up. Devices refuse a lower one.",
+						)}
+					</KvHint>
+				</KvRow>
+			) : null}
 			<KvRow label={t("hub.release.minimum", "Minimum release number")}>
 				<span className="tabular-nums">{trust.minimum_sequence}</span>
 				<Tech>minimum_sequence</Tech>
 				<KvHint>
 					{t(
 						"hub.release.minimumHint",
-						"Releases numbered below {{minimum}} are refused. Each setup package also raises its device's own minimum to the release it installs, so no device can be moved back to an older agent.",
-						{ minimum: trust.minimum_sequence },
+						"The lowest release number this hub accepts.",
 					)}
 				</KvHint>
+				{release && release.manifest.sequence > trust.minimum_sequence ? (
+					<MinimumBehind
+						minimum={trust.minimum_sequence}
+						sequence={release.manifest.sequence}
+					/>
+				) : null}
 			</KvRow>
-			{manifest ? (
-				<KvRow label={t("hub.release.valid", "Valid")}>
-					<span title={time.abs(manifest.issued_at)}>
-						{time.at(manifest.issued_at)}
-					</span>
-					{" → "}
-					<span title={time.abs(manifest.expires_at)}>
-						{time.at(manifest.expires_at)}
-					</span>{" "}
-					<span className="text-muted-foreground">
-						{t("hub.release.validMax", "· at most 30 days")}
-					</span>
-					<KvHint>
-						{t(
-							"hub.release.validHint",
-							"After it expires, setup can't create packages and agents refuse it until the hub publishes a new release.",
-						)}
-					</KvHint>
-				</KvRow>
-			) : null}
-			{release && manifest && manifest.expires_at > time.nowS ? (
+			{facts ? <ValidRow facts={facts} usable={!!release} /> : null}
+			{release ? (
 				<KvRow label={t("hub.release.verification", "Verification")}>
 					<StatusChip tone="good" icon={BadgeCheck} className="mr-1.5">
 						{t("hub.release.verified", "Verified")}
 					</StatusChip>
 					{t(
 						"hub.release.verifiedBy",
-						"Signed by a trusted key · release #{{sequence}} is at or above {{minimum}} · within its validity window",
+						"Signed by a trusted key · release number {{sequence}} is at or above the minimum {{minimum}} · within its validity window",
 						{
-							sequence: manifest.sequence,
+							sequence: release.manifest.sequence,
 							minimum: trust.minimum_sequence,
 						},
 					)}
@@ -346,7 +430,7 @@ function TrustFacts({
 							"hub.release.downloadsHint",
 							"Downloads are checked against each platform's size and SHA-256 before use.",
 						)}
-						<Tech>{`state_schema_version ${manifest.state_schema_version}`}</Tech>
+						<Tech>{`state_schema_version ${release.manifest.state_schema_version}`}</Tech>
 					</KvHint>
 				</KvRow>
 			) : null}
@@ -363,17 +447,52 @@ function agentRank(view: DeviceViewModel, current?: string): AgentRank {
 	return current !== undefined && view.agent.version !== current ? 0 : 2;
 }
 
+/** The version cell of a device whose agent version isn't known here: the way to read it, never "Unknown". */
+function UnreadVersion({ view }: Readonly<{ view: DeviceViewModel }>) {
+	const { t } = useTranslation("devices");
+	const overlay = useOverlay();
+	if (view.presence.kind === "never")
+		return (
+			<span className="font-sans font-normal text-muted-foreground">–</span>
+		);
+	if (keysLocked(view.keys))
+		return (
+			<DvButton
+				size="xs"
+				variant="link"
+				icon={LockOpen}
+				data-act="unlock"
+				className="font-sans"
+				onClick={() => overlay.openUnlock(view.row.device_id)}
+			>
+				{t("hub.devices.locked", "Unlock to read")}
+			</DvButton>
+		);
+	return (
+		<span className="font-sans font-normal text-muted-foreground">
+			{t("hub.devices.notRead", "Not read yet")}
+		</span>
+	);
+}
+
+interface AgentCompare {
+	/** The version of the usable release; absent while there is none. */
+	current?: string;
+	/** The release is still being verified: nothing is said against it yet. */
+	pending?: boolean;
+}
+
 function DeviceAgentRow({
 	view,
 	current,
-}: Readonly<{ view: DeviceViewModel; current?: string }>) {
+	pending,
+}: Readonly<{ view: DeviceViewModel } & AgentCompare>) {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
 	const link = useRouteLink();
 	const name = deviceName(view.row);
 	const { agent, presence } = view;
-	const locked = view.keys.state !== "unlocked";
-	let status: ReactNode;
+	let status: ReactNode = null;
 	if (agent && current !== undefined && agent.version === current)
 		status = (
 			<span className={cx("inline-flex items-center gap-1", TONE_TEXT.good)}>
@@ -403,7 +522,7 @@ function DeviceAgentRow({
 				) : null}
 			</>
 		);
-	else if (agent)
+	else if (agent && !pending)
 		status = (
 			<span>
 				{t(
@@ -412,16 +531,8 @@ function DeviceAgentRow({
 				)}
 			</span>
 		);
-	else if (presence.kind === "never")
+	else if (!agent && presence.kind === "never")
 		status = <span>{t("hub.devices.never", "Hasn't checked in yet.")}</span>;
-	else
-		status = (
-			<span>
-				{locked
-					? t("hub.devices.locked", "Unlock to read its agent version")
-					: t("hub.devices.notRead", "Its agent version hasn't been read yet")}
-			</span>
-		);
 	return (
 		<li
 			data-device={view.row.device_id}
@@ -445,29 +556,23 @@ function DeviceAgentRow({
 				</a>
 			</span>
 			<span className="text-right font-mono text-[12.5px] font-medium whitespace-nowrap tabular-nums">
-				{agent ? (
-					agent.version
-				) : (
-					<span className="font-sans font-normal text-muted-foreground">
-						{presence.kind === "never"
-							? "–"
-							: t("hub.devices.unknown", "Unknown")}
-					</span>
-				)}
+				{agent ? agent.version : <UnreadVersion view={view} />}
 			</span>
-			<span className="col-span-full flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs text-muted-foreground">
-				{status}
-				{agent ? <FreshnessStamp {...stampOf(agent.source)} compact /> : null}
-			</span>
+			{status || agent ? (
+				<span className="col-span-full flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs text-muted-foreground">
+					{status}
+					{agent ? <FreshnessStamp {...stampOf(agent.source)} compact /> : null}
+				</span>
+			) : null}
 		</li>
 	);
 }
 
 /** The list needs `GET /devices`; until it answers this is "not loaded", never "no devices" (R6). */
-function DeviceAgents({ current }: Readonly<{ current?: string }>) {
+function DeviceAgents(compare: Readonly<AgentCompare>) {
 	const { t } = useTranslation("devices");
 	const devices = useDeviceRows();
-	if (devices.rows) return <DeviceAgentList current={current} />;
+	if (devices.rows) return <DeviceAgentList {...compare} />;
 	return (
 		<div data-hub="devices" className="flex min-w-0 flex-col gap-3">
 			<SectionHead title={t("hub.devices.title", "Your devices")} />
@@ -490,7 +595,7 @@ function DeviceAgents({ current }: Readonly<{ current?: string }>) {
 	);
 }
 
-function DeviceAgentList({ current }: Readonly<{ current?: string }>) {
+function DeviceAgentList({ current, pending }: Readonly<AgentCompare>) {
 	const { t } = useTranslation("devices");
 	const link = useRouteLink();
 	const views = useDeviceViews();
@@ -510,17 +615,21 @@ function DeviceAgentList({ current }: Readonly<{ current?: string }>) {
 			<SectionHead
 				title={t("hub.devices.title", "Your devices")}
 				note={
-					outdated
-						? t(
-								"hub.devices.summaryOutdated",
-								"{{total, number}} active · {{outdated, number}} on an older agent, listed first",
-								{ total: list.length, outdated },
-							)
-						: t(
-								"hub.devices.summary",
-								"{{total, number}} active · none on an older agent",
-								{ total: list.length },
-							)
+					current === undefined
+						? t("hub.devices.summaryPlain", "{{total, number}} active", {
+								total: list.length,
+							})
+						: outdated
+							? t(
+									"hub.devices.summaryOutdated",
+									"{{total, number}} active · {{outdated, number}} on an older agent, listed first",
+									{ total: list.length, outdated },
+								)
+							: t(
+									"hub.devices.summary",
+									"{{total, number}} active · none on an older agent",
+									{ total: list.length },
+								)
 				}
 			/>
 			{list.length ? (
@@ -530,6 +639,7 @@ function DeviceAgentList({ current }: Readonly<{ current?: string }>) {
 							key={view.row.device_id}
 							view={view}
 							current={current}
+							pending={pending}
 						/>
 					))}
 				</ul>
@@ -775,53 +885,60 @@ function MissingRelease() {
 	);
 }
 
-function FailedRelease({
-	failure,
-	host,
-}: Readonly<{ failure: ReleaseFailure; host: string }>) {
+/** What "Verify again" came back with: verified, refused by a check, or not fetched. */
+function VerifyOutcome({
+	verify,
+	minimum,
+}: Readonly<{ verify: ReturnType<typeof useReverify>; minimum: number }>) {
 	const { t } = useTranslation("devices");
-	return failure.transport ? (
-		<StateView
-			kind="notloaded"
-			icon={TriangleAlert}
-			title={t(
-				"hub.release.unfetched.title",
-				"The signed release list couldn't be fetched.",
-			)}
-			text={t(
-				"hub.release.unfetched.text",
-				"{{cause}} Setup and agent updates wait until it can be verified. Devices keep running the agent they have.",
-				{ cause: failure.text },
-			)}
-		/>
+	const time = useAreaTime();
+	const { outcome } = verify;
+	if (!outcome) return null;
+	const at = time.clock(outcome.at);
+	if (outcome.ok)
+		return (
+			<InlineResult tone="good" onDismiss={verify.dismiss}>
+				{t(
+					"hub.release.result.verified",
+					"Verified again at {{time}}: signed by a trusted key, release number {{sequence}} is at or above the minimum {{minimum}}, and valid until {{until}}.",
+					{
+						time: at,
+						sequence: outcome.data.manifest.sequence,
+						minimum,
+						until: time.at(outcome.data.manifest.expires_at),
+					},
+				)}
+			</InlineResult>
+		);
+	const refused = releaseCheckFailure(outcome.error);
+	return refused ? (
+		<InlineResult tone="critical" onDismiss={verify.dismiss}>
+			<span title={refused.detail}>
+				{t(
+					"hub.release.result.refused",
+					"Checked at {{time}}. The release failed a check: {{check}}.",
+					{ time: at, check: releaseCheckText(t, refused.check) },
+				)}
+			</span>
+		</InlineResult>
 	) : (
-		<StateView
-			kind="error"
-			icon={OctagonX}
-			title={t(
-				"hub.release.rejected.title",
-				"The hub's agent release couldn't be verified: {{reason}}.",
-				{ reason: failure.text },
+		<InlineResult tone="warning" onDismiss={verify.dismiss}>
+			{t(
+				"hub.release.result.failed",
+				"Couldn't verify at {{time}}: {{cause}}",
+				{
+					time: at,
+					cause: releaseFetchCause(t, outcome.error),
+				},
 			)}
-			text={
-				<span title={failure.detail}>
-					{t(
-						"hub.release.rejected.text",
-						"Ask the operator of {{host}}. The app won't package or install an agent it can't trace to a key they pinned, so nothing on this computer can work around it.",
-						{ host },
-					)}
-				</span>
-			}
-		/>
+		</InlineResult>
 	);
 }
 
 /** A fresh fetch and verification of the release list, with its outcome next to the button (R9). */
 function VerifyAgain({ minimum }: Readonly<{ minimum: number }>) {
 	const { t } = useTranslation("devices");
-	const time = useAreaTime();
 	const verify = useReverify();
-	const { outcome } = verify;
 	return (
 		<>
 			<div className="flex flex-wrap items-center gap-2">
@@ -838,77 +955,40 @@ function VerifyAgain({ minimum }: Readonly<{ minimum: number }>) {
 						: t("hub.release.verifyAgain", "Verify again")}
 				</DvButton>
 			</div>
-			{outcome ? (
-				<InlineResult
-					tone={outcome.ok ? "good" : "warning"}
-					onDismiss={verify.dismiss}
-				>
-					{outcome.ok
-						? t(
-								"hub.release.result.verified",
-								"Verified again at {{time}}: signed by a trusted key, release #{{sequence}} is at or above {{minimum}} and valid until {{until}}.",
-								{
-									time: time.clock(outcome.at),
-									sequence: outcome.data.manifest.sequence,
-									minimum,
-									until: time.at(outcome.data.manifest.expires_at),
-								},
-							)
-						: t(
-								"hub.release.result.failed",
-								"Couldn't verify at {{time}}: {{cause}}",
-								{
-									time: time.clock(outcome.at),
-									cause: failureOf(t, outcome.error).text,
-								},
-							)}
-				</InlineResult>
-			) : null}
+			<VerifyOutcome verify={verify} minimum={minimum} />
 		</>
-	);
-}
-
-/** Why there is no verified release to show yet: still verifying, not fetched, or refused. */
-function Unverified({
-	read,
-	host,
-}: Readonly<{ read: ReleaseTrustRead; host: string }>) {
-	const { t } = useTranslation("devices");
-	if (read.error)
-		return <FailedRelease failure={failureOf(t, read.error)} host={host} />;
-	return (
-		<StateView
-			kind="loading"
-			title={t("hub.release.verifying", "Verifying the release…")}
-		/>
 	);
 }
 
 function ConfiguredRelease({
 	trust,
-	read,
-	host,
+	verdict,
+	verifiedAt,
 }: Readonly<{
 	trust: ReleaseTrustConfig;
-	read: ReleaseTrustRead;
-	host: string;
+	verdict: ShownVerdict;
+	/** Unix seconds of the verification the verdict rests on. */
+	verifiedAt?: number;
 }>) {
-	const release = read.data;
+	const release = usableRelease(verdict);
 	return (
 		<>
-			{release ? <Hero release={release} /> : null}
+			<VerdictLine verdict={verdict} />
+			{verdict.kind === "ok" ||
+			verdict.kind === "ends_soon" ||
+			verdict.kind === "expired" ? (
+				<Hero verdict={verdict} />
+			) : null}
 			<div className="grid grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] border-b border-hairline @max-[900px]/devices:grid-cols-1">
 				<div className="flex min-w-0 flex-col gap-3 px-4 py-3">
-					{release ? null : <Unverified read={read} host={host} />}
-					<TrustFacts
-						trust={trust}
-						release={release}
-						verifiedAt={read.freshness.at ?? read.freshness.dataFrom}
-					/>
+					<TrustFacts trust={trust} verdict={verdict} verifiedAt={verifiedAt} />
 					<VerifyAgain minimum={trust.minimum_sequence} />
 				</div>
 				<div className="min-w-0 border-l border-hairline px-4 py-3 @max-[900px]/devices:border-t @max-[900px]/devices:border-l-0">
-					<DeviceAgents current={release?.manifest.release_version} />
+					<DeviceAgents
+						current={release?.manifest.release_version}
+						pending={verdict.kind === "checking"}
+					/>
 				</div>
 			</div>
 			{release ? <Platforms release={release} /> : null}
@@ -918,10 +998,12 @@ function ConfiguredRelease({
 
 function ReleaseBody({
 	record,
+	verdict,
 	read,
 	hub,
 }: Readonly<{
 	record: HubStandalone | undefined;
+	verdict: ReleaseVerdict;
 	read: ReleaseTrustRead;
 	hub: HubSupportRead;
 }>) {
@@ -935,7 +1017,8 @@ function ReleaseBody({
 				/>
 			</div>
 		);
-	if (!record)
+	const trust = record?.release_trust;
+	if (!record || verdict.kind === "waiting")
 		return (
 			<div className="px-4 py-3">
 				<StateView
@@ -947,42 +1030,49 @@ function ReleaseBody({
 				/>
 			</div>
 		);
-	const trust = record.release_trust;
-	if (trust)
-		return <ConfiguredRelease trust={trust} read={read} host={hub.host} />;
+	if (!trust || verdict.kind === "missing")
+		return (
+			<>
+				<MissingRelease />
+				<div className="border-t border-hairline px-4 py-3">
+					<DeviceAgents />
+				</div>
+			</>
+		);
 	return (
-		<>
-			<MissingRelease />
-			<div className="border-t border-hairline px-4 py-3">
-				<DeviceAgents />
-			</div>
-		</>
+		<ConfiguredRelease
+			trust={trust}
+			verdict={verdict}
+			verifiedAt={read.freshness.at ?? read.freshness.dataFrom}
+		/>
 	);
 }
 
-/** SPEC §5.10 block 4: where releases are published, which keys sign them, and the current verified release. */
+/** SPEC §5.10 block 4: what the hub's agent release means right now, where releases are published and which keys sign them. */
 export function ReleaseTrust() {
 	const { t } = useTranslation("devices");
+	const time = useAreaTime();
 	const hub = useHubSupport();
 	const { record } = useHubRecord();
 	const read = useReleaseTrust();
-	const trust = record ? record.release_trust : undefined;
-	const missing = !!record && !trust;
+	const verdict = releaseVerdictOf(record, read, time.nowS);
+	// The block shows the list this computer verified, or else only the hub's settings.
+	const shown = "release" in verdict && !!verdict.release;
 	return (
 		<Block
 			id="releases"
-			icon={missing ? PackageX : PackageCheck}
+			icon={verdict.kind === "missing" ? PackageX : PackageCheck}
 			title={t("hub.release.title", "Signed agent releases")}
 			stamp={
 				<HubReadStamp
-					freshness={trust && read.data ? read.freshness : hub.freshness}
+					freshness={shown ? read.freshness : hub.freshness}
 					loading={hub.support.state === "checking"}
 				/>
 			}
 			flush
 			className="scroll-mt-4"
 			foot={
-				trust ? (
+				record?.release_trust ? (
 					<span>
 						{t(
 							"hub.release.foot",
@@ -992,7 +1082,7 @@ export function ReleaseTrust() {
 				) : undefined
 			}
 		>
-			<ReleaseBody record={record} read={read} hub={hub} />
+			<ReleaseBody record={record} verdict={verdict} read={read} hub={hub} />
 		</Block>
 	);
 }

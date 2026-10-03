@@ -24,6 +24,7 @@ const MINIMAL_PREFIXES: &[&str] = &[
     "app_group.request.",
     "sink.",
     "event.teams.",
+    "event.schedule.",
     "device.delegation.",
 ];
 
@@ -208,6 +209,8 @@ mod tests {
         ("event.regression.run", AuditLevel::Standard),
         ("event.regression.suite.update", AuditLevel::Standard),
         ("event.restore", AuditLevel::Standard),
+        ("event.schedule.give_back", AuditLevel::Minimal),
+        ("event.schedule.release", AuditLevel::Minimal),
         ("event.setup", AuditLevel::Standard),
         ("event.teams.disconnect", AuditLevel::Minimal),
         ("event.teams.orphaned", AuditLevel::Minimal),
@@ -230,6 +233,7 @@ mod tests {
         ("graph.overlay.update", AuditLevel::Standard),
         ("graph.relationships.update", AuditLevel::Standard),
         ("instance.register", AuditLevel::Standard),
+        ("instance.schedules.claim", AuditLevel::Standard),
         ("instance.storage.lease", AuditLevel::Standard),
         ("invite.create", AuditLevel::Minimal),
         ("invite.delete", AuditLevel::Minimal),

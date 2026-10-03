@@ -12,12 +12,18 @@ import {
 } from "../../../../lib/device-management/model/__fixtures__/apps";
 import {
 	type AppDeviceInput,
+	type AppEventInput,
 	buildAppView,
 } from "../../../../lib/device-management/model/app-plan";
 import {
 	refineView,
 	versionInputs,
 } from "../../../../lib/device-management/model/app-versions";
+import {
+	type PlanFacts,
+	makePlan,
+	resolvePlan,
+} from "../../../../lib/device-management/model/deploy-plan";
 import type { GateFailure } from "../../../../lib/device-management/model/types";
 import type {
 	ActivityItem,
@@ -34,6 +40,7 @@ import {
 	changesOf,
 	cloudOf,
 	eventsNowhere,
+	flowsToPublish,
 	headlineApp,
 	openRunIds,
 	runsElsewhere,
@@ -370,6 +377,62 @@ describe("update everywhere", () => {
 		expect(updateBatches(rows)).toEqual([[rows[0], rows[2]], [rows[1]]]);
 		expect(updateBatches([])).toEqual([]);
 	});
+
+	test("an update names the flows it turns into a version: only those with edits no version holds", () => {
+		const REVIEW = "evt_invoice_review";
+		const planOf = (flow: AppEventInput["flow"]) => {
+			const app = {
+				...INVOICE,
+				events: INVOICE.events.map((event) =>
+					event.id === REVIEW ? { ...event, flow } : event,
+				),
+			};
+			const facts: PlanFacts = {
+				app,
+				devices: {
+					studio: {
+						id: "studio",
+						name: "studio",
+						gate: null,
+						locked: false,
+						services: [
+							{ serviceId: "review", projectId: app.id, events: [REVIEW] },
+						],
+					},
+				},
+				platform: "desktop",
+				now: NOW0,
+			};
+			const draft = makePlan({
+				scope: { kind: "app", appId: app.id },
+				route: { deviceIds: ["studio"], mode: "update" },
+				app,
+				deploymentId: "dep-flows",
+				now: NOW0,
+			});
+			return resolvePlan(
+				{
+					...draft,
+					targets: [
+						{
+							...draft.targets[0],
+							choices: { main: { kind: "update", serviceId: "review" } },
+						},
+					],
+				},
+				facts,
+			);
+		};
+		expect(
+			flowsToPublish([planOf({ current: null, newest: v("0.9.2") })]),
+		).toEqual(["flow_review"]);
+		// A version already equals the flow, or its state is not known: nothing is announced.
+		expect(
+			flowsToPublish([planOf({ current: v("0.9.2"), newest: v("0.9.2") })]),
+		).toEqual([]);
+		expect(flowsToPublish([planOf(undefined)])).toEqual([]);
+		expect(flowsToPublish([])).toEqual([]);
+	});
 });
 
 describe("cloud access", () => {
@@ -500,14 +563,51 @@ describe("headline facts and lists", () => {
 		const locked = invoiceView();
 		expect(eventsNowhere(locked)).toEqual([]);
 		const open = invoiceView({ labUnlocked: true });
-		expect(eventsNowhere(open)).toEqual(["Invoice tools (MCP)"]);
+		// The nightly schedule is on no device either: the hub runs it, so it is not "nowhere".
+		expect(eventsNowhere(open)).toEqual([
+			"Review queue",
+			"Invoice tools (MCP)",
+		]);
 		expect(headlineApp(open)).toMatchObject({
 			appId: INVOICE.id,
 			localOnly: false,
-			events: { total: 6, eligible: 3 },
+			events: { total: 6, eligible: 5 },
 			latestLabel: "v1.5.0",
 			olderServices: 2,
 		});
+	});
+
+	test("events nowhere: a bot and a one-time schedule are never among them, a form is (design R2 §6.4)", () => {
+		const SHOP = APPS.app_shop_assistant;
+		const devices = sampleDevices({ labUnlocked: true }).map((device) =>
+			device.id === "edge-berlin-01" && Array.isArray(device.services)
+				? {
+						...device,
+						services: [
+							...device.services,
+							svc({
+								deviceId: device.id,
+								serviceId: "shop-orders",
+								projectId: SHOP.id,
+								source: "online",
+								events: [
+									{
+										event_id: "evt_shop_orders",
+										event_version: v("1.0.0"),
+										board_version: v("1.2.0"),
+									},
+								],
+							}),
+						],
+					}
+				: device,
+		);
+		const view = buildAppView({
+			app: SHOP,
+			devices,
+			placements: PLACEMENTS.app_shop_assistant,
+		});
+		expect(eventsNowhere(view)).toEqual(["Return request"]);
 	});
 
 	test("lists are capped", () => {

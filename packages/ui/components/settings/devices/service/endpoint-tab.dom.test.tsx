@@ -201,6 +201,28 @@ describe("service page", () => {
 		expect(text(view.container)).not.toContain("Nothing here yet");
 	});
 
+	test("a service that only runs a schedule names it as the reason it has no page", async () => {
+		const view = await open(EDGE, "nightly-sync", {
+			arrange: (fake) =>
+				patchConfig(fake, EDGE, "nightly-sync", (config) => {
+					config.events = [
+						...(config.events as unknown[]),
+						{
+							event_id: "evt_crm_hourly",
+							event_version: [1, 0, 0],
+							board_version: [4, 1, 0],
+						},
+					];
+				}),
+		});
+		await until(() =>
+			text(view.container).includes("This service has no web endpoint."),
+		);
+		expect(text(view.container)).toContain(
+			"Its events run as Background and Schedule, so it has no service page.",
+		);
+	});
+
 	test("an offline device: the endpoint isn't known and nothing is read", async () => {
 		const view = await open(WAREHOUSE, "scanner-ingest");
 		expect(text(view.container)).toContain("Settings aren't known");

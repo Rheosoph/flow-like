@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { useCallback, useState } from "react";
 import type { MatrixRow } from "../../../../lib/device-management/model/app-plan";
-import { eligibilityCopy } from "../copy/eligibility-copy";
+import { eligibilityCopy, eligibilityInput } from "../copy/eligibility-copy";
 import {
 	type DevicesT,
 	useAreaTime,
@@ -56,7 +56,7 @@ function useEventEntries(): () => MenuEntry[] {
 			return {
 				id: `event-${row.eventId}`,
 				label: row.name,
-				icon: eventIcon(row.eventType, row.eligibility.hosted),
+				icon: eventIcon(row.eventType, row.hasPage),
 				route: APP_LINKS.deploy({ eventId: row.eventId }),
 				note: count
 					? t("app.header.eventOn", {
@@ -70,15 +70,15 @@ function useEventEntries(): () => MenuEntry[] {
 		const ineligible: MenuEntry[] = view.events.ineligible.map((row) => ({
 			id: `event-${row.eventId}`,
 			label: row.name,
-			icon: eventIcon(row.eventType),
+			icon: eventIcon(row.eventType, row.hasPage),
 			blocked: row.eligibility.code
-				? eligibilityCopy(t, {
-						code: row.eligibility.code,
-						eventType: row.eventType,
-						...(row.eligibility.detail
-							? { detail: row.eligibility.detail }
-							: {}),
-					}).long
+				? eligibilityCopy(
+						t,
+						eligibilityInput(
+							{ ...row.eligibility, code: row.eligibility.code },
+							row.eventType,
+						),
+					).long
 				: null,
 		}));
 		return [

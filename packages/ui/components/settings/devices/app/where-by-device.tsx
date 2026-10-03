@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import {
 	CircleArrowUp,
 	CircleDashed,
+	CirclePlay,
 	Cloud,
 	CloudOff,
 	Copy,
@@ -29,17 +30,20 @@ import { useUserIdentity } from "../../../../hooks/use-user-lookup";
 import type {
 	AppDeviceGroup,
 	AppServiceRow,
+	MatrixRow,
 } from "../../../../lib/device-management/model/app-plan";
 import {
 	fleetFacts,
 	rolloutEndsAt,
 } from "../../../../lib/device-management/model/device-view";
+import { nextScheduledRun } from "../../../../lib/device-management/model/schedule-where";
 import type {
 	DeviceViewModel,
 	GateResult,
 } from "../../../../lib/device-management/model/types";
 import { identityName } from "../access/person-name";
 import { appCopy } from "../copy/app-copy";
+import { scheduleRunNames, scheduledLine } from "../copy/schedule-copy";
 import { VersionCell } from "../primitives/app-chips";
 import {
 	type AreaTime,
@@ -118,6 +122,13 @@ import {
 	writesFacts,
 } from "./app-view-local";
 import {
+	answersRequests,
+	cellLines,
+	eventsOfKind,
+	ruleRows,
+} from "./kind-lines";
+import { openRunNow } from "./run-now";
+import {
 	type AwareInput,
 	useRemoveService,
 	useWhatStays,
@@ -142,8 +153,6 @@ export const desiredRun = (desired: string): DesiredRun =>
 	desired === "stopped" ? "stopped" : "running";
 export const observedRun = (observed: string): ObservedRun =>
 	OBSERVED.includes(observed) ? (observed as ObservedRun) : "unknown";
-
-const OWN_SERVER = new Set(["rest", "mcp"]);
 
 interface Endpoint {
 	address: string;
@@ -178,16 +187,21 @@ function ServiceCell({
 	const { t } = useTranslation("devices");
 	const { view } = useAppPage();
 	const link = useRouteLink();
+	const rules = useMemo(() => ruleRows(view), [view]);
+	const served = row.events ?? [];
+	const kinds = served.map(
+		(event) => rules.get(event.event_id)?.eligibility.kind,
+	);
+	// Services that run on their own: nothing answers a request, so there is no address to show.
+	const answers = kinds.some(
+		(kind) => kind !== undefined && answersRequests(kind),
+	);
 	const background =
-		!!row.events?.length &&
-		row.events.every((event) => {
-			const known = view.events.rows.find(
-				(entry) => entry.eventId === event.event_id,
-			);
-			return (
-				!!known && !known.eligibility.hosted && !OWN_SERVER.has(known.eventType)
-			);
-		});
+		kinds.includes("background") &&
+		!answers &&
+		kinds.every((kind) => kind !== undefined);
+	// Forms and quick actions of a service without a web endpoint run only from Devices.
+	const started = !answers && kinds.includes("on_demand");
 	const { shown, rest } = capList(names ?? [], EVENT_NAME_CAP);
 	return (
 		<>
@@ -241,6 +255,68 @@ function ServiceCell({
 					{t("app.device.background", "Runs in the background")}
 				</CellSub>
 			) : null}
+			{started ? (
+				<CellSub data-kind-line="on_demand">
+					{t("app.device.onDemand", "Started by a person · from Devices")}
+				</CellSub>
+			) : null}
+			<KindLines row={row} rules={rules} />
+		</>
+	);
+}
+
+/** What a service's schedules and bots do: when the repeating ones run next, each one-time schedule, each bot's state. */
+function KindLines({
+	row,
+	rules,
+}: Readonly<{ row: AppServiceRow; rules: ReadonlyMap<string, MatrixRow> }>) {
+	const { t } = useTranslation("devices");
+	const { view } = useAppPage();
+	const time = useAreaTime();
+	const deviceName = useDeviceNames();
+	const served = row.events ?? [];
+	const scheduled = eventsOfKind(rules, served, "scheduled");
+	const repeating = scheduled.filter((rule) => !rule.eligibility.once);
+	const own = [
+		...scheduled.filter((rule) => rule.eligibility.once),
+		...eventsOfKind(rules, served, "bot"),
+	];
+	const next = nextScheduledRun(
+		row.view,
+		repeating.map((rule) => rule.eventId),
+		time.nowS,
+	);
+	const names = (rule: MatrixRow) => () =>
+		scheduleRunNames(t, {
+			deviceId: row.deviceId,
+			serviceId: row.serviceId,
+			device: deviceName(row.deviceId),
+			eventId: rule.eventId,
+			...(rule.where ? { where: rule.where } : {}),
+			deviceName,
+			siblings: view.services
+				.filter((entry) => entry.deviceId === row.deviceId)
+				.map((entry) => entry.view),
+		});
+	return (
+		<>
+			{repeating.length ? (
+				<CellSub data-schedule="">{scheduledLine(t, next, time)}</CellSub>
+			) : null}
+			{own.map((rule) => {
+				const [line] = cellLines(t, rule, row.view, names(rule), time);
+				if (!line) return null;
+				return (
+					<CellSub key={rule.eventId} data-kind-line={rule.eligibility.kind}>
+						{own.length > 1
+							? t("app.device.kindLine", "{{event}} · {{line}}", {
+									event: rule.name,
+									line,
+								})
+							: line}
+					</CellSub>
+				);
+			})}
 		</>
 	);
 }
@@ -622,11 +698,28 @@ function useRowMenu(
 		}),
 		[serviceId, row.view],
 	);
-	const gates = useGates(["update_service"], deviceId, target);
+	const gates = useGates(["update_service", "run_event"], deviceId, target);
+	const started = useMemo(
+		() => eventsOfKind(ruleRows(view), row.events ?? [], "on_demand"),
+		[view, row.events],
+	);
 	const newest = view.versions[0];
 	return useCallback(() => {
 		const change = gateReason(gateText, gates.update_service, true);
 		const update = { deviceIds: [deviceId], serviceId };
+		const runNow = started.map(
+			(rule, index): MenuEntry => ({
+				id: `run-now-${rule.eventId}`,
+				label: t("app.menu.runNow", "Run {{event}} now…", {
+					event: rule.name,
+				}),
+				icon: CirclePlay,
+				blocked: gateReason(gateText, gates.run_event),
+				onSelect: () =>
+					openRunNow({ deviceId, serviceId, eventId: rule.eventId }),
+				...(index === 0 ? { separated: true } : {}),
+			}),
+		);
 		const lifecycle = (
 			id: Exclude<Confirming, null>,
 			command: ServiceCommand,
@@ -682,6 +775,7 @@ function useRowMenu(
 				route: APP_LINKS.deploy({ ...update, step: "what" }),
 				blocked: change,
 			},
+			...runNow,
 			{
 				...lifecycle(
 					"start",
@@ -726,6 +820,7 @@ function useRowMenu(
 		t,
 		gateText,
 		gates.update_service,
+		gates.run_event,
 		commands,
 		remove,
 		confirm,
@@ -733,6 +828,7 @@ function useRowMenu(
 		serviceId,
 		newest,
 		row.behind,
+		started,
 	]);
 }
 
@@ -781,6 +877,7 @@ function ServiceRows({
 	const remove = useRemoveService(
 		aware,
 		cloud.state === "approved" ? cloud.approval : null,
+		commands,
 	);
 	const entries = useRowMenu(row, commands, remove, setConfirming);
 	const command = confirming ? commands[confirming] : null;
@@ -904,6 +1001,15 @@ function ServiceRows({
 					</td>
 				</tr>
 			))}
+			{remove.note ? (
+				<tr data-remove-note="" className="hover:bg-transparent">
+					<td colSpan={SPAN} className="border-t border-hairline px-4 py-2">
+						<InlineResult tone={remove.note.tone} onDismiss={remove.dismiss}>
+							{remove.note.text}
+						</InlineResult>
+					</td>
+				</tr>
+			) : null}
 		</>
 	);
 }
@@ -1129,7 +1235,7 @@ export function WhereFoot() {
 				<FootLine icon={CircleArrowUp}>
 					{copy.versionFoot({
 						version: versionName(newest),
-						hash: newest.short,
+						hash: newest.unpublished ? copy.currentEdits() : newest.short,
 						when: dayTime(newest.builtAt),
 						mode: view.app.mode,
 						running: runs.services,

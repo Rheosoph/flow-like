@@ -355,6 +355,22 @@ function isNewerRelease(
 		: compareVersions(latest.version, agent.version) > 0;
 }
 
+/** Agents before this release refuse any release list that is valid for longer than 30 days. */
+const LONG_RELEASES_FROM = "0.1.1";
+const SHORT_RELEASE_S = 30 * 86_400;
+
+/** The device would refuse the hub's list for its lifetime: an update from here can't work, so none is offered. */
+function refusesLongRelease(
+	latest: NonNullable<AttentionInputExt["latestRelease"]>,
+	agent: NonNullable<DeviceFacts["agent"]>,
+) {
+	return (
+		latest.validForS !== undefined &&
+		latest.validForS > SHORT_RELEASE_S &&
+		compareVersions(agent.version, LONG_RELEASES_FROM) < 0
+	);
+}
+
 const agentUpdate = perDevice("agent_update_available", (input, device) => {
 	const latest = input.latestRelease;
 	const agent = device.agent;
@@ -362,7 +378,9 @@ const agentUpdate = perDevice("agent_update_available", (input, device) => {
 		return undefined;
 	if (device.relationship !== "owner" && !canUpdateAgent(input, device.id))
 		return undefined;
-	const remote = device.inspection?.hostOperations?.update_agent !== false;
+	const refused = refusesLongRelease(latest, agent);
+	const remote =
+		!refused && device.inspection?.hostOperations?.update_agent !== false;
 	return attentionCandidate({
 		key: "agent_update_available",
 		severity: "notice",
@@ -372,6 +390,7 @@ const agentUpdate = perDevice("agent_update_available", (input, device) => {
 			available: latest.version,
 			running: agent.version,
 			readAt: agent.source.at ?? 0,
+			...(refused ? { needsShortRelease: 1 } : {}),
 		},
 		action: remote
 			? {

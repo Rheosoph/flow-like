@@ -21,6 +21,8 @@ const { SAMPLE_APPS, SAMPLE_IDS, SAMPLE_PEOPLE } = await import(
 	"../../../../lib/device-management/model/__fixtures__/sample-fleet"
 );
 const { createFakeWorkspace } = await import("../testing/fake-workspace");
+const { SHOP, serveNightlyOnEdge, serveShopOnEdge, shopTokenSecret } =
+	await import("../testing/schedule-scenarios");
 const {
 	ADMIN_ROLE,
 	MACHINE_WORDS,
@@ -68,7 +70,7 @@ function Tab({
 
 interface OpenOptions extends MountCloudOptions {
 	/** Changes to the fake hub before the tab reads it. */
-	arrange?(fake: FakeWorkspace): void;
+	arrange?(fake: FakeWorkspace): void | Promise<void>;
 }
 
 async function open(
@@ -77,7 +79,7 @@ async function open(
 	{ arrange, ...options }: OpenOptions = {},
 ) {
 	const fake = await createFakeWorkspace(undefined, options);
-	arrange?.(fake);
+	await arrange?.(fake);
 	const view = await mountCloud(
 		<Tab deviceId={deviceId} serviceId={serviceId} />,
 		{
@@ -196,6 +198,58 @@ describe("Service › Cloud access", () => {
 		);
 		expect(act(container, "approve-open")).not.toBeNull();
 		expect(act(container, "revoke-approval")).toBeNull();
+	});
+
+	test("revoking the approval of a service that runs a schedule says that the hub takes it back", async () => {
+		const view = await open(EDGE, "invoice-extractor", {
+			arrange: async (fake) => {
+				await serveNightlyOnEdge(fake);
+			},
+		});
+		await click(act(view.container, "revoke-approval"));
+		await view.settle();
+		const sheet = textOf(inPortal("alertdialog"));
+		expect(sheet).toContain(
+			"The hub runs Nightly reconciliation again in about 5 minutes, or in about an hour while edge-berlin-01 is still running invoice-extractor.",
+		);
+		expect(sheet).not.toContain("edge-berlin-01 is offline.");
+	});
+
+	test("revoking the approval of a service with bots: the device disconnects them, and keeps their tokens", async () => {
+		const view = await open(EDGE, SHOP.service, {
+			roles: { [SHOP.app]: OWNER_ROLE },
+			arrange: async (fake) => {
+				await serveShopOnEdge(fake, {
+					events: [SHOP.telegram, SHOP.discord, SHOP.once],
+				});
+			},
+		});
+		await click(act(view.container, "revoke-approval"));
+		await view.settle();
+		const sheet = textOf(inPortal("alertdialog"));
+		// The one-time schedule goes back to the hub like any schedule; the bots don't.
+		expect(sheet).toContain(
+			"The hub runs Price update again in about 5 minutes, or in about an hour while edge-berlin-01 is still running shop-assistant.",
+		);
+		expect(sheet).toMatch(
+			/edge-berlin-01 disconnects Shop support and Shop helper at its next check with the hub, within 30 minutes\. If it can't reach the hub, it can stay connected until its cloud access ends on .+\. The bot token stays on edge-berlin-01: to cut the bot off for certain, replace the token with BotFather and the Discord Developer Portal\./,
+		);
+		expect(sheet).not.toContain("The hub runs Shop helper");
+		expect(sheet).not.toContain(shopTokenSecret(SHOP.telegram));
+	});
+
+	test("an offline device may keep running the schedule from its cache: the revoke says so", async () => {
+		const view = await open(EDGE, "invoice-extractor", {
+			arrange: async (fake) => {
+				await serveNightlyOnEdge(fake);
+				fake.hub.checkIn(EDGE, fake.hub.now() - 3_600);
+			},
+		});
+		await click(act(view.container, "revoke-approval"));
+		await view.settle();
+		expect(textOf(inPortal("alertdialog"))).toContain(
+			"edge-berlin-01 is offline. If it is still running, it keeps running Nightly reconciliation from its cache until it reconnects.",
+		);
 	});
 
 	test("someone else's spending limit can't be revoked: the reason names who pays, a click sends nothing", async () => {

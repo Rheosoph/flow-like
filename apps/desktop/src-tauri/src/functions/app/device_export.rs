@@ -6,7 +6,9 @@ use anyhow::{Context, Result, ensure};
 use flow_like::{
     app::{
         App,
-        sharing::device::{DeviceExportFile, DeviceProjectSnapshot, MAX_DEVICE_EXPORT_CHUNK},
+        sharing::device::{
+            DeviceExportFile, DeviceLatestEvent, DeviceProjectSnapshot, MAX_DEVICE_EXPORT_CHUNK,
+        },
     },
     flow_like_storage::{Path, object_store::ObjectStoreExt},
     state::FlowLikeState,
@@ -56,6 +58,9 @@ pub struct PreparedExport {
     source: &'static str,
     files: Vec<DeviceExportFile>,
     assets: Assets,
+    /// Every event of a local project that follows Latest, with the flow version its staged
+    /// copy was pinned to. Empty for an online project, whose hub resolves them.
+    latest_events: Vec<DeviceLatestEvent>,
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -458,6 +463,7 @@ async fn prepare(
         source,
         files: snapshot.files(),
         assets,
+        latest_events: snapshot.latest_events().to_vec(),
     };
     EXPORTS.lock().await.insert(
         export_id.clone(),

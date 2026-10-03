@@ -39,6 +39,7 @@ import {
 	DropdownMenuTrigger,
 } from "../../../ui/dropdown-menu";
 import { enumLabel } from "../copy/enum-labels";
+import { usableRelease, useAgentReleaseVerdict } from "../hub/hub-view";
 import { useAreaTime } from "../primitives/area-context";
 import { type Crumb, ObjectHeader } from "../primitives/block";
 import {
@@ -72,7 +73,6 @@ import {
 	useLiveSession,
 	useMyAccess,
 	useOverlay,
-	useReleaseTrust,
 } from "../workspace";
 import {
 	type DevicePage,
@@ -178,8 +178,7 @@ export function useDeployTarget(
 							kind: "unsupported",
 							reason: t(
 								"device.deploy.noEvents",
-								"None of {{app}}'s events can run on a device. Pin a flow version or add a Web request, Chat, Page, REST, MCP or Background event in Events.",
-								{ app: page.app.name },
+								"No event of this app can run on a device yet. Most types can: add one in Events. Inbound email, Teams and deep-link events can't.",
 							),
 						},
 					}
@@ -325,7 +324,7 @@ function PlatformFact({ page }: Readonly<{ page: DevicePage }>) {
 function AgentFact({ page }: Readonly<{ page: DevicePage }>) {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
-	const release = useReleaseTrust();
+	const release = usableRelease(useAgentReleaseVerdict());
 	const agent = page.view.agent;
 	if (!agent)
 		return (
@@ -335,7 +334,7 @@ function AgentFact({ page }: Readonly<{ page: DevicePage }>) {
 					: t("device.header.notReported", "Not reported")}
 			</span>
 		);
-	const latest = release.data?.manifest.release_version;
+	const latest = release?.manifest.release_version;
 	const behind = latest ? compareVersions(agent.version, latest) < 0 : false;
 	const read = agent.source.age !== "live" && agent.source.at !== undefined;
 	return (

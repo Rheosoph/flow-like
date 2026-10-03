@@ -11,26 +11,32 @@ import {
 } from "../../../../lib/device-management/model/app-plan";
 import { appCopy } from "../copy/app-copy";
 import {
+	agentTooOldCopy,
+	cantHereCopy,
 	eligibilityCopy,
 	eligibilityFixLabel,
-	eventTypeLabel,
-	howItRunsCopy,
+	eligibilityInput,
 } from "../copy/eligibility-copy";
 import { enumLabel } from "../copy/enum-labels";
+import { scheduleRunNames } from "../copy/schedule-copy";
 import { AreaEventsDevices } from "../events/events-devices";
 import { RunsOnCell } from "../events/runs-on-cell";
+import { useAreaTime } from "../primitives/area-context";
 import { CellSub, DvTable, Td, Th, Tr } from "../primitives/dv-table";
+import {
+	EventCell as EventCellView,
+	eventRunsLine,
+} from "../primitives/event-cell";
 import { MatrixCell, type MatrixUnknownCell } from "../primitives/matrix-cell";
 import { PairedPins } from "../primitives/paired-pins";
 import { PresenceGlyph } from "../primitives/presence-glyph";
-import { KeyChip, StatusChip } from "../primitives/status-chip";
+import { KeyChip } from "../primitives/status-chip";
 import { cx } from "../primitives/tone";
 import { appEventsHref } from "../routing/devices-href";
 import { useDevicesRoute, useRouteLink } from "../routing/use-devices-route";
 import { keyChipOf } from "../shell/keys-popover";
 import {
 	APP_LINKS,
-	EventTile,
 	HostLink,
 	LINK,
 	UnknownAction,
@@ -45,46 +51,37 @@ import {
 	stagedVersionOf,
 	versionName,
 } from "./app-view-local";
+import { answersRequests, cellLines } from "./kind-lines";
+import { RunNowAction } from "./run-now";
 import { useStagedActions } from "./use-service-actions";
 import { desiredRun, observedRun, useEndpoint } from "./where-by-device";
 
 type EventRow = Omit<MatrixRow, "cells">;
 
-/** APP §2.10 event cell: type tile, name, type, pins and how it runs on a device. */
+/** APP §2.10 event cell: type tile, name, type, pins and the kind's own line (an Endpoint's path, when a schedule runs). */
 export function EventCell({ row }: Readonly<{ row: EventRow }>) {
 	const { t } = useTranslation("devices");
-	const hosted = row.eligibility.hosted;
-	const page = hosted && !["http", "simple_chat"].includes(row.eventType);
+	const { followsLatest, eventVersion, eligible } = row.eligibility;
 	return (
-		<span className="flex min-w-0 items-start gap-2.5">
-			<EventTile eventType={row.eventType} hasPage={page} className="mt-0.5" />
-			<span className="flex min-w-0 flex-col">
-				<span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-					<span className="font-semibold text-foreground">{row.name}</span>
-					<span className="text-muted-foreground">
-						{eventTypeLabel(t, row.eventType, page)}
-					</span>
-					{row.newIn ? (
-						<StatusChip tone="info">
-							{t("app.event.newIn", "New in {{version}}", {
-								version: row.newIn,
-							})}
-						</StatusChip>
-					) : null}
-				</span>
-				{row.pin ? (
-					<CellSub>
-						{t("app.event.pins", "event {{event}} · flow {{flow}}", {
+		<EventCellView
+			eventType={row.eventType}
+			hasPage={row.hasPage}
+			name={row.name}
+			eventId={row.eventId}
+			followsLatest={followsLatest}
+			{...(row.pin
+				? {
+						pin: {
 							event: pinText(row.pin.eventVersion),
 							flow: pinText(row.pin.boardVersion),
-						})}
-					</CellSub>
-				) : null}
-				{row.eligibility.eligible ? (
-					<CellSub>{howItRunsCopy(t, row.eligibility)}</CellSub>
-				) : null}
-			</span>
-		</span>
+						},
+					}
+				: followsLatest && eventVersion
+					? { pinNote: appCopy(t).pinLatest(pinText(eventVersion)) }
+					: {})}
+			{...(row.newIn ? { newIn: row.newIn } : {})}
+			{...(eligible ? { runs: eventRunsLine(t, row.eligibility) } : {})}
+		/>
 	);
 }
 
@@ -97,7 +94,27 @@ function ServedCell({
 	const { view } = useAppPage();
 	const { href } = useDevicesRoute();
 	const deviceName = useDeviceNames();
+	const time = useAreaTime();
 	const copy = appCopy(t);
+	const note = copy.servedNote(cell.drift);
+	const lines = cellLines(
+		t,
+		row,
+		service.view,
+		() =>
+			scheduleRunNames(t, {
+				deviceId: cell.deviceId,
+				serviceId: service.serviceId,
+				device: deviceName(cell.deviceId),
+				eventId: row.eventId,
+				...(row.where ? { where: row.where } : {}),
+				deviceName,
+				siblings: view.services
+					.filter((entry) => entry.deviceId === cell.deviceId)
+					.map((entry) => entry.view),
+			}),
+		time,
+	);
 	const endpoint = useEndpoint(cell.deviceId, service.serviceId);
 	const staged = stagedVersionOf(service, view.versions);
 	const actions = useStagedActions(service, deviceName(cell.deviceId), staged);
@@ -114,7 +131,7 @@ function ServedCell({
 					})
 				: pinText(row.pin.eventVersion)
 			: undefined;
-	return (
+	const matrixCell = (
 		<MatrixCell
 			state={cell.state === "staged" ? "staged" : "served"}
 			serviceId={service.serviceId}
@@ -136,6 +153,9 @@ function ServedCell({
 					: t("app.event.pinUnknown", "version unknown")
 			}
 			{...(target ? { target } : {})}
+			{...(note ? { note } : {})}
+			{...(row.eligibility.followsLatest ? { tag: true } : {})}
+			{...(lines.length ? { lines } : {})}
 			{...(target && row.pin && newest
 				? {
 						targetTitle: copy.pinTitle({
@@ -145,7 +165,7 @@ function ServedCell({
 						}),
 					}
 				: {})}
-			{...(endpoint
+			{...(endpoint && answersRequests(row.eligibility.kind)
 				? { port: `:${endpoint.address.split(":").pop()}`, tls: endpoint.tls }
 				: {})}
 			{...(cell.state === "staged"
@@ -161,6 +181,41 @@ function ServedCell({
 				? { also: cell.serviceIds.slice(1) }
 				: {})}
 		/>
+	);
+	if (row.eligibility.kind !== "on_demand") return matrixCell;
+	return (
+		<span className="flex min-w-0 flex-col items-start gap-1.5">
+			{matrixCell}
+			<RunNowAction
+				deviceId={cell.deviceId}
+				view={service.view}
+				eventId={row.eventId}
+			/>
+		</span>
+	);
+}
+
+/** Why this device can't take the event; an agent that is too old comes with the way to update it. */
+function CantHereReason({ cell }: Readonly<{ cell: ModelCell }>) {
+	const { t } = useTranslation("devices");
+	const link = useRouteLink();
+	const device = useDeviceNames()(cell.deviceId);
+	const reason = cantHereCopy(t, cell, device);
+	if (cell.why !== "agent") return <>{reason}</>;
+	return (
+		<>
+			{reason}{" "}
+			<a
+				{...link({
+					screen: "device",
+					deviceId: cell.deviceId,
+					tab: "settings",
+				})}
+				className={cx(LINK, "underline")}
+			>
+				{agentTooOldCopy(t, device, cell.feature).fix}
+			</a>
+		</>
 	);
 }
 
@@ -180,7 +235,9 @@ function DeviceCell({
 		if (service) return <ServedCell row={row} cell={cell} service={service} />;
 	}
 	if (cell.state === "cant_here")
-		return <MatrixCell state="cant_here" reason={cell.reason ?? ""} />;
+		return (
+			<MatrixCell state="cant_here" reason={<CantHereReason cell={cell} />} />
+		);
 	if (cell.state === "no_access") return <MatrixCell state="no_access" />;
 	if (cell.state === "unknown" && cell.unknown) {
 		const kind = cell.unknown.kind;
@@ -266,6 +323,40 @@ function DeviceHead({
 	);
 }
 
+/** An event that can't be deployed any more keeps running where it was deployed: each such service, with its link. */
+function StillServed({ row }: Readonly<{ row: MatrixRow }>) {
+	const { t } = useTranslation("devices");
+	const link = useRouteLink();
+	const deviceName = useDeviceNames();
+	const served = Object.values(row.cells).filter(
+		(cell) => cell.state === "served" || cell.state === "staged",
+	);
+	return served.map((cell) => {
+		const [serviceId = ""] = cell.serviceIds;
+		return (
+			<CellSub
+				key={cell.deviceId}
+				data-still-served={cell.deviceId}
+				className="text-warning"
+			>
+				{t(
+					"events.pop.stillServed",
+					"{{device}} still runs it until you stop or update {{service}}.",
+					{ device: deviceName(cell.deviceId), service: serviceId },
+				)}{" "}
+				<a
+					{...link(APP_LINKS.service(cell.deviceId, serviceId))}
+					className={cx(LINK, "underline")}
+				>
+					{t("events.pop.openService", "Open {{service}}", {
+						service: serviceId,
+					})}
+				</a>
+			</CellSub>
+		);
+	});
+}
+
 /** "Can't run on devices · N": collapsed; each event with its plain reason and fix link (APP §2.10). */
 export function CantRunGroup({ span }: Readonly<{ span: number }>) {
 	const { t } = useTranslation("devices");
@@ -301,13 +392,13 @@ export function CantRunGroup({ span }: Readonly<{ span: number }>) {
 			{open
 				? rows.map((row) => {
 						const reason = row.eligibility.code
-							? eligibilityCopy(t, {
-									code: row.eligibility.code,
-									eventType: row.eventType,
-									...(row.eligibility.detail
-										? { detail: row.eligibility.detail }
-										: {}),
-								})
+							? eligibilityCopy(
+									t,
+									eligibilityInput(
+										{ ...row.eligibility, code: row.eligibility.code },
+										row.eventType,
+									),
+								)
 							: null;
 						return (
 							<Tr key={row.eventId} data-event={row.eventId} dim>
@@ -334,6 +425,7 @@ export function CantRunGroup({ span }: Readonly<{ span: number }>) {
 										className="text-muted-foreground"
 									>
 										{t("app.event.notOffered", "Not offered when you deploy")}
+										<StillServed row={row} />
 									</Td>
 								) : null}
 							</Tr>

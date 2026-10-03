@@ -1,7 +1,11 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, act } from "react";
 import type { AuthContextProps } from "react-oidc-context";
-import type { AppInput } from "../../../../lib/device-management/model/app-plan";
+import type {
+	AppEventForm,
+	AppInput,
+} from "../../../../lib/device-management/model/app-plan";
+import type { IEventInput } from "../../../../lib/schema/flow/event";
 import {
 	type IBackendState,
 	type IOwnRole,
@@ -125,19 +129,82 @@ function appOf(apps: Readonly<Record<string, AppInput>>, appId: string) {
 	return app;
 }
 
+/** The sample keeps one version of each event: the one every pin names. */
+function eventOf(
+	apps: Readonly<Record<string, AppInput>>,
+	appId: string,
+	eventId: string,
+) {
+	for (const event of appOf(apps, appId).events)
+		if (event.id === eventId) return event;
+	throw new Error(`The fake backend has no event ${eventId} in ${appId}.`);
+}
+
 /** The app record with its own version text and last change, as the real one carries them: the sample's newest version. */
 function appRecord({ id, visibility, versions }: AppInput) {
 	const newest = versions?.[0];
 	const version = newest?.label?.replace(/^v(?=\d)/, "");
 	const changed = newest?.builtAt;
-	return {
-		id,
-		visibility,
-		...(version ? { version } : {}),
-		...(changed
+	return Object.assign(
+		{ id, visibility },
+		version ? { version } : {},
+		changed
 			? { updated_at: { secs_since_epoch: changed, nanos_since_epoch: 0 } }
-			: {}),
+			: {},
+	);
+}
+
+/** A form's fields as its record lists them: its file fields as `PathBuf`, the others as text. */
+function formInputs({ fields, fileFields }: AppEventForm) {
+	const inputs: IEventInput[] = [];
+	for (let index = 0; index < fields; index++)
+		inputs.push({
+			id: `pin_field_${index}`,
+			name: `field_${index + 1}`,
+			friendly_name: `Field ${index + 1}`,
+			description: "",
+			data_type: index >= fields - fileFields ? "PathBuf" : "String",
+			value_type: "Normal",
+			index,
+		});
+	return inputs;
+}
+
+/**
+ * An event as the app's store returns it: its config bytes (the sample's
+ * `config`, else its schedule), a form's fields as `inputs` and the flow as
+ * `board_id`. What the model derives (`flow`, `form`) is left out; `inputs`
+ * the sample gives itself win.
+ */
+export function eventRecord({
+	schedule,
+	boardId,
+	flow: _flow,
+	form,
+	...event
+}: AppInput["events"][number]) {
+	return {
+		...(form ? { inputs: formInputs(form) } : {}),
+		...event,
+		board_id: boardId ?? "flow_main",
+		config: event.config?.length
+			? [...event.config]
+			: schedule
+				? [...new TextEncoder().encode(JSON.stringify(schedule))]
+				: [],
 	};
+}
+
+/** "flow_review" → "Review flow": the sample's flows are named after their ids. */
+export const sampleFlowName = (boardId: string) =>
+	`${boardId.replace(/^flow_/, "").replace(/^./, (first) => first.toUpperCase())} flow`;
+
+/** The flows the app's events use, as the summaries a flow list reads: id and name. */
+function flowSummaries(app: AppInput) {
+	const ids = [
+		...new Set(app.events.map((event) => event.boardId ?? "flow_main")),
+	];
+	return ids.sort().map((id) => ({ id, name: sampleFlowName(id) }));
 }
 
 /** The sample viewer owns the sample apps, as the prototype shows them. */
@@ -151,8 +218,9 @@ const OWNER_ROLE: IOwnRole = {
 
 /**
  * The host backend: the fake hub as `apiState`, the profile, the hub's apps
- * with their events, and the Owner role on every app. Another role, or none
- * (`roleState: undefined`), goes in through `extra`.
+ * with their events, the Owner role on every app, and on the desktop this
+ * computer's own triggers (`sinkState`, from `fake.sinks`; the web has none).
+ * Another role, or none (`roleState: undefined`), goes in through `extra`.
  */
 export function fakeBackend(
 	fake: FakeWorkspace,
@@ -180,10 +248,22 @@ export function fakeBackend(
 			}),
 		}),
 		eventState: strict("eventState", {
-			getEvents: async (appId: string) => [...appOf(apps, appId).events],
+			getEvents: async (appId: string) =>
+				appOf(apps, appId).events.map(eventRecord),
+			getEventAuthoritative: async (appId: string, eventId: string) =>
+				eventRecord(eventOf(apps, appId, eventId)),
+			// This computer runs only what the test gave it (`localTriggers`).
+			isEventSinkActive: async (eventId: string) =>
+				fake.sinks.state().isEventSinkActive(eventId),
 		}),
+		sinkState:
+			fake.deps.platform === "desktop" ? fake.sinks.state() : undefined,
 		roleState: strict("roleState", {
 			getOwnRole: async (_appId: string) => OWNER_ROLE,
+		}),
+		boardState: strict("boardState", {
+			getBoardSummaries: async (appId: string) =>
+				flowSummaries(appOf(apps, appId)),
 		}),
 		capabilities: () => ({
 			needsSignIn: false,
@@ -214,7 +294,7 @@ function oidcOf(
 }
 
 async function loadProviders() {
-	const [client, oidc, provider, area, confirm, route, overlays] =
+	const [client, oidc, provider, area, confirm, route, overlays, flows] =
 		await Promise.all([
 			import("react-dom/client"),
 			import("react-oidc-context"),
@@ -223,6 +303,7 @@ async function loadProviders() {
 			import("../primitives/confirm-sheet"),
 			import("../routing/use-devices-route"),
 			import("../overlays/area-overlays"),
+			import("../workspace/use-latest-flows"),
 		]);
 	return {
 		createRoot: client.createRoot,
@@ -232,7 +313,18 @@ async function loadProviders() {
 		ConfirmProvider: confirm.ConfirmProvider,
 		MemoryDevicesRoute: route.MemoryDevicesRoute,
 		AreaOverlays: overlays.AreaOverlays,
+		latestFlowSeams: flows.latestFlowSeams,
 	};
+}
+
+/** A local-only app's flows live on this computer: the desktop commands answer from the fake hub's flow state. */
+function desktopFlows(fake: FakeWorkspace) {
+	return async () => ({
+		read: async (appId: string, boardId: string) =>
+			fake.hub.flows.state(appId, boardId),
+		publish: async (appId: string, boardId: string) =>
+			fake.hub.flows.publish(appId, boardId),
+	});
 }
 
 let providers: ReturnType<typeof loadProviders> | undefined;
@@ -355,6 +447,9 @@ export async function mountDevices(
 	useBackendStore
 		.getState()
 		.setBackend(fakeBackend(fake, options.apps, options.backend));
+	const { latestFlowSeams } = parts;
+	const previousFlows = latestFlowSeams.commands;
+	latestFlowSeams.commands = desktopFlows(fake);
 
 	const navigations: MountedNavigation[] = [];
 	const frame: HostFrame = {
@@ -390,6 +485,7 @@ export async function mountDevices(
 			await macrotask();
 			container.remove();
 			useBackendStore.setState({ backend: previousBackend });
+			latestFlowSeams.commands = previousFlows;
 			await fake.dispose();
 		},
 	};

@@ -6,6 +6,7 @@ import {
 	CircleCheck,
 	CircleDashed,
 	CirclePause,
+	CirclePlay,
 	CloudUpload,
 	Database,
 	FileKey,
@@ -46,6 +47,7 @@ export type TrayKind =
 	| "offline_write_retry"
 	| "signing_request"
 	| "setup"
+	| "event_run"
 	| "rollout";
 
 /** Byte-identical to ActivityState. */
@@ -71,6 +73,7 @@ export const TRAY_KIND_ICON: Record<TrayKind, LucideIcon> = {
 	offline_write_retry: Database,
 	signing_request: FileKey,
 	setup: Server,
+	event_run: CirclePlay,
 	rollout: Layers,
 };
 

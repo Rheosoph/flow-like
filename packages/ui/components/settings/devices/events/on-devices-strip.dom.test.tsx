@@ -45,7 +45,7 @@ function noneCanRun(value: EventsDevicesValue) {
 		rows: [],
 		ineligible: [
 			...events.ineligible,
-			...events.rows.map(({ cells: _cells, ...row }) => row),
+			...events.rows.map((row) => ({ ...row, cells: {} })),
 		],
 	};
 	value.live.rows = new Map();
@@ -62,7 +62,7 @@ describe("On devices strip (APP §4.2)", () => {
 			"Devices run the version you deploy from the hub. Data stays in the cloud, so they need internet.",
 		);
 		expect(text).toContain(
-			"3 of 6 events can run on a device. 1 of them runs on 1 device you can see.",
+			"5 of 6 events can run on a device. 1 of them runs on 1 device you can see.",
 		);
 		expect(text).toContain(
 			"Status from 3 of 5 devices you can see; 1 is unknown, 1 hasn't checked in yet.",
@@ -77,8 +77,9 @@ describe("On devices strip (APP §4.2)", () => {
 		expect(strip?.querySelector("[data-mode='offline']")?.textContent).toBe(
 			"Offline copy",
 		);
+		// The quick action is a person-started event now: 4 of 5 (design R2 §6.6).
 		expect(text).toContain(
-			"2 of 5 events can run on a device. 2 of them run on 1 device you can see. Each device checks them again when the copy arrives.",
+			"4 of 5 events can run on a device. 2 of them run on 1 device you can see. Each device checks them again when the copy arrives.",
 		);
 	});
 
@@ -145,11 +146,13 @@ describe("On devices strip (APP §4.2)", () => {
 
 	test("Deploy to devices… and Open in Devices lead into the app's device pages", async () => {
 		const { strip } = await renderStrip("app_invoice_ai");
-		expect(
-			byRole("link", "Deploy to devices…", strip ?? undefined).getAttribute(
-				"href",
-			),
-		).toBe("/library/config/devices?id=app_invoice_ai&flow=deploy&mode=new");
+		const deploy = byRole("link", "Deploy to devices…", strip ?? undefined);
+		expect(deploy.getAttribute("href")).toBe(
+			"/library/config/devices?id=app_invoice_ai&flow=deploy&mode=new",
+		);
+		expect(deploy.getAttribute("title")).toBe(
+			"Opens deploy with every event of Invoice AI that can run on a device; schedules and bots start unticked. You pick one or more devices next.",
+		);
 		expect(
 			byRole("link", "Open in Devices", strip ?? undefined).getAttribute(
 				"href",
@@ -208,7 +211,7 @@ describe("On devices strip (APP §4.2)", () => {
 			};
 		});
 		expect(strip?.querySelector("[data-stamp][data-age='error']")).toBeTruthy();
-		expect(text).toContain("3 of 6 events can run on a device.");
+		expect(text).toContain("5 of 6 events can run on a device.");
 	});
 
 	test("while devices load the strip says so; without device data it is not rendered", async () => {

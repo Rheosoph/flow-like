@@ -1,14 +1,16 @@
 import { z } from "zod";
 import { type DeploymentRolloutStatus, rolloutSchema } from "./deployment";
+import { deviceText } from "./event-run";
 import { hostOperationSchema } from "./inspection";
 import type {
 	AgentFeature,
 	AgentFeatures,
+	EventForm,
 	HostOperationView,
 } from "./model/types";
 import type { ManagementCall } from "./telemetry";
 import { rejectionMessage } from "./transport";
-import { managementRejection } from "./types";
+import { type EventFormCommand, managementRejection } from "./types";
 import { LiveCallError, rejectionCode } from "./workspace/errors";
 
 /**
@@ -577,5 +579,78 @@ export function pruneArtifactRevisions(
 				})
 				.parse(result),
 		crypto.randomUUID(),
+	);
+}
+
+/* Design R2 §1.8: the form of a quick action or form, from the flow version the service runs. */
+
+const pinWord = z.string().regex(/^[A-Za-z0-9_]{1,32}$/u);
+const formVersion = z.tuple([count, count, count]);
+const boundedJson = (max: number) =>
+	z
+		.unknown()
+		.refine(
+			(value) =>
+				value === undefined ||
+				new TextEncoder().encode(JSON.stringify(value)).length <= max,
+			`exceeds ${max} bytes`,
+		);
+
+const formFieldSchema = z.object({
+	name: deviceText(120, 1),
+	label: deviceText(120),
+	description: deviceText(480),
+	data_type: pinWord,
+	value_type: pinWord,
+	optional: z.boolean(),
+	sensitive: z.boolean(),
+	default: boundedJson(1024).transform((value) => value ?? null),
+	default_omitted: z.boolean().optional(),
+	options: z.array(deviceText(64)).max(32).nullable(),
+});
+
+/** The fields of a quick action (none) or form, to run it from Devices. Asks only an agent with `on_demand_events`. */
+export function readEventForm(
+	call: ManagementCall,
+	features: AgentFeatures | undefined,
+	input: { placementId: string; eventId: string },
+): Promise<AgentRead<EventForm>> {
+	const placement = managementId.parse(input.placementId);
+	const event = managementId.parse(input.eventId);
+	return agentRead(
+		call,
+		features,
+		"on_demand_events",
+		`form of event ${event}`,
+		{
+			type: "event_form",
+			placement_id: placement,
+			event_id: event,
+		} satisfies EventFormCommand,
+		(result): EventForm => {
+			const form = z
+				.object({
+					placement_id: z.literal(placement),
+					config_revision: count,
+					event_id: z.literal(event),
+					event_version: formVersion,
+					board_version: formVersion,
+					kind: z.enum(["action", "form"]),
+					name: deviceText(480),
+					description: deviceText(4096),
+					fields: z.array(formFieldSchema).max(64),
+					fields_truncated: z.boolean(),
+					file_fields: count.max(64),
+					navigate_to_routes: z.array(text(512)).max(64),
+				})
+				.parse(result);
+			return {
+				...form,
+				// A sensitive field's default is never shown, whatever a device sends.
+				fields: form.fields.map((field) =>
+					field.sensitive ? { ...field, default: null } : field,
+				),
+			};
+		},
 	);
 }

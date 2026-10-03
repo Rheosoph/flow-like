@@ -45,6 +45,7 @@ function harness(approved = approvedApp()) {
 			return {
 				artifact: artifact("native"),
 				assets: { bit_pins: [], package_pins: [] },
+				latestEvents: null,
 				release: async () => {
 					calls.push("release");
 				},

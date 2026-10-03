@@ -2,25 +2,12 @@
 
 import { useTranslation } from "@flow-like/locales";
 import {
-	Braces,
 	Check,
-	ClipboardList,
-	Clock,
 	Copy,
-	Globe,
-	Hash,
 	KeyRound,
-	Link2,
 	LockOpen,
 	type LucideIcon,
-	Mail,
-	MessageSquare,
-	Monitor,
-	Plug,
-	Send,
 	Stethoscope,
-	Timer,
-	Zap,
 } from "lucide-react";
 import {
 	type ComponentProps,
@@ -490,51 +477,7 @@ export function useLinkCapture(
 	);
 }
 
-/* Event types on devices (APP §7.3). */
-
-const EVENT_ICON: Record<string, LucideIcon> = {
-	simple_chat: MessageSquare,
-	page: Monitor,
-	http: Globe,
-	rest: Braces,
-	mcp: Plug,
-	daemon: Timer,
-	cron: Clock,
-	email: Mail,
-	inbound_email: Mail,
-	teams: MessageSquare,
-	discord: Hash,
-	telegram: Send,
-	generic_form: ClipboardList,
-	quick_action: Zap,
-	deeplink: Link2,
-	geolocation: Globe,
-	api: Globe,
-};
-
-export function eventIcon(eventType: string, hasPage = false): LucideIcon {
-	return EVENT_ICON[hasPage ? "page" : eventType] ?? Zap;
-}
-
-/** The 24 px type tile in front of an event name. */
-export function EventTile({
-	eventType,
-	hasPage = false,
-	className,
-}: Readonly<{ eventType: string; hasPage?: boolean; className?: string }>) {
-	const Icon = eventIcon(eventType, hasPage);
-	return (
-		<span
-			aria-hidden
-			className={cx(
-				"inline-flex size-6 shrink-0 items-center justify-center rounded-md border border-border bg-card text-ink-2",
-				className,
-			)}
-		>
-			<Icon className="size-3.5" />
-		</span>
-	);
-}
+export { EventTile, eventIcon } from "../primitives/event-cell";
 
 /**
  * A person by account id: "You" for the viewer, the directory name otherwise;

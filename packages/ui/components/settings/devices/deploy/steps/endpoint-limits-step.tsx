@@ -20,7 +20,11 @@ import {
 	type DeviceCertificate,
 	readCertificates,
 } from "../../../../../lib/device-management/certificates";
-import type { PlacementConfiguration } from "../../../../../lib/device-management/deployment";
+import {
+	type PlacementConfiguration,
+	eventKind,
+} from "../../../../../lib/device-management/deployment";
+import { ROUTE_EVENT_TYPES } from "../../../../../lib/device-management/event-route";
 import {
 	DEFAULT_ISOLATION,
 	type DeployOverrides,
@@ -65,6 +69,7 @@ import {
 	ExceptionsTable,
 	exceptionRows,
 } from "../exceptions-table";
+import { serviceWhyText } from "../service-plan";
 import type { PlanStepProps } from "../step-props";
 
 /* Step 5 · Endpoint & limits (APP §3.9): shared values first, then the devices that differ. */
@@ -127,22 +132,67 @@ function useCertificates(
 	);
 }
 
+/** The events of a service that the device's web server serves: Pages, chats and Endpoints. */
+function servedEvents(state: State, events: readonly string[]) {
+	return (state.plan.app?.events ?? []).filter(
+		(event) => events.includes(event.id) && eventKind(event) === "served",
+	);
+}
+
 function hostedNames(state: State): string {
 	const { plan } = state;
 	const hosted = plan.services.filter((service) => service.hosted);
 	const names = hosted.flatMap((service) =>
-		service.events
-			.filter((eventId) => {
-				const event = plan.app?.events.find((row) => row.id === eventId);
-				return (
-					!!event &&
-					(Boolean(event.default_page_id) ||
-						["http", "simple_chat"].includes(event.event_type))
-				);
-			})
-			.map((eventId) => eventName(plan, eventId)),
+		servedEvents(state, service.events).map((event) => event.name),
 	);
 	return [...new Set(names)].join(", ");
+}
+
+/** An Endpoint (no Page): one route of the service's web server. */
+const isEndpoint = (event: {
+	event_type: string;
+	default_page_id?: string | null;
+}) =>
+	!event.default_page_id &&
+	(ROUTE_EVENT_TYPES as readonly string[]).includes(event.event_type);
+
+/**
+ * Services that put Endpoints together with Pages or chats: one access token
+ * calls all of them, so whoever gets it to open a Page can call the Endpoints.
+ */
+function sharedTokenServices(state: State) {
+	return state.plan.services.flatMap((service) => {
+		const served = servedEvents(state, service.events);
+		const endpoints = served.filter(isEndpoint);
+		return endpoints.length && endpoints.length < served.length
+			? [
+					{
+						service: service.id,
+						endpoints: endpoints.map((event) => event.name),
+					},
+				]
+			: [];
+	});
+}
+
+/** The shared-token hint of a service that mixes Endpoints with Pages or chats. */
+function SharedTokenNote({ state }: Readonly<{ state: State }>) {
+	const { t } = useTranslation("devices");
+	const mixed = sharedTokenServices(state);
+	if (!mixed.length) return null;
+	return (
+		<>
+			{mixed.map((row) => (
+				<Note key={row.service}>
+					{t(
+						"deploy.endpoint.sharedToken",
+						"One access token calls everything {{service}} serves: whoever has it to open a Page or a chat can also call {{endpoints}}. Deploy an Endpoint as its own service to give it a token of its own.",
+						{ service: row.service, endpoints: row.endpoints.join(", ") },
+					)}
+				</Note>
+			))}
+		</>
+	);
 }
 
 function BindChoice({ state, update }: Readonly<PlanStepProps>) {
@@ -903,6 +953,7 @@ function EndpointBlock(props: Readonly<PlanStepProps>) {
 			{keeps ? null : <PortField {...props} />}
 			<Certificates state={state} certificates={certificates} />
 			<TokenField {...props} />
+			<SharedTokenNote state={state} />
 			{multi ? (
 				<div className="flex min-w-0 flex-col gap-1.5">
 					<span className="text-[13px]/[18px] font-medium">
@@ -945,16 +996,28 @@ function EndpointBlock(props: Readonly<PlanStepProps>) {
 	);
 }
 
+/** The plan's events that a person starts (forms and quick actions). */
+function personStarted(state: State): string[] {
+	const { plan } = state;
+	const ids = new Set(plan.services.flatMap((service) => service.events));
+	return (plan.app?.events ?? [])
+		.filter((event) => ids.has(event.id) && eventKind(event) === "on_demand")
+		.map((event) => event.name);
+}
+
 function NoEndpoint({ state }: Readonly<{ state: State }>) {
 	const { t } = useTranslation("devices");
 	const { plan } = state;
+	const started = personStarted(state);
 	const names = [
 		...new Set(
 			plan.services.flatMap((service) =>
 				service.events.map((eventId) => eventName(plan, eventId)),
 			),
 		),
-	].join(", ");
+	]
+		.filter((name) => !started.includes(name))
+		.join(", ");
 	return (
 		<Block
 			title={t("deploy.endpoint.none", "Web endpoint")}
@@ -967,11 +1030,29 @@ function NoEndpoint({ state }: Readonly<{ state: State }>) {
 				kind="empty"
 				icon={Globe}
 				title={t("deploy.endpoint.noneTitle", "No web endpoint needed")}
-				text={t(
-					"deploy.endpoint.noneText",
-					"{{events}} run on their own, so the service doesn't listen on a port.",
-					{ events: names },
-				)}
+				text={
+					<>
+						{names
+							? t(
+									"deploy.endpoint.noneText",
+									"{{events}} run on their own, so the service doesn't listen on a port.",
+									{ events: names },
+								)
+							: null}
+						{started.length ? (
+							<span data-person-started="" className="block">
+								{t("deploy.endpoint.personStarted", {
+									events: started.join(", "),
+									count: started.length,
+									defaultValue_one:
+										"{{events}} starts when a person runs it from Devices.",
+									defaultValue_other:
+										"{{events}} start when a person runs them from Devices.",
+								})}
+							</span>
+						) : null}
+					</>
+				}
 			/>
 		</Block>
 	);
@@ -984,18 +1065,7 @@ function InstancesBlock({ state, update }: Readonly<PlanStepProps>) {
 	const max = limited ? 1 : 32;
 	const value = Math.min(max, Math.max(1, Math.trunc(draft.maxInstances) || 1));
 	const why = limited?.why.find((row) => row.code !== "split_variables");
-	const reason = !why
-		? null
-		: why.code === "background"
-			? t(
-					"deploy.services.whyBackground",
-					"{{event}} runs on its own, so this service runs 1 instance. Only Web request, Chat and Page events can run several.",
-					{ event: eventName(plan, why.eventId) },
-				)
-			: t(
-					"deploy.services.whyWrites",
-					"Write buffering is on, so this service runs 1 instance.",
-				);
+	const reason = why ? serviceWhyText(t, plan, why) : null;
 	const kept = plan.targets.some((target) =>
 		target.services.some((service) => service.kind !== "new"),
 	);
@@ -1532,6 +1602,10 @@ export function EndpointLimitsStep(props: Readonly<PlanStepProps>) {
 	const { state, goTo } = props;
 	const { plan, app } = state;
 	const hosted = plan.services.some((service) => service.hosted);
+	const limits = t(
+		"deploy.endpoint.ledeLimits",
+		"No event you picked is served by the device's web server, so only limits apply.",
+	);
 	const header = (
 		<WizardStepHeader
 			step={5}
@@ -1548,10 +1622,12 @@ export function EndpointLimitsStep(props: Readonly<PlanStepProps>) {
 							"How {{events}} is reached, how many instances run, and what they may do on the device.",
 							{ events: hostedNames(state) },
 						)
-					: t(
-							"deploy.endpoint.ledeLimits",
-							"No event you picked is served by the device's web server, so only limits apply.",
-						)
+					: personStarted(state).length
+						? `${limits} ${t(
+								"deploy.endpoint.ledeOnDemand",
+								"Run its forms and quick actions from Devices: this service has no service page.",
+							)}`
+						: limits
 			}
 		/>
 	);

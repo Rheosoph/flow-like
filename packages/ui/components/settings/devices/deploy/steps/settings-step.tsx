@@ -4,6 +4,10 @@ import { useTranslation } from "@flow-like/locales";
 import { Lock, Undo2, Variable } from "lucide-react";
 import { useState } from "react";
 import {
+	botTokenEventId,
+	isBotTokenKey,
+} from "../../../../../lib/device-management/bot-config";
+import {
 	type DeploymentVariable,
 	type PlacementConfiguration,
 	variableText,
@@ -13,6 +17,7 @@ import type {
 	PlanTarget,
 	PlannedService,
 } from "../../../../../lib/device-management/model/deploy-plan";
+import { eventTypeLabel } from "../../copy/eligibility-copy";
 import type { DevicesT } from "../../primitives/area-context";
 import { Block } from "../../primitives/block";
 import { DvButton } from "../../primitives/dv-button";
@@ -29,6 +34,7 @@ import { eventName, issueText, planNames } from "../deploy-copy";
 import {
 	type UnresolvedOverride,
 	eventVariables,
+	savedTokenOf,
 	variableUsers,
 } from "../deploy-facts";
 import { HubStamp, Note, TargetsStamp } from "../deploy-parts";
@@ -466,6 +472,214 @@ function isOn(
 	return typed || stored.some((row) => !row.removed);
 }
 
+type TokenSource = "keep" | "saved" | "enter";
+
+/** The devices this plan sends the bot to; a token entered for a device lands there. */
+function botDevices(state: State, eventId: string): string[] {
+	return state.plan.targets
+		.filter((target) =>
+			target.services.some((service) => service.events.includes(eventId)),
+		)
+		.map((target) => target.deviceId);
+}
+
+/**
+ * Writes a bot's token where the plan reads it: shared, or for each device
+ * that gets the bot when secrets differ per device. `undefined` takes the
+ * value back (the token saved in Events, or the one stored on the device).
+ */
+function setBotToken(
+	props: PlanStepProps,
+	key: string,
+	eventId: string,
+	value: string | undefined,
+) {
+	const { state, update } = props;
+	const { draft } = state;
+	const edited =
+		value === undefined
+			? draft.edited.filter((id) => id !== key)
+			: [...new Set([...draft.edited, key])];
+	if (draft.secretsMode === "same") {
+		update({
+			secrets:
+				value === undefined
+					? without(draft.secrets, key)
+					: { ...draft.secrets, [key]: value },
+			edited,
+		});
+		return;
+	}
+	for (const deviceId of botDevices(state, eventId))
+		setOver(state, deviceId, (over) => ({
+			...over,
+			secrets:
+				value === undefined
+					? without(over.secrets ?? {}, key)
+					: { ...over.secrets, [key]: value },
+		}));
+	update({ edited });
+}
+
+/** The token a person entered for the bot: shared, else the first device's. */
+function enteredValue(state: State, key: string): string | undefined {
+	const { draft } = state;
+	return (
+		draft.secrets[key] ??
+		draft.targets.find((target) => target.over.secrets?.[key] !== undefined)
+			?.over.secrets?.[key]
+	);
+}
+
+function tokenSource(
+	entered: string | undefined,
+	saved: string | null,
+	kept: boolean,
+	setting: boolean,
+): TokenSource {
+	if (entered === undefined)
+		return kept && !setting ? "keep" : saved ? "saved" : "enter";
+	return saved !== null && entered === saved ? "saved" : "enter";
+}
+
+/**
+ * A bot's token (§1.10): the token saved on the event in Events, or one
+ * entered here; a service that has the bot keeps its stored token unless it
+ * is set anew. Shape-checked here; it can't be read back from the device.
+ */
+function BotTokenRow(props: Readonly<RowProps>) {
+	const { t } = useTranslation("devices");
+	const { state, service, variable, check } = props;
+	const { plan } = state;
+	const key = variable.id;
+	const eventId = botTokenEventId(key) ?? "";
+	const event = plan.app?.events.find((row) => row.id === eventId);
+	const saved = savedTokenOf(event);
+	const kept = storedValues(state, service, variable).some(
+		(row) => !row.removed,
+	);
+	const entered = enteredValue(state, key);
+	const [setting, setSetting] = useState(entered !== undefined);
+	const source = tokenSource(entered, saved, kept, setting);
+	const label = t("deploy.settings.botToken.label", "Bot token of {{event}}", {
+		event: variable.name,
+	});
+	const devices = botDevices(state, eventId);
+	const [only] = devices;
+	const device =
+		devices.length === 1 && only
+			? (plan.targets.find((target) => target.deviceId === only)?.name ?? only)
+			: t("deploy.settings.botToken.eachDevice", "each device");
+	const errors = check.issues
+		.filter(
+			(issue) =>
+				issue.step === "settings" &&
+				(issue.code === "bot_token_missing" ||
+					issue.code === "bot_token_shape") &&
+				issue.params?.event === eventId,
+		)
+		.map((issue) => issueText(t, issue, planNames(t, plan)));
+	const choose = (next: TokenSource) => {
+		setSetting(next !== "keep");
+		if (next === "keep") setBotToken(props, key, eventId, undefined);
+		// An added bot takes the saved token by itself; a kept one only when it is chosen.
+		else if (next === "saved")
+			setBotToken(props, key, eventId, kept ? (saved ?? "") : undefined);
+		else setBotToken(props, key, eventId, "");
+	};
+	return (
+		<li
+			data-variable={key}
+			data-bot-token={eventId}
+			className="grid grid-cols-[minmax(0,230px)_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-hairline px-4 py-3 first:border-t-0 @max-[560px]/settingsstep:grid-cols-1"
+		>
+			<div className="flex min-w-0 flex-col gap-0.5">
+				<b className="text-ui font-semibold">{label}</b>
+				<span className="text-xs text-muted-foreground">
+					{event ? eventTypeLabel(t, event.event_type) : null}
+					{t("deploy.settings.secretTag", " · secret")}
+				</span>
+			</div>
+			<div className="flex min-w-0 flex-col gap-2">
+				{kept ? (
+					<Segmented<"keep" | "new">
+						label={t("deploy.settings.secretValue", "{{variable}} value", {
+							variable: label,
+						})}
+						value={source === "keep" ? "keep" : "new"}
+						onChange={(next) =>
+							choose(next === "keep" ? "keep" : saved ? "saved" : "enter")
+						}
+						options={[
+							{
+								value: "keep",
+								label: t("deploy.settings.keepStored", "Keep stored"),
+							},
+							{ value: "new", label: t("deploy.settings.setNew", "Set new") },
+						]}
+					/>
+				) : null}
+				{source === "keep" ? (
+					<p className="flex items-center gap-1.5 text-ui text-ink-2">
+						<Lock aria-hidden className="size-3.5 text-muted-foreground" />
+						{t(
+							"deploy.settings.storedSecret",
+							"Stored secret · can't be read back, not even by you.",
+						)}
+					</p>
+				) : (
+					<>
+						{saved ? (
+							<Segmented<"saved" | "enter">
+								label={label}
+								value={source === "saved" ? "saved" : "enter"}
+								onChange={choose}
+								wrap
+								options={[
+									{
+										value: "saved",
+										label: t(
+											"deploy.settings.botToken.saved",
+											"Use the token saved in Events",
+										),
+									},
+									{
+										value: "enter",
+										label: t("deploy.settings.botToken.enter", "Enter a token"),
+									},
+								]}
+							/>
+						) : null}
+						{source === "enter" ? (
+							<SecretInput
+								id={`deploy-bot-token-${eventId}`}
+								aria-label={label}
+								autoComplete="new-password"
+								value={entered ?? ""}
+								onValueChange={(text) => setBotToken(props, key, eventId, text)}
+								minBytes={1}
+								maxBytes={4096}
+							/>
+						) : null}
+						<p className="text-xs text-muted-foreground">
+							{t(
+								"deploy.settings.botToken.hint",
+								"Stored on {{device}} as a secret. It can't be read back.",
+								{ device },
+							)}
+						</p>
+					</>
+				)}
+				{errors.map((error) => (
+					<p key={error} className="text-xs text-critical">
+						{error}
+					</p>
+				))}
+			</div>
+		</li>
+	);
+}
+
 function VariableRow(props: Readonly<RowProps>) {
 	const { t } = useTranslation("devices");
 	const { state, service, variable, check } = props;
@@ -843,14 +1057,23 @@ function SettingsBlock(props: Readonly<PlanStepProps>) {
 				) : null}
 				{variables.length ? (
 					<ul className="flex flex-col">
-						{variables.map((variable) => (
-							<VariableRow
-								key={variable.id}
-								{...props}
-								service={service}
-								variable={variable}
-							/>
-						))}
+						{variables.map((variable) =>
+							isBotTokenKey(variable.id) ? (
+								<BotTokenRow
+									key={variable.id}
+									{...props}
+									service={service}
+									variable={variable}
+								/>
+							) : (
+								<VariableRow
+									key={variable.id}
+									{...props}
+									service={service}
+									variable={variable}
+								/>
+							),
+						)}
 					</ul>
 				) : (
 					<div className="px-4 py-3">
@@ -999,6 +1222,8 @@ export function SettingsStep(props: Readonly<PlanStepProps>) {
 							)}
 						</Note>
 					)}
+					{/* A bot's token is asked before the flows' own settings are known. */}
+					{state.definitions.known ? null : <DefinitionsPending {...props} />}
 					<SettingsBlock {...props} />
 				</>
 			) : (

@@ -70,6 +70,7 @@ import {
 	sealFakeRecovery,
 	sealFakeVault,
 } from "./fake-device-api";
+import { FakeLocalTriggers } from "./fake-sinks";
 
 /*
  * The real workspace managers over a fake hub, fake agents, fake crypto, a fake
@@ -1216,6 +1217,8 @@ export interface FakeWorkspaceOptions
 	queryClient?: QueryClient;
 	/** Extra workspace seams, merged over the fake's. */
 	workspace?: DeviceWorkspaceOptions;
+	/** Events this computer runs itself while Flow-Like is open (the desktop's triggers); none by default. */
+	localTriggers?: readonly string[];
 }
 
 export interface FakeWorkspace {
@@ -1230,6 +1233,8 @@ export interface FakeWorkspace {
 	readonly profile: IProfile;
 	readonly password: string;
 	readonly deps: WorkspaceDeps;
+	/** This computer's own triggers, which the fake backend's `sinkState` answers from. */
+	readonly sinks: FakeLocalTriggers;
 	/** The seams the workspace was built with, for a test that goes through the registry itself. */
 	readonly workspaceOptions: DeviceWorkspaceOptions;
 	readonly workspace: DeviceWorkspaceRuntime;
@@ -1368,6 +1373,11 @@ export async function createFakeWorkspace(
 		profile: api.profile,
 		password: api.hub.password,
 		deps,
+		sinks: new FakeLocalTriggers(
+			() => api.hub.apps,
+			() => api.hub.now(),
+			options.localTriggers,
+		),
 		workspaceOptions,
 		workspace,
 		agent: (deviceId) => api.agent(deviceId),

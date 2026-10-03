@@ -8380,6 +8380,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-bots"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum 0.8.8",
+ "base64 0.22.1",
+ "pulldown-cmark 0.13.3",
+ "serde",
+ "serde_json",
+ "serenity",
+ "teloxide",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "flow-like-browser"
 version = "0.1.0"
 dependencies = [
@@ -9817,7 +9835,7 @@ dependencies = [
 
 [[package]]
 name = "flow-like-standalone"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -9827,8 +9845,12 @@ dependencies = [
  "blake3",
  "bytes",
  "chacha20poly1305",
+ "chrono",
+ "chrono-tz",
  "clap",
+ "croner",
  "dotenvy",
+ "flow-like-bots",
  "flow-like-catalog",
  "flow-like-device-crypto",
  "flow-like-device-protocol",

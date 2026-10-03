@@ -39,7 +39,9 @@ export function HowRunsBlock() {
 					? {
 							newest: {
 								label: versionName(newest),
-								hash: newest.hash,
+								...(newest.unpublished
+									? { edits: copy.currentEdits() }
+									: { hash: newest.hash }),
 								at: newest.builtAt,
 							},
 						}

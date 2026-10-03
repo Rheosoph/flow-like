@@ -195,6 +195,7 @@ export function activityTitle(t: DevicesT, item: ActivityItem): string {
 			"Signing request",
 		),
 		setup: t("devices:chrome.tray.kind.setup", "Device setup"),
+		event_run: t("devices:chrome.tray.kind.eventRun", "Action or form run"),
 	} satisfies Record<ActivityKind, string>;
 	return titles[item.kind];
 }
@@ -268,10 +269,16 @@ function stateText(t: DevicesT, time: AreaTime, item: ActivityItem) {
 						"Paused. You can resume until {{time}}.",
 						{ time: time.at(until / 1000) },
 					),
-		waiting_for_device: t(
-			"devices:chrome.tray.detail.waitingForDevice",
-			"Saved. The device applies it the next time it checks in.",
-		),
+		waiting_for_device:
+			item.kind === "event_run"
+				? t(
+						"devices:chrome.tray.detail.waitingForRun",
+						"Sent. Waiting for the device to start the run.",
+					)
+				: t(
+						"devices:chrome.tray.detail.waitingForDevice",
+						"Saved. The device applies it the next time it checks in.",
+					),
 		waiting_for_apply: t(
 			"devices:chrome.tray.detail.waitingForApply",
 			"Waiting for the device to apply it.",
@@ -692,8 +699,22 @@ function showsObject(route: DeviceRoute | ServiceRoute, item: ActivityItem) {
 	return route.screen === "device" || route.serviceId === item.target.serviceId;
 }
 
+/** The "Run now…" sheet of that event is open: it shows the outcome itself. */
+function sheetShows(item: ActivityItem) {
+	const overlay = useOverlayStore.getState().overlay;
+	const { target } = item;
+	return (
+		item.kind === "event_run" &&
+		overlay.kind === "run_now" &&
+		overlay.deviceId === target.deviceId &&
+		overlay.serviceId === target.serviceId &&
+		overlay.eventId === target.eventId
+	);
+}
+
 /** The screen already shows this device (or service), or the run the item belongs to: no toast needed there. */
 function showsItem(route: DevicesRoute | undefined, item: ActivityItem) {
+	if (sheetShows(item)) return true;
 	if (!route) return false;
 	switch (route.screen) {
 		case "deploy":

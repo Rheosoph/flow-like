@@ -43,14 +43,15 @@ describe("entries (APP §3.1)", () => {
 		expect(page).toContain(
 			"Deploy Visitor Check-in: pick what runs, then where.",
 		);
-		expect(page).toContain("2 of its 4 events can run on a device.");
+		// The schedule can run too; the summary below still counts the two that Whole app ticks.
+		expect(page).toContain("3 of its 4 events can run on a device.");
 		expect(page).toContain(
 			"Nothing changes on any device until you deploy on step 7.",
 		);
 		// Step 6 follows the app's mode (A1).
 		expect(page).toContain("Access & cost");
 		expect(page).not.toContain("Copy & upload");
-		expect(page).toContain("Can't run on devices · 2");
+		expect(page).toContain("Can't run on devices · 1");
 		expect(page).toContain("Visitor Check-in · v0.4.0 · 2 events · 1 service");
 		// No app picker in an app's own page.
 		expect(view.container.querySelector("#deploy-app")).toBeNull();
@@ -108,7 +109,7 @@ describe("entries (APP §3.1)", () => {
 				"aria-pressed",
 			),
 		).toBe("true");
-		expect(page).toContain("Also run other events of CRM Sync · 2");
+		expect(page).toContain("Also run other events of CRM Sync · 3");
 		expect(page).not.toContain("Nightly CRM sync");
 		// The service takes the event's name.
 		expect(
@@ -166,7 +167,7 @@ describe("entries (APP §3.1)", () => {
 			"CRM Sync · offline copy · v3.1.0 · to edge-berlin-01 · new service",
 		);
 		expect(page).toContain("Deploy CRM Sync to edge-berlin-01 as crm-sync.");
-		expect(page).toContain("3 of its 5 events can run on a device.");
+		expect(page).toContain("4 of its 5 events can run on a device.");
 		expect(page).toContain("Runs on 1 device now");
 		expect(kit.primaries(view.container)).toBe(1);
 	});

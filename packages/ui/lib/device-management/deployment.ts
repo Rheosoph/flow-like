@@ -1,13 +1,45 @@
 import { z } from "zod";
 import type { IBoardState } from "../../state/backend-state/board-state";
 import type { IEventState } from "../../state/backend-state/event-state";
+import { CRON_EVENT_TYPE, type IScheduleConfig } from "../schedule-config";
+import { ONCE_MAX_AT, ONCE_MIN_AT } from "../schedule-instant";
 import type { IBoard } from "../schema/flow/board";
 import type { IEvent } from "../schema/flow/event";
+import { parseUint8ArrayToJson } from "../uint8";
 import {
 	type ProjectArtifactAssets,
 	assertOneVersionPerPackage,
 } from "./artifacts";
+import {
+	type BotFacts,
+	type DeviceBotResult,
+	botProvider,
+	botTokenEventId,
+	botTokenKey,
+	botTokenProblem,
+	botTokenVariable,
+	deviceBot,
+} from "./bot-config";
+import {
+	type DeviceRouteResult,
+	type EventRoute,
+	MAX_ROUTE_PATH_BYTES,
+	ROUTE_EVENT_TYPES,
+	ROUTE_METHODS,
+	ROUTE_PROBLEMS,
+	deviceRoute,
+} from "./event-route";
+import type { AgentFeature, AgentFeatures } from "./model/types";
 import { readOfflineQueues } from "./offline-queue";
+import {
+	type DeviceSchedule,
+	type DeviceScheduleResult,
+	MAX_SCHEDULE_EXPRESSION,
+	type OnceSchedule,
+	SCHEDULE_PROBLEMS,
+	type ScheduleDetail,
+	deviceSchedule,
+} from "./schedule";
 import type { ManagementCall } from "./telemetry";
 import {
 	type ManagementRejection,
@@ -81,7 +113,29 @@ const version = z.tuple([
 	z.number().int().min(0).max(4294967294),
 	z.number().int().min(0).max(4294967294),
 ]);
-const eventSchema = z.object({
+/**
+ * How an event runs on a device. `on_demand`: a person starts it (quick
+ * action, form). `bot`: it stays connected to Telegram or Discord.
+ */
+export const EVENT_KINDS = [
+	"served",
+	"own_server",
+	"background",
+	"scheduled",
+	"on_demand",
+	"bot",
+] as const;
+export type EventKind = (typeof EVENT_KINDS)[number];
+/** The codes a device's discovery row may carry beside `eligible: false`. */
+export const DEVICE_INELIGIBLE_CODES = [
+	...SCHEDULE_PROBLEMS,
+	...ROUTE_PROBLEMS,
+	"bot_invalid",
+] as const;
+/** A fact newer agents add: a value this client does not know is dropped, never fatal. */
+const optionalFact = <T extends z.ZodTypeAny>(schema: T) =>
+	schema.nullish().catch(undefined);
+const discoveredEventSchema = z.object({
 	id: identifier,
 	name: z.string().max(480),
 	event_type: z.string().max(128),
@@ -92,7 +146,43 @@ const eventSchema = z.object({
 	rollout_supported: z.boolean().optional(),
 	eligible: z.boolean(),
 	ineligible_reason: z.string().max(480).optional(),
+	/** The device's own sentence for an event it can't run. */
+	readiness_error: optionalFact(z.string().max(1024)),
+	kind: optionalFact(z.enum(EVENT_KINDS)),
+	/** A `cron` event whose schedule the device can run; the zone is the effective one. */
+	schedule: optionalFact(
+		z.object({
+			expression: z.string().min(1).max(MAX_SCHEDULE_EXPRESSION),
+			timezone: z.string().min(1).max(64),
+		}),
+	),
+	/** An `http` or `api` event without a Page whose route the device serves. */
+	route: optionalFact(
+		z.object({
+			method: z.enum(ROUTE_METHODS),
+			path: z.string().min(1).max(MAX_ROUTE_PATH_BYTES),
+		}),
+	),
+	/** A one-time schedule the device can run; `at` in unix seconds. Such a row has no `schedule`. */
+	once: optionalFact(
+		z.object({
+			date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+			time: z.string().regex(/^\d{2}:\d{2}$/),
+			at: z.number().int().min(ONCE_MIN_AT).max(ONCE_MAX_AT),
+			timezone: z.string().min(1).max(64),
+		}),
+	),
+	ineligible_code: optionalFact(z.enum(DEVICE_INELIGIBLE_CODES)),
 });
+/** A row whose `kind` this client does not know can't run here, whatever the device says. */
+const eventSchema = z.preprocess((row) => {
+	if (!row || typeof row !== "object" || Array.isArray(row)) return row;
+	const { kind } = row as { kind?: unknown };
+	return typeof kind === "string" &&
+		!(EVENT_KINDS as readonly string[]).includes(kind)
+		? { ...row, kind: undefined, eligible: false }
+		: row;
+}, discoveredEventSchema);
 const variableSchema = z.object({
 	id: identifier,
 	name: z.string().max(480),
@@ -602,30 +692,62 @@ function samePins(
 		JSON.stringify(left.board_version) === JSON.stringify(right.board_version)
 	);
 }
+/** In the order the rule checks them. */
 export const EVENT_INELIGIBLE_CODES = [
 	"paused",
 	"latest_flow",
 	"canary",
 	"variants",
-	"api_type",
 	"type",
+	...ROUTE_PROBLEMS,
+	...SCHEDULE_PROBLEMS,
+	"bot_invalid",
+	"hub_schedules",
+	"hub_type",
 	"flow_error",
 	"refuse",
 ] as const;
 export type EventIneligibleCode = (typeof EVENT_INELIGIBLE_CODES)[number];
 export type EventReadiness = "listener" | "explicit" | "unsupported";
+/**
+ * Why an event that follows the Latest flow can't be deployed: the hub is too
+ * old, the person can't publish its edits, its Page or start node left the
+ * flow, an imported copy has no published flow version, or the pin is unreadable.
+ */
+export type LatestFlowCase = "hub" | "role" | "target" | "copy" | "other";
 /** The `IEvent` fields the rule reads; app catalogues pass the same shape. */
 export interface EligibilityEvent {
+	/** Read for a bot: its token key must fit 128 characters. */
+	id?: string;
 	active: boolean;
 	event_type: string;
 	canary?: unknown;
 	variants?: readonly unknown[] | null;
 	default_page_id?: string | null;
 	event_version?: readonly number[] | null;
+	/** Absent: the event follows the Latest flow. */
 	board_version?: readonly number[] | null;
+	/**
+	 * The record's config bytes: the route of an `http` or `api` event, the
+	 * schedule of a `cron` event, a bot's settings. Credentials in it are never
+	 * read, only whether a bot token is saved.
+	 */
+	config?: readonly number[] | null;
+	/** The schedule half of the config, when the caller already holds it; wins over `config`. */
+	schedule?: IScheduleConfig | null;
 }
-/** Facts from outside the event record: the approved bundle and a device's own refusal. */
+/** Facts from outside the event record: the hub, the approved bundle and a device's own refusal. */
 export interface EventEligibilityMetadata {
+	/** Known only for an event that follows Latest. */
+	latestFlow?: Exclude<LatestFlowCase, "other"> | null;
+	/** `false`: the app's hub can't hand schedules to devices. */
+	hubSchedules?: boolean;
+	/**
+	 * Online apps, once the hub's placement list is read: its `event_types`, or
+	 * `[]` when it has none. A list without the event's type gives `hub_type` to
+	 * an Endpoint, form, quick action or bot. Absent while unknown.
+	 */
+	hubTypes?: readonly string[];
 	ineligibleReason?: string | null;
 	deviceRefusal?: string | null;
 }
@@ -633,66 +755,259 @@ export interface EventEligibility {
 	eligible: boolean;
 	/** First failing rule, in the order the device checks them; null when eligible. */
 	code: EventIneligibleCode | null;
+	/**
+	 * `flow_error`, `refuse`: the bundle's or the device's sentence.
+	 * `route_invalid`: the method or path as written. `route_reserved`: the
+	 * path. `bot_invalid`: the setting's key.
+	 */
 	detail?: string;
+	/** How the event runs on a device; null for a type no device runs. */
+	kind: EventKind | null;
 	hosted: boolean;
 	readiness: EventReadiness;
 	rolloutSupported: boolean;
 	eventVersion: [number, number, number] | null;
+	/** Null for an event that follows Latest: the deploy pins the shipped copy. */
 	boardVersion: [number, number, number] | null;
+	followsLatest: boolean;
+	/** Set with `latest_flow`. */
+	latestFlow?: LatestFlowCase;
+	/** A repeating schedule a device can run. */
+	schedule?: DeviceSchedule;
+	/** A one-time schedule a device can run, whether or not its time has passed. */
+	once?: OnceSchedule;
+	/** Set with `schedule_invalid`: what this client's check found. */
+	scheduleDetail?: ScheduleDetail;
+	/** An `http` or `api` event without a Page: the route a device serves. */
+	route?: EventRoute;
+	/** A bot whose settings a device reads. */
+	bot?: BotFacts;
 }
+const SERVED_TYPES = ["simple_chat", ...ROUTE_EVENT_TYPES];
 const OWN_SERVER_TYPES = ["rest", "mcp"];
-const RUNS_ALONE_TYPES = ["daemon", "rest", "mcp"];
-/** The device's event rule (`sa/deployment.rs:114-150`), shared by online discovery and every app view. */
+const ON_DEMAND_TYPES = ["quick_action", "generic_form"];
+const BOT_FEATURES: Record<string, AgentFeature> = {
+	telegram: "telegram_bots",
+	discord: "discord_bots",
+};
+/**
+ * The event types an online app's hub must name in `event_types` before it
+ * hands an event of that type without a Page to a device.
+ */
+export const HUB_EXPORT_TYPES = [
+	"api",
+	"quick_action",
+	"generic_form",
+	"telegram",
+	"discord",
+] as const;
+/** How a device runs the event: a default Page wins whatever the type; null for a type no device runs. */
+export function eventKind(
+	event: Pick<EligibilityEvent, "event_type" | "default_page_id">,
+): EventKind | null {
+	if (event.default_page_id || SERVED_TYPES.includes(event.event_type))
+		return "served";
+	if (OWN_SERVER_TYPES.includes(event.event_type)) return "own_server";
+	if (event.event_type === "daemon") return "background";
+	if (event.event_type === CRON_EVENT_TYPE) return "scheduled";
+	if (ON_DEMAND_TYPES.includes(event.event_type)) return "on_demand";
+	return Object.hasOwn(BOT_FEATURES, event.event_type) ? "bot" : null;
+}
+/** Whether an event of this kind keeps its service at one instance. */
+export function limitsInstances(kind: EventKind): boolean {
+	return kind !== "served" && kind !== "on_demand";
+}
+const READINESS: Record<EventKind, EventReadiness> = {
+	served: "listener",
+	own_server: "listener",
+	background: "explicit",
+	// Clients before these kinds parse the wire value with a closed enum; `kind` says which.
+	scheduled: "explicit",
+	on_demand: "explicit",
+	bot: "explicit",
+};
+const parsedConfigs = new WeakMap<object, Record<string, unknown> | null>();
+/** The record's config as an object; null when it is none. */
+function eventConfig(event: EligibilityEvent): Record<string, unknown> | null {
+	const source = event.config;
+	if (!source?.length) return null;
+	const known = parsedConfigs.get(source);
+	if (known !== undefined) return known;
+	const config: unknown = parseUint8ArrayToJson(source as number[]);
+	const record =
+		config && typeof config === "object" && !Array.isArray(config)
+			? (config as Record<string, unknown>)
+			: null;
+	parsedConfigs.set(source, record);
+	return record;
+}
+const scheduleResults = new WeakMap<object, DeviceScheduleResult>();
+function scheduleResult(event: EligibilityEvent): DeviceScheduleResult {
+	const source = event.schedule === undefined ? event.config : event.schedule;
+	if (!source) return deviceSchedule(null);
+	const known = scheduleResults.get(source);
+	if (known) return known;
+	const result = deviceSchedule(
+		event.schedule === undefined ? eventConfig(event) : event.schedule,
+	);
+	scheduleResults.set(source, result);
+	return result;
+}
+/** The route of an `http` or `api` event without a Page; undefined for every other event. */
+function routeResult(
+	event: EligibilityEvent,
+	kind: EventKind | null,
+): DeviceRouteResult | undefined {
+	return kind === "served" &&
+		!event.default_page_id &&
+		(ROUTE_EVENT_TYPES as readonly string[]).includes(event.event_type)
+		? deviceRoute(eventConfig(event))
+		: undefined;
+}
+function botResult(
+	event: EligibilityEvent,
+	kind: EventKind | null,
+): DeviceBotResult | undefined {
+	return kind === "bot"
+		? (deviceBot(event.event_type, eventConfig(event), event.id) ?? undefined)
+		: undefined;
+}
+function hubLacksType(
+	event: EligibilityEvent,
+	metadata: EventEligibilityMetadata,
+): boolean {
+	return (
+		metadata.hubTypes !== undefined &&
+		!event.default_page_id &&
+		(HUB_EXPORT_TYPES as readonly string[]).includes(event.event_type) &&
+		!metadata.hubTypes.includes(event.event_type)
+	);
+}
+/** The device's event rule (`sa/deployment.rs`, `sa/runtime.rs`), shared by online discovery and every app view. */
 export function eventEligibility(
 	event: EligibilityEvent,
 	metadata: EventEligibilityMetadata = {},
 ): EventEligibility {
-	const hosted =
-		Boolean(event.default_page_id) ||
-		["http", "simple_chat"].includes(event.event_type);
+	const kind = eventKind(event);
+	const hosted = kind === "served";
 	const eventVersion = version.safeParse(event.event_version);
+	const followsLatest = event.board_version == null;
 	const boardVersion = version.safeParse(event.board_version);
+	const latestFlow: LatestFlowCase | null =
+		!eventVersion.success || (!followsLatest && !boardVersion.success)
+			? "other"
+			: followsLatest
+				? (metadata.latestFlow ?? null)
+				: null;
+	const route = routeResult(event, kind);
+	const schedule = kind === "scheduled" ? scheduleResult(event) : undefined;
+	const bot = botResult(event, kind);
 	const code: EventIneligibleCode | null = !event.active
 		? "paused"
-		: !eventVersion.success || !boardVersion.success
+		: latestFlow
 			? "latest_flow"
 			: event.canary
 				? "canary"
 				: event.variants?.length
 					? "variants"
-					: !hosted && !RUNS_ALONE_TYPES.includes(event.event_type)
-						? event.event_type === "api"
-							? "api_type"
-							: "type"
-						: metadata.ineligibleReason
-							? "flow_error"
-							: metadata.deviceRefusal
-								? "refuse"
-								: null;
+					: kind === null
+						? "type"
+						: route && !route.ok
+							? route.problem
+							: schedule && !schedule.ok
+								? schedule.problem
+								: bot && !bot.ok
+									? bot.problem
+									: schedule && metadata.hubSchedules === false
+										? "hub_schedules"
+										: hubLacksType(event, metadata)
+											? "hub_type"
+											: metadata.ineligibleReason
+												? "flow_error"
+												: metadata.deviceRefusal
+													? "refuse"
+													: null;
 	const detail =
 		code === "flow_error"
 			? (metadata.ineligibleReason ?? undefined)
 			: code === "refuse"
 				? (metadata.deviceRefusal ?? undefined)
-				: undefined;
+				: route && !route.ok && code === route.problem
+					? route.detail
+					: bot && !bot.ok && code === bot.problem
+						? bot.detail
+						: undefined;
 	return {
 		eligible: code === null,
 		code,
 		...(detail ? { detail } : {}),
+		kind,
 		hosted,
-		readiness:
-			hosted || OWN_SERVER_TYPES.includes(event.event_type)
-				? "listener"
-				: event.event_type === "daemon"
-					? "explicit"
-					: "unsupported",
-		rolloutSupported: hosted || RUNS_ALONE_TYPES.includes(event.event_type),
+		readiness: kind ? READINESS[kind] : "unsupported",
+		rolloutSupported:
+			kind !== null &&
+			schedule?.ok !== false &&
+			route?.ok !== false &&
+			bot?.ok !== false,
 		eventVersion: eventVersion.success ? eventVersion.data : null,
 		boardVersion: boardVersion.success ? boardVersion.data : null,
+		followsLatest,
+		...(code === "latest_flow" && latestFlow ? { latestFlow } : {}),
+		...(schedule?.ok && schedule.schedule
+			? { schedule: schedule.schedule }
+			: {}),
+		...(schedule?.ok && schedule.once ? { once: schedule.once } : {}),
+		...(code === "schedule_invalid" &&
+		schedule &&
+		!schedule.ok &&
+		schedule.detail
+			? { scheduleDetail: schedule.detail }
+			: {}),
+		...(route?.ok ? { route: route.route } : {}),
+		...(bot?.ok ? { bot: bot.bot } : {}),
 	};
+}
+/**
+ * The agent flags a device needs to run this event: none for a Page. An
+ * `http` event outside the strict route form needs `api_events` too, since
+ * older agents read only `{path: "/…", method}` and fail at start.
+ */
+export function requiredFeatures(event: EligibilityEvent): AgentFeature[] {
+	const kind = eventKind(event);
+	if (!kind || event.default_page_id) return [];
+	switch (kind) {
+		case "served": {
+			if (event.event_type === "api") return ["api_events"];
+			const route = routeResult(event, kind);
+			return route && !(route.ok && route.strict) ? ["api_events"] : [];
+		}
+		case "scheduled": {
+			const schedule = scheduleResult(event);
+			return schedule.ok && schedule.once
+				? ["scheduled_events", "scheduled_once"]
+				: ["scheduled_events"];
+		}
+		case "on_demand":
+			return ["on_demand_events"];
+		case "bot":
+			return [BOT_FEATURES[event.event_type]];
+		default:
+			return [];
+	}
+}
+/** The first flag the agent lacks for this event; `unknown` when its flags are not known. */
+export function missingFeature(
+	event: EligibilityEvent,
+	features: AgentFeatures | undefined,
+): AgentFeature | "unknown" | null {
+	const needed = requiredFeatures(event);
+	if (!needed.length) return null;
+	if (!features) return "unknown";
+	return needed.find((feature) => features[feature] !== 1) ?? null;
 }
 function onlineEvent(event: IEvent): DeploymentEvent {
 	const rule = eventEligibility(event);
+	const deviceCode = DEVICE_INELIGIBLE_CODES.find((code) => code === rule.code);
 	return eventSchema.parse({
 		id: event.id,
 		name: event.name.slice(0, 120),
@@ -703,6 +1018,27 @@ function onlineEvent(event: IEvent): DeploymentEvent {
 		readiness_kind: rule.readiness,
 		rollout_supported: rule.rolloutSupported,
 		eligible: rule.eligible,
+		...(rule.kind ? { kind: rule.kind } : {}),
+		...(rule.schedule
+			? {
+					schedule: {
+						expression: rule.schedule.expression,
+						timezone: rule.schedule.timezone,
+					},
+				}
+			: {}),
+		...(rule.route ? { route: rule.route } : {}),
+		...(rule.once
+			? {
+					once: {
+						date: rule.once.date,
+						time: rule.once.time,
+						at: rule.once.at,
+						timezone: rule.once.timezone,
+					},
+				}
+			: {}),
+		...(deviceCode ? { ineligible_code: deviceCode } : {}),
 	});
 }
 /**
@@ -1028,6 +1364,39 @@ type PlanInput = {
 	/** Undefined preserves existing limits; null selects the trusted process profile. */
 	resourceLimits?: PlacementResources | null;
 };
+/**
+ * The settings a placement may carry: the boards' variables, and one secret
+ * per selected bot for its token. A flow variable whose id is a bot token key
+ * never takes a value; a device refuses such a flow.
+ */
+function placementDefinitions(
+	input: PlanInput,
+): Map<string, DeploymentVariable> {
+	const definitions = new Map(
+		input.variables
+			.filter((variable) => botTokenEventId(variable.id) === null)
+			.map((variable) => [variable.id, variable]),
+	);
+	for (const event of input.events)
+		if (event.kind === "bot") {
+			const token = botTokenVariable(event);
+			definitions.set(token.id, token);
+		}
+	return definitions;
+}
+/** The trimmed bot token of an override, after the shape check a device makes. */
+function botTokenText(input: PlanInput, id: string, text: string): string {
+	const eventId = botTokenEventId(id);
+	const event = input.events.find((item) => item.id === eventId);
+	const provider = event && botProvider(event.event_type);
+	if (!event || !provider) return text;
+	const problem = botTokenProblem(provider, text);
+	if (problem)
+		throw new Error(
+			`The bot token of ${event.name} doesn't look like a ${provider === "telegram" ? "Telegram" : "Discord"} bot token. Enter it again under Settings.`,
+		);
+	return text.trim();
+}
 function placementVariables(input: PlanInput) {
 	const removed = new Set(input.removeOverrides ?? []);
 	for (const id of removed) identifier.parse(id);
@@ -1043,9 +1412,7 @@ function placementVariables(input: PlanInput) {
 		if (!removed.has(id)) references[id] = name;
 	const secrets: { name: string; value: string }[] = [];
 	const replaced = new Set<string>();
-	const definitions = new Map(
-		input.variables.map((variable) => [variable.id, variable]),
-	);
+	const definitions = placementDefinitions(input);
 	for (const [id, text] of Object.entries(input.overrides)) {
 		const definition = definitions.get(id);
 		if (!definition)
@@ -1054,7 +1421,7 @@ function placementVariables(input: PlanInput) {
 			);
 		// Empty secret inputs mean keep the opaque reference, never read or replace it.
 		if (definition.secret && text === "") continue;
-		const value = variableValue(definition, text);
+		const value = variableValue(definition, botTokenText(input, id, text));
 		if (definition.secret) {
 			const name = `variable-${crypto.randomUUID()}`;
 			delete plain[id];
@@ -1093,7 +1460,19 @@ function placementVariables(input: PlanInput) {
 			}
 		}
 	}
+	for (const event of input.events)
+		if (
+			event.kind === "bot" &&
+			!Object.hasOwn(references, botTokenKey(event.id))
+		)
+			throw new Error(
+				`Bot ${event.name} needs its bot token. Enter it under Settings.`,
+			);
 	return { plain, references, secrets };
+}
+/** A discovery row without `kind` comes from an agent before kinds: anything not hosted keeps one instance. */
+function keepsOneInstance(event: DeploymentEvent): boolean {
+	return event.kind ? limitsInstances(event.kind) : !event.hosted;
 }
 function retainedSettings(
 	existing?: PlacementConfiguration,
@@ -1288,10 +1667,10 @@ export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 		!Number.isInteger(input.replicas) ||
 		input.replicas < 1 ||
 		input.replicas > 32 ||
-		(input.replicas > 1 && events.some((event) => !event.hosted))
+		(input.replicas > 1 && (!hosted || events.some(keepsOneInstance)))
 	)
 		throw new Error(
-			"Only HTTP, chat and Page services can use multiple replicas.",
+			"Only HTTP, chat and Page services can use multiple replicas. Schedules, bots, background and own-server events keep a service at one.",
 		);
 	const previousHosting = existing?.config.hosting ?? undefined;
 	const replaceToken =

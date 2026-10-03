@@ -60,6 +60,7 @@ const KINDS: Record<ActivityKind, true> = {
 	offline_write_retry: true,
 	signing_request: true,
 	setup: true,
+	event_run: true,
 };
 const STATES: Record<ActivityState, true> = {
 	active: true,
@@ -166,6 +167,7 @@ const itemSchema = z.object({
 		deviceName: name.optional(),
 		serviceId: id.optional(),
 		projectId: id.optional(),
+		eventId: id.optional(),
 	}),
 	state: z.enum(codes(STATES)),
 	label: copy(z.enum(codes(KINDS))),
@@ -447,6 +449,10 @@ async function lookupJournal(
 	);
 }
 
+/** An open operation waits for the device to apply it; a run waits for the device to run it. */
+const operationWaiting = (command: string): ActivityDetailCode =>
+	command === "run_event" ? "waiting_for_device" : "waiting_for_apply";
+
 const JOURNAL_ENDS: Partial<Record<string, Resolution>> = {
 	completed: DONE,
 	failed: failedWith("failed"),
@@ -521,7 +527,11 @@ async function checkLive(
 ): Promise<Resolution | undefined> {
 	switch (handle.type) {
 		case "operation":
-			return checkJournal(call, handle.operationId, "waiting_for_apply");
+			return checkJournal(
+				call,
+				handle.operationId,
+				operationWaiting(handle.command),
+			);
 		case "secret":
 		case "host_operation":
 			return checkJournal(call, handle.operationId, "waiting_for_device");

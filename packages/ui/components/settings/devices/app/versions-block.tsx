@@ -53,6 +53,14 @@ function diffPart(
 		return t("devices:app.versions.diffRemoved", "removed: {{event}}", {
 			event: name,
 		});
+	if (row.kind === "edits")
+		return row.from
+			? t(
+					"devices:app.versions.diffEdits",
+					"{{event}} flow {{from}} → current edits",
+					{ event: name, from: pinText(row.from.boardVersion) },
+				)
+			: null;
 	if (!row.from || !row.to) return null;
 	const from = pinText(row.from.eventVersion);
 	const to = pinText(row.to.eventVersion);
@@ -366,13 +374,22 @@ function VersionRow({
 		>
 			<div className="flex min-w-0 flex-[1_1_420px] flex-col gap-1.5">
 				<p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui">
-					{version.label ? (
-						<span className="font-mono text-ui">{version.label}</span>
-					) : null}
-					<IdRef
-						id={version.hash}
-						copyLabel={t("app.versions.copyHash", "Copy app version hash")}
-					/>
+					{version.unpublished ? (
+						// The next deploy creates this version: a hash now would name something that never runs anywhere.
+						<span data-version-unpublished="" className="font-semibold">
+							{t("app.versions.currentEdits", "Current edits (no version yet)")}
+						</span>
+					) : (
+						<>
+							{version.label ? (
+								<span className="font-mono text-ui">{version.label}</span>
+							) : null}
+							<IdRef
+								id={version.hash}
+								copyLabel={t("app.versions.copyHash", "Copy app version hash")}
+							/>
+						</>
+					)}
 					{newest ? (
 						<StatusChip tone="good" icon={Check}>
 							{copy.drift(0)}
@@ -455,11 +472,11 @@ export function VersionsBlock() {
 					{local
 						? t(
 								"app.versions.footLocal",
-								"An app version pins one version of each event and its flow. A device gets a new version only when you send it a new copy.",
+								"An app version pins one version of each event and its flow. An event that follows Latest is deployed as the flow is at that moment. A device gets a new version only when you send it a new copy.",
 							)
 						: t(
 								"app.versions.footOnline",
-								"An app version pins one version of each event and its flow. A device gets a new version only when you re-pin its service.",
+								"An app version pins one version of each event and its flow. An event that follows Latest is deployed as the flow is at that moment. A device gets a new version only when you re-pin its service.",
 							)}
 				</span>
 			}

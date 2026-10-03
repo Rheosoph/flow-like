@@ -816,15 +816,20 @@
 				"whoUp": "More of the app's code runs on {{device}}."
 			},
 			"start": {
+				"bots": "Its bots connect again.",
 				"clearsLimit": "This also clears the crash-loop limit.",
 				"label": "Start {{service}}",
+				"schedules": "Schedules run again from their next time. Missed runs are not made up.",
 				"undo": "Stop it again.",
 				"what_one": "Starts {{count, number}} instance with settings v{{settings}}.",
 				"what_other": "Starts {{count, number}} instances with settings v{{settings}}.",
 				"who": "Runs the app's code on {{device}}."
 			},
 			"stop": {
+				"bots": "Its bots disconnect. Telegram keeps messages for a day; after a start {{device}} answers those of the last 15 minutes. Discord messages sent meanwhile are not answered.",
 				"label": "Stop {{service}}",
+				"schedules": "Its schedules stop. A run in progress is cut off. The hub doesn't take them over. To run one on the hub meanwhile, choose Run it on the hub again in Events.",
+				"schedulesLocal": "Its schedules stop. A run in progress is cut off.",
 				"stays": "Settings v{{settings}}, app data and certificates stay on the device.",
 				"undo": "Start runs the same settings again.",
 				"what_one": "Its instance stops. The device keeps it stopped until someone starts it.",
@@ -923,6 +928,22 @@
 		"attention": {
 			"title": "Needs attention"
 		},
+		"bot": {
+			"conflict": "Not connected: another program uses its token",
+			"connected": "Connected",
+			"connectedAs": "Connected as {{name}}",
+			"connecting": "Connecting",
+			"held": "Not connected: {{reason}}",
+			"intentsRefused": "Not connected: Discord refused its permissions",
+			"needsAgent": "Update the device agent to see its bots",
+			"notReported": "Not reported yet",
+			"reconnecting": "Reconnecting",
+			"stopped": "Not connected while the service is not running",
+			"tokenRefused": "Not connected: its token was refused",
+			"unknown": "Not in this status. Connect live to see whether it is connected.",
+			"waiting": "Waiting to connect",
+			"webhookSet": "Not connected: Telegram sends its messages to a webhook"
+		},
 		"coverage": {
 			"noAccess": "Your access to <1>{{device}}</1> doesn't cover {{app}}.",
 			"noAccessMany_one": "Your access doesn't cover {{app}} on {{count, number}} devices.",
@@ -963,6 +984,7 @@
 			"inCloud": "In the cloud",
 			"instances": "{{ready, number}} of {{requested, number}} ready · max {{max, number}}",
 			"instancesLastKnown": "last known · {{ago}} · {{ready, number}} of {{requested, number}} ready · max {{max, number}}",
+			"kindLine": "{{event}} · {{line}}",
 			"modelAccess": "Model access",
 			"moreEvents_one": "+{{count, number}}",
 			"moreEvents_other": "+{{count, number}}",
@@ -971,11 +993,14 @@
 			"moreUnknownText": "Which {{app}} services run on {{names}} isn't readable on this computer yet. They count as unknown, never as not deployed.",
 			"noBuffering": "No write buffering",
 			"noLimit": "No spending limit",
+			"onDemand": "Started by a person · from Devices",
 			"onDevice": "On the device",
 			"partial": "You see {{app}} only",
 			"platformLinux": "Linux",
 			"platformMac": "Mac",
 			"platformWindows": "Windows",
+			"scheduled": "Runs on a schedule",
+			"scheduledNext": "Runs on a schedule · next {{time}}",
 			"settingsUnknownDate": "Settings v{{settings}} · date unknown",
 			"since": "Since {{date}}",
 			"sinceUnknown": "Since: unknown",
@@ -1009,6 +1034,9 @@
 		"drift": {
 			"behind_one": "{{count, number}} behind",
 			"behind_other": "{{count, number}} behind",
+			"flowEdits": "Newer flow edits are available",
+			"followsLatest": "Follows Latest",
+			"followsLatestTitle": "A device runs the flow as it was when the service was last deployed or updated.",
 			"footNotRunning": "Newest version {{version}} ({{hash}}), built {{when}}, isn't running anywhere yet.",
 			"footNotRunningLocal": "Newest version {{version}} ({{hash}}), changed on this computer {{when}}, isn't running anywhere yet.",
 			"footRuns": "Newest version {{version}} ({{hash}}), built {{when}}, runs on {{running, number}} of {{total, number}} services.",
@@ -1017,6 +1045,7 @@
 			"footUnsureLocal": "Newest version {{version}} ({{hash}}), changed on this computer {{when}}, isn't on any service whose version is known.",
 			"newest": "Newest",
 			"older": "Can't be prepared again. Devices that have it keep it until you update them.",
+			"pinLatest": "event {{event}} · flow as it is now",
 			"pinNewest": "{{version}} · newest",
 			"pinTitle": "{{event}} {{version}} is part of {{release}}",
 			"publishOffline": "Changes on this computer reach a device only when you update it. The data on the device is never replaced.",
@@ -1024,6 +1053,9 @@
 			"staged": "{{version}} staged",
 			"title": "Runs {{version}} from {{date}}. Newest is {{newest}} from {{newestDate}}.",
 			"unknown": "Unknown",
+			"unknownHub": "Unknown: this hub can't say which flow version is current",
+			"unknownLoading": "Unknown: the flow's current version isn't read yet",
+			"unknownPin": "Unknown: the event's flow version can't be read",
 			"updateOffline_one": "Sends a new copy of {{app}} from this computer: {{count, number}} file, {{size}}. Replaces the app on the device. The data on the device stays as it is; the tables in the new copy aren't used by {{service}}.",
 			"updateOffline_other": "Sends a new copy of {{app}} from this computer: {{count, number}} files, {{size}}. Replaces the app on the device. The data on the device stays as it is; the tables in the new copy aren't used by {{service}}.",
 			"updateOnline": "Re-pins {{service}} to the event and flow versions published now: {{pins}}. About {{size}} is sent. Data stays in the cloud and isn't touched."
@@ -1076,9 +1108,7 @@
 			"footPins": "Hollow pin: what you asked for. Filled pin: what the device reports.",
 			"lastKnown": "{{label}} · last known",
 			"listLabel": "Events of {{app}} that can run on a device",
-			"newIn": "New in {{version}}",
 			"notOffered": "Not offered when you deploy",
-			"pins": "event {{event}} · flow {{flow}}",
 			"pinUnknown": "version unknown",
 			"stagedUpdate": "Update",
 			"tableLabel": "Events of {{app}} by device"
@@ -1096,7 +1126,7 @@
 			"allStagedUnnamed": "No service can take an update right now. An update is staged. Activate or discard it first.",
 			"events": "Events",
 			"noDevice": "You have no device that can take a deploy right now.",
-			"noEvents": "None of {{app}}'s events can run on a device. Pin a flow version or add a Web request, Chat, Page, REST, MCP or Background event.",
+			"noEvents": "No event of this app can run on a device yet. Most types can: add one in Events. Inbound email, Teams and deep-link events can't.",
 			"noneCan": "No service can take an update right now. {{reason}}",
 			"nothingDeployed": "Nothing to update: {{app}} isn't on any device you can see.",
 			"runActive": "Wait for the current update to finish.",
@@ -1153,6 +1183,7 @@
 			"openService": "Open service",
 			"remove": "Remove service…",
 			"restart": "Restart…",
+			"runNow": "Run {{event}} now…",
 			"start": "Start",
 			"stop": "Stop…",
 			"update": "Update…",
@@ -1317,6 +1348,8 @@
 			"cancel": "Cancel",
 			"changed": "changed on this computer {{when}}",
 			"continue": "Continue with the rest",
+			"createsFlow_one": "Starting it creates a flow version of {{flows}} from the current edits. The version stays in the flow's history.",
+			"createsFlow_other": "Starting it creates flow versions of {{flows}} from the current edits. They stay in the flows' history.",
 			"following": "following",
 			"fromTo": "{{from}} → {{to}}",
 			"inWizard": "Change settings or events too…",
@@ -1337,6 +1370,7 @@
 				"create": "Creating",
 				"install": "Installing",
 				"prepare": "Preparing",
+				"schedules": "Moving schedules",
 				"secrets": "Secrets",
 				"spending": "Spending limit",
 				"start": "Starting",
@@ -1376,6 +1410,7 @@
 			"stopOnFail": "Stop when a device fails or rolls back",
 			"sub": "Every service of {{app}} you can see · one version for all",
 			"title": "Update {{app}} everywhere",
+			"toNow": "the app as it is now",
 			"toReview": "Next: review",
 			"toStrategy": "Next: strategy",
 			"tracked": "tracked on this computer",
@@ -1393,6 +1428,9 @@
 			"by": "by",
 			"changed": "Changed on this computer {{when}}",
 			"copyHash": "Copy app version hash",
+			"currentEdits": "Current edits (no version yet)",
+			"currentEditsShort": "current edits, no version yet",
+			"diffEdits": "{{event}} flow {{from}} → current edits",
 			"diffEvent": "{{event}} {{from}} → {{to}}",
 			"diffFlow": "{{event}} flow {{from}} → {{to}}",
 			"diffNew": "new: {{event}}",
@@ -1411,8 +1449,8 @@
 			"foldOther_other": "{{count, number}} not readable",
 			"foldServices_one": "{{count, number}} services · version unknown",
 			"foldServices_other": "{{count, number}} services · version unknown",
-			"footLocal": "An app version pins one version of each event and its flow. A device gets a new version only when you send it a new copy.",
-			"footOnline": "An app version pins one version of each event and its flow. A device gets a new version only when you re-pin its service.",
+			"footLocal": "An app version pins one version of each event and its flow. An event that follows Latest is deployed as the flow is at that moment. A device gets a new version only when you send it a new copy.",
+			"footOnline": "An app version pins one version of each event and its flow. An event that follows Latest is deployed as the flow is at that moment. A device gets a new version only when you re-pin its service.",
 			"lastKnown": "· last known",
 			"moreRuns_one": "and {{count, number}} more service",
 			"moreRuns_other": "and {{count, number}} more services",
@@ -1554,6 +1592,7 @@
 		},
 		"agent_update_available": {
 			"lastKnown": "Agent {{available}} is available for {{device}}. It ran {{running}} when last read live.",
+			"needsShortRelease": "Agent {{available}} is available for {{device}}, but its agent ({{running}}) only accepts releases valid for 30 days or less. Ask the hub operator to renew the release for 30 days, or set this device up again.",
 			"sentence": "Agent {{available}} is available for {{device}} (running {{running}})."
 		},
 		"background_task_failing": {
@@ -1564,6 +1603,21 @@
 		"backup_slots_nearly_full": {
 			"sentence": "You're using {{used, number}} of {{max, number}} account backup slots."
 		},
+		"bot_conflict": {
+			"sentence": "Another program uses the token of a bot of {{service}} on {{device}}. A bot runs in one place: stop it there.",
+			"webhook": "Telegram sends the messages of a bot of {{service}} on {{device}} to a webhook. Remove it in Events, then restart {{service}}."
+		},
+		"bot_held": {
+			"sentence": "A bot of {{service}} on {{device}} isn't connected: {{reason}}.",
+			"several": "Some bots of {{service}} on {{device}} aren't connected: {{reason}}."
+		},
+		"bot_intents_refused": {
+			"sentence": "Discord refused the permissions of a bot of {{service}} on {{device}}. Turn on the message content intent in the Discord Developer Portal, then restart {{service}}."
+		},
+		"bot_token_refused": {
+			"sentence": "{{provider}} refused the token of a bot of {{service}} on {{device}}. Enter a new one under Configuration."
+		},
+		"botProvider": "The provider",
 		"certificate_expired": {
 			"sentence": "Certificate {{label}} on {{device}} expired {{date}}.",
 			"services_one": "{{count, number}} service uses it.",
@@ -1755,6 +1809,17 @@
 		"rollout_staged_waiting": {
 			"sentence": "An update for {{service}} on {{device}} is ready but not activated. It expires {{in}}.",
 			"undated": "An update for {{service}} on {{device}} is ready but not activated."
+		},
+		"schedule_failed": {
+			"sentence": "The last run of a schedule of {{service}} on {{device}} failed. The service keeps running.",
+			"several": "The last runs of several schedules of {{service}} on {{device}} failed. The service keeps running."
+		},
+		"schedule_held": {
+			"sentence": "A schedule of {{service}} on {{device}} isn't running there: {{reason}}.",
+			"several": "Some schedules of {{service}} on {{device}} aren't running there: {{reason}}."
+		},
+		"schedule_once_missed": {
+			"sentence": "A one-time schedule of {{service}} on {{device}} didn't run: {{device}} wasn't running at its time ({{time}})."
 		},
 		"scope": {
 			"device": "the whole device"
@@ -2850,6 +2915,10 @@
 				"agentUpdateAvailable": "Agent update available",
 				"backgroundTaskFailing": "Background task failing",
 				"backupSlotsNearlyFull": "Backup slots nearly full",
+				"botConflict": "Bot used elsewhere",
+				"botHeld": "Bot not connected",
+				"botIntentsRefused": "Bot permissions refused",
+				"botTokenRefused": "Bot token refused",
 				"certificateExpired": "Certificate expired",
 				"certificateExpiring": "Certificate expiring",
 				"certificateInventoryStale": "Certificate report stale",
@@ -2899,6 +2968,9 @@
 				"rolloutNotApplied": "Update not applied",
 				"rolloutRolledBack": "Update rolled back",
 				"rolloutStagedWaiting": "Update staged",
+				"scheduleFailed": "Scheduled run failed",
+				"scheduleHeld": "Schedule not running here",
+				"scheduleOnceMissed": "One-time schedule missed",
 				"secretWriteFailed": "Secret not saved",
 				"secretWritePending": "Secret pending",
 				"serviceCrashLooping": "Crashing",
@@ -2969,7 +3041,8 @@
 				"waitingForApply": "Waiting for the device to apply it.",
 				"waitingForBackup": "Waiting for the upload to your account.",
 				"waitingForDevice": "Saved. The device applies it the next time it checks in.",
-				"waitingForHeartbeat": "Waiting for the device's first check-in."
+				"waitingForHeartbeat": "Waiting for the device's first check-in.",
+				"waitingForRun": "Sent. Waiting for the device to start the run."
 			},
 			"finished": "Finished",
 			"finishedEmpty": "Nothing has finished yet.",
@@ -2982,6 +3055,7 @@
 				"accountBackup": "Account backup",
 				"agentUpdate": "Agent update",
 				"command": "Command",
+				"eventRun": "Action or form run",
 				"historyReaders": "History readers",
 				"metricReaders": "Shared live metrics",
 				"offlineWriteRetry": "Buffered change retry",
@@ -3219,6 +3293,17 @@
 			"replaceHalf": "The old approval was revoked, but the new one wasn't created. {{service}} has no {{access}} until you approve again."
 		},
 		"retry": "Try again",
+		"revoke": {
+			"bots": "{{device}} disconnects {{events}} at its next check with the hub, within 30 minutes. If it can't reach the hub, it can stay connected until its cloud access ends on {{date}}. The bot token stays on {{device}}: to cut the bot off for certain, replace the token with {{provider}}.",
+			"botsNoDate": "{{device}} disconnects {{events}} at its next check with the hub, within 30 minutes. If it can't reach the hub, it can stay connected until its cloud access ends. The bot token stays on {{device}}: to cut the bot off for certain, replace the token with {{provider}}.",
+			"provider": {
+				"both": "BotFather and the Discord Developer Portal",
+				"discord": "the Discord Developer Portal",
+				"telegram": "BotFather"
+			},
+			"schedules": "The hub runs {{events}} again in about 5 minutes, or in about an hour while {{device}} is still running {{service}}.",
+			"schedulesOffline": "{{device}} is offline. If it is still running, it keeps running {{events}} from its cache until it reconnects."
+		},
 		"row": {
 			"approval": "Approval",
 			"approvalActive": "Approval still active",
@@ -3575,6 +3660,7 @@
 			"keepHint": "The address and port stay as they are.",
 			"lede": "How {{events}} is reached, how many instances run, and what they may do on the device.",
 			"ledeLimits": "No event you picked is served by the device's web server, so only limits apply.",
+			"ledeOnDemand": "Run its forms and quick actions from Devices: this service has no service page.",
 			"local": "Only this device",
 			"localHint": "127.0.0.1 · programs on {{where}} itself",
 			"none": "Web endpoint",
@@ -3586,6 +3672,8 @@
 			"ownPort": "Port on this device",
 			"ownPortHint": "Leave empty to use the shared port.",
 			"ownPortWhy": "You set this port for this device.",
+			"personStarted_one": "{{events}} starts when a person runs it from Devices.",
+			"personStarted_other": "{{events}} start when a person runs them from Devices.",
 			"pickEventsText": "The endpoint and the limits depend on the events you deploy.",
 			"port": "Port",
 			"portHint": "1 to 65535. The device checks the port again when you deploy.",
@@ -3601,6 +3689,7 @@
 			"sharedOwn": "your own token on every device",
 			"sharedPerDevice": "one token per device",
 			"sharedSame": "the same token on every device",
+			"sharedToken": "One access token calls everything {{service}} serves: whoever has it to open a Page or a chat can also call {{endpoints}}. Deploy an Endpoint as its own service to give it a token of its own.",
 			"sheetDone": "Done",
 			"sheetSub": "Applies to this device only; the others keep the shared values.",
 			"sheetTitle": "Endpoint on {{device}}",
@@ -3618,11 +3707,20 @@
 			"who": "Who can reach it"
 		},
 		"exception": {
+			"botOpen": "Anyone who can message {{event}} can start runs on {{device}}. Allowed chats are set in Events.",
+			"botOpenDiffers": "{{event}} · open to everyone",
+			"botOtherComputers": "Other computers that run {{event}} in the desktop app can't be seen from here. Stop it there too.",
+			"botOtherComputersDiffers": "{{event}} · may run elsewhere",
 			"cantSandboxWhy": "{{device}} can't sandbox services, so it has the agent's full access there.",
 			"duplicateWhy": "{{service}} already serves it here.",
+			"endpointSharedToken": "{{event}} has its own token in Events. On {{device}} everyone with {{service}}'s access token can call it, like every other endpoint, page and chat of {{service}}.",
+			"endpointSharedTokenDiffers": "{{event}} · the service's token",
+			"endpointSharedTokenFix": "Deploy it as its own service",
 			"leftOut": "{{event}} · left out",
 			"noCertificate": "No certificate · unencrypted",
 			"noCertificateWhy": "No certificate is picked for {{device}}. Anyone on its network can read the traffic.",
+			"onceSoon": "{{event}} runs at {{time}}, in less than 5 minutes. If the deploy isn't finished by then, it doesn't run.",
+			"onceSoonDiffers": "{{event}} · runs very soon",
 			"portMoved": "Port {{to}}",
 			"portMovedService": "{{service}} of this deploy takes the next free port, {{to}}: one service per port.",
 			"portMovedUsedBy": "Port {{from}} is used by {{service}} there, so it uses {{to}} instead.",
@@ -3631,7 +3729,13 @@
 			"renamed": "Service {{to}}",
 			"renamedWhy": "{{from}} is taken on {{device}}; this one becomes {{to}}.",
 			"runsAsAgent": "Runs as the agent",
-			"runsAsAgentWhy": "It isn't sandboxed on {{device}}, so it has the agent's full access there."
+			"runsAsAgentWhy": "It isn't sandboxed on {{device}}, so it has the agent's full access there.",
+			"scheduleAlso": "{{event}} · runs elsewhere too",
+			"scheduleLocalTrigger": "This computer also runs {{event}} while Flow-Like is open.",
+			"scheduleTwoDevices_one": "{{event}} will run on {{count, number}} devices. Each runs it on its own copy of the app's data; emails and other outside effects happen once per device.",
+			"scheduleTwoDevices_other": "{{event}} will run on {{count, number}} devices. Each runs it on its own copy of the app's data; emails and other outside effects happen once per device.",
+			"stopLocalTrigger": "Stop running it on this computer",
+			"stopLocalTriggerFailed": "It couldn't be stopped here. Turn it off in Events on this computer."
 		},
 		"exceptions": {
 			"action": "Action",
@@ -3862,6 +3966,13 @@
 			"trustWho": "It can read and change everything the agent can, including other services' data and files on {{device}}."
 		},
 		"issue": {
+			"acknowledge": {
+				"botOpen": "Confirm on {{device}} that anyone who can message its bot can start runs, or set allowed chats in Events.",
+				"botOtherComputers": "Confirm on {{device}} that no other computer keeps running its bot in the desktop app.",
+				"endpointSharedToken": "Confirm on {{device}} that an Endpoint with its own token shares the service's access token, or deploy it as its own service.",
+				"onceSoon": "Confirm on {{device}} that a one-time schedule runs in less than 5 minutes, or set a later time in Events.",
+				"other": "Confirm the warnings on {{device}} first."
+			},
 			"agentTrust": "Confirm that {{device}} runs {{app}} with the agent's full access.",
 			"appMissing": "Choose an app first.",
 			"approvalExpiryFar": "Cloud access can last 365 days at most.",
@@ -3874,17 +3985,36 @@
 			"approvalInstancesRange": "Allowed instances go from 1 to 100.",
 			"approvalModels": "Pick up to 64 different models.",
 			"approvalNothing": "Approve project files or at least one model.",
+			"botElsewhere": "{{event}} is already assigned to {{device}} › {{service}}. A bot runs in one place: remove it there first, or take it back in Events.",
+			"botElsewhereHidden": "{{event}} is already assigned to a device you can't see. A bot runs in one place: take it back in Events first.",
+			"botLocalTrigger": "This computer runs {{event}} while Flow-Like is open. Two programs can't use one bot: stop it here first.",
+			"botReturning": "{{event}} is still being given up where it ran. Deploy it after {{time}}.",
+			"botRole": "Moving {{event}} to a device needs the right to edit this app's events. Ask someone who has it, or leave the bot out.",
+			"botToken": "{{event}} needs its bot token. Enter it under Settings.",
+			"botTokenShape": "That doesn't look like a {{provider}} bot token.",
+			"formNeedsPage": "{{event}} takes a file. Files can only be sent from a service page: deploy it together with a Page, chat or Endpoint.",
 			"hostInvalid": "{{device}}: enter an IP address, not a host name.",
 			"instancesRange": "Instances go from 1 to 32.",
 			"isolationRequired": "{{device}} requires sandboxed services.",
 			"isolationUnavailable": "{{device}} can't sandbox services. Choose Runs as the agent for it.",
 			"localOnlyWeb": "Offline copies are prepared by the desktop app.",
+			"needsSingleInstance_one": "{{service}} runs {{count, number}} instances. A schedule needs a service with 1 instance: set it to 1, or deploy the schedule as its own service.",
+			"needsSingleInstance_other": "{{service}} runs {{count, number}} instances. A schedule needs a service with 1 instance: set it to 1, or deploy the schedule as its own service.",
+			"needsSingleInstanceBot_one": "{{service}} runs {{count, number}} instances. A bot needs a service with 1 instance: set it to 1, or deploy the bot as its own service.",
+			"needsSingleInstanceBot_other": "{{service}} runs {{count, number}} instances. A bot needs a service with 1 instance: set it to 1, or deploy the bot as its own service.",
 			"noEvents": "Pick at least one event.",
 			"noTargets": "Pick at least one device.",
+			"oncePassed": "{{event}}'s time ({{time}}) has passed. Set a new time in Events, or leave it out.",
 			"portInUse": "Port {{port}} is already in use on {{device}}.",
 			"portInUseBy": "Port {{port}} is used by {{service}} on {{device}}.",
 			"portInvalid": "{{device}}: enter a port from 1 to 65535.",
 			"removedEvents": "Confirm the events that stop being served after the update.",
+			"routeConflict": "{{a}} and {{b}} both answer {{method}} {{path}}. A service answers each path once: change one in Events, or deploy them as two services.",
+			"scheduleElsewhere": "{{event}} is already assigned to {{device}} › {{service}}. A schedule runs in one place: remove it there first, or run it on the hub again in Events.",
+			"scheduleElsewhereHidden": "{{event}} is already assigned to a device you can't see. A schedule runs in one place: run it on the hub again in Events first.",
+			"scheduleReturning": "{{event}} is still returning to the hub from where it ran. Deploy it after {{time}}.",
+			"scheduleRole": "Moving {{event}} off the hub needs the right to edit this app's events. Ask someone who has it, or leave the schedule out.",
+			"scheduleTwice": "Confirm on {{device}} that its schedule may run in more than one place, or leave it out.",
 			"secretSize": "{{device}}: {{variable}} needs 1 to 4,096 bytes.",
 			"serviceIdInvalid": "A service ID has 1 to 128 letters, digits, dots, dashes or underscores.",
 			"serviceIdReserved": "{{service}} was used before on {{device}} and can't be reused.",
@@ -3899,7 +4029,11 @@
 			"targetLocked": "Unlock {{device}} to continue.",
 			"targetNoEvents": "None of the picked events can run on {{device}}.",
 			"tokenInvalid": "The access token needs at least 32 printable characters without spaces.",
+			"tooManyClaimed_one": "{{service}} would run {{count, number}} schedules and bots. One service runs 64 at most: split them over two services.",
+			"tooManyClaimed_other": "{{service}} would run {{count, number}} schedules and bots. One service runs 64 at most: split them over two services.",
 			"tooManyEvents": "A service can serve 64 events at most.",
+			"tooManyLatest_one": "This deploy has {{count, number}} events that follow Latest; one deploy can take 64. Deploy fewer at a time, or pin some in Events.",
+			"tooManyLatest_other": "This deploy has {{count, number}} events that follow Latest; one deploy can take 64. Deploy fewer at a time, or pin some in Events.",
 			"unencrypted": "Confirm serving unencrypted on {{device}}, or pick a certificate there.",
 			"updateNeedsService": "Pick the service to update on {{device}}.",
 			"variableInvalid": "{{device}}: {{variable}} isn't a valid value.",
@@ -3916,6 +4050,12 @@
 			"copyHash": "Copy definitions hash",
 			"eventBlocked": "{{event}} can't be prepared for devices: {{detail}}",
 			"eventMissing": "{{event}} isn't in what the hub publishes for devices. Check it in Events, then prepare again.",
+			"flowBusy": "Someone is editing this flow right now. Try again in a moment.",
+			"flowCreated": "Created flow version {{version}} of {{flow}}",
+			"flowIncomparable": "This flow can't be compared with its published version. Pin a flow version in Events to deploy this event.",
+			"flowMoved": "{{event}}'s flow changed while preparing. Prepare again.",
+			"flowOf": "the flow of {{event}}",
+			"flowUnchanged": "Nothing changed in {{flow}} since {{version}}",
 			"footOffline": "Prepared once on this computer, then sent to every device. Every device gets the same files, checked by their hashes.",
 			"footOnline": "Prepared once, then sent to every device. Each device checks the definitions' hash before it uses them.",
 			"limits": "Under the limits: 8 GiB and 8,192 files",
@@ -3924,6 +4064,8 @@
 			"noSecrets": "No saved secret values in flows",
 			"notChecked": " · not checked",
 			"noWriters": "Nothing else is writing to the app",
+			"publishFlows": "Create flow versions for current edits",
+			"publishFlowsNone": " · none of the chosen events follows Latest",
 			"readApp": "Reading the app on this computer",
 			"readHub": "Reading what's published on the hub",
 			"readImport": "Reading the prepared copy",
@@ -3931,6 +4073,11 @@
 			"stampDone": "prepared {{ago}}",
 			"stampRunning": "preparing…",
 			"title": "Preparing"
+		},
+		"provider": {
+			"discord": "Discord",
+			"other": "the provider",
+			"telegram": "Telegram"
 		},
 		"services": {
 			"events": "Events",
@@ -3945,13 +4092,23 @@
 			"perEventHint": "Each event gets its own service, settings and cloud access.",
 			"perEventHintOffline": "Each event gets its own service and settings.",
 			"renamed": "{{from}} is taken on {{device}}; this one becomes {{to}}.",
-			"whyBackground": "{{event}} runs on its own, so this service runs 1 instance. Only Web request, Chat and Page events can run several.",
+			"whyBot": "{{event}} is a bot, so this service runs 1 instance. Two instances would answer every message twice.",
+			"whyOnDemand": "{{event}} is started by a person and nothing in this service is served on the web, so it runs 1 instance. More instances need a Page, chat or Endpoint.",
+			"whyRunsAlone": "{{event}} runs on its own, so this service runs 1 instance. Only services with a Page, chat or Endpoint can run several.",
+			"whyScheduled": "{{event}} runs on a schedule, so this service runs 1 instance. Two instances would start every run twice.",
 			"whySplit": "{{first}} and {{second}} disagree about {{variable}}, so {{second}} gets its own service.",
 			"whyWrites": "Write buffering is on, so this service runs 1 instance."
 		},
 		"settings": {
 			"blocked": "Settings show once the version is prepared",
 			"blockedText": "The preparation in How it runs stopped; fix it there first.",
+			"botToken": {
+				"eachDevice": "each device",
+				"enter": "Enter a token",
+				"hint": "Stored on {{device}} as a secret. It can't be read back.",
+				"label": "Bot token of {{event}}",
+				"saved": "Use the token saved in Events"
+			},
 			"differs": "Different on some devices",
 			"foot": "Settings belong to the service, so events in one service share a value. Secret values are stored encrypted on the device and can't be read back.",
 			"footMulti": "Settings belong to the service, so events in one service share a value. A value set for one device applies to that device only. Secret values are stored encrypted on the device and can't be read back.",
@@ -4048,6 +4205,8 @@
 			"barDevices_other": "{{count, number}} devices",
 			"barNoDevices": "no devices yet",
 			"barStep": " · Step {{n, number}} of {{total, number}} · ",
+			"botTokens_one": "{{count, number}} bot token to set",
+			"botTokens_other": "{{count, number}} bot tokens to set",
 			"copyToDevices_one": "The copy goes to {{count, number}} device",
 			"copyToDevices_other": "The copy goes to {{count, number}} devices",
 			"defaults_one": "{{count, number}} app default",
@@ -4123,6 +4282,14 @@
 			"appId": "App ID",
 			"appLegend": "App to deploy",
 			"appsError": "Couldn't load your apps",
+			"botAnswers": "In groups and servers it answers mentions and replies.",
+			"botAnswersEvery": "In servers it answers every message in its channels, not only mentions and replies.",
+			"botAnswersNone": "In groups and servers it answers nothing; only private messages start runs.",
+			"botAnswersPrefix": "In groups and servers it answers mentions, replies and every message that starts with {{prefix}}.",
+			"botAnswersPrefixOnly": "In groups and servers it answers every message that starts with {{prefix}}.",
+			"botDevice": "Connected from {{device}} › {{service}} today.",
+			"botHere": "Runs in the desktop app on this computer today. Tick it to keep it connected from the device instead.",
+			"botNowhere": "No device runs it. Tick it to keep it connected from the device.",
 			"cantRun_one": "Can't run on devices · {{count, number}}",
 			"cantRun_other": "Can't run on devices · {{count, number}}",
 			"colEvent": "Event",
@@ -4132,16 +4299,20 @@
 			"colVersions": "Versions",
 			"copyAppId": "Copy app ID",
 			"copyHash": "Copy app version hash",
+			"createsFlow": "Preparing creates a flow version from the current edits. It stays in the flow's history.",
+			"deploysFlow": "Deploys flow {{version}}.",
+			"endpoint": "{{method}} {{path}}",
+			"endpointOpen": "Open on the hub. On a device callers need the service's access token.",
+			"endpointToken": "Its own token from Events is not used on a device.",
 			"events": "Events",
 			"eventsCount_one": "{{count, number}} of {{total, number}}",
 			"eventsCount_other": "{{count, number}} of {{total, number}}",
 			"eventsIn": "in {{version}}",
 			"eventsLabel": "Events of {{app}}",
-			"flowLatest": "latest",
 			"footOffline": "The device checks the events again after the copy arrives.",
 			"footOnline": "The hub leaves out events that can't run on devices; the reasons above come from the app's own event list.",
 			"footPick": "Pick the events this deploy runs.",
-			"footWhole": "Whole app ticks every event that can run on a device.",
+			"footWholeClaimed": "Whole app ticks every event that can run on a device, except schedules and bots: tick one yourself to move it to the device.",
 			"keep": "Keep each service's version",
 			"keepHint": "Change settings or events only; nothing is uploaded.",
 			"lede": "Pick the version and the events. They decide which devices can take it.",
@@ -4165,6 +4336,12 @@
 			"notServed": "Not served yet",
 			"olderVersions": "Older versions can't be prepared again.",
 			"on": "on",
+			"once": "Runs once on {{date}} at {{time}} ({{zone}})",
+			"oncePassed": "Its time has passed. Set a new time in Events.",
+			"onDemand": "Started by a person",
+			"onDemandFile": "It takes a file: only a service page can send one.",
+			"onDemandForm_one": "Started by a person · {{count, number}} field",
+			"onDemandForm_other": "Started by a person · {{count, number}} fields",
 			"pickApp": "Pick an app to see its version and events.",
 			"pins": "event {{event}} · flow {{flow}}",
 			"removed_one": "{{events}} stops being served by {{service}} on {{device}} after the update.",
@@ -4172,6 +4349,9 @@
 			"removedLabel": "Events that stop being served",
 			"runsOn_one": "Runs on {{count, number}} device now",
 			"runsOn_other": "Runs on {{count, number}} devices now",
+			"scheduleHub": "Runs on the hub today. Tick it to run it on the device instead.",
+			"scheduleLocal": "Runs in the desktop app while it is open. On a device it runs without a computer.",
+			"scheduleNext": "Next run by its schedule: {{time}}",
 			"scope": "What to run",
 			"scopeApp": "Whole app",
 			"scopeEvent": "One event",
@@ -4190,15 +4370,25 @@
 			"updateFootKeep": "Keeping the version: only events already in each service's version can be served.",
 			"updateFootKept": "Each service keeps the events it serves now. To add or drop events, update one service from its row.",
 			"updateFootNewest": "Events the service doesn't serve yet are listed unticked. A service can serve 64 events at most.",
+			"updateTakesEdits": "Updating also takes the current flow edits of {{event}}.",
 			"version": "Version",
-			"versionPins": "An app version pins one version of each event and its flow."
+			"versionPins": "An app version pins one version of each event and its flow. An event that follows Latest is deployed as the flow is at that moment."
 		},
 		"where": {
+			"acknowledge": {
+				"botOpen": "Let anyone who can message it start runs",
+				"botOtherComputers": "No other computer runs it",
+				"endpointSharedToken": "Let the service's token call it",
+				"onceSoon": "Deploy it anyway: it may not run"
+			},
 			"addHint": "Or add {{what}} to a service that already runs here, as an update of that service.",
 			"addHintOne": "Or add {{what}} to {{service}} as an update of that service.",
 			"addOption": "Add {{what}} to {{service}}",
 			"addRunning": "{{service}} also serves {{what}}; its other events, data and cloud access stay.",
 			"addStopped": "{{service}} is stopped as you asked; it stays stopped, so {{what}} won't answer until you start it.",
+			"confirmShared": "Each warning needs your yes on its device.",
+			"confirmTable": "Warnings this update asks you to confirm",
+			"confirmTitle": "To confirm in this update",
 			"devices": "Devices",
 			"events_one": "{{count, number}} event",
 			"events_other": "{{count, number}} events",
@@ -4217,6 +4407,7 @@
 			"leaveOut": "Leave it out again",
 			"lede": "Pick one or more devices. Each gets its own service, settings and cloud access.",
 			"ledeOffline": "Pick one or more devices. Each gets its own service and settings.",
+			"leftOutAgent": "Leaves out {{event}}: {{reason}}",
 			"leftOutDuplicate": "Leaves out {{event}}: {{service}} already serves it here.",
 			"leftOutRefuse": "Leaves out {{event}}: {{reason}}",
 			"legend": "Deploy to",
@@ -4235,6 +4426,10 @@
 			"renamed": "{{from}} is taken here; this one becomes {{to}}.",
 			"revoked_one": "{{count, number}} revoked device isn't listed.",
 			"revoked_other": "{{count, number}} revoked devices aren't listed.",
+			"schedulesShared": "A schedule runs once in every place it is deployed to.",
+			"schedulesTable": "Schedules that run in more than one place",
+			"schedulesTitle": "Schedules in this update",
+			"scheduleTwice": "Run it here as well: it then runs in more than one place",
 			"selected_one": "{{count, number}} of {{total, number}} devices selected",
 			"selected_other": "{{count, number}} of {{total, number}} devices selected",
 			"selectedCount_one": "{{count, number}} selected",
@@ -4339,18 +4534,41 @@
 		"conseq": {
 			"answersAt": "{{address}} starts answering on {{devices}}.",
 			"background": "Runs {{events}} in the background on {{devices}}.",
+			"bot": "{{event}} answers from {{device}} while {{service}} runs.",
+			"botGap": "Discord messages sent while {{service}} restarts or updates are not answered.",
+			"botUndo": "Remove {{event}} from the service, or take it back in Events. Nothing else runs it afterwards until you start it somewhere.",
+			"botWebhook": "{{device}} removes the bot's Telegram webhook when it first connects.",
 			"cloud": "Each gets cloud access until {{date}}.",
 			"cloudSpend": "Each gets cloud access until {{date}} and a {{limit}} spending limit.",
 			"creates": "Creates {{services}} on {{devices}}, serving {{events}}.",
+			"endpoint": "{{event}} answers {{method}} {{address}}{{path}}.",
+			"endpointAnswers": "A failed run answers 502, and a run is stopped at {{service}}'s time limit ({{limit}}).",
+			"endpointElsewhere": "The hub keeps answering {{events}} at its own address.",
+			"endpointElsewhereLocal": "This computer keeps answering {{events}} while Flow-Like is open.",
+			"endpointShared": "Everyone with {{service}}'s access token can call all of its endpoints, pages and chats.",
+			"endpointToken": "Callers need {{service}}'s access token. The token set in Events is not used on a device.",
+			"flowCreated": "Created flow version {{version}} of {{flow}} from the current edits. The event keeps following Latest.",
+			"flowUndo": "A created flow version stays in the flow's history.",
 			"model": "Each gets model access until {{date}}.",
 			"modelSpend": "Each gets model access until {{date}} and a {{limit}} spending limit.",
 			"nobody": "Nobody right now.",
 			"nobodyYet": "Nobody yet: the new services stay stopped until someone starts them.",
 			"noSafe": "Safe update isn't available on {{device}}: {{reason}}.",
+			"once": "{{event}} runs once on {{device}} at {{time}} ({{zone}}). If {{device}} isn't running then, or within 15 minutes after, it doesn't run at all.",
+			"onceAfter": "After that nothing runs it again.",
+			"onDemand": "{{event}} can be run from Devices by people who may start {{service}}.",
+			"onDemandPage": "Anyone with {{service}}'s access token can also run it from the service page.",
 			"quick": "{{service}} on {{device}} stops, then starts the newest version.",
 			"quickWho": "{{service}} is down for about 10 s on {{device}}.",
 			"safe": "{{service}} on {{device}} switches to the newest version with a safe update.",
 			"safeWho": "The current version keeps answering until the new one is healthy.",
+			"schedule": "{{event}} runs on {{device}} {{words}} ({{zone}}). First run {{time}}. Missed runs are not made up.",
+			"scheduleLimit": "Each run can use hosted models within {{service}}'s spending limit. When the limit is used up, this service's other events lose hosted models too.",
+			"scheduleMoves": "The hub stops running {{event}} when {{device}} starts it.",
+			"scheduleReadOnly": "{{service}}'s cloud access is read-only. Runs that change the app's data will fail.",
+			"scheduleSwitch": "A scheduled time that falls into the switch is skipped.",
+			"scheduleUndo": "Remove it from the service, or choose Run it on the hub again in Events: the hub runs it again a few minutes later.",
+			"seconds": "{{value, number}} s",
 			"settings": "{{service}} on {{device}} gets new settings.",
 			"staysKeep": "The app version and its data stay. Nothing is uploaded.",
 			"staysOffline": "Each new service starts with the copy's data. Other services on these devices aren't touched.",
@@ -4461,22 +4679,51 @@
 		},
 		"exception": {
 			"agent": "Runs with the agent's full access",
+			"agentFeature": "Leaves out {{event}}: {{reason}}",
+			"botOpen": "Anyone who can message {{event}} starts runs here",
+			"botOtherComputers": "Other computers may still run {{event}} in the desktop app",
 			"duplicate": "Leaves out {{event}}: {{service}} already serves it here",
+			"endpointSharedToken": "{{event}} answers to {{service}}'s access token, not its own",
+			"onceSoon": "{{event}} runs in less than 5 minutes; it doesn't run if the deploy takes longer",
 			"portMoved": "Port {{to}}: {{from}} is in use there",
 			"refuse": "Leaves out {{event}}: the device can't run it",
 			"renamed": "Named {{to}} here: {{from}} is taken",
+			"scheduleLocalTrigger": "This computer also runs {{event}}",
+			"scheduleTwoDevices_one": "{{event}} runs on {{count, number}} devices, once on each",
+			"scheduleTwoDevices_other": "{{event}} runs on {{count, number}} devices, once on each",
 			"unencrypted": "Serves unencrypted"
 		},
 		"fail": {
+			"agentFeature": {
+				"apiEvents": "the device's agent is too old to serve Endpoints",
+				"discordBots": "the device's agent is too old to run Discord bots",
+				"onDemandEvents": "the device's agent is too old to run forms and quick actions",
+				"other": "the device's agent is too old for one of its events",
+				"scheduledOnce": "the device's agent is too old to run one-time schedules",
+				"telegramBots": "the device's agent is too old to run Telegram bots"
+			},
+			"agentSchedules": "the device's agent is too old to run schedules",
 			"appliedOnly": "the device applied it, but this page closed before the steps after it; open the service to check it",
+			"botElsewhere": "{{event}} is already assigned to another service, and a bot runs in one place",
+			"botHub": "this hub can't hand bots to devices yet",
+			"botReturning": "{{event}} is still being given up where it ran",
+			"botRole": "moving {{event}} to a device needs the right to edit this app's events",
 			"busy": "the device was busy",
 			"changed": "the service changed on the device in the meantime",
 			"deviceUnread": "the device's services couldn't be read",
+			"eventMissing": "{{event}} isn't in what the hub publishes for devices",
 			"eventRefused": "the device can't run one of the events",
 			"failed": "the device couldn't complete it",
+			"flowBusy": "someone is editing one of its flows right now",
+			"flowHub": "this hub can't deploy events that follow Latest yet",
+			"flowIncomparable": "a flow can't be compared with its published version",
+			"flowMoved": "a flow changed while this was being prepared",
+			"flowRole": "a flow has edits that aren't published as a version, and your role can't create one",
+			"flowTarget": "an event points at a Page or a start node that is no longer in its flow",
 			"hostPolicy": "the device's isolation rules don't allow these limits",
 			"hub": "the hub didn't confirm it",
 			"hubRefused": "the hub refused it",
+			"hubType": "this hub can't hand {{event}} to devices yet; update the hub",
 			"interrupted": "it was stopped before it finished",
 			"invalid": "the device refused these settings",
 			"invalidPlan": "these settings can't be applied as they are",
@@ -4489,6 +4736,10 @@
 			"rolledBack": "the new version didn't become healthy in time",
 			"rolloutCancelled": "the update was discarded",
 			"rolloutFailed": "the update failed on the device",
+			"scheduleElsewhere": "{{event}} is already assigned to another service, and a schedule runs in one place",
+			"scheduleHub": "this hub can't run schedules on devices yet",
+			"scheduleReturning": "{{event}} is still returning to the hub from where it ran",
+			"scheduleRole": "moving {{event}} off the hub needs the right to edit this app's events",
 			"secret": "a secret couldn't be saved on the device",
 			"serviceExists": "a service with this ID already runs on the device",
 			"sourceChanged": "the service runs the app another way than this deploy",
@@ -4549,6 +4800,7 @@
 		},
 		"phase": {
 			"apply": "Applying the new settings",
+			"bots": "Moving its bots to this service",
 			"checkEvents": "Checking events on the device",
 			"checkNew": "Checking new version",
 			"cloudAccess": "Creating cloud access",
@@ -4556,6 +4808,8 @@
 			"install": "Installing the app version",
 			"modelAccess": "Creating model access",
 			"prepareUpdate": "Preparing the update",
+			"schedules": "Moving its schedules off the hub",
+			"schedulesBots": "Moving its schedules and bots to this service",
 			"secrets": "Saving secrets",
 			"secretsCount_one": "Saving {{count, number}} secret",
 			"secretsCount_other": "Saving {{count, number}} secrets",
@@ -4784,11 +5038,13 @@
 		"while": {
 			"apply": "applying the new settings",
 			"approve": "creating its cloud access",
+			"bots": "moving its bots to this service",
 			"checkEvents": "checking the events",
 			"checkNew": "checking the new version",
 			"create": "creating the service",
 			"install": "installing",
 			"prepareUpdate": "preparing the update",
+			"schedules": "moving its schedules off the hub",
 			"secrets": "saving secrets",
 			"spending": "setting the spending limit",
 			"start": "starting",
@@ -4850,13 +5106,17 @@
 			"checked": "Checked at {{time}}: {{version}} is the latest verified release.",
 			"checkedNone": "Checked at {{time}}.",
 			"checkFailed": "Couldn't check at {{time}}. The release shown was read earlier.",
+			"checkRefused": "Checked at {{time}}. The hub's agent release failed a check: {{check}}.",
 			"manifestTooLarge": "The release manifest is too large to send to the device. Check Hub status.",
+			"needsShortRelease": "This device's agent ({{version}}) only accepts releases valid for 30 days or less. Ask the hub operator to renew the release for 30 days, or set this device up again.",
 			"noReleaseTrust": "This hub has no trusted agent releases set up.",
+			"releaseFailed": "The hub's agent release failed a check, so there is nothing to install. Hub status says which.",
+			"releaseRanOut": "The hub's agent release ran out on {{date}}. Updates wait until the hub operator publishes or renews a release.",
 			"releaseReading": "Reading the latest verified release…",
 			"releaseUnread": "The latest verified release couldn't be read from the hub. Check for an agent update again.",
 			"rows": {
-				"install": "Installs verified release {{version}} (release #{{sequence, number}}). If the new agent doesn't start, the device rolls back to {{current}}.",
-				"installNoCurrent": "Installs verified release {{version}} (release #{{sequence, number}}). If the new agent doesn't start, the device rolls back."
+				"install": "Installs verified release {{version}} (release number {{sequence, number}}). If the new agent doesn't start, the device rolls back to {{current}}.",
+				"installNoCurrent": "Installs verified release {{version}} (release number {{sequence, number}}). If the new agent doesn't start, the device rolls back."
 			},
 			"update": "Update agent…",
 			"updateCheck": "Stop the running services and restart the agent with the verified release",
@@ -4874,7 +5134,6 @@
 			"close": "Close",
 			"copyHash": "Copy app version hash",
 			"event": "Event",
-			"eventPin": "event <1/> · flow <2/>",
 			"how": {
 				"afterCheckIn": "Once <1/> checks in, ",
 				"afterKeys": "Once this computer has keys for <1/>, ",
@@ -4899,7 +5158,6 @@
 				"unreadableOnline": "<1/> is an online app, so any service of it on <2/> <3>runs online</3> at the version deployed from the hub, with its data in the cloud."
 			},
 			"newest": "Newest version",
-			"newIn": "New in {{version}}",
 			"noEvents": "{{app}} has no events",
 			"noEventsText": "Add an event in Events before you deploy it.",
 			"noFlows": "Events on this device",
@@ -4947,7 +5205,7 @@
 			"appHere": "Deploy {{app}} here…",
 			"appHereOffline": "{{app}} gets an offline copy on {{device}}",
 			"appHereOnline": "{{app}} runs online on {{device}}",
-			"noEvents": "None of {{app}}'s events can run on a device. Pin a flow version or add a Web request, Chat, Page, REST, MCP or Background event in Events."
+			"noEvents": "No event of this app can run on a device yet. Most types can: add one in Events. Inbound email, Teams and deep-link events can't."
 		},
 		"diagnose": {
 			"clockAhead_one": "The hub refused {{device}}'s last check-in ({{since}}) because its clock is about {{minutes, number}} min ahead. Set the clock on the device.",
@@ -5206,6 +5464,15 @@
 		"scopeNote": "Showing <1/> on <2/>. Services, and the items and services on Overview, show only this app. The rest, including tabs marked with the device glyph, covers the whole device.",
 		"services": {
 			"appVersionUnknown": "App version unknown",
+			"bot": "{{type}} · {{state}}",
+			"botState": {
+				"connected": "connected",
+				"connecting": "connecting",
+				"elsewhere": "used elsewhere",
+				"intentsRefused": "permissions refused",
+				"off": "not connected",
+				"tokenRefused": "token refused"
+			},
 			"cloud": "Cloud access",
 			"cloudSpend": "Cloud access · {{used}} of {{limit}}",
 			"confirmLabel": "Confirm: {{action}}",
@@ -5221,6 +5488,8 @@
 			"modeUnknown": "· how it runs is unknown",
 			"newVersion": "a new version",
 			"noUpdate": "No update running",
+			"onceNotRun": "One-time schedule didn't run ({{time}})",
+			"onceRan": "Ran once {{time}}",
 			"oneApp": "one app",
 			"open": "Open",
 			"othersHidden_one": "{{count, number}} service of other apps on {{device}} isn't shown.",
@@ -5321,10 +5590,12 @@
 			"readAgo": "read {{ago}}",
 			"registered": "Registered",
 			"releaseError": "Couldn't be read from the hub",
-			"releaseExpires": "· expires {{date}} ·",
-			"releaseFacts": "· release #{{sequence, number}} · signed by",
+			"releaseExpires": "· runs out on {{date}}",
+			"releaseFacts": "· release number {{sequence, number}} · signed by",
+			"releaseFailed": "The hub's agent release failed a check",
 			"releaseLoading": "Reading…",
 			"releaseNone": "This hub has no trusted agent releases set up",
+			"releaseRanOut": "The hub's agent release ran out on {{date}}",
 			"remoteUpdate": "Remote update",
 			"remoteUpdateLinux": "Linux with systemd",
 			"remoteUpdateNo": "Not supported on this system: update the agent from the device itself",
@@ -5979,9 +6250,36 @@
 		}
 	},
 	"eligibility": {
-		"apiType": {
-			"long": "Endpoint events can't run on a device yet. Use a REST event, or give it a page.",
-			"short": "Endpoint events can't yet"
+		"agent": {
+			"apiEvents": {
+				"fix": "Update the device agent to serve Endpoints",
+				"long": "{{device}}'s agent is too old to serve Endpoints."
+			},
+			"discordBots": {
+				"fix": "Update the device agent to run Discord bots",
+				"long": "{{device}}'s agent is too old to run Discord bots."
+			},
+			"fix": "Update the device agent to run schedules",
+			"long": "{{device}}'s agent is too old to run schedules.",
+			"onDemandEvents": {
+				"fix": "Update the device agent to run forms and quick actions",
+				"long": "{{device}}'s agent is too old to run forms and quick actions."
+			},
+			"scheduledOnce": {
+				"fix": "Update the device agent to run one-time schedules",
+				"long": "{{device}}'s agent is too old to run one-time schedules."
+			},
+			"short": "Agent too old",
+			"telegramBots": {
+				"fix": "Update the device agent to run Telegram bots",
+				"long": "{{device}}'s agent is too old to run Telegram bots."
+			}
+		},
+		"bot": {
+			"invalid": {
+				"long": "Its bot settings can't be read on a device: {{detail}}",
+				"short": "Bot settings can't be read"
+			}
 		},
 		"canary": {
 			"long": "Splits traffic with a canary. A device can't split traffic; end the canary first.",
@@ -5990,33 +6288,66 @@
 		"eventType": {
 			"api": "Endpoint",
 			"chat": "Chat",
-			"chatBot": "Chat bot",
 			"cron": "Schedule",
 			"daemon": "Background",
 			"deeplink": "Deep link",
+			"discord": "Discord bot",
 			"email": "Mailbox",
 			"form": "Form",
 			"geolocation": "Location region",
-			"http": "Web request",
 			"inboundEmail": "Inbound email",
 			"mcp": "MCP",
 			"other": "Other",
 			"page": "Page",
 			"quickAction": "Quick action",
 			"rest": "REST",
-			"teams": "Teams bot"
+			"teams": "Teams bot",
+			"telegram": "Telegram bot"
 		},
 		"fix": {
-			"openEvents": "Open Events",
-			"pinFlow": "Pin a flow version in Events"
+			"openEvents": "Open Events"
 		},
 		"flowError": {
 			"long": "Its flow version can't be prepared for devices: {{detail}}",
 			"short": "Flow can't be prepared"
 		},
+		"hubSchedules": {
+			"long": "This hub can't run schedules on devices yet. Update the hub.",
+			"short": "Hub can't run schedules on devices yet"
+		},
+		"hubType": {
+			"bot": {
+				"long": "This hub can't hand bots to devices yet. Update the hub."
+			},
+			"endpoint": {
+				"long": "This hub can't hand Endpoints to devices yet. Update the hub."
+			},
+			"onDemand": {
+				"long": "This hub can't hand forms and quick actions to devices yet. Update the hub."
+			},
+			"short": "Hub can't yet"
+		},
 		"latestFlow": {
-			"long": "Follows the latest flow edits. Pin a flow version in Events first.",
-			"short": "Follows the latest flow"
+			"copy": {
+				"long": "This copy has no published version of the event's flow. Export it again from the desktop app.",
+				"short": "Copy has no flow version"
+			},
+			"hub": {
+				"long": "This hub can't deploy events that follow Latest yet. Update the hub, or pin a flow version in Events.",
+				"short": "Hub can't deploy Latest yet"
+			},
+			"other": {
+				"long": "Its flow version can't be read. Pick a flow version in Events.",
+				"short": "Flow version can't be read"
+			},
+			"role": {
+				"long": "This flow has edits that aren't published as a version, and your role can't create one. Ask someone who can edit the app to create a version.",
+				"short": "Flow edits need a version"
+			},
+			"target": {
+				"long": "This event points at a Page or a start node that is no longer in its flow. Open it in Events and pick it again.",
+				"short": "Page or start node is gone"
+			}
 		},
 		"paused": {
 			"long": "Paused. Activate it in Events first.",
@@ -6026,21 +6357,74 @@
 			"long": "{{device}} can't run it: {{reason}}",
 			"short": "Can't run here"
 		},
+		"route": {
+			"invalid": {
+				"long": "A device can't serve its method or path: {{detail}}",
+				"short": "Path can't be served"
+			},
+			"missing": {
+				"long": "It has no path. Set one in Events first.",
+				"short": "No path set"
+			},
+			"reserved": {
+				"long": "Its path {{path}} is used by the service itself. Choose another path in Events.",
+				"short": "Path is taken"
+			}
+		},
 		"runs": {
+			"bot": {
+				"discord": "Runs on its own · stays connected to Discord",
+				"telegram": "Runs on its own · stays connected to Telegram"
+			},
 			"explicit": "Runs on its own · waits for the flow to report ready",
 			"hosted": "Served by the device · checks its web server",
+			"once": "Runs once · the device starts it",
+			"onceAt": "Once on {{date}} at {{time}} · {{zone}}",
+			"onDemand": "Started by a person · from Devices or the service page",
 			"ownServer": "Runs its own server · checks it answers",
+			"route": "{{method}} {{path}} · served by the device",
+			"schedule": "{{words}} · {{zone}}",
+			"scheduled": "Runs on a schedule · the device starts it",
 			"unsupported": "Runs on its own · can't be checked, so no safe updates"
+		},
+		"runsElsewhere": "Another service runs this schedule. A schedule runs in one place.",
+		"runsElsewhereBot": "Another service runs this bot. A bot runs in one place.",
+		"schedule": {
+			"detail": {
+				"both": "it has a repeating schedule and a one-time date",
+				"date": "the date {{date}} isn't a real day written as YYYY-MM-DD",
+				"fields_one": "the expression has {{count}} fields, and a device reads 5 or 6",
+				"fields_other": "the expression has {{count}} fields, and a device reads 5 or 6",
+				"gap": "{{date}} {{time}} doesn't exist in {{zone}}: the clocks skip it",
+				"length": "the expression is longer than 128 characters",
+				"parser": "the expression isn't valid or never matches a date",
+				"range": "the date {{date}} is before 2000 or after 2100",
+				"syntax": "“{{field}}” is a form devices don't read",
+				"time": "the time {{time}} isn't a time from 00:00 to 23:59",
+				"zone": "the time zone {{zone}} isn't known"
+			},
+			"invalid": {
+				"long": "Its schedule can't be read on a device: {{detail}}",
+				"short": "Schedule can't be read"
+			},
+			"missing": {
+				"long": "No schedule set. Set one in Events first.",
+				"short": "No schedule set"
+			},
+			"once": {
+				"long": "This device's agent can't run one-time schedules yet. Update the device agent.",
+				"short": "Agent too old"
+			},
+			"tooOften": {
+				"long": "Runs more often than once a minute. Devices run a schedule at most once a minute.",
+				"short": "More than once a minute"
+			}
 		},
 		"thisDevice": "This device",
 		"type": {
 			"chatBot": {
 				"long": "Chat bots run in the desktop app, not on devices.",
 				"short": "Chat bots can't"
-			},
-			"cron": {
-				"long": "Schedules can't run on a device yet.",
-				"short": "Schedules can't"
 			},
 			"desktop": {
 				"long": "Deep links and location regions only work in the desktop app.",
@@ -6049,10 +6433,6 @@
 			"email": {
 				"long": "Mailboxes are read by the desktop app, not by devices.",
 				"short": "Mailboxes can't"
-			},
-			"inApp": {
-				"long": "Forms and quick actions open inside Flow-Like. Give it a page to serve it from a device.",
-				"short": "Opens inside Flow-Like"
 			},
 			"inboundEmail": {
 				"long": "Inbound email is handled by the hub.",
@@ -6142,7 +6522,7 @@
 			"scale": "Change instance count",
 			"scaleExplain": "Set how many instances run.",
 			"start": "Start services",
-			"startExplain": "Start stopped services and activate updates.",
+			"startExplain": "Start stopped services, activate updates, and run a service's quick actions and forms.",
 			"status": "View status",
 			"statusExplain": "See services, their state, versions and certificates in scope.",
 			"stop": "Stop services",
@@ -6231,7 +6611,7 @@
 		},
 		"eventType": {
 			"daemon": "Background",
-			"http": "Web request",
+			"http": "Endpoint",
 			"mcp": "MCP",
 			"page": "Page",
 			"rest": "REST",
@@ -6460,7 +6840,7 @@
 			"database": "Database migrations",
 			"explain": "Each failing check is fixed by the hub operator.",
 			"policy": "Device limits",
-			"release": "Signed agent releases",
+			"release": "Release settings",
 			"signaling": "Connection service",
 			"signing": "Hub signing key"
 		},
@@ -6764,6 +7144,8 @@
 			"blind": "Unknown: you can't read this app's flows",
 			"cantRun": "Can't run on devices",
 			"checking": "Checking devices…",
+			"edits_one": "{{count, number}} runs the flow from before its current edits",
+			"edits_other": "{{count, number}} run the flow from before its current edits",
 			"hubOff": "Device status off on this hub",
 			"locked_one": "{{count, number}} locked",
 			"locked_other": "{{count, number}} locked",
@@ -6774,7 +7156,10 @@
 			"older_one": "{{count, number}} runs an older version",
 			"older_other": "{{count, number}} run an older version",
 			"run": "Run on a device…",
+			"runsOnce": "Runs once {{time}}",
 			"signIn": "Sign in to see devices",
+			"stillRuns_one": "{{device}} still runs it",
+			"stillRuns_other": "{{count, number}} devices still run it",
 			"unavailable": "Device status unavailable",
 			"unknown_one": "{{count, number}} unknown",
 			"unknown_other": "{{count, number}} unknown",
@@ -6785,7 +7170,8 @@
 		},
 		"chip": {
 			"title": "{{service}} · {{actual}}",
-			"titleBehind": "{{service}} · {{actual}} · {{from}} → {{to}} available"
+			"titleBehind": "{{service}} · {{actual}} · {{from}} → {{to}} available",
+			"titleEdits": "{{service}} · {{actual}} · newer flow edits are available"
 		},
 		"column": {
 			"actions": "Actions",
@@ -6803,7 +7189,6 @@
 		"eventVersion": "event {{version}}",
 		"fix": {
 			"canary": "End the canary in the event's Canary section. A device serves one version and can't split traffic.",
-			"latestFlow": "In the event's Flow & target section, pick a published flow version instead of Latest. Devices only run pinned versions.",
 			"lead": "To fix it:",
 			"open": "Open the event…",
 			"paused": "Activate it with the play button in its row, then run it on a device.",
@@ -6815,12 +7200,56 @@
 		"flowVersion": "flow {{version}}",
 		"openInDevices": "Open in Devices",
 		"pop": {
+			"accessEndedNoNext": "Assigned to {{device}} › {{service}}, but its cloud access ended {{time}}. Nothing takes it back by itself: take it back here.",
+			"action": "Quick action · started by a person",
+			"aDevice": "a device",
 			"behind": "newest has {{newer}}",
 			"behindTitle": "Runs an older version. The newest version has {{newer}}.",
+			"botHub": "No device runs it.",
+			"botIdle": "Assigned to {{device}} › {{service}}, but it isn't connected: {{reason}}.",
+			"botIdleWhy": {
+				"conflict": "another program uses its token",
+				"failed": "the service keeps failing",
+				"intentsRefused": "Discord refused its permissions",
+				"removed": "the service was removed",
+				"stopped": "the service is stopped",
+				"tokenRefused": "its token was refused",
+				"webhookSet": "Telegram sends its messages to a webhook"
+			},
+			"botLocal": "Runs in the desktop app while it is open. On a device it stays connected without a computer.",
+			"botOn": "Connected from {{device}}.",
+			"botReleased": "Moves to {{device}} › {{service}} when that service starts it.",
+			"botReleasedHidden": "Moves to a device you can't see when its service starts it.",
+			"botReturning": "Taken back from its device. Nothing runs it after {{time}}.",
+			"botTakeBack": {
+				"done": "Taken back. {{device}} disconnects it within 30 minutes; nothing runs it afterwards.",
+				"doneReleased": "Taken back. No device runs it.",
+				"label": "Take it back",
+				"provider": {
+					"discord": "the Discord Developer Portal",
+					"telegram": "BotFather"
+				},
+				"released": "{{device}} can no longer take it over. Nothing runs it until you deploy it again.",
+				"token": "{{device}} disconnects {{events}} at its next check with the hub, within 30 minutes. If it can't reach the hub, it can stay connected until its cloud access ends on {{date}}. The bot token stays on {{device}}: to cut the bot off for certain, replace the token with {{provider}}.",
+				"tokenNoDate": "{{device}} disconnects {{events}} at its next check with the hub, within 30 minutes. If it can't reach the hub, it can stay connected until its cloud access ends. The bot token stays on {{device}}: to cut the bot off for certain, replace the token with {{provider}}.",
+				"undo": "Deploy it to a device again, or run it in the desktop app.",
+				"what": "{{device}} disconnects it at its next check, within 30 minutes. Nothing else runs it afterwards.",
+				"who": "People who message {{event}} get no answer once it disconnects."
+			},
 			"deployHere": "Deploy here",
 			"elsewhere": "Doesn't serve it",
+			"endpoint": "Endpoint · {{method}} {{path}}",
+			"form": "Form · started by a person",
 			"group_one": "{{label}} · {{count, number}}",
 			"group_other": "{{label}} · {{count, number}}",
+			"hold": {
+				"hubTooOld": "this hub can't hand schedules to devices yet",
+				"hubTooOldBot": "this hub can't hand bots to devices yet",
+				"hubUnreachable": "the service is waiting for the hub to confirm it",
+				"notReleased": "it was not moved to this service",
+				"otherService": "another service of that device runs it",
+				"runsElsewhere": "another service runs it"
+			},
 			"lockedWhy": "Only keys on this computer can read which services it runs.",
 			"modeOffline": "Devices get an offline copy of {{app}} from this computer. Its data lives only on the device.",
 			"modeOnline": "Devices run {{app}} online. Its data stays in the cloud.",
@@ -6832,22 +7261,67 @@
 			"none": "Not on any device yet.",
 			"noneVisible": "Not on a device you can see.",
 			"notOnIt": "Not on it",
+			"onceChanged": "A new time was set in Events. Update {{service}} to apply it; until then nothing runs it.",
+			"onceHub": "Not on a device: the hub keeps it.",
+			"onceMissed": "Did not run: {{device}} wasn't running at its time ({{time}}).",
+			"oncePassed": "Did not run: its time ({{time}}) had passed when {{service}} could first run it.",
+			"onceRan": "Ran on {{device}} {{time}}. Nothing runs it again.",
 			"open": "Open",
+			"openService": "Open {{service}}",
 			"others_one": "Deploy doesn't offer it. The app's other events aren't affected: {{count, number}} event can run on a device.",
 			"others_other": "Deploy doesn't offer it. The app's other events aren't affected: {{count, number}} events can run on a device.",
 			"paused": "Paused, so it can't run on devices",
 			"pin": "event {{event}} · flow {{flow}}",
 			"restoreKeys": "Restore keys…",
 			"runAnother": "Run on another device…",
+			"runHeld": "A schedule runs in one place. Run it on the hub again first.",
+			"runHeldBot": "A bot runs in one place. Take it back first.",
+			"runNow": "Run now…",
+			"runOnHub": {
+				"conseq": "The hub runs {{event}} again in about 5 minutes, or in about an hour while {{device}} is still running its service. {{device}} stops running it at its next check, within 30 minutes.",
+				"conseqReleased": "The hub keeps running {{event}}. {{device}} can no longer take it over.",
+				"done": "The hub runs {{event}} again from {{time}}.",
+				"doneNow": "The hub runs {{event}}.",
+				"label": "Run it on the hub again",
+				"needsRole": "Only someone who can edit this app's events can move it.",
+				"offline": "{{device}} is not connected. If it is still running, it keeps running {{event}} from its cache until it reconnects, so it can run in both places.",
+				"once": "It goes back to the hub from {{time}}. If its time is before that, nobody runs it.",
+				"onceDone": "It goes back to the hub. Its time has passed, so nothing runs it again.",
+				"refused": "The hub didn't take it back. Read where it runs again, then retry.",
+				"undo": "Deploy it to a device again once the hub has taken it back.",
+				"who": "Runs that are due before the hub takes over are skipped, never run twice."
+			},
+			"scheduleChanged": "{{device}} runs the schedule of event {{version}}. Update {{service}} to apply the change.",
+			"scheduleHidden": "Assigned to a device you can't see, not the hub. It last confirmed {{ago}}.",
+			"scheduleHub": "Runs on the hub.",
+			"scheduleIdle": {
+				"accessEnded": "Assigned to {{device}} › {{service}}, but nothing runs it: its cloud access ended {{time}}; the hub takes it back at its next scheduled time.",
+				"failed": "Assigned to {{device}} › {{service}}, but nothing runs it: the service keeps failing.",
+				"held": "Assigned to {{device}} › {{service}}, but nothing runs it: {{hold}}.",
+				"removed": "Assigned to {{device}} › {{service}}, but nothing runs it: the service was removed.",
+				"stopped": "Assigned to {{device}} › {{service}}, but nothing runs it: the service is stopped."
+			},
+			"scheduleOn": "Runs on {{device}}, not on the hub.",
+			"schedulePaused": "Paused in Events. {{device}} still runs it until you stop or update {{service}}.",
+			"scheduleReleased": "Moves to {{device}} › {{service}} when that service starts it. The hub runs it until then.",
+			"scheduleReleasedHidden": "Moves to a device you can't see when its service starts it. The hub runs it until then.",
+			"scheduleReturning": "Returns to the hub at {{time}}.",
+			"scheduleUnconfirmed": {
+				"recent": "Assigned to {{device}}. It last confirmed {{ago}}; unlock the device to see whether it runs.",
+				"silent": "Assigned to {{device}}. It last confirmed {{ago}}; its status doesn't say whether it runs.",
+				"stale": "Assigned to {{device}}, which has not confirmed since {{time}}. It may be off."
+			},
 			"serves": "Serves it",
 			"snapshotWhy": "It runs {{service}}, but its status doesn't list the events it serves. An agent update on the device adds them.",
 			"snapshotWhyPlain": "Its status doesn't list the events it serves. An agent update on the device adds them.",
 			"staged": "an update is staged",
 			"startInstructions": "Start instructions",
+			"stillServed": "{{device}} still runs it until you stop or update {{service}}.",
 			"stoppedAsAsked": "Stopped, as you asked",
 			"typeAndHow": "{{type}} · {{how}}",
 			"unknown": "Status unknown",
-			"unlock": "Unlock…"
+			"unlock": "Unlock…",
+			"whereLabel": "Where it runs"
 		},
 		"row": {
 			"actions": "Actions for {{event}}",
@@ -6866,7 +7340,7 @@
 			"canRun_one": "<1>{{eligible, number}}</1> of {{count, number}} event can run on a device.",
 			"canRun_other": "<1>{{eligible, number}}</1> of {{count, number}} events can run on a device.",
 			"deploy": "Deploy to devices…",
-			"deployTitle": "Opens deploy with every event of {{app}} that can run on a device. You pick one or more devices next.",
+			"deployTitle": "Opens deploy with every event of {{app}} that can run on a device; schedules and bots start unticked. You pick one or more devices next.",
 			"devices_one": "{{count, number}} device",
 			"devices_other": "{{count, number}} devices",
 			"label": "{{app}} on devices",
@@ -6884,6 +7358,8 @@
 		"summary": {
 			"cantRun": "Can't run on devices: {{reason}}",
 			"comma": ", ",
+			"edits_one": "{{count, number}} before the edits",
+			"edits_other": "{{count, number}} before the edits",
 			"older_one": "{{count, number}} older",
 			"older_other": "{{count, number}} older",
 			"on": "On {{devices}}",
@@ -7387,6 +7863,7 @@
 		"lockedLogs": "Unlock {{device}} to read logs.",
 		"lockedLookup": "Unlock {{device}} to look up a command.",
 		"lockedMetrics": "Unlock {{device}} to read metrics.",
+		"lockedRun": "Unlock {{device}} to run its actions and forms.",
 		"lockedStatus": "Unlock {{device}} to see its services.",
 		"lockedText": "The hub can't read them; only keys on this computer can.",
 		"lockUnsupported": "This browser can't protect device keys.",
@@ -7584,18 +8061,18 @@
 			"hint": "Revoked devices aren't listed. Each agent version comes from where it was last read.",
 			"keeps": "Keeps this agent until the hub has a verified release again",
 			"loading": "Loading your devices",
-			"locked": "Unlock to read its agent version",
+			"locked": "Unlock to read",
 			"more_one": "Show {{count, number}} more",
 			"more_other": "Show {{count, number}} more",
 			"never": "Hasn't checked in yet.",
 			"notLoaded": "Your devices haven't been read: the hub didn't answer.",
-			"notRead": "Its agent version hasn't been read yet",
+			"notRead": "Not read yet",
 			"offline": "Offline since {{when}}, so it can't update yet",
 			"shown": "{{shown, number}} of {{total, number}} shown",
 			"summary": "{{total, number}} active · none on an older agent",
 			"summaryOutdated": "{{total, number}} active · {{outdated, number}} on an older agent, listed first",
-			"title": "Your devices",
-			"unknown": "Unknown"
+			"summaryPlain": "{{total, number}} active",
+			"title": "Your devices"
 		},
 		"diagnostics": {
 			"action": "Copy diagnostics",
@@ -7630,6 +8107,7 @@
 				"ok": "Services keep running as requested, whatever happens to the hub."
 			},
 			"setup": {
+				"expired": "The agent release ran out on {{until}}, so no setup package can be made.",
 				"full": "You're at your device limit: {{used, number}} of {{max, number}}.",
 				"label": "Set up new devices",
 				"need": "Needs all the checks and a verified agent release.",
@@ -7648,6 +8126,8 @@
 			},
 			"title": "What works on this hub",
 			"update": {
+				"endsSoon": "Current release {{version}} · runs out on {{until}}. After that, updates wait for a new or renewed release.",
+				"expired": "The agent release ran out on {{until}}. Devices keep the agent they have.",
 				"label": "Remote agent updates",
 				"missing": "This hub has no signed agent releases. Devices keep the agent they have.",
 				"need": "Needs signed agent releases and a live connection.",
@@ -7663,6 +8143,8 @@
 			"allPass": "All {{total, number}} checks pass",
 			"checking": "Checking {{host}}…",
 			"checkingRest": "Device support, the hub status checks and the agent release appear in a moment. Nothing on this page changes your devices.",
+			"endsSoon": "{{all}}, but the agent release runs out on {{until}}.",
+			"expired": "{{all}}, but the agent release ran out on {{until}}, so setup can't create a package.",
 			"full": "You're at your device limit, though: {{used, number}} of {{max, number}}, so setting up another device fails.",
 			"near": "You're using {{used, number}} of {{max, number}} device slots.",
 			"noRelease": "{{all}}, but the hub has no signed agent releases, so setup can't create a package.",
@@ -7672,6 +8154,7 @@
 			"offRest": "Ask the hub operator to turn on device support. Apps, flows and everything else in Flow-Like keep working.",
 			"over": "You're over your device limit, though: {{used, number}} of {{max, number}}, so setting up another device fails.",
 			"ready": "{{host}} is ready for devices.",
+			"releaseBlocks": "{{host}} can't set up devices right now.",
 			"supports": "{{host}} supports devices.",
 			"supportsChecking": "The hub status checks are running…",
 			"supportsNoChecks": "The hub status checks couldn't run, so it isn't known yet whether setup works. Select Check again below.",
@@ -7824,8 +8307,8 @@
 				"blocks": "Agents can't be updated remotely, and new devices can't be set up.",
 				"failed": "The hub has no release address or no trusted release signing keys.",
 				"fix": "Configure a release manifest URL and at least one trusted release signing key in the hub settings.",
-				"label": "Signed agent releases",
-				"ready": "The release address and its signing keys are set. This app verifies the signed release before it creates a package.",
+				"label": "Release settings",
+				"ready": "The hub names where releases are published and which keys sign them. This app verifies the release itself; see {{block}}.",
 				"what": "Checks that the hub says where agent releases are published and which keys sign them."
 			},
 			"signaling": {
@@ -7854,14 +8337,17 @@
 			"daysLeft_other": "{{count, number}} days left",
 			"downloadsHint": "Downloads are checked against each platform's size and SHA-256 before use.",
 			"expired": "Expired",
-			"expires": "Expires {{when}}",
+			"expires": "Valid until {{when}}",
 			"foot": "The hub names where releases are published and which keys sign them. This app verifies every release itself before it builds a setup package or updates an agent.",
 			"issued": "Issued {{when}}",
 			"keys": "Trusted signing keys",
 			"keysHint": "The hub operator pins these keys. A release signed by any other key is refused.",
+			"lastDay": "less than a day left",
 			"loading": "Loading the release",
 			"minimum": "Minimum release number",
-			"minimumHint": "Releases numbered below {{minimum}} are refused. Each setup package also raises its device's own minimum to the release it installs, so no device can be moved back to an older agent.",
+			"minimumBehind": "For the hub operator: releases {{minimum}} to {{below}} are still accepted. Raise the minimum to {{sequence}} so that only the current release is.",
+			"minimumBehindOne": "For the hub operator: release {{minimum}} is still accepted. Raise the minimum to {{sequence}} so that only the current release is.",
+			"minimumHint": "The lowest release number this hub accepts.",
 			"missing": {
 				"address": "Not configured on this hub",
 				"keys": "None configured",
@@ -7871,40 +8357,46 @@
 				"title": "This hub has no signed agent releases, so agents can't be updated remotely."
 			},
 			"notLoaded": "The release settings haven't been read: the hub didn't answer.",
-			"number": "release #{{sequence}}",
+			"number": "release number {{sequence}}",
 			"publishedAt": "Published at",
 			"publishedHint": "Where this app and your devices fetch the signed release list.",
+			"ranOut": "Ran out {{when}}",
 			"reason": {
-				"expired": "it has expired",
-				"invalid": "it isn't a valid release",
-				"sequence": "it's older than the hub's minimum release",
-				"signature": "its signature doesn't match a key the hub operator pinned"
-			},
-			"rejected": {
-				"text": "Ask the operator of {{host}}. The app won't package or install an agent it can't trace to a key they pinned, so nothing on this computer can work around it.",
-				"title": "The hub's agent release couldn't be verified: {{reason}}."
+				"expired": "it has run out",
+				"invalid": "it isn't a valid release list",
+				"lifetime": "it is valid for longer than this app accepts; update the app",
+				"notYetValid": "it isn't valid yet; check this computer's clock",
+				"sequence": "its release number is below the hub's minimum",
+				"signature": "it isn't signed by a key the hub operator pinned"
 			},
 			"result": {
 				"failed": "Couldn't verify at {{time}}: {{cause}}",
-				"verified": "Verified again at {{time}}: signed by a trusted key, release #{{sequence}} is at or above {{minimum}} and valid until {{until}}."
+				"refused": "Checked at {{time}}. The release failed a check: {{check}}.",
+				"verified": "Verified again at {{time}}: signed by a trusted key, release number {{sequence}} is at or above the minimum {{minimum}}, and valid until {{until}}."
 			},
+			"sequence": "Release number",
+			"sequenceHint": "Release numbers only go up. Devices refuse a lower one.",
 			"signedBy": "Signing key fingerprint:",
 			"title": "Signed agent releases",
-			"unfetched": {
-				"text": "{{cause}} Setup and agent updates wait until it can be verified. Devices keep running the agent they have.",
-				"title": "The signed release list couldn't be fetched."
-			},
+			"unfetchedOther": "The release address didn't answer with a release list.",
 			"valid": "Valid",
-			"validHint": "After it expires, setup can't create packages and agents refuse it until the hub publishes a new release.",
-			"validMax": "· at most 30 days",
+			"validHint": "For the hub operator: publish or renew a release before {{date}}. Running devices are not affected.",
+			"verdict": {
+				"endsSoon": "Agent {{version}} can be used until {{date}} ({{left}}). After that no device can be set up or updated until the hub operator publishes or renews a release. Devices that are running keep running.",
+				"expired": "The release of agent {{version}} ran out on {{date}}. No device can be set up or updated until the hub operator publishes or renews a release. Devices that are running keep running.",
+				"failed": "The hub's agent release failed a check: {{check}}. Don't set up or update devices until this is resolved.",
+				"ok": "New and updated devices get agent {{version}}. The release is genuine and current. Nothing to do until {{date}}.",
+				"unfetched": "The release list couldn't be fetched, so nothing is verified. Setup and agent updates wait. {{cause}}"
+			},
 			"verification": "Verification",
 			"verified": "Verified",
-			"verifiedBy": "Signed by a trusted key · release #{{sequence}} is at or above {{minimum}} · within its validity window",
+			"verifiedBy": "Signed by a trusted key · release number {{sequence}} is at or above the minimum {{minimum}} · within its validity window",
 			"verifyAgain": "Verify again",
-			"verifying": "Verifying the release…",
+			"verifying": "Checking the release…",
 			"verifyingShort": "Verifying…",
-			"window_one": "Valid from {{from}} to {{until}}; {{count, number}} days left",
-			"window_other": "Valid from {{from}} to {{until}}; {{count, number}} days left"
+			"window_one": "Valid from {{from}} to {{until}}; {{count, number}} day left",
+			"window_other": "Valid from {{from}} to {{until}}; {{count, number}} days left",
+			"windowDates": "Valid from {{from}} to {{until}}"
 		},
 		"setup": {
 			"action": "Set up a device",
@@ -7921,6 +8413,8 @@
 			"checks": "Status checks",
 			"checksNotRun": "Not run yet",
 			"devices": "Your devices",
+			"endsSoon": "Ends soon",
+			"expiredSub": "ran out on {{when}}",
 			"fails": "{{check}} fails",
 			"full": "At the limit",
 			"lastKnown": "Last known · read at {{time}}",
@@ -7944,6 +8438,8 @@
 			"unreachableSub": "Its device settings couldn't be read",
 			"until_one": "until {{when}} · {{count, number}} day left",
 			"until_other": "until {{when}} · {{count, number}} days left",
+			"untilDate": "until {{when}}",
+			"untilLastDay": "until {{when}} · less than a day left",
 			"unverified": "Not verified",
 			"unverifiedSub": "Setup and agent updates wait",
 			"upTo": "up to {{max, number}}",
@@ -9583,6 +10079,152 @@
 		"slotsFullLimit": "All {{limit, number}} connection slots for your access are in use; the oldest will be closed",
 		"tokenRestricted": "Use a token with full permissions"
 	},
+	"runNow": {
+		"again": "Run again…",
+		"againAction": "Run again",
+		"cancel": "Cancel",
+		"checkAgain": "Check again",
+		"close": "Close",
+		"closeKeepsRunning": "Closing doesn't stop the run. Its outcome stays under Activity.",
+		"conseq": {
+			"local": "It uses {{device}}'s own copy of the app's data.",
+			"online": "It runs with {{service}}'s cloud access, not as you.",
+			"spending": "It can use hosted models within {{service}}'s spending limit.",
+			"undo": "No.",
+			"unknownSource": "It runs as {{service}}, not as you.",
+			"what": "Runs the flow once on {{device}}.",
+			"when": "Now. A running instance of {{service}} takes it within 30 seconds, or it doesn't run.",
+			"whoLabel": "How it runs"
+		},
+		"failure": {
+			"cancelled": "Stopped.",
+			"flowFailed": "The flow failed. People with Logs can read why in {{service}}'s logs.",
+			"interrupted": "{{service}} stopped, updated or restarted during the run. It isn't started again.",
+			"invalidFields": "{{device}} refused these fields: {{fields}}.",
+			"needsInteraction": "The flow asked a question. That can't be answered from here.",
+			"notStarted": "No running instance of {{service}} took the run within 30 seconds.",
+			"other": "The run didn't succeed.",
+			"timedOut": "Stopped after {{limit}}.",
+			"timedOutLimit": "Stopped at {{service}}'s time limit."
+		},
+		"field": {
+			"array": "Enter a JSON list, like [1, 2].",
+			"choose": "Choose a value",
+			"date": "Enter a date, like 2026-10-03.",
+			"defaultOmitted": "Its default is too large to show here. Left empty, the flow uses it.",
+			"file": "Files can only be sent from the service page.",
+			"integer": "Enter a whole number.",
+			"items": "A value in the list has a type this field doesn't take.",
+			"json": "This isn't valid JSON.",
+			"noChoice": "No value · the flow's default",
+			"number": "Enter a number.",
+			"object": "Enter a JSON object, like {\"key\": 1}.",
+			"option": "Choose one of the values.",
+			"refused": "{{device}} refused this value.",
+			"required": "Enter a value.",
+			"requiredMark": "required",
+			"sensitive": "Hidden while you type. It is part of the run's input all the same.",
+			"unique": "Each value may appear only once.",
+			"unknown": "This app can't show this field."
+		},
+		"loading": "Reading the form from {{device}}…",
+		"noInput": "This action takes no input.",
+		"noReply": "No reply from {{device}}. The run may have started: check before you run it again.",
+		"notSent": "It didn't reach {{device}}, so nothing ran. {{reason}}",
+		"paused": "Lost touch with the run. It may still be running on {{device}}. {{reason}}",
+		"pausedLocked": "Reading stopped while {{device}} is locked. The run goes on there.",
+		"payload": {
+			"tooLarge": "What you entered is larger than the 12 KiB a run takes. Shorten it.",
+			"tooMany": "A run takes at most 64 fields."
+		},
+		"progress": {
+			"reading": "Reading the run from {{device}}…",
+			"running": "Running · {{elapsed}}",
+			"sent": "Sent",
+			"waiting": "Waiting for {{device}}"
+		},
+		"readFailed": "Couldn't read the form from {{device}}",
+		"readRetry": "Couldn't read the run just now; trying again. {{reason}}",
+		"recorded": "What you enter becomes the run's input. {{service}} keeps it in its run records on {{device}}.",
+		"rejected": {
+			"busy": "{{service}} is running as many actions as it accepts. Try again in a moment.",
+			"invalid": "{{device}} refused the run: it isn't an action or form of {{service}} any more, or the inputs are larger than it takes.",
+			"limit": "{{device}} has recorded as many of your commands today as it accepts. Try again later, or ask the device's owner.",
+			"other": "{{device}} refused the run.",
+			"reason": "{{device}} refused the run: “{{reason}}”",
+			"revisionConflict": "{{service}} changed or isn't running. Reload the form.",
+			"unauthorized": "{{device}} doesn't let you start {{service}}, so you can't run its actions and forms.",
+			"unsupported": "{{device}}'s agent can't run forms and quick actions. Update the device agent."
+		},
+		"reload": "Reload the form",
+		"result": {
+			"attachments_one": "It also made {{count, number}} file or image. It isn't shown here.",
+			"attachments_other": "It also made {{count, number}} files or images. They aren't shown here.",
+			"copied": "Copied",
+			"copy": "Copy",
+			"finished": "Finished {{time}}",
+			"gone": "The result is no longer on {{device}} (its agent restarted).",
+			"none": "The run returned no result.",
+			"output": "Result",
+			"succeeded": "The run succeeded.",
+			"took": "Took {{took}} · finished {{time}}",
+			"truncated": "Shortened: the full result is larger than 8 KiB."
+		},
+		"run": "Run",
+		"started": {
+			"finished": "finished {{time}}",
+			"follow": "Follow…",
+			"foot": "Runs started from this computer in the last 24 hours. A result is read from the device again when you open it; this computer keeps none.",
+			"sent": "started {{time}}",
+			"show": "Show result…",
+			"state": {
+				"failed": "Didn't succeed",
+				"noReply": "No reply received",
+				"running": "Running",
+				"stopped": "Stopped",
+				"succeeded": "Succeeded",
+				"waiting": "Waiting"
+			},
+			"title": "Runs you started",
+			"tracked": "tracked here"
+		},
+		"stop": "Stop this run",
+		"stopFailed": "Couldn't stop the run. {{reason}}",
+		"stopping": "Stopping…",
+		"sub": "{{service}} · event {{event}} · flow {{flow}}",
+		"support": {
+			"endpoint": "Open Endpoint",
+			"file": "This form takes a file. Open it on the service page.",
+			"truncated": "This form has more fields than fit here. Open it on the service page.",
+			"unknownField": "This form has a field this app can't show. Update the app, or open it on the service page."
+		},
+		"title": "Run {{event}} on {{device}}",
+		"titleFallback": "Run an action or form on {{device}}",
+		"tryAgain": "Try again",
+		"unknownRun": "{{device}} has no record of this run. It didn't arrive, or it is more than a day old."
+	},
+	"schedule": {
+		"expression": "Schedule {{expression}}",
+		"expressionInline": "by the schedule {{expression}}",
+		"head": "Schedule · {{words}} · {{zone}}",
+		"headOnce": "Schedule · Once on {{date}} at {{time}} · {{zone}}",
+		"outcome": {
+			"cancelled": "cut off",
+			"failed": "failed",
+			"succeeded": "succeeded",
+			"timedOut": "stopped after 24 hours"
+		},
+		"place": "{{device}} › {{service}}",
+		"skip": {
+			"busy": "8 scheduled runs were already going",
+			"missed": "the device was off, asleep or restarting at its time",
+			"overlap": "the previous run was still going"
+		},
+		"time": "{{time}} {{zone}} · {{relative}}",
+		"timeOwn": "{{time}} {{zone}} · {{relative}} · {{own}} your time",
+		"timeOwnOnly": "{{own}} your time · {{relative}}",
+		"zoneUnset": "UTC (the event sets no time zone)"
+	},
 	"service": {
 		"actions": {
 			"addNone": "Every event of {{app}} that can run on a device is already served here.",
@@ -9597,8 +10239,11 @@
 			"moreFor": "More actions for {{service}}",
 			"ofMax": "of max {{max}} · {{ready}} ready",
 			"oneBackground": "This service runs one instance: its background event runs once per device.",
+			"oneBot": "This service runs one instance: two would answer every message to its bot twice.",
 			"oneBuffering": "This service runs one instance because write buffering is on.",
 			"oneMax": "This service runs one instance. Raise Max instances in Configuration to run more.",
+			"oneNoEndpoint": "This service runs one instance: only a service with a web endpoint can run more.",
+			"oneScheduled": "This service runs one instance: two would start every scheduled run twice.",
 			"openEndpoint": "This service listens on every network of {{device}}. Endpoint has the address people use.",
 			"openLoopback": "Opens {{address}} in your browser. Only {{device}} itself can reach this address.",
 			"openPage": "Open service page",
@@ -9782,6 +10427,7 @@
 			"openPageNote": "Its address is on Endpoint",
 			"remove": "Remove service…",
 			"removeNote": "In Configuration › Danger zone",
+			"runNow": "Run {{event}} now…",
 			"stagedFirst": "An update is staged. Activate or discard it under Status first.",
 			"whereRuns": "Where {{app}} runs",
 			"whereRunsNote": "In the app's settings"
@@ -10021,6 +10667,11 @@
 			"no": "No",
 			"yes": "Yes"
 		},
+		"botToken": {
+			"hint": "A new token goes to {{service}} in an update. The bot keeps the stored one until the update switches over, and nobody can read a token back.",
+			"label": "Bot token of {{event}}",
+			"setNew": "Set new…"
+		},
 		"buffer": {
 			"automatic": "The device sends it on its own as soon as the cloud is reachable.",
 			"behind_one": "{{count, number}} change waits",
@@ -10227,12 +10878,9 @@
 			"encryption": "Encryption",
 			"expires": "expires {{date}}",
 			"exposed": "Exposed",
-			"exposedText": "Pages and chats, listed on the service page · REST and MCP endpoints work but aren't listed there",
+			"exposedText": "Pages, chats, quick actions and forms, listed on the service page · Endpoints and REST and MCP servers work but aren't listed there",
 			"exposure": "Exposure",
 			"https": "HTTPS",
-			"kindBackground": "Background",
-			"kindMcp": "MCP",
-			"kindRest": "REST",
 			"lan": "The device reports:",
 			"lanUnsupported": "Update the device agent to see the addresses the device has on its networks.",
 			"limits": "Limits",
@@ -10329,6 +10977,7 @@
 		},
 		"json": {
 			"bytes": "{{bytes, number}} of {{max, number}} bytes, as sent to the device",
+			"eventAdded": "Add it with Add an event…: it checks the device's agent and, for a bot, asks for its token.",
 			"identity": "The service's identity can't change (it now says {{value}}). Deploy a new service instead.",
 			"invalid": "That isn't valid JSON: {{detail}}. Nothing was applied.",
 			"label": "Settings",
@@ -10367,6 +11016,7 @@
 			"packages_other": "{{count, number}} packages"
 		},
 		"remove": {
+			"bots": "{{device}} disconnects {{events}} when it stops the service. The bot token stays on {{device}}: to cut the bot off for certain, replace the token with {{provider}}.",
 			"button": "Remove service…",
 			"cloudForeign": "Cloud access stays. Only the device owner or the person who approved it can revoke it.",
 			"cloudHidden": "If someone approved cloud access for it, that stays until they or the device owner revoke it.",
@@ -10379,15 +11029,24 @@
 			"firstWaiting_one": "{{count, number}} buffered change hasn't reached the cloud. Removing discards it.",
 			"firstWaiting_other": "{{count, number}} buffered changes haven't reached the cloud. Removing discards them.",
 			"firstWaitingUnknown": "If buffered changes haven't reached the cloud yet, removing discards them. Write buffering shows how many wait.",
+			"giveBack": "Run its schedules on the hub again ({{events}})",
+			"giveBackBoth": "Run its schedules on the hub again ({{schedules}}) and take its bots back ({{bots}})",
+			"giveBackBots": "Take its bots back ({{events}})",
+			"giveBackNeedsRole": "{{events}} stays assigned to this service and nothing runs it. Ask someone who can edit this app's events to run it on the hub again.",
+			"giveBackNeedsRoleBots": "{{events}} stays assigned to this service and nothing answers it. Ask someone who can edit this app's events to take it back.",
 			"interrupted": "Removing {{service}} was interrupted before {{device}} confirmed it. Check its status, then try again.",
 			"lead": "Remove this service.",
 			"lose_one": "Remove anyway and lose it",
 			"lose_other": "Remove anyway and lose them",
 			"needLose": "Tick the box under “Do this first” to remove a service whose buffered changes haven't reached the cloud.",
+			"notGivenBack": "The hub didn't take its schedules back, so {{service}} wasn't removed. Try again, or untick “Run its schedules on the hub again”.",
+			"notGivenBackStopped": "The hub didn't take its schedules back, so {{service}} wasn't removed. It stays stopped. Try again, or untick “Run its schedules on the hub again”.",
 			"notRemoved": "{{service}} wasn't removed.",
 			"notRevoked": "Its cloud access wasn't revoked, so {{service}} wasn't removed. Try again, or remove it without revoking.",
 			"notRevokedStopped": "Its cloud access wasn't revoked, so {{service}} wasn't removed. It stays stopped. Try again, or remove it without revoking.",
 			"notStopped": "{{service}} wasn't stopped or removed.",
+			"notTakenBack": "The hub didn't take back what {{service}} runs, so it wasn't removed. Try again, or untick “{{box}}”.",
+			"notTakenBackStopped": "The hub didn't take back what {{service}} runs, so it wasn't removed. It stays stopped. Try again, or untick “{{box}}”.",
 			"revokeAccess": "Also revoke {{service}}'s cloud access",
 			"revokeAccessLabel": "Revoke the cloud access of {{service}}",
 			"revokeBoth": "Also revoke {{service}}'s cloud access and spending limit",
@@ -10574,6 +11233,147 @@
 			"unnamed": "Unnamed variable {{id}}"
 		}
 	},
+	"serviceEndpoint": {
+		"alsoOnPage_one": "Also on the service page: {{count, number}} action or form",
+		"alsoOnPage_other": "Also on the service page: {{count, number}} actions and forms",
+		"requests": {
+			"changed": "Events has {{method}} {{path}} now. Update {{service}} to answer that instead.",
+			"copyAddress": "Copy address",
+			"copyCurl": "Copy command",
+			"noAddress": "Enter the address people use under Service page to copy full addresses.",
+			"noRoute": "Its deployed version has no path a device answers.",
+			"title": "Requests",
+			"token": "Every request needs this service's access token. The token set in Events is not used on a device.",
+			"tokenPlaceholder": "<access token>",
+			"unknown": "The paths of the deployed version can't be read here: {{reason}}",
+			"why": {
+				"failed": "reading them failed. Open this tab again to retry",
+				"live": "connect live to read them from {{device}}",
+				"role": "your role can't read this app's events"
+			}
+		},
+		"runFromDevices": "Run its actions and forms from Devices, under Status."
+	},
+	"serviceStatus": {
+		"actions": {
+			"action": "Quick action",
+			"fileOnly": "This form takes a file. Open it on the service page.",
+			"fileOnlyNoPage": "This form takes a file. Files can only be sent from a service page, and this service has none.",
+			"form_one": "Form · {{count, number}} field",
+			"form_other": "Form · {{count, number}} fields",
+			"last": "Last run {{time}} · {{outcome}}",
+			"needsAgent": "Update the device agent to run actions from here.",
+			"noRuns": "No runs since the service started.",
+			"notReported": "Not reported yet.",
+			"openPage": "Service page",
+			"rule": "Everyone who may start {{service}} can run these from Devices.",
+			"running_one": "{{count, number}} run is going now.",
+			"running_other": "{{count, number}} runs are going now.",
+			"runNow": "Run now…",
+			"runs_one": "{{count, number}} run since the service started · {{failed, number}} failed",
+			"runs_other": "{{count, number}} runs since the service started · {{failed, number}} failed",
+			"stopped": "Can't be run while the service is not running.",
+			"title": "Actions and forms",
+			"truncated": "The device reported only some of this service's actions and forms.",
+			"unknown": "Not in this status. Connect live to see its runs."
+		},
+		"bots": {
+			"conflict": "Another program uses this bot's token. A bot runs in one place: stop it there.",
+			"connected": "Connected.",
+			"connectedAs": "Connected as {{name}} since {{time}}.",
+			"connectedAsNow": "Connected as {{name}}.",
+			"connectedSince": "Connected since {{time}}.",
+			"connecting": "Connecting.",
+			"dropped_one": "Not answered: {{count, number}} message (too many at once, or too old after a start).",
+			"dropped_other": "Not answered: {{count, number}} messages (too many at once, or too old after a start).",
+			"hold": {
+				"anotherService": "Not connected: another service runs it. A bot runs in one place.",
+				"hubTooOld": "This hub can't hand bots to devices yet. Update the hub.",
+				"hubUnreachable": "Waiting for the hub to confirm that this service may run it.",
+				"notReleased": "Not connected: nobody who can edit this app's events has moved it to this service.",
+				"otherService": "Not connected: {{service}} on this device runs it. A bot runs in one place.",
+				"runsElsewhere": "Not connected: {{where}} runs it. A bot runs in one place."
+			},
+			"intentsRefused": "Discord refused the bot's permissions. Turn on the message content intent in the Discord Developer Portal, then restart {{service}}.",
+			"lastMessage": "Last message {{time}}",
+			"lastMessageRun": "Last message {{time}} · its run {{outcome}}",
+			"needsAgent": "Update the device agent to see its bots.",
+			"notReported": "Not reported yet.",
+			"ok": "Connected or reconnecting when this status was published.",
+			"openConfiguration": "Open Configuration",
+			"reconnecting": "Reconnecting.",
+			"rule": "A bot runs in one place. It connects once this service may run it, and stays connected while the service runs.",
+			"runHereConseq": "{{service}} connects {{event}} at its next check, within 5 minutes.",
+			"runHereDone": "{{service}} connects {{event}} at its next check, within 5 minutes.",
+			"runHereElsewhere": "Another service runs it. A bot runs in one place: take it back in Events first.",
+			"runHereUndo": "Choose Take it back in Events.",
+			"runHereWho": "A bot runs in one place: no other device answers its messages afterwards.",
+			"running_one": "{{count, number}} run is going now.",
+			"running_other": "{{count, number}} runs are going now.",
+			"runs_one": "{{count, number}} run today · {{total, number}} since it started · {{failed, number}} failed",
+			"runs_other": "{{count, number}} runs today · {{total, number}} since it started · {{failed, number}} failed",
+			"stopped": "Not connected while the service is not running.",
+			"title": "Bots",
+			"tokenRefused": {
+				"discord": "Discord refused the token. Enter a new one under Configuration.",
+				"telegram": "Telegram refused the token. Enter a new one under Configuration."
+			},
+			"truncated": "The device reported only some of this service's bots.",
+			"unknown": "Not in this status. Connect live to see whether it is connected.",
+			"waiting": "Not connected yet: {{service}} is checking whether it may run it.",
+			"webhookSet": "Telegram sends this bot's messages to a webhook. Remove it in Events, then restart {{service}}."
+		},
+		"schedules": {
+			"clockBehind": "Waiting until {{time}}: {{device}}'s clock is behind its last run.",
+			"clockChange": "When the clocks change, a time that comes twice runs once, and a time that doesn't come runs right after the change.",
+			"hold": {
+				"anotherService": "another service",
+				"hubTooOld": "This hub can't hand schedules to devices yet. Update the hub.",
+				"hubUnreachable": "Waiting for the hub to confirm that it stopped running it.",
+				"notReleased": "Not running here: nobody who can edit this app's events has moved it to this service. The hub runs it.",
+				"otherService": "Not running here: {{service}} on this device runs it.",
+				"runsElsewhere": "Not running here: {{where}} runs it. A schedule runs in one place."
+			},
+			"last": "Last run {{time}} · {{outcome}}",
+			"lastOutcome": "Last run {{outcome}}",
+			"lastRunning": "Last run {{time}}",
+			"needsAgent": "Update the device agent to see its schedules.",
+			"next": "Next run {{time}}",
+			"nextComputed": "Next run by its schedule: {{time}}",
+			"noNext": "No further run is scheduled.",
+			"notReported": "Not reported yet.",
+			"once": {
+				"cutOff": "Was cut off {{time}}; it isn't started again.",
+				"done": "Nothing more to run.",
+				"missed": "Missed: {{device}} wasn't running at its time ({{time}}).",
+				"passed": "Its time ({{time}}) had passed when {{service}} could first run it.",
+				"ran": "Ran {{time}} · {{outcome}}",
+				"ranAt": "Ran {{time}}",
+				"thisService": "this service",
+				"willRun": "Runs once {{time}}"
+			},
+			"onceRule": "A one-time schedule runs once. If {{device}} isn't running at its time, or within 15 minutes after, it doesn't run at all.",
+			"rule": "A run is skipped when the device is off, asleep or restarting at its time, and when the previous run is still going.",
+			"runHere": "Run it here",
+			"runHereConseq": "{{service}} takes {{event}} over at its next check, within 5 minutes. The hub stops running it then.",
+			"runHereDone": "{{service}} takes {{event}} over at its next check, within 5 minutes.",
+			"runHereElsewhere": "Another service runs it. A schedule runs in one place: run it on the hub again in Events first.",
+			"runHereReturning": "It is still returning to the hub from where it ran. Try again in a few minutes.",
+			"runHereUndo": "Choose Run it on the hub again in Events.",
+			"runHereWhen": "At the service's next check, within 5 minutes.",
+			"runHereWho": "Until then the hub keeps running it. No run happens twice.",
+			"running": "A run is going now.",
+			"skipped_one": "Skipped {{count, number}} · last: {{reason}}",
+			"skipped_other": "Skipped {{count, number}} · last: {{reason}}",
+			"skippedCount_one": "Skipped {{count, number}}",
+			"skippedCount_other": "Skipped {{count, number}}",
+			"stale": "This status is too old to say when it runs next.",
+			"stopped": "No runs while the service is not running.",
+			"title": "Schedules",
+			"truncated": "The device reports 16 schedules at once; this service has more.",
+			"unknown": "Not in this status. Connect live to see its runs."
+		}
+	},
 	"setup": {
 		"aside": {
 			"backupOff": "Off",
@@ -10659,38 +11459,35 @@
 			},
 			"openHub": "Open hub status",
 			"openPending": "Open Pending setups",
-			"reason": {
-				"digest": "its size or checksum doesn't match",
-				"expired": "it has expired",
-				"invalid": "it isn't a valid release",
-				"sequence": "it's older than the hub's minimum release",
-				"signature": "the signature doesn't match"
-			},
 			"rejected": {
-				"text": "Ask your hub operator. The app won't package an agent it can't trace to a key they pinned, so nothing on this computer can work around it.",
-				"title": "The hub's agent release couldn't be verified: {{reason}}."
+				"expired": "Ask your hub operator to publish or renew a release. Nothing was created.",
+				"here": "This can be fixed on this computer; then check again. Nothing was created.",
+				"text": "Ask your hub operator. Nothing on this computer can work around it, and nothing was created.",
+				"title": "The hub's agent release failed a check: {{reason}}."
 			},
 			"release": {
 				"after": "After setup",
 				"agent": "Agent",
 				"copyFingerprint": "Copy signing key fingerprint",
 				"docker": "Docker image for Linux",
-				"floor": "The device refuses any release older than #{{sequence, number}}.",
+				"endsSoon": "This hub's agent release runs out on {{date}}. Setup works until then.",
+				"floor": "The device refuses any release with a number below {{sequence, number}}.",
 				"guard": "rollback guard",
 				"loading": "Verifying the agent release…",
 				"packages": "Packages",
 				"pinned": "a key the hub operator pinned",
-				"rejected": "This release is not trusted",
-				"rejectedText": "It can't be traced to a key the hub operator pinned, so no package is built from it.",
+				"rejected": "This release can't be used",
+				"rejectedText": "It failed a check: {{reason}}. No package is built from it.",
 				"signedBy": "Signed by",
 				"title": "Agent release",
 				"unreachable": "The agent release couldn't be loaded",
 				"unreachableText": "The release server didn't answer. Check again in a moment; nothing was created.",
 				"valid": "Valid",
-				"validity": "issued {{issued}} · expires {{expires}} ({{left}})",
+				"validity": "issued {{issued}} · valid until {{expires}} ({{left}})",
+				"validityLong": "issued {{issued}} · valid until {{expires}}",
 				"verifiedAgo": "verified {{ago}}",
 				"verifying": "Verifying",
-				"version": "<1>{{version}}</1> · release #{{sequence, number}}",
+				"version": "<1>{{version}}</1> · release number {{sequence, number}}",
 				"waiting": "Verified once the hub checks pass",
 				"waitingText": "The setup only uses a release it verified after the hub said it can register devices."
 			},
@@ -10710,6 +11507,7 @@
 				"what": "Makes owner keys for <1/> on this computer, registers the device with {{host}} and builds a setup package for {{platform}}.",
 				"when_one": "Usually under a minute. The package then works for {{count, number}} h.",
 				"when_other": "Usually under a minute. The package then works for {{count, number}} h.",
+				"whenOnly": "Usually under a minute.",
 				"who": "Nobody else yet. The device appears in your list as a pending setup, and only you can see it."
 			},
 			"change": "Change",
@@ -10779,7 +11577,7 @@
 				"title": "Creating the package"
 			},
 			"summary": {
-				"agent": "<1>{{version}}</1> · release #{{sequence, number}} · verified",
+				"agent": "<1>{{version}}</1> · release number {{sequence, number}} · verified",
 				"backupOff": "Off · you'll save a key backup file instead",
 				"backupOn": "On · encrypted with the device password",
 				"packageDeferred": "<1/> · under 1 MB · the agent downloads on first start",
@@ -10832,14 +11630,16 @@
 			"limitRest": "A new package can't be made until there is room again. Nothing was created.",
 			"notReady": "{{host}} can't set up devices right now.",
 			"notReadyRest": "{{check}} isn't ready, so a new device couldn't be set up. Nothing was created and no slot is used.",
+			"ranOut": "The hub's agent release has run out.",
+			"ranOutRest": "It ran out on {{date}}, so no package can be built until the hub operator publishes or renews a release. Nothing was created.",
 			"ready": "{{host}} is ready for a new device.",
 			"readyRest_one": "All {{checks, number}} hub checks pass, agent {{version}} is verified, and you can add {{count, number}} more devices.",
 			"readyRest_other": "All {{checks, number}} hub checks pass, agent {{version}} is verified, and you can add {{count, number}} more devices.",
 			"readyRestPlain": "All {{checks, number}} hub checks pass and agent {{version}} is verified.",
 			"registered": "<1/> registered with the hub.",
 			"registeredRest": "Waiting for its first check-in…",
-			"rejected": "The agent release can't be verified.",
-			"rejectedRest": "It can't be traced to the keys the hub operator pinned ({{reason}}), so no package can be built. Nothing was created.",
+			"rejected": "The agent release failed a check.",
+			"rejectedRest": "The reason: {{reason}}. No package can be built from it, and nothing was created.",
 			"resumed": "<1/> is waiting to be started.",
 			"resumedRest": "Its package was made {{when}} and works until {{until}}. Only the steps from here on apply.",
 			"save": "The package for <1/> works until {{until}}.",
@@ -10903,6 +11703,7 @@
 			"stamp": "checklist",
 			"time_one": "About 10 minutes, and {{count, number}} h to start the package once it's made.",
 			"time_other": "About 10 minutes, and {{count, number}} h to start the package once it's made.",
+			"timeOnly": "About 10 minutes.",
 			"title": "You'll need"
 		},
 		"next": {
@@ -10922,7 +11723,7 @@
 			"opensLater": "Opens once {{name}} checks in.",
 			"packageFirst": "Download the setup package first. It can't be downloaded again after you leave this setup.",
 			"passwordGone": "Enter the device password again first. It's never stored, so it's gone after the page reloaded.",
-			"rejected": "The agent release can't be verified, so no package can be built.",
+			"rejected": "The agent release failed a check, so no package can be built.",
 			"releaseUnreachable": "The agent release couldn't be loaded. Check again.",
 			"retry": "Try again",
 			"startNew": "Start a new setup",
@@ -11027,6 +11828,7 @@
 				"registered": "registered {{ago}}",
 				"status": "Status",
 				"then": "then the package stops working",
+				"thenRelease": "then the hub's agent release runs out",
 				"title": "The new device",
 				"waiting": "Waiting for the device · counts toward your {{max, number}} unused packages",
 				"waitingPlain": "Waiting for the device · counts toward your unused packages"
@@ -11098,7 +11900,7 @@
 				"not": "Not in the package",
 				"notText": "Your device password and the owner keys. They stay on this computer.",
 				"onboarding": "Proves the device is the one this package was made for. The agent deletes it after setup. Don't share the package until then.",
-				"release": "The signed release and the keys it must be signed with. The device refuses releases older than #{{sequence, number}}.",
+				"release": "The signed release and the keys it must be signed with. The device refuses any release with a number below {{sequence, number}}.",
 				"releasePlain": "The signed release and the keys it must be signed with.",
 				"secret": "One-time secret",
 				"start": "Registers the device on first start, then runs the agent.",
@@ -11129,6 +11931,8 @@
 				"title": "Unpack it and open the folder"
 			}
 		},
+		"startBy": "Start it on the device before {{time}}: the hub's agent release runs out then.",
+		"startByNew": "A package made now has to be started on the device before {{time}}: the hub's agent release runs out then.",
 		"steps": {
 			"check": "Check",
 			"create": "Create",
@@ -11443,7 +12247,8 @@
 		},
 		"event": {
 			"newIn": "New in {{version}}",
-			"pins": "event <1/> · flow <2/>"
+			"pins": "event <1/> · flow <2/>",
+			"route": "{{method}} {{path}}"
 		},
 		"fleet": {
 			"active": "{{phase}}…",

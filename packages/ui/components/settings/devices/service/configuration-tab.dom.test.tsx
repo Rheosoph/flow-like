@@ -15,6 +15,18 @@ const { cleanupDevices, mountDevices, preloadDevices } = await import(
 );
 await preloadDevices();
 const { rejected } = await import("../testing/fake-device-api");
+const {
+	NIGHTLY,
+	REVIEW,
+	SHOP,
+	serveNightlyOnEdge,
+	serveReviewOnEdge,
+	serveShopOnEdge,
+	shopTokenSecret,
+} = await import("../testing/schedule-scenarios");
+const { AGENT_FEATURES } = await import(
+	"../../../../lib/device-management/model/types"
+);
 const { formatTimeOfDay } = await import("../../../../lib/date");
 const { useOverlayStore } = await import("../workspace/overlay-store");
 const { ConfigUnavailable } = await import("./config-parts");
@@ -47,8 +59,13 @@ afterAll(dom.restore);
 /** Safe updates poll the device once a second until the new settings are healthy. */
 const SLOW = 20_000;
 
+const EVENT_ADDED =
+	"Add it with Add an event…: it checks the device's agent and, for a bot, asks for its token.";
+
 const summary = (view: View) =>
 	view.container.querySelector<HTMLElement>("[data-config-summary]");
+/** The text of a node that may be missing. */
+const said = (node: ParentNode | null | undefined) => (node ? text(node) : "");
 const actions = (view: View) =>
 	view.container.querySelector<HTMLElement>(
 		"[data-config-actions]",
@@ -375,7 +392,7 @@ describe("action row", () => {
 		expect(text(summary(view) as HTMLElement)).toContain("1 behind");
 	});
 
-	test("on the published versions: Update… links to the wizard for this service; nothing more can be added", async () => {
+	test("on the published versions: Update… links to the wizard for this service; Add an event offers the form it doesn't serve", async () => {
 		const view = await fieldNotes();
 		await ready(view);
 		const update = act(view, "update");
@@ -385,11 +402,11 @@ describe("action row", () => {
 		expect(href).toContain(`device=${STUDIO}`);
 		expect(href).toContain("service=field-notes");
 		expect(href).toContain("app=app_field_notes");
+		// "New note" is a form a device can run now, and field-notes doesn't serve it.
 		const add = act(view, "add");
-		expect(add.getAttribute("aria-disabled")).toBe("true");
-		expect(text(actions(view))).toContain(
-			"Add an event: Every event of Field Notes that can run on a device is already served here.",
-		);
+		expect(add.tagName).toBe("A");
+		expect(add.getAttribute("href")).toContain("step=what");
+		expect(text(actions(view))).not.toContain("already served here");
 		// Another action's reason doesn't take the place of what Edit settings does.
 		expect(
 			text(actions(view).querySelector("[data-config-hint]") as HTMLElement),
@@ -400,6 +417,21 @@ describe("action row", () => {
 			"Runs the newest version, v2.0.0. Publishing on the hub doesn't change a running device. Each service keeps its version until you update it.",
 		);
 		expect(primaries()).toBe(1);
+	});
+
+	test("an agent without the flag the form needs: Add an event names the agent update instead of the wizard", async () => {
+		const features = Object.fromEntries(
+			AGENT_FEATURES.filter((flag) => flag !== "on_demand_events").map(
+				(flag) => [flag, 1 as const],
+			),
+		);
+		const view = await fieldNotes({ agentFeatures: features });
+		await ready(view);
+		const add = act(view, "add");
+		expect(add.getAttribute("aria-disabled")).toBe("true");
+		expect(text(actions(view))).toContain(
+			"Add an event: studio-mac-mini's agent is too old to run forms and quick actions.",
+		);
 	});
 
 	test("in an app's settings the wizard links stay in that app", async () => {
@@ -1161,6 +1193,398 @@ describe("danger zone", () => {
 		await click(byRole("button", "Cancel", inPortal("alertdialog")));
 		expect(writes(view)).toEqual([]);
 		expect(revoked(view)).toEqual([]);
+	});
+});
+
+describe("a service that serves an event which follows Latest", () => {
+	const review = (view: View) =>
+		view.container.querySelector<HTMLElement>(`[data-event="${REVIEW.event}"]`);
+	const served = (
+		arrange: (fake: Parameters<typeof serveReviewOnEdge>[0]) => void = () =>
+			undefined,
+		flowVersion?: [number, number, number],
+	) =>
+		open(REVIEW.device, REVIEW.service, {
+			arrange: async (fake) => {
+				await serveReviewOnEdge(fake, flowVersion);
+				arrange(fake);
+			},
+		});
+
+	test("the flow as it was deployed is the newest: the row says so and names the event Follows Latest, never “Latest”", async () => {
+		const view = await served();
+		await ready(view);
+		const row = review(view);
+		expect(said(row)).toContain("event 0.9.0 · flow 0.9.2");
+		expect(said(row?.querySelector("[data-pin]"))).toBe("newest");
+		expect(said(row?.querySelector("[data-follows-latest]"))).toBe(
+			"Follows Latest",
+		);
+		expect(said(row)).not.toContain("flow Latest");
+		expect(
+			view.container.querySelector('[data-update-line="flow-edits"]') === null,
+		).toBe(true);
+	});
+
+	test("the flow has edits that no version holds: not “newest”, and Update says it takes them", async () => {
+		const view = await served((fake) => {
+			fake.hub.flows.edit(REVIEW.app, REVIEW.flow);
+		});
+		await ready(view);
+		const row = review(view);
+		expect(row?.querySelector("[data-pin]")?.getAttribute("data-pin")).toBe(
+			"edits",
+		);
+		expect(said(row)).toContain("Newer flow edits are available");
+		expect(said(row)).not.toContain("newest");
+		expect(
+			said(view.container.querySelector('[data-update-line="flow-edits"]')),
+		).toContain("Review queue");
+	});
+
+	test("a device on an older version of the flow is behind", async () => {
+		const view = await served(undefined, [0, 9, 1]);
+		await ready(view);
+		const row = review(view);
+		expect(said(row)).toContain("event 0.9.0 · flow 0.9.1");
+		expect(said(row)).not.toContain("newest");
+	});
+});
+
+describe("a service that runs a schedule", () => {
+	const zone = (view: View) =>
+		view.container.querySelector("#svc-danger") as HTMLElement;
+	const GIVE_BACK = `apps/${NIGHTLY.app}/device-schedules/${NIGHTLY.event}`;
+	const givenBack = (view: View) =>
+		view.fake.api.sent("DELETE", /device-schedules/).map(([, path]) => path);
+
+	/** invoice-extractor on edge-berlin-01 after a deploy added the nightly schedule to it. */
+	const nightly = (options: Partial<Parameters<Kit["openTab"]>[0]> = {}) =>
+		open(NIGHTLY.device, NIGHTLY.service, {
+			...options,
+			arrange: async (fake) => {
+				fake.agent(NIGHTLY.device).rollouts.length = 0;
+				await serveNightlyOnEdge(fake);
+				await options.arrange?.(fake);
+			},
+		});
+
+	async function confirmRemoval(view: View, untick = false) {
+		await click(byRole("button", "Remove service…", view.container));
+		const sheet = inPortal("alertdialog");
+		await typeInto(
+			sheet.querySelector("#dv-confirm-typed") as HTMLElement,
+			NIGHTLY.service,
+		);
+		if (untick)
+			await click(sheet.querySelector("#svc-remove-give-back") as HTMLElement);
+		await click(byRole("button", `Stop and remove ${NIGHTLY.service}`, sheet));
+	}
+
+	test("the summary names it a schedule, with when it runs and in which zone", async () => {
+		const view = await nightly();
+		await ready(view);
+		const events = said(summary(view));
+		expect(events).toContain("Nightly reconciliation");
+		expect(events).toContain("Schedule · event 1.0.0 · flow 1.3.0");
+		expect(events).toContain("At 02:00 every day · Europe/Berlin");
+	});
+
+	test("removing it hands the schedule back to the hub first, then removes the service", async () => {
+		const view = await nightly();
+		await ready(view);
+		const before: string[][] = [];
+		view.fake.agent(NIGHTLY.device).handle("remove", () => {
+			before.push(givenBack(view));
+			return { state: "completed", result: { removed: true } };
+		});
+		await click(byRole("button", "Remove service…", view.container));
+		const sheet = inPortal("alertdialog");
+		const box = sheet.querySelector<HTMLElement>("#svc-remove-give-back");
+		expect(box?.getAttribute("aria-checked") ?? box?.dataset.state).toMatch(
+			/true|checked/,
+		);
+		expect(text(sheet)).toContain(
+			"Run its schedules on the hub again (Nightly reconciliation)",
+		);
+		await click(byRole("button", "Cancel", sheet));
+		expect(givenBack(view)).toEqual([]);
+
+		await confirmRemoval(view);
+		await until(() => commandsOf(view, "remove").length === 1);
+		expect(before).toEqual([[GIVE_BACK]]);
+		expect(writes(view)).toEqual(["stop", "remove"]);
+		expect(
+			view.fake.hub.schedules
+				.listing(NIGHTLY.app)
+				.filter((row) => row.state === "device"),
+		).toEqual([]);
+	});
+
+	test("with the box unticked the service goes and the schedule stays where it is", async () => {
+		const view = await nightly();
+		await ready(view);
+		await confirmRemoval(view, true);
+		await until(() => commandsOf(view, "remove").length === 1);
+		expect(givenBack(view)).toEqual([]);
+	});
+
+	test("a give-back the hub refuses keeps the service, stopped, and says what to do", async () => {
+		const view = await nightly();
+		await ready(view);
+		view.fake.hub.schedules.canEditEvents = false;
+		await confirmRemoval(view);
+		await until(() =>
+			text(zone(view)).includes(
+				`The hub didn't take its schedules back, so ${NIGHTLY.service} wasn't removed. It stays stopped.`,
+			),
+		);
+		expect(writes(view)).toEqual(["stop"]);
+		expect(view.navigations).toEqual([]);
+	});
+
+	test("someone who can't edit the app's events is told that nothing will run it, and who can change that", async () => {
+		const view = await nightly({
+			mount: {
+				backend: {
+					roleState: {
+						getOwnRole: async () => ({
+							role_id: "role-viewer",
+							role_name: "Viewer",
+							permissions: 256,
+							is_owner: false,
+							can_leave: true,
+						}),
+					},
+				} as never,
+			},
+		});
+		await ready(view);
+		await click(byRole("button", "Remove service…", view.container));
+		const sheet = inPortal("alertdialog");
+		expect(sheet.querySelector("#svc-remove-give-back") === null).toBe(true);
+		expect(text(sheet)).toContain(
+			"Nightly reconciliation stays assigned to this service and nothing runs it. Ask someone who can edit this app's events to run it on the hub again.",
+		);
+	});
+
+	test("Edit as JSON refuses a schedule typed in by hand, and takes another event", async () => {
+		const DIGEST = "evt_notes_digest";
+		const view = await fieldNotes({
+			arrange: (fake) => {
+				const app = fake.hub.apps.app_field_notes;
+				if (!app) throw new Error("The sample has no Field Notes app.");
+				fake.hub.apps.app_field_notes = {
+					...app,
+					events: [
+						...app.events,
+						{
+							id: DIGEST,
+							name: "Daily digest",
+							active: true,
+							event_type: "cron",
+							event_version: [1, 0, 0],
+							board_version: [1, 0, 0],
+							default_page_id: null,
+							schedule: {
+								expression: "0 0 6 * * *",
+								timezone: "Europe/Berlin",
+							},
+							boardId: "flow_main",
+						},
+					],
+				};
+			},
+		});
+		await ready(view);
+		await click(act(view, "json"));
+		const sheet = inPortal("dialog");
+		const area = sheet.querySelector("#svc-json-text") as HTMLTextAreaElement;
+		const config = JSON.parse(area.value) as Config & { events: unknown[] };
+		const withEvent = (eventId: string) =>
+			JSON.stringify({
+				...config,
+				events: [
+					...config.events,
+					{
+						event_id: eventId,
+						event_version: [1, 0, 0],
+						board_version: [1, 0, 0],
+					},
+				],
+			});
+		await typeInto(area, withEvent(DIGEST));
+		await click(byRole("button", "Apply", sheet));
+		expect(text(sheet)).toContain(EVENT_ADDED);
+		expect(writes(view)).toEqual([]);
+		// A form needs the agent's flag too.
+		await typeInto(area, withEvent("evt_notes_form"));
+		await click(byRole("button", "Apply", sheet));
+		expect(text(sheet)).toContain(EVENT_ADDED);
+		expect(writes(view)).toEqual([]);
+		// So does a bot token typed in by hand: only the wizard asks for a token.
+		await typeInto(
+			area,
+			JSON.stringify({
+				...config,
+				secret_overrides: {
+					...((config.secret_overrides as Record<string, string>) ?? {}),
+					"event.evt_notes_bot.bot_token": "typed-secret",
+				},
+			}),
+		);
+		await click(byRole("button", "Apply", sheet));
+		expect(text(sheet)).toContain(EVENT_ADDED);
+		expect(writes(view)).toEqual([]);
+		// An event that needs none of that goes to the device, which validates the rest.
+		await typeInto(area, withEvent("evt_notes_other"));
+		await click(byRole("button", "Apply", sheet));
+		await until(() => writes(view).length > 0);
+	});
+});
+
+describe("removing a service that runs bots", () => {
+	const zone = (view: View) =>
+		view.container.querySelector("#svc-danger") as HTMLElement;
+	const givenBack = (view: View) =>
+		view.fake.api.sent("DELETE", /device-schedules/).map(([, path]) => path);
+	const BOTH =
+		"Run its schedules on the hub again (Price update) and take its bots back (Shop helper)";
+
+	/** shop-assistant on edge-berlin-01 with its Telegram bot, and its one-time schedule unless `botOnly`. */
+	const shop = (botOnly = false) =>
+		open(SHOP.device, SHOP.service, {
+			arrange: async (fake) => {
+				await serveShopOnEdge(fake, {
+					events: botOnly ? [SHOP.telegram] : [SHOP.telegram, SHOP.once],
+				});
+			},
+		});
+
+	async function confirmRemoval(view: View) {
+		await click(byRole("button", "Remove service…", view.container));
+		const sheet = inPortal("alertdialog");
+		await typeInto(
+			sheet.querySelector("#dv-confirm-typed") as HTMLElement,
+			SHOP.service,
+		);
+		await click(byRole("button", `Stop and remove ${SHOP.service}`, sheet));
+	}
+
+	test("the box takes its bots back too, and the confirm says the device keeps the token", async () => {
+		const view = await shop();
+		await ready(view);
+		await click(byRole("button", "Remove service…", view.container));
+		const sheet = inPortal("alertdialog");
+		expect(text(sheet)).toContain(BOTH);
+		// Removing stops the service first, so the bot disconnects at once.
+		expect(text(sheet)).toContain(
+			"edge-berlin-01 disconnects Shop helper when it stops the service. The bot token stays on edge-berlin-01: to cut the bot off for certain, replace the token with BotFather.",
+		);
+		await click(byRole("button", "Cancel", sheet));
+		await confirmRemoval(view);
+		await until(() => commandsOf(view, "remove").length === 1);
+		expect(givenBack(view).sort()).toEqual(
+			[SHOP.once, SHOP.telegram]
+				.map((id) => `apps/${SHOP.app}/device-schedules/${id}`)
+				.sort(),
+		);
+	});
+
+	test("bots only: Take its bots back", async () => {
+		const view = await shop(true);
+		await ready(view);
+		await click(byRole("button", "Remove service…", view.container));
+		expect(text(inPortal("alertdialog"))).toContain(
+			"Take its bots back (Shop helper)",
+		);
+	});
+
+	test("a give-back the hub refuses keeps the service, stopped, and names the box to untick", async () => {
+		const view = await shop();
+		await ready(view);
+		view.fake.hub.schedules.canEditEvents = false;
+		await confirmRemoval(view);
+		await until(() =>
+			text(zone(view)).includes(
+				`The hub didn't take back what ${SHOP.service} runs, so it wasn't removed. It stays stopped. Try again, or untick “${BOTH}”.`,
+			),
+		);
+		expect(writes(view)).toEqual(["stop"]);
+	});
+});
+
+describe("a service with bots", () => {
+	/** edge-berlin-01 requires sandboxed services: the shop runs in one unless a test says otherwise. */
+	const open = (sandboxed = true) =>
+		openTab({
+			tab: "configuration",
+			device: SHOP.device,
+			service: SHOP.service,
+			arrange: async (fake) => {
+				await serveShopOnEdge(fake);
+				if (sandboxed)
+					await patchConfig(fake, SHOP.device, SHOP.service, (config) => {
+						config.resources = {
+							profile: "linux_sandbox",
+							cpu_millis: 2000,
+							memory_bytes: 2 * 1024 ** 3,
+							max_processes: 256,
+							disk_bytes: 4 * 1024 ** 3,
+						};
+					});
+			},
+		});
+
+	test("a bot's token is a stored secret of its bot with Set new…, an update from the wizard's Settings step", async () => {
+		const view = await open();
+		await ready(view);
+		const page = text(summary(view) as HTMLElement);
+		expect(page).toContain("Bot token of Shop helper");
+		expect(page).toContain("Bot token of Shop support");
+		expect(page).toContain("stored secret · can't be read back");
+		expect(page).not.toContain("No event of this service uses it any more");
+		expect(page).not.toContain(shopTokenSecret(SHOP.telegram));
+		const [setNew] = view.container.querySelectorAll<HTMLElement>(
+			"[data-act=config-token]",
+		);
+		expect(setNew?.tagName).toBe("A");
+		const href = setNew?.getAttribute("href") ?? "";
+		expect(href).toContain("flow=deploy");
+		expect(href).toContain(`service=${SHOP.service}`);
+		expect(href).toContain("step=settings");
+		// A token never changes in place: Change secret value… has nothing to offer for it.
+		expect(queryByRole("button", "Change secret value…", view.container)).toBe(
+			null,
+		);
+		expect(writes(view)).toEqual([]);
+	});
+
+	test("Set new… waits for what holds an update back, and says why", async () => {
+		const view = await open(false);
+		await ready(view);
+		const [setNew] = view.container.querySelectorAll<HTMLElement>(
+			"[data-act=config-token]",
+		);
+		expect(setNew?.tagName).toBe("BUTTON");
+		expect(setNew?.getAttribute("aria-disabled")).toBe("true");
+		expect(text(setNew?.parentElement as HTMLElement)).toContain(
+			"edge-berlin-01 requires sandboxed services.",
+		);
+		await click(setNew as HTMLElement);
+		expect(view.navigations).toEqual([]);
+	});
+
+	test("its events read by their type names", async () => {
+		const view = await open();
+		await ready(view);
+		const event = (id: string) =>
+			text(view.container.querySelector(`[data-event="${id}"]`) as HTMLElement);
+		expect(event(SHOP.orders)).toMatch(/^Endpoint · event 1\.0\.0/);
+		expect(event(SHOP.telegram)).toMatch(/^Telegram bot · event 1\.0\.0/);
+		expect(event(SHOP.discord)).toMatch(/^Discord bot · event 1\.0\.0/);
+		expect(event(SHOP.form)).toMatch(/^Form · event 1\.0\.0/);
+		expect(event(SHOP.once)).toMatch(/^Schedule · event 1\.0\.0/);
 	});
 });
 

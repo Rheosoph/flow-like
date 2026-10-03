@@ -337,7 +337,49 @@ export interface AppDevicePlacements {
 		} | null;
 		instances: { active: number; newest_lease_expires_at: number | null };
 	}[];
+	/**
+	 * Where the app's schedules and bots run when it is not the hub. Absent on a
+	 * hub that can't hand schedules to devices; one the hub runs is not listed.
+	 */
+	schedules?: AppScheduleRow[];
+	/**
+	 * The event types this hub exports to devices (Page events go whatever their
+	 * type). Absent on a hub that can't hand Endpoints, forms, quick actions or
+	 * bots to devices.
+	 */
+	event_types?: string[];
 }
+
+/** The service a schedule is assigned to; absent when the viewer can't see that device. */
+interface ScheduleServiceRef {
+	device_id?: string;
+	placement_id?: string;
+}
+
+/** One schedule of an app that a person released to a device service, or that is on its way back. */
+export type AppScheduleRow =
+	| ({
+			event_id: string;
+			/** A service claimed it. `seen_at` is its last claim or confirmation (every 30 minutes while it runs). */
+			state: "device";
+			since: number;
+			seen_at: number;
+			grant_id?: string;
+	  } & ScheduleServiceRef)
+	| ({
+			event_id: string;
+			/** Released to a service that has not claimed it: the hub still runs it. */
+			state: "released";
+			since: number;
+			/** An earlier runner's grace period: the hub runs it again from then. */
+			hub_resumes_at?: number;
+	  } & ScheduleServiceRef)
+	| {
+			event_id: string;
+			/** Handed back; the hub runs it again at `hub_resumes_at`. */
+			state: "returning";
+			hub_resumes_at: number;
+	  };
 
 /* Agent facts (CA4, plan §3.4). Every field is absent on older agents. */
 
@@ -356,6 +398,12 @@ export const AGENT_FEATURES = [
 	"acme_failure_detail",
 	"archive_status",
 	"artifact_capacity",
+	"scheduled_events",
+	"api_events",
+	"scheduled_once",
+	"on_demand_events",
+	"telegram_bots",
+	"discord_bots",
 ] as const;
 export type AgentFeature = (typeof AGENT_FEATURES)[number];
 export type AgentFeatures = Partial<Record<AgentFeature, 1>>;
@@ -384,6 +432,128 @@ export interface OfflineWritesSummary {
 	mirror_error: boolean;
 }
 
+export const SCHEDULE_HOLDS = [
+	"other_service",
+	"not_released",
+	"runs_elsewhere",
+	"hub_unreachable",
+	"hub_too_old",
+] as const;
+/** Why a running service does not run one of its schedules. */
+export type ScheduleHold = (typeof SCHEDULE_HOLDS)[number];
+export const SCHEDULE_OUTCOMES = [
+	"succeeded",
+	"failed",
+	"cancelled",
+	"timed_out",
+] as const;
+export type ScheduleOutcome = (typeof SCHEDULE_OUTCOMES)[number];
+export const SCHEDULE_SKIP_REASONS = ["overlap", "missed", "busy"] as const;
+export type ScheduleSkipReason = (typeof SCHEDULE_SKIP_REASONS)[number];
+
+/**
+ * A one-time schedule on its device. `pending`: not handled yet; `started`: a
+ * run started; `ran`: it ran (`last_outcome` says how; `cancelled` when it was
+ * cut off); `missed`: no process could start it within 15 minutes of its time;
+ * `passed`: its time was over when the service could first run it. The last
+ * three are final.
+ */
+export const ONCE_STATES = [
+	"pending",
+	"started",
+	"ran",
+	"missed",
+	"passed",
+] as const;
+export type OnceState = (typeof ONCE_STATES)[number];
+
+/**
+ * One schedule of a service, as its process reported it. A status snapshot
+ * carries only the facts that do not change by themselves: the schedule, the
+ * hold and the last result. A repeating schedule has `expression`, a one-time
+ * schedule `once_at` and `once_state` instead; a finished one-time entry is
+ * reported also while the service is not running.
+ */
+export interface ServiceSchedule {
+	event_id: string;
+	expression?: string;
+	/** One-time: the instant, unix seconds. */
+	once_at?: number;
+	once_state?: OnceState;
+	timezone: string;
+	/** null = armed. */
+	hold: ScheduleHold | null;
+	last_outcome?: ScheduleOutcome | null;
+	/** Live only, unix seconds by the device's clock. One-time: `once_at` while pending and armed. */
+	next_at?: number | null;
+	running?: boolean;
+	last_at?: number | null;
+	/** Live only, since the service started. */
+	runs?: number;
+	failed?: number;
+	skipped?: number;
+	last_skip?: { at: number; reason: ScheduleSkipReason } | null;
+	/** The device clock is before its last run: nothing runs until it has passed it. */
+	clock_behind?: boolean;
+}
+
+export const BOT_PROVIDERS = ["telegram", "discord"] as const;
+export type ServiceBotProvider = (typeof BOT_PROVIDERS)[number];
+/**
+ * `waiting`: not allowed to connect (see `hold`). `token_refused`,
+ * `intents_refused`: the bot stays off until the service restarts.
+ * `conflict`: another program takes the bot's updates. `webhook_set`: a
+ * webhook was set again after the first connect. A snapshot sends `ok` for
+ * `connecting`, `connected` and `reconnecting`, which change with every
+ * network blip.
+ */
+export const BOT_STATES = [
+	"waiting",
+	"connecting",
+	"connected",
+	"reconnecting",
+	"token_refused",
+	"intents_refused",
+	"conflict",
+	"webhook_set",
+	"ok",
+] as const;
+export type ServiceBotState = (typeof BOT_STATES)[number];
+
+/** One bot of a service, as its process reported it; counters are live only, since the service started. */
+export interface ServiceBot {
+	event_id: string;
+	provider: ServiceBotProvider;
+	state: ServiceBotState;
+	/** null = allowed to connect. */
+	hold: ScheduleHold | null;
+	/** The bot's public handle; null when it has none a device can show. Live only. */
+	bot_name?: string | null;
+	connected_at?: number | null;
+	last_message_at?: number | null;
+	last_outcome?: ScheduleOutcome | null;
+	running?: number;
+	runs?: number;
+	runs_today?: number;
+	failed?: number;
+	/** Messages not answered: floods, busy chats and stale messages after a start. */
+	dropped?: number;
+}
+
+/** A quick action has no fields; a form has `fields` of which `file_fields` take a file. */
+export interface ServiceAction {
+	event_id: string;
+	kind: "action" | "form";
+	fields: number;
+	file_fields: number;
+	/** Live only, added up over the service's instances. */
+	running?: number;
+	last_at?: number | null;
+	last_outcome?: ScheduleOutcome | null;
+	runs?: number;
+	failed?: number;
+}
+
 export type ReplicaStatus = NonNullable<PlacementStatus["replicas"]>[number];
 export interface ReplicaStatusPlus extends ReplicaStatus {
 	process_id?: number | null;
@@ -404,6 +574,15 @@ export interface PlacementStatusPlus extends Omit<PlacementStatus, "replicas"> {
 	events?: PlacementEvent[];
 	events_truncated?: boolean;
 	online_metadata_sha256?: string | null;
+	/** Present only while a process of the service runs and reported them; absent ≠ none. */
+	schedules?: ServiceSchedule[];
+	schedules_truncated?: boolean;
+	/** Like `schedules`, for bots (at most 8). */
+	bots?: ServiceBot[];
+	bots_truncated?: boolean;
+	/** Like `schedules`, for quick actions and forms (at most 16). */
+	actions?: ServiceAction[];
+	actions_truncated?: boolean;
 }
 
 export interface TaskHealth {
@@ -711,6 +890,7 @@ export type ActionId =
 	| "restart"
 	| "scale"
 	| "remove_service"
+	| "run_event"
 	| "upload_revision"
 	| "create_service"
 	| "update_service"
@@ -793,6 +973,7 @@ export type GateReason =
 	| "locked_access"
 	| "locked_keys"
 	| "locked_certificates"
+	| "locked_run"
 	| "unlocking"
 	| "held_elsewhere"
 	| "password_required"
@@ -1149,6 +1330,13 @@ export type AttentionKey =
 	| "secret_write_failed"
 	| "endpoint_unencrypted_exposed"
 	| "event_tokens_after_revoke"
+	| "schedule_held"
+	| "schedule_failed"
+	| "bot_held"
+	| "bot_token_refused"
+	| "bot_intents_refused"
+	| "bot_conflict"
+	| "schedule_once_missed"
 	// offline writes
 	| "offline_writes_conflict"
 	| "offline_writes_blocked"
@@ -1359,7 +1547,12 @@ export interface AttentionInput {
 	hub: HubDeviceSupport;
 	readiness?: DeviceSetupReadiness;
 	releaseTrust?: unknown;
-	latestRelease?: { version: string; sequence: number | null };
+	latestRelease?: {
+		version: string;
+		sequence: number | null;
+		/** How long the hub's release list is valid in all, in seconds; absent when that isn't known. */
+		validForS?: number;
+	};
 	usage?: { limits: DeviceLimits; usage: DeviceUsage };
 	clock?: {
 		hubOffsetS?: number;
@@ -1440,7 +1633,59 @@ export interface ServiceView {
 				quarantined: boolean;
 		  }
 		| "not_loaded";
+	/**
+	 * What the service's process says about its schedules. `not_reported`: the
+	 * agent can say and the row carries none (the service is not running, or has
+	 * not armed yet). `needs_agent`: the agent is too old to say. `not_loaded`:
+	 * whether the agent can say is not known on this plane.
+	 */
+	schedules?: ServiceSchedule[] | "not_reported" | "needs_agent" | "not_loaded";
+	/** The device reports 16 schedules at once; the service has more. */
+	schedulesTruncated?: boolean;
+	/** Its bots, with the three states of `schedules` (flags `telegram_bots`, `discord_bots`). */
+	bots?: ServiceBot[] | "not_reported" | "needs_agent" | "not_loaded";
+	botsTruncated?: boolean;
+	/** Its quick actions and forms, with the three states of `schedules` (flag `on_demand_events`). */
+	actions?: ServiceAction[] | "not_reported" | "needs_agent" | "not_loaded";
+	actionsTruncated?: boolean;
 	rollout?: DeploymentRolloutStatus;
+}
+
+/* A form or quick action as the device runs it (`event_form`, design R2 §1.8). */
+
+export interface EventFormField {
+	name: string;
+	label: string;
+	description: string;
+	/** The pin's own words; a client that does not know one can't build the field. */
+	data_type: string;
+	value_type: string;
+	optional: boolean;
+	/** A password input; its default is never sent. */
+	sensitive: boolean;
+	default: unknown;
+	/** The default was larger than a device sends. */
+	default_omitted?: boolean;
+	/** The pin's valid values, shown as a choice. */
+	options: string[] | null;
+}
+
+export interface EventForm {
+	placement_id: string;
+	config_revision: number;
+	event_id: string;
+	event_version: [number, number, number];
+	board_version: [number, number, number];
+	/** A quick action has no fields. */
+	kind: "action" | "form";
+	name: string;
+	description: string;
+	fields: EventFormField[];
+	/** The form has more fields than one answer carries. */
+	fields_truncated: boolean;
+	/** Fields that take a file (`PathBuf`, `Byte`): only the service page can send them. */
+	file_fields: number;
+	navigate_to_routes: string[];
 }
 
 export interface DeviceViewModel {
@@ -1450,6 +1695,8 @@ export interface DeviceViewModel {
 	keys: KeySessionSnapshot;
 	live: LiveState;
 	agent?: { version: string; source: Freshness };
+	/** The agent's flags on the plane the services come from; absent = unknown, never "too old". */
+	features?: AgentFeatures;
 	/** Never an empty array for "not loaded". */
 	services:
 		| ServiceView[]

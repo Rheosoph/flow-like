@@ -56,6 +56,8 @@ export interface SetupController {
 	checks: SetupChecks;
 	/** The verified release, kept while a re-check runs; undefined once it is rejected. */
 	release: VerifiedRelease | undefined;
+	/** Unix seconds the agent release runs out, when a package made now would outlive it: the time to start such a package by. */
+	releaseCutoff?: number;
 	options: readonly TargetOption[];
 	/** The chosen platform. */
 	option: TargetOption | undefined;

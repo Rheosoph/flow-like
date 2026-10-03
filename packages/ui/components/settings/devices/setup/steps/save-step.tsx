@@ -41,6 +41,7 @@ import {
 	STEP_COUNT,
 	keyBackupFile,
 	packageFile,
+	startBy,
 } from "../setup-state";
 import { megabytes } from "./platform-step";
 
@@ -408,13 +409,17 @@ function DeviceFacts({ created }: Readonly<{ created: CreatedSetup }>) {
 				) : null}
 				<KvRow
 					label={t("setup.save.device.before", "Start it before")}
-					provenance={t(
-						"setup.save.device.then",
-						"then the package stops working",
-					)}
+					provenance={
+						created.releaseEndsAt === undefined
+							? t("setup.save.device.then", "then the package stops working")
+							: t(
+									"setup.save.device.thenRelease",
+									"then the hub's agent release runs out",
+								)
+					}
 				>
-					<b className="font-semibold">{time.at(created.expiresAt)}</b> (
-					{time.ago(created.expiresAt)})
+					<b className="font-semibold">{time.at(startBy(created))}</b> (
+					{time.ago(startBy(created))})
 				</KvRow>
 				<KvRow label={t("setup.save.device.status", "Status")}>
 					<span className="inline-flex items-center gap-1.5">

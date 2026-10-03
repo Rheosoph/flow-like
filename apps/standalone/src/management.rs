@@ -16,12 +16,31 @@ use std::{
     },
 };
 
+pub mod run_queue;
+
 /// Terminal rows stay replayable and readable by status lookups for this long.
 const JOURNAL_RETENTION_SECONDS: i64 = 86_400;
 const MAX_GRANT_JOURNAL_ENTRIES: u64 = 4_096;
 const MAX_JOURNAL_ENTRIES: u64 = 1_000_000;
 const MAX_REJECTION_TEXT: usize = 1_024;
 const REMOTE_HOST_OPERATIONS: bool = cfg!(target_os = "linux");
+const RUN_DIRECTORY: &str = ".standalone-run";
+const CONTRACT_FILE: &str = "contract.json";
+const MAX_CONTRACT_BYTES: u64 = 256 * 1024;
+const MAX_RUN_PAYLOAD_KEYS: usize = 64;
+const MAX_RUN_PAYLOAD_BYTES: usize = 12_288;
+const ON_DEMAND_TIME_LIMIT_SECS: u64 = 3_600;
+const MAX_RUN_ANSWER_BYTES: usize = 13 * 1024;
+const MAX_FORM_ANSWER_BYTES: usize = 12 * 1024;
+const MAX_FORM_FIELDS: usize = 64;
+const MAX_FORM_NAME_CHARS: usize = 120;
+const MAX_FORM_DESCRIPTION_CHARS: usize = 480;
+const MAX_FORM_DEFAULT_BYTES: usize = 1_024;
+const MAX_FORM_OPTIONS: usize = 32;
+const MAX_FORM_OPTION_CHARS: usize = 64;
+const MAX_FORM_TYPE_CHARS: usize = 32;
+const MAX_FORM_ROUTES: usize = 16;
+const MAX_FORM_ROUTE_CHARS: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RejectionCode {
@@ -394,6 +413,11 @@ fn authorized_read<R>(
 
 impl ManagementService {
     pub fn new(state_dir: PathBuf, device: Arc<DeviceSession>, boot_id: String) -> Arc<Self> {
+        if let Err(error) = sweep_interrupted_runs(&state_dir) {
+            tracing::warn!(
+                "Person-started runs left open by an earlier agent were not closed: {error:#}"
+            );
+        }
         Arc::new(Self {
             state_dir,
             device,
@@ -973,10 +997,12 @@ fn previous_operation(
 
 /// Journal rows of every principal, newest first, continuing after operation `after`; a
 /// cursor whose row was pruned has nothing older left. Rejected commands and reads are
-/// never journaled, and `kind` stays null until the journal records the command.
+/// never journaled. `kind` names person-started runs and their cancellations, with the
+/// event they ran; it stays null for every other command.
 fn journaled_operations(store: &StateStore, after: Option<&str>, limit: u32) -> Result<Vec<Value>> {
     let mut query = store.connection.prepare(
-        "SELECT m.operation_id,m.principal,m.project_id,m.placement_id,m.accepted_at,json_extract(m.result_json,'$.state') FROM management_operations m
+        "SELECT m.operation_id,m.principal,m.project_id,m.placement_id,m.accepted_at,json_extract(m.result_json,'$.state'),
+                json_extract(m.result_json,'$.result.command'),json_extract(m.result_json,'$.result.event_id') FROM management_operations m
             WHERE ?1 IS NULL OR EXISTS(SELECT 1 FROM management_operations c WHERE c.operation_id=?1
                 AND (m.accepted_at<c.accepted_at OR (m.accepted_at=c.accepted_at AND m.operation_id>c.operation_id)))
             ORDER BY m.accepted_at DESC,m.operation_id LIMIT ?2",
@@ -988,15 +1014,29 @@ fn journaled_operations(store: &StateStore, after: Option<&str>, limit: u32) -> 
             (1..=32).contains(&state.len())
                 && state.bytes().all(|c| c.is_ascii_lowercase() || c == b'_')
         });
-        Ok(json!({
+        let kind = row
+            .get::<_, Option<String>>(6)
+            .ok()
+            .flatten()
+            .filter(|kind| ["run_event", "cancel_run"].contains(&kind.as_str()));
+        let mut operation = json!({
             "operation_id":row.get::<_, String>(0)?,
-            "kind":null,
+            "kind":kind,
             "actor":Actor::parse(&principal).json(),
             "project_id":row.get::<_, Option<String>>(2)?,
             "placement_id":row.get::<_, Option<String>>(3)?,
             "accepted_at":row.get::<_, i64>(4)?,
             "state":state.unwrap_or_else(|| "unknown".into()),
-        }))
+        });
+        if kind.is_some() {
+            operation["event_id"] = json!(
+                row.get::<_, Option<String>>(7)
+                    .ok()
+                    .flatten()
+                    .filter(|id| validate_management_id(id).is_ok())
+            );
+        }
+        Ok(operation)
     })?;
     Ok(operations.collect::<rusqlite::Result<Vec<_>>>()?)
 }
@@ -1674,6 +1714,17 @@ fn execute(
     now: i64,
 ) -> Result<ManagementResponse> {
     validate_request(request, &manifest.device_id, now)?;
+    refuse_unless(
+        crate::event_kind::ON_DEMAND_EVENTS
+            || !matches!(
+                request.command,
+                ManagementCommand::RunEvent { .. }
+                    | ManagementCommand::CancelRun { .. }
+                    | ManagementCommand::EventForm { .. }
+            ),
+        RejectionCode::Unsupported,
+        "This device agent was built without person-started runs",
+    )?;
     match &request.command {
         ManagementCommand::AcmeCertificates { after, limit } => {
             refuse_unless(
@@ -2029,7 +2080,35 @@ fn execute(
                             format!("Unknown operation {operation_id}; it was never accepted or its record expired"),
                         )
                     })?;
-                    Ok(serde_json::from_str(&result)?)
+                    let mut response: ManagementResponse = serde_json::from_str(&result)?;
+                    run_queue::overlay(state_dir, &authority.principal, &mut response);
+                    if serde_json::to_vec(&response)?.len() > MAX_RUN_ANSWER_BYTES
+                        && let Some(result) = response.result.as_object_mut()
+                    {
+                        result.remove("output");
+                        result.insert("output_gone".into(), json!(true));
+                    }
+                    Ok(response)
+                },
+            );
+        }
+        ManagementCommand::EventForm {
+            placement_id,
+            event_id,
+        } => {
+            return authorized_read(
+                store,
+                authority.read_guard(manifest, request, now, None, None),
+                || {
+                    let (record, project_id) = placement_scope(store, placement_id)?;
+                    authority.require(
+                        ManagementCapability::Start,
+                        Some(&project_id),
+                        Some(placement_id),
+                    )?;
+                    require_serving(&record)?;
+                    let form = event_contract(state_dir, &record, event_id)?;
+                    form_answer(request, &record, event_id, form)
                 },
             );
         }
@@ -2458,8 +2537,11 @@ fn execute(
     store.connection.execute_batch("BEGIN IMMEDIATE")?;
     let result = execute_transaction(store, authority, request, manifest, boot_id, state_dir, now);
     match result {
-        Ok(value) => {
+        Ok((value, after_commit)) => {
             store.connection.execute_batch("COMMIT")?;
+            if let Some(after_commit) = after_commit {
+                after_commit.run(state_dir);
+            }
             if matches!(
                 request.command,
                 ManagementCommand::PutCertificate { .. }
@@ -2629,6 +2711,354 @@ fn require_buffered_writes_drained(
     )
 }
 
+/// What a journaled command does once its row is committed. Dropped on a rollback, which
+/// gives a reserved queue place back.
+enum AfterCommit {
+    Enqueue(run_queue::Reservation, run_queue::Admission),
+    Cancel {
+        placement_id: String,
+        operation_id: String,
+    },
+}
+
+impl AfterCommit {
+    fn run(self, state_dir: &Path) {
+        match self {
+            Self::Enqueue(reservation, admission) => reservation.enqueue(admission),
+            Self::Cancel {
+                placement_id,
+                operation_id,
+            } => {
+                run_queue::cancel(state_dir, &placement_id, &operation_id);
+            }
+        }
+    }
+}
+
+/// Runs queued by an earlier agent process died with it: their open rows end as
+/// `interrupted`. Rows of runs this process still holds are left alone.
+fn sweep_interrupted_runs(state_dir: &Path) -> Result<usize> {
+    let path = state_dir.join("management.sqlite");
+    if !path.exists() {
+        return Ok(0);
+    }
+    let store = StateStore::open(&path)?;
+    let open = serde_json::to_string(&run_queue::open_operations(state_dir))?;
+    Ok(store.connection.execute(
+        "UPDATE management_operations SET result_json=json_set(result_json,'$.state','failed','$.result.run','failed','$.result.code','interrupted')
+            WHERE json_extract(result_json,'$.result.command')='run_event' AND json_extract(result_json,'$.state')='accepted'
+            AND operation_id NOT IN (SELECT value FROM json_each(?1))",
+        [open],
+    )?)
+}
+
+/// The service runs with its current settings: it is requested to run and an instance of
+/// this configuration and intent is ready.
+fn require_serving(record: &crate::state::PlacementRecord) -> Result<()> {
+    refuse_unless(
+        record.desired_state == crate::state::DesiredState::Running && record.ready_replicas > 0,
+        RejectionCode::RevisionConflict,
+        format!(
+            "Service {} is not running with its current settings",
+            record.id
+        ),
+    )
+}
+
+/// The run's limit as the placement process applies it: the listener's request limit when
+/// the service has one, else an hour.
+fn run_time_limit(config: &Value) -> u64 {
+    config["hosting"]["request_timeout_secs"]
+        .as_u64()
+        .filter(|seconds| (1..=ON_DEMAND_TIME_LIMIT_SECS).contains(seconds))
+        .unwrap_or(ON_DEMAND_TIME_LIMIT_SECS)
+}
+
+/// The field values of a run: an object of at most 64 fields and 12,288 bytes. They are
+/// never written anywhere by the agent and never named in a refusal.
+fn run_payload(payload: &Option<RunPayload>) -> Result<Option<Value>> {
+    let Some(RunPayload(payload)) = payload else {
+        return Ok(None);
+    };
+    refuse_unless(
+        payload
+            .as_object()
+            .is_some_and(|fields| fields.len() <= MAX_RUN_PAYLOAD_KEYS)
+            && serde_json::to_vec(payload)?.len() <= MAX_RUN_PAYLOAD_BYTES,
+        RejectionCode::Invalid,
+        format!(
+            "Run input must be an object of at most {MAX_RUN_PAYLOAD_KEYS} fields and {MAX_RUN_PAYLOAD_BYTES} bytes"
+        ),
+    )?;
+    Ok(Some(payload.clone()))
+}
+
+/// State directory, placement, config revision and intent of a contract file that failed.
+type ContractFault = (PathBuf, String, u64, u64);
+
+/// Contract files that failed, so each is logged once.
+static CONTRACT_FAULTS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<ContractFault>>,
+> = std::sync::LazyLock::new(Default::default);
+
+fn contract_fault(state_dir: &Path, record: &crate::state::PlacementRecord, problem: &str) {
+    let mut faults = CONTRACT_FAULTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if faults.len() >= 64 {
+        faults.clear();
+    }
+    let key = (
+        state_dir.to_path_buf(),
+        record.id.clone(),
+        record.config_revision,
+        record.intent_revision,
+    );
+    if faults.insert(key) {
+        tracing::warn!(
+            placement_id = %record.id,
+            "The service's description of its actions and forms is not used: {problem}"
+        );
+    }
+}
+
+fn bounded_chars(text: &str, max: usize) -> String {
+    text.chars().take(max).collect()
+}
+
+fn version_of(value: &Value) -> Option<[u32; 3]> {
+    serde_json::from_value(value.clone()).ok()
+}
+
+/// One field of a form as the parent answers it, or `None` when the file's field is not
+/// usable. A sensitive field's default is never answered; a default over 1 KiB is left out.
+fn form_field(field: &Value) -> Option<(Value, bool)> {
+    let text = |key: &str, max: usize| match &field[key] {
+        Value::Null => Some(String::new()),
+        Value::String(text) => Some(bounded_chars(text, max)),
+        _ => None,
+    };
+    let word = |key: &str| {
+        field[key]
+            .as_str()
+            .filter(|word| {
+                (1..=MAX_FORM_TYPE_CHARS).contains(&word.len())
+                    && word.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+            })
+            .map(str::to_owned)
+    };
+    let name = field["name"]
+        .as_str()
+        .filter(|name| !name.is_empty() && name.chars().count() <= MAX_FORM_NAME_CHARS)?;
+    let label = text("label", MAX_FORM_NAME_CHARS)?;
+    let description = text("description", MAX_FORM_DESCRIPTION_CHARS)?;
+    let (data_type, value_type) = (word("data_type")?, word("value_type")?);
+    let optional = field["optional"].as_bool()?;
+    let sensitive = field["sensitive"].as_bool()?;
+    let options = match &field["options"] {
+        Value::Null => Value::Null,
+        Value::Array(options)
+            if options.len() <= MAX_FORM_OPTIONS
+                && options.iter().all(|option| {
+                    option
+                        .as_str()
+                        .is_some_and(|option| option.chars().count() <= MAX_FORM_OPTION_CHARS)
+                }) =>
+        {
+            Value::Array(options.clone())
+        }
+        _ => return None,
+    };
+    let default = &field["default"];
+    let omitted = !sensitive
+        && serde_json::to_vec(default)
+            .map(|bytes| bytes.len())
+            .unwrap_or(usize::MAX)
+            > MAX_FORM_DEFAULT_BYTES;
+    let file = matches!(data_type.as_str(), "PathBuf" | "Byte");
+    let mut answer = json!({
+        "name": name,
+        "label": label,
+        "description": description,
+        "data_type": data_type,
+        "value_type": value_type,
+        "optional": optional,
+        "sensitive": sensitive,
+        "default": if sensitive || omitted { Value::Null } else { default.clone() },
+        "options": options,
+    });
+    if omitted {
+        answer["default_omitted"] = json!(true);
+    }
+    Some((answer, file))
+}
+
+/// A person-started event as the running service described it: its contract entry, checked
+/// field by field, for the config revision, intent and pinned versions the agent runs. No
+/// usable contract file is a service that is not running with its current settings; an
+/// event the file does not describe usably is not a person-started event of the service.
+pub(crate) fn event_contract(
+    state_dir: &Path,
+    record: &crate::state::PlacementRecord,
+    event_id: &str,
+) -> Result<Value> {
+    let not_running = || {
+        refusal(
+            RejectionCode::RevisionConflict,
+            format!(
+                "Service {} has not described its actions and forms for its current settings",
+                record.id
+            ),
+        )
+    };
+    let bytes = match crate::diagnostics::read_placement_file(
+        state_dir,
+        &record.id,
+        RUN_DIRECTORY,
+        CONTRACT_FILE,
+        MAX_CONTRACT_BYTES,
+    ) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Err(not_running()),
+        Err(error) => {
+            contract_fault(state_dir, record, &format!("{error:#}"));
+            return Err(not_running());
+        }
+    };
+    let Ok(contract) = serde_json::from_slice::<Value>(&bytes) else {
+        contract_fault(state_dir, record, "it is not JSON");
+        return Err(not_running());
+    };
+    if contract["version"] != 1
+        || contract["config_revision"].as_u64() != Some(record.config_revision)
+        || contract["intent_revision"].as_u64() != Some(record.intent_revision)
+    {
+        return Err(not_running());
+    }
+    let Some(events) = contract["events"].as_object() else {
+        contract_fault(state_dir, record, "it lists no events");
+        return Err(not_running());
+    };
+    let not_offered = || {
+        refusal(
+            RejectionCode::Invalid,
+            format!(
+                "Event {event_id} is not a person-started event of service {}",
+                record.id
+            ),
+        )
+    };
+    let binding = record.config["events"]
+        .as_array()
+        .and_then(|bindings| {
+            bindings
+                .iter()
+                .find(|binding| binding["event_id"] == event_id)
+        })
+        .ok_or_else(not_offered)?;
+    let entry = events.get(event_id).ok_or_else(not_offered)?;
+    let form = form_entry(entry, binding);
+    if form.is_none() {
+        contract_fault(state_dir, record, "an event's entry is not usable");
+    }
+    form.ok_or_else(not_offered)
+}
+
+fn form_entry(entry: &Value, binding: &Value) -> Option<Value> {
+    let kind = entry["kind"]
+        .as_str()
+        .filter(|kind| ["action", "form"].contains(kind))?;
+    let event_version = version_of(&entry["event_version"])?;
+    let board_version = version_of(&entry["board_version"])?;
+    if Some(event_version) != version_of(&binding["event_version"])
+        || Some(board_version) != version_of(&binding["board_version"])
+    {
+        return None;
+    }
+    let name = bounded_chars(entry["name"].as_str()?, MAX_FORM_NAME_CHARS);
+    let description = bounded_chars(
+        entry["description"].as_str().unwrap_or_default(),
+        MAX_FORM_DESCRIPTION_CHARS,
+    );
+    let listed: &[Value] = match &entry["fields"] {
+        Value::Null => &[],
+        Value::Array(fields) => fields,
+        _ => return None,
+    };
+    let checked: Vec<_> = listed.iter().filter_map(form_field).collect();
+    let file_fields = checked.iter().filter(|(_, file)| *file).count() as u64;
+    let file_fields = entry["file_fields"]
+        .as_u64()
+        .filter(|count| *count <= 1_024)
+        .map_or(file_fields, |count| count.max(file_fields));
+    let truncated = entry["fields_truncated"] == true
+        || checked.len() < listed.len()
+        || checked.len() > MAX_FORM_FIELDS;
+    let fields: Vec<Value> = checked
+        .into_iter()
+        .take(MAX_FORM_FIELDS)
+        .map(|(field, _)| field)
+        .collect();
+    let routes: Vec<&str> = entry["navigate_to_routes"]
+        .as_array()
+        .map(|routes| {
+            routes
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|route| {
+                    route.chars().count() <= MAX_FORM_ROUTE_CHARS
+                        && !route.chars().any(char::is_control)
+                })
+                .take(MAX_FORM_ROUTES)
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(json!({
+        "event_version": event_version,
+        "board_version": board_version,
+        "kind": kind,
+        "name": name,
+        "description": description,
+        "fields": fields,
+        "fields_truncated": truncated,
+        "file_fields": file_fields,
+        "navigate_to_routes": routes,
+    }))
+}
+
+/// The `event_form` answer: at most 12 KiB as sent, fields dropped from the end beyond that.
+fn form_answer(
+    request: &ManagementRequest,
+    record: &crate::state::PlacementRecord,
+    event_id: &str,
+    mut form: Value,
+) -> Result<ManagementResponse> {
+    form["placement_id"] = json!(record.id);
+    form["config_revision"] = json!(record.config_revision);
+    form["event_id"] = json!(event_id);
+    let mut response = ManagementResponse {
+        operation_id: request.operation_id.clone(),
+        state: "completed".into(),
+        result: form,
+    };
+    while serde_json::to_vec(&response)?.len() > MAX_FORM_ANSWER_BYTES {
+        let result = &mut response.result;
+        if result["fields"].as_array_mut().and_then(Vec::pop).is_some() {
+            result["fields_truncated"] = json!(true);
+        } else {
+            refuse_unless(
+                result["navigate_to_routes"]
+                    .as_array_mut()
+                    .and_then(Vec::pop)
+                    .is_some(),
+                RejectionCode::Limit,
+                "The form exceeds the encrypted message limit",
+            )?;
+        }
+    }
+    Ok(response)
+}
+
 fn execute_transaction(
     store: &mut StateStore,
     authority: &Authority,
@@ -2637,7 +3067,7 @@ fn execute_transaction(
     boot_id: &str,
     state_dir: &Path,
     now: i64,
-) -> Result<ManagementResponse> {
+) -> Result<(ManagementResponse, Option<AfterCommit>)> {
     authority.require_current(store, manifest, now)?;
     if matches!(
         request.command,
@@ -2679,6 +3109,7 @@ fn execute_transaction(
             | ManagementCommand::PutCertificate { .. }
             | ManagementCommand::InstallCertificateRequest { .. }
             | ManagementCommand::InstallCertificateIssuer { .. }
+            | ManagementCommand::RunEvent { .. }
     ) {
         crate::secrets::request_digest(state_dir, request)?
     } else {
@@ -2687,12 +3118,100 @@ fn execute_transaction(
     if let Some(previous) =
         previous_operation(&store.connection, &request.operation_id, &digest, authority)?
     {
-        return Ok(previous);
+        return Ok((previous, None));
     }
     reserve_journal_entry(&store.connection, authority, now)?;
     let mut project = None;
     let mut placement = None;
+    let mut after_commit = None;
     let result = match &request.command {
+        ManagementCommand::RunEvent {
+            placement_id,
+            event_id,
+            expected_revision,
+            payload,
+        } => {
+            let (record, project_id) = placement_scope(store, placement_id)?;
+            authority.require(
+                ManagementCapability::Start,
+                Some(&project_id),
+                Some(placement_id),
+            )?;
+            require_revision(record.config_revision, *expected_revision, placement_id)?;
+            require_serving(&record)?;
+            store
+                .require_no_active_rollout(placement_id)
+                .reject_as(RejectionCode::RevisionConflict)?;
+            event_contract(state_dir, &record, event_id)?;
+            let payload = run_payload(payload)?;
+            let reservation = run_queue::reserve(state_dir, placement_id).ok_or_else(|| {
+                refusal(
+                    RejectionCode::Busy,
+                    format!("Service {placement_id} has no free place for another run"),
+                )
+            })?;
+            let run_id = uuid::Uuid::new_v4().to_string();
+            after_commit = Some(AfterCommit::Enqueue(
+                reservation,
+                run_queue::Admission {
+                    operation_id: request.operation_id.clone(),
+                    run_id: run_id.clone(),
+                    event_id: event_id.clone(),
+                    principal: authority.principal.clone(),
+                    config_revision: record.config_revision,
+                    time_limit_secs: run_time_limit(&record.config),
+                    payload,
+                },
+            ));
+            project = Some(project_id);
+            placement = Some(placement_id.clone());
+            json!({"command":"run_event","placement_id":placement_id,"event_id":event_id,"run_id":run_id,"run":"queued"})
+        }
+        ManagementCommand::CancelRun { operation_id } => {
+            validate_management_id(operation_id).reject_as(RejectionCode::Invalid)?;
+            let run: Option<(String, Option<String>, Option<String>, String)> = store
+                .connection
+                .query_row(
+                    "SELECT principal,project_id,placement_id,result_json FROM management_operations
+                        WHERE operation_id=?1 AND json_extract(result_json,'$.result.command')='run_event'",
+                    [operation_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()?;
+            let (project_id, placement_id, run) = run
+                .filter(|(principal, ..)| {
+                    authority.grant.is_none() || *principal == authority.principal
+                })
+                .and_then(|(_, project, placement, result)| {
+                    Some((project?, placement?, serde_json::from_str::<Value>(&result).ok()?))
+                })
+                .ok_or_else(|| {
+                    refusal(
+                        RejectionCode::Invalid,
+                        format!("Unknown run {operation_id}; it was never queued by this principal or its record expired"),
+                    )
+                })?;
+            authority.require(
+                ManagementCapability::Start,
+                Some(&project_id),
+                Some(&placement_id),
+            )?;
+            let cancelled = run["state"] == "accepted"
+                && run_queue::is_open(state_dir, &placement_id, operation_id);
+            if cancelled {
+                after_commit = Some(AfterCommit::Cancel {
+                    placement_id: placement_id.clone(),
+                    operation_id: operation_id.clone(),
+                });
+            }
+            let event_id = run["result"]["event_id"]
+                .as_str()
+                .filter(|id| validate_management_id(id).is_ok());
+            let result = json!({"command":"cancel_run","placement_id":placement_id,"event_id":event_id,"cancelled":cancelled});
+            project = Some(project_id);
+            placement = Some(placement_id);
+            result
+        }
         ManagementCommand::ConfigureAcmeCertificate {
             certificate_id,
             label,
@@ -3278,6 +3797,7 @@ fn execute_transaction(
                 | ManagementCommand::DeleteCertificateIssuer { .. }
                 | ManagementCommand::ConfigureAcmeCertificate { .. }
                 | ManagementCommand::DeleteAcmeCertificate { .. }
+                | ManagementCommand::CancelRun { .. }
         ) {
             "completed"
         } else {
@@ -3287,7 +3807,7 @@ fn execute_transaction(
         result,
     };
     store.connection.execute("INSERT INTO management_operations(operation_id,request_digest,principal,project_id,placement_id,accepted_at,result_json) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![request.operation_id,digest,authority.principal,project,placement,now,serde_json::to_string(&response)?])?;
-    Ok(response)
+    Ok((response, after_commit))
 }
 
 #[cfg(test)]
@@ -4437,8 +4957,18 @@ mod tests {
             "acme_failure_detail",
             "archive_status",
             "artifact_capacity",
+            "scheduled_events",
         ] {
             assert_eq!(owned["features"][flag], 1, "{flag}");
+        }
+        for (flag, built) in [
+            ("api_events", crate::event_kind::API_EVENTS),
+            ("scheduled_once", crate::event_kind::SCHEDULED_ONCE),
+            ("on_demand_events", crate::event_kind::ON_DEMAND_EVENTS),
+            ("telegram_bots", crate::event_kind::TELEGRAM_BOTS),
+            ("discord_bots", crate::event_kind::DISCORD_BOTS),
+        ] {
+            assert_eq!(owned["features"].get(flag).is_some(), built, "{flag}");
         }
         let row = &owned["placements"][0];
         assert_eq!(
@@ -7863,5 +8393,653 @@ mod tests {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         assert!(journal.iter().all(|entry| !entry.contains("PRIVATE KEY")));
         Ok(())
+    }
+
+    fn run_event(
+        event_id: &str,
+        expected_revision: u64,
+        payload: Option<Value>,
+    ) -> ManagementCommand {
+        ManagementCommand::RunEvent {
+            placement_id: "api".into(),
+            event_id: event_id.into(),
+            expected_revision,
+            payload: payload.map(RunPayload),
+        }
+    }
+
+    #[cfg(not(all(feature = "runtime", feature = "on-demand")))]
+    #[test]
+    fn an_agent_without_person_started_runs_answers_unsupported() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        let manifest = manifest(&SigningKey::generate());
+        for command in [
+            run_event("event", 1, None),
+            ManagementCommand::CancelRun {
+                operation_id: "run-1".into(),
+            },
+            ManagementCommand::EventForm {
+                placement_id: "api".into(),
+                event_id: "event".into(),
+            },
+        ] {
+            let refused = execute(
+                &mut store,
+                &owner(&manifest),
+                &request("run", command),
+                &manifest,
+                "boot",
+                &root,
+                101,
+            )
+            .unwrap_err();
+            assert_eq!(rejection_code(&refused), RejectionCode::Unsupported);
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "runtime", feature = "on-demand"))]
+    mod person_started_runs {
+        use super::*;
+        use run_queue::FinishedRun;
+
+        fn title() -> Value {
+            json!([{"name":"title","label":"Title","description":"","data_type":"String","value_type":"Normal",
+                "optional":false,"sensitive":false,"default":null,"options":null}])
+        }
+
+        fn contract(intent: u64, fields: Value) -> Value {
+            json!({"version":1,"config_revision":1,"intent_revision":intent,"events":{"event":{
+                "kind":"form","name":"New note","description":"","event_version":[1,0,0],"board_version":[1,0,0],
+                "fields":fields,"fields_truncated":false,"file_fields":0,"navigate_to_routes":[]}}})
+        }
+
+        fn finished(operation_id: &str, run: &str) -> FinishedRun {
+            FinishedRun {
+                operation_id: operation_id.into(),
+                run: run.into(),
+                code: None,
+                fields: Vec::new(),
+                started_at: 0,
+                finished_at: 0,
+                output: None,
+                output_bytes: 0,
+                truncated: false,
+                attachments: 0,
+            }
+        }
+
+        fn cancel(operation_id: &str) -> ManagementCommand {
+            ManagementCommand::CancelRun {
+                operation_id: operation_id.into(),
+            }
+        }
+
+        fn form() -> ManagementCommand {
+            ManagementCommand::EventForm {
+                placement_id: "api".into(),
+                event_id: "event".into(),
+            }
+        }
+
+        fn code(result: Result<ManagementResponse>) -> RejectionCode {
+            rejection_code(&result.unwrap_err())
+        }
+
+        /// Service `api` of project `project`, deployed, requested to run and ready, whose
+        /// process described one form `event`.
+        struct Service {
+            _temp: tempfile::TempDir,
+            root: PathBuf,
+            store: StateStore,
+            manifest: OnboardingManifest,
+            signing: SigningKey,
+            intent: u64,
+        }
+
+        impl Service {
+            fn new() -> Result<Self> {
+                let temp = tempfile::tempdir()?;
+                let root = temp.path().canonicalize()?;
+                let mut store = StateStore::open(&root.join("management.sqlite"))?;
+                let signing = SigningKey::generate();
+                let manifest = manifest(&signing);
+                let deploy = ManagementCommand::Apply {
+                    config: placement(&root)?,
+                    expected_revision: 0,
+                    start: true,
+                };
+                let owner = owner(&manifest);
+                execute(
+                    &mut store,
+                    &owner,
+                    &request("deploy", deploy),
+                    &manifest,
+                    "boot",
+                    &root,
+                    101,
+                )?;
+                let record = store.get_placement("api")?.context("deployed")?;
+                store.connection.execute(
+                    "INSERT INTO placement_replicas(placement_id,slot,config_revision,intent_revision,observed_state,applied_revision,process_id) VALUES('api',0,?1,?2,'running',?1,4242)",
+                    params![record.config_revision, record.intent_revision],
+                )?;
+                let service = Self {
+                    _temp: temp,
+                    root,
+                    store,
+                    manifest,
+                    signing,
+                    intent: record.intent_revision,
+                };
+                service.write_contract(contract(service.intent, title()).to_string().as_bytes())?;
+                Ok(service)
+            }
+
+            fn run_directory(&self) -> PathBuf {
+                self.root
+                    .join("placement-data/api/current/store")
+                    .join(RUN_DIRECTORY)
+                    .join("api")
+            }
+
+            fn write_contract(&self, contract: &[u8]) -> Result<()> {
+                std::fs::create_dir_all(self.run_directory())?;
+                std::fs::write(self.run_directory().join(CONTRACT_FILE), contract)?;
+                Ok(())
+            }
+
+            fn owner(&self) -> Authority {
+                owner(&self.manifest)
+            }
+
+            fn grant(&self, grantees: &[&Authority]) -> Result<()> {
+                accept_grants(&self.store, &self.signing, grantees, 100, 1000)
+            }
+
+            fn run(
+                &mut self,
+                authority: &Authority,
+                id: &str,
+                command: ManagementCommand,
+            ) -> Result<ManagementResponse> {
+                execute(
+                    &mut self.store,
+                    authority,
+                    &request(id, command),
+                    &self.manifest,
+                    "boot",
+                    &self.root,
+                    101,
+                )
+            }
+
+            fn read(
+                &mut self,
+                authority: &Authority,
+                operation_id: &str,
+            ) -> Result<ManagementResponse> {
+                let read = ManagementCommand::Operation {
+                    operation_id: operation_id.into(),
+                };
+                self.run(authority, "read", read)
+            }
+
+            fn exchange(
+                &self,
+                connection: u64,
+                finished: Vec<FinishedRun>,
+            ) -> Result<run_queue::RunBatch> {
+                run_queue::exchange(&self.root, "api", connection, finished, &|| Ok(true))
+            }
+
+            fn row(&self, operation_id: &str) -> Result<(String, String)> {
+                Ok(self.store.connection.query_row(
+                    "SELECT request_digest,result_json FROM management_operations WHERE operation_id=?1",
+                    [operation_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?)
+            }
+
+            fn journaled(&self) -> Result<Vec<String>> {
+                Ok(self
+                    .store
+                    .connection
+                    .prepare(
+                        "SELECT operation_id FROM management_operations ORDER BY operation_id",
+                    )?
+                    .query_map([], |row| row.get(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?)
+            }
+        }
+
+        #[test]
+        fn run_event_needs_start_on_the_running_service_and_an_event_of_its_contract() -> Result<()>
+        {
+            let mut service = Service::new()?;
+            let starter = project_grant("starter", vec![ManagementCapability::Start], 1000);
+            let status = project_grant("status", vec![ManagementCapability::Status], 1000);
+            let mut elsewhere = project_grant("elsewhere", vec![ManagementCapability::Start], 1000);
+            if let Some(grant) = &mut elsewhere.grant {
+                grant.scope = ManagementScope::Project {
+                    project_id: "other".into(),
+                };
+            }
+            service.grant(&[&starter, &status, &elsewhere])?;
+            let refusals = [
+                (
+                    &status,
+                    run_event("event", 1, None),
+                    RejectionCode::Unauthorized,
+                ),
+                (
+                    &elsewhere,
+                    run_event("event", 1, None),
+                    RejectionCode::Unauthorized,
+                ),
+                (
+                    &starter,
+                    run_event("event", 2, None),
+                    RejectionCode::RevisionConflict,
+                ),
+                (
+                    &starter,
+                    run_event("other", 1, None),
+                    RejectionCode::Invalid,
+                ),
+                (
+                    &starter,
+                    run_event("event", 1, Some(json!(["title"]))),
+                    RejectionCode::Invalid,
+                ),
+                (
+                    &starter,
+                    run_event(
+                        "event",
+                        1,
+                        Some(Value::Object(
+                            (0..65).map(|i| (format!("f{i}"), json!(i))).collect(),
+                        )),
+                    ),
+                    RejectionCode::Invalid,
+                ),
+                (
+                    &starter,
+                    run_event(
+                        "event",
+                        1,
+                        Some(json!({"title": "x".repeat(MAX_RUN_PAYLOAD_BYTES)})),
+                    ),
+                    RejectionCode::Invalid,
+                ),
+            ];
+            for (index, (authority, command, expected)) in refusals.into_iter().enumerate() {
+                let refused = service.run(authority, &format!("refused-{index}"), command);
+                assert_eq!(code(refused), expected, "refusal {index}");
+            }
+
+            let command = run_event("event", 1, Some(json!({"title":"hidden words"})));
+            let accepted = service.run(&starter, "run-1", command.clone())?;
+            assert_eq!(accepted.state, "accepted");
+            let run_id = accepted.result["run_id"]
+                .as_str()
+                .context("run id")?
+                .to_owned();
+            assert!(uuid::Uuid::parse_str(&run_id).is_ok());
+            assert_eq!(
+                accepted.result,
+                json!({"command":"run_event","placement_id":"api","event_id":"event","run_id":run_id,"run":"queued"})
+            );
+            assert_eq!(service.journaled()?, ["deploy", "run-1"]);
+            let (digest, row) = service.row("run-1")?;
+            assert!(!row.contains("hidden"));
+            assert_ne!(
+                digest,
+                compact_digest(&serde_json::to_string(&request("run-1", command.clone()))?)
+            );
+            assert_eq!(
+                service.run(&starter, "run-1", command)?.result,
+                accepted.result
+            );
+
+            let batch = service.exchange(1, Vec::new())?;
+            assert_eq!(batch.start.len(), 1, "a replay queues nothing");
+            assert_eq!(batch.start[0].run_id, run_id);
+            assert_eq!(
+                batch.start[0].payload,
+                Some(json!({"title":"hidden words"}))
+            );
+            assert_eq!(batch.start[0].time_limit_secs, ON_DEMAND_TIME_LIMIT_SECS);
+
+            let owner = service.owner();
+            let stop = ManagementCommand::Stop {
+                placement_id: "api".into(),
+                expected_revision: 1,
+            };
+            service.run(&owner, "stop", stop)?;
+            let stopped = service.run(&starter, "stopped", run_event("event", 1, None));
+            assert_eq!(code(stopped), RejectionCode::RevisionConflict);
+            Ok(())
+        }
+
+        #[test]
+        fn the_issuer_follows_a_run_to_a_bounded_result_and_nobody_else_reads_it() -> Result<()> {
+            let mut service = Service::new()?;
+            let starter = project_grant("starter", vec![ManagementCapability::Start], 1000);
+            service.grant(&[&starter])?;
+            let owner = service.owner();
+            service.run(
+                &starter,
+                "run-1",
+                run_event("event", 1, Some(json!({"title":"t"}))),
+            )?;
+            assert_eq!(service.read(&starter, "run-1")?.result["run"], "queued");
+            assert_eq!(code(service.read(&owner, "run-1")), RejectionCode::Invalid);
+            service.exchange(7, Vec::new())?;
+            let running = service.read(&starter, "run-1")?;
+            assert_eq!(
+                (running.state.as_str(), &running.result["run"]),
+                ("accepted", &json!("running"))
+            );
+            assert!(running.result["started_at"].is_i64());
+
+            let text = "\"\\\u{7}ü€😀".repeat(2_000);
+            let mut succeeded = finished("run-1", "succeeded");
+            succeeded.output = Some(json!({ "text": text }));
+            succeeded.output_bytes = text.len() as u64;
+            service.exchange(7, vec![succeeded])?;
+            let done = service.read(&starter, "run-1")?;
+            assert_eq!(
+                (done.state.as_str(), &done.result["run"]),
+                ("completed", &json!("succeeded"))
+            );
+            assert!(text.starts_with(done.result["output"]["text"].as_str().context("text")?));
+            assert_eq!(done.result["truncated"], true);
+            assert!(serde_json::to_vec(&done)?.len() <= MAX_RUN_ANSWER_BYTES);
+            let (_, row) = service.row("run-1")?;
+            assert!(row.len() <= run_queue::MAX_ROW_BYTES && !row.contains('€'));
+
+            service.run(&starter, "run-2", run_event("event", 1, None))?;
+            service.exchange(7, Vec::new())?;
+            let mut refused = finished("run-2", "failed");
+            refused.code = Some("invalid_fields".into());
+            refused.fields = (0..100).map(|_| "\"\\\u{1}ü€".repeat(100)).collect();
+            service.exchange(7, vec![refused])?;
+            let failed = service.read(&starter, "run-2")?;
+            assert_eq!(
+                (failed.state.as_str(), &failed.result["code"]),
+                ("failed", &json!("invalid_fields"))
+            );
+            let names = failed.result["fields"].as_array().context("names")?;
+            assert!(!names.is_empty() && names.len() <= 16);
+            let (_, row) = service.row("run-2")?;
+            assert!(row.len() <= run_queue::MAX_ROW_BYTES);
+            assert!(serde_json::to_vec(&failed)?.len() <= noise::MAX_PLAINTEXT);
+            Ok(())
+        }
+
+        #[test]
+        fn cancel_run_is_for_the_issuer_or_the_owner_and_the_owner_lists_who_ran_what() -> Result<()>
+        {
+            let mut service = Service::new()?;
+            let starter = project_grant("starter", vec![ManagementCapability::Start], 1000);
+            let second = project_grant("second", vec![ManagementCapability::Start], 1000);
+            service.grant(&[&starter, &second])?;
+            let owner = service.owner();
+            service.run(&starter, "run-1", run_event("event", 1, None))?;
+            assert_eq!(
+                code(service.run(&second, "cancel-0", cancel("run-1"))),
+                RejectionCode::Invalid
+            );
+            let cancelled = service.run(&starter, "cancel-1", cancel("run-1"))?;
+            assert_eq!(cancelled.state, "completed");
+            assert_eq!(
+                cancelled.result,
+                json!({"command":"cancel_run","placement_id":"api","event_id":"event","cancelled":true})
+            );
+            let ended: Value = serde_json::from_str(&service.row("run-1")?.1)?;
+            assert_eq!(
+                (&ended["state"], &ended["result"]["run"]),
+                (&json!("failed"), &json!("cancelled"))
+            );
+            assert_eq!(
+                service.run(&starter, "cancel-2", cancel("run-1"))?.result["cancelled"],
+                false
+            );
+
+            service.run(&starter, "run-2", run_event("event", 1, None))?;
+            assert_eq!(service.exchange(3, Vec::new())?.start.len(), 1);
+            assert_eq!(
+                service.run(&owner, "cancel-3", cancel("run-2"))?.result["cancelled"],
+                true
+            );
+            assert_eq!(service.exchange(3, Vec::new())?.cancel, ["run-2"]);
+            let mut stopped = finished("run-2", "cancelled");
+            stopped.code = Some("cancelled".into());
+            service.exchange(3, vec![stopped])?;
+            assert_eq!(service.read(&starter, "run-2")?.result["run"], "cancelled");
+
+            let list = ManagementCommand::Operations {
+                after: None,
+                limit: 50,
+            };
+            let operations = service.run(&owner, "list", list)?.result["operations"].clone();
+            let row = |id: &str| {
+                operations
+                    .as_array()
+                    .and_then(|rows| rows.iter().find(|row| row["operation_id"] == id))
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            assert_eq!(
+                (&row("run-1")["kind"], &row("run-1")["event_id"]),
+                (&json!("run_event"), &json!("event"))
+            );
+            assert_eq!(
+                (&row("cancel-3")["kind"], &row("cancel-3")["event_id"]),
+                (&json!("cancel_run"), &json!("event"))
+            );
+            assert!(row("deploy")["kind"].is_null() && row("deploy").get("event_id").is_none());
+            assert!(!operations.to_string().contains("output"));
+            Ok(())
+        }
+
+        #[test]
+        fn event_form_answers_bounded_fields_without_sensitive_defaults() -> Result<()> {
+            let mut service = Service::new()?;
+            let starter = project_grant("starter", vec![ManagementCapability::Start], 1000);
+            let status = project_grant("status", vec![ManagementCapability::Status], 1000);
+            service.grant(&[&starter, &status])?;
+            assert_eq!(
+                code(service.run(&status, "form", form())),
+                RejectionCode::Unauthorized
+            );
+            assert_eq!(
+                service.run(&starter, "form", form())?.result,
+                json!({"placement_id":"api","config_revision":1,"event_id":"event","event_version":[1,0,0],
+                    "board_version":[1,0,0],"kind":"form","name":"New note","description":"","fields":title(),
+                    "fields_truncated":false,"file_fields":0,"navigate_to_routes":[]})
+            );
+
+            let field = |name: &str, data_type: &str, extra: Value| {
+                let mut field = json!({"name":name,"label":name,"description":"","data_type":data_type,
+                    "value_type":"Normal","optional":true,"sensitive":false,"default":null,"options":null});
+                for (key, value) in extra.as_object().cloned().unwrap_or_default() {
+                    field[key] = value;
+                }
+                field
+            };
+            let mut fields = vec![
+                field(
+                    "secret",
+                    "String",
+                    json!({"sensitive":true,"default":"hunter2"}),
+                ),
+                field(
+                    "big",
+                    "Struct",
+                    json!({"default":{"blob":"x".repeat(2_000)}}),
+                ),
+                field(
+                    "choice",
+                    "String",
+                    json!({"label":"L".repeat(500),"description":"d".repeat(900),"default":"a","options":["a","b"]}),
+                ),
+                field("upload", "PathBuf", json!({})),
+                field("bad type", "String; DROP", json!({})),
+                field(&"n".repeat(121), "String", json!({})),
+                field("bad options", "String", json!({"options":[1]})),
+            ];
+            fields.extend((0..10).map(|index| {
+                field(
+                    &format!("escaped_{index}"),
+                    "String",
+                    json!({"label":"\"\\\u{1}".repeat(40),
+                    "description":"\u{1}".repeat(480),"default":"\"".repeat(500)}),
+                )
+            }));
+            fields.extend(
+                (0..60).map(|index| field(&format!("plain_{index}"), "Integer", json!({}))),
+            );
+            let mut hostile = contract(service.intent, Value::Array(fields));
+            hostile["events"]["event"]["navigate_to_routes"] = json!(["/notes", "\u{1}", 7]);
+            service.write_contract(hostile.to_string().as_bytes())?;
+            let answer = service.run(&starter, "form", form())?;
+            let sent = serde_json::to_vec(&answer)?;
+            assert!(sent.len() <= MAX_FORM_ANSWER_BYTES);
+            assert!(!String::from_utf8_lossy(&sent).contains("hunter2"));
+            let result = &answer.result;
+            assert_eq!(result["fields_truncated"], true);
+            assert_eq!(result["file_fields"], 1);
+            assert_eq!(result["navigate_to_routes"], json!(["/notes"]));
+            let fields = result["fields"].as_array().context("fields")?;
+            assert!(fields.len() <= MAX_FORM_FIELDS && fields.len() > 4);
+            assert_eq!(
+                (&fields[0]["name"], &fields[0]["default"]),
+                (&json!("secret"), &Value::Null)
+            );
+            assert_eq!(
+                (&fields[1]["default"], &fields[1]["default_omitted"]),
+                (&Value::Null, &json!(true))
+            );
+            assert_eq!(
+                fields[2]["label"]
+                    .as_str()
+                    .map(|label| label.chars().count()),
+                Some(120)
+            );
+            assert_eq!(
+                fields[2]["description"]
+                    .as_str()
+                    .map(|text| text.chars().count()),
+                Some(480)
+            );
+            assert_eq!(
+                (&fields[2]["default"], &fields[2]["options"]),
+                (&json!("a"), &json!(["a", "b"]))
+            );
+            assert_eq!(fields[3]["data_type"], "PathBuf");
+            assert!(fields.iter().all(|field| {
+                field["name"]
+                    .as_str()
+                    .is_some_and(|name| name.chars().count() <= 120)
+                    && !["bad type", "bad options"]
+                        .contains(&field["name"].as_str().unwrap_or_default())
+            }));
+            Ok(())
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn a_hostile_or_stale_contract_file_is_never_used() -> Result<()> {
+            let mut service = Service::new()?;
+            let owner = service.owner();
+            let valid = contract(service.intent, title()).to_string();
+            let refused = |service: &mut Service| -> Result<(RejectionCode, RejectionCode)> {
+                Ok((
+                    code(service.run(&owner, "form", form())),
+                    code(service.run(&owner, "run", run_event("event", 1, None))),
+                ))
+            };
+            let contract_path = service.run_directory().join(CONTRACT_FILE);
+            let not_running = (
+                RejectionCode::RevisionConflict,
+                RejectionCode::RevisionConflict,
+            );
+            let not_offered = (RejectionCode::Invalid, RejectionCode::Invalid);
+
+            std::fs::write(service.root.join("elsewhere.json"), &valid)?;
+            std::fs::remove_file(&contract_path)?;
+            std::os::unix::fs::symlink(service.root.join("elsewhere.json"), &contract_path)?;
+            assert_eq!(refused(&mut service)?, not_running, "a link");
+
+            std::fs::remove_file(&contract_path)?;
+            let fifo = std::ffi::CString::new(contract_path.as_os_str().as_encoded_bytes())?;
+            assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+            assert_eq!(refused(&mut service)?, not_running, "a FIFO");
+            std::fs::remove_file(&contract_path)?;
+
+            let mut oversized = contract(service.intent, title());
+            oversized["padding"] = json!("x".repeat(MAX_CONTRACT_BYTES as usize));
+            let cases = [
+                (oversized.to_string(), not_running, "oversized"),
+                (json!({"version":1,"config_revision":1,"intent_revision":service.intent,"events":[]}).to_string(), not_running, "events not an object"),
+                ("{\"version\":".into(), not_running, "not JSON"),
+                (contract(service.intent + 1, title()).to_string(), not_running, "another intent"),
+                (json!({"version":1,"config_revision":1,"intent_revision":service.intent,"events":{}}).to_string(), not_offered, "no entry"),
+            ];
+            for (bytes, expected, case) in cases {
+                service.write_contract(bytes.as_bytes())?;
+                assert_eq!(refused(&mut service)?, expected, "{case}");
+            }
+            for (key, value) in [
+                ("kind", json!("page")),
+                ("event_version", json!([1, 0, 1])),
+                ("fields", json!({"title":{}})),
+                ("name", json!(7)),
+            ] {
+                let mut entry = contract(service.intent, title());
+                entry["events"]["event"][key] = value;
+                service.write_contract(entry.to_string().as_bytes())?;
+                assert_eq!(refused(&mut service)?, not_offered, "{key}");
+            }
+
+            service.write_contract(valid.as_bytes())?;
+            std::fs::rename(service.run_directory(), service.root.join("moved"))?;
+            std::os::unix::fs::symlink(service.root.join("moved"), service.run_directory())?;
+            assert_eq!(refused(&mut service)?, not_running, "a linked directory");
+            assert_eq!(service.journaled()?, ["deploy"]);
+            Ok(())
+        }
+
+        #[test]
+        fn the_start_up_sweep_closes_only_runs_of_an_earlier_agent() -> Result<()> {
+            let mut service = Service::new()?;
+            let owner = service.owner();
+            service.run(&owner, "current", run_event("event", 1, None))?;
+            let earlier = json!({"operation_id":"earlier","state":"accepted","result":{"command":"run_event",
+                "placement_id":"api","event_id":"event","run_id":"r","run":"queued"}});
+            service.store.connection.execute(
+                "INSERT INTO management_operations(operation_id,request_digest,principal,project_id,placement_id,accepted_at,result_json) VALUES('earlier','d','owner-user:owner','project','api',100,?1)",
+                [earlier.to_string()],
+            )?;
+            assert_eq!(sweep_interrupted_runs(&service.root)?, 1);
+            let earlier: Value = serde_json::from_str(&service.row("earlier")?.1)?;
+            assert_eq!(
+                (
+                    &earlier["state"],
+                    &earlier["result"]["run"],
+                    &earlier["result"]["code"]
+                ),
+                (&json!("failed"), &json!("failed"), &json!("interrupted"))
+            );
+            let current: Value = serde_json::from_str(&service.row("current")?.1)?;
+            assert_eq!(current["state"], "accepted");
+            let deploy: Value = serde_json::from_str(&service.row("deploy")?.1)?;
+            assert_eq!(deploy["state"], "accepted");
+            Ok(())
+        }
     }
 }

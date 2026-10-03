@@ -186,7 +186,8 @@ function CancelResult(): ReactNode {
  */
 export function SetupFoot() {
 	const { t } = useTranslation("devices");
-	const { draft, step, expired, create, next, goTo, cancelSetup } = useSetup();
+	const { draft, step, nowS, expired, create, next, goTo, cancelSetup } =
+		useSetup();
 	const primary = usePrimary();
 	const { created } = draft;
 	const creating = create.run.status === "running";
@@ -194,10 +195,11 @@ export function SetupFoot() {
 	const done = draft.checkedInAt !== undefined;
 	const closed = !!draft.cancelledAt || expired;
 
+	// A package whose agent release ran out can't be started, yet the hub holds its slot until the setup itself ends.
+	const heldAtHub = !!created && !registered && created.expiresAt > nowS;
 	const canCancel =
 		!draft.cancelledAt &&
-		((!!created && !registered && !expired) ||
-			(creating && !!create.run.registration));
+		(heldAtHub || (creating && !!create.run.registration));
 	const showBack = step > 0 && !closed && !done && !creating;
 	const floor = created || creating ? lockedBefore(draft) : 0;
 	const backOk = step - 1 >= floor;

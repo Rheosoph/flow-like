@@ -6,7 +6,9 @@ import {
 	canCheckDeploymentStartup,
 } from "../../../../lib/device-management/deployment";
 import {
+	APPS,
 	CRM_PLAN_APP,
+	HUB_EVENT_TYPES,
 	NOW0,
 	PLAN_DEVICES,
 	VISITOR_CATALOG,
@@ -21,9 +23,15 @@ import {
 import {
 	SAFE_UPDATE_TIMINGS,
 	type UpdateFacts,
+	agentGap,
 	blocksNewUpdate,
+	catalogGap,
+	exportTypesOf,
 	isBehind,
 	isFastPath,
+	needsAgentFlags,
+	planCatalog,
+	planExportTypes,
 	safeUpdateBlockers,
 	secretCount,
 	startsAfter,
@@ -363,5 +371,148 @@ describe("update helpers", () => {
 		expect(isBehind({ appVersion: { hash: "a" } }, "b")).toBe(true);
 		expect(isBehind({ appVersion: { hash: "b" } }, "b")).toBe(false);
 		expect(isBehind({ appVersion: null }, "b")).toBe(false);
+	});
+});
+
+describe("the catalogue without an approved bundle: events that follow Latest", () => {
+	const REVIEW = "evt_invoice_review";
+	const plan = planOf(APPS.app_invoice_ai, { deviceIds: [EDGE] });
+	const pinOf = (catalog: ReturnType<typeof planCatalog>) =>
+		catalog.events.find((event) => event.id === REVIEW)?.board_version;
+	const kept = {
+		config: {
+			events: [
+				{
+					event_id: REVIEW,
+					event_version: [0, 9, 0],
+					board_version: [0, 9, 1],
+				},
+			],
+		},
+	} as unknown as PlacementConfiguration;
+
+	test("it ships at the version the preparation resolved", () => {
+		expect(
+			pinOf(planCatalog(plan, undefined, { [REVIEW]: [0, 9, 3] })),
+		).toEqual([0, 9, 3]);
+		// A new copy carries the resolved pin, whatever the service ran before.
+		expect(pinOf(planCatalog(plan, kept, { [REVIEW]: [0, 9, 3] }))).toEqual([
+			0, 9, 3,
+		]);
+	});
+
+	test("a service that keeps its version keeps the pin it has", () => {
+		expect(pinOf(planCatalog(plan, kept))).toEqual([0, 9, 1]);
+	});
+
+	test("without either it can't be sent: it is not part of the catalogue", () => {
+		expect(pinOf(planCatalog(plan))).toBeUndefined();
+		// Events with their own flow pin are unaffected.
+		expect(
+			planCatalog(plan).events.find((event) => event.id === "evt_extract_http")
+				?.board_version,
+		).toEqual([2, 2, 0]);
+	});
+});
+
+describe("what a device may be sent (R2 §1.1, §1.9, §1.14)", () => {
+	const SHOP = APPS.app_shop_assistant;
+	const shopPlan = (eventId: string, change: Partial<DeployDraft> = {}) => {
+		const draft = {
+			...makePlan({
+				scope: { kind: "app", appId: SHOP.id },
+				route: { appId: SHOP.id, deviceIds: [EDGE], eventId },
+				app: SHOP,
+				deploymentId: "dep-update-path",
+				now: NOW0,
+			}),
+			...change,
+		};
+		return resolvePlan(draft, {
+			app: SHOP,
+			devices: PLAN_DEVICES,
+			platform: "desktop",
+			now: NOW0,
+		});
+	};
+
+	test("the export names the new types of the events sent and kept, sorted; none for Pages or a hub without the list", () => {
+		const page = planOf(VISITOR_PLAN_APP, { deviceIds: [EDGE] });
+		expect(planExportTypes(page, HUB_EVENT_TYPES)).toEqual([]);
+		const form = shopPlan("evt_shop_return");
+		expect(planExportTypes(form, HUB_EVENT_TYPES)).toEqual(["generic_form"]);
+		const whole = shopPlan("evt_shop_return", {
+			scope: "events",
+			events: [
+				"evt_shop_telegram",
+				"evt_shop_orders",
+				"evt_shop_return",
+				"evt_shop_prices",
+			],
+		});
+		expect(planExportTypes(whole, HUB_EVENT_TYPES)).toEqual([
+			"api",
+			"generic_form",
+			"telegram",
+		]);
+		expect(planExportTypes(whole, undefined)).toEqual([]);
+		expect(
+			exportTypesOf(
+				SHOP,
+				["evt_shop_discord", "evt_shop_discord"],
+				HUB_EVENT_TYPES,
+			),
+		).toEqual(["discord"]);
+	});
+
+	test("the hard gate: the first event whose flag the agent lacks; unknown flags never pass an event that needs one", () => {
+		const bot = shopPlan("evt_shop_telegram");
+		const [service] = bot.targets[0]?.services ?? [];
+		if (!service) throw new Error("The plan has no service for the bot.");
+		expect(needsAgentFlags(SHOP, service)).toBe(true);
+		expect(agentGap(SHOP, service, { telegram_bots: 1 })).toBeNull();
+		expect(agentGap(SHOP, service, { scheduled_events: 1 })).toEqual({
+			eventId: "evt_shop_telegram",
+			feature: "telegram_bots",
+		});
+		expect(agentGap(SHOP, service, undefined)).toEqual({
+			eventId: "evt_shop_telegram",
+			feature: "unknown",
+		});
+		const page = planOf(VISITOR_PLAN_APP, { deviceIds: [EDGE] });
+		const [served] = page.targets[0]?.services ?? [];
+		if (!served) throw new Error("The plan has no service for the page.");
+		// A Page needs no flag: older agents keep getting it.
+		expect(needsAgentFlags(VISITOR_PLAN_APP, served)).toBe(false);
+	});
+
+	test("an event the catalogue doesn't carry as runnable is named, never dropped without a word", () => {
+		const catalog = {
+			events: [
+				{ ...VISITOR_CATALOG.events[0], id: "evt_a" },
+				{ ...VISITOR_CATALOG.events[0], id: "evt_b", eligible: false },
+			] as DeploymentEvent[],
+			variables: {},
+		};
+		expect(catalogGap(catalog, { events: ["evt_a"] })).toBeNull();
+		expect(catalogGap(catalog, { events: ["evt_a", "evt_b"] })).toBe("evt_b");
+		expect(catalogGap(catalog, { events: ["evt_c"] })).toBe("evt_c");
+	});
+
+	test("a bot's token counts as a secret to save where the service gets the bot", () => {
+		const key = "event.evt_shop_telegram.bot_token";
+		const bot = shopPlan("evt_shop_telegram", {
+			secrets: { [key]: "123456789:AAHfixture-token-0123456789abcdef" },
+		});
+		const [target] = bot.targets;
+		const [service] = target?.services ?? [];
+		if (!target || !service) throw new Error("The plan has no bot service.");
+		expect(service.addedBots).toEqual(["evt_shop_telegram"]);
+		expect(secretCount(bot, target, service)).toBe(1);
+		const none = shopPlan("evt_shop_telegram");
+		const [noneTarget] = none.targets;
+		const [noneService] = noneTarget?.services ?? [];
+		if (!noneTarget || !noneService) throw new Error("No bot service.");
+		expect(secretCount(none, noneTarget, noneService)).toBe(0);
 	});
 });

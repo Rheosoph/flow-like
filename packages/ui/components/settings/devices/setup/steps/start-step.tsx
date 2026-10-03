@@ -184,7 +184,7 @@ export function StartStep({
 						)
 					: t(
 							"setup.start.files.release",
-							"The signed release and the keys it must be signed with. The device refuses releases older than #{{sequence, number}}.",
+							"The signed release and the keys it must be signed with. The device refuses any release with a number below {{sequence, number}}.",
 							{ sequence },
 						),
 		},

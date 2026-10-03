@@ -11,12 +11,22 @@ export interface UnlockRequest {
 	returnTo?: DevicesRoute;
 }
 
+/** "Run now…" of one quick action or form a service runs (design R2 §6.5). */
+export interface RunNowRequest {
+	deviceId: string;
+	serviceId: string;
+	eventId: string;
+	/** Shows this run you started instead of a new form ("Runs you started", the tray). */
+	operationId?: string;
+}
+
 export type OverlayState =
 	| { kind: "none" }
 	| ({ kind: "unlock"; deviceId: string } & UnlockRequest)
 	| { kind: "unlock_several" }
 	| { kind: "diagnose"; deviceId: string; serviceId?: string }
-	| { kind: "plane"; plane: PlaneSegmentId };
+	| { kind: "plane"; plane: PlaneSegmentId }
+	| ({ kind: "run_now" } & RunNowRequest);
 
 interface OverlayStore {
 	overlay: OverlayState;
@@ -24,6 +34,7 @@ interface OverlayStore {
 	openUnlockSeveral(): void;
 	openDiagnose(deviceId: string, serviceId?: string): void;
 	openPlane(plane: PlaneSegmentId): void;
+	openRunNow(request: RunNowRequest): void;
 	close(): void;
 }
 
@@ -48,6 +59,16 @@ export const useOverlayStore = create<OverlayStore>((set) => ({
 			},
 		}),
 	openPlane: (plane) => set({ overlay: { kind: "plane", plane } }),
+	openRunNow: ({ deviceId, serviceId, eventId, operationId }) =>
+		set({
+			overlay: {
+				kind: "run_now",
+				deviceId,
+				serviceId,
+				eventId,
+				...(operationId ? { operationId } : {}),
+			},
+		}),
 	close: () => set({ overlay: NONE }),
 }));
 

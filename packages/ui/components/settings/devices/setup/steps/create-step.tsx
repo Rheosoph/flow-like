@@ -26,8 +26,13 @@ import { StatusChip } from "../../primitives/status-chip";
 import { WizardStepHeader } from "../../primitives/wizard";
 import { useCreatePhases } from "../create-phases";
 import { useSetup } from "../setup-context";
-import { GroupLabel, Mono, TechnicalDetails } from "../setup-parts";
-import { STEP_COUNT, packageFile, packsAgent } from "../setup-state";
+import {
+	GroupLabel,
+	Mono,
+	TechnicalDetails,
+	startByReleaseText,
+} from "../setup-parts";
+import { STEP_COUNT, packageFile, packsAgent, startBy } from "../setup-state";
 import type { SetupFailure } from "../use-setup-create";
 import { megabytes } from "./platform-step";
 
@@ -161,7 +166,7 @@ function Summary() {
 						<Trans
 							t={t}
 							i18nKey="setup.create.summary.agent"
-							defaults="<1>{{version}}</1> · release #{{sequence, number}} · verified"
+							defaults="<1>{{version}}</1> · release number {{sequence, number}} · verified"
 							values={{
 								version: release.manifest.release_version,
 								sequence: release.manifest.sequence,
@@ -196,7 +201,8 @@ function Summary() {
 /** R8, inline: what creating does, before the one button that does it. */
 function BeforeRun() {
 	const { t } = useTranslation("devices");
-	const { draft, host, limits } = useSetup();
+	const time = useAreaTime();
+	const { draft, host, limits, releaseCutoff } = useSetup();
 	const { maxPending, pending, maxPerDay } = limits;
 	const hours = Math.round(limits.lifetimeS / 3600);
 	const undo =
@@ -239,11 +245,14 @@ function BeforeRun() {
 						"setup.create.before.stays",
 						"Nothing runs anywhere until you start the package on the device.",
 					),
-					when: t(
-						"setup.create.before.when",
-						"Usually under a minute. The package then works for {{count, number}} h.",
-						{ count: hours },
-					),
+					when:
+						releaseCutoff === undefined
+							? t(
+									"setup.create.before.when",
+									"Usually under a minute. The package then works for {{count, number}} h.",
+									{ count: hours },
+								)
+							: `${t("setup.create.before.whenOnly", "Usually under a minute.")} ${startByReleaseText(t, time, releaseCutoff, false)}`,
 					undo: { reversible: true, text: undo },
 				}}
 			/>
@@ -356,7 +365,7 @@ function Progress() {
 						t={t}
 						i18nKey="setup.create.progress.ready"
 						defaults="Package ready. <1/> is registered and waits for its first start until {{until}}."
-						values={{ until: time.at(created.expiresAt) }}
+						values={{ until: time.at(startBy(created)) }}
 						components={{ 1: <Mono>{draft.name}</Mono> }}
 					/>
 				</InlineResult>

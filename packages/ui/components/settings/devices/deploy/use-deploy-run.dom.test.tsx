@@ -42,7 +42,9 @@ const {
 	PLAN_DEVICES,
 	VISITOR_CATALOG,
 	VISITOR_PLAN_APP,
+	configBytes,
 } = await import("../../../../lib/device-management/model/__fixtures__/apps");
+const { withSavedBotTokens } = await import("./deploy-facts");
 const { SAMPLE_IDS } = await import(
 	"../../../../lib/device-management/model/__fixtures__/sample-fleet"
 );
@@ -1089,5 +1091,380 @@ describe("useDeployRun · updates", () => {
 		expect(sink.details?.[state().rows[0]?.target ?? ""]?.kept).toBe(
 			"approval",
 		);
+	});
+});
+
+describe("a deploy with a schedule (one place per schedule)", () => {
+	const VISITOR = "app_visitor_checkin";
+	const INVOICE = "app_invoice_ai";
+	const REPORT = "evt_visitor_report";
+	const RECONCILE = "evt_invoice_reconcile";
+	const SERVICE = "daily-visitor-report";
+
+	const reportPlan = () =>
+		planOf(VISITOR_PLAN_APP, { deviceIds: [STUDIO], eventId: REPORT });
+
+	async function runReport(mount: MountDevicesOptions = {}) {
+		const plan = reportPlan();
+		const mounted = await mountRun(plan, {}, mount);
+		serveArtifacts(mounted.fake.agent(STUDIO));
+		run.setDeployRunExtras(plan.draft.deploymentId, {
+			prepared: await visitorBundle(),
+		});
+		return { ...mounted, plan };
+	}
+
+	test("the schedule is released to the service before the device gets its config, and the service then runs it", async () => {
+		const { fake, sink, state } = await runReport();
+		const agent = fake.agent(STUDIO);
+		const release = agent.hold("apply");
+		expect(state().rows[0]?.phases).toEqual([
+			"schedules",
+			"approve",
+			"upload",
+			"install",
+			"create",
+			"start",
+		]);
+
+		await start(sink);
+		await until(
+			() => sent(fake, STUDIO, "apply").length === 1,
+			"the config to leave",
+		);
+		// The hub already holds the release when the device hears of the schedule.
+		expect(fake.hub.schedules.listing(VISITOR)).toMatchObject([
+			{
+				event_id: REPORT,
+				state: "released",
+				device_id: STUDIO,
+				placement_id: SERVICE,
+			},
+		]);
+		await act(async () => release());
+		await until(() => state().status === "finished", "the deploy to finish");
+
+		expect(state().rows[0]?.state).toBe("done");
+		expect(
+			fake.api.sent("PUT", /device-schedules/).map(([, path]) => path),
+		).toEqual([`apps/${VISITOR}/device-schedules/${REPORT}`]);
+		expect(agent.placement(SERVICE)?.schedules).toMatchObject([
+			{ event_id: REPORT, hold: null },
+		]);
+		expect(fake.hub.schedules.listing(VISITOR)).toMatchObject([
+			{ event_id: REPORT, state: "device", device_id: STUDIO },
+		]);
+	});
+
+	test("a person who may not edit the app's events: the target stops with that reason and the device gets nothing", async () => {
+		const { fake, sink, state } = await runReport();
+		fake.hub.schedules.canEditEvents = false;
+
+		await start(sink);
+		await until(() => state().status === "finished", "the refusal to show");
+
+		expect(state().rows[0]?.state).toBe("failed");
+		expect(state().rows[0]?.error).toMatchObject({
+			phase: "schedules",
+			code: "schedule_role",
+			detail: "Daily visitor report",
+		});
+		expect(types(fake, STUDIO)).toEqual([]);
+		expect(grants(fake, STUDIO)).toEqual([]);
+		expect(fake.hub.schedules.listing(VISITOR)).toEqual([]);
+	});
+
+	test("an agent that is too old to run schedules never gets one: nothing is approved, uploaded or applied", async () => {
+		const { fake, sink, state } = await runReport({
+			agentFeatures: { placement_events: 1, placement_diagnostics: 1 },
+		});
+
+		await start(sink);
+		await until(() => state().status === "finished", "the gate to show");
+
+		expect(state().rows[0]?.error).toMatchObject({
+			code: "agent_feature",
+			detail: "scheduled_events",
+		});
+		expect(types(fake, STUDIO)).toEqual([]);
+		expect(grants(fake, STUDIO)).toEqual([]);
+		expect(fake.api.sent("PUT", /device-schedules/)).toEqual([]);
+	});
+
+	test("a hub that can't hand schedules to devices stops the target before the config is sent", async () => {
+		const { fake, sink, state } = await runReport();
+		fake.hub.capabilities.schedules = false;
+
+		await start(sink);
+		await until(() => state().status === "finished", "the refusal to show");
+
+		expect(state().rows[0]?.error).toMatchObject({
+			phase: "schedules",
+			code: "schedule_hub",
+		});
+		expect(sent(fake, STUDIO, "apply")).toEqual([]);
+	});
+
+	test("a schedule another service runs: the target stops, and that service keeps it", async () => {
+		const plan = planOf(APPS.app_invoice_ai, {
+			deviceIds: [STUDIO],
+			eventId: RECONCILE,
+		});
+		const { fake, sink, state } = await mountRun(plan);
+		serveArtifacts(fake.agent(STUDIO));
+		fake.hub.schedules.release(INVOICE, RECONCILE, EDGE, "invoice-extractor");
+		fake.hub.schedules.claim(EDGE, "invoice-extractor", [RECONCILE]);
+
+		await start(sink);
+		await until(() => state().status === "finished", "the refusal to show");
+
+		expect(state().rows[0]?.error).toMatchObject({
+			phase: "schedules",
+			code: "schedule_elsewhere",
+			detail: "Nightly reconciliation",
+		});
+		expect(types(fake, STUDIO)).toEqual([]);
+		expect(grants(fake, STUDIO)).toEqual([]);
+		expect(fake.hub.schedules.listing(INVOICE)).toMatchObject([
+			{ event_id: RECONCILE, state: "device", device_id: EDGE },
+		]);
+	});
+});
+
+describe("a deploy with a bot, an Endpoint or a form (R2 §6.2, §8.4)", () => {
+	const SHOP = "app_shop_assistant";
+	const TELEGRAM = "evt_shop_telegram";
+	const FORM = "evt_shop_return";
+	/** A piece of the token saved on the Telegram event's record. */
+	const SAVED = "AAHfixture-token";
+	const OLD_AGENT = {
+		placement_events: 1,
+		placement_diagnostics: 1,
+		scheduled_events: 1,
+	} as const;
+
+	/** What the wizard plans: the draft with the token saved in Events as its default. */
+	function shopPlan(eventId: string) {
+		deployments += 1;
+		const app = APPS.app_shop_assistant;
+		const draft = makePlan({
+			scope: { kind: "app", appId: app.id },
+			route: { appId: app.id, deviceIds: [EDGE], eventId },
+			app,
+			deploymentId: `dep-run-${deployments}`,
+			now: NOW0,
+		});
+		const facts = {
+			app,
+			devices: DEVICES,
+			platform: "desktop" as const,
+			now: NOW0,
+		};
+		return resolvePlan(withSavedBotTokens(draft, facts), facts);
+	}
+
+	const sessionText = () =>
+		Array.from({ length: globalThis.sessionStorage.length }, (_, index) =>
+			globalThis.sessionStorage.getItem(
+				globalThis.sessionStorage.key(index) ?? "",
+			),
+		).join("\n");
+
+	const metadataPaths = (fake: FakeWorkspace) =>
+		fake.api.sent("GET", /device-metadata/).map(([, path]) => path);
+
+	test("a bot is released before the device hears of it, and the token saved in Events travels only inside set_secret", async () => {
+		const plan = shopPlan(TELEGRAM);
+		const { fake, sink, state } = await mountRun(plan);
+		const agent = fake.agent(EDGE);
+		serveArtifacts(agent);
+		const secrets: Record<string, unknown>[] = [];
+		agent.handle("set_secret", (command) => {
+			secrets.push(command);
+			return {
+				state: "completed",
+				result: {
+					placement_id: command.placement_id,
+					name: command.name,
+					secret: "completed",
+				},
+			};
+		});
+		const release = agent.hold("apply");
+		expect(state().rows[0]?.phases).toEqual([
+			"schedules",
+			"approve",
+			"upload",
+			"install",
+			"create",
+			"secrets",
+			"start",
+		]);
+
+		await start(sink);
+		await until(
+			() => sent(fake, EDGE, "apply").length === 1,
+			"the config to leave",
+		);
+		// The hub holds the release before the device hears of the bot.
+		expect(fake.hub.schedules.listing(SHOP)).toMatchObject([
+			{
+				event_id: TELEGRAM,
+				state: "released",
+				device_id: EDGE,
+				placement_id: "shop-helper",
+			},
+		]);
+		await act(async () => release());
+		await until(() => state().status === "finished", "the deploy to finish");
+
+		expect(state().rows[0]?.state).toBe("done");
+		expect(metadataPaths(fake)).toEqual([
+			`apps/${SHOP}/device-metadata?types=telegram`,
+		]);
+		const [apply] = sent(fake, EDGE, "apply");
+		const config = (
+			apply?.[2] as { config: { secret_overrides: Record<string, string> } }
+		).config;
+		expect(Object.keys(config.secret_overrides)).toEqual([
+			`event.${TELEGRAM}.bot_token`,
+		]);
+		expect(JSON.stringify(secrets)).toContain(SAVED);
+		const others = fake.api.commands.filter(
+			([, type]) => type !== "set_secret",
+		);
+		expect(JSON.stringify(others)).not.toContain(SAVED);
+		expect(JSON.stringify(fake.api.calls)).not.toContain(SAVED);
+		expect(JSON.stringify(fake.workspace.activity.list())).not.toContain(SAVED);
+		expect(sessionText()).not.toContain(SAVED);
+	});
+
+	test("an agent without the bot's flag gets nothing of it: no approval, upload, apply or staged update", async () => {
+		const plan = shopPlan(TELEGRAM);
+		const { fake, sink, state } = await mountRun(
+			plan,
+			{},
+			{
+				agentFeatures: OLD_AGENT,
+			},
+		);
+		serveArtifacts(fake.agent(EDGE));
+
+		await start(sink);
+		await until(() => state().status === "finished", "the gate to show");
+
+		expect(state().rows[0]?.error).toMatchObject({
+			code: "agent_feature",
+			detail: "telegram_bots",
+		});
+		expect(types(fake, EDGE)).toEqual([]);
+		expect(grants(fake, EDGE)).toEqual([]);
+		expect(fake.api.sent("PUT", /device-schedules/)).toEqual([]);
+	});
+
+	test("an http event whose route names no method needs the Endpoint flag: an older agent gets nothing", async () => {
+		const app = {
+			...APPS.app_invoice_ai,
+			events: APPS.app_invoice_ai.events.map((event) =>
+				event.id === "evt_extract_http"
+					? { ...event, config: configBytes({ path: "/extract" }) }
+					: event,
+			),
+		};
+		const plan = planOf(app, {
+			deviceIds: [STUDIO],
+			eventId: "evt_extract_http",
+		});
+		const { fake, sink, state } = await mountRun(
+			plan,
+			{},
+			{
+				agentFeatures: OLD_AGENT,
+			},
+		);
+		serveArtifacts(fake.agent(STUDIO));
+
+		await start(sink);
+		await until(() => state().status === "finished", "the gate to show");
+
+		expect(state().rows[0]?.error).toMatchObject({
+			code: "agent_feature",
+			detail: "api_events",
+		});
+		expect(types(fake, STUDIO)).toEqual([]);
+		expect(grants(fake, STUDIO)).toEqual([]);
+	});
+
+	test("a run that prepares by itself names the new types: none for a Page, generic_form for a form", async () => {
+		const page = visitorPlan([EDGE]);
+		const first = await mountRun(page);
+		serveArtifacts(first.fake.agent(EDGE));
+		await start(first.sink);
+		await until(() => first.state().status === "finished", "the Page");
+		expect(metadataPaths(first.fake)).toEqual([
+			"apps/app_visitor_checkin/device-metadata",
+		]);
+		// A deploy without a new type reads no placement list for it.
+		expect(
+			first.fake.api.sent("GET", /device-placements/).length,
+		).toBeLessThanOrEqual(1);
+		await cleanupDevices();
+
+		const form = shopPlan(FORM);
+		const second = await mountRun(form);
+		serveArtifacts(second.fake.agent(EDGE));
+		await start(second.sink);
+		await until(() => second.state().status === "finished", "the form");
+		expect(metadataPaths(second.fake)).toEqual([
+			`apps/${SHOP}/device-metadata?types=generic_form`,
+		]);
+	});
+});
+
+describe("a run that prepares by itself: events that follow Latest", () => {
+	const INVOICE = "app_invoice_ai";
+	const REVIEW = "evt_invoice_review";
+
+	const reviewPlan = () =>
+		planOf(APPS.app_invoice_ai, { deviceIds: [STUDIO], eventId: REVIEW });
+
+	test("flow edits become a version first, and the service is created at that version", async () => {
+		const plan = reviewPlan();
+		const { fake, sink, state } = await mountRun(plan);
+		serveArtifacts(fake.agent(STUDIO));
+		fake.hub.flows.edit(INVOICE, "flow_review");
+
+		await start(sink);
+		await until(() => state().status === "finished", "the deploy to finish");
+
+		expect(state().rows[0]?.state).toBe("done");
+		expect(fake.api.sent("POST", /version\/current/)).toHaveLength(1);
+		expect(
+			fake.api.sent("GET", /device-metadata/).map(([, path]) => path),
+		).toEqual([`apps/${INVOICE}/device-metadata?latest=${REVIEW}`]);
+		const [created] = sent(fake, STUDIO, "apply");
+		const config = (
+			created?.[2] as {
+				config: { events: { event_id: string; board_version: number[] }[] };
+			}
+		).config;
+		expect(config.events).toMatchObject([
+			{ event_id: REVIEW, board_version: [0, 9, 3] },
+		]);
+	});
+
+	test("a flow that can't become a version stops the run before anything reaches a device", async () => {
+		const plan = reviewPlan();
+		const { fake, sink, state } = await mountRun(plan);
+		serveArtifacts(fake.agent(STUDIO));
+		fake.hub.flows.edit(INVOICE, "flow_review");
+		fake.hub.flows.canPublish = false;
+
+		await start(sink);
+		await until(() => state().status === "finished", "the refusal to show");
+
+		expect(state().shared?.error?.code).toBe("flow_role");
+		expect(types(fake, STUDIO)).toEqual([]);
+		expect(fake.api.sent("GET", /device-metadata/)).toEqual([]);
 	});
 });

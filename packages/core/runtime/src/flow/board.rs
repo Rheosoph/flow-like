@@ -171,6 +171,34 @@ pub struct BoardVersionInfo {
     pub published_by: Option<String>,
 }
 
+/// How the stored draft of a flow stands against its published versions.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct BoardVersionCurrent {
+    /// `[major, minor, patch]` of the published version that holds exactly what the stored
+    /// draft holds, or `null` when the flow was never published or was edited since.
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<Vec<u32>>))]
+    pub current: Option<(u32, u32, u32)>,
+    /// `[major, minor, patch]` of the newest published version, or `null` when there is none.
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<Vec<u32>>))]
+    pub newest: Option<(u32, u32, u32)>,
+}
+
+/// Said when a version was just published and still does not compare equal to the draft it was
+/// published from: publishing again would add one version per attempt and change nothing.
+pub const DRAFT_NOT_COMPARABLE: &str = "This flow can't be compared with its published version. Pin a flow version in Events to deploy this event.";
+
+/// The published version that holds the stored draft of a flow.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct BoardVersionPublished {
+    /// `[major, minor, patch]`.
+    #[cfg_attr(feature = "openapi", schema(value_type = Vec<u32>))]
+    pub version: (u32, u32, u32),
+    /// `false` when that version already held the draft and nothing was published.
+    pub created: bool,
+}
+
 /// The `{version}.meta.json` sidecar written next to an immutable snapshot.
 #[derive(Serialize, Deserialize)]
 struct BoardVersionMeta {
@@ -2304,6 +2332,89 @@ impl Board {
         self.mark_changed();
         self.save(Some(store)).await?;
         Ok((new_version, published))
+    }
+
+    /// The newest published version, and whether it holds exactly what the stored draft holds.
+    /// Compares the persisted draft, so a hydrated board in memory never makes an unedited flow
+    /// look changed.
+    pub async fn version_current(
+        &self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<BoardVersionCurrent> {
+        let store = self.get_store(store).await?;
+        let newest = self
+            .get_versions(Some(store.clone()))
+            .await?
+            .first()
+            .copied();
+        let current = match newest {
+            Some(version)
+                if self
+                    .snapshot_matches_persisted_draft(version, Some(store))
+                    .await? =>
+            {
+                Some(version)
+            }
+            _ => None,
+        };
+        Ok(BoardVersionCurrent { current, newest })
+    }
+
+    /// The newest published version when it holds exactly what the stored draft holds, `None`
+    /// when the flow was never published or was edited since.
+    pub async fn published_version_of_draft(
+        &self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<Option<(u32, u32, u32)>> {
+        Ok(self.version_current(store).await?.current)
+    }
+
+    /// [`Self::published_version_of_draft`] for a flow known only by its id. A flow without a
+    /// stored draft has no version that holds it.
+    pub async fn published_version_of_stored_draft(
+        store: Arc<dyn ObjectStore>,
+        board_dir: &Path,
+        id: &str,
+    ) -> flow_like_types::Result<Option<(u32, u32, u32)>> {
+        match store.head(&Self::proto_path(board_dir, id, None)).await {
+            Ok(_) => {}
+            Err(object_store::Error::NotFound { .. }) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        }
+        Self::new_detached(Some(id.to_string()), board_dir.clone())
+            .published_version_of_draft(Some(store))
+            .await
+    }
+
+    /// Whether this board holds what an event points at: its Page when it has one, else its
+    /// start node, at the top level or inside a layer.
+    pub fn holds_event_target(&self, default_page_id: Option<&str>, node_id: &str) -> bool {
+        match default_page_id {
+            Some(page_id) => self.page_ids.iter().any(|id| id == page_id),
+            None => {
+                self.nodes.contains_key(node_id)
+                    || self
+                        .layers
+                        .values()
+                        .any(|layer| layer.nodes.contains_key(node_id))
+            }
+        }
+    }
+
+    /// Publish the draft as a Patch version unless the newest version already holds it. Returns
+    /// the version that holds the draft and whether this call created it.
+    pub async fn publish_if_changed(
+        &mut self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<((u32, u32, u32), bool)> {
+        let store = self.get_store(store).await?;
+        if let Some(version) = self.published_version_of_draft(Some(store.clone())).await? {
+            return Ok((version, false));
+        }
+        let (_draft, published) = self
+            .create_version_returning_published(VersionType::Patch, Some(store))
+            .await?;
+        Ok((published, true))
     }
 
     pub async fn get_versions(
@@ -5584,6 +5695,202 @@ mod tests {
             ],
             "each publication must occupy exactly one version slot"
         );
+    }
+
+    #[tokio::test]
+    async fn publish_if_changed_publishes_once_until_the_draft_is_edited() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = board_with_protobuf_flattened_pin_options(state, base_dir);
+        board.save(None).await.unwrap();
+        let first = board.version;
+
+        assert_eq!(board.publish_if_changed(None).await.unwrap(), (first, true));
+        assert_eq!(
+            board.publish_if_changed(None).await.unwrap(),
+            (first, false),
+            "an unedited flow must not get a version per deploy"
+        );
+        assert_eq!(board.get_versions(None).await.unwrap(), vec![first]);
+
+        board.name = "Edited flow".to_string();
+        board.mark_changed();
+        board.save(None).await.unwrap();
+        let second = (first.0, first.1, first.2 + 1);
+
+        assert_eq!(
+            board.publish_if_changed(None).await.unwrap(),
+            (second, true)
+        );
+        assert_eq!(
+            board.publish_if_changed(None).await.unwrap(),
+            (second, false)
+        );
+        assert_eq!(board.get_versions(None).await.unwrap(), vec![second, first]);
+    }
+
+    #[tokio::test]
+    async fn publish_if_changed_leaves_an_unedited_flow_loaded_cold_alone() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = board_with_protobuf_flattened_pin_options(state.clone(), base_dir.clone());
+        board.save(None).await.unwrap();
+        let (published, created) = board.publish_if_changed(None).await.unwrap();
+        assert!(created);
+
+        let mut cold = super::Board::load(base_dir.clone(), &board.id, state.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            cold.publish_if_changed(None).await.unwrap(),
+            (published, false),
+            "hydrating a stored flow must not read as an edit"
+        );
+        assert_eq!(cold.get_versions(None).await.unwrap(), vec![published]);
+
+        let legacy = board_with_legacy_duplicate_bridges(state.clone(), base_dir.clone());
+        legacy.save(None).await.unwrap();
+        let loaded = super::Board::load(base_dir.clone(), &legacy.id, state.clone(), None)
+            .await
+            .unwrap();
+        loaded
+            .snapshot_at_version(loaded.version, None)
+            .await
+            .unwrap();
+        let mut cold_legacy = super::Board::load(base_dir, &legacy.id, state, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            cold_legacy.publish_if_changed(None).await.unwrap(),
+            (loaded.version, false),
+            "a legacy draft that only differs by the load-time cleanup is unedited"
+        );
+        assert_eq!(
+            cold_legacy.get_versions(None).await.unwrap(),
+            vec![loaded.version]
+        );
+    }
+
+    #[tokio::test]
+    async fn published_version_of_draft_is_none_until_a_version_holds_the_stored_flow() {
+        use crate::a2ui::widget::Page;
+
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = board_with_protobuf_flattened_pin_options(state, base_dir);
+        let mut page = Page::new("page-1", "Start", "/");
+        board.save_page(&page, None).await.unwrap();
+        board.save(None).await.unwrap();
+        assert_eq!(
+            board.published_version_of_draft(None).await.unwrap(),
+            None,
+            "a flow that was never published has no version"
+        );
+
+        let (published, _) = board.publish_if_changed(None).await.unwrap();
+        assert_eq!(
+            board.published_version_of_draft(None).await.unwrap(),
+            Some(published)
+        );
+
+        page.name = "Renamed".to_string();
+        board.save_page(&page, None).await.unwrap();
+        assert_eq!(
+            board.published_version_of_draft(None).await.unwrap(),
+            None,
+            "a Page edit is an edit of the flow"
+        );
+        let (with_page_edit, created) = board.publish_if_changed(None).await.unwrap();
+        assert!(created);
+        assert_eq!(
+            board.published_version_of_draft(None).await.unwrap(),
+            Some(with_page_edit)
+        );
+
+        board.name = "Edited flow".to_string();
+        board.mark_changed();
+        board.save(None).await.unwrap();
+        assert_eq!(board.published_version_of_draft(None).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn published_version_of_draft_reads_the_stored_flow_not_the_board_in_memory() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = board_with_protobuf_flattened_pin_options(state, base_dir);
+        board.save(None).await.unwrap();
+        let (published, _) = board.publish_if_changed(None).await.unwrap();
+
+        board.name = "Unsaved edit".to_string();
+        board.mark_changed();
+
+        assert_eq!(
+            board.published_version_of_draft(None).await.unwrap(),
+            Some(published),
+            "an edit that was never stored is not part of the flow a device receives"
+        );
+    }
+
+    #[tokio::test]
+    async fn published_version_of_draft_is_read_for_a_flow_known_only_by_its_id() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let store = super::Board::meta_store(&state).await.unwrap();
+        let by_id = |id: String| {
+            let store = store.clone();
+            let base_dir = base_dir.clone();
+            async move {
+                super::Board::published_version_of_stored_draft(store, &base_dir, &id)
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(by_id("never-stored".to_string()).await, None);
+
+        let mut board = board_with_protobuf_flattened_pin_options(state, base_dir.clone());
+        board.save(None).await.unwrap();
+        assert_eq!(by_id(board.id.clone()).await, None);
+        let (published, _) = board.publish_if_changed(None).await.unwrap();
+        assert_eq!(by_id(board.id.clone()).await, Some(published));
+
+        board.name = "Edited flow".to_string();
+        board.mark_changed();
+        board.save(None).await.unwrap();
+        assert_eq!(by_id(board.id.clone()).await, None);
+        assert_eq!(
+            board.version_current(None).await.unwrap(),
+            super::BoardVersionCurrent {
+                current: None,
+                newest: Some(published),
+            },
+            "the newest version is reported even when the flow moved on"
+        );
+    }
+
+    #[test]
+    fn published_version_of_draft_fits_an_event_by_its_page_or_its_start_node() {
+        use crate::flow::node::Node;
+
+        let mut board = super::Board::new_detached(None, Path::from("boards"));
+        board.page_ids.push("page".to_string());
+        let top = Node::new("start", "Start", "", "test");
+        let top_id = top.id.clone();
+        board.nodes.insert(top_id.clone(), top);
+        let mut layer = super::Layer::new(
+            "group".to_string(),
+            "Group".to_string(),
+            super::LayerType::Collapsed,
+        );
+        let nested = Node::new("nested", "Nested", "", "test");
+        let nested_id = nested.id.clone();
+        layer.nodes.insert(nested_id.clone(), nested);
+        board.layers.insert(layer.id.clone(), layer);
+
+        assert!(board.holds_event_target(Some("page"), "gone"));
+        assert!(!board.holds_event_target(Some("removed-page"), &top_id));
+        assert!(board.holds_event_target(None, &top_id));
+        assert!(board.holds_event_target(None, &nested_id));
+        assert!(!board.holds_event_target(None, "gone"));
     }
 
     #[tokio::test]

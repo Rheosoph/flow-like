@@ -498,6 +498,58 @@ describe("resume", () => {
 		}
 	});
 
+	test("a run started from Devices keeps ids, state and times only, and resumes through its operation", async () => {
+		for (const [state, expected] of [
+			[
+				"accepted",
+				{ state: "waiting", detail: { code: "waiting_for_device" } },
+			],
+			["completed", { state: "done", detail: { code: "done" } }],
+			["failed", { state: "failed", detail: { code: "failed" } }],
+		] as const) {
+			values.clear();
+			const h = harness({ reply: journal(state) });
+			const id = h.create().start({
+				...item({
+					kind: "event_run",
+					label: { code: "event_run" },
+					target: {
+						deviceId: "edge-1",
+						serviceId: "notes",
+						projectId: "app",
+						eventId: "evt_notes_form",
+					},
+					state: "unknown",
+					resume: {
+						type: "operation",
+						operationId: "op-run",
+						command: "run_event",
+						issuedAt: T0 / 1000,
+					},
+				}),
+				payload: { pin: "1234" },
+				output: { json: { secret: "s3cr3t" } },
+			} as unknown as ActivityStart);
+			const raw = JSON.stringify(stored());
+			expect(raw).toContain("evt_notes_form");
+			expect(raw).not.toContain("1234");
+			expect(raw).not.toContain("s3cr3t");
+			const tray = h.create();
+			await tray.resume();
+			expect(tray.list().find((entry) => entry.id === id)).toMatchObject({
+				kind: "event_run",
+				target: { eventId: "evt_notes_form" },
+				...expected,
+			});
+			expect(h.sent).toEqual([
+				{
+					deviceId: "edge-1",
+					command: { type: "operation", operation_id: "op-run" },
+				},
+			]);
+		}
+	});
+
 	test("locked keys leave live handles untouched and send nothing", async () => {
 		const h = harness({ reply: journal("completed") });
 		h.unlocked.clear();

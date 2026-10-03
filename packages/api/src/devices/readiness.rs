@@ -154,6 +154,7 @@ pub(crate) async fn get(
         r#"SELECT digest,result FROM "InstanceOfflineReceipt" LIMIT 0"#,
         r#"SELECT code,"lastAt" FROM "DeviceAuthRejection" LIMIT 0"#,
         r#"SELECT until FROM "DeviceCertificateNoticeMute" LIMIT 0"#,
+        r#"SELECT "grantId","placementId","seenAt","resumeAt" FROM "DeviceScheduleClaim" LIMIT 0"#,
     ];
     let schema_ready = futures::future::join_all(
         queries
@@ -163,7 +164,7 @@ pub(crate) async fn get(
     .await
     .into_iter()
     .all(|result| result.is_ok());
-    checks.push(check("database", schema_ready, "The device database schema is ready.", "The device database schema is incomplete or unavailable. Apply the device, resource, validation, offline-replay, inventory, fleet and device console migrations."));
+    checks.push(check("database", schema_ready, "The device database schema is ready.", "The device database schema is incomplete or unavailable. Apply the device, resource, validation, offline-replay, inventory, fleet, device console and device schedules migrations."));
     Ok(Json(SetupReadiness {
         version: 1,
         ready: checks.iter().all(|check| check.ready),

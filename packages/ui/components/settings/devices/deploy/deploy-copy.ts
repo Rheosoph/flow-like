@@ -1,12 +1,26 @@
+import { formatMoment } from "../../../../lib/date";
+import type { BotProvider } from "../../../../lib/device-management/bot-config";
+import {
+	type EventKind,
+	HUB_EXPORT_TYPES,
+	type LatestFlowCase,
+	eventKind,
+} from "../../../../lib/device-management/deployment";
+import type {
+	LatestProblem,
+	PreparedFlow,
+} from "../../../../lib/device-management/latest-flows";
 import type { AppMode } from "../../../../lib/device-management/model/app-plan";
 import type {
 	DeployPlan,
+	PlanAcknowledgement,
 	PlanException,
 	PlanFacts,
 	PlanIssue,
 	PlanIssueCode,
 } from "../../../../lib/device-management/model/deploy-plan";
 import type {
+	AgentFeature,
 	CopyParams,
 	DeployRoute,
 	DeployStepId,
@@ -14,6 +28,7 @@ import type {
 	DevicesScope,
 	GateNoticeKind,
 } from "../../../../lib/device-management/model/types";
+import { agentTooOldCopy, eligibilityCopy } from "../copy/eligibility-copy";
 import { type CopyFormat, gateCopy } from "../copy/gate-copy";
 import type { DevicesT } from "../primitives/area-context";
 import type { WhereGate } from "./deploy-facts";
@@ -200,30 +215,321 @@ export function whereGateKind(gate: WhereGate): GateNoticeKind {
 	return WHERE_GATE_KIND[gate.code] ?? gate.failure.kind;
 }
 
-/** The failing preparation check's sentence (APP §3.6 item 3). */
-export function prepareFailureText(
+/** Why an event that follows Latest can't be shipped now; the Latest cases share their sentences with the event rule. */
+function latestFailureText(
+	t: DevicesT,
+	problem: LatestProblem,
+	failure: PrepareFailure,
+	event: string,
+): string {
+	const reason = (latestFlow: LatestFlowCase) =>
+		eligibilityCopy(t, { code: "latest_flow", eventType: "", latestFlow }).long;
+	if (problem === "busy")
+		return t(
+			"devices:deploy.prepare.flowBusy",
+			"Someone is editing this flow right now. Try again in a moment.",
+		);
+	if (problem === "moved")
+		return t(
+			"devices:deploy.prepare.flowMoved",
+			"{{event}}'s flow changed while preparing. Prepare again.",
+			{ event },
+		);
+	if (problem === "incomparable")
+		return (
+			failure.detail ||
+			t(
+				"devices:deploy.prepare.flowIncomparable",
+				"This flow can't be compared with its published version. Pin a flow version in Events to deploy this event.",
+			)
+		);
+	return reason(problem);
+}
+
+/** Why the device's agent got nothing: the flag an event needs, as the end of "Failed while …: …". */
+const AGENT_FEATURE_REFUSALS: Partial<
+	Record<AgentFeature, (t: DevicesT) => string>
+> = {
+	api_events: (t) =>
+		t(
+			"devices:deployShip.fail.agentFeature.apiEvents",
+			"the device's agent is too old to serve Endpoints",
+		),
+	scheduled_events: (t) =>
+		t(
+			"devices:deployShip.fail.agentSchedules",
+			"the device's agent is too old to run schedules",
+		),
+	scheduled_once: (t) =>
+		t(
+			"devices:deployShip.fail.agentFeature.scheduledOnce",
+			"the device's agent is too old to run one-time schedules",
+		),
+	on_demand_events: (t) =>
+		t(
+			"devices:deployShip.fail.agentFeature.onDemandEvents",
+			"the device's agent is too old to run forms and quick actions",
+		),
+	telegram_bots: (t) =>
+		t(
+			"devices:deployShip.fail.agentFeature.telegramBots",
+			"the device's agent is too old to run Telegram bots",
+		),
+	discord_bots: (t) =>
+		t(
+			"devices:deployShip.fail.agentFeature.discordBots",
+			"the device's agent is too old to run Discord bots",
+		),
+};
+
+function agentFeatureRefusal(t: DevicesT, feature: string): string {
+	const copy = Object.hasOwn(AGENT_FEATURE_REFUSALS, feature)
+		? AGENT_FEATURE_REFUSALS[feature as AgentFeature]
+		: undefined;
+	return copy
+		? copy(t)
+		: t(
+				"devices:deployShip.fail.agentFeature.other",
+				"the device's agent is too old for one of its events",
+			);
+}
+
+/**
+ * Why a run stopped a target, or its preparation, over a schedule, a bot, an
+ * agent flag or an event that follows Latest: the end of "Failed while …: …".
+ * `detail` is what the run named with the failure (the event a refusal is
+ * about, the flag an agent lacks).
+ */
+export const RUN_REFUSALS: Record<
+	string,
+	(t: DevicesT, detail: string) => string
+> = {
+	agent_feature: agentFeatureRefusal,
+	bot_role: (t, event) =>
+		t(
+			"devices:deployShip.fail.botRole",
+			"moving {{event}} to a device needs the right to edit this app's events",
+			{ event },
+		),
+	bot_elsewhere: (t, event) =>
+		t(
+			"devices:deployShip.fail.botElsewhere",
+			"{{event}} is already assigned to another service, and a bot runs in one place",
+			{ event },
+		),
+	bot_returning: (t, event) =>
+		t(
+			"devices:deployShip.fail.botReturning",
+			"{{event}} is still being given up where it ran",
+			{ event },
+		),
+	bot_hub: (t) =>
+		t(
+			"devices:deployShip.fail.botHub",
+			"this hub can't hand bots to devices yet",
+		),
+	hub_type: (t, event) =>
+		t(
+			"devices:deployShip.fail.hubType",
+			"this hub can't hand {{event}} to devices yet; update the hub",
+			{ event },
+		),
+	event_missing: (t, event) =>
+		t(
+			"devices:deployShip.fail.eventMissing",
+			"{{event}} isn't in what the hub publishes for devices",
+			{ event },
+		),
+	schedule_role: (t, event) =>
+		t(
+			"devices:deployShip.fail.scheduleRole",
+			"moving {{event}} off the hub needs the right to edit this app's events",
+			{ event },
+		),
+	schedule_elsewhere: (t, event) =>
+		t(
+			"devices:deployShip.fail.scheduleElsewhere",
+			"{{event}} is already assigned to another service, and a schedule runs in one place",
+			{ event },
+		),
+	schedule_returning: (t, event) =>
+		t(
+			"devices:deployShip.fail.scheduleReturning",
+			"{{event}} is still returning to the hub from where it ran",
+			{ event },
+		),
+	schedule_hub: (t) =>
+		t(
+			"devices:deployShip.fail.scheduleHub",
+			"this hub can't run schedules on devices yet",
+		),
+	agent_schedules: (t) =>
+		t(
+			"devices:deployShip.fail.agentSchedules",
+			"the device's agent is too old to run schedules",
+		),
+	flow_busy: (t) =>
+		t(
+			"devices:deployShip.fail.flowBusy",
+			"someone is editing one of its flows right now",
+		),
+	flow_role: (t) =>
+		t(
+			"devices:deployShip.fail.flowRole",
+			"a flow has edits that aren't published as a version, and your role can't create one",
+		),
+	flow_hub: (t) =>
+		t(
+			"devices:deployShip.fail.flowHub",
+			"this hub can't deploy events that follow Latest yet",
+		),
+	flow_moved: (t) =>
+		t(
+			"devices:deployShip.fail.flowMoved",
+			"a flow changed while this was being prepared",
+		),
+	flow_target: (t) =>
+		t(
+			"devices:deployShip.fail.flowTarget",
+			"an event points at a Page or a start node that is no longer in its flow",
+		),
+	flow_incomparable: (t) =>
+		t(
+			"devices:deployShip.fail.flowIncomparable",
+			"a flow can't be compared with its published version",
+		),
+};
+
+/** The sentence for one of those refusals; null for a failure the device or the hub words itself. */
+export function runRefusalText(
+	t: DevicesT,
+	error: { code: string; detail?: string },
+): string | null {
+	return Object.hasOwn(RUN_REFUSALS, error.code)
+		? RUN_REFUSALS[error.code](t, error.detail ?? "")
+		: null;
+}
+
+/** How a sentence names a flow: by its own name, else by an event that follows it. */
+export function flowLabel(
+	t: DevicesT,
+	plan: DeployPlan,
+	names: ReadonlyMap<string, string>,
+	boardId: string,
+): string {
+	const known = names.get(boardId);
+	if (known) return known;
+	const event = plan.app?.events.find((row) => row.boardId === boardId);
+	return t("devices:deploy.prepare.flowOf", "the flow of {{event}}", {
+		event: event?.name ?? boardId,
+	});
+}
+
+/** What preparing did for one flow of the events that follow Latest. */
+export function preparedFlowText(
+	t: DevicesT,
+	flow: PreparedFlow,
+	name: string,
+): string {
+	const values = { version: flow.version.join("."), flow: name };
+	return flow.created
+		? t(
+				"devices:deploy.prepare.flowCreated",
+				"Created flow version {{version}} of {{flow}}",
+				values,
+			)
+		: t(
+				"devices:deploy.prepare.flowUnchanged",
+				"Nothing changed in {{flow}} since {{version}}",
+				values,
+			);
+}
+
+/**
+ * An event that a hub exports only when asked for its type, from a hub whose
+ * placement list names the types it hands to devices and not this one.
+ */
+export function hubLacksExport(
+	event: { event_type: string; default_page_id?: string | null } | undefined,
+	hubTypes: readonly string[] | undefined,
+): boolean {
+	return (
+		!!event &&
+		hubTypes !== undefined &&
+		!event.default_page_id &&
+		(HUB_EXPORT_TYPES as readonly string[]).includes(event.event_type) &&
+		!hubTypes.includes(event.event_type)
+	);
+}
+
+/** A chosen event the hub's bundle doesn't carry: the hub's fault when it can't export its type, else the event's. */
+function missingEventText(
+	t: DevicesT,
+	plan: DeployPlan,
+	eventId: string,
+	hubTypes: readonly string[] | undefined,
+) {
+	const record = plan.app?.events.find((row) => row.id === eventId);
+	if (record && hubLacksExport(record, hubTypes))
+		return eligibilityCopy(t, {
+			code: "hub_type",
+			eventType: record.event_type,
+		}).long;
+	return t(
+		"devices:deploy.prepare.eventMissing",
+		"{{event}} isn't in what the hub publishes for devices. Check it in Events, then prepare again.",
+		{ event: eventName(plan, eventId) },
+	);
+}
+
+/** A chosen event the hub refused or left out of its bundle. */
+function eventFailureText(
 	t: DevicesT,
 	failure: PrepareFailure,
 	plan: DeployPlan,
-): string {
-	if (failure.kind !== "event") return failure.detail;
-	const event = eventName(plan, failure.eventId ?? "");
+	hubTypes: readonly string[] | undefined,
+) {
+	const eventId = failure.eventId ?? "";
 	return failure.detail
 		? t(
 				"devices:deploy.prepare.eventBlocked",
 				"{{event}} can't be prepared for devices: {{detail}}",
-				{ event, detail: failure.detail },
+				{ event: eventName(plan, eventId), detail: failure.detail },
 			)
-		: t(
-				"devices:deploy.prepare.eventMissing",
-				"{{event}} isn't in what the hub publishes for devices. Check it in Events, then prepare again.",
-				{ event },
-			);
+		: missingEventText(t, plan, eventId, hubTypes);
+}
+
+/**
+ * The failing preparation check's sentence (APP §3.6 item 3). `hubTypes` is
+ * the hub's `event_types`: a chosen event of a type that hub can't export is
+ * missing because of the hub, not because of the event.
+ */
+export function prepareFailureText(
+	t: DevicesT,
+	failure: PrepareFailure,
+	plan: DeployPlan,
+	hubTypes?: readonly string[],
+): string {
+	if (failure.kind === "flow")
+		return latestFailureText(
+			t,
+			failure.flow ?? "moved",
+			failure,
+			eventName(plan, failure.eventId ?? ""),
+		);
+	return failure.kind === "event"
+		? eventFailureText(t, failure, plan, hubTypes)
+		: failure.detail;
 }
 
 export interface IssueNames {
 	app: string;
 	device(deviceId: string | undefined): string;
+	event(eventId: string): string;
+	/** A unix-seconds time in the reader's words; the default locale without it. */
+	at?(atS: number): string;
+	/** How a device runs the event; unknown without it. */
+	kind?(eventId: string): EventKind | null;
 }
 
 interface IssueContext {
@@ -232,7 +538,70 @@ interface IssueContext {
 	device: string;
 	app: string;
 	issue: PlanIssue;
+	names: IssueNames;
+	/** The event a schedule, bot or route issue is about. */
+	event: string;
 }
+
+const momentOf = (names: IssueNames, atS: unknown) =>
+	typeof atS === "number" ? (names.at?.(atS) ?? formatMoment(atS * 1000)) : "";
+
+const PROVIDER_NAMES: Record<BotProvider, (t: DevicesT) => string> = {
+	telegram: (t) => t("devices:deploy.provider.telegram", "Telegram"),
+	discord: (t) => t("devices:deploy.provider.discord", "Discord"),
+};
+
+/** A bot's provider by its name ("Telegram"). */
+export function providerName(t: DevicesT, provider: unknown): string {
+	return typeof provider === "string" && Object.hasOwn(PROVIDER_NAMES, provider)
+		? PROVIDER_NAMES[provider as BotProvider](t)
+		: t("devices:deploy.provider.other", "the provider");
+}
+
+/** What a person confirms per device before Continue, as the step's blocking sentence. */
+const ACKNOWLEDGE_COPY: Record<
+	PlanAcknowledgement,
+	(t: DevicesT, device: string) => string
+> = {
+	once_soon: (t, device) =>
+		t(
+			"devices:deploy.issue.acknowledge.onceSoon",
+			"Confirm on {{device}} that a one-time schedule runs in less than 5 minutes, or set a later time in Events.",
+			{ device },
+		),
+	bot_open: (t, device) =>
+		t(
+			"devices:deploy.issue.acknowledge.botOpen",
+			"Confirm on {{device}} that anyone who can message its bot can start runs, or set allowed chats in Events.",
+			{ device },
+		),
+	bot_other_computers: (t, device) =>
+		t(
+			"devices:deploy.issue.acknowledge.botOtherComputers",
+			"Confirm on {{device}} that no other computer keeps running its bot in the desktop app.",
+			{ device },
+		),
+	endpoint_shared_token: (t, device) =>
+		t(
+			"devices:deploy.issue.acknowledge.endpointSharedToken",
+			"Confirm on {{device}} that an Endpoint with its own token shares the service's access token, or deploy it as its own service.",
+			{ device },
+		),
+};
+
+function acknowledgeText({ t, p, device }: IssueContext): string {
+	const code = String(p.exception ?? "");
+	return Object.hasOwn(ACKNOWLEDGE_COPY, code)
+		? ACKNOWLEDGE_COPY[code as PlanAcknowledgement](t, device)
+		: t(
+				"devices:deploy.issue.acknowledge.other",
+				"Confirm the warnings on {{device}} first.",
+				{ device },
+			);
+}
+
+const isBotIssue = ({ names, p }: IssueContext) =>
+	typeof p.event === "string" && names.kind?.(p.event) === "bot";
 
 const ISSUE_COPY = {
 	app_missing: ({ t }) =>
@@ -377,6 +746,126 @@ const ISSUE_COPY = {
 			"Confirm that {{device}} runs {{app}} with the agent's full access.",
 			{ device, app },
 		),
+	schedule_elsewhere: ({ t, p, names, event }) =>
+		typeof p.device === "string" && p.service !== undefined
+			? t(
+					"devices:deploy.issue.scheduleElsewhere",
+					"{{event}} is already assigned to {{device}} › {{service}}. A schedule runs in one place: remove it there first, or run it on the hub again in Events.",
+					{ event, device: names.device(p.device), service: p.service },
+				)
+			: t(
+					"devices:deploy.issue.scheduleElsewhereHidden",
+					"{{event}} is already assigned to a device you can't see. A schedule runs in one place: run it on the hub again in Events first.",
+					{ event },
+				),
+	schedule_returning: ({ t, p, names, event }) =>
+		t(
+			"devices:deploy.issue.scheduleReturning",
+			"{{event}} is still returning to the hub from where it ran. Deploy it after {{time}}.",
+			{ event, time: momentOf(names, p.time) },
+		),
+	schedule_role: ({ t, event }) =>
+		t(
+			"devices:deploy.issue.scheduleRole",
+			"Moving {{event}} off the hub needs the right to edit this app's events. Ask someone who has it, or leave the schedule out.",
+			{ event },
+		),
+	schedule_twice: ({ t, device }) =>
+		t(
+			"devices:deploy.issue.scheduleTwice",
+			"Confirm on {{device}} that its schedule may run in more than one place, or leave it out.",
+			{ device },
+		),
+	needs_single_instance: (c) =>
+		isBotIssue(c)
+			? c.t(
+					"devices:deploy.issue.needsSingleInstanceBot",
+					"{{service}} runs {{count, number}} instances. A bot needs a service with 1 instance: set it to 1, or deploy the bot as its own service.",
+					{ service: c.p.service, count: Number(c.p.count) },
+				)
+			: c.t(
+					"devices:deploy.issue.needsSingleInstance",
+					"{{service}} runs {{count, number}} instances. A schedule needs a service with 1 instance: set it to 1, or deploy the schedule as its own service.",
+					{ service: c.p.service, count: Number(c.p.count) },
+				),
+	too_many_latest: ({ t, p }) =>
+		t(
+			"devices:deploy.issue.tooManyLatest",
+			"This deploy has {{count, number}} events that follow Latest; one deploy can take 64. Deploy fewer at a time, or pin some in Events.",
+			{ count: Number(p.count) },
+		),
+	route_conflict: ({ t, p, names, event }) =>
+		t(
+			"devices:deploy.issue.routeConflict",
+			"{{a}} and {{b}} both answer {{method}} {{path}}. A service answers each path once: change one in Events, or deploy them as two services.",
+			{
+				a: event,
+				b: typeof p.other === "string" ? names.event(p.other) : "",
+				method: p.method,
+				path: p.path,
+			},
+		),
+	once_passed: ({ t, p, names, event }) =>
+		t(
+			"devices:deploy.issue.oncePassed",
+			"{{event}}'s time ({{time}}) has passed. Set a new time in Events, or leave it out.",
+			{ event, time: momentOf(names, p.time) },
+		),
+	bot_token_missing: ({ t, event }) =>
+		t(
+			"devices:deploy.issue.botToken",
+			"{{event}} needs its bot token. Enter it under Settings.",
+			{ event },
+		),
+	bot_token_shape: ({ t, p }) =>
+		t(
+			"devices:deploy.issue.botTokenShape",
+			"That doesn't look like a {{provider}} bot token.",
+			{ provider: providerName(t, p.provider) },
+		),
+	bot_local_trigger: ({ t, event }) =>
+		t(
+			"devices:deploy.issue.botLocalTrigger",
+			"This computer runs {{event}} while Flow-Like is open. Two programs can't use one bot: stop it here first.",
+			{ event },
+		),
+	bot_elsewhere: ({ t, p, names, event }) =>
+		typeof p.device === "string" && p.service !== undefined
+			? t(
+					"devices:deploy.issue.botElsewhere",
+					"{{event}} is already assigned to {{device}} › {{service}}. A bot runs in one place: remove it there first, or take it back in Events.",
+					{ event, device: names.device(p.device), service: p.service },
+				)
+			: t(
+					"devices:deploy.issue.botElsewhereHidden",
+					"{{event}} is already assigned to a device you can't see. A bot runs in one place: take it back in Events first.",
+					{ event },
+				),
+	bot_returning: ({ t, p, names, event }) =>
+		t(
+			"devices:deploy.issue.botReturning",
+			"{{event}} is still being given up where it ran. Deploy it after {{time}}.",
+			{ event, time: momentOf(names, p.time) },
+		),
+	bot_role: ({ t, event }) =>
+		t(
+			"devices:deploy.issue.botRole",
+			"Moving {{event}} to a device needs the right to edit this app's events. Ask someone who has it, or leave the bot out.",
+			{ event },
+		),
+	too_many_claimed: ({ t, p }) =>
+		t(
+			"devices:deploy.issue.tooManyClaimed",
+			"{{service}} would run {{count, number}} schedules and bots. One service runs 64 at most: split them over two services.",
+			{ service: p.service, count: Number(p.count) },
+		),
+	form_needs_page: ({ t, event }) =>
+		t(
+			"devices:deploy.issue.formNeedsPage",
+			"{{event}} takes a file. Files can only be sent from a service page: deploy it together with a Page, chat or Endpoint.",
+			{ event },
+		),
+	not_acknowledged: acknowledgeText,
 	"approval.models_invalid": ({ t }) =>
 		t("devices:deploy.issue.approvalModels", "Pick up to 64 different models."),
 	"approval.nothing_approved": ({ t }) =>
@@ -455,23 +944,56 @@ export function issueText(
 	issue: PlanIssue,
 	names: IssueNames,
 ): string {
+	const p = issue.params ?? {};
 	return ISSUE_COPY[issue.code]({
 		t,
-		p: issue.params ?? {},
+		p,
 		device: names.device(issue.deviceId),
 		app: names.app,
 		issue,
+		names,
+		event: typeof p.event === "string" ? names.event(p.event) : "",
 	});
 }
 
-/** Device and app names of one plan, for `issueText` and `exceptionText`. */
-export function planNames(t: DevicesT, plan: DeployPlan): IssueNames {
+/**
+ * Device, event and app names of one plan, for `issueText` and
+ * `exceptionText`. `facts` names devices that are not targets (where a
+ * schedule runs today); `at` formats times in the area's locale.
+ */
+export function planNames(
+	t: DevicesT,
+	plan: DeployPlan,
+	facts?: Pick<PlanFacts, "devices">,
+	at?: IssueNames["at"],
+): IssueNames {
 	return {
 		app: plan.app?.name ?? t("devices:deploy.thisApp", "this app"),
 		device: (deviceId) =>
-			plan.targets.find((target) => target.deviceId === deviceId)?.name ??
+			deviceNameOf(plan, facts, deviceId) ??
 			t("devices:deploy.aDevice", "a device"),
+		event: (eventId) => eventName(plan, eventId),
+		kind: (eventId) => eventKindOf(plan, eventId),
+		...(at ? { at } : {}),
 	};
+}
+
+/** A target's name, else the name of a device the plan's facts know. */
+function deviceNameOf(
+	plan: DeployPlan,
+	facts: Pick<PlanFacts, "devices"> | undefined,
+	deviceId: string | undefined,
+) {
+	const isIt = (target: { deviceId: string }) => target.deviceId === deviceId;
+	const target = plan.targets.find(isIt);
+	if (target) return target.name;
+	return deviceId ? facts?.devices[deviceId]?.name : undefined;
+}
+
+function eventKindOf(plan: DeployPlan, eventId: string) {
+	const isIt = (row: { id: string }) => row.id === eventId;
+	const event = plan.app?.events.find(isIt);
+	return event ? eventKind(event) : null;
 }
 
 /** Why an app can't be deployed by a role without Read boards (APP §3.5 item 1). */
@@ -504,7 +1026,14 @@ interface ExceptionContext {
 	usedBy?: string;
 	/** `runs_as_agent`: the device has no sandbox, so nobody chose it. */
 	cantSandbox?: boolean;
+	/** A unix-seconds time in the reader's words. */
+	at(atS: unknown): string;
 }
+
+const scheduleAlso = (t: DevicesT, event: string) =>
+	t("devices:deploy.exception.scheduleAlso", "{{event}} · runs elsewhere too", {
+		event,
+	});
 
 const EXCEPTION_COPY = {
 	left_out_refuse: ({ t, p, event }) => ({
@@ -514,6 +1043,80 @@ const EXCEPTION_COPY = {
 		why: t("devices:deploy.exception.refuseWhy", "Can't run here: {{reason}}", {
 			reason: p.reason,
 		}),
+	}),
+	left_out_agent: ({ t, p, device, event }) => ({
+		differs: t("devices:deploy.exception.leftOut", "{{event}} · left out", {
+			event,
+		}),
+		why: agentTooOldCopy(
+			t,
+			device,
+			typeof p.feature === "string" ? p.feature : undefined,
+		).long,
+	}),
+	once_soon: ({ t, p, event, at }) => ({
+		differs: t(
+			"devices:deploy.exception.onceSoonDiffers",
+			"{{event}} · runs very soon",
+			{ event },
+		),
+		why: t(
+			"devices:deploy.exception.onceSoon",
+			"{{event}} runs at {{time}}, in less than 5 minutes. If the deploy isn't finished by then, it doesn't run.",
+			{ event, time: at(p.time) },
+		),
+	}),
+	bot_open: ({ t, device, event }) => ({
+		differs: t(
+			"devices:deploy.exception.botOpenDiffers",
+			"{{event}} · open to everyone",
+			{ event },
+		),
+		why: t(
+			"devices:deploy.exception.botOpen",
+			"Anyone who can message {{event}} can start runs on {{device}}. Allowed chats are set in Events.",
+			{ event, device },
+		),
+	}),
+	bot_other_computers: ({ t, event }) => ({
+		differs: t(
+			"devices:deploy.exception.botOtherComputersDiffers",
+			"{{event}} · may run elsewhere",
+			{ event },
+		),
+		why: t(
+			"devices:deploy.exception.botOtherComputers",
+			"Other computers that run {{event}} in the desktop app can't be seen from here. Stop it there too.",
+			{ event },
+		),
+	}),
+	endpoint_shared_token: ({ t, p, device, event }) => ({
+		differs: t(
+			"devices:deploy.exception.endpointSharedTokenDiffers",
+			"{{event}} · the service's token",
+			{ event },
+		),
+		why: t(
+			"devices:deploy.exception.endpointSharedToken",
+			"{{event}} has its own token in Events. On {{device}} everyone with {{service}}'s access token can call it, like every other endpoint, page and chat of {{service}}.",
+			{ event, device, service: p.service },
+		),
+	}),
+	schedule_two_devices: ({ t, p, event }) => ({
+		differs: scheduleAlso(t, event),
+		why: t(
+			"devices:deploy.exception.scheduleTwoDevices",
+			"{{event}} will run on {{count, number}} devices. Each runs it on its own copy of the app's data; emails and other outside effects happen once per device.",
+			{ event, count: Number(p.count) },
+		),
+	}),
+	schedule_local_trigger: ({ t, event }) => ({
+		differs: scheduleAlso(t, event),
+		why: t(
+			"devices:deploy.exception.scheduleLocalTrigger",
+			"This computer also runs {{event}} while Flow-Like is open.",
+			{ event },
+		),
 	}),
 	left_out_duplicate: ({ t, p, event }) => ({
 		differs: t("devices:deploy.exception.leftOut", "{{event}} · left out", {
@@ -594,18 +1197,31 @@ export function exceptionText(
 	exception: PlanException,
 	plan: DeployPlan,
 	facts?: PlanFacts,
+	at?: IssueNames["at"],
 ): ExceptionText {
 	const p = exception.params ?? {};
 	const device = facts?.devices[exception.deviceId];
 	const usedBy = device?.portsInUse?.find(
 		(row) => row.port === p.from,
 	)?.serviceId;
+	const names: IssueNames = {
+		...planNames(t, plan, facts),
+		...(at ? { at } : {}),
+	};
 	return EXCEPTION_COPY[exception.code]({
 		t,
 		p,
-		device: planNames(t, plan).device(exception.deviceId),
+		device: names.device(exception.deviceId),
 		event: typeof p.event === "string" ? eventName(plan, p.event) : "",
+		at: (atS) => momentOf(names, atS),
 		...(usedBy ? { usedBy } : {}),
 		...(device?.isolation === "none" ? { cantSandbox: true } : {}),
 	});
 }
+
+/** The fix "Deploy it as its own service" of an Endpoint that has its own token. */
+export const ownServiceFixLabel = (t: DevicesT): string =>
+	t(
+		"devices:deploy.exception.endpointSharedTokenFix",
+		"Deploy it as its own service",
+	);

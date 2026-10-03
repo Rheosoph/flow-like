@@ -19,9 +19,14 @@ import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import {
 	DEPLOYMENT_CONFIG_BYTES,
+	eventKind,
 	readExistingDeployment,
 } from "../../../../../lib/device-management/deployment";
 import { deviceKeys } from "../../../../../lib/device-management/hub/queries";
+import {
+	type AppEventInput,
+	appEventRule,
+} from "../../../../../lib/device-management/model/app-plan";
 import {
 	type ConfigDiffRow,
 	type DeployDraft,
@@ -33,6 +38,7 @@ import {
 	type PlanTarget,
 	type PlanTargetService,
 	diffPlacementConfig,
+	scheduleIds,
 } from "../../../../../lib/device-management/model/deploy-plan";
 import type { DeployRunState } from "../../../../../lib/device-management/model/deploy-run";
 import type {
@@ -40,9 +46,16 @@ import type {
 	DeployRoute,
 	DeployStepId,
 } from "../../../../../lib/device-management/model/types";
+import { nextRuns } from "../../../../../lib/device-management/schedule";
 import { formatEuroMicros } from "../../../../../lib/device-resources";
 import { humanFileSize } from "../../../../../lib/utils";
+import { agentTooOldCopy } from "../../copy/eligibility-copy";
 import { gateCopy } from "../../copy/gate-copy";
+import {
+	scheduleTime,
+	scheduleWordsInline,
+	scheduleZone,
+} from "../../copy/schedule-copy";
 import {
 	type AreaTime,
 	type DevicesT,
@@ -79,6 +92,7 @@ import {
 	useGate,
 	useWidthBucket,
 } from "../../workspace";
+import { flowLabel } from "../deploy-copy";
 import type { DeployStepProps } from "../step-props";
 import {
 	DEADLINE_RANGE,
@@ -95,6 +109,7 @@ import {
 	timingIssues,
 	wantsAccess,
 } from "../update-path";
+import { useFlowNames } from "../use-deploy-reads";
 import {
 	deployRunExtras,
 	deployRunTitleRef,
@@ -278,7 +293,7 @@ const STEP_NAME: Record<DeployStepId, (t: DevicesT) => string> = {
 
 const EXCEPTION_COPY: Record<
 	PlanExceptionCode,
-	(c: Context, params: CopyParams) => string
+	(c: Context, params: CopyParams, device: string) => string
 > = {
 	left_out_refuse: (c, p) =>
 		c.t(
@@ -291,6 +306,55 @@ const EXCEPTION_COPY: Record<
 			"devices:deployShip.exception.duplicate",
 			"Leaves out {{event}}: {{service}} already serves it here",
 			{ event: eventNames(c, [String(p.event)]), service: p.service },
+		),
+	left_out_agent: (c, p, device) =>
+		c.t(
+			"devices:deployShip.exception.agentFeature",
+			"Leaves out {{event}}: {{reason}}",
+			{
+				event: eventNames(c, [String(p.event)]),
+				reason: agentTooOldCopy(
+					c.t,
+					device,
+					typeof p.feature === "string" ? p.feature : undefined,
+				).long,
+			},
+		),
+	once_soon: (c, p) =>
+		c.t(
+			"devices:deployShip.exception.onceSoon",
+			"{{event}} runs in less than 5 minutes; it doesn't run if the deploy takes longer",
+			{ event: eventNames(c, [String(p.event)]) },
+		),
+	bot_open: (c, p) =>
+		c.t(
+			"devices:deployShip.exception.botOpen",
+			"Anyone who can message {{event}} starts runs here",
+			{ event: eventNames(c, [String(p.event)]) },
+		),
+	bot_other_computers: (c, p) =>
+		c.t(
+			"devices:deployShip.exception.botOtherComputers",
+			"Other computers may still run {{event}} in the desktop app",
+			{ event: eventNames(c, [String(p.event)]) },
+		),
+	endpoint_shared_token: (c, p) =>
+		c.t(
+			"devices:deployShip.exception.endpointSharedToken",
+			"{{event}} answers to {{service}}'s access token, not its own",
+			{ event: eventNames(c, [String(p.event)]), service: p.service },
+		),
+	schedule_two_devices: (c, p) =>
+		c.t(
+			"devices:deployShip.exception.scheduleTwoDevices",
+			"{{event}} runs on {{count, number}} devices, once on each",
+			{ event: eventNames(c, [String(p.event)]), count: Number(p.count) },
+		),
+	schedule_local_trigger: (c, p) =>
+		c.t(
+			"devices:deployShip.exception.scheduleLocalTrigger",
+			"This computer also runs {{event}}",
+			{ event: eventNames(c, [String(p.event)]) },
 		),
 	renamed: (c, p) =>
 		c.t(
@@ -482,7 +546,11 @@ function PlanRow({
 						<ul className="list-disc pl-5 text-ui text-ink-2">
 							{exceptions.map((exception, index) => (
 								<li key={`${exception.code}-${index}`}>
-									{EXCEPTION_COPY[exception.code](c, exception.params ?? {})}
+									{EXCEPTION_COPY[exception.code](
+										c,
+										exception.params ?? {},
+										item.target.name,
+									)}
 								</li>
 							))}
 						</ul>
@@ -1534,6 +1602,341 @@ function updateConsequences(
 	out.undo.push(undoAfterUpdate(t, keep, safe));
 }
 
+/** The schedules a target's service takes that it does not serve today, as the plan says. */
+function addedSchedules(c: Context, item: ReviewTarget): AppEventInput[] {
+	const added = new Set(item.service.addedSchedules);
+	return (c.plan.app?.events ?? []).filter((event) => added.has(event.id));
+}
+
+/**
+ * A schedule that moves to a device: when it runs there, that the hub stops
+ * running it, and what its cloud access means for its runs.
+ */
+function scheduleConsequence(
+	c: Context,
+	item: ReviewTarget,
+	event: AppEventInput,
+	out: Consequences,
+) {
+	const { t, plan, time } = c;
+	const { schedule } = appEventRule(event);
+	if (!schedule) return;
+	const device = item.target.name;
+	const service = item.service.serviceId;
+	const [next] = nextRuns(schedule, time.now, 1);
+	out.what.push(
+		t(
+			"devices:deployShip.conseq.schedule",
+			"{{event}} runs on {{device}} {{words}} ({{zone}}). First run {{time}}. Missed runs are not made up.",
+			{
+				event: event.name,
+				device,
+				words: scheduleWordsInline(t, schedule.expression, time.locale),
+				zone: scheduleZone(t, schedule),
+				time:
+					next === undefined
+						? ""
+						: scheduleTime(t, Math.floor(next / 1000), schedule.timezone, time),
+			},
+		),
+	);
+	if (plan.mode !== "online") return;
+	out.what.push(
+		t(
+			"devices:deployShip.conseq.scheduleMoves",
+			"The hub stops running {{event}} when {{device}} starts it.",
+			{ event: event.name, device },
+		),
+	);
+	out.undo.push(
+		t(
+			"devices:deployShip.conseq.scheduleUndo",
+			"Remove it from the service, or choose Run it on the hub again in Events: the hub runs it again a few minutes later.",
+		),
+	);
+	if (item.service.kind !== "new") return;
+	// A new service gets the access this deploy asks for; an existing one keeps what it has.
+	if (plan.draft.approval.files === "read_only")
+		out.who.push(
+			t(
+				"devices:deployShip.conseq.scheduleReadOnly",
+				"{{service}}'s cloud access is read-only. Runs that change the app's data will fail.",
+				{ service },
+			),
+		);
+	if (plan.draft.spending)
+		out.who.push(
+			t(
+				"devices:deployShip.conseq.scheduleLimit",
+				"Each run can use hosted models within {{service}}'s spending limit. When the limit is used up, this service's other events lose hosted models too.",
+				{ service },
+			),
+		);
+}
+
+/** A one-time schedule that moves to a device: when it runs there, and that it runs at most once (§3.1). */
+function onceConsequence(
+	c: Context,
+	item: ReviewTarget,
+	event: AppEventInput,
+	out: Consequences,
+) {
+	const { t } = c;
+	const { once } = appEventRule(event);
+	if (!once) return;
+	const device = item.target.name;
+	out.what.push(
+		t(
+			"devices:deployShip.conseq.once",
+			"{{event}} runs once on {{device}} at {{time}} ({{zone}}). If {{device}} isn't running then, or within 15 minutes after, it doesn't run at all.",
+			{
+				event: event.name,
+				device,
+				time: `${once.date} ${once.time}`,
+				zone: scheduleZone(t, once),
+			},
+		),
+		t(
+			"devices:deployShip.conseq.onceAfter",
+			"After that nothing runs it again.",
+		),
+	);
+}
+
+function scheduleConsequences(
+	c: Context,
+	items: readonly ReviewTarget[],
+	out: Consequences,
+) {
+	const { t, plan } = c;
+	const schedules = scheduleIds(plan.app);
+	for (const item of items)
+		for (const event of addedSchedules(c, item)) {
+			scheduleConsequence(c, item, event, out);
+			onceConsequence(c, item, event, out);
+		}
+	const switches = items.some(
+		(item) =>
+			item.service.kind !== "new" &&
+			item.service.events.some((eventId) => schedules.has(eventId)),
+	);
+	if (switches)
+		out.who.push(
+			t(
+				"devices:deployShip.conseq.scheduleSwitch",
+				"A scheduled time that falls into the switch is skipped.",
+			),
+		);
+}
+
+/** The events a target's service gets that it doesn't serve today: all of a new service's. */
+function addedEvents(c: Context, item: ReviewTarget): AppEventInput[] {
+	const served = new Set(
+		(item.existing?.config.events ?? []).map((event) => event.event_id),
+	);
+	const added = new Set(
+		item.service.events.filter((eventId) => !served.has(eventId)),
+	);
+	return (c.plan.app?.events ?? []).filter((event) => added.has(event.id));
+}
+
+/** "https://10.0.4.20:8080": where an Endpoint of the service answers. */
+function serviceAddress(item: ReviewTarget): string {
+	const { certificateId } = item.target.endpoint;
+	const certificate =
+		certificateId === undefined
+			? item.existing?.config.tls_certificate_id
+			: certificateId;
+	return `${certificate ? "https" : "http"}://${addressOf(item)}`;
+}
+
+/** Endpoints a service starts to answer (§2.1): the address, the token that calls them, what the hub keeps doing, how a failure answers. */
+function endpointConsequences(
+	c: Context,
+	item: ReviewTarget,
+	out: Consequences,
+) {
+	const { t, plan } = c;
+	const endpoints = addedEvents(c, item).filter(
+		(event) => appEventRule(event).route && !event.default_page_id,
+	);
+	if (!endpoints.length) return;
+	const service = item.service.serviceId;
+	const address = serviceAddress(item);
+	for (const event of endpoints) {
+		const route = appEventRule(event).route;
+		if (route)
+			out.what.push(
+				t(
+					"devices:deployShip.conseq.endpoint",
+					"{{event}} answers {{method}} {{address}}{{path}}.",
+					{
+						event: event.name,
+						method: route.method,
+						address,
+						path: route.path,
+					},
+				),
+			);
+	}
+	out.who.push(
+		t(
+			"devices:deployShip.conseq.endpointToken",
+			"Callers need {{service}}'s access token. The token set in Events is not used on a device.",
+			{ service },
+		),
+	);
+	const served = item.service.events.filter((eventId) => {
+		const event = plan.app?.events.find((row) => row.id === eventId);
+		return event ? eventKind(event) === "served" : false;
+	});
+	if (served.length > 1)
+		out.who.push(
+			t(
+				"devices:deployShip.conseq.endpointShared",
+				"Everyone with {{service}}'s access token can call all of its endpoints, pages and chats.",
+				{ service },
+			),
+		);
+	const limit = item.existing?.config.hosting?.request_timeout_secs ?? 300;
+	out.who.push(
+		t(
+			"devices:deployShip.conseq.endpointAnswers",
+			"A failed run answers 502, and a run is stopped at {{service}}'s time limit ({{limit}}).",
+			{
+				service,
+				limit: t("devices:deployShip.conseq.seconds", "{{value, number}} s", {
+					value: limit,
+				}),
+			},
+		),
+	);
+	const names = c.list(endpoints.map((event) => event.name));
+	out.stays.push(
+		plan.mode === "online"
+			? t(
+					"devices:deployShip.conseq.endpointElsewhere",
+					"The hub keeps answering {{events}} at its own address.",
+					{ events: names },
+				)
+			: t(
+					"devices:deployShip.conseq.endpointElsewhereLocal",
+					"This computer keeps answering {{events}} while Flow-Like is open.",
+					{ events: names },
+				),
+	);
+}
+
+/** Forms and quick actions a service gets: who may run them from Devices, and from its service page. */
+function onDemandConsequences(
+	c: Context,
+	item: ReviewTarget,
+	out: Consequences,
+) {
+	const { t } = c;
+	const service = item.service.serviceId;
+	for (const event of addedEvents(c, item)) {
+		if (eventKind(event) !== "on_demand") continue;
+		out.who.push(
+			t(
+				"devices:deployShip.conseq.onDemand",
+				"{{event}} can be run from Devices by people who may start {{service}}.",
+				{ event: event.name, service },
+			),
+		);
+		if (item.hosted)
+			out.who.push(
+				t(
+					"devices:deployShip.conseq.onDemandPage",
+					"Anyone with {{service}}'s access token can also run it from the service page.",
+					{ service },
+				),
+			);
+	}
+}
+
+/** Bots a service takes (§5.2): it answers from the device, what is lost on a restart, how to undo it. */
+function botConsequences(c: Context, item: ReviewTarget, out: Consequences) {
+	const { t } = c;
+	const added = new Set(item.service.addedBots);
+	const device = item.target.name;
+	const service = item.service.serviceId;
+	for (const event of c.plan.app?.events ?? []) {
+		if (!added.has(event.id)) continue;
+		out.what.push(
+			t(
+				"devices:deployShip.conseq.bot",
+				"{{event}} answers from {{device}} while {{service}} runs.",
+				{ event: event.name, device, service },
+			),
+		);
+		if (appEventRule(event).bot?.provider === "telegram")
+			out.what.push(
+				t(
+					"devices:deployShip.conseq.botWebhook",
+					"{{device}} removes the bot's Telegram webhook when it first connects.",
+					{ device },
+				),
+			);
+		else
+			out.who.push(
+				t(
+					"devices:deployShip.conseq.botGap",
+					"Discord messages sent while {{service}} restarts or updates are not answered.",
+					{ service },
+				),
+			);
+		out.undo.push(
+			t(
+				"devices:deployShip.conseq.botUndo",
+				"Remove {{event}} from the service, or take it back in Events. Nothing else runs it afterwards until you start it somewhere.",
+				{ event: event.name },
+			),
+		);
+	}
+}
+
+function kindConsequences(
+	c: Context,
+	items: readonly ReviewTarget[],
+	out: Consequences,
+) {
+	for (const item of items) {
+		endpointConsequences(c, item, out);
+		onDemandConsequences(c, item, out);
+		botConsequences(c, item, out);
+	}
+}
+
+/** A flow version this deploy created for an event that follows Latest: said before anything is uploaded. */
+function flowConsequences(
+	c: Context,
+	prepared: DeployStepProps["prepared"],
+	flowNames: ReadonlyMap<string, string>,
+	out: Consequences,
+) {
+	const { t, plan } = c;
+	const created = (prepared?.flows ?? []).filter((flow) => flow.created);
+	for (const flow of created)
+		out.what.push(
+			t(
+				"devices:deployShip.conseq.flowCreated",
+				"Created flow version {{version}} of {{flow}} from the current edits. The event keeps following Latest.",
+				{
+					version: flow.version.join("."),
+					flow: flowLabel(t, plan, flowNames, flow.boardId),
+				},
+			),
+		);
+	if (created.length)
+		out.undo.push(
+			t(
+				"devices:deployShip.conseq.flowUndo",
+				"A created flow version stays in the flow's history.",
+			),
+		);
+}
+
 function whenText(c: Context, label: string): string {
 	const { t, plan } = c;
 	const { order, stopOnFail } = plan.draft;
@@ -1561,10 +1964,16 @@ function whenText(c: Context, label: string): string {
 	return `${texts[order]}${stops}`;
 }
 
+interface ConsequenceFacts {
+	prepared: DeployStepProps["prepared"];
+	flowNames: ReadonlyMap<string, string>;
+}
+
 function consequenceRows(
 	c: Context,
 	items: readonly ReviewTarget[],
 	label: string,
+	facts: ConsequenceFacts,
 ): ConsequenceRows {
 	const { t } = c;
 	const out: Consequences = {
@@ -1582,6 +1991,9 @@ function consequenceRows(
 	);
 	const updates = items.filter((item) => item.service.kind !== "new");
 	updateConsequences(c, updates, out);
+	scheduleConsequences(c, items, out);
+	kindConsequences(c, items, out);
+	flowConsequences(c, facts.prepared, facts.flowNames, out);
 	for (const item of items)
 		if (item.target.locked)
 			out.first.push(
@@ -2012,6 +2424,8 @@ export function ReviewStep(props: Readonly<DeployStepProps>) {
 	const items = useReviewTargets(props);
 	const choices = useApplyChoices(draft);
 	const label = deployButtonLabel(c, items);
+	const { prepared } = props;
+	const flowNames = useFlowNames(plan.app?.id, !!prepared?.flows?.length);
 	const header = (
 		<WizardStepHeader
 			step={7}
@@ -2065,7 +2479,9 @@ export function ReviewStep(props: Readonly<DeployStepProps>) {
 					/>
 				}
 			>
-				<ConsequencePreview rows={consequenceRows(c, items, label)} />
+				<ConsequencePreview
+					rows={consequenceRows(c, items, label, { prepared, flowNames })}
+				/>
 			</Block>
 			<SizeBlock c={c} items={items} />
 			<IdsDisclosure c={c} items={items} />

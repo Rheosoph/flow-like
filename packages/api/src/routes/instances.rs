@@ -19,6 +19,12 @@ pub fn routes() -> Router<AppState> {
         .route("/project/app", get(project_app))
         .route("/project/storage", post(storage))
         .route(
+            "/project/schedules",
+            post(schedules).layer(DefaultBodyLimit::max(
+                instances::schedules::CLAIM_BODY_LIMIT_BYTES,
+            )),
+        )
+        .route(
             "/project/offline/replay",
             post(offline_replay).layer(DefaultBodyLimit::max(
                 flow_like_device_protocol::MAX_OFFLINE_REPLAY_HTTP_BYTES,
@@ -70,6 +76,15 @@ async fn storage(
     headers: HeaderMap,
 ) -> Result<Json<flow_like_device_protocol::InstanceStorageLease>, ApiError> {
     Ok(Json(instances::project::storage(&state, &headers).await?))
+}
+async fn schedules(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<instances::schedules::ScheduleClaimResponse>, ApiError> {
+    Ok(Json(
+        instances::schedules::claim(&state, &headers, &body).await?,
+    ))
 }
 async fn artifact(
     State(state): State<AppState>,

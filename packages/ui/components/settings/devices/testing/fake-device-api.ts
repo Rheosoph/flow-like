@@ -29,7 +29,10 @@ import {
 	VISITOR_PLAN_APP,
 } from "../../../../lib/device-management/model/__fixtures__/apps";
 import { sampleFleet } from "../../../../lib/device-management/model/__fixtures__/sample-fleet";
-import type { AppInput } from "../../../../lib/device-management/model/app-plan";
+import type {
+	AppEventInput,
+	AppInput,
+} from "../../../../lib/device-management/model/app-plan";
 import { presence } from "../../../../lib/device-management/model/presence";
 import type {
 	AccountBackupList,
@@ -46,9 +49,14 @@ import type {
 	MyAccess,
 	PlacementStatusPlus,
 	ResourceSummary,
+	ScheduleHold,
+	ScheduleOutcome,
+	ServiceBot,
+	ServiceSchedule,
 } from "../../../../lib/device-management/model/types";
 import type { OfflineQueueStatus } from "../../../../lib/device-management/offline-queue";
 import type { DeviceSetupReadiness } from "../../../../lib/device-management/readiness";
+import { SCHEDULE_PROBLEMS } from "../../../../lib/device-management/schedule";
 import type {
 	DeviceAccountScope,
 	LocalDeviceVault,
@@ -79,6 +87,34 @@ import type {
 } from "../../../../lib/device-resources";
 import type { IApiState } from "../../../../state/backend-state/api-state";
 import type { IProfile } from "../../../../types";
+import {
+	type OnceRecord,
+	type ServiceEvent,
+	armOnce,
+	boundedLists,
+	discoveryRows,
+	isClaimed,
+	liveAction,
+	liveBot,
+	liveOnce,
+	liveSchedule,
+	onceFinished,
+	runIfDue,
+	serviceEvents,
+	stableAction,
+	stableBot,
+	stableSchedule,
+	startRefusal,
+} from "./fake-events";
+import {
+	type FakeEventForm,
+	FakeRuns,
+	SAMPLE_FORMS,
+	formAnswer,
+	payloadProblem,
+	refusedFields,
+} from "./fake-runs";
+import { FakeFlows, FakeSchedules } from "./fake-schedules";
 
 /*
  * In-memory hub and device agents for device tests (plan §2.4 "Testing support").
@@ -432,6 +468,15 @@ const EVENT_FIELDS = [
 	"online_metadata_sha256",
 ] as const;
 const SNAPSHOT_FIELDS = ["has_error", ...EVENT_FIELDS] as const;
+const SCHEDULE_FIELDS = ["schedules", "schedules_truncated"] as const;
+const BOT_FIELDS = ["bots", "bots_truncated"] as const;
+const ACTION_FIELDS = ["actions", "actions_truncated"] as const;
+/** The row facts of a service's events, cleared before its process reports again. */
+const EVENT_LIST_FIELDS = [
+	...SCHEDULE_FIELDS,
+	...BOT_FIELDS,
+	...ACTION_FIELDS,
+] as const;
 
 function pick<T extends object>(
 	row: T,
@@ -488,7 +533,27 @@ function wirePlacement(
 		...(diagnostics ? pick(row, DIAGNOSTIC_FIELDS) : {}),
 		...(features.placement_events === 1 ? pick(row, EVENT_FIELDS) : {}),
 		...(features.offline_summary === 1 ? pick(row, ["offline_writes"]) : {}),
+		...(features.scheduled_events === 1 ? pick(row, SCHEDULE_FIELDS) : {}),
+		...(features.telegram_bots === 1 || features.discord_bots === 1
+			? pick(row, BOT_FIELDS)
+			: {}),
+		...(features.on_demand_events === 1 ? pick(row, ACTION_FIELDS) : {}),
 	};
+}
+
+/** A list of a snapshot row: only what does not change by itself, and whether it was cut. */
+function stableList<T>(
+	row: PlacementStatusPlus,
+	key: "schedules" | "bots" | "actions",
+	stable: (entry: T) => T,
+): Record<string, unknown> {
+	const list = row[key] as T[] | undefined;
+	return list
+		? {
+				[key]: list.map(stable),
+				...pick(row, [`${key}_truncated` as keyof PlacementStatusPlus]),
+			}
+		: {};
 }
 
 /** A placement row of an encrypted status snapshot: never error text, process ids or retry times. */
@@ -500,6 +565,9 @@ function snapshotPlacement(row: PlacementStatusPlus): Record<string, unknown> {
 			pick(replica, ["slot", "observed_state", "applied_revision"]),
 		),
 		...pick(row, SNAPSHOT_FIELDS),
+		...stableList(row, "schedules", stableSchedule),
+		...stableList(row, "bots", stableBot),
+		...stableList(row, "actions", stableAction),
 	};
 }
 
@@ -518,9 +586,15 @@ const ALL_FEATURES: AgentFeatures = {
 	acme_failure_detail: 1,
 	archive_status: 1,
 	artifact_capacity: 1,
+	scheduled_events: 1,
+	api_events: 1,
+	scheduled_once: 1,
+	on_demand_events: 1,
+	telegram_bots: 1,
+	discord_bots: 1,
 };
 
-/** The feature flag each command of plan §3.4.3 needs. */
+/** The feature flag each command of plan §3.4.3 and of person-started runs needs. */
 const COMMAND_FEATURE: Record<string, AgentFeature> = {
 	host_operation: "host_operation",
 	rollout_history: "rollout_history",
@@ -528,7 +602,14 @@ const COMMAND_FEATURE: Record<string, AgentFeature> = {
 	metrics_history: "metrics_history",
 	offline_queue_operations: "offline_lookup",
 	offline_queue_lookup: "offline_lookup",
+	run_event: "on_demand_events",
+	cancel_run: "on_demand_events",
+	event_form: "on_demand_events",
 };
+/** Refused before anything is journaled: a refusal leaves no row. */
+const UNJOURNALED_REFUSALS = new Set(["run_event"]);
+/** Operations the owner's list names by kind, with the event they ran. */
+const RUN_KINDS = new Set(["run_event", "cancel_run"]);
 const ARTIFACT_FEATURE_KINDS = new Set(["usage", "prune"]);
 
 const completed = (result: Record<string, unknown> = {}): CommandReply => ({
@@ -594,6 +675,33 @@ interface AgentSeed {
 	transfers: FakeTransfer[];
 }
 
+/** A running process of a service: what its one claim call answered (round one's gate per event). */
+interface ServiceProcess {
+	/** Schedules and bots by event id; null = it may run. */
+	holds: Map<string, ScheduleHold | null>;
+	/** When the hub gave each event to this approval (the `floor` of a one-time schedule). */
+	since: Map<string, number>;
+	startedAt: number;
+}
+
+/** The event ids a configuration (or the placement row repeating it) lists, in its order. */
+function configEventIds(config: { events?: unknown }): string[] {
+	return Array.isArray(config.events)
+		? config.events.flatMap((event: { event_id?: unknown } | null) =>
+				typeof event?.event_id === "string" ? [event.event_id] : [],
+			)
+		: [];
+}
+
+/** The process could not start: the service ends `failed` with the device's sentence. */
+function failPlacement(row: PlacementStatusPlus, error: string): void {
+	row.observed_state = "failed";
+	row.running_replicas = 0;
+	row.ready_replicas = 0;
+	row.has_error = true;
+	row.last_error = error;
+}
+
 type RosterKind = "telemetry" | "logs" | "metrics";
 
 const READ_FACT_KEYS = [
@@ -648,19 +756,39 @@ export class FakeAgent {
 	/** Telemetry by `<metrics|logs|messages>:<placement id or "device" or "project:<id>">`. */
 	records = new Map<string, TelemetryRow[]>();
 	/** Answers of commands sent with an operation id (the device's 24 h journal). */
-	journal = new Map<string, CommandReply & { type: string; at: number }>();
+	journal = new Map<
+		string,
+		CommandReply & { type: string; at: number; eventId?: string }
+	>();
 	/** Configurations of staged updates by rollout id, applied on activation. */
 	staged = new Map<string, Record<string, unknown>>();
 	/** Activated rollouts that turn healthy on their next status read. */
 	settling = new Set<string>();
+	/** Activated rollouts whose configuration the device refused: `failed` on their next read. */
+	refused = new Set<string>();
 	/** Uploads the device still holds, by transfer id. */
 	transfers = new Map<string, FakeTransfer>();
 	/** Status reads a stopped service still reports `stopping` (a device takes up to 17 s); 0 = stopped at once. */
 	stopReads = 0;
+	/** Person-started runs: how the next ones end, and what the agent keeps of them in memory. */
+	readonly runs: FakeRuns;
+	/** One-time schedule records by placement id (the schedule state file's entries and `once_done`). */
+	readonly onceRecords = new Map<string, OnceRecord[]>();
+	/** How the next one-time runs end. */
+	onceOutcome: ScheduleOutcome = "succeeded";
+	/** What a test says about a bot beyond its hold, by event id: a state, a name, counters. */
+	readonly botFacts = new Map<string, Partial<ServiceBot>>();
 	private readonly stopping = new Map<string, number>();
 	private readonly handlers = new Map<string, CommandHandler>();
 	private readonly drops: (string | undefined)[] = [];
+	private readonly lostReplies: (string | undefined)[] = [];
 	private readonly sockets = new Set<{ remoteClose(): void }>();
+	/** The events each service got with its configuration (the deployed versions), by placement id. */
+	private readonly deployed = new Map<string, AppEventInput[]>();
+	/** The running process of each service: what its claim answered, by placement id. */
+	private readonly processes = new Map<string, ServiceProcess>();
+	/** Services whose last start the device refused (validation). */
+	private readonly refusedStarts = new Set<string>();
 
 	constructor(
 		readonly deviceId: string,
@@ -668,6 +796,13 @@ export class FakeAgent {
 		seed: AgentSeed,
 		features: AgentFeatures | undefined,
 	) {
+		this.runs = new FakeRuns(
+			() => this.now(),
+			(placementId) => {
+				const row = this.placement(placementId);
+				if (row) this.reportActions(row);
+			},
+		);
 		const inspection = seed.inspection;
 		this.features = features ?? inspection?.features ?? ALL_FEATURES;
 		this.bootId = seed.bootId;
@@ -796,14 +931,25 @@ export class FakeAgent {
 		this.drops.push(type);
 	}
 
+	/** The next command (of `type`, or any) runs on the device, but its answer is lost with the session. */
+	loseReplyNext(type?: string) {
+		this.lostReplies.push(type);
+	}
+
 	/** Drop every open session from the device side. */
 	disconnect() {
 		for (const socket of [...this.sockets]) socket.remoteClose();
 	}
 
-	/** Reboot: a new boot id and no open sessions. */
+	/** Reboot: a new boot id and no open sessions; the agent starts again (see `restartAgent`). */
 	reboot(bootId = crypto.randomUUID().replaceAll("-", "").slice(0, 16)) {
 		this.bootId = bootId;
+		this.restartAgent();
+	}
+
+	/** The agent process restarts: no open sessions, open runs end `interrupted`, kept outputs are gone. */
+	restartAgent() {
+		this.runs.restartAgent();
 		this.disconnect();
 	}
 
@@ -822,6 +968,385 @@ export class FakeAgent {
 		return this.placements.find((row) => row.id === placementId);
 	}
 
+	/** The events of the service's configuration. */
+	private eventIds(row: PlacementStatusPlus): string[] {
+		return configEventIds(this.configs.get(row.id) ?? row);
+	}
+
+	/** The service's events as its process reads them: the copies it got with its configuration. */
+	serviceEvents(row: PlacementStatusPlus): ServiceEvent[] {
+		return serviceEvents(
+			this.deployed.get(row.id) ??
+				this.world.hub.apps[row.project_id]?.events ??
+				[],
+			this.eventIds(row),
+		);
+	}
+
+	/** @internal A configuration arrives: its events are the versions the hub (or the copy) has now. */
+	receiveConfig(row: PlacementStatusPlus): void {
+		const ids = this.eventIds(row);
+		this.deployed.set(
+			row.id,
+			structuredClone(
+				(this.world.hub.apps[row.project_id]?.events ?? []).filter((event) =>
+					ids.includes(event.id),
+				),
+			),
+		);
+	}
+
+	/** A form or quick action of the service, as the flow version it runs defines it. */
+	personStarted(
+		row: PlacementStatusPlus,
+		eventId: unknown,
+	): { event: AppEventInput; form: FakeEventForm } | undefined {
+		const entry = this.serviceEvents(row).find(
+			({ event, rule }) => event.id === eventId && rule.kind === "on_demand",
+		);
+		return (
+			entry && { event: entry.event, form: this.world.hub.formOf(entry.event) }
+		);
+	}
+
+	/**
+	 * Why a process of the service fails validation and start, or null; with
+	 * `staged`, why that configuration of a safe update fails. The token keys
+	 * are checked only in a configuration this agent received in the test.
+	 */
+	refusal(
+		row: PlacementStatusPlus,
+		staged?: Record<string, unknown>,
+	): string | null {
+		const config = staged ?? this.configs.get(row.id);
+		const events = staged
+			? serviceEvents(
+					this.world.hub.apps[row.project_id]?.events ?? [],
+					configEventIds(staged),
+				)
+			: this.serviceEvents(row);
+		return startRefusal(
+			events,
+			this.features,
+			config
+				? ((config.secret_overrides as Record<string, unknown> | undefined) ??
+						{})
+				: null,
+			config ? config.hosting != null : Boolean(this.configFacts[row.id]?.port),
+		);
+	}
+
+	/** Another running service of the app on this device already runs the schedule or bot: the first to ask wins. */
+	private heldBySibling(row: PlacementStatusPlus, eventId: string): boolean {
+		return this.placements.some(
+			(other) =>
+				other !== row &&
+				other.project_id === row.project_id &&
+				this.processes.has(other.id) &&
+				[...(other.schedules ?? []), ...(other.bots ?? [])].some(
+					(entry) => entry.event_id === eventId && entry.hold === null,
+				),
+		);
+	}
+
+	/** One claim call for the service's schedules and bots (S5): the hub's holds and since when each was claimed. */
+	private claim(
+		row: PlacementStatusPlus,
+		eventIds: readonly string[],
+	): Pick<ServiceProcess, "holds" | "since"> {
+		const { hub, mode } = this.world;
+		const all = (hold: ScheduleHold) => ({
+			holds: new Map(eventIds.map((eventId) => [eventId, hold])),
+			since: new Map<string, number>(),
+		});
+		if (!hub.has("schedules")) return all("hub_too_old");
+		if (!mode.reachable) return all("hub_unreachable");
+		try {
+			const answer = hub.schedules.claim(this.deviceId, row.id, eventIds);
+			return {
+				holds: new Map(
+					answer.held.map((held) => [held.event_id, held.reason] as const),
+				),
+				since: new Map(
+					answer.claimed.map((claimed) => [claimed.event_id, claimed.since]),
+				),
+			};
+		} catch {
+			return all("hub_unreachable");
+		}
+	}
+
+	/**
+	 * What a service's process says about its events after a start, a stop or
+	 * an update (design R2 §1.7). A process the agent can't validate fails the
+	 * service: a kind without its flag, a bot token key of an event that is no
+	 * bot, a bot without its token, a route it can't serve. A running service
+	 * claims its schedules and bots in one call, arms what it may run and holds
+	 * the rest. A service that is not running reports only its finished one-time
+	 * schedules; its claim on the hub stays.
+	 */
+	settleEvents(row: PlacementStatusPlus): void {
+		this.processes.delete(row.id);
+		if (row.desired_state === "running" && row.observed_state === "running") {
+			const refusal = this.refusal(row);
+			if (refusal) {
+				failPlacement(row, refusal);
+				this.refusedStarts.add(row.id);
+			} else {
+				// A process that starts after the device refused the last one leaves no error behind.
+				if (this.refusedStarts.delete(row.id)) {
+					row.has_error = undefined;
+					row.last_error = undefined;
+				}
+				this.startProcess(row);
+			}
+		}
+		this.report(row);
+	}
+
+	private startProcess(row: PlacementStatusPlus): void {
+		const now = this.now();
+		const claimed = this.serviceEvents(row).filter(isClaimed);
+		const free = claimed.filter(
+			({ event }) => !this.heldBySibling(row, event.id),
+		);
+		// An online service states its full set once it is ready, an empty one too: what it dropped goes back to the hub.
+		const hub =
+			row.source === "online" && this.features.scheduled_events === 1
+				? this.claim(
+						row,
+						free.map(({ event }) => event.id),
+					)
+				: { holds: new Map<string, ScheduleHold>(), since: new Map() };
+		const holds = new Map<string, ScheduleHold | null>(
+			claimed.map(({ event }) => [
+				event.id,
+				free.some((entry) => entry.event.id === event.id)
+					? (hub.holds.get(event.id) ?? null)
+					: "other_service",
+			]),
+		);
+		const process = { holds, since: hub.since, startedAt: now };
+		this.processes.set(row.id, process);
+		const records = this.onceRecords.get(row.id) ?? [];
+		const current = this.serviceEvents(row).flatMap(({ event, rule }) =>
+			rule.once ? [{ event, once: rule.once }] : [],
+		);
+		// A record nobody asks for any more goes, unless it finished: a rollback finds it again.
+		const kept = records.filter(
+			(record) =>
+				onceFinished(record) ||
+				current.some(
+					({ event, once }) =>
+						event.id === record.eventId && once.at === record.onceAt,
+				),
+		);
+		for (const { event, once } of current) {
+			let record = kept.find(
+				(candidate) =>
+					candidate.eventId === event.id && candidate.onceAt === once.at,
+			);
+			if (!record) {
+				record = {
+					eventId: event.id,
+					onceAt: once.at,
+					timezone: once.timezone,
+					eventVersion: [...(event.event_version ?? [])],
+					state: "pending",
+					armedAt: null,
+					lastAt: null,
+					lastOutcome: null,
+				};
+				kept.push(record);
+			}
+			armOnce(
+				record,
+				holds.get(event.id) ?? null,
+				now,
+				process.since.get(event.id) ?? null,
+				this.onceOutcome,
+			);
+		}
+		this.onceRecords.set(row.id, kept);
+	}
+
+	/** The service's one-time record for the instant its configuration pins. */
+	private onceRecord(
+		row: PlacementStatusPlus,
+		{ event, rule }: ServiceEvent,
+	): OnceRecord | undefined {
+		return this.onceRecords
+			.get(row.id)
+			?.find(
+				(record) =>
+					record.eventId === event.id &&
+					record.onceAt === rule.once?.at &&
+					record.eventVersion.join(".") ===
+						(event.event_version ?? []).join("."),
+			);
+	}
+
+	/** Writes the row facts of the service's events from what its process knows now. */
+	report(row: PlacementStatusPlus): void {
+		for (const key of EVENT_LIST_FIELDS) row[key] = undefined;
+		const events = this.serviceEvents(row);
+		const process = this.processes.get(row.id);
+		if (!process) {
+			const finished = events.flatMap((entry) => {
+				const record = this.onceRecord(row, entry);
+				return record && onceFinished(record) ? [liveOnce(record, null)] : [];
+			});
+			if (finished.length)
+				Object.assign(row, boundedLists({ schedules: finished }));
+			return;
+		}
+		const now = this.now();
+		const hold = (eventId: string) => process.holds.get(eventId) ?? null;
+		const schedules = events.flatMap((entry): ServiceSchedule[] => {
+			const { event, rule } = entry;
+			if (rule.schedule)
+				return [
+					liveSchedule(
+						{
+							eventId: event.id,
+							expression: rule.schedule.expression,
+							timezone: rule.schedule.timezone,
+						},
+						hold(event.id),
+						now,
+					),
+				];
+			const record = rule.once ? this.onceRecord(row, entry) : undefined;
+			return record ? [liveOnce(record, hold(event.id))] : [];
+		});
+		const bots = events
+			.filter(({ rule }) => rule.kind === "bot")
+			.map(({ event }) =>
+				liveBot(
+					event,
+					hold(event.id),
+					process.startedAt,
+					this.botFacts.get(event.id),
+				),
+			);
+		const actions = this.actionsOf(row, events);
+		Object.assign(
+			row,
+			boundedLists({
+				...(schedules.length ? { schedules } : {}),
+				...(bots.length ? { bots } : {}),
+				...(actions.length ? { actions } : {}),
+			}),
+		);
+	}
+
+	private actionsOf(row: PlacementStatusPlus, events: ServiceEvent[]) {
+		return events
+			.filter(({ rule }) => rule.kind === "on_demand")
+			.map(({ event }) =>
+				liveAction(
+					event,
+					this.world.hub.formOf(event),
+					this.runs.counters(row.id, event.id),
+				),
+			);
+	}
+
+	/** A run started or ended: only the service's `actions` move (a test's edits of the other lists stay). */
+	private reportActions(row: PlacementStatusPlus): void {
+		if (!this.processes.has(row.id)) return;
+		const actions = this.actionsOf(row, this.serviceEvents(row));
+		if (!actions.length) return;
+		const lists = boundedLists({
+			schedules: row.schedules,
+			bots: row.bots,
+			actions,
+		});
+		row.actions = lists.actions;
+		row.actions_truncated = lists.actions_truncated;
+	}
+
+	/**
+	 * Time passed: an armed one-time schedule of a running service whose
+	 * instant came runs now. The row's facts are written again only when one
+	 * did, so a test's edits of them stay.
+	 */
+	refresh(): void {
+		const now = this.now();
+		for (const row of this.placements) {
+			const process = this.processes.get(row.id);
+			if (!process) continue;
+			let moved = false;
+			for (const entry of this.serviceEvents(row)) {
+				const record = entry.rule.once
+					? this.onceRecord(row, entry)
+					: undefined;
+				if (!record) continue;
+				const before = record.state;
+				runIfDue(
+					record,
+					now,
+					process.since.get(entry.event.id) ?? null,
+					this.onceOutcome,
+				);
+				moved ||= record.state !== before;
+			}
+			if (moved) this.report(row);
+		}
+	}
+
+	/** The service is removed: its data root goes with it. */
+	forget(placementId: string): void {
+		this.deployed.delete(placementId);
+		this.processes.delete(placementId);
+		this.onceRecords.delete(placementId);
+	}
+
+	/**
+	 * The app copy of a revision this device holds: the events a service of
+	 * that revision got stand in for the app's current records, so a record
+	 * edited after the deploy is not what the device describes.
+	 */
+	private appCopy(app: AppInput, revision: unknown): AppInput {
+		const service = this.placements.find(
+			(row) =>
+				row.project_id === app.id &&
+				row.revision === revision &&
+				this.deployed.has(row.id),
+		);
+		const copies = service ? (this.deployed.get(service.id) ?? []) : [];
+		return {
+			...app,
+			events: app.events.map(
+				(event) => copies.find((copy) => copy.id === event.id) ?? event,
+			),
+		};
+	}
+
+	/** `artifact · describe`: the events of the app copy the device holds, or the variables of one event. */
+	describe(request: Record<string, unknown>): CommandReply {
+		const { hub } = this.world;
+		const current = hub.apps[text(request.project_id)];
+		if (!current)
+			return rejected("failed", "The device does not hold this app.");
+		const app = this.appCopy(current, request.revision);
+		const eventId =
+			typeof request.event_id === "string" ? request.event_id : null;
+		const rows: { id: string }[] = eventId
+			? [...(hub.appVariables[eventId] ?? [])]
+			: discoveryRows(app, this.features, (event) =>
+					hub.copyPin(app.id, event),
+				);
+		const page = pageOf(rows, (row) => row.id, request.after, 512);
+		return completed({
+			project_id: app.id,
+			revision: request.revision,
+			event_id: eventId,
+			items: page.rows,
+			next: page.next,
+		});
+	}
+
 	/** @internal The relay hands every decrypted request here. */
 	async receive(
 		socket: { remoteClose(): void },
@@ -832,31 +1357,69 @@ export class FakeAgent {
 		this.world.commands.push([
 			this.deviceId,
 			type,
-			redact(command, SECRET_VALUE_COMMANDS.has(type)) as Record<
-				string,
-				unknown
-			>,
+			redact(
+				this.withoutSensitive(type, command),
+				SECRET_VALUE_COMMANDS.has(type),
+			) as Record<string, unknown>,
 		]);
-		const drop = this.drops.findIndex(
-			(wanted) => wanted === undefined || wanted === type,
-		);
-		if (drop >= 0) {
-			this.drops.splice(drop, 1);
+		const wanted = (drops: (string | undefined)[]) => {
+			const index = drops.findIndex(
+				(drop) => drop === undefined || drop === type,
+			);
+			if (index >= 0) drops.splice(index, 1);
+			return index >= 0;
+		};
+		if (wanted(this.drops)) {
 			socket.remoteClose();
 			return undefined;
 		}
 		const reply = await this.answer(type, command, operationId);
-		if (type !== "operation" && !READS.has(type))
+		if (
+			type !== "operation" &&
+			!READS.has(type) &&
+			!(reply.state === "rejected" && UNJOURNALED_REFUSALS.has(type))
+		)
 			this.journal.set(operationId, {
 				...reply,
 				type,
 				at: this.now(),
+				...journaledEvent(this, type, command),
 			});
+		if (wanted(this.lostReplies)) {
+			socket.remoteClose();
+			return undefined;
+		}
 		const lookup =
 			type === "operation" && reply.state !== "rejected"
 				? text(command.operation_id)
 				: operationId;
 		return this.bounded({ operation_id: lookup, ...reply }, operationId);
+	}
+
+	/** A run's recorded command: the values of the form's sensitive fields never reach `commands`. */
+	private withoutSensitive(
+		type: string,
+		command: Record<string, unknown>,
+	): Record<string, unknown> {
+		const payload = command.payload;
+		if (type !== "run_event" || !payload || typeof payload !== "object")
+			return command;
+		const row = this.placement(command.placement_id);
+		const form = row && this.personStarted(row, command.event_id)?.form;
+		const sensitive = new Set(
+			form?.fields
+				.filter((field) => field.sensitive)
+				.map((field) => field.name),
+		);
+		return {
+			...command,
+			payload: Object.fromEntries(
+				Object.entries(payload).map(([key, value]) => [
+					key,
+					sensitive.has(key) ? REDACTED : value,
+				]),
+			),
+		};
 	}
 
 	private bounded(reply: Record<string, unknown>, operationId: string) {
@@ -900,6 +1463,7 @@ export class FakeAgent {
 
 	/** @internal Inspection rows in the id order agents page them in. */
 	rows(): Record<string, unknown>[] {
+		this.refresh();
 		const rows = [...this.placements]
 			.sort((a, b) => (a.id < b.id ? -1 : 1))
 			.map((row) => wirePlacement(row, this.features));
@@ -1001,6 +1565,7 @@ const READS = new Set([
 	"metrics_history",
 	"offline_queue_operations",
 	"offline_queue_lookup",
+	"event_form",
 ]);
 
 const revisionConflict = (placementId: unknown) =>
@@ -1040,12 +1605,15 @@ function setRunning(row: PlacementStatusPlus, running: boolean) {
 	row.replicas = undefined;
 }
 
-function lifecycle(running: boolean): CommandHandler {
+/** `restart` and `stop` end the service's processes: a run they had is cut off. */
+function lifecycle(running: boolean, newProcess: boolean): CommandHandler {
 	return (command, { agent }) => {
 		const row = target(agent, command);
 		if (isReply(row)) return row;
+		if (newProcess) agent.runs.interrupt(row.id);
 		setRunning(row, running);
 		if (!running) agent.beginStopping(row);
+		agent.settleEvents(row);
 		return completed({ placement_id: row.id, state: row.observed_state });
 	};
 }
@@ -1075,6 +1643,7 @@ const remove: CommandHandler = (command, { agent }) => {
 			`placement must be stopped before removal: ${row.id}`,
 		);
 	agent.placements = agent.placements.filter((other) => other !== row);
+	agent.forget(row.id);
 	return completed({ placement_id: row.id, removed: true });
 };
 
@@ -1260,7 +1829,15 @@ const rollout: CommandHandler = (command, { agent }) => {
 	);
 	if (!row) return rejected("invalid", "Unknown rollout.");
 	const reply = completed({ ...row });
-	if (ACTIVATING.has(row.state) && agent.settling.delete(row.rollout_id)) {
+	if (ACTIVATING.has(row.state) && agent.refused.delete(row.rollout_id)) {
+		// The candidate failed validation: the running revision stays.
+		row.state = "failed";
+		row.failure_code = "validation_failed";
+		row.updated_at = agent.now();
+	} else if (
+		ACTIVATING.has(row.state) &&
+		agent.settling.delete(row.rollout_id)
+	) {
 		row.state = "healthy";
 		row.updated_at = agent.now();
 		const placement = agent.placement(row.placement_id);
@@ -1269,11 +1846,125 @@ const rollout: CommandHandler = (command, { agent }) => {
 	return reply;
 };
 
+/** A run's row moves on with each read; once it ended, the journal keeps it without its output. */
+function runOperation(
+	agent: FakeAgent,
+	operationId: string,
+	known: CommandReply,
+): CommandReply {
+	const record = agent.runs.read(operationId);
+	if (!record) return { state: known.state, result: known.result };
+	const state = agent.runs.state(record);
+	const {
+		output: _output,
+		output_gone: _gone,
+		...stored
+	} = agent.runs.result(record);
+	Object.assign(known, { state, result: stored });
+	return { state, result: agent.runs.result(record) };
+}
+
 const operation: CommandHandler = (command, { agent }) => {
-	const known = agent.journal.get(text(command.operation_id));
-	return known
-		? { state: known.state, result: known.result }
-		: rejected("invalid", "The device has no record of this operation.");
+	const operationId = text(command.operation_id);
+	const known = agent.journal.get(operationId);
+	if (!known)
+		return rejected("invalid", "The device has no record of this operation.");
+	return known.type === "run_event"
+		? runOperation(agent, operationId, known)
+		: { state: known.state, result: known.result };
+};
+
+/** The event a journaled run or cancel names, for the owner's operations list. */
+function journaledEvent(
+	agent: FakeAgent,
+	type: string,
+	command: Record<string, unknown>,
+): { eventId?: string } {
+	if (type === "run_event") return { eventId: text(command.event_id) };
+	if (type !== "cancel_run") return {};
+	const eventId = agent.journal.get(text(command.operation_id))?.eventId;
+	return eventId ? { eventId } : {};
+}
+
+/** The parent's checks before it journals a run (§4.2 step 2), then the run is queued. */
+const runEvent: CommandHandler = (command, { agent, operationId }) => {
+	// A repeated operation id answers the stored row; the run never starts twice.
+	const replayed = agent.journal.get(operationId);
+	if (replayed?.type === "run_event")
+		return { state: replayed.state, result: replayed.result };
+	if (typeof command.expected_revision !== "number")
+		return rejected("invalid", "A run names the service's revision.");
+	const row = target(agent, command);
+	if (isReply(row)) return row;
+	if (
+		row.desired_state !== "running" ||
+		row.observed_state !== "running" ||
+		activeRollout(agent, row.id)
+	)
+		return revisionConflict(row.id);
+	const event = agent.personStarted(row, command.event_id);
+	if (!event)
+		return rejected(
+			"invalid",
+			`Event ${text(command.event_id)} is no form or quick action of ${row.id}.`,
+		);
+	const problem = payloadProblem(command.payload);
+	if (problem) return rejected("invalid", problem);
+	if (agent.runs.full(row.id))
+		return rejected(
+			"busy",
+			`${row.id} is running as many actions as it accepts.`,
+			true,
+		);
+	const record = agent.runs.start(
+		operationId,
+		row.id,
+		event.event.id,
+		refusedFields(
+			event.form,
+			command.payload as Record<string, unknown> | undefined,
+		),
+	);
+	return {
+		state: "accepted",
+		result: agent.runs.result(record),
+	};
+};
+
+const cancelRun: CommandHandler = (command, { agent }) => {
+	const cancelled = agent.runs.cancel(text(command.operation_id));
+	return cancelled === undefined
+		? rejected("invalid", "The device has no record of this run.")
+		: completed({ command: "cancel_run", cancelled });
+};
+
+const eventForm: CommandHandler = (command, { agent }) => {
+	const row = target(agent, command);
+	if (isReply(row)) return row;
+	if (row.desired_state !== "running" || row.observed_state !== "running")
+		return revisionConflict(row.id);
+	const found = agent.personStarted(row, command.event_id);
+	if (!found)
+		return rejected(
+			"invalid",
+			`Event ${text(command.event_id)} is no form or quick action of ${row.id}.`,
+		);
+	const pinned = agent
+		.placement(row.id)
+		?.events?.find((event) => event.event_id === found.event.id);
+	return completed(
+		formAnswer(
+			{
+				placement_id: row.id,
+				config_revision: row.config_revision,
+				event_id: found.event.id,
+				event_version: pinned?.event_version ?? found.event.event_version ?? [],
+				board_version: pinned?.board_version ?? found.event.board_version ?? [],
+				name: found.event.name,
+			},
+			found.form,
+		),
+	);
 };
 
 const certificates: CommandHandler = (command, { agent }) => {
@@ -1365,12 +2056,15 @@ const operations: CommandHandler = (command, { agent }) => {
 		.slice(-limitOf(command, 20))
 		.map(([operationId, entry]) => ({
 			operation_id: operationId,
-			kind: null,
+			kind: RUN_KINDS.has(entry.type) ? entry.type : null,
 			actor: { role: "owner", user_id: null, grant_id: null },
 			project_id: null,
 			placement_id: null,
 			accepted_at: entry.at,
 			state: entry.state === "rejected" ? "failed" : entry.state,
+			...(RUN_KINDS.has(entry.type) && entry.eventId
+				? { event_id: entry.eventId }
+				: {}),
 		}));
 	return completed({ operations: rows, next: null });
 };
@@ -1438,6 +2132,7 @@ const ARTIFACT_HANDLERS: Record<string, ArtifactHandler> = {
 		transfer.state = "aborted";
 		return completed({ ...transfer });
 	},
+	describe: (request, agent) => agent.describe(request),
 };
 
 const artifact: CommandHandler = (command, { agent }) => {
@@ -1463,6 +2158,22 @@ function removed<T>(
 			return rejected("invalid", "Nothing to delete with this identifier.");
 		assign(agent, kept);
 		return completed({ [idField]: id, deleted: true });
+	};
+}
+
+/** What a placement row repeats of its configuration: where the app comes from and the events it serves. */
+function configRowFacts(
+	config: Record<string, unknown>,
+): Pick<PlacementStatusPlus, "source" | "events" | "online_metadata_sha256"> {
+	const { source, events, online_metadata_sha256: metadata } = config;
+	return {
+		...(source === "online" || source === "offline" ? { source } : {}),
+		...(Array.isArray(events)
+			? { events: events as PlacementStatusPlus["events"] }
+			: {}),
+		...(typeof metadata === "string"
+			? { online_metadata_sha256: metadata }
+			: {}),
 	};
 }
 
@@ -1493,12 +2204,17 @@ const apply: CommandHandler = (command, { agent }) => {
 		intent_revision: (existing?.intent_revision ?? 0) + 1,
 		applied_revision: existing?.applied_revision ?? null,
 		replicas: undefined,
+		...configRowFacts(config),
 	};
+	// Apply stops the service's processes, so a run they had is cut off.
+	agent.runs.interrupt(id);
 	agent.placements = [
 		...agent.placements.filter((other) => other.id !== id),
 		row,
 	];
 	agent.configs.set(id, config);
+	agent.receiveConfig(row);
+	agent.settleEvents(row);
 	return completed({ placement_id: id, config_revision: revision });
 };
 
@@ -1548,13 +2264,25 @@ const activateRollout: CommandHandler = (command, { agent }) => {
 	if (!row || row.state !== "staged")
 		return rejected("invalid", "This update is not staged.");
 	const placement = agent.placement(row.placement_id);
+	const config = agent.staged.get(row.rollout_id);
+	row.state = "validating";
+	if (placement && config && agent.refusal(placement, config)) {
+		// Validation refuses the candidate: the running revision stays as it is.
+		agent.refused.add(row.rollout_id);
+		return completed(rolloutScope(row));
+	}
 	if (placement) {
 		placement.config_revision = Number(row.active_revision);
 		placement.applied_revision = placement.config_revision;
-		const config = agent.staged.get(row.rollout_id);
-		if (config) agent.configs.set(placement.id, config);
+		if (config) {
+			agent.configs.set(placement.id, config);
+			Object.assign(placement, configRowFacts(config));
+			agent.receiveConfig(placement);
+		}
+		// The old process stops (its runs are cut off); the new one arms from its own start.
+		agent.runs.interrupt(placement.id);
+		agent.settleEvents(placement);
 	}
-	row.state = "validating";
 	agent.settling.add(row.rollout_id);
 	return completed(rolloutScope(row));
 };
@@ -1637,9 +2365,12 @@ const DEFAULT_HANDLERS: Record<string, CommandHandler> = {
 			error_code: null,
 		}),
 	artifact,
-	start: lifecycle(true),
-	restart: lifecycle(true),
-	stop: lifecycle(false),
+	start: lifecycle(true, false),
+	restart: lifecycle(true, true),
+	stop: lifecycle(false, true),
+	run_event: runEvent,
+	cancel_run: cancelRun,
+	event_form: eventForm,
 	scale,
 	remove,
 	reboot: hostOperation("reboot"),
@@ -1775,6 +2506,90 @@ const HUB_ONLY_ROW_FIELDS = [
 	"auth_rejection",
 ] as const;
 
+/** `event_types` of a hub of round two (design §1.9), in its order. */
+const HUB_EVENT_TYPES = [
+	"http",
+	"simple_chat",
+	"rest",
+	"mcp",
+	"daemon",
+	"cron",
+	"api",
+	"quick_action",
+	"generic_form",
+	"telegram",
+	"discord",
+] as const;
+/** Exported only when the request names the type in `types=` (unless the event has a Page). */
+const NAMED_EXPORT_TYPES: ReadonlySet<string> = new Set([
+	"api",
+	"quick_action",
+	"generic_form",
+	"telegram",
+	"discord",
+]);
+/** Codes of the rule the hub does not check: the device refuses them, and the client says why. */
+const DEVICE_CHECKED: ReadonlySet<string> = new Set([
+	...SCHEDULE_PROBLEMS,
+	"route_missing",
+	"route_invalid",
+	"route_reserved",
+	"bot_invalid",
+]);
+
+/** The hub's `device_event`: a top-level key that is a credential never leaves it. */
+function isCredentialKey(key: string): boolean {
+	const lower = key.toLowerCase();
+	return (
+		["token", "secret", "password"].includes(lower) ||
+		lower.startsWith("secret_") ||
+		["_token", "_secret", "_password", "api_key"].some((suffix) =>
+			lower.endsWith(suffix),
+		)
+	);
+}
+
+function storedObject(
+	bytes: readonly number[],
+): Record<string, unknown> | null {
+	try {
+		const value: unknown = JSON.parse(decoder.decode(Uint8Array.from(bytes)));
+		return value && typeof value === "object" && !Array.isArray(value)
+			? (value as Record<string, unknown>)
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * An exported event's config bytes: the stored config (or schedule) without
+ * its credentials. Bytes that are no JSON object go as they are, as on the hub.
+ */
+function exportedConfig(event: AppEventInput): { config?: number[] } {
+	if (event.config?.length) {
+		const stored = storedObject(event.config);
+		return {
+			config: stored
+				? [
+						...utf8(
+							JSON.stringify(
+								Object.fromEntries(
+									Object.entries(stored).filter(
+										([key]) => !isCredentialKey(key),
+									),
+								),
+							),
+						),
+					]
+				: [...event.config],
+		};
+	}
+	return event.schedule
+		? { config: [...utf8(JSON.stringify(event.schedule))] }
+		: {};
+}
+
 function releaseTrustOf(value: unknown): ReleaseTrust | null {
 	const trust = value as Partial<ReleaseTrust> | null | undefined;
 	if (!trust || typeof trust.manifest_url !== "string") return null;
@@ -1822,6 +2637,8 @@ export class FakeHub {
 		...VISITOR_PLAN_APP.variables,
 		...CRM_PLAN_APP.variables,
 	};
+	/** Event id → the form its flow defines (the entry node's pins); a missing one has no fields. */
+	eventForms: Record<string, FakeEventForm> = { ...SAMPLE_FORMS };
 	/** Reminder channels the hub has a provider for; a test on another one is skipped as `not_configured`. */
 	noticeChannels = { push: true, email: true };
 	readiness: DeviceSetupReadiness;
@@ -1835,6 +2652,24 @@ export class FakeHub {
 		string,
 		{ max_bytes: number; retention_seconds: number }
 	>;
+	/**
+	 * What a hub from before "run more on devices" lacks. `schedules: false`:
+	 * no release, give-back or claim, and no `schedules` in the placement list.
+	 * `latest: false`: no `version/current`, and the export ignores `latest=`.
+	 * `eventTypes: false` (a hub before round two): no `event_types` in the
+	 * placement list, and the export ignores `types=` and never carries an
+	 * Endpoint, a form, a quick action or a bot.
+	 */
+	capabilities = { schedules: true, latest: true, eventTypes: true };
+	/** Where the apps' schedules run when it is not the hub. */
+	readonly schedules: FakeSchedules;
+	/** Each flow as a version; `flows.edit(app, board)` leaves it with unpublished edits. */
+	readonly flows: FakeFlows;
+	/** Latest events whose Page or start node left their flow: the export leaves them out. */
+	unfitEvents = new Set<string>();
+	/** Whether a process of a service runs; set by the world that owns the agents. */
+	serviceRunning: (deviceId: string, placementId: string) => boolean = () =>
+		false;
 	private readonly summarySeed?: ResourceSummary;
 	private readonly lastTestNotice = new Map<string, number>();
 
@@ -1865,10 +2700,54 @@ export class FakeHub {
 			PRO: { max_bytes: 268_435_456, retention_seconds: 604_800 },
 		};
 		this.summarySeed = structuredClone(seed.resourceSummary);
+		this.schedules = new FakeSchedules({
+			now: () => this.now(),
+			refuse: hubError,
+			approval: (deviceId, placementId) =>
+				this.workingApproval(deviceId, placementId),
+			running: (deviceId, placementId) =>
+				this.serviceRunning(deviceId, placementId),
+			visible: (deviceId) => this.rows.has(deviceId),
+		});
+		this.flows = new FakeFlows(() => this.apps, hubError);
 		this.seedRegistry(seed);
 		this.seedAccess(seed);
-		this.seedStatus(seed);
+		this.seedStatus(seed, options);
 		this.seedBackups(seed);
+	}
+
+	/** An old hub has none of the capabilities, whatever the switches say. */
+	has(capability: keyof FakeHub["capabilities"]): boolean {
+		return this.version === "current" && this.capabilities[capability];
+	}
+
+	/** The approval of a service that still works: active and not past its effective end. */
+	private workingApproval(deviceId: string, placementId: string) {
+		const grant = this.resources
+			.get(deviceId)
+			?.grants.find(
+				(row) =>
+					row.placement_id === placementId &&
+					row.status === "active" &&
+					(row.effective_expires_at ?? row.expires_at) > this.now(),
+			);
+		return grant
+			? { grantId: grant.grant_id, appId: grant.app_id ?? null }
+			: undefined;
+	}
+
+	/** The form a person-started event's flow defines. */
+	formOf(event: Pick<AppEventInput, "id">): FakeEventForm {
+		return this.eventForms[event.id] ?? { fields: [] };
+	}
+
+	/** The flow version the desktop export pins a Latest event of a local copy to; none while no version equals the flow or the event no longer fits it. */
+	copyPin(
+		appId: string,
+		event: AppEventInput,
+	): [number, number, number] | null {
+		if (!event.boardId || this.unfitEvents.has(event.id)) return null;
+		return this.flows.state(appId, event.boardId).current;
 	}
 
 	private seedRegistry(seed: DeviceSeed) {
@@ -1933,7 +2812,7 @@ export class FakeHub {
 		};
 	}
 
-	private seedStatus(seed: DeviceSeed) {
+	private seedStatus(seed: DeviceSeed, options: FakeDeviceApiOptions) {
 		for (const [id, state] of Object.entries(seed.fleet)) {
 			const grantId = this.grantIdOf(id);
 			const facts = snapshotFacts(seed.live[id]?.inspection?.value);
@@ -1953,6 +2832,11 @@ export class FakeHub {
 							observed_at: observation.observed_at,
 							placements: observation.placements.map(snapshotPlacement),
 							...facts,
+							...snapshotFeatures(
+								featuresOption(options, id) ??
+									observation.features ??
+									seed.live[id]?.inspection?.value.features,
+							),
 						},
 					},
 				});
@@ -2450,6 +3334,7 @@ export class FakeHub {
 
 	/** The device publishes a status snapshot: the next sequence, observed now. */
 	publishStatus(deviceId: string, agent: FakeAgent) {
+		agent.refresh();
 		const now = this.now();
 		const streams = this.streams.get(deviceId) ?? [];
 		const previous = streams.find(
@@ -2475,6 +3360,7 @@ export class FakeHub {
 						"host",
 						"host_operation",
 					]),
+					...snapshotFeatures(agent.features),
 				},
 			},
 		};
@@ -2665,19 +3551,89 @@ export class FakeHub {
 				});
 			}
 		}
-		return { server_time: now, placements };
+		return {
+			server_time: now,
+			placements,
+			...(this.has("schedules")
+				? { schedules: this.schedules.listing(appId) }
+				: {}),
+			...(this.has("eventTypes") ? { event_types: this.eventTypes() } : {}),
+		};
 	}
 
-	/** An online app's executable definitions as the owner approves them: its deployable events, one flow each. */
-	deviceMetadata(appId: string) {
+	/** The types this hub can export (Page events go whatever their type). */
+	eventTypes(): string[] {
+		return HUB_EVENT_TYPES.filter(
+			(type) => type !== "cron" || this.has("schedules"),
+		);
+	}
+
+	/**
+	 * The flow version an exported event is pinned to. A pinned event keeps its
+	 * own. One that follows Latest is exported only when the client names it,
+	 * a published version equals its flow and the event still fits that version.
+	 */
+	private exportPin(
+		appId: string,
+		event: AppEventInput,
+		latest: ReadonlySet<string>,
+		types: ReadonlySet<string>,
+	): [number, number, number] | null {
+		const rule = eventEligibility(event);
+		// The hub checks no schedule, route or bot setting: the device and the client do.
+		const exportable = rule.code === null || DEVICE_CHECKED.has(rule.code);
+		if (!exportable) return null;
+		if (rule.kind === "scheduled" && !this.has("schedules")) return null;
+		if (
+			!event.default_page_id &&
+			NAMED_EXPORT_TYPES.has(event.event_type) &&
+			!(this.has("eventTypes") && types.has(event.event_type))
+		)
+			return null;
+		if (!rule.followsLatest) return rule.boardVersion;
+		return this.has("latest") && latest.has(event.id)
+			? this.copyPin(appId, event)
+			: null;
+	}
+
+	/** `types=` as the hub reads it: the five named types, each once; none when empty or on a hub before round two. */
+	private exportTypes(types: string | null): Set<string> {
+		if (!types || !this.has("eventTypes")) return new Set();
+		const names = types.split(",");
+		if (
+			names.some((name) => !NAMED_EXPORT_TYPES.has(name)) ||
+			new Set(names).size !== names.length
+		)
+			throw badRequest(
+				"types lists api, quick_action, generic_form, telegram or discord, each once",
+			);
+		return new Set(names);
+	}
+
+	/**
+	 * An online app's executable definitions as the owner approves them: its
+	 * deployable events, one flow each. `latest` names the events that follow
+	 * Latest and are part of this deploy; `types` the types of round two it
+	 * needs (without them the bundle is round one's).
+	 */
+	deviceMetadata(
+		appId: string,
+		latest: readonly string[] = [],
+		types: string | null = null,
+	) {
 		const app = this.apps[appId];
 		if (!app || this.hiddenApps.has(appId))
 			throw forbidden("You do not have access to this app");
 		if (app.visibility === "Offline")
 			throw badRequest("Only online projects use executable metadata export");
-		const events = app.events.filter(
-			(event) => eventEligibility(event).eligible,
-		);
+		if (latest.length > 64)
+			throw badRequest("At most 64 events can be resolved from Latest");
+		const named = new Set(latest);
+		const typed = this.exportTypes(types);
+		const events = app.events.flatMap((event) => {
+			const boardVersion = this.exportPin(appId, event, named, typed);
+			return boardVersion ? [{ ...event, board_version: boardVersion }] : [];
+		});
 		const boardOf = (eventId: string) => `board_${eventId}`;
 		const documents: Record<string, unknown> = {};
 		for (const event of events) {
@@ -2707,6 +3663,7 @@ export class FakeHub {
 				board_id: boardId,
 				default_page_id: event.default_page_id ?? null,
 				variants: [],
+				...exportedConfig(event),
 			};
 		}
 		documents.app = {
@@ -2966,6 +3923,8 @@ export class FakeHub {
 	async publishRelease(release: {
 		version: string;
 		sequence?: number | null;
+		/** Seconds from now until the list runs out; a year by default. */
+		validForS?: number;
 	}): Promise<void> {
 		const pair = (await crypto.subtle.generateKey("Ed25519", true, [
 			"sign",
@@ -2989,7 +3948,7 @@ export class FakeHub {
 			sequence,
 			release_version: release.version,
 			issued_at: now - 3_600,
-			expires_at: now + 7 * DAY,
+			expires_at: now + (release.validForS ?? 365 * DAY),
 			artifacts: [
 				{
 					target: "x86_64-unknown-linux-gnu",
@@ -3052,6 +4011,28 @@ function thumbprint(key: Ed25519PublicKey): string {
 	return fakeDigest(`thumbprint:${key.x}`);
 }
 
+/** One feature set for every agent, or one per device id; undefined = what the seed says. */
+function featuresOption(
+	options: FakeDeviceApiOptions,
+	deviceId: string,
+): AgentFeatures | undefined {
+	const option = options.agentFeatures;
+	if (!option) return undefined;
+	const perDevice = Object.values(option).some(
+		(value) => typeof value === "object",
+	);
+	return perDevice
+		? (option as Record<string, AgentFeatures>)[deviceId]
+		: (option as AgentFeatures);
+}
+
+/** A snapshot's device facts carry the feature map; an agent from before the map sends none. */
+function snapshotFeatures(features: AgentFeatures | undefined): {
+	features?: AgentFeatures;
+} {
+	return features && Object.keys(features).length ? { features } : {};
+}
+
 /** Device-scope facts a status snapshot carries: release, boot time, unhealthy tasks, host operation. */
 function snapshotFacts(
 	inspection: InspectionPlus | undefined,
@@ -3076,6 +4057,8 @@ interface Route {
 	template: string;
 	/** Added by this work: absent on an old hub. */
 	added?: true;
+	/** Absent on a hub without this capability (`FakeHub.capabilities`). */
+	needs?: keyof FakeHub["capabilities"];
 	handle(request: HubRequest): unknown;
 }
 
@@ -3561,7 +4544,14 @@ function cloudRoutes(hub: FakeHub): Route[] {
 			method: "DELETE",
 			template: "devices/:id/resource-grants/:grant",
 			handle: ({ params }) => {
-				hub.grant(params.id, params.grant).status = "revoked";
+				const grant = hub.grant(params.id, params.grant);
+				grant.status = "revoked";
+				// The revoke hands back every schedule the approval runs.
+				hub.schedules.revoke(
+					grant.app_id ?? null,
+					grant.grant_id,
+					hub.serviceRunning(params.id, grant.placement_id),
+				);
 			},
 		},
 		{
@@ -3638,7 +4628,59 @@ function cloudRoutes(hub: FakeHub): Route[] {
 		{
 			method: "GET",
 			template: "apps/:app/device-metadata",
-			handle: ({ params }) => hub.deviceMetadata(params.app),
+			handle: ({ params, query }) =>
+				hub.deviceMetadata(
+					params.app,
+					(query.get("latest") ?? "").split(",").filter(Boolean),
+					query.get("types"),
+				),
+		},
+	];
+}
+
+/** Schedules on devices and the flow as a version: routes a hub from before them lacks. */
+function runMoreRoutes(hub: FakeHub): Route[] {
+	return [
+		{
+			method: "PUT",
+			template: "apps/:app/device-schedules/:event",
+			added: true,
+			needs: "schedules",
+			handle: (request) => {
+				const { device_id, placement_id } = body<{
+					device_id?: unknown;
+					placement_id?: unknown;
+				}>(request);
+				if (typeof device_id !== "string" || typeof placement_id !== "string")
+					throw badRequest("A release names a device and a service");
+				return hub.schedules.release(
+					request.params.app,
+					request.params.event,
+					device_id,
+					placement_id,
+				);
+			},
+		},
+		{
+			method: "DELETE",
+			template: "apps/:app/device-schedules/:event",
+			added: true,
+			needs: "schedules",
+			handle: ({ params }) => hub.schedules.giveBack(params.app, params.event),
+		},
+		{
+			method: "GET",
+			template: "apps/:app/board/:board/version/current",
+			added: true,
+			needs: "latest",
+			handle: ({ params }) => hub.flows.state(params.app, params.board),
+		},
+		{
+			method: "POST",
+			template: "apps/:app/board/:board/version/current",
+			added: true,
+			needs: "latest",
+			handle: ({ params }) => hub.flows.publish(params.app, params.board),
 		},
 	];
 }
@@ -3740,12 +4782,15 @@ class World {
 		private readonly options: FakeDeviceApiOptions,
 	) {
 		this.hub = new FakeHub(seed, options);
+		this.hub.serviceRunning = (deviceId, placementId) =>
+			this.agent(deviceId).placement(placementId)?.observed_state === "running";
 		this.routes = [
 			...registryRoutes(this.hub),
 			...accessRoutes(this.hub, this),
 			...statusRoutes(this.hub),
 			...certificateRoutes(this.hub),
 			...cloudRoutes(this.hub),
+			...runMoreRoutes(this.hub),
 			...deviceRoutes(),
 		];
 	}
@@ -3761,14 +4806,7 @@ class World {
 	/* Agents. */
 
 	private featuresFor(deviceId: string): AgentFeatures | undefined {
-		const option = this.options.agentFeatures;
-		if (!option) return undefined;
-		const perDevice = Object.values(option).some(
-			(value) => typeof value === "object",
-		);
-		return perDevice
-			? (option as Record<string, AgentFeatures>)[deviceId]
-			: (option as AgentFeatures);
+		return featuresOption(this.options, deviceId);
 	}
 
 	/** Uploads the seed's tray still tracks: the device holds them, half received. */
@@ -3932,7 +4970,9 @@ class World {
 			.filter(Boolean)
 			.map(decodeURIComponent);
 		const active = [...this.extra, ...this.routes].filter(
-			(route) => this.hub.version === "current" || !route.added,
+			(route) =>
+				(this.hub.version === "current" || !route.added) &&
+				(!route.needs || this.hub.has(route.needs)),
 		);
 		const matched = active
 			.map((route) => ({

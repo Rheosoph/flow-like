@@ -20,7 +20,7 @@ import {
 	serviceRoute,
 	serviceSubject,
 } from "../device-view";
-import type { AttentionKey, ServiceView } from "../types";
+import type { AttentionKey, ServiceBotState, ServiceView } from "../types";
 
 const DWELL_S = 2 * MINUTE_S;
 const STAGED_WAIT_S = HOUR_S;
@@ -342,6 +342,89 @@ const unencryptedEndpoint = perService(
 	},
 );
 
+/** Schedules the service's process reported; none while it is not running or can't say. */
+const reportedSchedules = (service: ServiceView) =>
+	Array.isArray(service.schedules) ? service.schedules : [];
+
+const FAILED_OUTCOMES = new Set(["failed", "timed_out"]);
+
+const scheduleHeld = perService("schedule_held", (_input, facts, service) => {
+	if (service.observed !== "running") return undefined;
+	const held = reportedSchedules(service).filter(
+		(schedule) => schedule.hold !== null,
+	);
+	const hold = held[0]?.hold;
+	if (!hold) return undefined;
+	return serviceItem("schedule_held", "warning", facts, service, {
+		params: { hold, held: held.length },
+		action: statusAction(service),
+		dwellS: DWELL_S,
+	});
+});
+
+const scheduleFailed = perService(
+	"schedule_failed",
+	(_input, facts, service) => {
+		const failed = reportedSchedules(service).filter((schedule) =>
+			FAILED_OUTCOMES.has(schedule.last_outcome ?? ""),
+		);
+		if (failed.length === 0) return undefined;
+		return serviceItem("schedule_failed", "notice", facts, service, {
+			params: { failed: failed.length },
+			action: statusAction(service),
+		});
+	},
+);
+
+/** A one-time schedule its device could not start within 15 minutes of its time: final, it never runs. */
+const scheduleOnceMissed = perService(
+	"schedule_once_missed",
+	(_input, facts, service) => {
+		const missed = reportedSchedules(service).find(
+			(schedule) => schedule.once_state === "missed",
+		);
+		if (missed?.once_at === undefined) return undefined;
+		return serviceItem("schedule_once_missed", "notice", facts, service, {
+			params: { event: missed.event_id, time: missed.once_at },
+			action: statusAction(service),
+		});
+	},
+);
+
+/* Bots (design R2 §5.7): the states a status snapshot keeps; connecting and reconnecting flap and are never items. */
+
+const reportedBots = (service: ServiceView) =>
+	Array.isArray(service.bots) ? service.bots : [];
+
+const botHeld = perService("bot_held", (_input, facts, service) => {
+	if (service.observed !== "running") return undefined;
+	const held = reportedBots(service).filter((bot) => bot.hold !== null);
+	const hold = held[0]?.hold;
+	if (!hold) return undefined;
+	return serviceItem("bot_held", "warning", facts, service, {
+		params: { hold, held: held.length },
+		action: statusAction(service),
+		dwellS: DWELL_S,
+	});
+});
+
+/** A bot that stays off until someone acts: its provider refused it, or another program uses its token. */
+function botStateRule(
+	key: "bot_token_refused" | "bot_intents_refused" | "bot_conflict",
+	states: readonly ServiceBotState[],
+): AttentionRuleExt {
+	return perService(key, (_input, facts, service) => {
+		const bot = reportedBots(service).find((entry) =>
+			states.includes(entry.state),
+		);
+		if (!bot) return undefined;
+		return serviceItem(key, "warning", facts, service, {
+			params: { event: bot.event_id, provider: bot.provider, state: bot.state },
+			action: statusAction(service),
+		});
+	});
+}
+
 export const SERVICE_RULES: readonly AttentionRuleExt[] = [
 	crashLooping,
 	notAsRequestedRule,
@@ -351,4 +434,11 @@ export const SERVICE_RULES: readonly AttentionRuleExt[] = [
 	secretPending,
 	secretFailed,
 	unencryptedEndpoint,
+	scheduleHeld,
+	scheduleFailed,
+	scheduleOnceMissed,
+	botHeld,
+	botStateRule("bot_token_refused", ["token_refused"]),
+	botStateRule("bot_intents_refused", ["intents_refused"]),
+	botStateRule("bot_conflict", ["conflict", "webhook_set"]),
 ];

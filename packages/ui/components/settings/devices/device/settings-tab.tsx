@@ -18,9 +18,11 @@ import { keysLocked } from "../../../../lib/device-management/model/device-view"
 import type { DeviceRoute } from "../../../../lib/device-management/model/types";
 import { humanFileSize } from "../../../../lib/utils";
 import { enumLabel } from "../copy/enum-labels";
+import { useAgentReleaseVerdict } from "../hub/hub-view";
 import { useAreaTime } from "../primitives/area-context";
 import { Banner } from "../primitives/banner";
 import { Block } from "../primitives/block";
+import { dayText } from "../primitives/day";
 import {
 	FreshnessStamp,
 	MixedSourcesStamp,
@@ -28,15 +30,11 @@ import {
 import { IdRef } from "../primitives/id-ref";
 import { KeyValueList, KvRow } from "../primitives/key-value-list";
 import { StateView } from "../primitives/state-view";
-import { cx } from "../primitives/tone";
+import { TONE_TEXT, cx } from "../primitives/tone";
 import { ACCOUNT_SCOPE } from "../routing/devices-route";
 import { useDevicesRoute, useRouteLink } from "../routing/use-devices-route";
 import { stampOf } from "../shell/attention-popover";
-import {
-	useDeviceRows,
-	useFleetDeviceStates,
-	useReleaseTrust,
-} from "../workspace";
+import { useDeviceRows, useFleetDeviceStates } from "../workspace";
 import { CapacityBlock } from "./capacity-block";
 import { DangerZone } from "./danger-zone";
 import {
@@ -331,13 +329,82 @@ function HostLayer({ page }: Readonly<{ page: DevicePage }>) {
 	);
 }
 
-function AgentLayer({ page }: Readonly<{ page: DevicePage }>) {
+/** The hub's release on the device page: the same verdict as Hub status, in one line. */
+function LatestRelease() {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
 	const link = useRouteLink();
-	const release = useReleaseTrust();
+	const verdict = useAgentReleaseVerdict();
+	const hubStatus = (
+		<a {...link({ screen: "hub" }, { scope: ACCOUNT_SCOPE })} className={LINK}>
+			{t("device.settings.hubStatus", "Hub status")}
+		</a>
+	);
+	if (verdict.kind === "ok" || verdict.kind === "ends_soon") {
+		const { manifest, signerFingerprint } = verdict.release;
+		return (
+			<span className="inline-flex flex-wrap items-baseline gap-x-1.5">
+				<span className="font-mono">{manifest.release_version}</span>
+				<span>
+					{t(
+						"device.settings.releaseFacts",
+						"· release number {{sequence, number}} · signed by",
+						{ sequence: manifest.sequence },
+					)}
+				</span>
+				<span className="font-mono">
+					{groupFingerprint(signerFingerprint.slice(0, 8))}
+				</span>
+				{verdict.kind === "ends_soon" ? (
+					<span className={TONE_TEXT.warning}>
+						{t("device.settings.releaseExpires", "· runs out on {{date}}", {
+							date: dayText(time, manifest.expires_at),
+						})}
+					</span>
+				) : null}
+				<span aria-hidden>·</span>
+				{hubStatus}
+			</span>
+		);
+	}
+	if (verdict.kind === "expired" || verdict.kind === "failed")
+		return (
+			<span className="inline-flex flex-wrap items-baseline gap-x-1.5">
+				<span className={TONE_TEXT.critical}>
+					{verdict.kind === "expired"
+						? t(
+								"device.settings.releaseRanOut",
+								"The hub's agent release ran out on {{date}}",
+								{ date: dayText(time, verdict.facts.expires_at) },
+							)
+						: t(
+								"device.settings.releaseFailed",
+								"The hub's agent release failed a check",
+							)}
+				</span>
+				<span aria-hidden>·</span>
+				{hubStatus}
+			</span>
+		);
+	const waiting: Record<typeof verdict.kind, string> = {
+		missing: t(
+			"device.settings.releaseNone",
+			"This hub has no trusted agent releases set up",
+		),
+		unfetched: t(
+			"device.settings.releaseError",
+			"Couldn't be read from the hub",
+		),
+		checking: t("device.settings.releaseLoading", "Reading…"),
+		waiting: t("device.settings.releaseLoading", "Reading…"),
+	};
+	return <span className="text-muted-foreground">{waiting[verdict.kind]}</span>;
+}
+
+function AgentLayer({ page }: Readonly<{ page: DevicePage }>) {
+	const { t } = useTranslation("devices");
+	const time = useAreaTime();
 	const agent = page.view.agent;
-	const manifest = release.data?.manifest;
 	const hostOperations = page.inspection?.hostOperations;
 	return (
 		<Layer
@@ -379,48 +446,7 @@ function AgentLayer({ page }: Readonly<{ page: DevicePage }>) {
 				<KvRow
 					label={t("device.settings.latestRelease", "Latest verified release")}
 				>
-					{manifest ? (
-						<span className="inline-flex flex-wrap items-baseline gap-x-1.5">
-							<span className="font-mono">{manifest.release_version}</span>
-							<span>
-								{t(
-									"device.settings.releaseFacts",
-									"· release #{{sequence, number}} · signed by",
-									{ sequence: manifest.sequence },
-								)}
-							</span>
-							<span className="font-mono">
-								{groupFingerprint(
-									release.data?.signerFingerprint.slice(0, 8) ?? "",
-								)}
-							</span>
-							<span>
-								{t("device.settings.releaseExpires", "· expires {{date}} ·", {
-									date: time.at(manifest.expires_at),
-								})}
-							</span>
-							<a
-								{...link({ screen: "hub" }, { scope: ACCOUNT_SCOPE })}
-								className={LINK}
-							>
-								{t("device.settings.hubStatus", "Hub status")}
-							</a>
-						</span>
-					) : (
-						<span className="text-muted-foreground">
-							{release.configured
-								? release.error
-									? t(
-											"device.settings.releaseError",
-											"Couldn't be read from the hub",
-										)
-									: t("device.settings.releaseLoading", "Reading…")
-								: t(
-										"device.settings.releaseNone",
-										"This hub has no trusted agent releases set up",
-									)}
-						</span>
-					)}
+					<LatestRelease />
 				</KvRow>
 				<KvRow label={t("device.settings.remoteUpdate", "Remote update")}>
 					{hostOperations === undefined

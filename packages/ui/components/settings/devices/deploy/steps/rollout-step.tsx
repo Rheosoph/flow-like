@@ -75,6 +75,7 @@ import {
 } from "../../routing/use-devices-route";
 import { useActivityTray } from "../../shell/activity-tray";
 import { useDeviceWorkspace, useOverlay } from "../../workspace";
+import { RUN_REFUSALS } from "../deploy-copy";
 import type { DeployStepProps } from "../step-props";
 import { secretCount } from "../update-path";
 import {
@@ -105,6 +106,22 @@ interface PhaseContext {
 	files: number;
 	secrets: number;
 	running: boolean;
+	/** What the `schedules` phase hands to the service: schedules, bots or both. */
+	claims: { schedules: number; bots: number };
+}
+
+function claimsLabel({ t, claims }: PhaseContext): string {
+	if (!claims.bots)
+		return t(
+			"devices:deployShip.phase.schedules",
+			"Moving its schedules off the hub",
+		);
+	return claims.schedules
+		? t(
+				"devices:deployShip.phase.schedulesBots",
+				"Moving its schedules and bots to this service",
+			)
+		: t("devices:deployShip.phase.bots", "Moving its bots to this service");
 }
 
 const PHASE_LABEL: Record<DeployPhase, (c: PhaseContext) => string> = {
@@ -132,6 +149,7 @@ const PHASE_LABEL: Record<DeployPhase, (c: PhaseContext) => string> = {
 		t("devices:deployShip.phase.checkEvents", "Checking events on the device"),
 	install: ({ t }) =>
 		t("devices:deployShip.phase.install", "Installing the app version"),
+	schedules: claimsLabel,
 	create: ({ t, service }) =>
 		t(
 			"devices:deployShip.phase.create",
@@ -159,7 +177,13 @@ const PHASE_LABEL: Record<DeployPhase, (c: PhaseContext) => string> = {
 			: t("devices:deployShip.phase.apply", "Applying the new settings"),
 };
 
-const FAILED_WHILE: Record<DeployPhase, (t: DevicesT) => string> = {
+/** A failure's code names the kind it is about: a bot's refusals start with `bot_`. */
+type FailedCode = Pick<DeployFailure, "code"> | null | undefined;
+
+const FAILED_WHILE: Record<
+	DeployPhase,
+	(t: DevicesT, error?: FailedCode) => string
+> = {
 	approve: (t) =>
 		t("devices:deployShip.while.approve", "creating its cloud access"),
 	spending: (t) =>
@@ -168,6 +192,13 @@ const FAILED_WHILE: Record<DeployPhase, (t: DevicesT) => string> = {
 	check_events: (t) =>
 		t("devices:deployShip.while.checkEvents", "checking the events"),
 	install: (t) => t("devices:deployShip.while.install", "installing"),
+	schedules: (t, error) =>
+		error?.code.startsWith("bot_")
+			? t("devices:deployShip.while.bots", "moving its bots to this service")
+			: t(
+					"devices:deployShip.while.schedules",
+					"moving its schedules off the hub",
+				),
 	create: (t) => t("devices:deployShip.while.create", "creating the service"),
 	secrets: (t) => t("devices:deployShip.while.secrets", "saving secrets"),
 	start: (t) => t("devices:deployShip.while.start", "starting"),
@@ -179,7 +210,8 @@ const FAILED_WHILE: Record<DeployPhase, (t: DevicesT) => string> = {
 	stop: (t) => t("devices:deployShip.while.apply", "applying the new settings"),
 };
 
-const REASON: Record<string, (t: DevicesT) => string> = {
+const REASON: Record<string, (t: DevicesT, detail: string) => string> = {
+	...RUN_REFUSALS,
 	unauthorized: (t) =>
 		t(
 			"devices:deployShip.fail.unauthorized",
@@ -320,7 +352,7 @@ function failureReason(t: DevicesT, error: DeployFailure): string {
 	const known = Object.hasOwn(REASON, error.code)
 		? REASON[error.code]
 		: undefined;
-	return (known ?? unknownReason)(t);
+	return (known ?? unknownReason)(t, error.detail ?? "");
 }
 
 function listOf(time: AreaTime, values: readonly string[]): string {
@@ -355,6 +387,10 @@ function phaseLabels(c: RowContext, row: DeployRunRow): string[] {
 		files: c.files,
 		secrets: target && service ? secretCount(c.plan, target, service) : 0,
 		running: detail?.wasRunning !== false,
+		claims: {
+			schedules: service?.addedSchedules.length ?? 0,
+			bots: service?.addedBots.length ?? 0,
+		},
 	};
 	return row.phases.map((phase) => PHASE_LABEL[phase](context));
 }
@@ -366,7 +402,7 @@ function keptText(c: RowContext, row: DeployRunRow): string | undefined {
 	if (row.state !== "failed" || !kept || !error || error.rolledBack)
 		return undefined;
 	const params = {
-		phase: FAILED_WHILE[error.phase](c.t),
+		phase: FAILED_WHILE[error.phase](c.t, error),
 		reason: failureReason(c.t, error),
 		device: c.details[row.target]?.deviceName ?? "",
 	};
@@ -443,7 +479,7 @@ function fleetRow(
 		...(error
 			? {
 					reason: failureReason(c.t, error),
-					failedWhile: FAILED_WHILE[error.phase](c.t),
+					failedWhile: FAILED_WHILE[error.phase](c.t, error),
 				}
 			: {}),
 	};
@@ -560,7 +596,7 @@ function firstFailure(c: ResultContext): string {
 	const params = {
 		device: detail?.deviceName ?? "",
 		service: detail?.serviceId ?? "",
-		phase: FAILED_WHILE[failure.phase](c.t),
+		phase: FAILED_WHILE[failure.phase](c.t, failure),
 		reason: failureReason(c.t, failure),
 	};
 	return failure.rolledBack
@@ -981,7 +1017,7 @@ function singleSentence(
 		phase,
 		device: c.details[row.target]?.deviceName ?? "",
 		reason: error ? failureReason(c.t, error) : "",
-		failedWhile: error ? FAILED_WHILE[error.phase](c.t) : "",
+		failedWhile: error ? FAILED_WHILE[error.phase](c.t, error) : "",
 	});
 }
 

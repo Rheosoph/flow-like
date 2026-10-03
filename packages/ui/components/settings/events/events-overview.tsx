@@ -79,6 +79,7 @@ import {
 	type EventsDevicesHarness,
 	EventsDevicesProvider,
 	useEventsDevices,
+	useOptionalEventsDevices,
 } from "../devices/events/events-devices";
 import {
 	EVENTS_BLOCK_ID,
@@ -86,6 +87,7 @@ import {
 	OnDevicesStrip,
 } from "../devices/events/on-devices-strip";
 import { RunsOnCell, RunsOnColumnHeader } from "../devices/events/runs-on-cell";
+import { scheduleOnDevice } from "../devices/events/runs-on-model";
 import {
 	type RunOnDevice,
 	useRunOnDevice,
@@ -1300,8 +1302,14 @@ function EventNameBlock({
 	Pick<EventRowHandlers, "isOffline" | "onEdit"> & { row: EventRowModel }
 >) {
 	const { t } = useTranslation("settings");
+	const devices = useOptionalEventsDevices();
 	const { event, status, topIssue } = row;
 	const chip = "shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium";
+	// A schedule or bot this place doesn't run may run on a device: "Not running" would be wrong for it.
+	const onDevice =
+		row.requiresSink && row.sinkActive === false
+			? scheduleOnDevice(devices?.live?.rows.get(event.id))
+			: null;
 	return (
 		<div className="min-w-0 overflow-hidden">
 			<div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -1319,8 +1327,21 @@ function EventNameBlock({
 				<span className={cn(chip, "bg-secondary text-secondary-foreground")}>
 					{formatEventTypeLabel(event.event_type)}
 				</span>
-				{row.requiresSink && row.sinkActive === false && (
+				{onDevice && (
 					<span
+						data-sink-chip={onDevice}
+						className={cn(chip, "bg-muted text-muted-foreground")}
+					>
+						{onDevice === "runs"
+							? t("onADevice", "On a device")
+							: onDevice === "ran"
+								? t("ranOnADevice", "Ran on a device")
+								: t("assignedToADevice", "Assigned to a device")}
+					</span>
+				)}
+				{row.requiresSink && row.sinkActive === false && !onDevice && (
+					<span
+						data-sink-chip="off"
 						className={cn(
 							chip,
 							"bg-amber-500/15 text-amber-700 dark:text-amber-400",

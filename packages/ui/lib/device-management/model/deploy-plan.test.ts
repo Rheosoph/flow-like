@@ -35,12 +35,17 @@ import {
 	diffPlacementConfig,
 	draftWithoutSecrets,
 	makePlan,
+	planLatestEvents,
 	planPhases,
 	planServices,
+	releasedSchedules,
 	resolvePlan,
+	scheduleIds,
 	serviceSlug,
+	wholeAppEvents,
 	wirePlan,
 } from "./deploy-plan";
+import type { ScheduleWhere } from "./schedule-where";
 import type { GateFailure } from "./types";
 
 const TOKEN = "visitor-checkin-access-token-0123456789";
@@ -331,12 +336,88 @@ describe("services (A5: split only where the code forces it)", () => {
 
 	test("events that can't run on devices never reach a service", () => {
 		const draft = draftFor(CRM_PLAN_APP, [], {
-			events: ["evt_crm_hourly", "evt_crm_rest", "evt_crm_webhook"],
+			events: ["evt_crm_rest", "evt_crm_webhook"],
 		});
 		expect(planServices(draft, CRM_PLAN_APP)).toMatchObject([
 			{ events: ["evt_crm_webhook"] },
 		]);
 		expect(planServices(draft, null)).toEqual([]);
+		// An older hub can't hand schedules over: an online app's schedule stays out.
+		const visitor = draftFor(VISITOR_PLAN_APP, [], {
+			events: ["evt_visitor_page", "evt_visitor_report"],
+		});
+		expect(
+			planServices(visitor, VISITOR_PLAN_APP, { hubSchedules: false }),
+		).toMatchObject([{ events: ["evt_visitor_page"] }]);
+		expect(planServices(visitor, VISITOR_PLAN_APP)).toMatchObject([
+			{ events: ["evt_visitor_page", "evt_visitor_report"] },
+		]);
+	});
+
+	test("a schedule is ticked by hand and limits its service to 1 instance, for its own reason", () => {
+		expect(wholeAppEvents(VISITOR_PLAN_APP)).toEqual([
+			"evt_visitor_page",
+			"evt_badge_printer",
+		]);
+		expect(wholeAppEvents(CRM_PLAN_APP)).toEqual([
+			"evt_crm_nightly",
+			"evt_crm_webhook",
+			"evt_crm_watch",
+		]);
+		expect([...scheduleIds(CRM_PLAN_APP)]).toEqual(["evt_crm_hourly"]);
+		const draft = draftFor(CRM_PLAN_APP, [], {
+			events: ["evt_crm_hourly", "evt_crm_webhook"],
+			maxInstances: 3,
+		});
+		expect(planServices(draft, CRM_PLAN_APP)).toEqual([
+			{
+				key: "main",
+				id: "crm-sync",
+				events: ["evt_crm_webhook", "evt_crm_hourly"],
+				maxInstances: 1,
+				hosted: true,
+				why: [{ code: "scheduled", eventId: "evt_crm_hourly" }],
+			},
+		]);
+		// A schedule and a background flow each give their reason.
+		expect(
+			planServices(
+				draftFor(CRM_PLAN_APP, [], {
+					events: ["evt_crm_hourly", "evt_crm_nightly"],
+				}),
+				CRM_PLAN_APP,
+			)[0].why,
+		).toEqual([
+			{ code: "scheduled", eventId: "evt_crm_hourly" },
+			{ code: "background", eventId: "evt_crm_nightly" },
+		]);
+		// A schedule alone is its own service without an endpoint.
+		expect(
+			planServices(
+				draftFor(CRM_PLAN_APP, [], { events: ["evt_crm_hourly"] }),
+				CRM_PLAN_APP,
+			),
+		).toMatchObject([{ hosted: false, maxInstances: 1 }]);
+		// A `cron` event with a Page is a served Page: no limit, no schedule.
+		const paged: PlanApp = {
+			...CRM_PLAN_APP,
+			events: CRM_PLAN_APP.events.map((event) =>
+				event.id === "evt_crm_hourly"
+					? { ...event, default_page_id: "page_hourly" }
+					: event,
+			),
+		};
+		expect([...scheduleIds(paged)]).toEqual([]);
+		expect(wholeAppEvents(paged)).toContain("evt_crm_hourly");
+		expect(
+			planServices(
+				draftFor(paged, [], {
+					events: ["evt_crm_hourly", "evt_crm_webhook"],
+					maxInstances: 3,
+				}),
+				paged,
+			)[0],
+		).toMatchObject({ maxInstances: 3, why: [] });
 	});
 });
 
@@ -360,6 +441,8 @@ describe("targets (APP §3.7)", () => {
 					},
 				],
 				removedEvents: [],
+				addedSchedules: [],
+				addedBots: [],
 				renamedFrom: "nightly-sync",
 			},
 			{
@@ -375,6 +458,8 @@ describe("targets (APP §3.7)", () => {
 					},
 				],
 				removedEvents: [],
+				addedSchedules: [],
+				addedBots: [],
 			},
 		]);
 		expect(check.exceptions.map((row) => [row.code, row.tone])).toEqual([
@@ -471,7 +556,11 @@ describe("targets (APP §3.7)", () => {
 					{
 						serviceId: "invoice-extractor-gpu",
 						projectId: "app_invoice_ai",
-						events: ["evt_gpu_extract", "evt_invoice_reconcile"],
+						events: [
+							"evt_gpu_extract",
+							"evt_invoice_reconcile",
+							"evt_invoice_inbox",
+						],
 					},
 				],
 			},
@@ -503,11 +592,12 @@ describe("targets (APP §3.7)", () => {
 			[
 				"lab-gpu-02",
 				"invoice-extractor-gpu",
-				["evt_gpu_extract"],
-				["evt_invoice_reconcile"],
+				// An update keeps the schedule the service already runs.
+				["evt_gpu_extract", "evt_invoice_reconcile"],
+				["evt_invoice_inbox"],
 			],
 		]);
-		// The schedule can't run on devices any more: dropping it needs the user's yes.
+		// The mailbox can't run on devices any more: dropping it needs the user's yes.
 		expect(
 			check.issues.map((issue) => `${issue.code}@${issue.deviceId}`),
 		).toEqual(["removed_events@lab-gpu-02"]);
@@ -575,8 +665,10 @@ describe("targets (APP §3.7)", () => {
 				service.port,
 			]),
 		).toEqual([
-			["extract-invoice", undefined],
-			["extract-invoice-gpu", 8091],
+			["review-queue", undefined],
+			// 8090 is field-notes' port on this device.
+			["extract-invoice", 8091],
+			["extract-invoice-gpu", 8092],
 			["invoice-tools-mcp", undefined],
 		]);
 		expect(plan.targets[0].endpoint.port).toBe(8089);
@@ -586,7 +678,7 @@ describe("targets (APP §3.7)", () => {
 			step: "endpoint",
 			deviceId: "studio-mac-mini",
 			tone: "info",
-			params: { from: 8089, to: 8091, service: "extract-invoice-gpu" },
+			params: { from: 8089, to: 8092, service: "extract-invoice-gpu" },
 		});
 		const wired = (serviceKey: string) =>
 			wirePlan(
@@ -600,9 +692,11 @@ describe("targets (APP §3.7)", () => {
 					canManageCertificates: false,
 				},
 			).port;
-		expect([wired("evt_extract_http"), wired("evt_gpu_extract")]).toEqual([
-			8089, 8091,
-		]);
+		expect([
+			wired("evt_invoice_review"),
+			wired("evt_extract_http"),
+			wired("evt_gpu_extract"),
+		]).toEqual([8089, 8091, 8092]);
 	});
 
 	test("a port typed for a device that another service uses there is refused", () => {
@@ -1093,7 +1187,8 @@ const VISITOR_LEGACY: DeploymentPlanInput = {
 	removeOverrides: [],
 	placement: "visitor-check-in",
 	deployment: "dep-plan",
-	events: VISITOR_CATALOG.events,
+	// The whole app without its schedule: a schedule is ticked by hand.
+	events: VISITOR_CATALOG.events.filter((event) => event.kind !== "scheduled"),
 	variables: mergeVariables([
 		VISITOR_CATALOG.variables.evt_badge_printer,
 		VISITOR_CATALOG.variables.evt_visitor_page,
@@ -1473,5 +1568,552 @@ describe("config diff", () => {
 			["added", "instances", undefined],
 			["added", "packages", undefined],
 		]);
+	});
+});
+
+describe("schedules: one place per schedule", () => {
+	const REPORT = "evt_visitor_report";
+	const HOURLY = "evt_crm_hourly";
+	const OLD_AGENT = { placement_events: 1 } as const;
+	const NEW_AGENT = { placement_events: 1, scheduled_events: 1 } as const;
+	const withFeatures = (
+		deviceId: string,
+		features: PlanFacts["devices"][string]["features"],
+	) => ({
+		...PLAN_DEVICES,
+		[deviceId]: { ...PLAN_DEVICES[deviceId], features },
+	});
+	const visitor = (devices: string[], change: Partial<DeployDraft> = {}) => {
+		const draft = draftFor(VISITOR_PLAN_APP, devices, {
+			events: ["evt_visitor_page", REPORT],
+			...change,
+		});
+		draft.approval.ownerConsent = true;
+		for (const target of draft.targets) target.over.trustAgent = true;
+		return draft;
+	};
+	const scheduleCodes = (
+		draft: DeployDraft,
+		app: PlanApp,
+		change: Partial<PlanFacts> = {},
+	) =>
+		planFor(draft, app, change)
+			.check.issues.filter(
+				(issue) =>
+					issue.code.startsWith("schedule_") ||
+					issue.code === "needs_single_instance",
+			)
+			.map((issue) => [issue.code, issue.deviceId, issue.params]);
+
+	test("a device whose agent is known to be too old is left out, with its own exception", () => {
+		const draft = visitor(["studio-mac-mini"]);
+		const old = planFor(draft, VISITOR_PLAN_APP, {
+			devices: withFeatures("studio-mac-mini", OLD_AGENT),
+		});
+		expect(old.plan.targets[0].services[0]).toMatchObject({
+			events: ["evt_visitor_page"],
+			leftOut: [{ eventId: REPORT, why: "agent", feature: "scheduled_events" }],
+		});
+		expect(old.check.exceptions).toContainEqual({
+			code: "left_out_agent",
+			step: "where",
+			deviceId: "studio-mac-mini",
+			tone: "paused",
+			params: { event: REPORT, feature: "scheduled_events" },
+		});
+		// Unknown flags (a locked device) refuse nothing; the run checks again with a live read.
+		for (const features of [undefined, NEW_AGENT])
+			expect(
+				planFor(draft, VISITOR_PLAN_APP, {
+					devices: withFeatures("studio-mac-mini", features),
+				}).plan.targets[0].services[0],
+			).toMatchObject({ events: ["evt_visitor_page", REPORT], leftOut: [] });
+		// Nothing but the schedule was picked: the device has no event left.
+		expect(
+			codes(
+				visitor(["studio-mac-mini"], { events: [REPORT] }),
+				VISITOR_PLAN_APP,
+				{
+					devices: withFeatures("studio-mac-mini", OLD_AGENT),
+				},
+			),
+		).toContain("target_no_events@studio-mac-mini");
+	});
+
+	test("a schedule another service of the device lists is left out, and can't be served in both", () => {
+		const devices = {
+			...PLAN_DEVICES,
+			"studio-mac-mini": {
+				...PLAN_DEVICES["studio-mac-mini"],
+				services: [
+					{
+						serviceId: "reports",
+						projectId: "app_visitor_checkin",
+						events: [REPORT, "evt_visitor_page"],
+					},
+				],
+			},
+		};
+		const draft = visitor(["studio-mac-mini"]);
+		draft.targets[0].serveBoth = [REPORT, "evt_visitor_page"];
+		expect(
+			planFor(draft, VISITOR_PLAN_APP, { devices }).plan.targets[0].services[0],
+		).toMatchObject({
+			events: ["evt_visitor_page"],
+			leftOut: [{ eventId: REPORT, why: "duplicate", serviceId: "reports" }],
+		});
+	});
+
+	test("an online schedule another service holds, or one on its way back, blocks the target", () => {
+		const draft = visitor(["studio-mac-mini"]);
+		const held = {
+			deviceId: "edge-berlin-01",
+			serviceId: "reports",
+			since: NOW0 - 86_400,
+			seenAt: NOW0 - 600,
+		};
+		const at = "studio-mac-mini";
+		const blocked = (where: ScheduleWhere) =>
+			scheduleCodes(draft, VISITOR_PLAN_APP, {
+				schedules: { [REPORT]: where },
+			});
+		const elsewhere = [
+			[
+				"schedule_elsewhere",
+				at,
+				{ event: REPORT, device: "edge-berlin-01", service: "reports" },
+			],
+		];
+		expect(
+			blocked({
+				fact: "device",
+				...held,
+				live: false,
+				schedule: {
+					event_id: REPORT,
+					expression: "0 0 18 * * *",
+					timezone: "Europe/Berlin",
+					hold: null,
+				},
+			}),
+		).toEqual(elsewhere);
+		expect(blocked({ fact: "device_idle", why: "stopped", ...held })).toEqual(
+			elsewhere,
+		);
+		expect(
+			blocked({
+				fact: "device_unconfirmed",
+				...held,
+				stale: true,
+				readable: false,
+			}),
+		).toEqual(elsewhere);
+		// A device the viewer can't see: no names.
+		expect(
+			blocked({
+				fact: "device_unconfirmed",
+				since: 1,
+				seenAt: 2,
+				stale: false,
+				readable: false,
+			}),
+		).toEqual([["schedule_elsewhere", at, { event: REPORT }]]);
+		expect(blocked({ fact: "returning", hubResumesAt: NOW0 + 300 })).toEqual([
+			["schedule_returning", at, { event: REPORT, time: NOW0 + 300 }],
+		]);
+		// Released to another service while a grace period runs: the hub refuses to re-target it.
+		expect(
+			blocked({
+				fact: "released",
+				since: NOW0 - 60,
+				deviceId: "edge-berlin-01",
+				serviceId: "reports",
+				hubResumesAt: NOW0 + 200,
+			}),
+		).toEqual([
+			["schedule_returning", at, { event: REPORT, time: NOW0 + 200 }],
+		]);
+		// Nothing runs it elsewhere: the hub, or a release nobody claimed.
+		for (const where of [
+			{ fact: "hub" },
+			{
+				fact: "released",
+				since: NOW0 - 60,
+				deviceId: "edge-berlin-01",
+				serviceId: "reports",
+			},
+			{
+				fact: "released",
+				since: NOW0 - 9_000,
+				deviceId: "edge-berlin-01",
+				serviceId: "reports",
+				hubResumesAt: NOW0 - 5,
+			},
+		] as ScheduleWhere[])
+			expect(blocked(where)).toEqual([]);
+		// The hub's list is not known: nothing is refused, the hub decides at the release.
+		expect(scheduleCodes(draft, VISITOR_PLAN_APP)).toEqual([]);
+		expect(scheduleCodes(draft, VISITOR_PLAN_APP, { schedules: null })).toEqual(
+			[],
+		);
+	});
+
+	test("a service that already holds its schedule updates without moving anything", () => {
+		const devices = {
+			...PLAN_DEVICES,
+			"studio-mac-mini": {
+				...PLAN_DEVICES["studio-mac-mini"],
+				services: [
+					{
+						serviceId: "reports",
+						projectId: "app_visitor_checkin",
+						events: [REPORT],
+					},
+				],
+			},
+		};
+		const draft = draftFor(
+			VISITOR_PLAN_APP,
+			["studio-mac-mini"],
+			{},
+			{ serviceId: "reports", mode: "update" },
+		);
+		draft.events = [REPORT];
+		const own = {
+			deviceId: "studio-mac-mini",
+			serviceId: "reports",
+			since: 1,
+			seenAt: 2,
+		};
+		expect(
+			scheduleCodes(draft, VISITOR_PLAN_APP, {
+				devices,
+				canEditEvents: false,
+				schedules: {
+					[REPORT]: { fact: "device_idle", why: "stopped", ...own },
+				},
+			}),
+		).toEqual([]);
+		// Someone handed it back to the hub on purpose: an update of the service must not move it again.
+		for (const schedules of [
+			{},
+			{ [REPORT]: { fact: "returning", hubResumesAt: NOW0 + 300 } },
+		] as Record<string, ScheduleWhere>[]) {
+			const kept = planFor(draft, VISITOR_PLAN_APP, {
+				devices,
+				canEditEvents: false,
+				schedules,
+			});
+			expect(kept.plan.targets[0].services[0]).toMatchObject({
+				events: [REPORT],
+				addedSchedules: [],
+			});
+			expect(
+				kept.check.issues.filter((issue) => issue.code.startsWith("schedule_")),
+			).toEqual([]);
+			expect(
+				releasedSchedules(kept.plan, kept.plan.targets[0].services[0]),
+			).toEqual([]);
+		}
+	});
+
+	test("only a schedule the deploy adds is moved: the run releases it before anything is approved or sent", () => {
+		const fresh = planFor(visitor(["studio-mac-mini"]), VISITOR_PLAN_APP).plan;
+		const [created] = fresh.targets[0].services;
+		expect(created.addedSchedules).toEqual([REPORT]);
+		expect(releasedSchedules(fresh, created)).toEqual([REPORT]);
+		expect(planPhases(fresh, created, { secrets: false, safe: false })).toEqual(
+			["schedules", "approve", "upload", "install", "create", "start"],
+		);
+		// An existing service that takes the schedule on top of what it serves.
+		const devices = {
+			...PLAN_DEVICES,
+			"studio-mac-mini": {
+				...PLAN_DEVICES["studio-mac-mini"],
+				services: [
+					{
+						serviceId: "reports",
+						projectId: "app_visitor_checkin",
+						events: ["evt_visitor_page"],
+					},
+				],
+			},
+		};
+		const update = draftFor(
+			VISITOR_PLAN_APP,
+			["studio-mac-mini"],
+			{},
+			{ serviceId: "reports", mode: "update" },
+		);
+		update.events = ["evt_visitor_page", REPORT];
+		const added = planFor(update, VISITOR_PLAN_APP, { devices }).plan;
+		const [service] = added.targets[0].services;
+		expect(service.addedSchedules).toEqual([REPORT]);
+		expect(planPhases(added, service, { secrets: false, safe: true })).toEqual([
+			"schedules",
+			"upload",
+			"install",
+			"prepare_update",
+			"check_new",
+			"switch",
+		]);
+		// A local-only app has no hub to release it on: no such step.
+		const local = planFor(
+			draftFor(CRM_PLAN_APP, ["studio-mac-mini"], { events: [HOURLY] }),
+			CRM_PLAN_APP,
+		).plan;
+		const [copy] = local.targets[0].services;
+		expect(copy.addedSchedules).toEqual([HOURLY]);
+		expect(releasedSchedules(local, copy)).toEqual([]);
+		expect(
+			planPhases(local, copy, { secrets: false, safe: false }),
+		).not.toContain("schedules");
+	});
+
+	test("a person who can't edit the app's events can't move a schedule off the hub", () => {
+		const draft = visitor(["studio-mac-mini"]);
+		expect(
+			scheduleCodes(draft, VISITOR_PLAN_APP, {
+				canEditEvents: false,
+				schedules: {},
+			}),
+		).toEqual([["schedule_role", "studio-mac-mini", { event: REPORT }]]);
+		// An unknown role is not a refusal: the hub's 403 decides.
+		for (const canEditEvents of [true, undefined])
+			expect(
+				scheduleCodes(draft, VISITOR_PLAN_APP, {
+					canEditEvents,
+					schedules: {},
+				}),
+			).toEqual([]);
+		// A local-only app has no hub to move a schedule off.
+		expect(
+			scheduleCodes(
+				draftFor(CRM_PLAN_APP, ["studio-mac-mini"], { events: [HOURLY] }),
+				CRM_PLAN_APP,
+				{ canEditEvents: false },
+			),
+		).toEqual([]);
+	});
+
+	test("one plan can't put an online schedule on two devices", () => {
+		const draft = visitor(["studio-mac-mini", "edge-berlin-01"]);
+		expect(scheduleCodes(draft, VISITOR_PLAN_APP, { schedules: {} })).toEqual([
+			[
+				"schedule_elsewhere",
+				"edge-berlin-01",
+				{
+					event: REPORT,
+					device: "studio-mac-mini",
+					service: "visitor-check-in",
+				},
+			],
+		]);
+	});
+
+	test("a local-only schedule on a second device needs an acknowledgement", () => {
+		const draft = draftFor(CRM_PLAN_APP, ["studio-mac-mini"], {
+			events: [HOURLY],
+		});
+		const warnings = (value: DeployDraft, change: Partial<PlanFacts> = {}) =>
+			planFor(value, CRM_PLAN_APP, change).check.exceptions.filter((row) =>
+				row.code.startsWith("schedule_"),
+			);
+		// One device, nothing else runs it: no warning.
+		expect(warnings(draft)).toEqual([]);
+		expect(scheduleCodes(draft, CRM_PLAN_APP)).toEqual([]);
+		// It already runs on another device.
+		const devices = {
+			...PLAN_DEVICES,
+			"edge-berlin-01": {
+				...PLAN_DEVICES["edge-berlin-01"],
+				services: [
+					{
+						serviceId: "nightly-sync",
+						projectId: "app_crm_sync",
+						events: ["evt_crm_nightly", HOURLY],
+					},
+				],
+			},
+		};
+		expect(warnings(draft, { devices })).toEqual([
+			{
+				code: "schedule_two_devices",
+				step: "where",
+				deviceId: "studio-mac-mini",
+				tone: "warning",
+				params: { event: HOURLY, count: 2 },
+			},
+		]);
+		expect(scheduleCodes(draft, CRM_PLAN_APP, { devices })).toEqual([
+			["schedule_twice", "studio-mac-mini", undefined],
+		]);
+		draft.targets[0].over.scheduleTwice = true;
+		expect(scheduleCodes(draft, CRM_PLAN_APP, { devices })).toEqual([]);
+		// Two targets of one plan: each device runs its own copy, and each row is acknowledged.
+		const both = draftFor(CRM_PLAN_APP, ["studio-mac-mini", "lab-gpu-02"], {
+			events: [HOURLY],
+		});
+		const unlocked = {
+			...PLAN_DEVICES,
+			"lab-gpu-02": {
+				...PLAN_DEVICES["lab-gpu-02"],
+				locked: false,
+				services: [],
+			},
+		};
+		expect(
+			warnings(both, { devices: unlocked }).map((row) => [
+				row.code,
+				row.deviceId,
+				row.params?.count,
+			]),
+		).toEqual([
+			["schedule_two_devices", "studio-mac-mini", 2],
+			["schedule_two_devices", "lab-gpu-02", 2],
+		]);
+		// An online app never gets this warning: the hub keeps one place per schedule.
+		expect(
+			planFor(visitor(["studio-mac-mini"]), VISITOR_PLAN_APP, {
+				schedules: {},
+			}).check.exceptions.filter((row) => row.code.startsWith("schedule_")),
+		).toEqual([]);
+	});
+
+	test("this computer's own trigger is a warning with an acknowledgement, for any app", () => {
+		for (const [app, draft] of [
+			[
+				CRM_PLAN_APP,
+				draftFor(CRM_PLAN_APP, ["studio-mac-mini"], { events: [HOURLY] }),
+			],
+			[VISITOR_PLAN_APP, visitor(["studio-mac-mini"])],
+		] as const) {
+			const eventId = app === CRM_PLAN_APP ? HOURLY : REPORT;
+			const change = { localTriggers: [eventId], schedules: {} };
+			expect(
+				planFor(draft, app, change).check.exceptions.filter((row) =>
+					row.code.startsWith("schedule_"),
+				),
+			).toEqual([
+				{
+					code: "schedule_local_trigger",
+					step: "where",
+					deviceId: "studio-mac-mini",
+					tone: "warning",
+					params: { event: eventId },
+				},
+			]);
+			expect(scheduleCodes(draft, app, change)).toEqual([
+				["schedule_twice", "studio-mac-mini", undefined],
+			]);
+		}
+	});
+
+	test("a schedule can't be added to a service that runs more than one instance", () => {
+		const devices = {
+			...PLAN_DEVICES,
+			"edge-berlin-01": {
+				...PLAN_DEVICES["edge-berlin-01"],
+				services: [
+					{
+						serviceId: "support-bot",
+						projectId: "app_support_portal",
+						events: ["evt_support_chat", "evt_support_http"],
+						maxInstances: 4,
+					},
+				],
+			},
+		};
+		const draft = draftFor(
+			APPS.app_support_portal,
+			["edge-berlin-01"],
+			{},
+			{ eventId: "evt_support_digest" },
+		);
+		draft.targets[0].choices = {
+			main: { kind: "add", serviceId: "support-bot" },
+		};
+		expect(scheduleCodes(draft, APPS.app_support_portal, { devices })).toEqual([
+			[
+				"needs_single_instance",
+				"edge-berlin-01",
+				{ service: "support-bot", count: 4, event: "evt_support_digest" },
+			],
+		]);
+		const single = {
+			...devices,
+			"edge-berlin-01": {
+				...devices["edge-berlin-01"],
+				services: [
+					{ ...devices["edge-berlin-01"].services[0], maxInstances: 1 },
+				],
+			},
+		};
+		expect(
+			scheduleCodes(draft, APPS.app_support_portal, { devices: single }),
+		).toEqual([]);
+		// As its own service it needs nothing of the kind.
+		draft.targets[0].choices = {};
+		expect(scheduleCodes(draft, APPS.app_support_portal, { devices })).toEqual(
+			[],
+		);
+	});
+
+	test("a plan names at most 64 events that follow Latest", () => {
+		const latest = (count: number): PlanApp => ({
+			...VISITOR_PLAN_APP,
+			events: Array.from({ length: count }, (_, index) => ({
+				...VISITOR_PLAN_APP.events[0],
+				id: `evt_latest_${String(index).padStart(2, "0")}`,
+				board_version: null,
+				flow: { current: [0, 4, 0], newest: [0, 4, 0] } as const,
+			})),
+		});
+		const plan = (app: PlanApp) =>
+			planFor(draftFor(app, ["studio-mac-mini"], { split: "per_event" }), app);
+		const within = plan(latest(64));
+		expect(planLatestEvents(within.plan)).toHaveLength(64);
+		expect(planLatestEvents(within.plan).slice(0, 2)).toEqual([
+			"evt_latest_00",
+			"evt_latest_01",
+		]);
+		expect(within.check.issues.map((issue) => issue.code)).not.toContain(
+			"too_many_latest",
+		);
+		const beyond = plan(latest(65));
+		expect(
+			beyond.check.issues.find((issue) => issue.code === "too_many_latest"),
+		).toEqual({
+			code: "too_many_latest",
+			step: "what",
+			severity: "error",
+			params: { count: 65 },
+		});
+		// Pinned events are never named.
+		expect(planLatestEvents(plan(VISITOR_PLAN_APP).plan)).toEqual([]);
+		// An update names the Latest events the service keeps.
+		const devices = {
+			...PLAN_DEVICES,
+			"studio-mac-mini": {
+				...PLAN_DEVICES["studio-mac-mini"],
+				services: [
+					{
+						serviceId: "invoices",
+						projectId: "app_invoice_ai",
+						events: ["evt_invoice_review", "evt_extract_http"],
+					},
+				],
+			},
+		};
+		const add = draftFor(
+			INVOICE_PLAN_APP,
+			["studio-mac-mini"],
+			{},
+			{ eventId: "evt_invoice_mcp" },
+		);
+		add.targets[0].choices = { main: { kind: "add", serviceId: "invoices" } };
+		expect(
+			planLatestEvents(resolvePlan(add, facts(INVOICE_PLAN_APP, { devices }))),
+		).toEqual(["evt_invoice_review"]);
 	});
 });

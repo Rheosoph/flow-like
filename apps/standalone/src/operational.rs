@@ -915,14 +915,21 @@ mod tests {
             placement_status["placements"][0]["events"][0]["event_id"],
             "http"
         );
-        assert_eq!(device_facts(&status), [false; 5]);
-        assert_eq!(device_facts(&placement_status), [false; 5]);
+        assert_eq!(device_facts(&status), [false; 6]);
+        assert_eq!(device_facts(&placement_status), [false; 6]);
         Ok(())
     }
 
-    fn device_facts(snapshot: &Value) -> [bool; 5] {
-        ["agent", "host", "tasks", "host_operation", "network"]
-            .map(|fact| snapshot.get(fact).is_some())
+    fn device_facts(snapshot: &Value) -> [bool; 6] {
+        [
+            "agent",
+            "host",
+            "tasks",
+            "host_operation",
+            "features",
+            "network",
+        ]
+        .map(|fact| snapshot.get(fact).is_some())
     }
 
     #[test]
@@ -936,7 +943,9 @@ mod tests {
             "boot",
             100,
         )?;
-        assert_eq!(device_facts(&device), [true, true, true, true, false]);
+        assert_eq!(device_facts(&device), [true, true, true, true, true, false]);
+        // A locked device is judged by the flags of its snapshot.
+        assert_eq!(device["features"], crate::diagnostics::features());
         assert!(device["host_operation"].is_null());
         assert_eq!(device["placements"][0]["offline_writes"]["scopes"], 0);
         Ok(())
@@ -954,6 +963,7 @@ mod tests {
         for index in 0..64 {
             let id = worst_case_id(&format!("{prefix}-{index:02}"));
             worst_case_placement(&mut state, dir.path(), global(), &id)?;
+            worst_case_schedules(dir.path(), &id);
         }
         let snapshot = fleet_snapshot(
             dir.path(),
@@ -970,6 +980,13 @@ mod tests {
             placements
                 .iter()
                 .all(|row| row["offline_writes"] == worst_case_offline_writes())
+        );
+        // Schedules that are over are reported for services that do not run; rows that have
+        // to shed detail give them up with their events.
+        assert!(
+            placements
+                .iter()
+                .all(|row| row["schedules_truncated"] == true && row.get("schedules").is_none())
         );
         let volatile = [
             "last_error",
@@ -1011,6 +1028,62 @@ mod tests {
         Ok(())
     }
 
+    /// A service `notes` of `project` whose one replica runs revision 1 of this config.
+    fn running_service(root: &std::path::Path, events: Value) -> Result<StateStore> {
+        let mut state = StateStore::open(&root.join("management.sqlite"))?;
+        let config = json!({"id":"notes","project_id":"project","deployment_id":"deployment","revision":"one","source":"offline","project_path":root,"events":events});
+        state.upsert_placement("notes", &config, DesiredState::Running)?;
+        state.set_replica_count("notes", 1, 1)?;
+        ensure!(state.claim_replica("notes", 0, 1, 1)?);
+        state.record_replica("notes", 0, 1, 1, ObservedState::Starting, Some(100), None)?;
+        ensure!(state.record_replica_prepared("notes", 0, 1, 1, 100)?);
+        Ok(state)
+    }
+
+    #[test]
+    fn status_snapshots_carry_only_the_stable_facts_of_schedules_bots_and_actions() -> Result<()> {
+        use crate::diagnostics::test_support::*;
+        use flow_like_device_protocol::{FleetKind, ManagementScope};
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        running_service(
+            root,
+            json!([
+                {"event_id":"evt_once","event_version":[0,0,4],"board_version":[0,0,7]},
+                {"event_id":"evt_helper","event_version":[0,0,1],"board_version":[0,0,3]},
+                {"event_id":"evt_notes_form","event_version":[1,0,0],"board_version":[3,0,1]},
+            ]),
+        )?;
+        let once = json!({"evt_once": design_once_entry()});
+        write_schedule_state(root, "notes", &design_schedules(once, (1, 1)));
+        let bots = json!({"evt_helper": design_bot_entry()});
+        write_bot_state(root, "notes", &design_bots(bots, (1, 1)));
+        let runs = json!({"evt_notes_form": design_action_entry()});
+        write_run_state(root, "notes", 0, &design_runs(runs, (1, 1)));
+
+        let scope = ManagementScope::Project {
+            project_id: "project".into(),
+        };
+        let snapshot = fleet_snapshot(root, &scope, FleetKind::Status, "boot", 100)?;
+        let row = &snapshot["placements"][0];
+        assert_eq!(
+            row["schedules"],
+            json!([{"event_id":"evt_once","once_at":1790233200,"timezone":"Europe/Berlin","once_state":"pending","hold":null,"last_outcome":null}])
+        );
+        assert_eq!(
+            row["bots"],
+            json!([{"event_id":"evt_helper","provider":"telegram","hold":null,"state":"ok"}])
+        );
+        assert_eq!(
+            row["actions"],
+            json!([{"event_id":"evt_notes_form","kind":"form","fields":1,"file_fields":0}])
+        );
+        for flag in ["schedules_truncated", "bots_truncated", "actions_truncated"] {
+            assert_eq!(row[flag], false, "{flag}");
+        }
+        Ok(())
+    }
+
     #[test]
     fn project_status_snapshots_carry_no_device_facts() -> Result<()> {
         let project = worst_case_status(
@@ -1019,7 +1092,7 @@ mod tests {
                 project_id: "p".repeat(128),
             },
         )?;
-        for device_fact in ["agent", "host", "tasks", "host_operation"] {
+        for device_fact in ["agent", "host", "tasks", "host_operation", "features"] {
             assert!(project.get(device_fact).is_none(), "{device_fact}");
         }
         Ok(())

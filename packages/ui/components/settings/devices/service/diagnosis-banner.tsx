@@ -1149,17 +1149,24 @@ function NextSteps({
 	device,
 	service,
 	writesNeedYou,
+	hasSchedules,
+	hasBots,
 }: Readonly<{
 	device: DeviceViewModel;
 	service: ServiceView;
 	writesNeedYou: boolean;
+	hasSchedules: boolean | undefined;
+	hasBots: boolean | undefined;
 }>) {
 	const { t } = useTranslation("devices");
 	const link = useRouteLink();
 	const overlay = useOverlay();
 	const deviceId = device.row.device_id;
 	const { serviceId } = service;
-	const commands = useServiceCommands(deviceId, serviceId);
+	const commands = useServiceCommands(deviceId, serviceId, {
+		...(hasSchedules === undefined ? {} : { hasSchedules }),
+		...(hasBots === undefined ? {} : { hasBots }),
+	});
 	const live = !isLastKnown(service.freshness);
 	const crashed = isCrashed(service);
 	const unsettled = service.conv === "converging" || service.conv === "unknown";
@@ -1224,6 +1231,8 @@ export function DiagnosisBlock({
 	diagnosis,
 	diagnostics,
 	lockedData = false,
+	hasSchedules,
+	hasBots,
 }: Readonly<{
 	device: DeviceViewModel;
 	service: ServiceView;
@@ -1231,6 +1240,10 @@ export function DiagnosisBlock({
 	diagnosis: ServiceDiagnosis;
 	diagnostics: InstanceDiagnostics;
 	lockedData?: boolean;
+	/** The service has schedules, as the screen knows from its app's events: its Start and Restart confirms say what happens to them. */
+	hasSchedules?: boolean;
+	/** The same for bots. */
+	hasBots?: boolean;
 }>) {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
@@ -1284,6 +1297,8 @@ export function DiagnosisBlock({
 				device={device}
 				service={service}
 				writesNeedYou={!!diagnosis.queues?.needYou}
+				hasSchedules={hasSchedules}
+				hasBots={hasBots}
 			/>
 		</Block>
 	);

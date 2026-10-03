@@ -458,7 +458,10 @@ export interface LiveStreams {
 /** A status snapshot's rows: the retained shape plus the agent facts a snapshot may carry (plan §3.4.2). */
 export type StatusObservation = RetainedObservation &
 	Partial<
-		Pick<InspectionPlus, "agent" | "host" | "tasks" | "hostOperation">
+		Pick<
+			InspectionPlus,
+			"agent" | "host" | "tasks" | "hostOperation" | "features"
+		>
 	> & { placements: PlacementStatusPlus[] };
 
 export interface FleetDeviceState {
@@ -518,7 +521,9 @@ export type ActivityKind =
 	| "metric_readers"
 	| "offline_write_retry"
 	| "signing_request"
-	| "setup";
+	| "setup"
+	/** A quick action or form run from Devices: ids, state and times only, never inputs or output. */
+	| "event_run";
 
 export type ActivityState =
 	| "active"
@@ -558,6 +563,8 @@ export interface ActivityTarget {
 	deviceName?: string;
 	serviceId?: string;
 	projectId?: string;
+	/** `event_run`: the event that ran. */
+	eventId?: string;
 }
 
 /** Times in a handle (`issuedAt`, `expiresAt`) are unix seconds, like the device's. */

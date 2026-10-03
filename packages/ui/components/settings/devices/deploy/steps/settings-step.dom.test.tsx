@@ -5,6 +5,7 @@ import {
 	click,
 	clickByText,
 	installDom,
+	queryByRole,
 	typeInto,
 } from "../../testing/dom-harness";
 import type { FakeWorkspace } from "../../testing/fake-workspace";
@@ -14,6 +15,7 @@ const { mountDevices, cleanupDevices, preloadDevices } = await import(
 	"../../testing/mount-devices"
 );
 const { createFakeWorkspace } = await import("../../testing/fake-workspace");
+const { serveShopOnEdge } = await import("../../testing/schedule-scenarios");
 const kit = await import("../deploy-test-kit");
 const { EDGE, STUDIO, VISITOR, CRM, text } = kit;
 await preloadDevices();
@@ -401,5 +403,96 @@ describe("Settings · updates", () => {
 					(command.request as { kind?: string }).kind === "describe",
 			),
 		).toBe(true);
+	});
+});
+
+describe("Settings · bot tokens (R2 §1.10)", () => {
+	const SHOP = "app_shop_assistant";
+	const TELEGRAM = "evt_shop_telegram";
+	const DISCORD = "evt_shop_discord";
+	/** The token saved on the Telegram event's record. */
+	const SAVED = "123456789:AAHfixture-token-0123456789abcdef";
+	const DISCORD_TOKEN =
+		"MTE4MDAwMDAwMDAwMDAwMDAwMQ.test-only.not-a-real-discord-token";
+	const tokenRow = (root: ParentNode, eventId: string) =>
+		root.querySelector<HTMLElement>(
+			`[data-bot-token="${eventId}"]`,
+		) as HTMLElement;
+
+	test("a bot without a saved token needs one: entered here, shape-checked, never kept in saved progress", async () => {
+		const view = await settings(SHOP, { device: EDGE, event: DISCORD });
+		await view.settle();
+		const bot = tokenRow(view.container, DISCORD);
+		expect(text(bot)).toContain("Bot token of Shop support");
+		expect(text(bot)).toContain("Discord bot · secret");
+		expect(text(bot)).toContain(
+			"Stored on edge-berlin-01 as a secret. It can't be read back.",
+		);
+		// Nothing was saved on the event, so there is nothing to choose: only the field.
+		expect(
+			queryByRole("button", "Use the token saved in Events", bot),
+		).toBeNull();
+		expect(kit.footBlocking(view.container)).toBe(
+			"Shop support needs its bot token. Enter it under Settings.",
+		);
+		const field = bot.querySelector(`#deploy-bot-token-${DISCORD}`) as Element;
+		await typeInto(field, "my bot token");
+		expect(text(bot)).toContain("That doesn't look like a Discord bot token.");
+		expect(kit.footBlocking(view.container)).toBe(
+			"That doesn't look like a Discord bot token.",
+		);
+		await typeInto(field, DISCORD_TOKEN);
+		expect(kit.footBlocking(view.container)).toBeNull();
+		expect(summary()).toContain("1 secret");
+		expect(kit.savedText()).not.toContain(DISCORD_TOKEN);
+		expect(kit.copyOf(view.container)).not.toMatch(kit.MACHINE_WORDS);
+	});
+
+	test("a bot whose record has a token takes it by default; it never reaches saved progress", async () => {
+		const view = await settings(SHOP, { device: EDGE, event: TELEGRAM });
+		await view.settle();
+		const bot = tokenRow(view.container, TELEGRAM);
+		const saved = byRole("button", "Use the token saved in Events", bot);
+		expect(saved.getAttribute("aria-pressed")).toBe("true");
+		expect(bot.querySelector("input")).toBeNull();
+		expect(kit.footBlocking(view.container)).toBeNull();
+		expect(summary()).toContain("1 secret");
+		expect(view.container.textContent).not.toContain(SAVED);
+
+		await click(byRole("button", "Enter a token", bot));
+		expect(bot.querySelector(`#deploy-bot-token-${TELEGRAM}`)).not.toBeNull();
+		expect(kit.footBlocking(view.container)).toBe(
+			"Shop helper needs its bot token. Enter it under Settings.",
+		);
+		await click(byRole("button", "Use the token saved in Events", bot));
+		expect(kit.footBlocking(view.container)).toBeNull();
+		expect(kit.savedText()).not.toContain(SAVED);
+		expect(kit.savedText()).not.toContain("AAHfixture");
+	});
+
+	test("an update keeps the token stored on the device unless it is set anew", async () => {
+		const fake = await createFakeWorkspace();
+		await serveShopOnEdge(fake);
+		const view = await settings(
+			SHOP,
+			{ mode: undefined, device: EDGE, service: "shop-assistant" },
+			{ fake },
+		);
+		await view.settle();
+		const bot = tokenRow(view.container, TELEGRAM);
+		expect(
+			byRole("button", "Keep stored", bot).getAttribute("aria-pressed"),
+		).toBe("true");
+		expect(text(bot)).toContain(
+			"Stored secret · can't be read back, not even by you.",
+		);
+		await clickByText("Set new", bot);
+		expect(
+			byRole("button", "Use the token saved in Events", bot).getAttribute(
+				"aria-pressed",
+			),
+		).toBe("true");
+		expect(kit.savedText()).not.toContain(SAVED);
+		expect(kit.footBlocking(view.container)).toBeNull();
 	});
 });

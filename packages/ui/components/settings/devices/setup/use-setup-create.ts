@@ -203,11 +203,16 @@ function registrationOf(
 	};
 }
 
-/** The tray item of a setup: its handle is also this computer's record of the pending setup on older hubs. */
+/**
+ * The tray item of a setup: its handle is also this computer's record of the
+ * pending setup on older hubs. Its deadline is the time the package has to be
+ * started by: the setup's own end, or the earlier end of the agent release.
+ */
 function trackSetup(
 	workspace: DeviceWorkspace,
 	registration: Registration,
 	name: string,
+	releaseEndsAt: number,
 ): string {
 	const { enrollmentId, deviceId, expiresAt } = registration;
 	return workspace.activity.start({
@@ -216,7 +221,7 @@ function trackSetup(
 		state: "active",
 		label: { code: "setup" },
 		progress: "indeterminate",
-		deadlineAt: expiresAt * 1000,
+		deadlineAt: Math.min(expiresAt, releaseEndsAt) * 1000,
 		startedBy: "you",
 		resume: { type: "setup", enrollmentId, deviceId },
 		actions: [],
@@ -324,7 +329,12 @@ export function useSetupCreate(prepare: PrepareSetup): SetupCreate {
 					registration.current = state.registration;
 					// Tracked even after the wizard closed: the hub now holds a setup that an older hub lists nowhere.
 					if (state.registration)
-						itemId = trackSetup(workspace, state.registration, request.name);
+						itemId = trackSetup(
+							workspace,
+							state.registration,
+							request.name,
+							request.verified.manifest.expires_at,
+						);
 					advance(request.packsAgent ? "download" : "build", "register");
 				},
 				backingUp: () => {

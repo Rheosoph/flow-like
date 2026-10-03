@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInvoke } from "../../../../hooks/use-invoke";
 import type { DeploymentCatalog } from "../../../../lib/device-management/deployment";
 import {
+	type AppHubFacts,
 	type AppInput,
 	type AppMode,
 	appMode,
@@ -21,6 +22,7 @@ import {
 	draftWithoutSecrets,
 	makePlan,
 	resolvePlan,
+	withBotTokens,
 } from "../../../../lib/device-management/model/deploy-plan";
 import type {
 	DeployRoute,
@@ -37,8 +39,10 @@ import {
 	mergeEventVariables,
 	runsNewest,
 	unresolvedOverrides,
+	withSavedBotTokens,
 } from "./deploy-facts";
 import type { DeployDeviceCheck } from "./step-props";
+import { exportTypesOf } from "./update-path";
 import {
 	type Configurations,
 	type DefinitionsRead,
@@ -47,6 +51,7 @@ import {
 	useInstalledVariables,
 	useKeepCatalog,
 	useLiveDemand,
+	useLocalTriggers,
 	usePreviousSecrets,
 	useSharedAccess,
 } from "./use-deploy-reads";
@@ -92,8 +97,12 @@ export interface DeployDraftState {
 	revoked: number;
 	/** Live-read configurations of the selected devices' services. */
 	configurations: Configurations;
-	/** Whether variable definitions outside the preparation are still being read, or why they couldn't be. */
-	definitions: Pick<DefinitionsRead, "loading" | "error">;
+	/**
+	 * Whether variable definitions outside the preparation are still being
+	 * read, or why they couldn't be. `known`: the flows' own settings are in
+	 * (a bot's token setting is there before them).
+	 */
+	definitions: Pick<DefinitionsRead, "loading" | "error"> & { known: boolean };
 	/** Stored values of updated services that the update can't carry over as they are. */
 	unresolved: UnresolvedOverride[];
 	resumed: boolean;
@@ -189,6 +198,8 @@ interface EntryInput {
 	now: number;
 	/** The one service this entry updates already runs what the app publishes now. */
 	runsNewest: boolean;
+	/** What the app's hub can do for its events, as far as it is known when the draft starts. */
+	hub?: AppHubFacts;
 }
 
 function freshDraft({
@@ -197,6 +208,7 @@ function freshDraft({
 	app,
 	now,
 	runsNewest: upToDate,
+	hub,
 }: EntryInput): SavedDraft {
 	const draft = makePlan({
 		scope,
@@ -204,6 +216,7 @@ function freshDraft({
 		app,
 		deploymentId: globalThis.crypto.randomUUID(),
 		now,
+		...(hub ? { hub } : {}),
 	});
 	// "Change settings…" and an update of a service that is already newest keep the version: nothing is uploaded.
 	const keep =
@@ -506,12 +519,19 @@ export function useDeployDraft(
 		!!app &&
 		appMode(app.visibility) === "online" &&
 		runsNewest(app.events, servedNow);
+	// What the hub can do for the app's events, and whether this person may create a flow version.
+	const noFlowEdits = role.canEditFlows === false;
+	const hub = useMemo<AppHubFacts>(
+		() => (noFlowEdits ? { ...appRead.hub, canEditFlows: false } : appRead.hub),
+		[appRead.hub, noFlowEdits],
+	);
 	const store = useDraftStore(storageKey, !appId || !!app, {
 		route,
 		scope,
 		app: baseApp,
 		now: input.now,
 		runsNewest: upToDate,
+		hub,
 	});
 	const { saved, change } = store;
 	const { draft } = saved;
@@ -554,10 +574,19 @@ export function useDeployDraft(
 	);
 	useLiveDemand(workspace, devices, selected);
 	const configurations = useDeviceConfigurations(workspace, devices, selected);
+	// The export names the types of the chosen events and of those the picked devices' services of the app keep.
+	const keepTypes = useMemo(() => {
+		const kept = devices
+			.filter((device) => selected.includes(device.id))
+			.flatMap((device) => appServicesOn(device, draft.appId))
+			.flatMap((service) => (service.events ?? []).map((row) => row.event_id));
+		return exportTypesOf(baseApp, [...draft.events, ...kept], hub.hubTypes);
+	}, [devices, selected, draft.appId, draft.events, baseApp, hub.hubTypes]);
 	const keepCatalog = useKeepCatalog(
 		workspace,
 		draft.appId,
 		mode === "online" && draft.version === "keep",
+		keepTypes,
 	);
 	const installed = useInstalledVariables(
 		workspace,
@@ -573,26 +602,33 @@ export function useDeployDraft(
 	);
 	const previous = mode === "offline" ? installed.byService : previousOnline;
 
+	const merged = useMemo(
+		() => mergeEventVariables(installed.variables, checks, approved?.variables),
+		[installed.variables, checks, approved],
+	);
 	const planApp = useMemo<PlanApp | null>(() => {
 		if (!baseApp) return null;
-		const variables = mergeEventVariables(
-			installed.variables,
-			checks,
-			approved?.variables,
-		);
+		// Every bot brings its token as a setting of its own, before the flows' own settings are known; a flow variable with a token key's id never is one.
+		const variables = withBotTokens(baseApp.events, merged);
 		return variables ? { ...baseApp, variables } : baseApp;
-	}, [baseApp, approved, installed.variables, checks]);
+	}, [baseApp, merged]);
 	const definitionsError = keepCatalog.error ?? installed.error;
+	const known = merged !== undefined;
 	const definitions = useMemo(
 		() => ({
 			loading: keepCatalog.loading || installed.loading,
+			known,
 			...(definitionsError ? { error: definitionsError } : {}),
 		}),
-		[keepCatalog.loading, installed.loading, definitionsError],
+		[keepCatalog.loading, installed.loading, known, definitionsError],
 	);
 
 	// A role without the Owner permission (an Admin included) can't approve the app's files; with it the hub still decides.
 	const notOwner = role.isOwner === false;
+	const { platform } = workspace.deps;
+	const localTriggers = useLocalTriggers(baseApp, platform);
+	const schedules = appRead.view?.schedules;
+	const { canEditEvents } = role;
 	const facts = useMemo(
 		() =>
 			buildPlanFacts({
@@ -600,13 +636,32 @@ export function useDeployDraft(
 				devices,
 				configurations,
 				checks,
-				platform: workspace.deps.platform,
+				platform,
 				now: input.now,
 				...(notOwner ? { isAppOwner: false } : {}),
+				hub,
+				...(schedules === undefined ? {} : { schedules }),
+				...(canEditEvents === undefined ? {} : { canEditEvents }),
+				localTriggers,
 			}),
-		[planApp, devices, configurations, checks, workspace, input.now, notOwner],
+		[
+			planApp,
+			devices,
+			configurations,
+			checks,
+			platform,
+			input.now,
+			notOwner,
+			hub,
+			schedules,
+			canEditEvents,
+			localTriggers,
+		],
 	);
-	const plan = useMemo(() => resolvePlan(draft, facts), [draft, facts]);
+	const plan = useMemo(
+		() => resolvePlan(withSavedBotTokens(draft, facts), facts),
+		[draft, facts],
+	);
 	const check = useMemo(() => checkPlan(plan, facts), [plan, facts]);
 	const unresolved = useMemo(
 		() => unresolvedOverrides(plan, { configurations, previous }),

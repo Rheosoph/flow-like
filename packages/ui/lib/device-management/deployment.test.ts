@@ -2,8 +2,10 @@ import { expect, test } from "bun:test";
 import type { IBoardState } from "../../state/backend-state/board-state";
 import type { IEventState } from "../../state/backend-state/event-state";
 import type { IEvent } from "../schema/flow/event";
+import { botTokenKey } from "./bot-config";
 import {
 	DEPLOYMENT_CONFIG_BYTES,
+	DEVICE_INELIGIBLE_CODES,
 	type DeploymentEvent,
 	DeploymentPublicationFailedError,
 	DeploymentRejectedError,
@@ -11,7 +13,9 @@ import {
 	DeploymentRolloutEndedError,
 	type DeploymentRolloutStatus,
 	type DeploymentVariable,
+	EVENT_KINDS,
 	type EventIneligibleCode,
+	type EventKind,
 	type EventReadiness,
 	type InstalledProject,
 	type PlacementConfiguration,
@@ -27,18 +31,24 @@ import {
 	discoverPreviousOfflineVariables,
 	discoverPreviousOnlineVariables,
 	eventEligibility,
+	eventKind,
 	executeDeploymentPlan,
+	limitsInstances,
 	mergeVariables,
+	missingFeature,
 	offlineWritesSchema,
 	placementResourcesSchema,
 	readDeploymentRollout,
 	readExistingDeployment,
 	removesOfflineBuffering,
+	requiredFeatures,
 	validateVariableValue,
 	variableText,
 	variableValue,
 	waitForDeploymentRollout,
 } from "./deployment";
+import type { EventRoute } from "./event-route";
+import type { AgentFeature } from "./model/types";
 import type { ManagementCall } from "./telemetry";
 
 const installed: InstalledProject = {
@@ -66,6 +76,9 @@ const secret: DeploymentVariable = {
 };
 
 const time = { secs_since_epoch: 100, nanos_since_epoch: 0 };
+const ROUTE_CONFIG = Array.from(
+	new TextEncoder().encode(JSON.stringify({ path: "/api", method: "POST" })),
+);
 function approvedEvent(change: Partial<IEvent> = {}): IEvent {
 	return {
 		id: event.id,
@@ -75,7 +88,7 @@ function approvedEvent(change: Partial<IEvent> = {}): IEvent {
 		board_id: "board",
 		board_version: [3, 2, 1],
 		active: true,
-		config: [],
+		config: ROUTE_CONFIG,
 		created_at: time,
 		updated_at: time,
 		description: "",
@@ -131,6 +144,8 @@ test("online discovery offers only the approved metadata installed on the device
 		...event,
 		readiness_kind: "listener",
 		rollout_supported: true,
+		kind: "served",
+		route: { method: "POST", path: "/api" },
 	});
 	expect(discoverOnlineVariables(project, selected)).toEqual([secret]);
 	const changes: Partial<DeploymentEvent>[] = [
@@ -699,6 +714,26 @@ test("automatic startup checks reject stopped placements, unsupported agents and
 			events: [{ ...event, event_type: "mcp", hosted: false }],
 		}),
 	).toThrow("running HTTP");
+	// A schedule is checkable once it is armed; a row without the fact (an older agent) is not.
+	const single = {
+		...base,
+		healthChecked: true,
+		replicas: 1,
+		existing: {
+			...base.existing,
+			config: { ...base.existing.config, max_replicas: 1 },
+		},
+	};
+	const schedule = { ...event, event_type: "cron", hosted: false };
+	expect(() => createDeploymentPlan({ ...single, events: [schedule] })).toThrow(
+		"running HTTP",
+	);
+	expect(
+		createDeploymentPlan({
+			...single,
+			events: [event, { ...schedule, id: "nightly", rollout_supported: true }],
+		}).steps.map(({ command }) => command.type),
+	).toEqual(["stage_rollout", "activate_rollout"]);
 	expect(() =>
 		createDeploymentPlan({
 			...base,
@@ -1151,6 +1186,34 @@ test("selection forbids floating pins, replicated daemons, unknown overrides and
 			events: [{ ...event, hosted: false, event_type: "daemon" }],
 		}),
 	).toThrow();
+	// Two instances would start every scheduled run twice.
+	const schedule: DeploymentEvent = {
+		...event,
+		hosted: false,
+		event_type: "cron",
+		kind: "scheduled",
+		readiness_kind: "explicit",
+		rollout_supported: true,
+	};
+	expect(() =>
+		createDeploymentPlan({ ...input(), events: [schedule] }),
+	).toThrow("multiple replicas");
+	expect(() =>
+		createDeploymentPlan({
+			...input(),
+			events: [event, { ...schedule, id: "nightly" }],
+		}),
+	).toThrow("multiple replicas");
+	const alone = createDeploymentPlan({
+		...input(),
+		replicas: 1,
+		events: [schedule],
+	});
+	expect(alone.config.hosting).toBeUndefined();
+	expect(alone.config.max_replicas).toBe(1);
+	expect(alone.config.events).toEqual([
+		{ event_id: "api", event_version: [1, 2, 3], board_version: [3, 2, 1] },
+	]);
 	expect(() =>
 		createDeploymentPlan({ ...input(), overrides: { unknown: "secret" } }),
 	).toThrow();
@@ -1351,6 +1414,537 @@ test("offline discovery validates project, revision, order and pagination progre
 	});
 	await expect(discoverOfflineEvents(foreign, installed)).rejects.toThrow();
 });
+
+/* run-more-design §1.3: the literal a device sends for a schedule it can run. */
+const SCHEDULE_ROW = JSON.parse(
+	`{"id":"evt_report","name":"Nightly report","event_type":"cron","event_version":[0,0,3],"board_version":[0,0,7],
+ "hosted":false,"eligible":true,"readiness_kind":"explicit","rollout_supported":true,"readiness_error":null,
+ "kind":"scheduled","schedule":{"expression":"0 0 2 * * *","timezone":"Europe/Berlin"},"ineligible_code":null}`,
+);
+
+test("offline discovery reads a schedule row and drops facts it does not know", async () => {
+	const discover = (items: unknown[]) =>
+		discoverOfflineEvents(
+			async () => ({
+				operation_id: "read",
+				state: "completed",
+				result: {
+					project_id: "project",
+					revision: installed.revision,
+					event_id: null,
+					items,
+					next: null,
+				},
+			}),
+			installed,
+		);
+	const [row] = await discover([SCHEDULE_ROW]);
+	expect(row).toMatchObject({
+		id: "evt_report",
+		eligible: true,
+		hosted: false,
+		readiness_kind: "explicit",
+		rollout_supported: true,
+		kind: "scheduled",
+		schedule: { expression: "0 0 2 * * *", timezone: "Europe/Berlin" },
+	});
+	expect(row.ineligible_code ?? null).toBeNull();
+	const [refused] = await discover([
+		{
+			...SCHEDULE_ROW,
+			eligible: false,
+			rollout_supported: false,
+			schedule: null,
+			ineligible_code: "schedule_too_often",
+			readiness_error:
+				"Schedule */30 * * * * * runs more often than once a minute.",
+		},
+	]);
+	expect([refused.ineligible_code, refused.readiness_error]).toEqual([
+		"schedule_too_often",
+		"Schedule */30 * * * * * runs more often than once a minute.",
+	]);
+	// An agent newer than this client: unknown values are dropped, the row and the discovery stay;
+	// a kind this client does not know can't run here, whatever the device says.
+	const [newer, older] = await discover([
+		{
+			...SCHEDULE_ROW,
+			kind: "webhook",
+			ineligible_code: "schedule_paused_elsewhere",
+			schedule: { expression: 7 },
+			readiness_error: 404,
+			a_later_fact: true,
+		},
+		{ ...event, id: "older" },
+	]);
+	expect(newer).toMatchObject({ id: "evt_report", eligible: false });
+	expect([
+		newer.kind,
+		newer.schedule,
+		newer.ineligible_code,
+		newer.readiness_error,
+	]).toEqual([undefined, undefined, undefined, undefined]);
+	expect("a_later_fact" in newer).toBe(false);
+	expect(older).toEqual({ ...event, id: "older" });
+	// `readiness_kind` stays a closed enum on every client, so a device never sends a fourth value.
+	await expect(
+		discover([{ ...SCHEDULE_ROW, readiness_kind: "armed" }]),
+	).rejects.toThrow();
+});
+/* run-more-2-design §1.5: the literals a device sends for an Endpoint, a one-time schedule, a form and a bot. */
+const ROUND_TWO_ROWS = [
+	`{"id":"evt_helper","name":"Helper","event_type":"telegram","event_version":[0,0,1],"board_version":[0,0,3],
+ "hosted":false,"eligible":true,"readiness_kind":"explicit","rollout_supported":true,"readiness_error":null,
+ "kind":"bot","ineligible_code":null}`,
+	`{"id":"evt_notes_form","name":"New note","event_type":"generic_form","event_version":[1,0,0],"board_version":[3,0,1],
+ "hosted":false,"eligible":true,"readiness_kind":"explicit","rollout_supported":true,"readiness_error":null,
+ "kind":"on_demand","ineligible_code":null}`,
+	`{"id":"evt_once","name":"Migration","event_type":"cron","event_version":[0,0,4],"board_version":[0,0,7],
+ "hosted":false,"eligible":true,"readiness_kind":"explicit","rollout_supported":true,"readiness_error":null,
+ "kind":"scheduled","once":{"date":"2026-09-24","time":"09:00","at":1790233200,"timezone":"Europe/Berlin"},"ineligible_code":null}`,
+	`{"id":"evt_orders","name":"Orders","event_type":"api","event_version":[0,0,2],"board_version":[0,0,5],
+ "hosted":true,"eligible":true,"readiness_kind":"listener","rollout_supported":true,"readiness_error":null,
+ "kind":"served","route":{"method":"GET","path":"/orders"},"ineligible_code":null}`,
+].map((row) => JSON.parse(row));
+
+async function discoverRows(items: unknown[]) {
+	return discoverOfflineEvents(
+		async () => ({
+			operation_id: "read",
+			state: "completed",
+			result: {
+				project_id: "project",
+				revision: installed.revision,
+				event_id: null,
+				items,
+				next: null,
+			},
+		}),
+		installed,
+	);
+}
+
+test("offline discovery reads the rows of Endpoints, one-time schedules, forms and bots", async () => {
+	const [helper, form, once, orders] = await discoverRows(ROUND_TWO_ROWS);
+	expect([helper.kind, form.kind, once.kind, orders.kind]).toEqual([
+		"bot",
+		"on_demand",
+		"scheduled",
+		"served",
+	]);
+	expect([helper, form, once, orders].every((row) => row.eligible)).toBe(true);
+	expect(orders.route).toEqual({ method: "GET", path: "/orders" });
+	expect(once.once).toEqual({
+		date: "2026-09-24",
+		time: "09:00",
+		at: 1790233200,
+		timezone: "Europe/Berlin",
+	});
+	// 2026-09-24 09:00 in Berlin is 07:00 UTC, the instant the row carries.
+	expect(
+		eventEligibility(
+			approvedEvent(
+				cron({
+					scheduled_for: { date: "2026-09-24", time: "09:00" },
+					timezone: "Europe/Berlin",
+				}),
+			),
+		).once?.at,
+	).toBe(1790233200);
+	// A one-time row has no `schedule`: a parser that needs an expression never meets one.
+	expect("schedule" in once).toBe(false);
+	const [refused] = await discoverRows([
+		{
+			...ROUND_TWO_ROWS[3],
+			eligible: false,
+			route: null,
+			ineligible_code: "route_reserved",
+			readiness_error: "HTTP event path is reserved by the service host",
+		},
+	]);
+	expect([refused.ineligible_code, refused.route]).toEqual([
+		"route_reserved",
+		null,
+	]);
+	// A route or an instant a device can't send is dropped, the row stays.
+	const [bent] = await discoverRows([
+		{
+			...ROUND_TWO_ROWS[3],
+			route: { method: "TRACE", path: "/orders" },
+		},
+	]);
+	expect([bent.eligible, bent.route]).toEqual([true, undefined]);
+	const [late] = await discoverRows([
+		{ ...ROUND_TWO_ROWS[2], once: { ...ROUND_TWO_ROWS[2].once, at: 1 } },
+	]);
+	expect(late.once).toBeUndefined();
+	// An agent built without a part answers as today.
+	const [older] = await discoverRows([
+		{
+			...ROUND_TWO_ROWS[0],
+			eligible: false,
+			readiness_kind: "unsupported",
+			kind: undefined,
+		},
+	]);
+	expect([older.eligible, older.kind, older.ineligible_code ?? null]).toEqual([
+		false,
+		undefined,
+		null,
+	]);
+});
+
+const withConfig = (event_type: string, config: unknown): Partial<IEvent> => ({
+	event_type,
+	config: configBytes(config),
+});
+
+test("each event needs the agent flags of its kind; a Page needs none", () => {
+	const cases: [Partial<IEvent>, AgentFeature[]][] = [
+		[withConfig("http", { path: "/orders", method: "get" }), []],
+		[withConfig("http", { path: "orders" }), ["api_events"]],
+		[withConfig("http", { path: "/orders" }), ["api_events"]],
+		[
+			withConfig("http", { path_suffix: "/a/b", method: "PUT" }),
+			["api_events"],
+		],
+		[withConfig("api", API_DEFAULT), ["api_events"]],
+		[{ event_type: "simple_chat" }, []],
+		[{ event_type: "rest" }, []],
+		[{ event_type: "daemon" }, []],
+		[{ event_type: "cron", config: nightly }, ["scheduled_events"]],
+		[
+			cron({ scheduled_for: { date: "2026-12-24", time: "18:00" } }),
+			["scheduled_events", "scheduled_once"],
+		],
+		[{ event_type: "quick_action" }, ["on_demand_events"]],
+		[{ event_type: "generic_form" }, ["on_demand_events"]],
+		[withConfig("telegram", TELEGRAM_DEFAULT), ["telegram_bots"]],
+		[withConfig("discord", DISCORD_DEFAULT), ["discord_bots"]],
+		[{ event_type: "telegram", default_page_id: "page" }, []],
+		[{ event_type: "generic_form", default_page_id: "page" }, []],
+		[{ event_type: "email" }, []],
+	];
+	for (const [change, features] of cases)
+		expect([
+			change.event_type,
+			requiredFeatures(approvedEvent(change)),
+		]).toEqual([change.event_type, features]);
+	const once = approvedEvent(
+		cron({ scheduled_for: { date: "2026-12-24", time: "18:00" } }),
+	);
+	expect(missingFeature(once, undefined)).toBe("unknown");
+	expect(missingFeature(once, {})).toBe("scheduled_events");
+	expect(missingFeature(once, { scheduled_events: 1 })).toBe("scheduled_once");
+	expect(
+		missingFeature(once, { scheduled_events: 1, scheduled_once: 1 }),
+	).toBeNull();
+	expect(missingFeature(approvedEvent(), undefined)).toBeNull();
+});
+
+test("person-started events do not keep a service at one instance; claimed ones do", () => {
+	expect(EVENT_KINDS.filter(limitsInstances)).toEqual([
+		"own_server",
+		"background",
+		"scheduled",
+		"bot",
+	]);
+	for (const [event_type, kind] of [
+		["http", "served"],
+		["api", "served"],
+		["simple_chat", "served"],
+		["rest", "own_server"],
+		["mcp", "own_server"],
+		["daemon", "background"],
+		["cron", "scheduled"],
+		["quick_action", "on_demand"],
+		["generic_form", "on_demand"],
+		["telegram", "bot"],
+		["discord", "bot"],
+		["teams", null],
+		["email", null],
+		["deeplink", null],
+	] as const)
+		expect([event_type, eventKind({ event_type })]).toEqual([event_type, kind]);
+	expect(eventKind({ event_type: "telegram", default_page_id: "p" })).toBe(
+		"served",
+	);
+});
+
+test("an online app's hub hands an Endpoint, form or bot to devices only when it lists the type", () => {
+	const types = [
+		["api", withConfig("api", API_DEFAULT)],
+		["quick_action", { event_type: "quick_action" }],
+		["generic_form", { event_type: "generic_form" }],
+		["telegram", withConfig("telegram", TELEGRAM_DEFAULT)],
+		["discord", withConfig("discord", DISCORD_DEFAULT)],
+	] as const;
+	for (const [type, change] of types) {
+		const record = approvedEvent(change);
+		expect(eventEligibility(record).code).toBeNull();
+		expect(eventEligibility(record, { hubTypes: [] }).code).toBe("hub_type");
+		expect(eventEligibility(record, { hubTypes: ["http", "cron"] }).code).toBe(
+			"hub_type",
+		);
+		expect(eventEligibility(record, { hubTypes: [type] }).code).toBeNull();
+		// A Page goes whatever its type.
+		expect(
+			eventEligibility({ ...record, default_page_id: "page" }, { hubTypes: [] })
+				.code,
+		).toBeNull();
+	}
+	for (const change of [
+		{},
+		{ event_type: "simple_chat" },
+		{ event_type: "cron", config: nightly },
+		cron({ scheduled_for: { date: "2026-12-24", time: "18:00" } }),
+	])
+		expect(eventEligibility(approvedEvent(change), { hubTypes: [] }).code).toBe(
+			null,
+		);
+	// The event's own rule comes first, the hub after it, the bundle and the device last.
+	expect(
+		eventEligibility(approvedEvent(withConfig("discord", { intents: ["X"] })), {
+			hubTypes: [],
+		}).code,
+	).toBe("bot_invalid");
+	expect(
+		eventEligibility(approvedEvent(withConfig("api", { path: "/ui" })), {
+			hubTypes: [],
+		}).code,
+	).toBe("route_reserved");
+	expect(
+		eventEligibility(approvedEvent({ event_type: "generic_form" }), {
+			hubTypes: [],
+			ineligibleReason: "Board board 3.2.1 cannot be deployed",
+		}).code,
+	).toBe("hub_type");
+});
+
+test("the rule names what a device can't read, and what a runnable event shows", () => {
+	const invalid = eventEligibility(
+		approvedEvent(withConfig("http", { path: "/x", method: "TRACE" })),
+	);
+	expect([invalid.code, invalid.detail, invalid.rolloutSupported]).toEqual([
+		"route_invalid",
+		"TRACE",
+		false,
+	]);
+	const reserved = eventEligibility(
+		approvedEvent(withConfig("api", { path: "/channels/1" })),
+	);
+	expect([reserved.code, reserved.detail]).toEqual([
+		"route_reserved",
+		"/channels/1",
+	]);
+	const bot = eventEligibility(
+		approvedEvent({
+			...withConfig("telegram", { chat_whitelist: "all" }),
+		}),
+	);
+	expect([bot.code, bot.detail, bot.bot]).toEqual([
+		"bot_invalid",
+		"chat_whitelist",
+		undefined,
+	]);
+	const longId = eventEligibility({
+		...approvedEvent(withConfig("telegram", TELEGRAM_DEFAULT)),
+		id: "e".repeat(113),
+	});
+	expect([longId.code, longId.detail]).toEqual(["bot_invalid", "id"]);
+	const endpoint = eventEligibility(
+		approvedEvent(withConfig("api", API_DEFAULT)),
+	);
+	expect([endpoint.route, endpoint.rolloutSupported, endpoint.bot]).toEqual([
+		{ method: "GET", path: "/cm1abc" },
+		true,
+		undefined,
+	]);
+	const telegram = eventEligibility(
+		approvedEvent(withConfig("telegram", TELEGRAM_DEFAULT)),
+	);
+	expect(telegram.bot).toEqual({
+		provider: "telegram",
+		open: true,
+		savedToken: false,
+		prefix: "/",
+		mentions: true,
+	});
+	expect(telegram.readiness).toBe("explicit");
+	const page = eventEligibility(
+		approvedEvent({
+			...withConfig("api", { path: "/services" }),
+			default_page_id: "page",
+		}),
+	);
+	expect([page.code, page.route]).toEqual([null, undefined]);
+	// Whether its time has passed never makes a one-time schedule ineligible.
+	const past = eventEligibility(
+		approvedEvent(
+			cron({ scheduled_for: { date: "2001-01-01", time: "00:00" } }),
+		),
+	);
+	expect([past.eligible, past.once?.at, past.schedule]).toEqual([
+		true,
+		978307200,
+		undefined,
+	]);
+	const gap = eventEligibility(
+		approvedEvent(
+			cron({
+				scheduled_for: { date: "2027-03-28", time: "02:30" },
+				timezone: "Europe/Berlin",
+			}),
+		),
+	);
+	expect([gap.code, gap.scheduleDetail]).toEqual([
+		"schedule_invalid",
+		{ code: "gap", date: "2027-03-28", time: "02:30", zone: "Europe/Berlin" },
+	]);
+});
+
+const discovered = (change: Partial<DeploymentEvent>): DeploymentEvent => ({
+	...event,
+	...change,
+});
+const BOT: DeploymentEvent = discovered({
+	id: "evt_helper",
+	name: "Helper",
+	event_type: "telegram",
+	hosted: false,
+	kind: "bot",
+	readiness_kind: "explicit",
+	rollout_supported: true,
+});
+const FORM: DeploymentEvent = discovered({
+	id: "evt_notes_form",
+	name: "New note",
+	event_type: "generic_form",
+	hosted: false,
+	kind: "on_demand",
+	readiness_kind: "explicit",
+	rollout_supported: true,
+});
+const TOKEN = "123456789:AAH-secret_token_value_123";
+
+test("a form beside a served event keeps its instances; a bot or an older row without a kind keeps one", () => {
+	const plan = createDeploymentPlan({ ...input(), events: [event, FORM] });
+	expect(plan.config.max_replicas).toBe(2);
+	expect(() => createDeploymentPlan({ ...input(), events: [FORM] })).toThrow(
+		"multiple replicas",
+	);
+	const alone = createDeploymentPlan({
+		...input(),
+		replicas: 1,
+		events: [FORM],
+	});
+	expect(alone.config.hosting).toBeUndefined();
+	expect(() =>
+		createDeploymentPlan({
+			...input(),
+			events: [event, BOT],
+			overrides: { [botTokenKey(BOT.id)]: TOKEN },
+		}),
+	).toThrow("multiple replicas");
+	expect(() =>
+		createDeploymentPlan({
+			...input(),
+			events: [event, { ...FORM, kind: undefined }],
+		}),
+	).toThrow("multiple replicas");
+});
+
+test("a bot's token is a secret setting of its event, checked and stored by reference only", () => {
+	const single = { ...input(), replicas: 1, events: [BOT], variables: [] };
+	const plan = createDeploymentPlan({
+		...single,
+		overrides: { [botTokenKey(BOT.id)]: ` ${TOKEN}\n` },
+	});
+	const references = plan.config.secret_overrides as Record<string, string>;
+	expect(Object.keys(references)).toEqual(["event.evt_helper.bot_token"]);
+	expect(references["event.evt_helper.bot_token"]).toMatch(/^variable-/);
+	expect(JSON.stringify(plan.config)).not.toContain(TOKEN);
+	const write = plan.steps.find((step) => step.command.type === "set_secret");
+	expect(write?.command).toMatchObject({
+		name: references["event.evt_helper.bot_token"],
+		value: JSON.stringify(TOKEN),
+	});
+	expect(() => createDeploymentPlan({ ...single, overrides: {} })).toThrow(
+		"Bot Helper needs its bot token. Enter it under Settings.",
+	);
+	expect(() =>
+		createDeploymentPlan({
+			...single,
+			overrides: { [botTokenKey(BOT.id)]: "my token" },
+		}),
+	).toThrow("doesn't look like a Telegram bot token");
+	// A flow variable that claims the reserved id never takes a value.
+	expect(() =>
+		createDeploymentPlan({
+			...input(),
+			variables: [{ ...secret, id: botTokenKey("api") }],
+			overrides: { [botTokenKey("api")]: TOKEN },
+		}),
+	).toThrow("outside the selected events");
+});
+
+test("a stored bot token stays with its bot, and leaves when the bot leaves", async () => {
+	const existing = await existingPlacement();
+	const stored = {
+		...existing,
+		config: {
+			...existing.config,
+			max_replicas: 1,
+			hosting: null,
+			events: [
+				{
+					event_id: BOT.id,
+					event_version: [1, 2, 3] as [number, number, number],
+					board_version: [3, 2, 1] as [number, number, number],
+				},
+			],
+			variables: {},
+			secret_overrides: { [botTokenKey(BOT.id)]: "variable-token" },
+		},
+	};
+	const kept = createDeploymentPlan({
+		...input(),
+		existing: stored,
+		replicas: 1,
+		events: [BOT, FORM],
+		variables: [],
+		overrides: {},
+		serviceToken: "",
+	});
+	expect(kept.config.secret_overrides).toEqual({
+		[botTokenKey(BOT.id)]: "variable-token",
+	});
+	expect(() =>
+		createDeploymentPlan({
+			...input(),
+			existing: stored,
+			replicas: 1,
+			events: [FORM],
+			variables: [],
+			overrides: {},
+			serviceToken: "",
+		}),
+	).toThrow(
+		`Stored override ${botTokenKey(BOT.id)} is outside the selected events`,
+	);
+	const removed = createDeploymentPlan({
+		...input(),
+		existing: stored,
+		replicas: 1,
+		events: [FORM],
+		variables: [],
+		overrides: {},
+		serviceToken: "",
+		removeOverrides: [botTokenKey(BOT.id)],
+	});
+	expect(removed.config.secret_overrides).toEqual({});
+});
+
 const storedConfig = {
 	id: "api-on-device",
 	project_id: "project",
@@ -2280,47 +2874,281 @@ const canaryTarget = {
 	updated_at: time,
 	variables: {},
 };
+const configBytes = (config: unknown) =>
+	Array.from(new TextEncoder().encode(JSON.stringify(config)));
+const nightly = configBytes({
+	expression: "0 0 2 * * *",
+	timezone: "Europe/Berlin",
+});
+const cron = (config: Record<string, unknown>): Partial<IEvent> => ({
+	event_type: "cron",
+	config: configBytes(config),
+});
+/* The configs the event editor saves (`packages/ui/lib/event-definitions.ts`). */
+const API_DEFAULT = {
+	sink_type: "http",
+	method: "GET",
+	path: "/cm1abc",
+	public_endpoint: false,
+};
+const TELEGRAM_DEFAULT = {
+	sink_type: "telegram",
+	bot_token: "",
+	bot_name: "Flow-Like Bot",
+	bot_description: "",
+	chat_whitelist: [],
+	chat_blacklist: [],
+	respond_to_mentions: true,
+	respond_to_private: true,
+	command_prefix: "/",
+};
+const DISCORD_DEFAULT = {
+	sink_type: "discord",
+	token: "",
+	bot_name: "Flow-Like Bot",
+	bot_description: "",
+	intents: ["Guilds", "GuildMessages", "MessageContent"],
+	channel_whitelist: [],
+	channel_blacklist: [],
+	respond_to_mentions: true,
+	respond_to_dms: true,
+	command_prefix: "!",
+};
 const ELIGIBILITY_CASES: [
 	Partial<IEvent>,
 	EventIneligibleCode | null,
 	boolean,
 	EventReadiness,
+	EventKind | null,
 ][] = [
-	[{}, null, true, "listener"],
-	[{ event_type: "simple_chat" }, null, true, "listener"],
+	[{}, null, true, "listener", "served"],
+	[{ event_type: "simple_chat" }, null, true, "listener", "served"],
 	[
 		{ event_type: "generic_form", default_page_id: "page" },
 		null,
 		true,
 		"listener",
+		"served",
 	],
-	[{ event_type: "rest" }, null, false, "listener"],
-	[{ event_type: "mcp" }, null, false, "listener"],
-	[{ event_type: "daemon" }, null, false, "explicit"],
-	[{ event_type: "cron" }, "type", false, "unsupported"],
-	[{ event_type: "api" }, "api_type", false, "unsupported"],
-	[{ active: false, event_type: "cron" }, "paused", false, "unsupported"],
-	[{ board_version: null }, "latest_flow", true, "listener"],
-	[{ event_version: [1, 2, 4294967295] }, "latest_flow", true, "listener"],
+	[{ event_type: "rest" }, null, false, "listener", "own_server"],
+	[{ event_type: "mcp" }, null, false, "listener", "own_server"],
+	[{ event_type: "daemon" }, null, false, "explicit", "background"],
 	[
-		{ canary: canaryTarget, event_type: "cron" },
+		{ event_type: "cron", config: nightly },
+		null,
+		false,
+		"explicit",
+		"scheduled",
+	],
+	[cron({ cron: "0 9 * * 1-5" }), null, false, "explicit", "scheduled"],
+	[
+		{ event_type: "cron", config: nightly, default_page_id: "page" },
+		null,
+		true,
+		"listener",
+		"served",
+	],
+	[
+		{ event_type: "cron", default_page_id: "page" },
+		null,
+		true,
+		"listener",
+		"served",
+	],
+	[{ event_type: "cron" }, "schedule_missing", false, "explicit", "scheduled"],
+	[
+		cron({ scheduled_for: { date: "2026-12-24", time: "18:00" } }),
+		null,
+		false,
+		"explicit",
+		"scheduled",
+	],
+	[
+		cron({ scheduled_for: { date: "2020-01-01", time: "00:00" } }),
+		null,
+		false,
+		"explicit",
+		"scheduled",
+	],
+	[
+		cron({
+			scheduled_for: { date: "2027-03-28", time: "02:30" },
+			timezone: "Europe/Berlin",
+		}),
+		"schedule_invalid",
+		false,
+		"explicit",
+		"scheduled",
+	],
+	[
+		cron({ expression: "*/30 * * * * *" }),
+		"schedule_too_often",
+		false,
+		"explicit",
+		"scheduled",
+	],
+	[
+		cron({ expression: "0 0 9 ? * 1-5" }),
+		"schedule_invalid",
+		false,
+		"explicit",
+		"scheduled",
+	],
+	[
+		cron({ expression: "0 0 2 * * *", timezone: "Mars/Olympus" }),
+		"schedule_invalid",
+		false,
+		"explicit",
+		"scheduled",
+	],
+	[{ event_type: "api" }, null, true, "listener", "served"],
+	[
+		{ event_type: "api", config: configBytes(API_DEFAULT) },
+		null,
+		true,
+		"listener",
+		"served",
+	],
+	[
+		{ event_type: "http", config: [] },
+		"route_missing",
+		true,
+		"listener",
+		"served",
+	],
+	[
+		{ event_type: "api", config: configBytes({ path: 7 }) },
+		"route_missing",
+		true,
+		"listener",
+		"served",
+	],
+	[
+		{ event_type: "http", config: configBytes({ path: "/a?x=1" }) },
+		"route_invalid",
+		true,
+		"listener",
+		"served",
+	],
+	[
+		{ event_type: "api", config: configBytes({ path: "/ui/x" }) },
+		"route_reserved",
+		true,
+		"listener",
+		"served",
+	],
+	[
+		{
+			event_type: "api",
+			config: configBytes({ path: "/ui/x" }),
+			default_page_id: "page",
+		},
+		null,
+		true,
+		"listener",
+		"served",
+	],
+	[{ event_type: "quick_action" }, null, false, "explicit", "on_demand"],
+	[{ event_type: "generic_form" }, null, false, "explicit", "on_demand"],
+	[
+		{ event_type: "telegram", config: configBytes(TELEGRAM_DEFAULT) },
+		null,
+		false,
+		"explicit",
+		"bot",
+	],
+	[
+		{ event_type: "discord", config: configBytes(DISCORD_DEFAULT) },
+		null,
+		false,
+		"explicit",
+		"bot",
+	],
+	[
+		{
+			event_type: "discord",
+			config: configBytes({ ...DISCORD_DEFAULT, intents: ["Guilds", "Nope"] }),
+		},
+		"bot_invalid",
+		false,
+		"explicit",
+		"bot",
+	],
+	[
+		{ event_type: "telegram", config: [] },
+		"bot_invalid",
+		false,
+		"explicit",
+		"bot",
+	],
+	[{ event_type: "email" }, "type", false, "unsupported", null],
+	[{ event_type: "teams" }, "type", false, "unsupported", null],
+	[{ event_type: "deeplink" }, "type", false, "unsupported", null],
+	[
+		{ active: false, event_type: "telegram", config: [] },
+		"paused",
+		false,
+		"explicit",
+		"bot",
+	],
+	[
+		{ active: false, event_type: "cron", config: nightly },
+		"paused",
+		false,
+		"explicit",
+		"scheduled",
+	],
+	[{ board_version: null }, null, true, "listener", "served"],
+	[
+		{ board_version: null, event_type: "cron", config: nightly },
+		null,
+		false,
+		"explicit",
+		"scheduled",
+	],
+	[
+		{ event_version: [1, 2, 4294967295] },
+		"latest_flow",
+		true,
+		"listener",
+		"served",
+	],
+	[
+		{ board_version: [4294967295, 0, 0] },
+		"latest_flow",
+		true,
+		"listener",
+		"served",
+	],
+	[
+		{ canary: canaryTarget, event_type: "cron", config: nightly },
 		"canary",
 		false,
-		"unsupported",
+		"explicit",
+		"scheduled",
 	],
-	[{ variants: [shadowVariant] }, "variants", true, "listener"],
+	[
+		{ variants: [shadowVariant], event_type: "cron" },
+		"variants",
+		false,
+		"explicit",
+		"scheduled",
+	],
+	[{ variants: [shadowVariant] }, "variants", true, "listener", "served"],
 ];
 
 test("event eligibility names the first failing device rule and agrees with online discovery", () => {
-	for (const [change, code, hosted, readiness] of ELIGIBILITY_CASES) {
+	for (const [change, code, hosted, readiness, kind] of ELIGIBILITY_CASES) {
 		const record = approvedEvent(change);
 		const rule = eventEligibility(record);
-		expect([rule.code, rule.hosted, rule.readiness]).toEqual([
+		expect([rule.code, rule.hosted, rule.readiness, rule.kind]).toEqual([
 			code,
 			hosted,
 			readiness,
+			kind,
 		]);
 		expect(rule.eligible).toBe(code === null);
+		expect(rule.followsLatest).toBe(record.board_version == null);
 		if (!rule.eventVersion || !rule.boardVersion) continue;
 		const [discovered] = approvedOnlineCatalog(
 			approvedDocuments([record]),
@@ -2330,13 +3158,167 @@ test("event eligibility names the first failing device rule and agrees with onli
 			discovered.hosted,
 			discovered.readiness_kind,
 			discovered.rollout_supported,
+			discovered.kind ?? null,
 		]).toEqual([
 			rule.eligible,
 			rule.hosted,
 			rule.readiness,
 			rule.rolloutSupported,
+			rule.kind,
 		]);
+		expect(discovered.schedule ?? null).toEqual(
+			rule.schedule
+				? {
+						expression: rule.schedule.expression,
+						timezone: rule.schedule.timezone,
+					}
+				: null,
+		);
+		expect(discovered.once ?? null).toEqual(
+			rule.once
+				? {
+						date: rule.once.date,
+						time: rule.once.time,
+						at: rule.once.at,
+						timezone: rule.once.timezone,
+					}
+				: null,
+		);
+		expect<EventRoute | null>(discovered.route ?? null).toEqual(
+			rule.route ?? null,
+		);
+		expect<string | null>(discovered.ineligible_code ?? null).toBe(
+			(DEVICE_INELIGIBLE_CODES as readonly string[]).includes(rule.code ?? "")
+				? rule.code
+				: null,
+		);
 	}
+});
+
+test("a schedule a device can run carries its expression and effective zone; safe updates need a valid one", () => {
+	const valid = eventEligibility(
+		approvedEvent({ event_type: "cron", config: nightly }),
+	);
+	expect(valid.schedule).toEqual({
+		expression: "0 0 2 * * *",
+		timezone: "Europe/Berlin",
+		zoneSet: true,
+	});
+	expect(valid.rolloutSupported).toBe(true);
+	expect(
+		eventEligibility(approvedEvent(cron({ expression: "0 9 * * 1-5" })))
+			.schedule,
+	).toEqual({ expression: "0 9 * * 1-5", timezone: "UTC", zoneSet: false });
+	const broken = eventEligibility(
+		approvedEvent(cron({ expression: "0 0 9 ? * 1-5" })),
+	);
+	expect(broken.schedule).toBeUndefined();
+	expect(broken.scheduleDetail).toEqual({ code: "syntax", field: "?" });
+	expect(broken.rolloutSupported).toBe(false);
+	// A served `cron` Page is not a schedule: its config is never read.
+	const page = eventEligibility(
+		approvedEvent({
+			event_type: "cron",
+			default_page_id: "page",
+			config: configBytes({ expression: "not a schedule" }),
+		}),
+	);
+	expect([page.eligible, page.kind, page.schedule]).toEqual([
+		true,
+		"served",
+		undefined,
+	]);
+});
+
+test("the schedule half of a config wins over the record's bytes, and null means no schedule", () => {
+	const record = approvedEvent({ event_type: "cron", config: nightly });
+	expect(
+		eventEligibility({ ...record, schedule: { expression: "0 0 6 * * *" } })
+			.schedule?.expression,
+	).toBe("0 0 6 * * *");
+	expect(eventEligibility({ ...record, schedule: null }).code).toBe(
+		"schedule_missing",
+	);
+	expect(
+		eventEligibility(
+			approvedEvent({ event_type: "cron", config: configBytes(["no"]) }),
+		).code,
+	).toBe("schedule_missing");
+});
+
+test("an event that follows Latest is eligible; only its narrow cases are refused", () => {
+	const latest = approvedEvent({ board_version: null });
+	const rule = eventEligibility(latest);
+	expect([rule.eligible, rule.followsLatest, rule.boardVersion]).toEqual([
+		true,
+		true,
+		null,
+	]);
+	expect(rule.latestFlow).toBeUndefined();
+	expect(eventEligibility({ ...latest, board_version: undefined })).toEqual(
+		rule,
+	);
+	for (const reason of ["hub", "role", "target", "copy"] as const) {
+		const refused = eventEligibility(latest, { latestFlow: reason });
+		expect([refused.code, refused.latestFlow]).toEqual(["latest_flow", reason]);
+	}
+	// The cases describe Latest events only; a pinned event is never refused by them.
+	expect(eventEligibility(approvedEvent(), { latestFlow: "hub" }).code).toBe(
+		null,
+	);
+	for (const change of [
+		{ event_version: [1, 2, 4294967295] },
+		{ board_version: [3, 2, 4294967295] },
+		{ board_version: [3, 2] },
+		{ event_version: undefined },
+	] as Partial<IEvent>[]) {
+		const unreadable = eventEligibility(approvedEvent(change), {
+			latestFlow: "hub",
+		});
+		expect([
+			unreadable.code,
+			unreadable.latestFlow,
+			unreadable.followsLatest,
+		]).toEqual(["latest_flow", "other", false]);
+	}
+	expect(
+		eventEligibility(approvedEvent({ active: false, board_version: null }), {
+			latestFlow: "hub",
+		}).code,
+	).toBe("paused");
+});
+
+test("an older hub refuses every schedule of an online app, after the schedule's own rule", () => {
+	const schedule = approvedEvent({ event_type: "cron", config: nightly });
+	expect(eventEligibility(schedule, { hubSchedules: false }).code).toBe(
+		"hub_schedules",
+	);
+	expect(eventEligibility(schedule, { hubSchedules: true }).code).toBeNull();
+	expect(eventEligibility(schedule, {}).code).toBeNull();
+	expect(
+		eventEligibility(approvedEvent({ event_type: "cron" }), {
+			hubSchedules: false,
+		}).code,
+	).toBe("schedule_missing");
+	expect(
+		eventEligibility(approvedEvent(), { hubSchedules: false }).code,
+	).toBeNull();
+	expect(
+		eventEligibility(
+			approvedEvent({
+				event_type: "cron",
+				config: nightly,
+				default_page_id: "page",
+			}),
+			{ hubSchedules: false },
+		).code,
+	).toBeNull();
+	expect(
+		eventEligibility(schedule, {
+			hubSchedules: false,
+			ineligibleReason: "Board board 3.2.1 cannot be deployed",
+		}).code,
+	).toBe("hub_schedules");
 });
 
 test("bundle and device refusals come after the event's own rules", () => {

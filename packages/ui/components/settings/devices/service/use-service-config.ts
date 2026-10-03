@@ -10,12 +10,19 @@ import {
 	type DeploymentVariable,
 	type PlacementConfiguration,
 	StaleDeploymentRevisionError,
+	discoverOfflineEvents,
 	discoverOfflineVariables,
+	eventEligibility,
 	executeDeploymentPlan,
 	mergeVariables,
 	readExistingDeployment,
 	removesOfflineBuffering,
 } from "../../../../lib/device-management/deployment";
+import {
+	type EventRoute,
+	ROUTE_EVENT_TYPES,
+	ROUTE_PROBLEMS,
+} from "../../../../lib/device-management/event-route";
 import { deviceName } from "../../../../lib/device-management/model/device-view";
 import type {
 	DeviceViewModel,
@@ -53,6 +60,7 @@ import {
 	ConfigTooLargeError,
 	type PlacementConfig,
 	boardDefinitions,
+	serviceDefinitions,
 	settingsPlan,
 } from "./config-model";
 
@@ -316,9 +324,145 @@ export function useVariableDefinitions(
 		meta: { persist: false },
 	});
 	return useMemo(
-		() => ({ definitions: query.data, loading: query.isLoading }),
-		[query.data, query.isLoading],
+		() => ({
+			definitions:
+				config && query.data
+					? serviceDefinitions(config, query.data)
+					: query.data,
+			loading: query.isLoading,
+		}),
+		[config, query.data, query.isLoading],
 	);
+}
+
+/* The routes the service's deployed Endpoints answer. */
+
+export interface DeployedRoute {
+	eventId: string;
+	/** Absent when the deployed version names no route a device serves. */
+	route?: EventRoute;
+}
+
+export type DeployedRoutesRead =
+	| { state: "loading" }
+	| { state: "known"; routes: DeployedRoute[] }
+	/** `live`: a local-only app's copy is read from the device, which needs a live connection. */
+	| { state: "unknown"; reason: "live" | "failed" };
+
+const routeEvent = (eventType: string, pageId: unknown) =>
+	!pageId && (ROUTE_EVENT_TYPES as readonly string[]).includes(eventType);
+
+/** An online service's Endpoints as their pinned event versions have them. */
+async function pinnedRoutes(
+	backend: ReturnType<typeof useBackend>,
+	config: PlacementConfig,
+): Promise<DeployedRoute[]> {
+	const routes: DeployedRoute[] = [];
+	for (const pin of config.events) {
+		const event = await backend.eventState.getEventAuthoritative(
+			config.project_id,
+			pin.event_id,
+			pin.event_version,
+		);
+		if (!routeEvent(event.event_type, event.default_page_id)) continue;
+		// The device serves the pinned copy, paused or not: only its route counts here.
+		const { route } = eventEligibility({
+			id: event.id,
+			active: true,
+			event_type: event.event_type,
+			config: event.config ?? null,
+			default_page_id: event.default_page_id ?? null,
+			event_version: pin.event_version,
+			board_version: pin.board_version,
+		});
+		routes.push({ eventId: pin.event_id, ...(route ? { route } : {}) });
+	}
+	return routes;
+}
+
+/** A local-only service's Endpoints as the device describes the copy it holds. */
+async function describedRoutes(
+	call: ReturnType<typeof deviceCall>,
+	config: PlacementConfig,
+): Promise<DeployedRoute[]> {
+	const rows = await discoverOfflineEvents(call, {
+		project_id: config.project_id,
+		project_path: config.project_path,
+		revision: config.revision,
+		source: "offline",
+	});
+	const served = new Set(config.events.map((event) => event.event_id));
+	// A Page has no route; an Endpoint has one, or the code that says why a device can't serve it.
+	const endpoint = (row: (typeof rows)[number]) =>
+		served.has(row.id) &&
+		(!!row.route ||
+			(ROUTE_PROBLEMS as readonly unknown[]).includes(row.ineligible_code));
+	return rows.filter(endpoint).map((row) => ({
+		eventId: row.id,
+		...(row.route ? { route: row.route } : {}),
+	}));
+}
+
+/**
+ * The method and path each Endpoint of the service answers, from the version
+ * it runs: the pinned event of an online app, the device's description of a
+ * local-only copy. Never the live event record, which may have changed since.
+ */
+export function useDeployedRoutes(
+	deviceId: string,
+	configuration: PlacementConfiguration | undefined,
+	live: boolean,
+): DeployedRoutesRead {
+	const { workspace } = useAttentionState();
+	const backend = useBackend();
+	const config = configuration?.config;
+	const offline = config?.source === "offline";
+	const read = (known: PlacementConfig) =>
+		known.source === "offline"
+			? describedRoutes(deviceCall(workspace, deviceId, "poll"), known)
+			: pinnedRoutes(backend, known);
+	const query = useQuery({
+		queryKey: routesKey(workspace.scopeKey, deviceId, config),
+		queryFn: () => (config ? read(config) : Promise.resolve([])),
+		enabled: !!config && (!offline || live),
+		staleTime: Number.POSITIVE_INFINITY,
+		retry: false,
+		meta: { persist: false },
+	});
+	const waitsForLive = offline && !live;
+	return useMemo(
+		() => routesRead(query.data, query.isError, waitsForLive),
+		[query.data, query.isError, waitsForLive],
+	);
+}
+
+/** One read per settings revision and pins: a new deploy reads the routes again. */
+function routesKey(
+	scopeKey: string,
+	deviceId: string,
+	config: PlacementConfig | undefined,
+) {
+	return [
+		"devices",
+		scopeKey,
+		"service-routes",
+		deviceId,
+		config?.id ?? "",
+		config?.revision ?? "",
+		JSON.stringify(config?.events ?? []),
+	];
+}
+
+function routesRead(
+	routes: DeployedRoute[] | undefined,
+	failed: boolean,
+	waitsForLive: boolean,
+): DeployedRoutesRead {
+	if (routes) return { state: "known", routes };
+	if (failed) return { state: "unknown", reason: "failed" };
+	return waitsForLive
+		? { state: "unknown", reason: "live" }
+		: { state: "loading" };
 }
 
 /* Gates of the settings actions. */

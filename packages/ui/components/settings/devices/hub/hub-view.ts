@@ -7,18 +7,19 @@ import type {
 	GateResult,
 } from "../../../../lib/device-management/model/types";
 import type { DeviceSetupReadiness } from "../../../../lib/device-management/readiness";
+import { useAreaTime } from "../primitives/area-context";
 import {
 	type HubRead,
 	type HubSupportRead,
 	type ReleaseTrustRead,
 	useArchiveUsage,
 	useDeviceUsage,
-	useDeviceWorkspace,
 	useGate,
 	useHubSupport,
 	useReadiness,
 	useReleaseTrust,
 } from "../workspace";
+import { type ReleaseVerdict, releaseVerdictOf } from "./release-verdict";
 import {
 	type CheckId,
 	type CheckSummary,
@@ -30,14 +31,18 @@ import {
 	useHubRecord,
 } from "./use-hub-facts";
 
-export const DAY = 86_400;
-
-export type ReleaseState =
-	| "waiting"
-	| "missing"
-	| "verifying"
-	| "verified"
-	| "failed";
+export {
+	DAY,
+	RELEASE_ENDS_SOON_S,
+	type ReleaseAttempt,
+	type ReleaseCheckFailure,
+	type ReleaseVerdict,
+	type ReleaseVerdictKind,
+	daysLeft,
+	releaseCheckFailure,
+	releaseVerdictOf,
+	usableRelease,
+} from "./release-verdict";
 
 /** Everything the Hub status page reads, gathered once and handed to its blocks. */
 export interface HubView {
@@ -48,7 +53,6 @@ export interface HubView {
 	readiness: HubRead<DeviceSetupReadiness>;
 	summary?: CheckSummary;
 	release: ReleaseTrustRead;
-	releaseState: ReleaseState;
 	archive: HubRead<ArchiveUsage>;
 	usage: HubRead<DeviceUsageResponse>;
 	limits: HubLimits;
@@ -57,26 +61,11 @@ export interface HubView {
 	setup: GateResult;
 }
 
-const releaseStateOf = (
-	record: HubStandalone | undefined,
-	release: ReleaseTrustRead,
-	nowS: number,
-) => {
-	if (!record) return "waiting";
-	if (!record.release_trust) return "missing";
-	if (release.data)
-		return release.data.manifest.expires_at > nowS ? "verified" : "failed";
-	return release.error ? "failed" : "verifying";
-};
-
 /**
- * Reads the clock when the hub's data changes instead of following its tick, so
- * the page as a whole doesn't re-render every second; the parts that show a
- * running time follow the clock themselves.
+ * The page as a whole doesn't follow the clock's tick, so nothing here depends
+ * on the time; the parts that show a running time follow the clock themselves.
  */
 export function useHubView(): HubView {
-	const workspace = useDeviceWorkspace();
-	const nowS = Math.floor(workspace.clock.now() / 1000);
 	const hub = useHubSupport();
 	const { record, origin } = useHubRecord();
 	const readiness = useReadiness();
@@ -99,13 +88,27 @@ export function useHubView(): HubView {
 		readiness,
 		...(summary ? { summary } : {}),
 		release,
-		releaseState: releaseStateOf(record, release, nowS),
 		archive,
 		usage,
 		limits: limitsOf(hub.support),
 		...(slots ? { slots } : {}),
 		setup,
 	};
+}
+
+/** The release verdict as the area clock has it now: the headline, the summary cell and the features read this one. */
+export function useReleaseVerdict(
+	view: Pick<HubView, "record" | "release">,
+): ReleaseVerdict {
+	const { nowS } = useAreaTime();
+	return releaseVerdictOf(view.record, view.release, nowS);
+}
+
+/** The same verdict for a screen that doesn't hold the Hub status view, such as a device's Settings tab. */
+export function useAgentReleaseVerdict(): ReleaseVerdict {
+	const { record } = useHubRecord();
+	const release = useReleaseTrust();
+	return useReleaseVerdict({ ...(record ? { record } : {}), release });
 }
 
 export const firstFailing = (view: HubView): CheckId | undefined =>

@@ -22,8 +22,11 @@ import { LOCKED_DATA_CLASS } from "../primitives/state-view";
 import { StatusChip } from "../primitives/status-chip";
 import { cx } from "../primitives/tone";
 import { useRouteLink } from "../routing/use-devices-route";
+import { RunsYouStarted } from "../run/runs-you-started";
 import { stampOf } from "../shell/attention-popover";
-import { useActivity } from "../workspace";
+import { useActivity, useOverlayStore } from "../workspace";
+import { ActionsBlock } from "./actions-block";
+import { BotsBlock, botRows } from "./bots-block";
 import {
 	CurrentUpdate,
 	type ServiceRollouts,
@@ -31,6 +34,8 @@ import {
 } from "./current-update";
 import { DiagnosisBlock, type ServiceDiagnosis } from "./diagnosis-banner";
 import { type InstanceDiagnostics, InstancesTable } from "./instances-table";
+import { SchedulesBlock, scheduleRows } from "./schedules-block";
+import { appEventRows } from "./service-events";
 import {
 	AppVersionValue,
 	type ServiceApp,
@@ -313,7 +318,49 @@ function SecretWrites({
 	);
 }
 
-/** SPEC §5.3 Status: diagnosis, the current update, requested vs actual, update history, secret writes and instances. */
+/** The service answers web requests, so it has a service page: its settings say so, or one of its events is served. */
+function hasServicePage(
+	service: ServiceView,
+	app: ServiceApp,
+	diagnosis: ServiceDiagnosis,
+): boolean {
+	if (diagnosis.endpoint) return !!diagnosis.endpoint.host;
+	const known = appEventRows(app);
+	return (service.events ?? []).some(
+		(event) => known.get(event.event_id)?.eligibility.kind === "served",
+	);
+}
+
+/** The service's quick actions and forms with Run now…, and the runs this computer started. */
+function PersonStarted({
+	service,
+	app,
+	diagnosis,
+}: Readonly<{
+	service: ServiceView;
+	app: ServiceApp;
+	diagnosis: ServiceDiagnosis;
+}>) {
+	const openRunNow = useOverlayStore((store) => store.openRunNow);
+	const { deviceId, serviceId } = service;
+	return (
+		<>
+			<ActionsBlock
+				service={service}
+				app={app}
+				hasPage={hasServicePage(service, app, diagnosis)}
+				onRunNow={(eventId) => openRunNow({ deviceId, serviceId, eventId })}
+			/>
+			<RunsYouStarted
+				deviceId={deviceId}
+				serviceId={serviceId}
+				events={app.events}
+			/>
+		</>
+	);
+}
+
+/** SPEC §5.3 Status: diagnosis, the current update, requested vs actual, update history, secret writes, schedules, bots, actions and forms, and instances. */
 export function ServiceStatusTab({
 	device,
 	service,
@@ -359,6 +406,8 @@ export function ServiceStatusTab({
 						rollout={rollout}
 						diagnosis={diagnosis}
 						diagnostics={diagnostics}
+						hasSchedules={scheduleRows(service, app).length > 0}
+						hasBots={botRows(service, app).length > 0}
 					/>
 					{rollout ? (
 						<CurrentUpdate
@@ -384,6 +433,9 @@ export function ServiceStatusTab({
 					<SecretWrites deviceId={deviceId} serviceId={service.serviceId} />
 				</div>
 			</div>
+			<SchedulesBlock device={device} service={service} app={app} />
+			<BotsBlock device={device} service={service} app={app} />
+			<PersonStarted service={service} app={app} diagnosis={diagnosis} />
 			<InstancesTable
 				deviceId={deviceId}
 				service={service}

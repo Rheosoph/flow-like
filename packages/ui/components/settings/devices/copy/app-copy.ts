@@ -1,10 +1,33 @@
 import type {
 	AppMode,
 	AppVisibility,
+	PinDrift,
 } from "../../../../lib/device-management/model/app-plan";
 import type { DevicesT } from "../primitives/area-context";
 
 /* APP §7.1 visibility, §7.2 online vs offline copy, §7.5 versions and drift. */
+
+type PinUnknownWhy = Extract<PinDrift, { state: "unknown" }>["why"];
+
+const flowEditsText = (t: DevicesT) =>
+	t("devices:app.drift.flowEdits", "Newer flow edits are available");
+
+function pinUnknownText(t: DevicesT, why: PinUnknownWhy): string {
+	if (why === "hub")
+		return t(
+			"devices:app.drift.unknownHub",
+			"Unknown: this hub can't say which flow version is current",
+		);
+	return why === "pin"
+		? t(
+				"devices:app.drift.unknownPin",
+				"Unknown: the event's flow version can't be read",
+			)
+		: t(
+				"devices:app.drift.unknownLoading",
+				"Unknown: the flow's current version isn't read yet",
+			);
+}
 
 export interface VisibilityText {
 	label: string;
@@ -298,6 +321,32 @@ export function appCopy(t: DevicesT) {
 				"Runs {{version}} from {{date}}. Newest is {{newest}} from {{newestDate}}.",
 				input,
 			),
+		/** A served event that follows Latest: its flow has edits no published version holds. */
+		flowEdits: (): string => flowEditsText(t),
+		/** The tag on a served event whose record follows Latest: a device runs the flow as it was at its last deploy or update. */
+		followsLatest: (): string =>
+			t("devices:app.drift.followsLatest", "Follows Latest"),
+		followsLatestTitle: (): string =>
+			t(
+				"devices:app.drift.followsLatestTitle",
+				"A device runs the flow as it was when the service was last deployed or updated.",
+			),
+		/** Why a served pin can't be compared; never shown as "Newest". */
+		pinUnknown: (why: PinUnknownWhy): string => pinUnknownText(t, why),
+		/** What stands in for "newest" on a served event that can't be called so: flow edits no version holds, or a flow state that isn't known. */
+		servedNote: (
+			drift: PinDrift | undefined,
+		): { text: string; tone: "info" | "unknown" } | null =>
+			drift?.state === "edits"
+				? { text: flowEditsText(t), tone: "info" }
+				: drift?.state === "unknown"
+					? { text: pinUnknownText(t, drift.why), tone: "unknown" }
+					: null,
+		/** An event that follows Latest, where the app has no flow version to name: "event 0.9.0 · flow as it is now". */
+		pinLatest: (event: string): string =>
+			t("devices:app.drift.pinLatest", "event {{event}} · flow as it is now", {
+				event,
+			}),
 		staged: (version: string): string =>
 			t("devices:app.drift.staged", "{{version}} staged", { version }),
 		pinNewest: (version: string): string =>
@@ -313,6 +362,12 @@ export function appCopy(t: DevicesT) {
 				input,
 			),
 		versionFoot: (input: VersionFootInput): string => versionFoot(t, input),
+		/** Named instead of a hash while the newest version is flow edits that no version holds yet. */
+		currentEdits: (): string =>
+			t(
+				"devices:app.versions.currentEditsShort",
+				"current edits, no version yet",
+			),
 		publishNote: (mode: AppMode): string =>
 			mode === "online"
 				? t(

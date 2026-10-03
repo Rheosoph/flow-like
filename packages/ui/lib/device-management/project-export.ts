@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { IApp } from "../schema/app/app";
 import {
 	type ArtifactBlob,
@@ -8,12 +9,27 @@ import {
 } from "./artifacts";
 import type { ApprovedOnlineMetadata } from "./online-metadata";
 
+/**
+ * One event that follows the Latest flow, as the export staged it: pinned to
+ * the published version that equals its flow, or left out with the cause.
+ * `edited`: no version equals the flow. `target_missing`: one does, and it no
+ * longer holds the event's Page or start node.
+ */
+export interface ExportedLatestEvent {
+	event_id: string;
+	board_id: string;
+	board_version: [number, number, number] | null;
+	problem: "edited" | "target_missing" | null;
+}
+
 export type DesktopExport = {
 	export_id: string;
 	project_id: string;
 	source?: "online" | "offline";
 	files: { path: string; size: number }[];
 	assets: ProjectArtifactAssets;
+	/** Absent from a desktop app that can't deploy events that follow Latest. */
+	latest_events?: unknown;
 };
 export type ExportCommands = {
 	prepare(projectId: string): Promise<DesktopExport>;
@@ -28,8 +44,33 @@ export type ExportCommands = {
 export type PreparedDesktopProject = {
 	artifact: PreparedProjectArtifact;
 	assets: ProjectArtifactAssets;
+	/** `null`: the export says nothing about events that follow Latest (an older desktop app). */
+	latestEvents: ExportedLatestEvent[] | null;
 	release(): Promise<void>;
 };
+
+const triple = z.tuple([
+	z.number().int().min(0),
+	z.number().int().min(0),
+	z.number().int().min(0),
+]);
+const latestEventSchema = z.object({
+	event_id: z.string().min(1).max(128),
+	board_id: z.string().min(1).max(128),
+	board_version: triple.nullable(),
+	problem: z.enum(["edited", "target_missing"]).nullable().catch(null),
+});
+
+/** The export's Latest events; an entry this client can't read is dropped, not the list. */
+export function parseExportedLatestEvents(
+	value: unknown,
+): ExportedLatestEvent[] | null {
+	if (!Array.isArray(value)) return null;
+	return value.flatMap((entry) => {
+		const parsed = latestEventSchema.safeParse(entry);
+		return parsed.success ? [parsed.data] : [];
+	});
+}
 
 export async function desktopExportCommands(
 	onlineApp?: IApp,
@@ -139,7 +180,12 @@ export async function prepareDesktopProject(
 			assets,
 			exported.source ?? "offline",
 		);
-		return { artifact, assets, release };
+		return {
+			artifact,
+			assets,
+			latestEvents: parseExportedLatestEvents(exported.latest_events),
+			release,
+		};
 	} catch (error) {
 		await release().catch(() => {});
 		throw error;

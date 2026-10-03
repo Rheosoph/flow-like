@@ -17,6 +17,8 @@ import type {
 	VerifiedRelease,
 } from "../../../../lib/device-management/package";
 import type { DeviceSetupReadiness } from "../../../../lib/device-management/readiness";
+import { type ReleaseCheckFailure, releaseCheckFailure } from "../hub/hub-view";
+import { useAreaTime } from "../primitives/area-context";
 import { useDeviceWorkspace, useGate } from "../workspace";
 
 export type ReleaseCheck =
@@ -26,9 +28,9 @@ export type ReleaseCheck =
 	| { state: "waiting" }
 	| { state: "checking" }
 	| { state: "verified"; release: VerifiedRelease; verifiedAt: number }
-	/** The manifest arrived and failed verification. `detail` is the verifier's own sentence. */
-	| { state: "rejected"; detail: string }
-	/** The release server gave no usable answer. */
+	/** The list arrived and failed a check, or ran out since it was verified. `detail` is the verifier's own sentence. */
+	| ({ state: "rejected" } & ReleaseCheckFailure)
+	/** The release list didn't arrive. */
 	| { state: "unreachable"; error: HubError };
 
 export type ReadinessCheck =
@@ -57,8 +59,6 @@ export interface SetupChecks {
 	recheck(): Promise<void>;
 }
 
-const TRANSPORT = new Set(["network", "timeout", "server_error"]);
-
 function readinessCheckOf(
 	answer: DeviceSetupReadiness | undefined,
 	failure: unknown,
@@ -77,18 +77,31 @@ function readinessCheckOf(
 	return error ? { state: "failed", error } : { state: "checking" };
 }
 
-/** A manifest that did not arrive is "unreachable"; one that arrived and failed verification is "rejected". */
+/** A list that arrived and failed a check is "rejected"; any other failure means it did not arrive. */
 function failedRelease(failure: unknown): ReleaseCheck {
 	const error = toHubError(failure);
-	if (TRANSPORT.has(error.code)) return { state: "unreachable", error };
-	const { cause } = error;
+	const refused = releaseCheckFailure(error);
+	return refused
+		? { state: "rejected", ...refused }
+		: { state: "unreachable", error };
+}
+
+/** A list verified earlier that has run out since: the same answer the verifier would give now. */
+function ranOut({ manifest }: VerifiedRelease): ReleaseCheck {
 	return {
 		state: "rejected",
-		detail: cause instanceof Error ? cause.message : error.message,
+		check: "expired",
+		facts: {
+			release_version: manifest.release_version,
+			sequence: manifest.sequence,
+			issued_at: manifest.issued_at,
+			expires_at: manifest.expires_at,
+		},
+		detail: "The release manifest has expired.",
 	};
 }
 
-interface ReleaseFacts {
+interface ReleaseState {
 	/** The hub record is loaded, so "no release trust" is a fact and not a gap. */
 	trustKnown: boolean;
 	configured: boolean;
@@ -98,17 +111,21 @@ interface ReleaseFacts {
 	failure: unknown;
 	data: VerifiedRelease | undefined;
 	verifiedAt: number;
+	/** The verified list's end has passed on the area clock. */
+	ended: boolean;
 }
 
-function releaseCheckOf(facts: ReleaseFacts): ReleaseCheck {
-	if (!facts.configured)
-		return { state: facts.trustKnown ? "missing" : "waiting" };
-	if (!facts.hubReady) return { state: "waiting" };
-	if (facts.pending) return { state: "checking" };
-	if (facts.failure) return failedRelease(facts.failure);
-	return facts.data
-		? { state: "verified", release: facts.data, verifiedAt: facts.verifiedAt }
-		: { state: "checking" };
+/** A failed attempt always wins over a list verified before it; only then does the list in hand count. */
+function releaseCheckOf(state: ReleaseState): ReleaseCheck {
+	if (!state.configured)
+		return { state: state.trustKnown ? "missing" : "waiting" };
+	if (!state.hubReady) return { state: "waiting" };
+	if (state.pending) return { state: "checking" };
+	if (state.failure) return failedRelease(state.failure);
+	if (!state.data) return { state: "checking" };
+	return state.ended
+		? ranOut(state.data)
+		: { state: "verified", release: state.data, verifiedAt: state.verifiedAt };
 }
 
 /**
@@ -195,6 +212,8 @@ export function useSetupChecks(): SetupChecks {
 	const pending = releaseQuery.isFetching || reverify;
 	const failure = releaseQuery.isError ? releaseQuery.error : undefined;
 	const { data, dataUpdatedAt: verifiedAt } = releaseQuery;
+	const { nowS } = useAreaTime();
+	const ended = !!data && data.manifest.expires_at <= nowS;
 	const release = useMemo(
 		() =>
 			releaseCheckOf({
@@ -205,8 +224,18 @@ export function useSetupChecks(): SetupChecks {
 				failure,
 				data,
 				verifiedAt,
+				ended,
 			}),
-		[trustKnown, configured, hubReady, pending, failure, data, verifiedAt],
+		[
+			trustKnown,
+			configured,
+			hubReady,
+			pending,
+			failure,
+			data,
+			verifiedAt,
+			ended,
+		],
 	);
 
 	const gate = useGate("setup_device", undefined, {

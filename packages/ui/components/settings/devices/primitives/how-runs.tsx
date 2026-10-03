@@ -39,7 +39,9 @@ function useDayTime(time: AreaTime) {
 export interface NewestVersion {
 	/** "v1.5.0". */
 	label: string;
-	hash: string;
+	hash?: string;
+	/** Said instead of the hash while the newest version is flow edits no version holds yet. */
+	edits?: string;
 	/** Unix seconds: built on the hub, or changed on this computer (local-only). */
 	at: number;
 }
@@ -88,10 +90,15 @@ export function HowRunsStrip({
 				<span className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground @max-[900px]/howruns:order-4">
 					{t("view.howRuns.newest", "Newest")}
 					<span className="font-mono text-foreground">{newest.label}</span>
-					<IdRef
-						id={newest.hash}
-						copyLabel={t("view.drift.copyHash", "Copy app version hash")}
-					/>
+					{newest.hash ? (
+						<IdRef
+							id={newest.hash}
+							copyLabel={t("view.drift.copyHash", "Copy app version hash")}
+						/>
+					) : null}
+					{newest.edits ? (
+						<span className="text-foreground">{newest.edits}</span>
+					) : null}
 					{mode === "offline"
 						? t("view.howRuns.changed", "· changed on this computer {{when}}", {
 								when: dayTime(newest.at),

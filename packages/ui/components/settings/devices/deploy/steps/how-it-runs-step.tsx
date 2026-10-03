@@ -23,6 +23,7 @@ import type { AppMode } from "../../../../../lib/device-management/model/app-pla
 import type { PlanTarget } from "../../../../../lib/device-management/model/deploy-plan";
 import { humanFileSize } from "../../../../../lib/utils";
 import { appCopy } from "../../copy/app-copy";
+import { eligibilityFixLabel } from "../../copy/eligibility-copy";
 import { MODE_ICON } from "../../primitives/app-chips";
 import { type DevicesT, useAreaTime } from "../../primitives/area-context";
 import { Banner } from "../../primitives/banner";
@@ -35,8 +36,14 @@ import { IdRef } from "../../primitives/id-ref";
 import { KeyValueList, KvRow } from "../../primitives/key-value-list";
 import { StateView } from "../../primitives/state-view";
 import { WizardStepHeader } from "../../primitives/wizard";
+import { appEventsHref } from "../../routing/devices-href";
+import { useHostLink } from "../../routing/use-devices-route";
 import { useDeviceWorkspace } from "../../workspace/device-workspace-provider";
-import { prepareFailureText } from "../deploy-copy";
+import {
+	flowLabel,
+	prepareFailureText,
+	preparedFlowText,
+} from "../deploy-copy";
 import { Disclosure, HeadChip, Note } from "../deploy-parts";
 import type { PlanStepProps } from "../step-props";
 import type {
@@ -44,7 +51,9 @@ import type {
 	ImportedCopy,
 	PrepareCheck,
 	PrepareCheckId,
+	PrepareFailure,
 } from "../use-deploy-prepare";
+import { useFlowNames } from "../use-deploy-reads";
 
 /* Step 2 · How it runs (APP §3.6): the mode as a fact, what is sent, and the preparation on this computer. */
 
@@ -126,6 +135,8 @@ function ModeCard({ app, mode }: Readonly<{ app: string; mode: AppMode }>) {
 }
 
 const CHECK_SOURCE: Record<PrepareCheckId, "hub" | "local"> = {
+	// An online app's flows are published on the hub; a local-only app's on this computer (see `checkSource`).
+	publish_flows: "hub",
 	read_hub: "hub",
 	check_events: "hub",
 	collect: "local",
@@ -137,6 +148,9 @@ const CHECK_SOURCE: Record<PrepareCheckId, "hub" | "local"> = {
 	limits: "local",
 };
 
+const checkSource = (id: PrepareCheckId, mode: AppMode | null) =>
+	id === "publish_flows" && mode === "offline" ? "local" : CHECK_SOURCE[id];
+
 function checkLabel(
 	t: DevicesT,
 	id: PrepareCheckId,
@@ -144,6 +158,11 @@ function checkLabel(
 ): string {
 	const descriptor = prepare.prepared?.artifact.descriptor;
 	switch (id) {
+		case "publish_flows":
+			return t(
+				"devices:deploy.prepare.publishFlows",
+				"Create flow versions for current edits",
+			);
 		case "read_hub":
 			return t(
 				"devices:deploy.prepare.readHub",
@@ -200,6 +219,68 @@ function checkLabel(
 	}
 }
 
+/** What the first check did, per flow; without a Latest event among the choices it says that nothing is created. */
+function PublishedFlows({
+	check,
+	state,
+}: Readonly<{ check: PrepareCheck; state: PlanStepProps["state"] }>) {
+	const { t } = useTranslation("devices");
+	const names = useFlowNames(state.plan.app?.id, !!check.flows?.length);
+	if (check.flows?.length)
+		return (
+			<span data-flows="">
+				{check.flows
+					.map((flow) =>
+						preparedFlowText(
+							t,
+							flow,
+							flowLabel(t, state.plan, names, flow.boardId),
+						),
+					)
+					.join(" · ")}
+			</span>
+		);
+	return (
+		<>
+			{t(
+				"deploy.prepare.publishFlows",
+				"Create flow versions for current edits",
+			)}
+			{check.state === "skip" ? (
+				<span className="text-muted-foreground">
+					{t(
+						"deploy.prepare.publishFlowsNone",
+						" · none of the chosen events follows Latest",
+					)}
+				</span>
+			) : null}
+		</>
+	);
+}
+
+/** A Latest event whose Page or start node is gone is fixed in Events; preparing again would stop at the same place. */
+function PrepareFix({
+	failure,
+	appId,
+	again,
+}: Readonly<{ failure: PrepareFailure; appId: string; again(): void }>) {
+	const { t } = useTranslation("devices");
+	const hostLink = useHostLink();
+	if (failure.kind === "flow" && failure.flow === "target" && failure.eventId)
+		return (
+			<DvButton size="xs" asChild>
+				<a {...hostLink(appEventsHref(appId, failure.eventId))}>
+					{eligibilityFixLabel(t, "open_events")}
+				</a>
+			</DvButton>
+		);
+	return (
+		<DvButton size="xs" icon={RefreshCw} onClick={again}>
+			{t("deploy.prepare.again", "Prepare again")}
+		</DvButton>
+	);
+}
+
 function PreparingBlock({ state, prepare, prepared }: Readonly<PlanStepProps>) {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
@@ -210,9 +291,11 @@ function PreparingBlock({ state, prepare, prepared }: Readonly<PlanStepProps>) {
 		return {
 			id: check.id,
 			state: check.state,
-			source: CHECK_SOURCE[check.id],
+			source: checkSource(check.id, mode),
 			label: failed ? (
-				prepareFailureText(t, failed, plan)
+				prepareFailureText(t, failed, plan, state.facts.hub?.hubTypes)
+			) : check.id === "publish_flows" ? (
+				<PublishedFlows check={check} state={state} />
 			) : (
 				<>
 					{checkLabel(t, check.id, prepare)}
@@ -238,9 +321,11 @@ function PreparingBlock({ state, prepare, prepared }: Readonly<PlanStepProps>) {
 			...(failed
 				? {
 						fix: (
-							<DvButton size="xs" icon={RefreshCw} onClick={prepare.again}>
-								{t("deploy.prepare.again", "Prepare again")}
-							</DvButton>
+							<PrepareFix
+								failure={failed}
+								appId={plan.app?.id ?? ""}
+								again={prepare.again}
+							/>
 						),
 					}
 				: {}),

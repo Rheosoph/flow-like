@@ -21,8 +21,13 @@ import { IdRef } from "../primitives/id-ref";
 import { PresenceGlyph } from "../primitives/presence-glyph";
 import { useEnrollments, usePendingSetups } from "../workspace";
 import { useSetup } from "./setup-context";
-import { IconList, Mono, PendingSetupsStamp } from "./setup-parts";
-import { CREATE_STEP } from "./setup-state";
+import {
+	IconList,
+	Mono,
+	PendingSetupsStamp,
+	startByReleaseText,
+} from "./setup-parts";
+import { CREATE_STEP, startBy } from "./setup-state";
 import { outcomeLabel } from "./steps/save-step";
 
 /** How many pending setups the side list shows before it points to the full list (R11). */
@@ -70,8 +75,8 @@ function PackageFact() {
 				})}
 				<span className={sub}>
 					{t("setup.aside.package.until", "works until {{until}} · {{left}}", {
-						until: time.at(created.expiresAt),
-						left: time.ago(created.expiresAt),
+						until: time.at(startBy(created)),
+						left: time.ago(startBy(created)),
 					})}
 				</span>
 			</>
@@ -183,7 +188,8 @@ function ThisSetup() {
 
 function Needs() {
 	const { t } = useTranslation("devices");
-	const { host, limits } = useSetup();
+	const time = useAreaTime();
+	const { host, limits, releaseCutoff } = useSetup();
 	return (
 		<Block
 			icon={ListChecks}
@@ -226,11 +232,14 @@ function Needs() {
 					{
 						id: "time",
 						icon: Timer,
-						text: t(
-							"setup.needs.time",
-							"About 10 minutes, and {{count, number}} h to start the package once it's made.",
-							{ count: Math.round(limits.lifetimeS / 3600) },
-						),
+						text:
+							releaseCutoff === undefined
+								? t(
+										"setup.needs.time",
+										"About 10 minutes, and {{count, number}} h to start the package once it's made.",
+										{ count: Math.round(limits.lifetimeS / 3600) },
+									)
+								: `${t("setup.needs.timeOnly", "About 10 minutes.")} ${startByReleaseText(t, time, releaseCutoff, false)}`,
 					},
 				]}
 			/>

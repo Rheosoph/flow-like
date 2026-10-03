@@ -7,7 +7,7 @@ import { Banner } from "../primitives/banner";
 import { DvButton } from "../primitives/dv-button";
 import type { RouteLinkProps } from "../routing/use-devices-route";
 import { Mono } from "./setup-parts";
-import type { WaitingSetup } from "./setup-state";
+import { type WaitingSetup, startBy } from "./setup-state";
 
 /**
  * On a new setup: an earlier one from this window is still waiting for its
@@ -55,7 +55,7 @@ export function ResumeBanner({
 				"You made its package {{when}} in this window. It works until {{until}}; you're starting another setup here.",
 				{
 					when: time.ago(created.createdAt),
-					until: time.at(created.expiresAt),
+					until: time.at(startBy(created)),
 				},
 			)}
 		</Banner>

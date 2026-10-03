@@ -264,6 +264,25 @@ const REASONS = {
 			"devices:chrome.rail.reason.eventTokensAfterRevoke",
 			"Event tokens still valid",
 		),
+	schedule_held: (t) =>
+		t("devices:chrome.rail.reason.scheduleHeld", "Schedule not running here"),
+	schedule_failed: (t) =>
+		t("devices:chrome.rail.reason.scheduleFailed", "Scheduled run failed"),
+	schedule_once_missed: (t) =>
+		t(
+			"devices:chrome.rail.reason.scheduleOnceMissed",
+			"One-time schedule missed",
+		),
+	bot_held: (t) => t("devices:chrome.rail.reason.botHeld", "Bot not connected"),
+	bot_token_refused: (t) =>
+		t("devices:chrome.rail.reason.botTokenRefused", "Bot token refused"),
+	bot_intents_refused: (t) =>
+		t(
+			"devices:chrome.rail.reason.botIntentsRefused",
+			"Bot permissions refused",
+		),
+	bot_conflict: (t) =>
+		t("devices:chrome.rail.reason.botConflict", "Bot used elsewhere"),
 	offline_writes_conflict: (t) =>
 		t(
 			"devices:chrome.rail.reason.offlineWritesConflict",

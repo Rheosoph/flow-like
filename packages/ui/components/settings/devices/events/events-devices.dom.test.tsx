@@ -27,6 +27,10 @@ const { EVENTS_BLOCK_ID, EventsDevicesBanner, OnDevicesStrip } = await import(
 );
 const { sampleEvents } = await import("./events-test-kit");
 const { useOverlayStore } = await import("../workspace/overlay-store");
+const { serveNightlyOnEdge } = await import("../testing/schedule-scenarios");
+const { readExistingDeployment } = await import(
+	"../../../../lib/device-management/deployment"
+);
 
 afterEach(async () => {
 	await cleanupDevices();
@@ -38,7 +42,18 @@ afterAll(dom.restore);
 const APP: SampleApp = "app_invoice_ai";
 const SERVED = "evt_extract_http";
 const NOT_SERVED = "evt_gpu_extract";
-const CANT = "evt_invoice_review";
+const CANT = "evt_invoice_inbox";
+const CANT_TEXT = "Can't run on devicesHandled by the hub";
+const LATEST = "evt_invoice_review";
+const SCHEDULE = "evt_invoice_reconcile";
+/** Read boards and Read events, nothing else: sees the app's events and may not edit them. */
+const READER_ROLE = {
+	role_id: "role_reader",
+	role_name: "Reader",
+	permissions: 0b1_0001_0000_0000,
+	is_owner: false,
+	can_leave: true,
+};
 const HUB_OFF = { standalone: { enabled: false } } as never;
 const HUB_ON = { standalone: { enabled: true } } as never;
 
@@ -56,12 +71,24 @@ interface MountOptions extends FakeWorkspaceOptions {
 	props?: Partial<EventsDevicesProviderProps>;
 	/** Runs on the fake hub before the page mounts. */
 	before?: (fake: Awaited<ReturnType<typeof createFakeWorkspace>>) => void;
+	/** The viewer's role on the app, when it is not the owner's. */
+	role?: typeof READER_ROLE;
+	/** A fake hub and fleet that a scenario already changed. */
+	fake?: Awaited<ReturnType<typeof createFakeWorkspace>>;
 }
 
 /** The Events device column over the fake hub, with what the hub had seen before the page mounted. */
 async function mountPage(appId: SampleApp, options: MountOptions = {}) {
-	const { seed, signedIn, props, before, ...workspace } = options;
-	const fake = await createFakeWorkspace(seed, workspace);
+	const {
+		seed,
+		signedIn,
+		props,
+		before,
+		role,
+		fake: given,
+		...workspace
+	} = options;
+	const fake = given ?? (await createFakeWorkspace(seed, workspace));
 	before?.(fake);
 	const calls = fake.api.calls.length;
 	const commands = fake.api.commands.length;
@@ -84,7 +111,18 @@ async function mountPage(appId: SampleApp, options: MountOptions = {}) {
 				))}
 			</EventsDevicesProvider>
 		),
-		{ fake, providers: false, signedIn },
+		{
+			fake,
+			providers: false,
+			signedIn,
+			...(role
+				? {
+						backend: {
+							roleState: { getOwnRole: async () => role },
+						} as never,
+					}
+				: {}),
+		},
 	);
 	const cell = (eventId: string) => {
 		const found = document.getElementById(runsOnReasonId(eventId));
@@ -131,9 +169,9 @@ describe("EventsDevicesProvider over the device workspace", () => {
 			`/library/config/devices?id=${APP}&device=${SAMPLE_IDS.edge}&service=invoice-extractor`,
 		);
 		expect(view.text(NOT_SERVED)).toContain("Not on a device you can see");
-		expect(view.text(CANT)).toBe("Can't run on devicesFollows the latest flow");
+		expect(view.text(CANT)).toBe(CANT_TEXT);
 		expect(view.strip()?.textContent).toContain(
-			"3 of 6 events can run on a device. 1 of them runs on 1 device you can see.",
+			"5 of 6 events can run on a device. 1 of them runs on 1 device you can see.",
 		);
 		expect(view.banner()).toBeNull();
 		expect(
@@ -190,7 +228,7 @@ describe("EventsDevicesProvider over the device workspace", () => {
 			props: { hub: HUB_ON, canReadBoards: false },
 		});
 		expect(view.text(SERVED)).toBe("Unknown: you can't read this app's flows");
-		expect(view.text(CANT)).toBe("Can't run on devicesFollows the latest flow");
+		expect(view.text(CANT)).toBe(CANT_TEXT);
 		expect(view.banner()).toBeNull();
 		expect(view.strip()).toBeNull();
 		expect(view.since().calls).toEqual([]);
@@ -227,7 +265,7 @@ describe("EventsDevicesProvider over the device workspace", () => {
 			view.strip()?.querySelector("[data-stamp][data-age='error']"),
 		).toBeTruthy();
 		expect(view.strip()?.textContent).toContain(
-			"3 of 6 events can run on a device.",
+			"5 of 6 events can run on a device.",
 		);
 	});
 
@@ -415,8 +453,206 @@ describe("RunsOnCell inside the Devices area (App › Devices, list mode)", () =
 			host: "app",
 			search: `id=${APP}&by=event`,
 		});
-		expect(view.container.textContent).toBe(
-			"Can't run on devicesFollows the latest flow",
+		expect(view.container.textContent).toBe(CANT_TEXT);
+	});
+});
+
+describe("schedules and Latest events over the hub", () => {
+	const where = () =>
+		document.querySelector<HTMLElement>("[data-schedule-where]");
+
+	async function openSchedule(options: MountOptions = {}) {
+		const view = await mountPage(APP, options);
+		await click(
+			byRole(
+				"button",
+				"Where Nightly reconciliation runs",
+				view.cell(SCHEDULE),
+			),
+		);
+		return {
+			...view,
+			dialog: byRole("dialog", "Where Nightly reconciliation runs"),
+		};
+	}
+
+	test("a schedule nobody moved runs on the hub, and can run on a device", async () => {
+		const view = await openSchedule();
+		expect(where()?.getAttribute("data-schedule-where")).toBe("hub");
+		expect(where()?.textContent).toContain("Runs on the hub.");
+		expect(
+			byRole("link", "Run on a device…", view.cell(SCHEDULE)),
+		).toBeTruthy();
+	});
+
+	test("an older hub can't hand schedules to devices: the schedule says so, other events are unaffected", async () => {
+		const view = await mountPage(APP, { hubVersion: "old" });
+		expect(view.text(SCHEDULE)).toBe(
+			"Can't run on devicesHub can't run schedules on devices yet",
+		);
+		expect(byRole("link", "edge-berlin-01", view.cell(SERVED))).toBeTruthy();
+	});
+
+	test("released to a service: Run it on the hub again asks the hub once and the list follows", async () => {
+		const view = await openSchedule({
+			before: (fake) => {
+				fake.hub.schedules.release(
+					APP,
+					SCHEDULE,
+					SAMPLE_IDS.edge,
+					"invoice-extractor",
+				);
+			},
+		});
+		expect(where()?.textContent).toContain(
+			"Moves to edge-berlin-01 › invoice-extractor when that service starts it. The hub runs it until then.",
+		);
+		await click(byRole("button", "Run it on the hub again", view.dialog));
+		await click(
+			byRole(
+				"button",
+				"Run it on the hub again",
+				byRole("region", "Run it on the hub again", view.dialog),
+			),
+		);
+		await view.settle();
+		expect(
+			view.fake.api.sent("DELETE", /device-schedules/).map(([, path]) => path),
+		).toEqual([`apps/${APP}/device-schedules/${SCHEDULE}`]);
+		expect(where()?.getAttribute("data-schedule-where")).toBe("hub");
+		expect(where()?.textContent).toContain(
+			"The hub runs Nightly reconciliation.",
+		);
+		expect(view.since().commands).toEqual([]);
+	});
+
+	test("one place, end to end: deployed it runs on the device, stopped it runs nowhere, given back it returns to the hub", async () => {
+		const fake = await createFakeWorkspace();
+		expect(await serveNightlyOnEdge(fake)).toBeNull();
+		const view = await openSchedule({ fake });
+		expect(where()?.getAttribute("data-schedule-where")).toBe("device");
+		expect(where()?.textContent).toContain(
+			"Runs on edge-berlin-01, not on the hub.",
+		);
+		// No other device can take it while edge-berlin-01 runs it.
+		expect(view.dialog.textContent).toContain(
+			"Another service runs this schedule. A schedule runs in one place.",
+		);
+
+		await act(async () => {
+			await fake.workspace.live.call(SAMPLE_IDS.edge)({
+				type: "stop",
+				placement_id: "invoice-extractor",
+			});
+			fake.api.hub.publishStatus(
+				SAMPLE_IDS.edge,
+				fake.api.agent(SAMPLE_IDS.edge),
+			);
+			await fake.workspace.live.refreshInspection(SAMPLE_IDS.edge);
+		});
+		await view.settle();
+		expect(where()?.getAttribute("data-schedule-where")).toBe("device_idle");
+		expect(where()?.textContent).toContain(
+			"but nothing runs it: the service is stopped.",
+		);
+		expect(fake.hub.schedules.listing(APP)).toMatchObject([
+			{ event_id: SCHEDULE, state: "device", device_id: SAMPLE_IDS.edge },
+		]);
+
+		await click(byRole("button", "Run it on the hub again", view.dialog));
+		await click(
+			byRole(
+				"button",
+				"Run it on the hub again",
+				byRole("region", "Run it on the hub again", view.dialog),
+			),
+		);
+		await view.settle();
+		expect(
+			fake.api.sent("DELETE", /device-schedules/).map(([, path]) => path),
+		).toEqual([`apps/${APP}/device-schedules/${SCHEDULE}`]);
+		expect(fake.hub.schedules.listing(APP)).toMatchObject([
+			{ event_id: SCHEDULE, state: "returning" },
+		]);
+		expect(where()?.getAttribute("data-schedule-where")).toBe("returning");
+	});
+
+	test("an update that drops the schedule hands it back: it returns to the hub after the grace period", async () => {
+		const fake = await createFakeWorkspace();
+		expect(await serveNightlyOnEdge(fake)).toBeNull();
+		await act(async () => {
+			const call = fake.workspace.live.call(SAMPLE_IDS.edge);
+			const existing = await readExistingDeployment(
+				call,
+				"invoice-extractor",
+				APP,
+			);
+			await call({
+				type: "apply",
+				config: {
+					...existing.config,
+					events: existing.config.events.filter(
+						(event) => event.event_id !== SCHEDULE,
+					),
+				},
+				expected_revision: existing.config_revision,
+				start: true,
+			});
+		});
+		expect(fake.hub.schedules.listing(APP)).toMatchObject([
+			{ event_id: SCHEDULE, state: "returning" },
+		]);
+		await openSchedule({ fake });
+		expect(where()?.getAttribute("data-schedule-where")).toBe("returning");
+		// The service retired its process before it handed the schedule back: 5 minutes.
+		expect(where()?.textContent).toContain("Returns to the hub at 12:05.");
+	});
+
+	test("a role that can't edit the app's events: the way back is shown, off, with who can", async () => {
+		const view = await openSchedule({
+			role: READER_ROLE,
+			before: (fake) => {
+				fake.hub.schedules.release(
+					APP,
+					SCHEDULE,
+					SAMPLE_IDS.edge,
+					"invoice-extractor",
+				);
+			},
+		});
+		const back = byRole("button", "Run it on the hub again", view.dialog);
+		expect(back.getAttribute("aria-disabled")).toBe("true");
+		expect(view.dialog.textContent).toContain(
+			"Only someone who can edit this app's events can move it.",
+		);
+		await click(back);
+		expect(view.fake.api.sent("DELETE", /device-schedules/)).toEqual([]);
+	});
+
+	test("an event that follows Latest reads its flow's state from the hub and can run on a device", async () => {
+		const view = await mountPage(APP);
+		expect(byRole("link", "Run on a device…", view.cell(LATEST))).toBeTruthy();
+		expect(
+			view.fake.api.sent("GET", /version\/current/).map(([, path]) => path),
+		).toEqual([`apps/${APP}/board/flow_review/version/current`]);
+	});
+
+	test("an older hub can't deploy Latest: the event says so and points at a flow version", async () => {
+		const view = await mountPage(APP, { hubVersion: "old" });
+		expect(view.text(LATEST)).toBe(
+			"Can't run on devicesHub can't deploy Latest yet",
+		);
+		await click(
+			byRole(
+				"button",
+				"Why Review queue can't run on devices",
+				view.cell(LATEST),
+			),
+		);
+		expect(
+			byRole("dialog", "Why Review queue can't run on devices").textContent,
+		).toContain(
+			"This hub can't deploy events that follow Latest yet. Update the hub, or pin a flow version in Events.",
 		);
 	});
 });

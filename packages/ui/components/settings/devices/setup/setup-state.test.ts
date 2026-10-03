@@ -18,8 +18,10 @@ import {
 	packsAgent,
 	passwordIssue,
 	readDrafts,
+	releaseCutoff,
 	repeatIssue,
 	resolveStep,
+	startBy,
 	suggestName,
 	targetOptions,
 	waitingSetup,
@@ -239,6 +241,33 @@ describe("the step to show", () => {
 		);
 		expect(isExpired({ ...lapsed, cancelledAt: NOW - 4_000 }, NOW)).toBe(false);
 	});
+
+	test("a package has to be started before the agent release inside it runs out", () => {
+		const made = {
+			deviceId: "device-1",
+			createdAt: NOW - 60,
+			expiresAt: NOW + 86_340,
+		};
+		expect(startBy(made)).toBe(NOW + 86_340);
+		const cut = { ...made, releaseEndsAt: NOW + 7_200 };
+		expect(startBy(cut)).toBe(NOW + 7_200);
+		const draft = created({ created: cut });
+		expect(isExpired(draft, NOW + 7_199)).toBe(false);
+		expect(isExpired(draft, NOW + 7_200)).toBe(true);
+		expect(resolveStep(5, { ...facts(draft), nowS: NOW + 7_200 })).toBe(7);
+	});
+
+	test("a release that ends before a package made now would is the cut-off; a longer one is none", () => {
+		const day = 86_400;
+		expect(releaseCutoff(undefined, NOW, day)).toBeUndefined();
+		expect(releaseCutoff({ expires_at: NOW + day }, NOW, day)).toBeUndefined();
+		expect(releaseCutoff({ expires_at: NOW + day - 1 }, NOW, day)).toBe(
+			NOW + day - 1,
+		);
+		expect(releaseCutoff({ expires_at: NOW + 365 * day }, NOW, day)).toBe(
+			undefined,
+		);
+	});
 });
 
 describe("drafts of this window", () => {
@@ -288,6 +317,16 @@ describe("drafts of this window", () => {
 		const stored = store.get(`flow-like.devices.setup.${SCOPE}`) ?? "";
 		expect(stored).toContain("factory-line-4");
 		expect(stored).not.toContain("violet");
+	});
+
+	test("keep the end of the agent release a package carries", () => {
+		const draft = created();
+		if (!draft.created) throw new Error("The draft has a package");
+		const cut = { ...draft.created, releaseEndsAt: NOW + 7_200 };
+		writeDraft(SCOPE, NEW_SLOT, { ...draft, created: cut });
+		expect(readDrafts(SCOPE)[NEW_SLOT]?.created?.releaseEndsAt).toBe(
+			NOW + 7_200,
+		);
 	});
 
 	test("a setup made here is found by its enrollment id too", () => {

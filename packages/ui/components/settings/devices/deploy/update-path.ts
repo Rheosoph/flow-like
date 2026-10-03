@@ -6,6 +6,10 @@ import type {
 	ProjectArtifactAssets,
 } from "../../../../lib/device-management/artifacts";
 import {
+	botTokenKey,
+	isBotTokenKey,
+} from "../../../../lib/device-management/bot-config";
+import {
 	type DeploymentCatalog,
 	type DeploymentEvent,
 	type DeploymentVariable,
@@ -13,18 +17,25 @@ import {
 	type PlacementConfiguration,
 	createDeploymentPlan,
 	eventEligibility,
+	missingFeature,
 } from "../../../../lib/device-management/deployment";
 import {
 	type DeployDraft,
 	type DeployPhase,
 	type DeployPlan,
 	type DeployTargetDraft,
+	type PlanApp,
 	type PlanTarget,
 	type PlanTargetService,
 	planPhases,
 	wirePlan,
 } from "../../../../lib/device-management/model/deploy-plan";
-import type { CopyParams } from "../../../../lib/device-management/model/types";
+import type {
+	AgentFeature,
+	AgentFeatures,
+	CopyParams,
+} from "../../../../lib/device-management/model/types";
+import { exportTypes } from "../../../../lib/device-management/online-metadata";
 import type { DevicesT } from "../primitives/area-context";
 import type { DeployPrepared } from "./step-props";
 
@@ -286,22 +297,135 @@ function secretVariables(plan: DeployPlan, service: PlanTargetService) {
 	return [...ids];
 }
 
-/** Secrets the device has to save for this service: typed secret values plus a new access token. */
+/** Whether a secret has a value for this device: its own, else the shared one when secrets are the same everywhere. */
+function hasSecretValue(plan: DeployPlan, deviceId: string, id: string) {
+	const { draft } = plan;
+	const own = draftTarget(plan, deviceId)?.over.secrets?.[id];
+	const shared = draft.secretsMode === "same" ? draft.secrets[id] : undefined;
+	return (own ?? shared ?? "") !== "";
+}
+
+/** A bot's token is sent where the service gets the bot, and where it is set anew. */
+function botTokensToSave(
+	plan: DeployPlan,
+	deviceId: string,
+	service: PlanTargetService,
+): number {
+	return service.events.filter((eventId) => {
+		const key = botTokenKey(eventId);
+		const sent =
+			service.addedBots.includes(eventId) || plan.draft.edited.includes(key);
+		return sent && hasSecretValue(plan, deviceId, key);
+	}).length;
+}
+
+/** Secrets the device has to save for this service: typed secret values, the token of each bot it adds, plus a new access token. */
 export function secretCount(
 	plan: DeployPlan,
 	target: PlanTarget,
 	service: PlanTargetService,
 ): number {
 	const { draft } = plan;
-	const own = draftTarget(plan, target.deviceId)?.over.secrets ?? {};
-	const typed = secretVariables(plan, service).filter((id) => {
-		const edited = service.kind === "new" || draft.edited.includes(id);
-		return edited && (own[id] ?? draft.secrets[id] ?? "") !== "";
-	}).length;
+	const typed = secretVariables(plan, service).filter(
+		(id) =>
+			!isBotTokenKey(id) &&
+			(service.kind === "new" || draft.edited.includes(id)) &&
+			hasSecretValue(plan, target.deviceId, id),
+	).length;
 	const hosted = plan.services.find(
 		(value) => value.key === service.key,
 	)?.hosted;
-	return typed + (hosted && draft.endpoint.token !== "keep" ? 1 : 0);
+	const token = hosted && draft.endpoint.token !== "keep" ? 1 : 0;
+	return typed + botTokensToSave(plan, target.deviceId, service) + token;
+}
+
+/* What a device may be sent (R2 §1.1, §1.9, §1.14). */
+
+const eventsOf = (
+	app: Pick<PlanApp, "events"> | null,
+	ids: Iterable<string>,
+) => {
+	const wanted = new Set(ids);
+	return (app?.events ?? []).filter((event) => wanted.has(event.id));
+};
+
+/** Every event a plan names: the ones it sends and the ones its services keep. */
+export function planEventIds(
+	plan: Pick<DeployPlan, "services" | "targets">,
+): string[] {
+	return [
+		...new Set([
+			...plan.services.flatMap((service) => service.events),
+			...plan.targets.flatMap((target) =>
+				target.services.flatMap((service) => service.events),
+			),
+		]),
+	];
+}
+
+/** The `types` the hub's export is asked for, for these events of the app; none for a hub without `event_types`. */
+export function exportTypesOf(
+	app: Pick<PlanApp, "events"> | null,
+	eventIds: Iterable<string>,
+	hubTypes: readonly string[] | undefined,
+): string[] {
+	return exportTypes(eventsOf(app, eventIds), hubTypes);
+}
+
+/** The export's `types` for a plan: those of the events it sends and of those its services keep. */
+export function planExportTypes(
+	plan: Pick<DeployPlan, "app" | "services" | "targets">,
+	hubTypes: readonly string[] | undefined,
+): string[] {
+	return exportTypesOf(plan.app, planEventIds(plan), hubTypes);
+}
+
+export interface AgentGap {
+	eventId: string;
+	/** `unknown`: the agent reports no flags, and the event needs one. */
+	feature: AgentFeature | "unknown";
+}
+
+/**
+ * The first event of a service that the device's agent can't run: an agent
+ * without a flag accepts the service and then fails it on every start, so
+ * such a service is never sent (the hard gate). Null when every event runs.
+ */
+export function agentGap(
+	app: Pick<PlanApp, "events"> | null,
+	service: Pick<PlanTargetService, "events">,
+	features: AgentFeatures | undefined,
+): AgentGap | null {
+	for (const event of eventsOf(app, service.events)) {
+		const feature = missingFeature(event, features);
+		if (feature) return { eventId: event.id, feature };
+	}
+	return null;
+}
+
+/** Whether any event of the service needs an agent flag: only then is the agent asked again before sending. */
+export function needsAgentFlags(
+	app: Pick<PlanApp, "events"> | null,
+	service: Pick<PlanTargetService, "events">,
+): boolean {
+	return agentGap(app, service, {}) !== null;
+}
+
+/**
+ * The first event of a service that the catalogue doesn't carry as one a
+ * device can run. A service is wired from the catalogue, so without this an
+ * event would be dropped from the service without a word.
+ */
+export function catalogGap(
+	catalog: DeploymentCatalog,
+	service: Pick<PlanTargetService, "events">,
+): string | null {
+	return (
+		service.events.find(
+			(eventId) =>
+				!catalog.events.some((event) => event.id === eventId && event.eligible),
+		) ?? null
+	);
 }
 
 /** A staged, validating or activating update blocks a new one for that service. */
@@ -386,13 +510,23 @@ export function installedFromExisting(
 	};
 }
 
+type FlowPin = [number, number, number];
+
+/**
+ * An event that follows Latest has no flow pin of its own: it ships at the
+ * version the preparation resolved, and a service that keeps its version
+ * keeps the pin it has. Without either it can't be sent.
+ */
 function keptEvent(
 	event: NonNullable<DeployPlan["app"]>["events"][number],
 	pins: PlacementConfiguration["config"]["events"][number] | undefined,
+	resolved: FlowPin | undefined,
 ): DeploymentEvent[] {
 	const facts = eventEligibility(event);
 	const eventVersion = pins?.event_version ?? facts.eventVersion;
-	const boardVersion = pins?.board_version ?? facts.boardVersion;
+	const boardVersion = facts.followsLatest
+		? (resolved ?? pins?.board_version ?? null)
+		: (pins?.board_version ?? facts.boardVersion);
 	if (!eventVersion || !boardVersion) return [];
 	return [
 		{
@@ -408,10 +542,15 @@ function keptEvent(
 	];
 }
 
-/** The catalogue without an approved bundle: the app's events with their published pins, or the pins a service keeps. */
+/**
+ * The catalogue without an approved bundle: the app's events with their
+ * published pins, or the pins a service keeps. `latest` holds the flow version
+ * each event that follows Latest was resolved to when the copy was prepared.
+ */
 export function planCatalog(
 	plan: DeployPlan,
 	existing?: PlacementConfiguration,
+	latest?: DeployPrepared["latest"],
 ): DeploymentCatalog {
 	const pinned = new Map(
 		(existing?.config.events ?? []).map((event) => [event.event_id, event]),
@@ -419,7 +558,7 @@ export function planCatalog(
 	const app = plan.app;
 	return {
 		events: (app?.events ?? []).flatMap((event) =>
-			keptEvent(event, pinned.get(event.id)),
+			keptEvent(event, pinned.get(event.id), latest?.[event.id]),
 		),
 		variables: Object.fromEntries(
 			Object.entries(app?.variables ?? {}).map(([id, list]) => [id, [...list]]),
@@ -605,7 +744,10 @@ function reviewTarget(
 	base: ReviewTarget,
 ): ReviewTarget {
 	const { existing } = base;
-	const catalog = bundle?.approved?.catalog ?? planCatalog(plan, existing);
+	// A service that keeps its version keeps its pins; a new copy carries the ones it was prepared with.
+	const resolved = plan.draft.version === "keep" ? undefined : bundle?.latest;
+	const catalog =
+		bundle?.approved?.catalog ?? planCatalog(plan, existing, resolved);
 	const strategy = strategyOf(plan, base, catalog);
 	if (base.unread) return { ...base, strategy };
 	const installed = projectedInstalled(plan, bundle, existing);
@@ -640,6 +782,8 @@ export interface CopyRefusedEvent {
 	name: string;
 	/** The device's own sentence, when it gave one. */
 	reason?: string;
+	/** `latest_copy`: the event follows Latest and the copy holds no published version of its flow (a copy prepared elsewhere). */
+	cause?: "latest_copy";
 }
 
 /** What the device said about the copy it now holds, for the events this plan serves there. */

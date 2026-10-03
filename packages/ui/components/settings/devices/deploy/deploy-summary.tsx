@@ -3,6 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import { ChevronUp, ClipboardList, Lock } from "lucide-react";
 import { type ReactNode, useState } from "react";
+import { isBotTokenKey } from "../../../../lib/device-management/bot-config";
 import type {
 	DeployPlan,
 	DeployResult,
@@ -147,16 +148,25 @@ function settingsCounts(plan: DeployPlan) {
 	let values = 0;
 	let differ = 0;
 	let secrets = 0;
+	// A bot's token has no app default: it counts once it is set, and never as a default.
+	let tokensUnset = 0;
 	for (const variable of variables) {
 		const own = perDevice(variable.id, variable.secret);
 		if (variable.secret) {
 			if (draft.secrets[variable.id] || own) secrets += 1;
+			else if (isBotTokenKey(variable.id)) tokensUnset += 1;
 			continue;
 		}
 		if (draft.vars[variable.id] !== undefined || own) values += 1;
 		if (own) differ += 1;
 	}
-	return { all: variables.length, values, differ, secrets };
+	return {
+		all: variables.length - tokensUnset,
+		values,
+		differ,
+		secrets,
+		tokensUnset,
+	};
 }
 
 function settingsValue({ t, plan }: ValueContext): ReactNode {
@@ -164,8 +174,8 @@ function settingsValue({ t, plan }: ValueContext): ReactNode {
 		return (
 			<Muted>{t("devices:deploy.summary.afterApp", "After the app")}</Muted>
 		);
-	const { all, values, differ, secrets } = settingsCounts(plan);
-	if (!all)
+	const { all, values, differ, secrets, tokensUnset } = settingsCounts(plan);
+	if (!all && !tokensUnset)
 		return (
 			<Muted>
 				{plan.app.variables
@@ -178,6 +188,12 @@ function settingsValue({ t, plan }: ValueContext): ReactNode {
 		);
 	const defaults = all - values - secrets;
 	return joined([
+		tokensUnset > 0 &&
+			t("devices:deploy.summary.botTokens", {
+				count: tokensUnset,
+				defaultValue_one: "{{count, number}} bot token to set",
+				defaultValue_other: "{{count, number}} bot tokens to set",
+			}),
 		values > 0 &&
 			t("devices:deploy.summary.values", {
 				count: values,

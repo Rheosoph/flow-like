@@ -1,6 +1,6 @@
 import type { SetupStep } from "../../../../lib/device-management/model/types";
-import { enumLabel } from "../copy/enum-labels";
 import { gateCopy } from "../copy/gate-copy";
+import { checkLabel } from "../hub/readiness-list";
 import type { DevicesT } from "../primitives/area-context";
 import type { NextState } from "./setup-context";
 import {
@@ -52,7 +52,7 @@ export function checksReason(
 			t(
 				"devices:setup.next.notReady",
 				"{{check}} isn't ready. Only the hub operator can fix it.",
-				{ check: enumLabel(t, "readinessCheck", failing.id) },
+				{ check: checkLabel(t, failing.id) },
 			),
 		);
 	if (release.state === "missing")
@@ -66,7 +66,7 @@ export function checksReason(
 		return hub(
 			t(
 				"devices:setup.next.rejected",
-				"The agent release can't be verified, so no package can be built.",
+				"The agent release failed a check, so no package can be built.",
 			),
 		);
 	if (release.state === "unreachable")

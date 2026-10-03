@@ -212,6 +212,7 @@ describe("tray model", () => {
 			"offline_write_retry",
 			"signing_request",
 			"setup",
+			"event_run",
 		];
 		for (const kind of kinds) {
 			const title = activityTitle(
@@ -262,6 +263,33 @@ describe("tray model", () => {
 				}),
 			),
 		).toBe("12 of 38 files");
+	});
+
+	test("a run started from Devices: its own title and waiting sentence, nothing of its input or output", () => {
+		const run = item("run", {
+			kind: "event_run",
+			label: { code: "event_run" },
+			state: "waiting",
+			detail: { code: "waiting_for_device" },
+			target: {
+				deviceId: "5b794764-0000-4000-8000-000000000001",
+				deviceName: "edge-berlin-01",
+				serviceId: "shop-assistant",
+				eventId: "evt_shop_return",
+			},
+			href: undefined,
+		});
+		expect(activityTitle(t, run)).toBe("Action or form run");
+		expect(activityDetail(t, TIME, run)).toBe(
+			"Sent. Waiting for the device to start the run.",
+		);
+		expect(activityTarget(run)).toBe("edge-berlin-01 › shop-assistant");
+		expect(activityRoute(run)).toEqual({
+			screen: "service",
+			deviceId: "5b794764-0000-4000-8000-000000000001",
+			serviceId: "shop-assistant",
+			tab: "status",
+		});
 	});
 });
 

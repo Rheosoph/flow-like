@@ -12,7 +12,7 @@ import type { DevicesT } from "../primitives/area-context";
 import { DvButton } from "../primitives/dv-button";
 import { DvTable, Td, Th, Tr } from "../primitives/dv-table";
 import { cx } from "../primitives/tone";
-import { exceptionText, planNames } from "./deploy-copy";
+import { type IssueNames, exceptionText, planNames } from "./deploy-copy";
 
 /* APP §3.7 / §3.9 `exceptions`: what is the same on every device first, then one row per device that differs. */
 
@@ -49,7 +49,7 @@ const TONE_EDGE: Record<ExceptionRow["tone"], string> = {
 	),
 };
 
-/** Plan exceptions as rows, with the sentences of `deploy-copy`. */
+/** Plan exceptions as rows, with the sentences of `deploy-copy`; `at` words a time in the area's locale. */
 export function exceptionRows(
 	t: DevicesT,
 	plan: DeployPlan,
@@ -60,10 +60,11 @@ export function exceptionRows(
 		Pick<ExceptionRow, "check" | "action" | "onChange">
 	> = () => ({}),
 	facts?: PlanFacts,
+	at?: IssueNames["at"],
 ): ExceptionRow[] {
 	const names = planNames(t, plan);
 	return exceptions.map((exception, index) => {
-		const text = exceptionText(t, exception, plan, facts);
+		const text = exceptionText(t, exception, plan, facts, at);
 		return {
 			id: `${exception.deviceId}:${exception.code}:${index}`,
 			device: names.device(exception.deviceId),

@@ -3,6 +3,7 @@
 import { useCallback, useMemo } from "react";
 import { useInvoke } from "../../../../hooks/use-invoke";
 import type {
+	AppHubFacts,
 	AppInput,
 	AppView,
 	AppVisibility,
@@ -98,6 +99,8 @@ export interface AppDevicesData {
 	me: string;
 	/** The app with its events, once loaded. */
 	app: AppInput | undefined;
+	/** What the app's hub can do for its events (which types it hands to devices, Latest). */
+	hub: AppHubFacts;
 	role: AppRole;
 	/** The app's name once known, else its id. */
 	appName: string;
@@ -269,12 +272,13 @@ export function useAppDevices(
 	const appName = meta.data?.name ?? view?.app.name ?? appId;
 	const visibility = app.data?.visibility as AppVisibility | undefined;
 	const loading = role.loading || (allowed && read.loading);
-	const { app: appInput, placements } = read;
+	const { app: appInput, placements, hub } = read;
 	return useMemo(
 		() => ({
 			appId,
 			me: input.me,
 			app: appInput,
+			hub,
 			role,
 			appName,
 			visibility,
@@ -298,6 +302,7 @@ export function useAppDevices(
 			appId,
 			input.me,
 			appInput,
+			hub,
 			role,
 			appName,
 			visibility,

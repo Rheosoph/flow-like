@@ -81,6 +81,16 @@ export function serviceResultKey(deviceId: string, serviceId: string): string {
 	return `service:${deviceId}/${serviceId}`;
 }
 
+export interface ServiceCommandOptions {
+	/**
+	 * Whether the service has schedules, from a screen that reads its app's
+	 * events. Without it only what a running service reports is known.
+	 */
+	hasSchedules?: boolean;
+	/** The same for bots. */
+	hasBots?: boolean;
+}
+
 const ACTIVE_ROLLOUT = new Set([
 	"staged",
 	"validating",
@@ -136,8 +146,47 @@ interface CopyInput {
 	instances: number;
 	settings: number;
 	crashLooping: boolean;
+	/** The service runs schedules: of an online app (the hub coordinates them) or of an offline copy; null when it has none that is known. */
+	schedules: "online" | "offline" | null;
+	/** The service runs bots, as far as is known. */
+	bots: boolean;
 	/** Interpolation values shared by the sentences. */
 	names: { service: string; device: string; settings: number };
+}
+
+/** Sentences that follow another in one consequence row. */
+const after = (first: string, ...next: (string | null)[]) =>
+	[first, ...next.filter((line): line is string => line !== null)].join(" ");
+
+/** Stopping a service disconnects its bots; what happens to their messages meanwhile. */
+const stopBots = (c: CopyInput) =>
+	c.bots
+		? c.t(
+				"devices:action.service.stop.bots",
+				"Its bots disconnect. Telegram keeps messages for a day; after a start {{device}} answers those of the last 15 minutes. Discord messages sent meanwhile are not answered.",
+				c.names,
+			)
+		: null;
+
+const startBots = (c: CopyInput) =>
+	c.bots
+		? c.t("devices:action.service.start.bots", "Its bots connect again.")
+		: null;
+
+/** Stopping a service stops its schedules, and the hub does not take them over by itself. */
+function stopSchedules(c: CopyInput): string | null {
+	const { t } = c;
+	if (c.schedules === "online")
+		return t(
+			"devices:action.service.stop.schedules",
+			"Its schedules stop. A run in progress is cut off. The hub doesn't take them over. To run one on the hub meanwhile, choose Run it on the hub again in Events.",
+		);
+	return c.schedules === "offline"
+		? t(
+				"devices:action.service.stop.schedulesLocal",
+				"Its schedules stop. A run in progress is cut off.",
+			)
+		: null;
 }
 
 const immediately = (t: DevicesT) =>
@@ -160,9 +209,18 @@ function startCopy(c: CopyInput): Copy {
 			c.names,
 		),
 		rows: {
-			what: c.crashLooping
-				? `${what} ${t("devices:action.service.start.clearsLimit", "This also clears the crash-loop limit.")}`
-				: what,
+			what: after(
+				c.crashLooping
+					? `${what} ${t("devices:action.service.start.clearsLimit", "This also clears the crash-loop limit.")}`
+					: what,
+				c.schedules
+					? t(
+							"devices:action.service.start.schedules",
+							"Schedules run again from their next time. Missed runs are not made up.",
+						)
+					: null,
+				startBots(c),
+			),
 			who: t(
 				"devices:action.service.start.who",
 				"Runs the app's code on {{device}}.",
@@ -191,9 +249,13 @@ function stopCopy(c: CopyInput): Copy {
 				defaultValue_other:
 					"Its {{count, number}} instances stop. The device keeps it stopped until someone starts it.",
 			}),
-			who: t(
-				"devices:action.service.stop.who",
-				"The service stops answering. Requests in flight are cut off.",
+			who: after(
+				t(
+					"devices:action.service.stop.who",
+					"The service stops answering. Requests in flight are cut off.",
+				),
+				stopSchedules(c),
+				stopBots(c),
 			),
 			stays: t(
 				"devices:action.service.stop.stays",
@@ -491,11 +553,13 @@ function command(
 export function useServiceCommands(
 	deviceId: string,
 	serviceId: string,
+	options: ServiceCommandOptions = {},
 ): ServiceCommands {
 	const { t } = useTranslation("devices");
 	const state = useAttentionState();
 	const actions = useDeviceAction();
 	const { workspace, input } = state;
+	const { hasSchedules, hasBots } = options;
 
 	return useMemo(() => {
 		const row = input.devices.find((device) => device.device_id === deviceId);
@@ -517,6 +581,12 @@ export function useServiceCommands(
 		);
 		const device = row ? deviceName(row) : deviceId;
 		const settings = service?.settings.latest ?? 0;
+		// A running service reports its schedules; a stopped one only the screen that reads its app knows about.
+		const scheduled =
+			hasSchedules ??
+			(Array.isArray(service?.schedules) && service.schedules.length > 0);
+		const bots =
+			hasBots ?? (Array.isArray(service?.bots) && service.bots.length > 0);
 		const copy: CopyInput = {
 			t,
 			service: serviceId,
@@ -524,6 +594,12 @@ export function useServiceCommands(
 			instances: service?.instances.requested ?? 1,
 			settings,
 			crashLooping: service?.conv === "crash_looping",
+			schedules: scheduled
+				? service?.source === "offline"
+					? "offline"
+					: "online"
+				: null,
+			bots,
 			names: { service: serviceId, device, settings },
 		};
 		const base: CommandInput = {
@@ -548,5 +624,15 @@ export function useServiceCommands(
 				command(base, "scale", scaleCopy(copy, replicas), replicas),
 			remove: command(base, "remove_service", removeCopy(copy)),
 		};
-	}, [t, state, actions, workspace, input, deviceId, serviceId]);
+	}, [
+		t,
+		state,
+		actions,
+		workspace,
+		input,
+		deviceId,
+		serviceId,
+		hasSchedules,
+		hasBots,
+	]);
 }

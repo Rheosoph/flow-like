@@ -18,6 +18,7 @@ CENTRALIZED_CI = (
     ".github/workflows/compile-guardrails.yml",
     ".github/workflows/release-native.yml",
     ".github/workflows/standalone-release.yml",
+    ".github/workflows/standalone-release-renew.yml",
 )
 PACKAGE_DOCKER = "packages/api/Dockerfile.tools"
 SKIP_DIRECTORIES = {".git", ".agents", ".claude", ".codex", "node_modules", "target", ".next", ".turbo", ".venv", "vendor"}

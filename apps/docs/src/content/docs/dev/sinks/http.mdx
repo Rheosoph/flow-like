@@ -16,6 +16,8 @@ POST/GET/PATCH/DELETE /api/v1/sink/trigger/http/{app_id}{path}
 - `app_id`: Your application's unique identifier
 - `path`: Custom path you configure (must start with `/`)
 
+A service on a device you manage answers at its own address instead; see [On a device](#on-a-device).
+
 ## Configuration Options
 
 | Field | Type | Description | Required |
@@ -56,6 +58,66 @@ curl -X POST "https://your-domain.com/api/v1/sink/trigger/http/app_abc123/webhoo
   -H "Authorization: Bearer your-auth-token" \
   -d '{"event": "test", "data": {"key": "value"}}'
 ```
+
+## On a device
+
+An `http` event, or an Endpoint (`api` event), that is deployed to a device is served by the service it is deployed to, at that service's own address:
+
+```
+http(s)://<service address>:<port>{path}
+```
+
+The address has no `app_id`. The device answers with the event and Flow version the service was deployed with, until the service is updated. The hub, or the desktop app, keeps answering at its own address with the live event.
+
+### Who can call it
+
+- **Who can reach it** is the service's exposure: only this device, one address, or all networks.
+- **Who may call it** is whoever holds the service's access token, sent as `Authorization: Bearer <token>`. The token is shown once after the deploy and can be replaced on the service's Endpoint tab. One token covers every endpoint, page and chat of the service; deploy an endpoint as a service of its own to give it a token of its own.
+- The event's `auth_token` never reaches a device and is not used there. `public_endpoint` is not read: an endpoint that is open on the hub needs the service's token on a device.
+- Without a certificate on the service, the token travels unencrypted.
+- Senders that cannot set an `Authorization` header, such as many third-party webhooks, cannot call an endpoint on a device. A device sends no CORS headers and answers a browser's preflight request with `401`, so web pages on other origins cannot call it either.
+
+```bash
+curl -X POST "https://device.example:8443/webhook" \
+  -H "Authorization: Bearer <service access token>" \
+  -H "Content-Type: application/json" \
+  -d '{"event": "test"}'
+```
+
+### The route
+
+A device reads the route as the hub does: `path`, or `path_suffix` when there is no `path`, with a leading `/` added when it is missing; and `method`, which is `POST` when none is saved. The path is literal: at most 2,048 printable ASCII characters without spaces, none of `? # \ { } *`, and no `.` or `..` segment. The paths `/services`, `/ui`, `/ui/…` and `/channels/…` belong to the service itself.
+
+Within one service a method and path can be used once. Two endpoints with the same method and path are refused, and so is an endpoint that uses the route of a chat (`POST /chat/{event id}`), of a page (`GET /pages/{event id}/bootstrap`, `POST /pages/{event id}/invoke`) or of a form or quick action (`POST /run/{event id}`) of the same service. A device refuses such a service when the deploy is checked, before it replaces a running version. Two services on one device have ports of their own and can use the same route.
+
+### Request and answer
+
+| Topic | On a device |
+|---|---|
+| Query fields | Become fields of the payload; a repeated key becomes a list, and `key[]` always makes one |
+| JSON body | Read with `Content-Type: application/json`; the fields of an object join the query fields |
+| Form-encoded body | Read with `Content-Type: application/x-www-form-urlencoded`, like query fields |
+| Other bodies | Passed as one text value; together with query fields the request is refused |
+| Multipart bodies (file uploads) | Refused with `415` |
+| Body size | 10 MiB at most |
+| Answer | The payload of the Flow's last "Return Generic Result", or `{"completed": true}` |
+| Flow failed | `502`; the hub answers `200` with its acknowledgement |
+| Time limit | The service's request time limit. The run is cancelled when it passes and the caller gets `502`. A caller that hangs up cancels the run too |
+| Busy | `429` with `Retry-After: 1` while the service runs as many requests as it allows at once |
+| Identity | Runs act as the person who approved the service's cloud access, or as the device's local user for an offline app. They carry no personal access token and no signed-in provider tokens |
+
+| Status | Meaning on a device |
+|---|---|
+| `200 OK` | The Flow finished; the body is its result |
+| `400 Bad Request` | The query or the body cannot be read |
+| `401 Unauthorized` | The service's access token is missing or wrong |
+| `404 Not Found` | The service has no endpoint with this method and path |
+| `408 Request Timeout` | The body did not arrive within the time limit |
+| `413 Payload Too Large` | The body is larger than 10 MiB |
+| `415 Unsupported Media Type` | The body is multipart |
+| `429 Too Many Requests` | The service runs as many requests as it allows at once |
+| `502 Bad Gateway` | The Flow failed or ran past the time limit |
+| `503 Service Unavailable` | The service is stopping, or its access token cannot be read |
 
 ## Authentication
 

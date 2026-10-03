@@ -753,6 +753,9 @@ mod tests {
                     "../../prisma/migrations/20260922130000_device_archives/migration.sql"
                 ),
                 include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
+                include_str!(
+                    "../../prisma/migrations/20261002120000_device_schedules/migration.sql"
+                ),
             ] {
                 for statement in migration.split(';').filter(|part| !part.trim().is_empty()) {
                     db.execute_unprepared(statement).await.unwrap();

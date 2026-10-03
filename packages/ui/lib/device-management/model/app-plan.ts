@@ -2,11 +2,22 @@ import type { IAppVisibility } from "../../schema/app/app";
 import {
 	type EligibilityEvent,
 	type EventEligibility,
+	type EventKind,
 	eventEligibility,
+	missingFeature,
 } from "../deployment";
+import type { FlowVersionState } from "../hub/endpoints";
 import type { KeyState } from "../workspace/types";
+import {
+	type ScheduleWhere,
+	holdsSchedule,
+	scheduleWheres,
+	whereOf,
+} from "./schedule-where";
 import type {
 	AgeState,
+	AgentFeature,
+	AgentFeatures,
 	AppDevicePlacements,
 	Convergence,
 	CopyRef,
@@ -29,17 +40,124 @@ export function appMode(visibility: AppVisibility): AppMode {
 	return visibility === "Offline" ? "offline" : "online";
 }
 
+/** The flow of an event that follows Latest, as a version; `missing_on_hub`: the hub can't say. */
+export type EventFlowState = FlowVersionState | "missing_on_hub";
+
+/** A form's fields as the event record lists them; the device's own list comes from the flow version it runs. */
+export interface AppEventForm {
+	fields: number;
+	/** Fields that take a file (`PathBuf`, `Byte`): only a service page can send them. */
+	fileFields: number;
+}
+
+/**
+ * One event of an app, as the record says it. `config` (inherited) is the
+ * record's config: the rule reads routes, schedules and bot settings from it
+ * and never a credential, only whether a bot token is saved.
+ */
 export interface AppEventInput extends EligibilityEvent {
 	id: string;
 	name: string;
 	/** Why the approved bundle could not prepare this event's flow. */
 	ineligibleReason?: string | null;
+	/** The event's flow. */
+	boardId?: string;
+	/** Read for an event that follows Latest; absent while not loaded. */
+	flow?: EventFlowState;
+	/** An Endpoint whose record has a token of its own (`auth_token`); absent when its config can't be read. */
+	ownToken?: boolean;
+	/** A form or quick action: its fields per the record. */
+	form?: AppEventForm;
+}
+
+/** Kinds that run in one place: a person moves each one off the hub to one service (a claim). */
+export function isClaimedKind(kind: EventKind | null | undefined): boolean {
+	return kind === "scheduled" || kind === "bot";
+}
+
+/**
+ * Whether an Endpoint's record has a token of its own (`auth_token`); never
+ * the token. Undefined for any other type, and when its config can't be read.
+ */
+export function endpointOwnToken(
+	eventType: string,
+	config: Readonly<Record<string, unknown>> | null,
+): boolean | undefined {
+	if ((eventType !== "api" && eventType !== "http") || !config)
+		return undefined;
+	return (
+		typeof config.auth_token === "string" && config.auth_token.trim() !== ""
+	);
+}
+
+const FILE_DATA_TYPES = new Set(["PathBuf", "Byte"]);
+
+/** A form's or quick action's fields from the data types its record lists; undefined for any other type. */
+export function eventFormFacts(
+	eventType: string,
+	dataTypes: readonly string[],
+): AppEventForm | undefined {
+	if (eventType !== "quick_action" && eventType !== "generic_form")
+		return undefined;
+	return {
+		fields: dataTypes.length,
+		fileFields: dataTypes.filter((type) => FILE_DATA_TYPES.has(type)).length,
+	};
 }
 
 export interface AppVersionPin {
 	eventId: string;
 	eventVersion: VersionTriple;
 	boardVersion: VersionTriple;
+}
+
+type Pin = Omit<AppVersionPin, "eventId">;
+
+/** What the app pins for an event now: its own pins, or for an event that follows Latest the version that equals its flow. */
+export function resolvedPin(event: AppEventInput): Pin | null {
+	const rule = eventEligibility(event);
+	const flow = typeof event.flow === "object" ? event.flow.current : null;
+	const boardVersion = rule.followsLatest ? flow : rule.boardVersion;
+	return rule.eventVersion && boardVersion
+		? { eventVersion: rule.eventVersion, boardVersion }
+		: null;
+}
+
+/**
+ * A served pin against what the app pins now. `edits`: the event follows
+ * Latest and its flow has edits no version holds, so an update creates one.
+ * `unknown` is never shown as "newest".
+ */
+export type PinDrift =
+	| { state: "newest" }
+	| { state: "behind"; newest: Pin }
+	| { state: "edits" }
+	| { state: "unknown"; why: "not_loaded" | "hub" | "pin" };
+
+/** No pin to compare with: an event that follows Latest has flow edits, or the pin can't be told. */
+function unpinnedDrift(event: AppEventInput) {
+	const rule = eventEligibility(event);
+	if (!rule.followsLatest || !rule.eventVersion)
+		return { state: "unknown", why: "pin" } as const;
+	if (event.flow === undefined)
+		return { state: "unknown", why: "not_loaded" } as const;
+	return event.flow === "missing_on_hub"
+		? ({ state: "unknown", why: "hub" } as const)
+		: ({ state: "edits" } as const);
+}
+
+export function pinDrift(
+	event: AppEventInput,
+	served: { eventVersion: readonly number[]; boardVersion: readonly number[] },
+	/** The newest app version's pin of the event, when the caller holds one. */
+	versionPin?: Pin | null,
+): PinDrift {
+	const newest = versionPin ?? resolvedPin(event);
+	if (!newest) return unpinnedDrift(event);
+	return samePin(served.eventVersion, newest.eventVersion) &&
+		samePin(served.boardVersion, newest.boardVersion)
+		? { state: "newest" }
+		: { state: "behind", newest };
 }
 
 /** What an update to a version sends to a device: the definitions (online) or the copy (local-only). */
@@ -58,6 +176,13 @@ export interface AppVersionInput {
 	pins: readonly AppVersionPin[];
 	/** Known once this computer prepared or sent the version. */
 	sends?: AppVersionSends | null;
+	/**
+	 * An event that follows Latest has flow edits no published version holds:
+	 * this row is the current edits, and the next deploy creates their version.
+	 */
+	unpublished?: boolean;
+	/** With `unpublished`: those events. They have no pin yet, which doesn't make them removed. */
+	edited?: readonly string[];
 }
 
 export interface AppInput {
@@ -84,6 +209,8 @@ export interface AppDeviceInput {
 	refusals?: Readonly<Record<string, string>>;
 	/** Deploy gate for this app on this device, evaluated by the caller. */
 	deployGate?: GateFailure | null;
+	/** The agent's flags when a plane says them; absent = unknown, never "too old". */
+	features?: AgentFeatures;
 }
 
 /** What this computer recorded when it deployed a service (BG12 interim, APP §5.4). */
@@ -128,6 +255,10 @@ export interface AppViewInput {
 	 * unlocked" and never "not deployed".
 	 */
 	noAccess?: readonly string[];
+	/** Hub-corrected unix seconds, for what depends on time (where a schedule runs). */
+	now?: number;
+	/** `false`: the placement list could not be read from this hub at all (older hub). */
+	placementsOnHub?: boolean;
 }
 
 export type AppUnknownKind =
@@ -147,7 +278,8 @@ export interface AppUnknown {
 
 export interface VersionDiffRow {
 	eventId: string;
-	kind: "added" | "changed" | "removed";
+	/** `edits`: the event follows Latest and its flow has edits no version holds yet (`from` is what the older version pins). */
+	kind: "added" | "changed" | "removed" | "edits";
 	from?: Omit<AppVersionPin, "eventId">;
 	to?: Omit<AppVersionPin, "eventId">;
 }
@@ -174,6 +306,8 @@ export interface AppVersionView {
 	/** Devices or services whose version can't be read now (unknown ≠ not running). */
 	unknownOn: string[];
 	sends?: AppVersionSends | null;
+	/** The current edits, with no version yet (see `AppVersionInput.unpublished`). */
+	unpublished?: boolean;
 }
 
 export type AppCloudCell =
@@ -240,11 +374,23 @@ export interface MatrixCell {
 	serviceIds: string[];
 	conv?: Convergence;
 	pin?: Omit<AppVersionPin, "eventId">;
-	/** The served pin differs from the newest version's pin. */
+	/** The served pin differs from what the app pins now, or its flow has edits no version holds. */
 	behind?: boolean;
+	/** Served cells with a pin: `behind` in detail. */
+	drift?: PinDrift;
 	unknown?: AppUnknown | { kind: "snapshot" };
-	/** `cant_here`: the device's own words. */
+	/**
+	 * `cant_here`: the device refused it in its own words (`reason`), its agent
+	 * lacks a flag the event needs (`feature`), or another service already runs
+	 * the schedule or bot.
+	 */
+	why?: "refuse" | "agent" | "runs_elsewhere";
+	/** `cant_here` · `refuse`: the device's own words. */
 	reason?: string;
+	/** `cant_here` · `agent`: the first flag the device's agent lacks. */
+	feature?: AgentFeature;
+	/** `cant_here` · `runs_elsewhere`: the event is a bot. */
+	bot?: true;
 	/** `not_served`: why Deploy here is gated. */
 	gate?: GateFailure | null;
 }
@@ -253,12 +399,18 @@ export interface MatrixRow {
 	eventId: string;
 	name: string;
 	eventType: string;
+	/** The event has a default Page: it is a Page on a device, whatever its type. */
+	hasPage: boolean;
 	eligibility: EventEligibility;
-	/** Pin in the newest version, else the event's own pins. */
+	/** Pin in the newest version, else what the app pins now; null while that is not known. */
 	pin: Omit<AppVersionPin, "eventId"> | null;
 	/** Label of the newest version when the event is new in it. */
 	newIn: string | null;
 	cells: Record<string, MatrixCell>;
+	/** A schedule or bot of an online app: where it runs. Absent while the hub's list is not known. */
+	where?: ScheduleWhere;
+	/** An event that follows Latest: its flow as a version, once read. */
+	flow?: EventFlowState;
 }
 
 export const MATRIX_MAX_COLUMNS = 4;
@@ -266,8 +418,12 @@ export const MATRIX_MAX_COLUMNS = 4;
 export interface AppEventMatrix {
 	cols: string[];
 	rows: MatrixRow[];
-	/** "Can't run on devices": no device cells. */
-	ineligible: Omit<MatrixRow, "cells">[];
+	/**
+	 * "Can't run on devices". Their `cells` hold only the devices that still
+	 * serve the event: a paused or changed event keeps running there until its
+	 * service is stopped or updated.
+	 */
+	ineligible: MatrixRow[];
 	listMode: boolean;
 }
 
@@ -332,6 +488,12 @@ export interface AppView {
 		of: number;
 		unknown?: number;
 	} | null;
+	/**
+	 * Online apps: every schedule and bot that is not simply run by the hub,
+	 * by event id. `null`: not known (the list is loading, the hub is older, or
+	 * the app is local-only).
+	 */
+	schedules: Readonly<Record<string, ScheduleWhere>> | null;
 }
 
 /** Same rule as the attention items (`isLastKnown`): anything but live or current is last known. */
@@ -391,7 +553,7 @@ function versionDiff(
 		if (!newer.pins.some((value) => value.eventId === pin.eventId))
 			rows.push({
 				eventId: pin.eventId,
-				kind: "removed",
+				kind: newer.edited?.includes(pin.eventId) ? "edits" : "removed",
 				from: {
 					eventVersion: pin.eventVersion,
 					boardVersion: pin.boardVersion,
@@ -414,6 +576,7 @@ const baseVersions = (app: AppInput): AppVersionView[] => {
 		runningOn: [],
 		unknownOn: [],
 		...(version.sends ? { sends: version.sends } : {}),
+		...(version.unpublished ? { unpublished: true } : {}),
 	}));
 };
 
@@ -595,14 +758,95 @@ function byRankThenName<T extends { rank: number }>(
 function eventPin(
 	event: AppEventInput,
 	newest: AppVersionView | undefined,
-): Omit<AppVersionPin, "eventId"> | null {
+): Pin | null {
+	// An event that follows Latest is pinned by its flow's state alone: a version list can be older than the flow's edits.
+	if (eventEligibility(event).followsLatest) return resolvedPin(event);
 	const pin = newest?.pins.find((value) => value.eventId === event.id);
 	if (pin)
 		return { eventVersion: pin.eventVersion, boardVersion: pin.boardVersion };
-	const rule = eventEligibility(event);
-	return rule.eventVersion && rule.boardVersion
-		? { eventVersion: rule.eventVersion, boardVersion: rule.boardVersion }
+	return resolvedPin(event);
+}
+
+/** What the app's hub can do for its events, and what the viewer may do there; absent facts are unknown, never "can't". */
+export interface AppHubFacts {
+	/** `false`: the hub can't hand schedules to devices. */
+	hubSchedules?: boolean;
+	/**
+	 * The event types the hub hands to devices (its `event_types`); `[]` for a
+	 * hub before Endpoints, forms and bots. Absent while the placement list is
+	 * not read, or for a local-only app.
+	 */
+	hubTypes?: readonly string[];
+	/** `false`: the viewer's role can't create a flow version, so a Latest event whose flow has edits can't be deployed by them. */
+	canEditFlows?: boolean;
+}
+
+function latestFlowCase(
+	event: AppEventInput,
+	hub: AppHubFacts,
+): "hub" | "role" | null {
+	if (event.flow === "missing_on_hub") return "hub";
+	return hub.canEditFlows === false &&
+		typeof event.flow === "object" &&
+		event.flow.current === null
+		? "role"
 		: null;
+}
+
+/** An event's rule with what is known beyond its record: the bundle's refusal, its flow, the hub and the viewer's role. */
+export function appEventRule(
+	event: AppEventInput,
+	hub: AppHubFacts = {},
+): EventEligibility {
+	return eventEligibility(event, {
+		ineligibleReason: event.ineligibleReason,
+		latestFlow: latestFlowCase(event, hub),
+		...(hub.hubSchedules === false ? { hubSchedules: false } : {}),
+		...(hub.hubTypes ? { hubTypes: hub.hubTypes } : {}),
+	});
+}
+
+/** Whether the app's hub can hand schedules to devices: its placement list says so by carrying `schedules`. */
+export function hubSchedulesOf(
+	mode: AppMode,
+	input: Pick<AppViewInput, "placements" | "placementsOnHub">,
+): boolean | undefined {
+	if (mode !== "online") return undefined;
+	if (input.placementsOnHub === false) return false;
+	return input.placements
+		? input.placements.schedules !== undefined
+		: undefined;
+}
+
+const NO_TYPES: readonly string[] = [];
+
+/**
+ * The event types the app's hub hands to devices: its placement list's
+ * `event_types`, none for a hub before them. Undefined while the list loads
+ * (the events count as runnable then) and for a local-only app.
+ */
+export function hubTypesOf(
+	mode: AppMode,
+	input: Pick<AppViewInput, "placements" | "placementsOnHub">,
+): readonly string[] | undefined {
+	if (mode !== "online") return undefined;
+	if (input.placementsOnHub === false) return NO_TYPES;
+	return input.placements
+		? (input.placements.event_types ?? NO_TYPES)
+		: undefined;
+}
+
+/** Everything the app's hub says about its events, from its placement list. */
+export function appHubFacts(
+	mode: AppMode,
+	input: Pick<AppViewInput, "placements" | "placementsOnHub">,
+): AppHubFacts {
+	const hubSchedules = hubSchedulesOf(mode, input);
+	const hubTypes = hubTypesOf(mode, input);
+	return {
+		...(hubSchedules === undefined ? {} : { hubSchedules }),
+		...(hubTypes ? { hubTypes } : {}),
+	};
 }
 
 function newInLabel(
@@ -617,13 +861,49 @@ function newInLabel(
 	return added ? (newest.label ?? newest.short) : null;
 }
 
+interface CellContext {
+	group: AppDeviceGroup | undefined;
+	newestPin: Pin | null;
+	noAccess: boolean;
+	rule: EventEligibility;
+	where: ScheduleWhere | undefined;
+}
+
+/** The first flag this device's agent lacks for the event; null when it has them or its flags are not known. */
+export function agentLacks(
+	event: EligibilityEvent,
+	features: AgentFeatures | undefined,
+): AgentFeature | null {
+	const missing = missingFeature(event, features);
+	return missing === "unknown" ? null : missing;
+}
+
+/** Why this device can't take the event, when that is known: its agent, another place that holds the schedule or bot, its own refusal. */
+function cantHere(
+	event: AppEventInput,
+	device: AppDeviceInput,
+	{ rule, where }: CellContext,
+): Pick<MatrixCell, "why" | "reason" | "feature" | "bot"> | null {
+	const feature = agentLacks(event, device.features);
+	if (feature) return { why: "agent", feature };
+	if (
+		isClaimedKind(rule.kind) &&
+		holdsSchedule(where) &&
+		!("deviceId" in where && where.deviceId === device.id)
+	)
+		return rule.kind === "bot"
+			? { why: "runs_elsewhere", bot: true }
+			: { why: "runs_elsewhere" };
+	const refusal = device.refusals?.[event.id];
+	return refusal ? { why: "refuse", reason: refusal } : null;
+}
+
 function matrixCell(
 	event: AppEventInput,
 	device: AppDeviceInput,
-	group: AppDeviceGroup | undefined,
-	newestPin: Omit<AppVersionPin, "eventId"> | null,
-	noAccess: boolean,
+	context: CellContext,
 ): MatrixCell {
+	const { group, newestPin, noAccess } = context;
 	const base = { deviceId: device.id, serviceIds: [] as string[] };
 	const serving = (group?.services ?? []).filter((row) =>
 		row.events?.some((value) => value.event_id === event.id),
@@ -640,32 +920,38 @@ function matrixCell(
 	}
 	if (serving.length) {
 		const primary = serving[0];
-		const pin = primary.events?.find((value) => value.event_id === event.id);
+		const served = primary.events?.find((value) => value.event_id === event.id);
+		const pin = served
+			? {
+					eventVersion: served.event_version,
+					boardVersion: served.board_version,
+				}
+			: undefined;
+		const drift = pin ? pinDrift(event, pin, newestPin) : undefined;
 		return {
 			...base,
 			state: serving.some((row) => row.staged) ? "staged" : "served",
 			serviceIds: serving.map((row) => row.serviceId),
 			conv: primary.view.conv,
-			...(pin
+			...(pin && drift
 				? {
-						pin: {
-							eventVersion: pin.event_version,
-							boardVersion: pin.board_version,
-						},
-						behind: newestPin
-							? !samePin(pin.event_version, newestPin.eventVersion) ||
-								!samePin(pin.board_version, newestPin.boardVersion)
-							: false,
+						pin,
+						behind: drift.state === "behind" || drift.state === "edits",
+						drift,
 					}
 				: {}),
 		};
 	}
 	if (group?.services.some((row) => row.events === null))
 		return { ...base, state: "unknown", unknown: { kind: "snapshot" } };
-	const refusal = device.refusals?.[event.id];
-	if (refusal) return { ...base, state: "cant_here", reason: refusal };
+	const cant = cantHere(event, device, context);
+	if (cant) return { ...base, state: "cant_here", ...cant };
 	return { ...base, state: "not_served", gate: device.deployGate ?? null };
 }
+
+/** An event that can't run on devices keeps the cells of the devices that still serve it. */
+const servesIt = (cell: MatrixCell) =>
+	cell.state === "served" || cell.state === "staged";
 
 function buildMatrix(
 	input: AppViewInput,
@@ -673,6 +959,7 @@ function buildMatrix(
 	groups: AppDeviceGroup[],
 	noAccess: EverywhereRow[],
 	versions: AppVersionView[],
+	schedules: AppView["schedules"],
 ): AppEventMatrix {
 	const cols = [
 		...new Set([
@@ -684,37 +971,39 @@ function buildMatrix(
 		]),
 	];
 	const rows: MatrixRow[] = [];
-	const ineligible: Omit<MatrixRow, "cells">[] = [];
+	const ineligible: MatrixRow[] = [];
+	const hub = appHubFacts(appMode(input.app.visibility), input);
 	for (const event of input.app.events) {
-		const eligibility = eventEligibility(event, {
-			ineligibleReason: event.ineligibleReason,
-		});
+		const eligibility = appEventRule(event, hub);
 		const pin = eventPin(event, versions[0]);
-		const row = {
-			eventId: event.id,
-			name: event.name,
-			eventType: event.event_type,
-			eligibility,
-			pin,
-			newIn: newInLabel(event.id, versions),
-		};
-		if (!eligibility.eligible) {
-			ineligible.push(row);
-			continue;
-		}
+		const where = isClaimedKind(eligibility.kind)
+			? whereOf(schedules, event.id)
+			: undefined;
 		const cells: Record<string, MatrixCell> = {};
 		for (const id of cols) {
 			const device = devices.find((value) => value.id === id);
 			if (!device) continue;
-			cells[id] = matrixCell(
-				event,
-				device,
-				groups.find((group) => group.deviceId === id),
-				pin,
-				input.noAccess?.includes(id) ?? false,
-			);
+			const cell = matrixCell(event, device, {
+				group: groups.find((group) => group.deviceId === id),
+				newestPin: pin,
+				noAccess: input.noAccess?.includes(id) ?? false,
+				rule: eligibility,
+				where,
+			});
+			if (eligibility.eligible || servesIt(cell)) cells[id] = cell;
 		}
-		rows.push({ ...row, cells });
+		(eligibility.eligible ? rows : ineligible).push({
+			eventId: event.id,
+			name: event.name,
+			eventType: event.event_type,
+			hasPage: !!event.default_page_id,
+			eligibility,
+			pin,
+			newIn: newInLabel(event.id, versions),
+			cells,
+			...(where ? { where } : {}),
+			...(eligibility.followsLatest && event.flow ? { flow: event.flow } : {}),
+		});
 	}
 	return { cols, rows, ineligible, listMode: cols.length > MATRIX_MAX_COLUMNS };
 }
@@ -839,6 +1128,13 @@ export function buildAppView(input: AppViewInput): AppView {
 		version.unknownOn = unknownOn;
 	}
 	const newest = versions[0] ?? null;
+	const schedules =
+		mode === "online" && input.placements
+			? scheduleWheres(input.placements, {
+					devices,
+					now: input.now ?? input.placements.server_time,
+				})
+			: null;
 	return {
 		app: {
 			id: app.id,
@@ -864,6 +1160,7 @@ export function buildAppView(input: AppViewInput): AppView {
 			groups,
 			everywhereElse.noAccess,
 			versions,
+			schedules,
 		),
 		versions,
 		everywhereElse,
@@ -876,5 +1173,6 @@ export function buildAppView(input: AppViewInput): AppView {
 					unknown: services.filter((row) => !row.version).length,
 				}
 			: null,
+		schedules,
 	};
 }

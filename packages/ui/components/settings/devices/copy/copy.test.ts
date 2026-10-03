@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { getI18n } from "@flow-like/locales";
+import {
+	EVENT_INELIGIBLE_CODES,
+	type EventIneligibleCode,
+} from "../../../../lib/device-management/deployment";
 import type {
 	GateFailure,
 	GateReason,
@@ -13,6 +17,14 @@ import {
 	attentionNames,
 	defaultCopyTime,
 } from "./attention-copy";
+import {
+	agentTooOldCopy,
+	cantHereCopy,
+	eligibilityCopy,
+	eventRunsCopy,
+	eventTypeLabel,
+	howItRunsCopy,
+} from "./eligibility-copy";
 import { gateCopy } from "./gate-copy";
 import { headlineNames } from "./headline-copy";
 import { preflightCopy } from "./preflight-copy";
@@ -82,6 +94,101 @@ describe("attention copy", () => {
 		);
 	});
 
+	test("an agent that can't take the hub's release list is told why, instead of being offered the update", () => {
+		const update = (extra: Record<string, number>) =>
+			attentionCopy(
+				t,
+				item("agent_update_available", {
+					device: "edge-berlin-01",
+					available: "0.2.0",
+					running: "0.1.0",
+					...extra,
+				}),
+				ctx,
+			).sentence;
+		expect(update({ needsShortRelease: 1 })).toBe(
+			"Agent 0.2.0 is available for edge-berlin-01, but its agent (0.1.0) only accepts releases valid for 30 days or less. Ask the hub operator to renew the release for 30 days, or set this device up again.",
+		);
+		expect(update({})).toBe(
+			"Agent 0.2.0 is available for edge-berlin-01 (running 0.1.0).",
+		);
+	});
+
+	test("a schedule a running service holds says why; an unknown reason is never its wire value", () => {
+		const held = (params: Record<string, string | number>) =>
+			attentionCopy(
+				t,
+				item("schedule_held", {
+					service: "invoice-extractor",
+					device: "edge-berlin-01",
+					...params,
+				}),
+				ctx,
+			).sentence;
+		expect(held({ hold: "not_released", held: 1 })).toBe(
+			"A schedule of invoice-extractor on edge-berlin-01 isn't running there: it was not moved to this service.",
+		);
+		expect(held({ hold: "runs_elsewhere", held: 2 })).toBe(
+			"Some schedules of invoice-extractor on edge-berlin-01 aren't running there: another service runs it.",
+		);
+		expect(held({ hold: "paused_by_a_newer_agent", held: 1 })).toBe(
+			"A schedule of invoice-extractor on edge-berlin-01 isn't running there: reason unknown.",
+		);
+		expect(
+			attentionCopy(
+				t,
+				item("schedule_failed", {
+					service: "invoice-extractor",
+					device: "edge-berlin-01",
+					failed: 1,
+				}),
+				ctx,
+			).sentence,
+		).toBe(
+			"The last run of a schedule of invoice-extractor on edge-berlin-01 failed. The service keeps running.",
+		);
+	});
+
+	test("a bot that isn't connected, is refused or used elsewhere says why; a missed one-time schedule says when", () => {
+		const say = (
+			code: AttentionCopyItem["copy"]["code"],
+			params: Record<string, string | number>,
+		) =>
+			attentionCopy(
+				t,
+				item(code, {
+					service: "shop",
+					device: "edge-berlin-01",
+					...params,
+				}),
+				ctx,
+			).sentence;
+		expect(say("bot_held", { hold: "hub_too_old", held: 1 })).toBe(
+			"A bot of shop on edge-berlin-01 isn't connected: this hub can't hand bots to devices yet.",
+		);
+		expect(say("bot_held", { hold: "runs_elsewhere", held: 2 })).toBe(
+			"Some bots of shop on edge-berlin-01 aren't connected: another service runs it.",
+		);
+		expect(say("bot_token_refused", { provider: "telegram" })).toBe(
+			"Telegram refused the token of a bot of shop on edge-berlin-01. Enter a new one under Configuration.",
+		);
+		expect(say("bot_token_refused", { provider: "matrix" })).toStartWith(
+			"The provider refused",
+		);
+		expect(say("bot_intents_refused", { provider: "discord" })).toBe(
+			"Discord refused the permissions of a bot of shop on edge-berlin-01. Turn on the message content intent in the Discord Developer Portal, then restart shop.",
+		);
+		expect(say("bot_conflict", { state: "conflict" })).toBe(
+			"Another program uses the token of a bot of shop on edge-berlin-01. A bot runs in one place: stop it there.",
+		);
+		expect(say("bot_conflict", { state: "webhook_set" })).toBe(
+			"Telegram sends the messages of a bot of shop on edge-berlin-01 to a webhook. Remove it in Events, then restart shop.",
+		);
+		expect(say("schedule_once_missed", { time: SOON })).toMatch(
+			/^A one-time schedule of shop on edge-berlin-01 didn't run: edge-berlin-01 wasn't running at its time \(.+\)\.$/,
+		);
+	});
+
 	test("an item names the device and service its sentence sets in mono", () => {
 		expect(
 			attentionNames(
@@ -94,6 +201,135 @@ describe("attention copy", () => {
 			),
 		).toEqual(["warehouse-pi", "scanner-ingest"]);
 		expect(attentionNames(item("stale_local_keys", {}))).toEqual([]);
+	});
+});
+
+describe("eligibility copy", () => {
+	test("every reason an event can't run has words, never its code or a placeholder", () => {
+		for (const code of EVENT_INELIGIBLE_CODES) {
+			const copy = eligibilityCopy(t, {
+				code,
+				eventType: "api",
+				detail: "/ui/x",
+			});
+			for (const text of [copy.long, copy.short]) {
+				expect(text).not.toMatch(/\b[a-z]+_[a-z_]+\b/);
+				expect(text).not.toContain("{{");
+				expect(text.length).toBeGreaterThan(3);
+			}
+		}
+	});
+
+	test("a route or bot setting a device can't read is named; an older hub says what it can't hand over", () => {
+		const long = (
+			code: EventIneligibleCode,
+			eventType: string,
+			detail?: string,
+		) =>
+			eligibilityCopy(t, { code, eventType, ...(detail ? { detail } : {}) })
+				.long;
+		expect(long("route_reserved", "api", "/ui/x")).toBe(
+			"Its path /ui/x is used by the service itself. Choose another path in Events.",
+		);
+		expect(long("route_invalid", "http", "TRACE")).toBe(
+			"A device can't serve its method or path: TRACE",
+		);
+		expect(long("bot_invalid", "telegram", "chat_whitelist")).toBe(
+			"Its bot settings can't be read on a device: chat_whitelist",
+		);
+		expect(long("hub_type", "api")).toBe(
+			"This hub can't hand Endpoints to devices yet. Update the hub.",
+		);
+		expect(long("hub_type", "generic_form")).toBe(
+			"This hub can't hand forms and quick actions to devices yet. Update the hub.",
+		);
+		expect(long("hub_type", "discord")).toBe(
+			"This hub can't hand bots to devices yet. Update the hub.",
+		);
+		expect(
+			eligibilityCopy(t, { code: "schedule_once", eventType: "cron" }),
+		).toEqual({
+			long: "This device's agent can't run one-time schedules yet. Update the device agent.",
+			short: "Agent too old",
+			fix: null,
+		});
+	});
+
+	test("an older agent is told which part it lacks", () => {
+		expect(agentTooOldCopy(t, "edge", "api_events")).toEqual({
+			long: "edge's agent is too old to serve Endpoints.",
+			short: "Agent too old",
+			fix: "Update the device agent to serve Endpoints",
+		});
+		expect(agentTooOldCopy(t, "edge", "telegram_bots").fix).toBe(
+			"Update the device agent to run Telegram bots",
+		);
+		expect(agentTooOldCopy(t, "edge", "discord_bots").long).toBe(
+			"edge's agent is too old to run Discord bots.",
+		);
+		expect(agentTooOldCopy(t, "edge", "on_demand_events").long).toBe(
+			"edge's agent is too old to run forms and quick actions.",
+		);
+		expect(agentTooOldCopy(t, "edge", "scheduled_once").long).toBe(
+			"edge's agent is too old to run one-time schedules.",
+		);
+		expect(agentTooOldCopy(t, "edge").long).toBe(
+			"edge's agent is too old to run schedules.",
+		);
+		expect(
+			cantHereCopy(t, { why: "agent", feature: "api_events" }, "edge"),
+		).toBe("edge's agent is too old to serve Endpoints.");
+		expect(cantHereCopy(t, { why: "runs_elsewhere", bot: true }, "edge")).toBe(
+			"Another service runs this bot. A bot runs in one place.",
+		);
+	});
+
+	test("type names and how each new kind runs", () => {
+		expect(eventTypeLabel(t, "api")).toBe("Endpoint");
+		expect(eventTypeLabel(t, "http")).toBe("Endpoint");
+		expect(eventTypeLabel(t, "telegram")).toBe("Telegram bot");
+		expect(eventTypeLabel(t, "discord")).toBe("Discord bot");
+		expect(eventTypeLabel(t, "teams")).toBe("Teams bot");
+		const runs = (rule: Parameters<typeof howItRunsCopy>[1]) =>
+			howItRunsCopy(t, rule);
+		const base = { hosted: false, readiness: "explicit" } as const;
+		expect(runs({ ...base, kind: "on_demand" })).toBe(
+			"Started by a person · from Devices or the service page",
+		);
+		expect(
+			runs({
+				...base,
+				kind: "bot",
+				bot: {
+					provider: "discord",
+					open: false,
+					savedToken: false,
+					prefix: "",
+					mentions: true,
+				},
+			}),
+		).toBe("Runs on its own · stays connected to Discord");
+		const once = {
+			date: "2026-10-15",
+			time: "09:00",
+			at: 1792047600,
+			timezone: "Europe/Berlin",
+			zoneSet: true,
+		};
+		expect(runs({ ...base, kind: "scheduled", once })).toBe(
+			"Runs once · the device starts it",
+		);
+		expect(eventRunsCopy(t, { ...base, kind: "scheduled", once })).toBe(
+			"Once on 2026-10-15 at 09:00 · Europe/Berlin",
+		);
+		expect(
+			eventRunsCopy(t, {
+				hosted: true,
+				readiness: "listener",
+				kind: "served",
+				route: { method: "GET", path: "/orders" },
+			}),
+		).toBe("GET /orders · served by the device");
 	});
 });
 

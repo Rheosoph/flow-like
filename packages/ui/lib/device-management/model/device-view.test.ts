@@ -525,6 +525,113 @@ describe("ServiceView fields", () => {
 			service(sampleFleet(), ID.edge, "support-bot").diagnostics,
 		).toBeUndefined();
 	});
+
+	test("schedules: what the process reported, else what the missing fact means on this plane", () => {
+		const reported = [
+			{
+				event_id: "evt_support_digest",
+				expression: "0 0 8 * * 1-5",
+				timezone: "Europe/Berlin",
+				hold: null,
+				next_at: SAMPLE_NOW + 3_600,
+				runs: 4,
+			},
+		];
+		const live = service(
+			edgeWith({ schedules: reported, schedules_truncated: true }),
+			ID.edge,
+			"support-bot",
+		);
+		expect(live.schedules).toEqual(reported);
+		expect(live.schedulesTruncated).toBe(true);
+		expect(
+			service(edgeWith({ schedules: [] }), ID.edge, "support-bot"),
+		).toMatchObject({ schedules: [] });
+		expect(
+			service(edgeWith({ schedules: [] }), ID.edge, "support-bot"),
+		).not.toHaveProperty("schedulesTruncated");
+		// The agent can say and the row carries none: not running, or not armed yet.
+		expect(service(sampleFleet(), ID.edge, "support-bot").schedules).toBe(
+			"not_reported",
+		);
+		expect(viewOf(sampleFleet(), ID.edge).features?.scheduled_events).toBe(1);
+		// An older agent can't say.
+		const older = sampleFleetOlderAgent();
+		expect(service(older, ID.edge, "support-bot").schedules).toBe(
+			"needs_agent",
+		);
+		expect(viewOf(older, ID.edge).features).toEqual({});
+		// A snapshot says it only when it carries the feature map (a device-scope reader).
+		const [snapshot] = servicesOf(sampleFleet(), ID.warehouse);
+		expect(snapshot.freshness.src).toBe("snap");
+		expect(snapshot.schedules).toBe("not_reported");
+		const [unknown] = servicesOf(older, ID.warehouse);
+		expect(unknown.schedules).toBe("not_loaded");
+		expect(viewOf(older, ID.warehouse).features).toBeUndefined();
+		// Saved inventory carries no flags: unknown, never "too old".
+		const saved = sampleFleet();
+		const inventory = saved.fleet[ID.warehouse].saved;
+		if (!inventory) throw new Error("fixture: saved inventory");
+		inventory.observedAt = SAMPLE_NOW - 60;
+		expect(servicesOf(saved, ID.warehouse)[0].schedules).toBe("not_loaded");
+	});
+
+	test("bots and actions follow the same rule, each with its own flags", () => {
+		const bots = [
+			{
+				event_id: "evt_helper",
+				provider: "telegram" as const,
+				state: "connected" as const,
+				hold: null,
+				bot_name: null,
+			},
+		];
+		const actions = [
+			{
+				event_id: "evt_support_reply",
+				kind: "action" as const,
+				fields: 0,
+				file_fields: 0,
+				runs: 3,
+			},
+		];
+		const live = service(
+			edgeWith({
+				bots,
+				bots_truncated: true,
+				actions,
+				actions_truncated: true,
+			}),
+			ID.edge,
+			"support-bot",
+		);
+		expect(live).toMatchObject({
+			bots,
+			botsTruncated: true,
+			actions,
+			actionsTruncated: true,
+		});
+		const none = service(sampleFleet(), ID.edge, "support-bot");
+		expect([none.bots, none.actions]).toEqual(["not_reported", "not_reported"]);
+		expect(none).not.toHaveProperty("botsTruncated");
+		const older = service(sampleFleetOlderAgent(), ID.edge, "support-bot");
+		expect([older.bots, older.actions]).toEqual(["needs_agent", "needs_agent"]);
+		// One bot flag is enough to report bots; actions have their own.
+		const input = sampleFleet();
+		const inspection = input.live[ID.edge].inspection;
+		if (!inspection) throw new Error("fixture: edge inspection");
+		inspection.value.features = { discord_bots: 1, scheduled_events: 1 };
+		const partial = service(input, ID.edge, "support-bot");
+		expect([partial.bots, partial.actions]).toEqual([
+			"not_reported",
+			"needs_agent",
+		]);
+		const [unknown] = servicesOf(sampleFleetOlderAgent(), ID.warehouse);
+		expect([unknown.bots, unknown.actions]).toEqual([
+			"not_loaded",
+			"not_loaded",
+		]);
+	});
 });
 
 describe("older hub and older agent", () => {

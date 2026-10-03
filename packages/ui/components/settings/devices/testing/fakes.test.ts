@@ -10,7 +10,19 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { act, createElement } from "react";
 import type { HubResult } from "../../../../lib/device-management/hub/endpoints";
-import type { AttentionItem } from "../../../../lib/device-management/model/types";
+import type {
+	AppEventInput,
+	AppInput,
+} from "../../../../lib/device-management/model/app-plan";
+import type {
+	AgentFeature,
+	AgentFeatures,
+	AttentionItem,
+	PlacementStatusPlus,
+	ServiceAction,
+	ServiceBot,
+	ServiceSchedule,
+} from "../../../../lib/device-management/model/types";
 import type { ManagementPolicy } from "../../../../lib/device-management/types";
 import type { IBackendState } from "../../../../state/backend-state";
 import type { DeviceWorkspaceProviderProps } from "../workspace/device-workspace-provider";
@@ -27,10 +39,14 @@ const {
 	readArtifactUsage,
 	readHostOperation,
 	readMetricsHistory,
+	readEventForm,
 	readOfflineOperations,
 	readOperations,
 	readRolloutHistory,
 } = await import("../../../../lib/device-management/agent-reads");
+const { cancelRun, readRun, runEvent } = await import(
+	"../../../../lib/device-management/event-run"
+);
 const { readAcmeCertificates } = await import(
 	"../../../../lib/device-management/certificate-acme"
 );
@@ -51,20 +67,24 @@ const {
 	getFleetCertificateInventory,
 	getMyAccess,
 	getResourceSummary,
+	giveBackSchedule,
 	listAccountBackups,
 	listAppDevicePlacements,
 	listCertificateNoticeMutes,
 	listCertificateNotices,
 	listEnrollments,
 	muteCertificateNotices,
+	publishFlowVersion,
 	readCertificateInventory,
+	readFlowVersion,
 	readHubStandalone,
 	readPolicyView,
+	releaseSchedule,
 	sendTestCertificateNotice,
 	toHubError,
 	unmuteCertificateNotices,
 } = await import("../../../../lib/device-management/hub/endpoints");
-const { APPS, VISITOR_CATALOG } = await import(
+const { APPS, SHOP_ONCE_AT, VISITOR_CATALOG } = await import(
 	"../../../../lib/device-management/model/__fixtures__/apps"
 );
 const { SAMPLE_APPS, SAMPLE_IDS, SAMPLE_ME, SAMPLE_NOW, sampleFleet } =
@@ -98,6 +118,10 @@ const { loadDeviceResources } = await import(
 const { getDevice, listDevices, renameDevice, revokeDevice } = await import(
 	"../../../../lib/devices"
 );
+const { boundedLists } = await import("./fake-events");
+const { QUICK_REPLY, SHOP, serveQuickReplyOnEdge, serveShopOnEdge } =
+	await import("./schedule-scenarios");
+const { formAnswer, formField } = await import("./fake-runs");
 const { FAKE_AGENT_COMMANDS, fakeDeviceApi, fakeHubRoutes, fakeKeys } =
 	await import("./fake-device-api");
 const { createFakeWorkspace } = await import("./fake-workspace");
@@ -124,9 +148,11 @@ const EDGE_GRANT = "d99ba88b-717b-445e-a719-a2084df3aec0";
 const EDGE_BILLING = "b936e936-d443-4252-a8e6-9420d361c037";
 const INVOICE_ROLLOUT = "a0e5259e-a9bf-4eef-99df-f9666dffbab4";
 
-/** The routes plan §3.2 adds (E1, E2, E4 and E15 change existing ones). */
+/** The routes plan §3.2 adds (E1, E2, E4 and E15 change existing ones), and those of "run more on devices". */
 const ADDED_ROUTES = [
+	"DELETE apps/:app/device-schedules/:event",
 	"DELETE devices/:id/certificate-notices/mute",
+	"GET apps/:app/board/:board/version/current",
 	"GET apps/:app/device-placements",
 	"GET devices/:id/billing-grants/:billing/usage",
 	"GET devices/:id/certificate-notices",
@@ -140,7 +166,9 @@ const ADDED_ROUTES = [
 	"GET devices/resource-summary",
 	"GET devices/usage",
 	"PATCH devices/:id",
+	"POST apps/:app/board/:board/version/current",
 	"POST devices/:id/certificate-notices/test",
+	"PUT apps/:app/device-schedules/:event",
 	"PUT devices/:id/certificate-notices/mute",
 ];
 
@@ -464,6 +492,459 @@ describe("fake hub", () => {
 		expect(await read(visitor)).toBe("coded 403");
 		expect(api.writes()).toEqual([]);
 	});
+
+	test("the export resolves only the Latest events it is asked for, and leaves out one that no longer fits", async () => {
+		const api = fakeDeviceApi();
+		const backend = { apiState: api } as unknown as IBackendState;
+		const invoice = APPS.app_invoice_ai.id;
+		const events = async (latest?: string[]) =>
+			(
+				await prepareOnlineMetadata(
+					invoice,
+					backend,
+					api.profile,
+					undefined,
+					latest,
+				)
+			).catalog.events;
+		// Without names, an event that follows Latest stays out, as on every hub before.
+		expect((await events()).map((event) => event.id)).toEqual([
+			"evt_extract_http",
+			"evt_gpu_extract",
+			"evt_invoice_mcp",
+			"evt_invoice_reconcile",
+		]);
+		const named = await events(["evt_invoice_review"]);
+		expect(
+			named.find((event) => event.id === "evt_invoice_review"),
+		).toMatchObject({
+			eligible: true,
+			kind: "served",
+			event_version: [0, 9, 0],
+			board_version: [0, 9, 2],
+		});
+		expect(
+			named.find((event) => event.id === "evt_invoice_reconcile"),
+		).toMatchObject({
+			eligible: true,
+			kind: "scheduled",
+			schedule: { expression: "0 0 2 * * *", timezone: "Europe/Berlin" },
+		});
+		expect(api.sent("GET", /device-metadata/).at(-1)?.[1]).toBe(
+			`apps/${invoice}/device-metadata?latest=evt_invoice_review`,
+		);
+		// The flow got edits: no version equals it, so the event stays out until one is published.
+		api.hub.flows.edit(invoice, "flow_review");
+		const ids = async () =>
+			(await events(["evt_invoice_review"])).map((event) => event.id);
+		expect(await ids()).not.toContain("evt_invoice_review");
+		expect(
+			data(await readFlowVersion(api, api.profile, invoice, "flow_review")),
+		).toEqual({ current: null, newest: [0, 9, 2] });
+		expect(
+			await publishFlowVersion(api, api.profile, invoice, "flow_review"),
+		).toEqual({ kind: "ok", data: { version: [0, 9, 3], created: true } });
+		expect(
+			await publishFlowVersion(api, api.profile, invoice, "flow_review"),
+		).toEqual({ kind: "ok", data: { version: [0, 9, 3], created: false } });
+		expect(
+			(await events(["evt_invoice_review"])).find(
+				(event) => event.id === "evt_invoice_review",
+			)?.board_version,
+		).toEqual([0, 9, 3]);
+		// Its Page left the flow: the event is left out, the bundle stays valid.
+		api.hub.unfitEvents.add("evt_invoice_review");
+		expect(await ids()).not.toContain("evt_invoice_review");
+		api.hub.unfitEvents.clear();
+		// An older hub ignores the names and exports no schedule.
+		api.hub.capabilities.latest = false;
+		api.hub.capabilities.schedules = false;
+		expect(await ids()).toEqual([
+			"evt_extract_http",
+			"evt_gpu_extract",
+			"evt_invoice_mcp",
+		]);
+		expect(
+			await readFlowVersion(api, api.profile, invoice, "flow_review"),
+		).toEqual({ kind: "missing_on_hub" });
+	});
+
+	test("publishing a flow version can be refused: no right, an edit lock, a flow that never compares equal", async () => {
+		const api = fakeDeviceApi();
+		const invoice = APPS.app_invoice_ai.id;
+		const publish = () =>
+			publishFlowVersion(api, api.profile, invoice, "flow_review");
+		api.hub.flows.edit(invoice, "flow_review");
+		api.hub.flows.canPublish = false;
+		expect(await publish()).toEqual({ kind: "flow_role" });
+		api.hub.flows.canPublish = true;
+		api.hub.flows.locked.add(`${invoice}/flow_review`);
+		expect(await publish()).toEqual({ kind: "flow_busy" });
+		api.hub.flows.locked.clear();
+		api.hub.flows.incomparable.add(`${invoice}/flow_review`);
+		expect(await publish()).toMatchObject({ kind: "flow_incomparable" });
+		// A pinned flow reads as its newest pin; a flow nothing mentions has no version.
+		expect(
+			data(await readFlowVersion(api, api.profile, invoice, "flow_gpu")),
+		).toEqual({ current: [1, 4, 0], newest: [1, 4, 0] });
+		expect(
+			data(await readFlowVersion(api, api.profile, invoice, "flow_unknown")),
+		).toEqual({ current: null, newest: null });
+	});
+
+	test("a schedule moves to a device only after a person released it and the service claimed it", async () => {
+		const api = fakeDeviceApi();
+		const { hub } = api;
+		const invoice = APPS.app_invoice_ai.id;
+		const event = "evt_invoice_reconcile";
+		const listed = async () =>
+			data(await listAppDevicePlacements(api, api.profile, invoice)).schedules;
+		expect(await listed()).toEqual([]);
+		// A device can't take a schedule nobody released to its service.
+		expect(hub.schedules.claim(edge, "invoice-extractor", [event])).toEqual({
+			server_time: SAMPLE_NOW,
+			claimed: [],
+			held: [{ event_id: event, reason: "not_released" }],
+		});
+		expect(
+			await releaseSchedule(
+				api,
+				api.profile,
+				invoice,
+				event,
+				edge,
+				"invoice-extractor",
+			),
+		).toEqual({ kind: "ok", data: { state: "released", since: SAMPLE_NOW } });
+		expect(await listed()).toEqual([
+			{
+				event_id: event,
+				state: "released",
+				since: SAMPLE_NOW,
+				device_id: edge,
+				placement_id: "invoice-extractor",
+			},
+		]);
+		// Another service is refused while this one is the place; a service without an approval can't ask.
+		await api.post(api.profile, `devices/${studio}/resource-grants`, {
+			placement_id: "invoice-reports",
+			deployment_id: "dep-reports",
+			project_id: invoice,
+			app_id: invoice,
+		});
+		expect(
+			hub.schedules.claim(studio, "invoice-reports", [event]).held,
+		).toEqual([{ event_id: event, reason: "runs_elsewhere" }]);
+		expect(() =>
+			hub.schedules.claim(lab, "invoice-extractor-gpu", [event]),
+		).toThrow("No working cloud approval");
+		expect(
+			hub.schedules.claim(edge, "invoice-extractor", [event]).claimed,
+		).toEqual([{ event_id: event, since: SAMPLE_NOW }]);
+		expect(await listed()).toEqual([
+			{
+				event_id: event,
+				state: "device",
+				since: SAMPLE_NOW,
+				seen_at: SAMPLE_NOW,
+				grant_id: EDGE_GRANT,
+				device_id: edge,
+				placement_id: "invoice-extractor",
+			},
+		]);
+		// Releasing it again to the same service changes nothing; to another one is refused.
+		expect(
+			await releaseSchedule(
+				api,
+				api.profile,
+				invoice,
+				event,
+				edge,
+				"invoice-extractor",
+			),
+		).toEqual({ kind: "ok", data: { state: "device", since: SAMPLE_NOW } });
+		expect(
+			await releaseSchedule(
+				api,
+				api.profile,
+				invoice,
+				event,
+				lab,
+				"invoice-extractor-gpu",
+			),
+		).toEqual({ kind: "schedule_elsewhere" });
+		// Giving it back starts the grace period; nobody else can take it meanwhile.
+		// invoice-extractor is mid-update (no process runs), so the hub waits 5 minutes, not 65.
+		const back = await giveBackSchedule(api, api.profile, invoice, event);
+		expect(back).toEqual({
+			kind: "ok",
+			data: { hub_resumes_at: SAMPLE_NOW + 300 },
+		});
+		expect(await listed()).toEqual([
+			{
+				event_id: event,
+				state: "returning",
+				hub_resumes_at: SAMPLE_NOW + 300,
+			},
+		]);
+		expect(
+			await releaseSchedule(
+				api,
+				api.profile,
+				invoice,
+				event,
+				lab,
+				"invoice-extractor-gpu",
+			),
+		).toEqual({ kind: "schedule_returning" });
+		expect(
+			hub.schedules.claim(edge, "invoice-extractor", [event]).held,
+		).toEqual([{ event_id: event, reason: "not_released" }]);
+		// A person without the right to edit the app's events can neither move it nor give it back.
+		hub.schedules.canEditEvents = false;
+		expect(
+			await releaseSchedule(
+				api,
+				api.profile,
+				invoice,
+				"evt_other",
+				edge,
+				"invoice-extractor",
+			),
+		).toEqual({ kind: "schedule_role" });
+		expect(await giveBackSchedule(api, api.profile, invoice, event)).toEqual({
+			kind: "schedule_role",
+		});
+		// An older hub has neither the routes nor the list.
+		hub.capabilities.schedules = false;
+		expect(
+			await releaseSchedule(
+				api,
+				api.profile,
+				invoice,
+				event,
+				edge,
+				"invoice-extractor",
+			),
+		).toEqual({ kind: "missing_on_hub" });
+		expect(await listed()).toBeUndefined();
+	});
+
+	test("a hub of round two says which types it hands to devices; an older hub says nothing", async () => {
+		const api = fakeDeviceApi();
+		const raw = () =>
+			api.get<Record<string, unknown>>(
+				api.profile,
+				`apps/${APPS.app_invoice_ai.id}/device-placements`,
+			);
+		expect((await raw()).event_types).toEqual([
+			"http",
+			"simple_chat",
+			"rest",
+			"mcp",
+			"daemon",
+			"cron",
+			"api",
+			"quick_action",
+			"generic_form",
+			"telegram",
+			"discord",
+		]);
+		api.hub.capabilities.eventTypes = false;
+		expect(await raw()).not.toHaveProperty("event_types");
+		expect(await raw()).toHaveProperty("schedules");
+	});
+
+	test("the export takes the types of round two it is asked for: out of five, each once", async () => {
+		const api = fakeDeviceApi();
+		const read = (query: string) =>
+			outcome(() =>
+				send(
+					api,
+					"GET",
+					`apps/${APPS.app_invoice_ai.id}/device-metadata${query}`,
+				),
+			);
+		for (const query of [
+			"?types=generic_form",
+			"?types=api,quick_action,generic_form,telegram,discord",
+			"?types=",
+			"?latest=evt_invoice_review&types=api",
+		])
+			expect(await read(query)).toBe("ok");
+		for (const query of [
+			"?types=cron",
+			"?types=api,api",
+			"?types=API",
+			"?types=api,",
+		])
+			expect(await read(query)).toBe("coded 400");
+		// A hub before round two has no such parameter: it reads past it.
+		api.hub.capabilities.eventTypes = false;
+		expect(await read("?types=cron")).toBe("ok");
+		expect(api.writes()).toEqual([]);
+	});
+
+	test("an event of round two is in the bundle only when its type was named; an older hub never sends one", async () => {
+		const api = fakeDeviceApi();
+		const backend = { apiState: api } as unknown as IBackendState;
+		const shop = APPS.app_shop_assistant.id;
+		const ids = async (types: string[] = []) =>
+			(
+				await prepareOnlineMetadata(
+					shop,
+					backend,
+					api.profile,
+					undefined,
+					[],
+					types,
+				)
+			).catalog.events
+				.map((event) => event.id)
+				.sort();
+		// The one-time schedule is a `cron` event: round one's bundle has it.
+		expect(await ids()).toEqual(["evt_shop_prices"]);
+		expect(await ids(["generic_form"])).toEqual([
+			"evt_shop_prices",
+			"evt_shop_return",
+		]);
+		expect(
+			await ids(["telegram", "api", "discord", "generic_form", "quick_action"]),
+		).toEqual([
+			"evt_shop_discord",
+			"evt_shop_orders",
+			"evt_shop_prices",
+			"evt_shop_return",
+			"evt_shop_telegram",
+		]);
+		expect(api.sent("GET", /device-metadata/).at(-1)?.[1]).toBe(
+			`apps/${shop}/device-metadata?types=api,discord,generic_form,quick_action,telegram`,
+		);
+		// What reaches a device of each: routes and bot settings, never a token.
+		const bundle = await api.get<{
+			documents: Record<string, { config?: number[] }>;
+		}>(api.profile, `apps/${shop}/device-metadata?types=api,telegram,discord`);
+		const configOf = (event: string) =>
+			JSON.parse(
+				new TextDecoder().decode(
+					Uint8Array.from(
+						bundle.documents[`events/${event}/versions/1/0/0`]?.config ?? [],
+					),
+				),
+			) as Record<string, unknown>;
+		expect(configOf("evt_shop_orders")).toEqual({
+			sink_type: "http",
+			method: "GET",
+			path: "/orders",
+			public_endpoint: false,
+		});
+		expect(configOf("evt_shop_telegram")).not.toHaveProperty("bot_token");
+		expect(configOf("evt_shop_discord")).not.toHaveProperty("token");
+		expect(configOf("evt_shop_telegram").chat_whitelist).toEqual([]);
+		expect(JSON.stringify(bundle)).not.toContain("fixture-token");
+		expect(JSON.stringify(bundle)).not.toContain("shop-orders-own-token");
+		// The placements answer names what this hub hands to devices.
+		expect(
+			data(await listAppDevicePlacements(api, api.profile, shop)).event_types,
+		).toContain("generic_form");
+		api.hub.capabilities.eventTypes = false;
+		expect(await ids(["generic_form", "telegram"])).toEqual([
+			"evt_shop_prices",
+		]);
+		expect(
+			data(await listAppDevicePlacements(api, api.profile, shop)).event_types,
+		).toBeUndefined();
+	});
+
+	test("an exported event keeps its config without a credential", async () => {
+		const api = fakeDeviceApi();
+		const invoice = APPS.app_invoice_ai;
+		const stored = {
+			sink_type: "http",
+			path: "/extract",
+			method: "POST",
+			public_endpoint: true,
+			auth_token: "tok-auth",
+			Bot_Token: "tok-bot",
+			webhook_secret: "tok-hook",
+			secret_key: "tok-key",
+			password: "tok-pass",
+			openai_api_key: "tok-api",
+		};
+		api.hub.apps = {
+			...api.hub.apps,
+			[invoice.id]: {
+				...invoice,
+				events: invoice.events.map((event) =>
+					event.id === "evt_extract_http"
+						? {
+								...event,
+								config: [...new TextEncoder().encode(JSON.stringify(stored))],
+							}
+						: event,
+				),
+			},
+		};
+		const bundle = await api.get<{
+			documents: Record<string, { config?: number[] }>;
+		}>(api.profile, `apps/${invoice.id}/device-metadata`);
+		const config = bundle.documents["events/evt_extract_http/versions/1/5/0"]
+			?.config as number[];
+		expect(
+			JSON.parse(new TextDecoder().decode(Uint8Array.from(config))),
+		).toEqual({
+			sink_type: "http",
+			path: "/extract",
+			method: "POST",
+			public_endpoint: true,
+		});
+		expect(JSON.stringify(bundle)).not.toContain("tok-");
+		// A schedule still travels as its config.
+		const nightly = bundle.documents[
+			"events/evt_invoice_reconcile/versions/1/0/0"
+		]?.config as number[];
+		expect(
+			JSON.parse(new TextDecoder().decode(Uint8Array.from(nightly))),
+		).toEqual({ expression: "0 0 2 * * *", timezone: "Europe/Berlin" });
+	});
+
+	test("a service that drops a schedule hands it back; revoking its cloud access does too", async () => {
+		const api = fakeDeviceApi();
+		const { hub } = api;
+		const invoice = APPS.app_invoice_ai.id;
+		const event = "evt_invoice_reconcile";
+		const take = () => {
+			hub.schedules.release(invoice, event, edge, "invoice-extractor");
+			return hub.schedules.claim(edge, "invoice-extractor", [event]);
+		};
+		expect(take().claimed).toHaveLength(1);
+		// Its next claim call no longer lists the event: confirmed by the device, 5 minutes.
+		hub.schedules.claim(edge, "invoice-extractor", []);
+		expect(hub.schedules.listing(invoice)).toEqual([
+			{
+				event_id: event,
+				state: "returning",
+				hub_resumes_at: SAMPLE_NOW + 300,
+			},
+		]);
+		hub.now = () => SAMPLE_NOW + 301;
+		expect(hub.schedules.listing(invoice)).toEqual([]);
+		expect(take().claimed).toEqual([
+			{ event_id: event, since: SAMPLE_NOW + 301 },
+		]);
+		await api.fetch(
+			api.profile,
+			`devices/${edge}/resource-grants/${EDGE_GRANT}`,
+			{ method: "DELETE" },
+		);
+		// The release stays: a new approval for the same service can claim again.
+		expect(hub.schedules.listing(invoice)).toMatchObject([
+			{ event_id: event, state: "released", device_id: edge },
+		]);
+		expect(() =>
+			hub.schedules.claim(edge, "invoice-extractor", [event]),
+		).toThrow();
+	});
 });
 
 describe("fake agent", () => {
@@ -639,6 +1120,1488 @@ describe("fake agent", () => {
 		);
 		expect(row()).toBeUndefined();
 	});
+
+	test("a service reports its schedules only while it runs, armed or held; its claim on the hub stays through a stop", async () => {
+		fake = await createFakeWorkspace(sampleFleet(), { unlock: [edge] });
+		const { workspace, api } = fake;
+		const agent = api.agent(edge);
+		const call = workspace.live.call(edge);
+		const invoice = SAMPLE_APPS.invoiceAi;
+		const event = "evt_invoice_reconcile";
+		const row = () => seeded(agent.placement("invoice-extractor"));
+		const base = seeded(agent.placement("invoice-extractor"));
+		const config = {
+			id: "invoice-extractor",
+			project_id: invoice,
+			deployment_id: base.deployment_id,
+			revision: base.revision,
+			source: "online",
+			events: [
+				{
+					event_id: "evt_extract_http",
+					event_version: [1, 5, 0],
+					board_version: [2, 2, 0],
+				},
+				{ event_id: event, event_version: [1, 0, 0], board_version: [1, 3, 0] },
+			],
+		};
+		const revision = base.config_revision;
+		// Nobody released it: the service runs, the schedule is held and the hub keeps running it.
+		await call({
+			type: "apply",
+			config,
+			expected_revision: revision,
+			start: true,
+		});
+		expect(row().events?.map((value) => value.event_id)).toEqual([
+			"evt_extract_http",
+			event,
+		]);
+		expect(row().schedules).toMatchObject([
+			{ event_id: event, hold: "not_released", next_at: null },
+		]);
+		expect(api.hub.schedules.listing(invoice)).toEqual([]);
+		// Released, then the next start claims and arms it.
+		api.hub.schedules.release(invoice, event, edge, "invoice-extractor");
+		await call({
+			type: "restart",
+			placement_id: "invoice-extractor",
+			expected_revision: revision + 1,
+		});
+		expect(row().schedules).toEqual([
+			{
+				event_id: event,
+				expression: "0 0 2 * * *",
+				timezone: "Europe/Berlin",
+				hold: null,
+				// 02:00 in Berlin is 00:00 UTC in summer time; the sample's now is 2026-09-30 12:00 UTC.
+				next_at: Date.UTC(2026, 9, 1, 0, 0, 0) / 1_000,
+				running: false,
+				last_at: null,
+				last_outcome: null,
+				runs: 0,
+				failed: 0,
+				skipped: 0,
+				last_skip: null,
+				clock_behind: false,
+			},
+		]);
+		expect(row().schedules_truncated).toBe(false);
+		expect(api.hub.schedules.listing(invoice)).toMatchObject([
+			{ event_id: event, state: "device", device_id: edge },
+		]);
+		// The live row carries it; a snapshot only what does not change by itself.
+		await workspace.live.refreshInspection(edge);
+		expect(
+			workspace.live
+				.inspection(edge)
+				?.value.placements.find((value) => value.id === "invoice-extractor")
+				?.schedules?.[0],
+		).toMatchObject({ event_id: event, hold: null, runs: 0 });
+		api.hub.publishStatus(edge, agent);
+		const [stream] = api.hub.streams.get(edge) ?? [];
+		const snapshot = (
+			stream?.payload as {
+				inspection: {
+					features?: Record<string, number>;
+					placements: { id: string; schedules?: unknown[] }[];
+				};
+			}
+		).inspection;
+		expect(snapshot.features?.scheduled_events).toBe(1);
+		expect(
+			snapshot.placements.find((value) => value.id === "invoice-extractor")
+				?.schedules,
+		).toEqual([
+			{
+				event_id: event,
+				expression: "0 0 2 * * *",
+				timezone: "Europe/Berlin",
+				hold: null,
+				last_outcome: null,
+			},
+		]);
+		// Stop: no schedule fact, and the hub does not take it over.
+		await call({
+			type: "stop",
+			placement_id: "invoice-extractor",
+			expected_revision: revision + 1,
+		});
+		expect(row().schedules).toBeUndefined();
+		expect(api.hub.schedules.listing(invoice)).toMatchObject([
+			{ event_id: event, state: "device" },
+		]);
+		// An update that drops the schedule hands it back once the service runs again.
+		await call({
+			type: "apply",
+			config: { ...config, events: config.events.slice(0, 1) },
+			expected_revision: revision + 1,
+			start: true,
+		});
+		expect(row().schedules).toBeUndefined();
+		expect(api.hub.schedules.listing(invoice)).toMatchObject([
+			{ event_id: event, state: "returning" },
+		]);
+	});
+
+	test("an agent without the schedule flag fails a service that has one, and refuses schedules at discovery", async () => {
+		const withoutFlag = {
+			placement_events: 1,
+			placement_diagnostics: 1,
+		} as const;
+		fake = await createFakeWorkspace(sampleFleet(), {
+			unlock: [edge],
+			agentFeatures: withoutFlag,
+		});
+		const { workspace, api } = fake;
+		const agent = api.agent(edge);
+		const call = workspace.live.call(edge);
+		const base = seeded(agent.placement("nightly-sync"));
+		await call({
+			type: "apply",
+			config: {
+				id: "nightly-sync",
+				project_id: SAMPLE_APPS.crmSync,
+				deployment_id: base.deployment_id,
+				revision: base.revision,
+				source: "offline",
+				events: [
+					{
+						event_id: "evt_crm_hourly",
+						event_version: [1, 0, 0],
+						board_version: [4, 1, 0],
+					},
+				],
+			},
+			expected_revision: base.config_revision,
+			start: true,
+		});
+		expect(agent.placement("nightly-sync")).toMatchObject({
+			desired_state: "running",
+			observed_state: "failed",
+			running_replicas: 0,
+			has_error: true,
+			last_error: "Event evt_crm_hourly needs an unsupported cron sink.",
+		});
+		expect(agent.placement("nightly-sync")?.schedules).toBeUndefined();
+		const describe = async () => {
+			const answer = await call({
+				type: "artifact",
+				request: {
+					kind: "describe",
+					project_id: SAMPLE_APPS.crmSync,
+					revision: "a".repeat(64),
+					event_id: null,
+					after: null,
+				},
+			});
+			return (answer.result.items as Record<string, unknown>[]).find(
+				(item) => item.id === "evt_crm_hourly",
+			);
+		};
+		const old = await describe();
+		expect(old).toMatchObject({
+			eligible: false,
+			readiness_kind: "unsupported",
+			rollout_supported: false,
+		});
+		expect(old).not.toHaveProperty("kind");
+		agent.features = { ...withoutFlag, scheduled_events: 1 };
+		expect(await describe()).toMatchObject({
+			eligible: true,
+			readiness_kind: "explicit",
+			rollout_supported: true,
+			kind: "scheduled",
+			schedule: { expression: "0 0 * * * *", timezone: "UTC" },
+			ineligible_code: null,
+		});
+	});
+
+	test("two services of one device never both run a schedule: the second holds it", async () => {
+		fake = await createFakeWorkspace(sampleFleet(), { unlock: [edge] });
+		const { workspace, api } = fake;
+		const agent = api.agent(edge);
+		const call = workspace.live.call(edge);
+		const config = (id: string) => ({
+			id,
+			project_id: SAMPLE_APPS.crmSync,
+			deployment_id: `dep-${id}`,
+			revision: "r1",
+			source: "offline",
+			events: [
+				{
+					event_id: "evt_crm_hourly",
+					event_version: [1, 0, 0],
+					board_version: [4, 1, 0],
+				},
+			],
+		});
+		for (const id of ["hourly-a", "hourly-b"])
+			await call({
+				type: "apply",
+				config: config(id),
+				expected_revision: 0,
+				start: true,
+			});
+		expect(agent.placement("hourly-a")?.schedules?.[0].hold).toBeNull();
+		expect(agent.placement("hourly-b")?.schedules?.[0].hold).toBe(
+			"other_service",
+		);
+	});
+});
+
+describe("fake agent, round two", () => {
+	const R2_FLAGS = {
+		api_events: 1,
+		scheduled_once: 1,
+		on_demand_events: 1,
+		telegram_bots: 1,
+		discord_bots: 1,
+	} as const;
+	type Triple = [number, number, number];
+	const bytes = (value: unknown) => [
+		...new TextEncoder().encode(JSON.stringify(value)),
+	];
+	const kindsEvent = (
+		id: string,
+		name: string,
+		type: string,
+		version: Triple,
+		board: Triple,
+		config?: unknown,
+	): AppEventInput => ({
+		id,
+		name,
+		active: true,
+		event_type: type,
+		event_version: version,
+		board_version: board,
+		default_page_id: null,
+		boardId: "flow_main",
+		...(config === undefined ? {} : { config: bytes(config) }),
+	});
+	const KINDS = "app_kinds";
+	/** One event of each kind of round two, as the rows of design §1.5 name them. */
+	const KIND_EVENTS = {
+		orders: kindsEvent("evt_orders", "Orders", "api", [0, 0, 2], [0, 0, 5], {
+			sink_type: "http",
+			method: "GET",
+			path: "/orders",
+			public_endpoint: true,
+			auth_token: "tok-endpoint",
+		}),
+		once: kindsEvent("evt_once", "Migration", "cron", [0, 0, 4], [0, 0, 7], {
+			scheduled_for: { date: "2026-09-24", time: "09:00" },
+			timezone: "Europe/Berlin",
+		}),
+		form: kindsEvent(
+			"evt_notes_form",
+			"New note",
+			"generic_form",
+			[1, 0, 0],
+			[3, 0, 1],
+		),
+		helper: kindsEvent(
+			"evt_helper",
+			"Helper",
+			"telegram",
+			[0, 0, 1],
+			[0, 0, 3],
+			{
+				chat_whitelist: [],
+				bot_token: "123456789:tok-telegram-abcdefghijklmn",
+			},
+		),
+	};
+	const kindsApp = (extra: AppEventInput[] = []): AppInput => ({
+		id: KINDS,
+		name: "Kinds",
+		visibility: "Offline",
+		versions: null,
+		events: [...Object.values(KIND_EVENTS), ...extra],
+	});
+	const pin = (event: AppEventInput) => ({
+		event_id: event.id,
+		event_version: event.event_version,
+		board_version: event.board_version,
+	});
+	const tokenKey = (eventId: string) => `event.${eventId}.bot_token`;
+
+	/** edge-berlin-01 with every flag of round two and the app of `kindsApp`; `lacking(flag)` takes one away. */
+	async function onEdge(extra: AppEventInput[] = []) {
+		fake = await createFakeWorkspace(sampleFleet(), { unlock: [edge] });
+		const agent = fake.api.agent(edge);
+		const full: AgentFeatures = { ...agent.features, ...R2_FLAGS };
+		agent.features = full;
+		const lacking = (...flags: AgentFeature[]) => {
+			agent.features = Object.fromEntries(
+				Object.entries(full).filter(
+					([flag]) => !flags.includes(flag as AgentFeature),
+				),
+			) as AgentFeatures;
+		};
+		fake.hub.apps = { ...fake.hub.apps, [KINDS]: kindsApp(extra) };
+		const call = fake.workspace.live.call(edge);
+		const deploy = async (
+			events: AppEventInput[],
+			options: {
+				id?: string;
+				start?: boolean;
+				secrets?: Record<string, string>;
+			} = {},
+		) => {
+			const id = options.id ?? "kinds";
+			return call({
+				type: "apply",
+				config: {
+					id,
+					project_id: KINDS,
+					deployment_id: `dep-${id}`,
+					revision: "r1",
+					source: "offline",
+					events: events.map(pin),
+					secret_overrides: options.secrets ?? {},
+				},
+				expected_revision: agent.placement(id)?.config_revision ?? 0,
+				start: options.start !== false,
+			});
+		};
+		const row = (id = "kinds") => seeded(agent.placement(id));
+		return {
+			agent,
+			call,
+			deploy,
+			row,
+			lacking,
+			api: fake.api,
+			hub: fake.hub,
+		};
+	}
+
+	test("discovery rows say the kind, route and once of round two (the literals of design §1.5)", async () => {
+		const { call, lacking } = await onEdge();
+		const describeKinds = async () =>
+			(
+				await call({
+					type: "artifact",
+					request: {
+						kind: "describe",
+						project_id: KINDS,
+						revision: "a".repeat(64),
+						event_id: null,
+						after: null,
+					},
+				})
+			).result.items as Record<string, unknown>[];
+		const literal = [
+			{
+				id: "evt_helper",
+				name: "Helper",
+				event_type: "telegram",
+				event_version: [0, 0, 1],
+				board_version: [0, 0, 3],
+				hosted: false,
+				eligible: true,
+				readiness_kind: "explicit",
+				rollout_supported: true,
+				readiness_error: null,
+				kind: "bot",
+				ineligible_code: null,
+			},
+			{
+				id: "evt_notes_form",
+				name: "New note",
+				event_type: "generic_form",
+				event_version: [1, 0, 0],
+				board_version: [3, 0, 1],
+				hosted: false,
+				eligible: true,
+				readiness_kind: "explicit",
+				rollout_supported: true,
+				readiness_error: null,
+				kind: "on_demand",
+				ineligible_code: null,
+			},
+			{
+				id: "evt_once",
+				name: "Migration",
+				event_type: "cron",
+				event_version: [0, 0, 4],
+				board_version: [0, 0, 7],
+				hosted: false,
+				eligible: true,
+				readiness_kind: "explicit",
+				rollout_supported: true,
+				readiness_error: null,
+				kind: "scheduled",
+				once: {
+					date: "2026-09-24",
+					time: "09:00",
+					at: 1790233200,
+					timezone: "Europe/Berlin",
+				},
+				ineligible_code: null,
+			},
+			{
+				id: "evt_orders",
+				name: "Orders",
+				event_type: "api",
+				event_version: [0, 0, 2],
+				board_version: [0, 0, 5],
+				hosted: true,
+				eligible: true,
+				readiness_kind: "listener",
+				rollout_supported: true,
+				readiness_error: null,
+				kind: "served",
+				route: { method: "GET", path: "/orders" },
+				ineligible_code: null,
+			},
+		];
+		expect(await describeKinds()).toEqual(literal);
+		// An agent built without a part answers that type as it answers any type it doesn't know.
+		const unknown = (id: string) => ({
+			eligible: false,
+			readiness_kind: "unsupported",
+			rollout_supported: false,
+			readiness_error: null,
+			ineligible_code: null,
+			hosted: false,
+			id,
+		});
+		for (const [flag, id] of [
+			["api_events", "evt_orders"],
+			["on_demand_events", "evt_notes_form"],
+			["telegram_bots", "evt_helper"],
+		] as const) {
+			lacking(flag);
+			const row = (await describeKinds()).find((item) => item.id === id);
+			expect(row).toMatchObject(unknown(id));
+			expect(row).not.toHaveProperty("kind");
+			expect(row).not.toHaveProperty("route");
+		}
+		// Without one-time schedules it says why, and sends no instant.
+		lacking("scheduled_once");
+		const once = (await describeKinds()).find((item) => item.id === "evt_once");
+		expect(once).toMatchObject({
+			eligible: false,
+			readiness_kind: "explicit",
+			rollout_supported: false,
+			kind: "scheduled",
+			ineligible_code: "schedule_once",
+		});
+		expect(once).not.toHaveProperty("once");
+		expect(once).not.toHaveProperty("schedule");
+	});
+
+	test("a device describes the copy of a revision it holds, not an event record edited since", async () => {
+		const { call, deploy, hub } = await onEdge();
+		await deploy([KIND_EVENTS.orders]);
+		hub.apps = {
+			...hub.apps,
+			[KINDS]: {
+				...kindsApp(),
+				events: kindsApp().events.map((event) =>
+					event.id === "evt_orders"
+						? { ...event, config: bytes({ path: "/orders-v2", method: "GET" }) }
+						: event,
+				),
+			},
+		};
+		const routeAt = async (revision: string) =>
+			(
+				(
+					await call({
+						type: "artifact",
+						request: {
+							kind: "describe",
+							project_id: KINDS,
+							revision,
+							event_id: null,
+							after: null,
+						},
+					})
+				).result.items as { id: string; route?: unknown }[]
+			).find((item) => item.id === "evt_orders")?.route;
+		expect(await routeAt("r1")).toEqual({ method: "GET", path: "/orders" });
+		expect(await routeAt("r2")).toEqual({ method: "GET", path: "/orders-v2" });
+	});
+
+	test("a route, a bot setting or a one-time instant the device can't read is refused with its code", async () => {
+		const broken = [
+			kindsEvent("evt_no_path", "No path", "api", [1, 0, 0], [1, 0, 0], {}),
+			kindsEvent("evt_trace", "Trace", "api", [1, 0, 0], [1, 0, 0], {
+				path: "/x",
+				method: "TRACE",
+			}),
+			kindsEvent("evt_ui", "UI", "http", [1, 0, 0], [1, 0, 0], {
+				path: "/ui/x",
+				method: "GET",
+			}),
+			kindsEvent("evt_bad_bot", "Bad bot", "discord", [1, 0, 0], [1, 0, 0], {
+				intents: ["Guilds", "Telepathy"],
+			}),
+			kindsEvent("evt_gap", "Gap", "cron", [1, 0, 0], [1, 0, 0], {
+				scheduled_for: { date: "2027-03-28", time: "02:30" },
+				timezone: "Europe/Berlin",
+			}),
+		];
+		const { call, deploy, row, hub } = await onEdge(broken);
+		const items = (
+			await call({
+				type: "artifact",
+				request: {
+					kind: "describe",
+					project_id: KINDS,
+					revision: "a".repeat(64),
+					event_id: null,
+					after: null,
+				},
+			})
+		).result.items as Record<string, unknown>[];
+		const codes = Object.fromEntries(
+			items.map((item) => [item.id, [item.eligible, item.ineligible_code]]),
+		);
+		expect(codes).toMatchObject({
+			evt_no_path: [false, "route_missing"],
+			evt_trace: [false, "route_invalid"],
+			evt_ui: [false, "route_reserved"],
+			evt_bad_bot: [false, "bot_invalid"],
+			evt_gap: [false, "schedule_invalid"],
+		});
+		// Validation at start refuses each, with the device's sentence.
+		for (const event of broken) {
+			await deploy([event], { id: `svc-${event.id.replaceAll("_", "-")}` });
+			expect(row(`svc-${event.id.replaceAll("_", "-")}`)).toMatchObject({
+				observed_state: "failed",
+				has_error: true,
+			});
+		}
+		// Two events of one service on one method and path.
+		const twin = kindsEvent(
+			"evt_orders_2",
+			"Orders 2",
+			"api",
+			[1, 0, 0],
+			[1, 0, 0],
+			{
+				path: "/orders",
+				method: "get",
+			},
+		);
+		hub.apps = { ...hub.apps, [KINDS]: kindsApp([twin]) };
+		await deploy([KIND_EVENTS.orders, twin], { id: "twins" });
+		expect(row("twins").last_error).toBe(
+			"Two events claim the same method and service path",
+		);
+	});
+
+	test("an agent without a flag fails a service of that type; a bot token key belongs to a bot of the service", async () => {
+		const { agent, call, deploy, row, lacking } = await onEdge();
+		const failed = () => [row().observed_state, row().last_error];
+		for (const [flag, event, sentence] of [
+			[
+				"api_events",
+				KIND_EVENTS.orders,
+				"Event evt_orders needs an unsupported api sink.",
+			],
+			[
+				"scheduled_once",
+				KIND_EVENTS.once,
+				"Event evt_once has a one-time schedule this device can't run.",
+			],
+			[
+				"on_demand_events",
+				KIND_EVENTS.form,
+				"Event evt_notes_form needs an unsupported generic_form sink.",
+			],
+			[
+				"telegram_bots",
+				KIND_EVENTS.helper,
+				"Event evt_helper needs an unsupported telegram sink.",
+			],
+		] as const) {
+			lacking(flag);
+			await deploy([event], {
+				secrets:
+					event === KIND_EVENTS.helper ? { [tokenKey(event.id)]: "s1" } : {},
+			});
+			expect(failed()).toEqual(["failed", sentence]);
+		}
+		lacking();
+		await deploy([KIND_EVENTS.helper]);
+		expect(failed()).toEqual(["failed", "Event evt_helper has no bot token."]);
+		await deploy([KIND_EVENTS.orders, KIND_EVENTS.helper], {
+			secrets: {
+				[tokenKey("evt_helper")]: "s1",
+				[tokenKey("evt_orders")]: "s2",
+			},
+		});
+		expect(failed()).toEqual([
+			"failed",
+			"placement variable event.evt_orders.bot_token is absent from the selected pinned boards",
+		]);
+		await deploy([KIND_EVENTS.orders, KIND_EVENTS.helper], {
+			secrets: { [tokenKey("evt_helper")]: "s1" },
+		});
+		expect(failed()).toEqual(["running", undefined]);
+		// A safe update the device refuses fails validation and leaves the running revision.
+		const before = row().config_revision;
+		const staged = await call({
+			type: "stage_rollout",
+			config: { ...agent.configs.get("kinds"), secret_overrides: {} },
+			expected_revision: before,
+		});
+		const rolloutId = (staged.result as { rollout_id: string }).rollout_id;
+		await call({ type: "activate_rollout", rollout_id: rolloutId });
+		expect(
+			(await call({ type: "rollout", rollout_id: rolloutId })).result,
+		).toMatchObject({ state: "validating" });
+		expect(
+			(await call({ type: "rollout", rollout_id: rolloutId })).result,
+		).toMatchObject({ state: "failed", failure_code: "validation_failed" });
+		expect([row().config_revision, row().observed_state]).toEqual([
+			before,
+			"running",
+		]);
+	});
+
+	test("a bot connects once nothing holds it; a second service of the device holds it; a snapshot says only ok", async () => {
+		const { agent, api, call, deploy, row, lacking } = await onEdge();
+		const secrets = { [tokenKey("evt_helper")]: "bot-helper" };
+		await deploy([KIND_EVENTS.helper], { secrets });
+		expect(row().bots).toEqual([
+			{
+				event_id: "evt_helper",
+				provider: "telegram",
+				state: "connected",
+				hold: null,
+				bot_name: "Helper",
+				connected_at: SAMPLE_NOW,
+				last_message_at: null,
+				last_outcome: null,
+				running: 0,
+				runs: 0,
+				runs_today: 0,
+				failed: 0,
+				dropped: 0,
+			},
+		]);
+		expect(row().bots_truncated).toBe(false);
+		await deploy([KIND_EVENTS.helper], { id: "kinds-b", secrets });
+		expect(row("kinds-b").bots?.[0]).toMatchObject({
+			state: "waiting",
+			hold: "other_service",
+			connected_at: null,
+		});
+		// The provider refused the token: the bot stays off until the service restarts.
+		agent.botFacts.set("evt_helper", {
+			state: "token_refused",
+			bot_name: null,
+		});
+		await call({
+			type: "restart",
+			placement_id: "kinds",
+			expected_revision: row().config_revision,
+		});
+		expect(row().bots?.[0]).toMatchObject({
+			state: "token_refused",
+			bot_name: null,
+			connected_at: null,
+		});
+		// What a test says about a bot applies at its next start, or at once with `report`.
+		agent.botFacts.clear();
+		agent.report(row());
+		api.hub.publishStatus(edge, agent);
+		const snapshot = (
+			api.hub.streams.get(edge)?.at(-1)?.payload as {
+				inspection: { placements: PlacementStatusPlus[] };
+			}
+		).inspection.placements;
+		expect(snapshot.find((value) => value.id === "kinds")?.bots).toEqual([
+			{ event_id: "evt_helper", provider: "telegram", hold: null, state: "ok" },
+		]);
+		expect(snapshot.find((value) => value.id === "kinds-b")?.bots).toEqual([
+			{
+				event_id: "evt_helper",
+				provider: "telegram",
+				hold: "other_service",
+				state: "waiting",
+			},
+		]);
+		// The token saved on the event never reaches a fact, a snapshot or a command.
+		expect(
+			JSON.stringify([api.hub.streams.get(edge), api.commands, agent.rows()]),
+		).not.toContain("tok-telegram");
+		// An agent without a bot flag sends no bot list.
+		lacking("telegram_bots", "discord_bots");
+		const wire = agent.rows().find((value) => value.id === "kinds");
+		expect(wire).not.toHaveProperty("bots");
+	});
+
+	test("an online service claims its bots with its schedules, and connects a bot only after a person released it", async () => {
+		fake = await createFakeWorkspace(sampleFleet(), { unlock: [edge] });
+		const { api, workspace } = fake;
+		const agent = api.agent(edge);
+		agent.features = { ...agent.features, ...R2_FLAGS };
+		const invoice = APPS.app_invoice_ai;
+		const bot = kindsEvent(
+			"evt_invoice_bot",
+			"Invoice bot",
+			"discord",
+			[1, 0, 0],
+			[2, 2, 0],
+			{
+				channel_whitelist: ["123"],
+			},
+		);
+		api.hub.apps = {
+			...api.hub.apps,
+			[invoice.id]: { ...invoice, events: [...invoice.events, bot] },
+		};
+		const call = workspace.live.call(edge);
+		const base = seeded(agent.placement("invoice-extractor"));
+		const existing = await readExistingDeployment(
+			call,
+			"invoice-extractor",
+			invoice.id,
+		);
+		await call({
+			type: "apply",
+			config: {
+				...existing.config,
+				events: [
+					{
+						event_id: "evt_invoice_reconcile",
+						event_version: [1, 0, 0],
+						board_version: [1, 3, 0],
+					},
+					pin(bot),
+				],
+				secret_overrides: { [tokenKey(bot.id)]: "bot-secret" },
+			},
+			expected_revision: base.config_revision,
+			start: true,
+		});
+		const row = () => seeded(agent.placement("invoice-extractor"));
+		expect(row().bots).toMatchObject([
+			{
+				event_id: bot.id,
+				provider: "discord",
+				state: "waiting",
+				hold: "not_released",
+			},
+		]);
+		expect(row().schedules).toMatchObject([
+			{ event_id: "evt_invoice_reconcile", hold: "not_released" },
+		]);
+		api.hub.schedules.release(invoice.id, bot.id, edge, "invoice-extractor");
+		await call({
+			type: "restart",
+			placement_id: "invoice-extractor",
+			expected_revision: row().config_revision,
+		});
+		expect(row().bots?.[0]).toMatchObject({ state: "connected", hold: null });
+		expect(api.hub.schedules.listing(invoice.id)).toMatchObject([
+			{ event_id: bot.id, state: "device", device_id: edge },
+		]);
+		// One place per bot: it can't be released to another service while this one holds it.
+		expect(() =>
+			api.hub.schedules.release(invoice.id, bot.id, studio, "invoice-reports"),
+		).toThrow(`Schedule ${bot.id} runs on another service`);
+		const listing = await listAppDevicePlacements(api, api.profile, invoice.id);
+		expect(data(listing).schedules).toMatchObject([
+			{ event_id: bot.id, state: "device" },
+		]);
+	});
+
+	test("a one-time schedule runs once, also across a stop and a start; one deployed after its time has passed", async () => {
+		const ahead = kindsEvent("evt_soon", "Soon", "cron", [1, 0, 0], [1, 0, 0], {
+			scheduled_for: { date: "2026-10-01", time: "09:00" },
+			timezone: "Europe/Berlin",
+		});
+		const { api, agent, call, hub, deploy, row } = await onEdge([ahead]);
+		await deploy([KIND_EVENTS.once]);
+		expect(row().schedules).toEqual([
+			{
+				event_id: "evt_once",
+				once_at: 1790233200,
+				timezone: "Europe/Berlin",
+				once_state: "passed",
+				hold: null,
+				next_at: null,
+				running: false,
+				last_at: null,
+				last_outcome: null,
+			},
+		]);
+		await deploy([ahead], { id: "soon" });
+		const at = Date.UTC(2026, 9, 1, 7) / 1000;
+		expect(row("soon").schedules?.[0]).toMatchObject({
+			once_at: at,
+			once_state: "pending",
+			next_at: at,
+		});
+		// Its time comes while it runs (by the device's clock): it runs, once.
+		agent.online = true;
+		hub.now = () => at + 60;
+		agent.rows();
+		expect(row("soon").schedules?.[0]).toMatchObject({
+			once_state: "ran",
+			last_outcome: "succeeded",
+			next_at: null,
+		});
+		await call({
+			type: "stop",
+			placement_id: "soon",
+			expected_revision: row("soon").config_revision,
+		});
+		// A stopped service still reports the finished one, and nothing else.
+		expect(row("soon").schedules).toMatchObject([
+			{ event_id: "evt_soon", once_state: "ran" },
+		]);
+		await call({
+			type: "start",
+			placement_id: "soon",
+			expected_revision: row("soon").config_revision,
+		});
+		expect(row("soon").schedules?.[0]).toMatchObject({
+			once_state: "ran",
+			last_at: at + 60,
+		});
+		api.hub.publishStatus(edge, agent);
+		const snapshot = (
+			api.hub.streams.get(edge)?.at(-1)?.payload as {
+				inspection: { placements: PlacementStatusPlus[] };
+			}
+		).inspection.placements.find((value) => value.id === "soon");
+		expect(snapshot?.schedules).toEqual([
+			{
+				event_id: "evt_soon",
+				once_at: at,
+				timezone: "Europe/Berlin",
+				once_state: "ran",
+				hold: null,
+				last_outcome: "succeeded",
+			},
+		]);
+	});
+
+	test("a one-time schedule whose service was down over its time is missed", async () => {
+		const ahead = kindsEvent("evt_soon", "Soon", "cron", [1, 0, 0], [1, 0, 0], {
+			scheduled_for: { date: "2026-10-01", time: "09:00" },
+			timezone: "Europe/Berlin",
+		});
+		const { agent, call, hub, deploy, row } = await onEdge([ahead]);
+		agent.online = true;
+		await deploy([ahead]);
+		await call({
+			type: "stop",
+			placement_id: "kinds",
+			expected_revision: row().config_revision,
+		});
+		expect(row().schedules).toBeUndefined();
+		const at = Date.UTC(2026, 9, 1, 7) / 1000;
+		hub.now = () => at + 901;
+		await call({
+			type: "start",
+			placement_id: "kinds",
+			expected_revision: row().config_revision,
+		});
+		expect(row().schedules?.[0]).toMatchObject({
+			once_state: "missed",
+			hold: null,
+		});
+	});
+
+	test("a person-started run: accepted at once, read until it ends, counted on the row", async () => {
+		const { agent, api, call, deploy, row } = await onEdge();
+		await deploy([KIND_EVENTS.form]);
+		const revision = row().config_revision;
+		// The literals of design §1.6c and §1.8, for this service and revision.
+		expect(row().actions).toEqual([
+			{
+				event_id: "evt_notes_form",
+				kind: "form",
+				fields: 1,
+				file_fields: 0,
+				running: 0,
+				last_at: null,
+				last_outcome: null,
+				runs: 0,
+				failed: 0,
+			},
+		]);
+		const form = await call({
+			type: "event_form",
+			placement_id: "kinds",
+			event_id: "evt_notes_form",
+		});
+		expect(form.state).toBe("completed");
+		expect(form.result).toEqual({
+			placement_id: "kinds",
+			config_revision: revision,
+			event_id: "evt_notes_form",
+			event_version: [1, 0, 0],
+			board_version: [3, 0, 1],
+			kind: "form",
+			name: "New note",
+			description: "",
+			fields: [
+				{
+					name: "title",
+					label: "Title",
+					description: "",
+					data_type: "String",
+					value_type: "Normal",
+					optional: false,
+					sensitive: false,
+					default: null,
+					options: null,
+				},
+			],
+			fields_truncated: false,
+			file_fields: 0,
+			navigate_to_routes: [],
+		});
+
+		agent.runs.script = {
+			queuedReads: 1,
+			runningReads: 1,
+			end: { output: { id: 42 } },
+		};
+		const sent = await call({
+			type: "run_event",
+			placement_id: "kinds",
+			event_id: "evt_notes_form",
+			expected_revision: revision,
+			payload: { title: "Hello" },
+		});
+		expect(sent.state).toBe("accepted");
+		expect(sent.result).toMatchObject({
+			command: "run_event",
+			placement_id: "kinds",
+			event_id: "evt_notes_form",
+			run: "queued",
+		});
+		const operationId = sent.operation_id as string;
+		const read = () => call({ type: "operation", operation_id: operationId });
+		expect((await read()).result.run).toBe("queued");
+		const running = await read();
+		expect([
+			running.state,
+			running.result.run,
+			running.result.started_at,
+		]).toEqual(["accepted", "running", SAMPLE_NOW]);
+		expect(row().actions?.[0]?.running).toBe(1);
+		const done = await read();
+		expect(done).toMatchObject({
+			operation_id: operationId,
+			state: "completed",
+			result: {
+				run: "succeeded",
+				started_at: SAMPLE_NOW,
+				finished_at: SAMPLE_NOW,
+				output_bytes: 9,
+				truncated: false,
+				attachments: 0,
+				output: { json: { id: 42 } },
+			},
+		});
+		expect(row().actions?.[0]).toMatchObject({
+			running: 0,
+			runs: 1,
+			failed: 0,
+			last_at: SAMPLE_NOW,
+			last_outcome: "succeeded",
+		});
+		// The journal keeps the row without the output; the owner's list names who ran what.
+		expect(agent.journal.get(operationId)?.result).not.toHaveProperty("output");
+		const listed = (await call({ type: "operations", limit: 20 })).result
+			.operations as Record<string, unknown>[];
+		expect(listed.at(-1)).toMatchObject({
+			kind: "run_event",
+			event_id: "evt_notes_form",
+			state: "completed",
+		});
+		// The agent restarted: the row stays, the output is gone.
+		agent.restartAgent();
+		expect(agent.sessions).toBe(0);
+		const after = await call({ type: "operation", operation_id: operationId });
+		expect(after.result).toMatchObject({ run: "succeeded", output_gone: true });
+		expect(after.result).not.toHaveProperty("output");
+		expect(JSON.stringify(api.commands)).toContain('"title":"Hello"');
+	});
+
+	test("a run ends with each failure the device reports, and Stop this run cancels it", async () => {
+		const { agent, call, deploy, row } = await onEdge();
+		await deploy([KIND_EVENTS.form]);
+		const revision = row().config_revision;
+		const start = async (payload: Record<string, unknown> = { title: "x" }) =>
+			(
+				await call({
+					type: "run_event",
+					placement_id: "kinds",
+					event_id: "evt_notes_form",
+					expected_revision: revision,
+					payload,
+				})
+			).operation_id as string;
+		const finish = async (operationId: string) => {
+			for (let index = 0; index < 5; index++) {
+				const answer = await call({
+					type: "operation",
+					operation_id: operationId,
+				});
+				if (answer.state !== "accepted") return answer;
+			}
+			throw new Error("The run did not end.");
+		};
+		// The device checks the fields itself.
+		expect(
+			(await finish(await start({ title: 7, colour: "red" }))).result,
+		).toMatchObject({
+			run: "failed",
+			code: "invalid_fields",
+			fields: ["colour", "title"],
+		});
+		expect((await finish(await start({}))).result).toMatchObject({
+			code: "invalid_fields",
+			fields: ["title"],
+		});
+		for (const code of [
+			"flow_failed",
+			"timed_out",
+			"interrupted",
+			"not_started",
+			"needs_interaction",
+		] as const) {
+			agent.runs.script = { end: { code } };
+			const answer = await finish(await start());
+			expect([answer.state, answer.result.run, answer.result.code]).toEqual([
+				"failed",
+				code === "timed_out" ? "timed_out" : "failed",
+				code,
+			]);
+			expect(answer.result).not.toHaveProperty("output");
+		}
+		// A result larger than 8 KiB as it travels is cut until it fits.
+		agent.runs.script = { runningReads: 0, end: { text: '"'.repeat(9_000) } };
+		const cut = (await finish(await start())).result;
+		expect(cut.truncated).toBe(true);
+		expect(
+			new TextEncoder().encode(JSON.stringify(cut.output)).length,
+		).toBeLessThanOrEqual(8_192);
+		// Stop this run.
+		agent.runs.script = { runningReads: null };
+		const open = await start();
+		await call({ type: "operation", operation_id: open });
+		expect(
+			(await call({ type: "cancel_run", operation_id: open })).result,
+		).toEqual({ command: "cancel_run", cancelled: true });
+		expect((await finish(open)).result).toMatchObject({
+			run: "cancelled",
+			code: "cancelled",
+		});
+		expect(
+			(await call({ type: "cancel_run", operation_id: open })).result,
+		).toEqual({ command: "cancel_run", cancelled: false });
+		expect(
+			managementRejection(
+				await call({ type: "cancel_run", operation_id: "op-unknown" }),
+			)?.code,
+		).toBe("invalid");
+		// A test ends an open run when it wants to.
+		const manual = await start();
+		expect(agent.runs.end(manual, { output: { ok: true } })).toBe(true);
+		expect((await finish(manual)).result.output).toEqual({
+			json: { ok: true },
+		});
+		// A stop cuts a running run off.
+		const cutOff = await start();
+		await call({ type: "operation", operation_id: cutOff });
+		await call({
+			type: "stop",
+			placement_id: "kinds",
+			expected_revision: revision,
+		});
+		expect((await finish(cutOff)).result).toMatchObject({
+			run: "failed",
+			code: "interrupted",
+		});
+	});
+
+	test("run_event is refused before anything is journaled when the device can't take it", async () => {
+		const { agent, call, deploy, row, lacking } = await onEdge([
+			kindsEvent("evt_ping", "Ping", "quick_action", [1, 0, 0], [1, 0, 0]),
+		]);
+		await deploy([KIND_EVENTS.form, KIND_EVENTS.orders]);
+		const revision = row().config_revision;
+		const send = (command: Record<string, unknown>) =>
+			call({
+				type: "run_event",
+				placement_id: "kinds",
+				event_id: "evt_notes_form",
+				expected_revision: revision,
+				payload: { title: "x" },
+				...command,
+			});
+		const code = async (command: Record<string, unknown>) =>
+			managementRejection(await send(command))?.code;
+		expect(await code({ expected_revision: revision + 1 })).toBe(
+			"revision_conflict",
+		);
+		expect(await code({ event_id: "evt_orders" })).toBe("invalid");
+		expect(await code({ event_id: "evt_ping" })).toBe("invalid");
+		expect(await code({ payload: ["x"] })).toBe("invalid");
+		expect(
+			await code({
+				payload: Object.fromEntries(
+					Array.from({ length: 65 }, (_, index) => [`k${index}`, 1]),
+				),
+			}),
+		).toBe("invalid");
+		expect(await code({ payload: { title: "x".repeat(12_300) } })).toBe(
+			"invalid",
+		);
+		agent.runs.script = { runningReads: null };
+		for (let index = 0; index < 12; index++)
+			expect((await send({})).state).toBe("accepted");
+		const busy = managementRejection(await send({}));
+		expect([busy?.code, busy?.retryable]).toEqual(["busy", true]);
+		const refused = await send({ expected_revision: 0 });
+		expect(
+			managementRejection(
+				await call({
+					type: "operation",
+					operation_id: refused.operation_id as string,
+				}),
+			)?.code,
+		).toBe("invalid");
+		await call({
+			type: "stop",
+			placement_id: "kinds",
+			expected_revision: revision,
+		});
+		expect(await code({})).toBe("revision_conflict");
+		expect(
+			managementRejection(
+				await call({
+					type: "event_form",
+					placement_id: "kinds",
+					event_id: "evt_notes_form",
+				}),
+			)?.code,
+		).toBe("revision_conflict");
+		lacking("on_demand_events");
+		for (const command of [
+			{ type: "run_event", placement_id: "kinds" },
+			{ type: "cancel_run", operation_id: "op" },
+			{ type: "event_form", placement_id: "kinds", event_id: "evt_notes_form" },
+		])
+			expect(managementRejection(await call(command))?.code).toBe(
+				"unsupported",
+			);
+	});
+
+	test("a sensitive field's default never leaves the device, and its value never reaches the recorded commands", async () => {
+		const { api, call, deploy, row } = await onEdge();
+		api.hub.eventForms.evt_notes_form = {
+			fields: [
+				formField("title"),
+				formField("pin", { sensitive: true, optional: true, default: "1234" }),
+				formField("photo", { data_type: "PathBuf", optional: true }),
+			],
+		};
+		await deploy([KIND_EVENTS.form]);
+		const form = await call({
+			type: "event_form",
+			placement_id: "kinds",
+			event_id: "evt_notes_form",
+		});
+		expect(form.result).toMatchObject({ kind: "form", file_fields: 1 });
+		expect(
+			(form.result.fields as { name: string; default: unknown }[]).find(
+				(field) => field.name === "pin",
+			)?.default,
+		).toBeNull();
+		expect(row().actions?.[0]).toMatchObject({ fields: 3, file_fields: 1 });
+		await call({
+			type: "run_event",
+			placement_id: "kinds",
+			event_id: "evt_notes_form",
+			expected_revision: row().config_revision,
+			payload: { title: "visible", pin: "9876" },
+		});
+		const recorded = JSON.stringify(api.commands);
+		expect(recorded).toContain("visible");
+		expect(recorded).not.toContain("9876");
+		expect(recorded).not.toContain("1234");
+		// A file never fits a run from Devices.
+		const sent = await call({
+			type: "run_event",
+			placement_id: "kinds",
+			event_id: "evt_notes_form",
+			expected_revision: row().config_revision,
+			payload: { title: "x", photo: "data:image/png;base64,AAAA" },
+		});
+		for (let index = 0; index < 3; index++)
+			await call({
+				type: "operation",
+				operation_id: sent.operation_id as string,
+			});
+		expect(
+			(
+				await call({
+					type: "operation",
+					operation_id: sent.operation_id as string,
+				})
+			).result,
+		).toMatchObject({ code: "invalid_fields", fields: ["photo"] });
+	});
+
+	test("scenarios: Shop Assistant with one event of each kind, and Support Portal's quick action, on edge-berlin-01", async () => {
+		fake = await createFakeWorkspace(sampleFleet(), { unlock: [edge] });
+		const shop = await serveShopOnEdge(fake);
+		expect(shop).toMatchObject({
+			observed_state: "running",
+			source: "online",
+			bots: [
+				{ event_id: SHOP.telegram, state: "connected", hold: null },
+				{ event_id: SHOP.discord, state: "connected", hold: null },
+			],
+			schedules: [
+				{
+					event_id: SHOP.once,
+					once_state: "pending",
+					next_at: SHOP_ONCE_AT,
+				},
+			],
+			actions: [
+				{ event_id: SHOP.form, kind: "form", fields: 3, file_fields: 1 },
+			],
+		});
+		expect(fake.hub.schedules.listing(SHOP.app)).toMatchObject([
+			{ event_id: SHOP.telegram, state: "device", device_id: edge },
+			{ event_id: SHOP.discord, state: "device", device_id: edge },
+			{ event_id: SHOP.once, state: "device", device_id: edge },
+		]);
+		const placements = data(
+			await listAppDevicePlacements(fake.api, fake.api.profile, SHOP.app),
+		);
+		expect(placements.placements.map((row) => row.placement_id)).toEqual([
+			SHOP.service,
+		]);
+		const reply = await serveQuickReplyOnEdge(fake);
+		expect(reply?.actions).toEqual([
+			{
+				event_id: QUICK_REPLY.event,
+				kind: "action",
+				fields: 0,
+				file_fields: 0,
+				running: 0,
+				last_at: null,
+				last_outcome: null,
+				runs: 0,
+				failed: 0,
+			},
+		]);
+		expect(reply?.observed_state).toBe("running");
+		// Unreleased, the service holds what moves off the hub.
+		await fake.dispose();
+		fake = await createFakeWorkspace(sampleFleet(), { unlock: [edge] });
+		const held = await serveShopOnEdge(fake, {
+			events: [SHOP.telegram],
+			release: false,
+		});
+		expect(held?.bots).toMatchObject([
+			{ event_id: SHOP.telegram, state: "waiting", hold: "not_released" },
+		]);
+	});
+
+	test("the client library reads what the fake answers: the form, a run, its stop, the row facts", async () => {
+		const { agent, call, deploy, row } = await onEdge();
+		await deploy([KIND_EVENTS.form, KIND_EVENTS.helper], {
+			secrets: { [tokenKey("evt_helper")]: "bot-helper" },
+		});
+		const placement = { placementId: "kinds", eventId: "evt_notes_form" };
+		const form = await readEventForm(call, agent.features, placement);
+		expect(form).toMatchObject({
+			kind: "ok",
+			data: { kind: "form", fields: [{ name: "title", data_type: "String" }] },
+		});
+		agent.runs.script = { runningReads: 1, end: { text: "Saved." } };
+		const started = await runEvent(
+			call,
+			{
+				...placement,
+				expectedRevision: row().config_revision,
+				payload: { title: "Hi" },
+			},
+			"op-run-1",
+		);
+		expect(started).toMatchObject({
+			kind: "accepted",
+			run: { operationId: "op-run-1", run: "queued" },
+		});
+		expect(await readRun(call, "op-run-1")).toMatchObject({ run: "running" });
+		expect(await readRun(call, "op-run-1")).toMatchObject({
+			run: "succeeded",
+			output: { text: "Saved." },
+			outputBytes: 6,
+		});
+		expect(await readRun(call, "op-unknown")).toBeNull();
+		agent.runs.script = { runningReads: null };
+		await runEvent(
+			call,
+			{
+				...placement,
+				expectedRevision: row().config_revision,
+				payload: { title: "x" },
+			},
+			"op-run-2",
+		);
+		expect(await cancelRun(call, "op-run-2")).toBe(true);
+		expect(await readRun(call, "op-run-2")).toMatchObject({
+			run: "cancelled",
+			code: "cancelled",
+		});
+		expect(await cancelRun(call, "op-run-2")).toBe(false);
+		const refused = await runEvent(
+			call,
+			{ ...placement, expectedRevision: 0, payload: { title: "x" } },
+			"op-run-3",
+		);
+		expect(refused).toMatchObject({
+			kind: "rejected",
+			code: "revision_conflict",
+		});
+		// The device took the run but its answer was lost: the run is found by its id, and a
+		// repeated send answers that run instead of starting a second one.
+		agent.loseReplyNext("run_event");
+		const input = {
+			...placement,
+			expectedRevision: row().config_revision,
+			payload: { title: "lost" },
+		};
+		await expect(runEvent(call, input, "op-run-4")).rejects.toBeInstanceOf(
+			ManagementUnconfirmedError,
+		);
+		const found = await readRun(call, "op-run-4");
+		expect(found).toMatchObject({ operationId: "op-run-4", run: "running" });
+		const again = await runEvent(call, input, "op-run-4");
+		expect(again).toMatchObject({
+			kind: "accepted",
+			run: { runId: found?.runId },
+		});
+		expect(agent.runs.open("kinds")).toHaveLength(1);
+		// The live row as the client parses it.
+		await (fake as FakeWorkspace).workspace.live.refreshInspection(edge);
+		const parsed = (fake as FakeWorkspace).workspace.live
+			.inspection(edge)
+			?.value.placements.find((value) => value.id === "kinds");
+		expect(parsed?.bots).toMatchObject([
+			{ event_id: "evt_helper", state: "connected", hold: null },
+		]);
+		expect(parsed?.actions).toMatchObject([
+			{ event_id: "evt_notes_form", kind: "form", runs: 2, failed: 0 },
+		]);
+		// Without the flag the client never asks.
+		expect(await readEventForm(call, {}, placement)).toEqual({
+			kind: "unsupported",
+			feature: "on_demand_events",
+		});
+	});
+
+	test("a form answer keeps 64 fields at most and 12 KiB as it is sent", () => {
+		const head = {
+			placement_id: "kinds",
+			config_revision: 1,
+			event_id: "evt_big",
+			event_version: [1, 0, 0],
+			board_version: [1, 0, 0],
+			name: "Big",
+		};
+		const many = formAnswer(head, {
+			fields: Array.from({ length: 80 }, (_, index) => formField(`f${index}`)),
+		});
+		expect([(many.fields as unknown[]).length, many.fields_truncated]).toEqual([
+			64,
+			true,
+		]);
+		const long = formAnswer(head, {
+			fields: Array.from({ length: 30 }, (_, index) =>
+				formField(`f${index}`, { description: "d".repeat(480) }),
+			),
+		});
+		expect(long.fields_truncated).toBe(true);
+		expect(
+			new TextEncoder().encode(JSON.stringify(long)).length,
+		).toBeLessThanOrEqual(12 * 1024);
+		expect(formAnswer(head, { fields: [] })).toMatchObject({
+			kind: "action",
+			fields: [],
+			fields_truncated: false,
+		});
+	});
+
+	test("a row's lists keep their counts and share 4 KiB: actions go first, then schedules, then bots", async () => {
+		const forms = Array.from({ length: 20 }, (_, index) =>
+			kindsEvent(
+				`evt_form_${String(index).padStart(2, "0")}`,
+				`Form ${index}`,
+				"generic_form",
+				[1, 0, 0],
+				[1, 0, 0],
+			),
+		);
+		const { deploy, row } = await onEdge(forms);
+		await deploy(forms);
+		expect([row().actions?.length, row().actions_truncated]).toEqual([
+			16,
+			true,
+		]);
+		expect(row().schedules).toBeUndefined();
+
+		const long = (prefix: string, index: number) =>
+			`${prefix}_${String(index).padStart(2, "0")}_${"x".repeat(110)}`;
+		const action = (index: number): ServiceAction => ({
+			event_id: long("evt_action", index),
+			kind: "action",
+			fields: 0,
+			file_fields: 0,
+		});
+		const schedule = (index: number): ServiceSchedule => ({
+			event_id: long("evt_schedule", index),
+			expression: "0 0 * * * *",
+			timezone: "UTC",
+			hold: null,
+		});
+		const bot = (index: number): ServiceBot => ({
+			event_id: long("evt_bot", index),
+			provider: "telegram",
+			state: "ok",
+			hold: null,
+		});
+		const lists = boundedLists({
+			schedules: Array.from({ length: 16 }, (_, index) => schedule(index)),
+			bots: Array.from({ length: 8 }, (_, index) => bot(index)),
+			actions: Array.from({ length: 10 }, (_, index) => action(index)),
+		});
+		expect(
+			new TextEncoder().encode(
+				JSON.stringify([lists.actions, lists.schedules, lists.bots]),
+			).length,
+		).toBeLessThanOrEqual(4_096);
+		expect([lists.actions?.length, lists.actions_truncated]).toEqual([0, true]);
+		expect(lists.schedules?.length).toBeLessThan(16);
+		expect(lists.schedules_truncated).toBe(true);
+		expect([lists.bots?.length, lists.bots_truncated]).toEqual([8, false]);
+		expect(boundedLists({ bots: [bot(0)] })).toEqual({
+			bots: [bot(0)],
+			bots_truncated: false,
+		});
+	});
 });
 
 describe("fake workspace", () => {
@@ -770,7 +2733,11 @@ describe("fake workspace", () => {
 		for (const file of [
 			"fake-device-api.ts",
 			"fake-workspace.ts",
+			"fake-schedules.ts",
+			"fake-runs.ts",
+			"fake-sinks.ts",
 			"mount-devices.tsx",
+			"schedule-scenarios.ts",
 			"fakes.test.ts",
 		])
 			expect(readFileSync(join(import.meta.dir, file), "utf8")).not.toContain(
@@ -1040,6 +3007,49 @@ describe("mountDevices", () => {
 			backend: { roleState: undefined },
 		});
 		expect(backend().roleState).toBeUndefined();
+	});
+
+	test("this computer's triggers: the desktop lists and stops them, the web has none", async () => {
+		const { useBackendStore } = await import("../../../../state/backend-state");
+		const backend = () => useBackendStore.getState().backend as IBackendState;
+		const hourly = "evt_crm_hourly";
+		const desktop = await mountDevices(createElement("output"), {
+			unlock: "none",
+			platform: "desktop",
+			localTriggers: [hourly],
+		});
+		expect(await backend().eventState.isEventSinkActive(hourly)).toBe(true);
+		expect(
+			await backend().eventState.isEventSinkActive("evt_crm_webhook"),
+		).toBe(false);
+		expect(await backend().sinkState?.listEventSinks()).toEqual([
+			{
+				event_id: hourly,
+				name: "Hourly sync",
+				type: "cron",
+				created_at: SAMPLE_NOW,
+				updated_at: SAMPLE_NOW,
+				config: { expression: "0 0 * * * *" },
+				offline: true,
+				app_id: SAMPLE_APPS.crmSync,
+			},
+		]);
+		await backend().sinkState?.removeEventSink(hourly);
+		expect(desktop.fake.sinks.removed).toEqual([hourly]);
+		expect(await backend().sinkState?.isEventSinkActive(hourly)).toBe(false);
+		expect(await backend().eventState.isEventSinkActive(hourly)).toBe(false);
+		desktop.fake.sinks.failure = new Error("The desktop command failed.");
+		await expect(backend().sinkState?.listEventSinks()).rejects.toThrow(
+			"The desktop command failed.",
+		);
+		await desktop.unmount();
+
+		await mountDevices(createElement("output"), {
+			unlock: "none",
+			platform: "web",
+			localTriggers: [hourly],
+		});
+		expect(backend().sinkState).toBeUndefined();
 	});
 
 	test("the apps given to the mount are the apps the hub exports", async () => {

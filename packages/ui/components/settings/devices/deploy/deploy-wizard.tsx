@@ -20,6 +20,7 @@ import {
 	useMemo,
 	useRef,
 } from "react";
+import { appEventRule } from "../../../../lib/device-management/model/app-plan";
 import type {
 	DeployResult,
 	PlanIssue,
@@ -360,7 +361,10 @@ function restSentences(
 	if (stepIndex <= 1 || !count) parts.push(modeSentence(t, state));
 	if (draft.entry !== "update" && stepIndex === 0) {
 		const all = plan.app.events.length;
-		const able = new Set(plan.services.flatMap((row) => row.events)).size;
+		// Every event that can run, ticked or not: a schedule starts unticked and still counts.
+		const able = plan.app.events.filter(
+			(event) => appEventRule(event, state.facts.hub).eligible,
+		).length;
 		if (draft.scope === "app")
 			parts.push(
 				t(
@@ -676,7 +680,14 @@ function howBlocking({ t, state, prepare }: BlockingContext): Blocking | null {
 			busy: true,
 		};
 	return prepare.failure
-		? { text: prepareFailureText(t, prepare.failure, state.plan) }
+		? {
+				text: prepareFailureText(
+					t,
+					prepare.failure,
+					state.plan,
+					state.facts.hub?.hubTypes,
+				),
+			}
 		: null;
 }
 
@@ -753,14 +764,18 @@ function stepBlocking(
 	step: DeployStepId,
 	context: BlockingContext,
 ): Blocking | null {
-	const { t, state } = context;
+	const { t, state, time } = context;
 	const issue = state.check.issues.find(
 		(row) => row.step === step && row.severity === "error",
 	);
 	if (issue)
 		return (
 			gatedBlocking(context, issue) ?? {
-				text: issueText(t, issue, planNames(t, state.plan)),
+				text: issueText(
+					t,
+					issue,
+					planNames(t, state.plan, state.facts, time.at),
+				),
 			}
 		);
 	return STEP_BLOCKING[step]?.(context) ?? null;
@@ -1100,7 +1115,10 @@ function Wizard({
 	const steps = useMemo(() => deploySteps(mode), [mode]);
 	const step = currentStep(route, steps, state);
 	const index = steps.indexOf(step);
-	const prepare = useDeployPrepare(plan, { enabled: PREPARING.includes(step) });
+	const prepare = useDeployPrepare(plan, {
+		enabled: PREPARING.includes(step),
+		hubTypes: state.facts.hub?.hubTypes,
+	});
 	const limitsOnly =
 		plan.services.length > 0 && !plan.services.some((row) => row.hosted);
 	const prefilled = useMemo(() => prefilledSteps(route, scope), [route, scope]);
@@ -1138,7 +1156,11 @@ function Wizard({
 	const hold = step === "review" ? reviewHold(blockingContext) : null;
 	const blockingText = check.firstBlocking
 		? (gatedBlocking(blockingContext, check.firstBlocking)?.text ??
-			issueText(t, check.firstBlocking, planNames(t, plan)))
+			issueText(
+				t,
+				check.firstBlocking,
+				planNames(t, plan, state.facts, time.at),
+			))
 		: undefined;
 	const next = index < REVIEW_INDEX ? steps[index + 1] : undefined;
 	const localWeb = check.issues.some(

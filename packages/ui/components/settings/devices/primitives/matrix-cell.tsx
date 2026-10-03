@@ -14,6 +14,7 @@ import {
 import type { ReactNode } from "react";
 import { type DevicesT, useAreaTime } from "./area-context";
 import { DvButton } from "./dv-button";
+import { LatestTag } from "./event-cell";
 import { type Gate, GatedAction } from "./gate-notice";
 import { PairedPins } from "./paired-pins";
 import type { DesiredRun, ObservedRun } from "./requested-actual";
@@ -44,6 +45,15 @@ export interface MatrixServedCell {
 	/** The newest version's pin when this one is behind ("1.5.0", "flow 2.2.0"); omitted = newest. */
 	target?: string;
 	targetTitle?: string;
+	/**
+	 * Stands in for "newest" when the pin can't be called so: flow edits no
+	 * version holds (`info`), or a flow state that isn't known (`unknown`).
+	 */
+	note?: { text: string; tone: "info" | "unknown" };
+	/** The event has no flow pin: the "Follows Latest" tag beside the concrete version the device runs. */
+	tag?: boolean;
+	/** A schedule: its next run, or why it does not run here. */
+	lines?: readonly string[];
 	/** ":8081"; `tls` adds the lock. */
 	port?: string;
 	tls?: boolean;
@@ -129,10 +139,25 @@ function Served(props: Readonly<MatrixServedCell>) {
 					<span className="text-info" title={props.targetTitle}>
 						{t("view.matrix.target", "→ {{target}}", { target: props.target })}
 					</span>
+				) : props.note ? (
+					<span
+						data-pin-note={props.note.tone}
+						className={
+							props.note.tone === "info" ? "text-info" : "text-muted-foreground"
+						}
+					>
+						{props.note.text}
+					</span>
 				) : (
 					<span className="text-good">{t("view.matrix.newest", "newest")}</span>
 				)}
+				{props.tag ? <LatestTag /> : null}
 			</span>
+			{props.lines?.map((line) => (
+				<span key={line} data-schedule-run="" className="text-muted-foreground">
+					{line}
+				</span>
+			))}
 			{props.port ? (
 				<span className="inline-flex items-center gap-1 font-mono text-[11.5px] text-muted-foreground">
 					{props.tls ? (

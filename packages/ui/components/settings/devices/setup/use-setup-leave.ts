@@ -24,7 +24,12 @@ import {
 	useDeviceWorkspace,
 } from "../workspace";
 import type { SetupLimits } from "./setup-context";
-import { type SetupDraft, WAIT_STEP } from "./setup-state";
+import {
+	type CreatedSetup,
+	type SetupDraft,
+	WAIT_STEP,
+	startBy,
+} from "./setup-state";
 import {
 	type SetupCreate,
 	dropSetupActivity,
@@ -153,7 +158,7 @@ export function useSetupLeave(input: SetupLeaveInput): SetupLeave {
 	const cancelSetup = useCallback(async () => {
 		setCancelError(undefined);
 		const createdAt = created?.createdAt ?? registration?.createdAt;
-		const expiresAt = created?.expiresAt ?? registration?.expiresAt;
+		const expiresAt = created ? startBy(created) : registration?.expiresAt;
 		const consequence: ConsequenceRows = {
 			what: t(
 				"setup.cancel.what",
@@ -270,8 +275,7 @@ export function useSetupLeave(input: SetupLeaveInput): SetupLeave {
 
 	/** Names what leaving loses: the package of this window, unless it was saved (SPEC §5.5). */
 	const confirmLeave = useCallback(
-		async (expiresAt: number, saved: boolean) => {
-			const until = time.at(expiresAt);
+		async (made: CreatedSetup, saved: boolean) => {
 			const answer = await confirm({
 				icon: LogOut,
 				tone: saved ? "default" : "danger",
@@ -280,7 +284,7 @@ export function useSetupLeave(input: SetupLeaveInput): SetupLeave {
 					name,
 				}),
 				sub: t("setup.leave.subtitle", "Package works until {{until}}", {
-					until,
+					until: time.at(startBy(made)),
 				}),
 				confirmLabel: t("setup.leave.confirm", "Leave setup"),
 				rows: {
@@ -298,7 +302,7 @@ export function useSetupLeave(input: SetupLeaveInput): SetupLeave {
 					stays: t(
 						"setup.leave.stays",
 						"The setup stays in Pending setups until {{until}} and keeps its unused-package slot. The keys stay on this computer.",
-						{ until },
+						{ until: time.at(made.expiresAt) },
 					),
 					when: t("setup.cancel.when", "Immediately."),
 					undo: saved
@@ -336,8 +340,7 @@ export function useSetupLeave(input: SetupLeaveInput): SetupLeave {
 		expired ||
 		draft.registeredAt !== undefined ||
 		step === WAIT_STEP;
-	const holdsFiles = !!created && !!create.built;
-	const expiresAt = created?.expiresAt;
+	const holdsFiles = !!create.built;
 	const saved = draft.packageSaved;
 
 	const leave = useCallback(
@@ -347,8 +350,8 @@ export function useSetupLeave(input: SetupLeaveInput): SetupLeave {
 				if (
 					!creating &&
 					holdsFiles &&
-					expiresAt !== undefined &&
-					!(await confirmLeave(expiresAt, saved))
+					created &&
+					!(await confirmLeave(created, saved))
 				)
 					return;
 			}
@@ -358,7 +361,7 @@ export function useSetupLeave(input: SetupLeaveInput): SetupLeave {
 			settledElsewhere,
 			creating,
 			holdsFiles,
-			expiresAt,
+			created,
 			saved,
 			stopCreating,
 			confirmLeave,

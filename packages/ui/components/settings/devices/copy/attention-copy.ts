@@ -1,13 +1,16 @@
 import { formatMoment, formatRelativeTime } from "../../../../lib/date";
-import type {
-	AttentionActionCode,
-	AttentionItem,
-	AttentionKey,
-	CopyParams,
+import {
+	type AttentionActionCode,
+	type AttentionItem,
+	type AttentionKey,
+	type CopyParams,
+	SCHEDULE_HOLDS,
+	type ScheduleHold,
 } from "../../../../lib/device-management/model/types";
 import { humanFileSize } from "../../../../lib/utils";
 import type { AreaTime, DevicesT } from "../primitives/area-context";
 import { type EnumValues, enumLabel } from "./enum-labels";
+import { scheduleHoldReason } from "./schedule-copy";
 
 /** Satisfied by `useAreaTime()`; without one, times use `Date.now()` and the default locale. */
 export type CopyTime = Pick<AreaTime, "now" | "locale" | "ago" | "at">;
@@ -219,6 +222,29 @@ function observedLabel(c: SentenceContext, key: string) {
 		"observed",
 		known<"observed">(OBSERVED, value) ? value : "unknown",
 	);
+}
+
+const isHold = (value: string | undefined): value is ScheduleHold =>
+	(SCHEDULE_HOLDS as readonly (string | undefined)[]).includes(value);
+
+/** A hold this app doesn't know (a newer agent) reads "reason unknown", never its wire value (R3). */
+function holdReason(c: SentenceContext, bot = false) {
+	const hold = c.str("hold");
+	return isHold(hold)
+		? scheduleHoldReason(c.t, hold, bot)
+		: c.t("devices:attention.unknownReason", "reason unknown");
+}
+
+/** The provider's own name; a bot of a provider this app doesn't know is just "the provider". */
+function providerName(c: SentenceContext) {
+	switch (c.str("provider")) {
+		case "telegram":
+			return "Telegram";
+		case "discord":
+			return "Discord";
+		default:
+			return c.t("devices:attention.botProvider", "The provider");
+	}
 }
 
 function desiredLabel(c: SentenceContext) {
@@ -434,26 +460,31 @@ const SENTENCES = {
 					"Background work on {{device}} is failing: {{task}}.",
 					{ device: c.device, task: taskLabel(c) },
 				),
-	agent_update_available: (c) =>
-		c.item.lastKnown
+	agent_update_available: (c) => {
+		const names = {
+			device: c.device,
+			available: c.str("available"),
+			running: c.str("running"),
+		};
+		// An agent that refuses the hub's release list for its lifetime can't be updated from here.
+		if (c.p.needsShortRelease)
+			return c.t(
+				"devices:attention.agent_update_available.needsShortRelease",
+				"Agent {{available}} is available for {{device}}, but its agent ({{running}}) only accepts releases valid for 30 days or less. Ask the hub operator to renew the release for 30 days, or set this device up again.",
+				names,
+			);
+		return c.item.lastKnown
 			? c.t(
 					"devices:attention.agent_update_available.lastKnown",
 					"Agent {{available}} is available for {{device}}. It ran {{running}} when last read live.",
-					{
-						device: c.device,
-						available: c.str("available"),
-						running: c.str("running"),
-					},
+					names,
 				)
 			: c.t(
 					"devices:attention.agent_update_available.sentence",
 					"Agent {{available}} is available for {{device}} (running {{running}}).",
-					{
-						device: c.device,
-						available: c.str("available"),
-						running: c.str("running"),
-					},
-				),
+					names,
+				);
+	},
 	rebooted_unexpectedly: (c) =>
 		typeof c.p.bootedAt === "number"
 			? c.t(
@@ -815,6 +846,84 @@ const SENTENCES = {
 			"Access tokens deployed to revoked {{device}} may still be valid. Rotate them.",
 			{ device: c.device },
 		),
+	schedule_held: (c) => {
+		const values = {
+			service: c.service,
+			device: c.device,
+			reason: holdReason(c),
+		};
+		return c.num("held") > 1
+			? c.t(
+					"devices:attention.schedule_held.several",
+					"Some schedules of {{service}} on {{device}} aren't running there: {{reason}}.",
+					values,
+				)
+			: c.t(
+					"devices:attention.schedule_held.sentence",
+					"A schedule of {{service}} on {{device}} isn't running there: {{reason}}.",
+					values,
+				);
+	},
+	schedule_failed: (c) =>
+		c.num("failed") > 1
+			? c.t(
+					"devices:attention.schedule_failed.several",
+					"The last runs of several schedules of {{service}} on {{device}} failed. The service keeps running.",
+					{ service: c.service, device: c.device },
+				)
+			: c.t(
+					"devices:attention.schedule_failed.sentence",
+					"The last run of a schedule of {{service}} on {{device}} failed. The service keeps running.",
+					{ service: c.service, device: c.device },
+				),
+	schedule_once_missed: (c) =>
+		c.t(
+			"devices:attention.schedule_once_missed.sentence",
+			"A one-time schedule of {{service}} on {{device}} didn't run: {{device}} wasn't running at its time ({{time}}).",
+			{ service: c.service, device: c.device, time: c.when("time") },
+		),
+	bot_held: (c) => {
+		const values = {
+			service: c.service,
+			device: c.device,
+			reason: holdReason(c, true),
+		};
+		return c.num("held") > 1
+			? c.t(
+					"devices:attention.bot_held.several",
+					"Some bots of {{service}} on {{device}} aren't connected: {{reason}}.",
+					values,
+				)
+			: c.t(
+					"devices:attention.bot_held.sentence",
+					"A bot of {{service}} on {{device}} isn't connected: {{reason}}.",
+					values,
+				);
+	},
+	bot_token_refused: (c) =>
+		c.t(
+			"devices:attention.bot_token_refused.sentence",
+			"{{provider}} refused the token of a bot of {{service}} on {{device}}. Enter a new one under Configuration.",
+			{ provider: providerName(c), service: c.service, device: c.device },
+		),
+	bot_intents_refused: (c) =>
+		c.t(
+			"devices:attention.bot_intents_refused.sentence",
+			"Discord refused the permissions of a bot of {{service}} on {{device}}. Turn on the message content intent in the Discord Developer Portal, then restart {{service}}.",
+			{ service: c.service, device: c.device },
+		),
+	bot_conflict: (c) =>
+		c.str("state") === "webhook_set"
+			? c.t(
+					"devices:attention.bot_conflict.webhook",
+					"Telegram sends the messages of a bot of {{service}} on {{device}} to a webhook. Remove it in Events, then restart {{service}}.",
+					{ service: c.service, device: c.device },
+				)
+			: c.t(
+					"devices:attention.bot_conflict.sentence",
+					"Another program uses the token of a bot of {{service}} on {{device}}. A bot runs in one place: stop it there.",
+					{ service: c.service, device: c.device },
+				),
 	offline_writes_conflict: (c) =>
 		join(
 			c.t(

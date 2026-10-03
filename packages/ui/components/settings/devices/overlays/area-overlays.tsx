@@ -8,11 +8,16 @@ import type {
 import { devicesHref } from "../routing/devices-href";
 import { ACCOUNT_SCOPE } from "../routing/devices-route";
 import { useDevicesRoute } from "../routing/use-devices-route";
+import { RunNowSheet } from "../run/run-now-sheet";
 import {
 	useOptionalDeviceWorkspace,
 	useWorkspacePassive,
 } from "../workspace/device-workspace-provider";
-import { useOverlayStore } from "../workspace/overlay-store";
+import {
+	type OverlayState,
+	type RunNowRequest,
+	useOverlayStore,
+} from "../workspace/overlay-store";
 import { DiagnoseSheet } from "./diagnose-sheet";
 import { PlaneSheet } from "./plane-sheet";
 import { UnlockSeveralSheet } from "./unlock-several-sheet";
@@ -21,8 +26,8 @@ import { UnlockSheet } from "./unlock-sheet";
 /** What the host hands every sheet: links are built for `scope`, places open through `onNavigate`. */
 export interface OverlaySheetProps {
 	scope: DevicesScope;
-	onNavigate(route: DevicesRoute): void;
-	onClose(): void;
+	onNavigate: (route: DevicesRoute) => void;
+	onClose: () => void;
 }
 
 export interface AreaOverlaysProps {
@@ -35,14 +40,27 @@ export interface AreaOverlaysProps {
 interface HostProps {
 	scopeKey: string;
 	scope: DevicesScope;
-	onNavigate(route: DevicesRoute): void;
+	onNavigate: (route: DevicesRoute) => void;
 }
+
+/** One sheet per run request: another event, service or run starts a fresh one. */
+const runNowKey = (request: RunNowRequest) =>
+	[
+		request.deviceId,
+		request.serviceId,
+		request.eventId,
+		request.operationId ?? "",
+	].join("/");
 
 let mountedHosts = 0;
 
+type OverlayStoreState = ReturnType<typeof useOverlayStore.getState>;
+const selectClose = (state: OverlayStoreState) => state.close;
+const selectOverlay = (state: OverlayStoreState) => state.overlay;
+
 /** A request never outlives its account or the last host: the next page must not reopen it. */
 function useOverlayLifetime(scopeKey: string) {
-	const close = useOverlayStore((state) => state.close);
+	const close = useOverlayStore(selectClose);
 	const shown = useRef(scopeKey);
 	useEffect(() => {
 		if (shown.current !== scopeKey) close();
@@ -61,9 +79,13 @@ function useOverlayLifetime(scopeKey: string) {
 }
 
 function OverlayHost({ scopeKey, scope, onNavigate }: Readonly<HostProps>) {
-	const overlay = useOverlayStore((state) => state.overlay);
+	const overlay = useOverlayStore(selectOverlay);
 	const onClose = useOverlayLifetime(scopeKey);
-	const sheet = { scope, onNavigate, onClose };
+	return sheetFor(overlay, { scope, onNavigate, onClose });
+}
+
+/** The sheet the store asks for, keyed so another request starts it fresh. */
+function sheetFor(overlay: OverlayState, sheet: OverlaySheetProps) {
 	switch (overlay.kind) {
 		case "unlock":
 			return (
@@ -90,6 +112,8 @@ function OverlayHost({ scopeKey, scope, onNavigate }: Readonly<HostProps>) {
 			return (
 				<PlaneSheet key={overlay.plane} plane={overlay.plane} {...sheet} />
 			);
+		case "run_now":
+			return <RunNowSheet key={runNowKey(overlay)} {...overlay} {...sheet} />;
 		case "none":
 			return null;
 	}
@@ -123,7 +147,7 @@ function PageHost({
 
 /**
  * Renders the sheet the overlay store asks for (IA §6.4): Unlock, Unlock
- * several, Diagnose and the data sources sheet. Mounted once by `DevicesArea`;
+ * several, Diagnose, the data sources sheet and Run now. Mounted once by `DevicesArea`;
  * a page outside the area mounts it under a passive `DeviceWorkspaceProvider`.
  * Without a workspace (signed out, no profile) it renders nothing and the
  * request waits.

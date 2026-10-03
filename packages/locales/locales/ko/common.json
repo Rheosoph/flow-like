@@ -1803,6 +1803,7 @@
 	"offlineProjectsAreNeverListedSoNoConformityAssessmentOrPublicationReviewIsRequiredBringTheProjectOnlineToStart": "오프라인 프로젝트는 목록에 노출되지 않으므로 적합성 평가나 게시 심사가 필요하지 않습니다. 시작하려면 프로젝트를 온라인으로 전환하세요.",
 	"offlineUsingCachedData": "오프라인 - 캐시된 데이터 사용 중",
 	"offOnThisDevice": "이 기기에서 꺼짐",
+	"onADeviceLatestMeansTheFlowAsItWasWhenYouLastDeployedOrUpdated": "",
 	"onCompletion": "완료 시",
 	"onDisk": "디스크에",
 	"oneModelfileDependencyBitPerLineOrCommaSeparated": "모델 파일 종속 비트를 한 줄에 하나씩 또는 쉼표로 구분해 입력하세요",

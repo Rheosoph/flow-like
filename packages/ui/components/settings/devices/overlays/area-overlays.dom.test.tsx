@@ -49,6 +49,12 @@ describe("area overlays", () => {
 			() => store().openUnlockSeveral(),
 			() => store().openDiagnose(warehouse),
 			() => store().openPlane("live"),
+			() =>
+				store().openRunNow({
+					deviceId: warehouse,
+					serviceId: "notes",
+					eventId: "evt_notes_form",
+				}),
 		];
 		for (const step of steps) {
 			await request(step);
@@ -66,7 +72,40 @@ describe("area overlays", () => {
 			"Unlock several devices",
 			"Diagnose warehouse-pi",
 			"Data sources",
+			"Run an action or form on warehouse-pi",
 		]);
+	});
+
+	test("Run now… opens for one event of one service, and a request for another run replaces it", async () => {
+		const mounted = await mountDevices(<div />, { overlays: true });
+		const target = { deviceId: warehouse, serviceId: "notes" };
+		await request(() =>
+			store().openRunNow({ ...target, eventId: "evt_notes_form" }),
+		);
+		await mounted.settle();
+		expect(store().overlay).toEqual({
+			kind: "run_now",
+			...target,
+			eventId: "evt_notes_form",
+		});
+		expect(
+			byRole("dialog")
+				.querySelector("[data-run-now-sheet]")
+				?.getAttribute("data-run-now-sheet"),
+		).toBe("evt_notes_form");
+		await request(() =>
+			store().openRunNow({
+				...target,
+				eventId: "evt_other",
+				operationId: "op-1",
+			}),
+		);
+		await mounted.settle();
+		expect(allByRole("dialog")).toHaveLength(1);
+		expect(store().overlay).toMatchObject({
+			eventId: "evt_other",
+			operationId: "op-1",
+		});
 	});
 
 	test("Escape and the close button clear the request", async () => {

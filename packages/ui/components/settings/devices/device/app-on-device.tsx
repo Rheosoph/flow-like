@@ -1,19 +1,7 @@
 "use client";
 
 import { Trans, useTranslation } from "@flow-like/locales";
-import {
-	Bot,
-	ChevronDown,
-	ChevronRight,
-	FileText,
-	Globe,
-	type LucideIcon,
-	MessageSquare,
-	Plug,
-	Rocket,
-	SquareX,
-	Workflow,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, Rocket, SquareX } from "lucide-react";
 import { useState } from "react";
 import type {
 	AppVersionPin,
@@ -26,19 +14,27 @@ import {
 	keysLocked,
 } from "../../../../lib/device-management/model/device-view";
 import type { ServiceView } from "../../../../lib/device-management/model/types";
+import { answersRequests, cellLines } from "../app/kind-lines";
+import { RunNowAction } from "../app/run-now";
 import { appCopy } from "../copy/app-copy";
 import {
+	agentTooOldCopy,
+	cantHereCopy,
 	eligibilityCopy,
-	eventTypeLabel,
-	howItRunsCopy,
+	eligibilityInput,
 } from "../copy/eligibility-copy";
 import { enumLabel } from "../copy/enum-labels";
+import { scheduleRunNames } from "../copy/schedule-copy";
 import { ModeChip } from "../primitives/app-chips";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import { Block } from "../primitives/block";
 import { DvButton } from "../primitives/dv-button";
 import { DvSheet } from "../primitives/dv-sheet";
 import { DvTable, GroupRow, Td, Th, Tr } from "../primitives/dv-table";
+import {
+	EventCell as EventCellView,
+	eventRunsLine,
+} from "../primitives/event-cell";
 import { FreshnessStamp } from "../primitives/freshness-stamp";
 import { GateNotice } from "../primitives/gate-notice";
 import { ModeExplainer } from "../primitives/how-runs";
@@ -47,7 +43,6 @@ import { MatrixCell, type MatrixCellProps } from "../primitives/matrix-cell";
 import { initialsOf } from "../primitives/person-chip";
 import { PresenceGlyph } from "../primitives/presence-glyph";
 import { StateView } from "../primitives/state-view";
-import { StatusChip } from "../primitives/status-chip";
 import { useDevicesRoute, useRouteLink } from "../routing/use-devices-route";
 import { stampOf } from "../shell/attention-popover";
 import { type AppViewRead, useAttentionState } from "../workspace";
@@ -63,16 +58,6 @@ import { type DevicePage, gateView, servicesOfApp } from "./use-device-page";
 const LINK =
 	"underline decoration-border-strong underline-offset-2 hover:decoration-current";
 const MATRIX_COLS = ["46%", "54%"] as const;
-const PIN_VERSION = "font-mono text-[11.5px]";
-
-const EVENT_ICON: Record<string, LucideIcon> = {
-	http: Globe,
-	simple_chat: MessageSquare,
-	page: FileText,
-	rest: Plug,
-	mcp: Bot,
-	daemon: Workflow,
-};
 
 const triple = (version: readonly number[]) => version.join(".");
 
@@ -83,64 +68,46 @@ function pinText(t: DevicesT, pin: Omit<AppVersionPin, "eventId">): string {
 	});
 }
 
-/** APP §2.10 event cell: type tile, name, type, pins and how the event runs on a device. */
+/** The line under an event: its kind's own words when it can run here, else why it can't. */
+function runsText(t: DevicesT, row: Omit<MatrixRow, "cells">): string | null {
+	const { eligibility } = row;
+	if (eligibility.eligible) return eventRunsLine(t, eligibility);
+	return eligibility.code
+		? eligibilityCopy(
+				t,
+				eligibilityInput(
+					{ ...eligibility, code: eligibility.code },
+					row.eventType,
+				),
+			).long
+		: null;
+}
+
+/** APP §2.10 event cell: type tile, name, type, pins and the kind's own line. */
 function EventCell({ row }: Readonly<{ row: Omit<MatrixRow, "cells"> }>) {
 	const { t } = useTranslation("devices");
-	const Icon = EVENT_ICON[row.eventType] ?? Workflow;
-	const { eligibility } = row;
+	const { followsLatest, eventVersion } = row.eligibility;
+	const runs = runsText(t, row);
 	return (
-		<span className="flex min-w-0 items-start gap-2.5">
-			<span className="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-md border border-hairline bg-surface-sunken text-ink-2">
-				<Icon aria-hidden className="size-3.5" />
-			</span>
-			<span className="flex min-w-0 flex-col">
-				<span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-					<span className="truncate font-semibold">{row.name}</span>
-					<span className="text-xs text-muted-foreground">
-						{eventTypeLabel(t, row.eventType)}
-					</span>
-					{row.newIn ? (
-						<StatusChip tone="info" className="h-5 px-1.5 text-[11.5px]">
-							{t("device.app.newIn", "New in {{version}}", {
-								version: row.newIn,
-							})}
-						</StatusChip>
-					) : null}
-				</span>
-				{row.pin ? (
-					<span className="text-xs text-muted-foreground">
-						<Trans
-							t={t}
-							i18nKey="device.app.eventPin"
-							defaults="event <1/> · flow <2/>"
-							components={{
-								1: (
-									<span className={PIN_VERSION}>
-										{triple(row.pin.eventVersion)}
-									</span>
-								),
-								2: (
-									<span className={PIN_VERSION}>
-										{triple(row.pin.boardVersion)}
-									</span>
-								),
-							}}
-						/>
-					</span>
-				) : null}
-				<span className="text-xs text-muted-foreground">
-					{eligibility.eligible
-						? howItRunsCopy(t, eligibility)
-						: eligibility.code
-							? eligibilityCopy(t, {
-									code: eligibility.code,
-									eventType: row.eventType,
-									...(eligibility.detail ? { detail: eligibility.detail } : {}),
-								}).long
-							: null}
-				</span>
-			</span>
-		</span>
+		<EventCellView
+			eventType={row.eventType}
+			hasPage={row.hasPage}
+			name={row.name}
+			eventId={row.eventId}
+			followsLatest={followsLatest}
+			{...(row.pin
+				? {
+						pin: {
+							event: triple(row.pin.eventVersion),
+							flow: triple(row.pin.boardVersion),
+						},
+					}
+				: followsLatest && eventVersion
+					? { pinNote: appCopy(t).pinLatest(triple(eventVersion)) }
+					: {})}
+			{...(row.newIn ? { newIn: row.newIn } : {})}
+			{...(runs ? { runs } : {})}
+		/>
 	);
 }
 
@@ -161,12 +128,28 @@ function servedCell(
 	cell: CellModel,
 	service: ServiceView,
 ): MatrixCellProps {
-	const { t, page, read, register, ports } = context;
+	const { t, time, page, read, register, ports } = context;
 	const appRow = read.view?.services.find(
 		(entry) =>
 			entry.deviceId === page.deviceId && entry.serviceId === service.serviceId,
 	);
 	const observed = observedRun(service.observed);
+	const note = appCopy(t).servedNote(cell.drift);
+	const lines = cellLines(
+		t,
+		row,
+		service,
+		() =>
+			scheduleRunNames(t, {
+				deviceId: page.deviceId,
+				serviceId: service.serviceId,
+				device: page.name,
+				eventId: row.eventId,
+				...(row.where ? { where: row.where } : {}),
+				...(page.services ? { siblings: page.services } : {}),
+			}),
+		time,
+	);
 	const stagedHash =
 		appRow?.lastChange?.kind === "update" ? appRow.lastChange.hash : undefined;
 	const staged = stagedHash
@@ -206,7 +189,10 @@ function servedCell(
 					),
 				}
 			: {}),
-		...(port?.port === undefined
+		...(note ? { note } : {}),
+		...(row.eligibility.followsLatest ? { tag: true } : {}),
+		...(lines.length ? { lines } : {}),
+		...(port?.port === undefined || !answersRequests(row.eligibility.kind)
 			? {}
 			: { port: `:${port.port}`, tls: port.tls }),
 		...(cell.state === "staged"
@@ -255,7 +241,27 @@ function cellProps(
 				(cell.gate ? (gateView(t, time, cell.gate)?.gate ?? null) : null),
 		};
 	if (cell.state === "cant_here")
-		return { state: "cant_here", reason: cell.reason ?? "" };
+		return {
+			state: "cant_here",
+			reason:
+				cell.why === "agent" ? (
+					<>
+						{cantHereCopy(t, cell, page.name)}{" "}
+						<a
+							href={register({
+								screen: "device",
+								deviceId: page.deviceId,
+								tab: "settings",
+							})}
+							className={LINK}
+						>
+							{agentTooOldCopy(t, page.name, cell.feature).fix}
+						</a>
+					</>
+				) : (
+					cantHereCopy(t, cell, page.name)
+				),
+		};
 	if (cell.state === "no_access") return { state: "no_access" };
 	const kind = cell.unknown?.kind;
 	const why =
@@ -269,6 +275,28 @@ function cellProps(
 	const since =
 		cell.unknown && "since" in cell.unknown ? cell.unknown.since : undefined;
 	return { state: "unknown", why, ...(since === undefined ? {} : { since }) };
+}
+
+/** Run now… under a person-started event that a service of this device runs. */
+function CellRunNow({
+	page,
+	row,
+}: Readonly<{ page: DevicePage; row: MatrixRow }>) {
+	const cell = row.cells[page.deviceId];
+	if (row.eligibility.kind !== "on_demand" || !cell) return null;
+	if (cell.state !== "served" && cell.state !== "staged") return null;
+	const service = page.services?.find(
+		(entry) => entry.serviceId === cell.serviceIds[0],
+	);
+	return service ? (
+		<div className="mt-1.5">
+			<RunNowAction
+				deviceId={page.deviceId}
+				view={service}
+				eventId={row.eventId}
+			/>
+		</div>
+	) : null;
 }
 
 function EventMatrix({
@@ -343,6 +371,7 @@ function EventMatrix({
 							<MatrixCell
 								{...cellProps(context, row, row.cells[page.deviceId])}
 							/>
+							<CellRunNow page={page} row={row} />
 						</Td>
 					</Tr>
 				))}
@@ -376,9 +405,16 @@ function EventMatrix({
 									<EventCell row={row} />
 								</Td>
 								<Td label={page.name}>
-									<span className="text-xs text-muted-foreground">
-										{t("device.app.cantRunCell", "Can't run on a device")}
-									</span>
+									{/* A service that was deployed before keeps running it: the cell stays. */}
+									{row.cells[page.deviceId] ? (
+										<MatrixCell
+											{...cellProps(context, row, row.cells[page.deviceId])}
+										/>
+									) : (
+										<span className="text-xs text-muted-foreground">
+											{t("device.app.cantRunCell", "Can't run on a device")}
+										</span>
+									)}
 								</Td>
 							</Tr>
 						))

@@ -11,6 +11,7 @@ import type { PublicCertificateInventory } from "../certificates";
 import type {
 	AccountBackupList,
 	AppDevicePlacements,
+	AppScheduleRow,
 	ArchiveUsage,
 	DeviceUsageResponse,
 	EffectiveLimit,
@@ -460,11 +461,66 @@ const resourceSummarySchema: z.ZodType<ResourceSummary, z.ZodTypeDef, unknown> =
 			.max(1000),
 	});
 
+const scheduleService = {
+	device_id: id.optional(),
+	placement_id: id.optional(),
+};
+const scheduleRow: z.ZodType<AppScheduleRow, z.ZodTypeDef, unknown> =
+	z.discriminatedUnion("state", [
+		z.object({
+			event_id: id,
+			state: z.literal("device"),
+			since: time,
+			seen_at: time,
+			grant_id: id.optional(),
+			...scheduleService,
+		}),
+		z.object({
+			event_id: id,
+			state: z.literal("released"),
+			since: time,
+			hub_resumes_at: time.optional(),
+			...scheduleService,
+		}),
+		z.object({
+			event_id: id,
+			state: z.literal("returning"),
+			hub_resumes_at: time,
+		}),
+	]);
+/** A newer hub may list a state this client does not know: that entry is dropped, not the list. */
+const scheduleRows = z
+	.array(z.unknown())
+	.max(512)
+	.transform((rows) =>
+		rows.flatMap((row) => {
+			const parsed = scheduleRow.safeParse(row);
+			return parsed.success ? [parsed.data] : [];
+		}),
+	);
+
+/** Type names this client keeps of the hub's export list; a malformed list reads as an older hub's. */
+const eventTypes = z
+	.array(z.unknown())
+	.max(256)
+	.transform((names) =>
+		names.filter(
+			(name): name is string =>
+				typeof name === "string" && /^[a-z][a-z0-9_]{0,63}$/u.test(name),
+		),
+	)
+	.optional()
+	.catch(undefined);
+
 const appPlacementsSchema: z.ZodType<
 	AppDevicePlacements,
 	z.ZodTypeDef,
 	unknown
 > = z.object({
+	// Absent on a hub that can't hand schedules to devices: its presence is that capability.
+	schedules: scheduleRows.optional(),
+	// Absent on a hub before Endpoints, forms and bots on devices: its presence is that capability.
+	event_types: eventTypes,
 	server_time: time,
 	placements: z
 		.array(
@@ -827,6 +883,204 @@ export function listAppDevicePlacements(
 		"GET apps/{app_id}/device-placements",
 		() => api.get(profile, `apps/${segment(appId)}/device-placements`),
 		(value) => appPlacementsSchema.parse(value),
+	);
+}
+
+/**
+ * A refusal the caller words itself: the person's role (`role`), a schedule
+ * another service runs (`schedule_elsewhere`), one that is still on its way
+ * back to the hub (`schedule_returning`), a flow someone is editing
+ * (`flow_busy`) or one the hub can't compare with its versions (`flow_incomparable`).
+ */
+export type HubRefusal<K extends string> = { kind: K; message?: string };
+
+const refusalStatus = (error: unknown) =>
+	error instanceof HubError ? error.status : undefined;
+
+/** The hub's own sentence for a refusal, without the operation in front. */
+const serverMessageOf = (error: HubError) => messageOf(error.cause ?? error);
+
+/** The route's own refusals, by status and hub code; anything else stays a `HubError`. */
+async function withRefusals<T, K extends string>(
+	call: Promise<HubResult<T>>,
+	refusal: (
+		status: number,
+		code: string | undefined,
+		error: HubError,
+	) => HubRefusal<K> | undefined,
+): Promise<HubResult<T> | HubRefusal<K>> {
+	try {
+		return await call;
+	} catch (error) {
+		const status = refusalStatus(error);
+		const known =
+			status === undefined
+				? undefined
+				: refusal(status, codeOf((error as HubError).cause), error as HubError);
+		if (known) return known;
+		throw error;
+	}
+}
+
+export type ScheduleRefusal = HubRefusal<
+	"schedule_role" | "schedule_elsewhere" | "schedule_returning"
+>;
+
+const SCHEDULE_CONFLICTS: Readonly<
+	Record<string, "schedule_elsewhere" | "schedule_returning">
+> = {
+	SCHEDULE_RUNS_ELSEWHERE: "schedule_elsewhere",
+	SCHEDULE_RETURNING: "schedule_returning",
+};
+
+function scheduleRefusal(
+	status: number,
+	code: string | undefined,
+	error: HubError,
+): ScheduleRefusal | undefined {
+	if (status === 403 && error.code === "forbidden")
+		return { kind: "schedule_role" };
+	const conflict =
+		status === 409 && code && Object.hasOwn(SCHEDULE_CONFLICTS, code)
+			? SCHEDULE_CONFLICTS[code]
+			: undefined;
+	return conflict ? { kind: conflict } : undefined;
+}
+
+const appEventPath = (appId: string, eventId: string) =>
+	`apps/${segment(appId)}/device-schedules/${segment(eventId)}`;
+
+export interface ScheduleRelease {
+	/** `device`: the service already runs it. */
+	state: "released" | "device";
+	since: number;
+}
+
+/**
+ * Lets one service take a schedule off the hub once it runs (needs the right
+ * to edit the app's events). The hub keeps running it until that service's
+ * device claims it.
+ */
+export function releaseSchedule(
+	api: IApiState,
+	profile: IProfile,
+	appId: string,
+	eventId: string,
+	deviceId: string,
+	placementId: string,
+): Promise<HubResult<ScheduleRelease> | ScheduleRefusal> {
+	return withRefusals(
+		hubCall(
+			"app",
+			"PUT apps/{app_id}/device-schedules/{event_id}",
+			() =>
+				api.put(profile, appEventPath(appId, eventId), {
+					device_id: deviceId,
+					placement_id: placementId,
+				}),
+			(value) =>
+				z
+					.object({ state: z.enum(["released", "device"]), since: time })
+					.parse(value),
+		),
+		scheduleRefusal,
+	);
+}
+
+export interface ScheduleGiveBack {
+	/** null: the hub was running it all along. */
+	hub_resumes_at: number | null;
+}
+
+/** Hands a schedule back to the hub, whatever state the device is in. */
+export function giveBackSchedule(
+	api: IApiState,
+	profile: IProfile,
+	appId: string,
+	eventId: string,
+): Promise<HubResult<ScheduleGiveBack> | ScheduleRefusal> {
+	return withRefusals(
+		hubCall(
+			"app",
+			"DELETE apps/{app_id}/device-schedules/{event_id}",
+			() => api.del(profile, appEventPath(appId, eventId)),
+			(value) => z.object({ hub_resumes_at: nullable(time) }).parse(value),
+		),
+		scheduleRefusal,
+	);
+}
+
+const versionTriple = z.tuple([count, count, count]);
+const boardVersionPath = (appId: string, boardId: string) =>
+	`apps/${segment(appId)}/board/${segment(boardId)}/version/current`;
+
+/** The flow as a version: the published version that equals the stored flow, and the newest one. */
+export interface FlowVersionState {
+	current: [number, number, number] | null;
+	newest: [number, number, number] | null;
+}
+
+/** The hub route and the desktop command answer with the same shape. */
+export const parseFlowVersionState = (value: unknown): FlowVersionState =>
+	z
+		.object({
+			current: nullable(versionTriple),
+			newest: nullable(versionTriple),
+		})
+		.parse(value);
+
+export function readFlowVersion(
+	api: IApiState,
+	profile: IProfile,
+	appId: string,
+	boardId: string,
+): Promise<HubResult<FlowVersionState>> {
+	return hubCall(
+		"app",
+		"GET apps/{app_id}/board/{board_id}/version/current",
+		() => api.get(profile, boardVersionPath(appId, boardId)),
+		parseFlowVersionState,
+	);
+}
+
+export interface FlowVersionPublished {
+	version: [number, number, number];
+	/** False when a version already equalled the flow. */
+	created: boolean;
+}
+
+export const parseFlowVersionPublished = (
+	value: unknown,
+): FlowVersionPublished =>
+	z.object({ version: versionTriple, created: z.boolean() }).parse(value);
+
+export type FlowPublishRefusal = HubRefusal<
+	"flow_role" | "flow_busy" | "flow_incomparable"
+>;
+
+/** Publishes a Patch version of the flow when no published version equals it. */
+export function publishFlowVersion(
+	api: IApiState,
+	profile: IProfile,
+	appId: string,
+	boardId: string,
+): Promise<HubResult<FlowVersionPublished> | FlowPublishRefusal> {
+	return withRefusals(
+		hubCall(
+			"app",
+			"POST apps/{app_id}/board/{board_id}/version/current",
+			() => api.post(profile, boardVersionPath(appId, boardId)),
+			parseFlowVersionPublished,
+		),
+		(status, _code, error): FlowPublishRefusal | undefined => {
+			if (status === 403 && error.code === "forbidden")
+				return { kind: "flow_role" };
+			if (status === 423) return { kind: "flow_busy" };
+			// The hub's own sentence: the flow never compares equal to its published version.
+			if (status === 422)
+				return { kind: "flow_incomparable", message: serverMessageOf(error) };
+			return undefined;
+		},
 	);
 }
 

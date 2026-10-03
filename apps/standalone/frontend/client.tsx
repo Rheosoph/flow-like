@@ -2,6 +2,7 @@
 
 import { ChatInterface } from "@flow-like/flow-like-ui/components/interfaces/chat-default";
 import { ChatFeedbackEnabledContext } from "@flow-like/flow-like-ui/components/interfaces/chat-default/message";
+import { GenericEventFormInterface } from "@flow-like/flow-like-ui/components/interfaces/generic-event-form";
 import { PageInterface } from "@flow-like/flow-like-ui/components/interfaces/page-interface";
 import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider";
 import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
@@ -10,7 +11,9 @@ import {
 	type ClientNavigation,
 	ClientNavigationContext,
 } from "@flow-like/flow-like-ui/lib/client-navigation";
+import type { IEvent } from "@flow-like/flow-like-ui/lib/schema/flow/event";
 import { QueryParamNavigationContext } from "@flow-like/flow-like-ui/lib/set-query-params";
+import { parseUint8ArrayToJson } from "@flow-like/flow-like-ui/lib/uint8";
 import { useBackendStore } from "@flow-like/flow-like-ui/state/backend-state";
 import { ExecutionEngineProviderComponent } from "@flow-like/flow-like-ui/state/execution-engine-context";
 import { I18nProvider } from "@flow-like/locales";
@@ -21,6 +24,7 @@ import {
 	type Inventory,
 	type PageBootstrap,
 	createServiceBackend,
+	isPersonStarted,
 } from "./lib/backend";
 import { clearServiceHistory } from "./lib/history";
 import {
@@ -36,6 +40,16 @@ interface Session {
 	request: ServiceRequest;
 	inventory: Inventory;
 	controller: AbortController;
+}
+
+const servesInterface = (event: IEvent) =>
+	Boolean(event.default_page_id) || event.event_type === "simple_chat";
+
+/** What a form shows besides its fields: the routes it links to, as the service lists them. */
+function formConfig(event: IEvent) {
+	const config = parseUint8ArrayToJson(event.config);
+	const routes = config?.navigate_to_routes;
+	return Array.isArray(routes) ? { navigate_to_routes: routes } : {};
 }
 
 export default function Service() {
@@ -180,10 +194,10 @@ function SessionView({
 		[session],
 	);
 	const events = useMemo(
-		() =>
-			session.inventory.events.filter(
-				(event) => event.default_page_id || event.event_type === "simple_chat",
-			),
+		() => [
+			...session.inventory.events.filter(servesInterface),
+			...session.inventory.events.filter(isPersonStarted),
+		],
 		[session.inventory.events],
 	);
 	const [selected, setSelected] = useState(
@@ -193,6 +207,7 @@ function SessionView({
 	const [page, setPage] = useState<PageBootstrap>();
 	const [error, setError] = useState("");
 	const event = events.find((event) => event.id === selected);
+	const eventConfig = useMemo(() => (event ? formConfig(event) : {}), [event]);
 	useEffect(() => {
 		const previous = useBackendStore.getState().backend;
 		useBackendStore.getState().setBackend(backend);
@@ -335,8 +350,8 @@ function SessionView({
 						)}
 						{!event ? (
 							<p className="p-6 text-muted-foreground">
-								This deployment has no Page or chat interface. Its API endpoints
-								are available to clients.
+								This deployment has no Page, chat, form or quick action. Its API
+								endpoints are available to clients.
 							</p>
 						) : !ready ? (
 							<p className="p-6">Loading…</p>
@@ -362,6 +377,13 @@ function SessionView({
 											) : (
 												<p className="p-6">Loading Page…</p>
 											)
+										) : isPersonStarted(event) ? (
+											<GenericEventFormInterface
+												appId={session.inventory.project_id}
+												event={event}
+												config={eventConfig}
+												onNavigate={navigate}
+											/>
 										) : (
 											<ChatFeedbackEnabledContext.Provider value={false}>
 												<ChatInterface

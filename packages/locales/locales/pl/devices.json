@@ -888,8 +888,10 @@
 				"whoUp": ""
 			},
 			"start": {
+				"bots": "",
 				"clearsLimit": "",
 				"label": "",
+				"schedules": "",
 				"undo": "",
 				"what_one": "",
 				"what_few": "",
@@ -898,7 +900,10 @@
 				"who": ""
 			},
 			"stop": {
+				"bots": "",
 				"label": "",
+				"schedules": "",
+				"schedulesLocal": "",
 				"stays": "",
 				"undo": "",
 				"what_one": "",
@@ -1011,6 +1016,22 @@
 		"attention": {
 			"title": ""
 		},
+		"bot": {
+			"conflict": "",
+			"connected": "",
+			"connectedAs": "",
+			"connecting": "",
+			"held": "",
+			"intentsRefused": "",
+			"needsAgent": "",
+			"notReported": "",
+			"reconnecting": "",
+			"stopped": "",
+			"tokenRefused": "",
+			"unknown": "",
+			"waiting": "",
+			"webhookSet": ""
+		},
 		"coverage": {
 			"noAccess": "",
 			"noAccessMany_one": "",
@@ -1057,6 +1078,7 @@
 			"inCloud": "",
 			"instances": "",
 			"instancesLastKnown": "",
+			"kindLine": "",
 			"modelAccess": "",
 			"moreEvents_one": "",
 			"moreEvents_few": "",
@@ -1069,11 +1091,14 @@
 			"moreUnknownText": "",
 			"noBuffering": "",
 			"noLimit": "",
+			"onDemand": "",
 			"onDevice": "",
 			"partial": "",
 			"platformLinux": "",
 			"platformMac": "",
 			"platformWindows": "",
+			"scheduled": "",
+			"scheduledNext": "",
 			"settingsUnknownDate": "",
 			"since": "",
 			"sinceUnknown": "",
@@ -1115,6 +1140,9 @@
 			"behind_few": "",
 			"behind_many": "",
 			"behind_other": "",
+			"flowEdits": "",
+			"followsLatest": "",
+			"followsLatestTitle": "",
 			"footNotRunning": "",
 			"footNotRunningLocal": "",
 			"footRuns": "",
@@ -1123,6 +1151,7 @@
 			"footUnsureLocal": "",
 			"newest": "",
 			"older": "",
+			"pinLatest": "",
 			"pinNewest": "",
 			"pinTitle": "",
 			"publishOffline": "",
@@ -1130,6 +1159,9 @@
 			"staged": "",
 			"title": "",
 			"unknown": "",
+			"unknownHub": "",
+			"unknownLoading": "",
+			"unknownPin": "",
 			"updateOffline_one": "",
 			"updateOffline_few": "",
 			"updateOffline_many": "",
@@ -1194,9 +1226,7 @@
 			"footPins": "",
 			"lastKnown": "",
 			"listLabel": "",
-			"newIn": "",
 			"notOffered": "",
-			"pins": "",
 			"pinUnknown": "",
 			"stagedUpdate": "",
 			"tableLabel": ""
@@ -1275,6 +1305,7 @@
 			"openService": "",
 			"remove": "",
 			"restart": "",
+			"runNow": "",
 			"start": "",
 			"stop": "",
 			"update": "",
@@ -1453,6 +1484,10 @@
 			"cancel": "",
 			"changed": "",
 			"continue": "",
+			"createsFlow_one": "",
+			"createsFlow_few": "",
+			"createsFlow_many": "",
+			"createsFlow_other": "",
 			"following": "",
 			"fromTo": "",
 			"inWizard": "",
@@ -1473,6 +1508,7 @@
 				"create": "",
 				"install": "",
 				"prepare": "",
+				"schedules": "",
 				"secrets": "",
 				"spending": "",
 				"start": "",
@@ -1522,6 +1558,7 @@
 			"stopOnFail": "",
 			"sub": "",
 			"title": "",
+			"toNow": "",
 			"toReview": "",
 			"toStrategy": "",
 			"tracked": "",
@@ -1541,6 +1578,9 @@
 			"by": "",
 			"changed": "",
 			"copyHash": "",
+			"currentEdits": "",
+			"currentEditsShort": "",
+			"diffEdits": "",
 			"diffEvent": "",
 			"diffFlow": "",
 			"diffNew": "",
@@ -1724,6 +1764,7 @@
 		},
 		"agent_update_available": {
 			"lastKnown": "",
+			"needsShortRelease": "",
 			"sentence": ""
 		},
 		"background_task_failing": {
@@ -1736,6 +1777,21 @@
 		"backup_slots_nearly_full": {
 			"sentence": ""
 		},
+		"bot_conflict": {
+			"sentence": "",
+			"webhook": ""
+		},
+		"bot_held": {
+			"sentence": "",
+			"several": ""
+		},
+		"bot_intents_refused": {
+			"sentence": ""
+		},
+		"bot_token_refused": {
+			"sentence": ""
+		},
+		"botProvider": "",
 		"certificate_expired": {
 			"sentence": "",
 			"services_one": "",
@@ -1949,6 +2005,17 @@
 		"rollout_staged_waiting": {
 			"sentence": "",
 			"undated": ""
+		},
+		"schedule_failed": {
+			"sentence": "",
+			"several": ""
+		},
+		"schedule_held": {
+			"sentence": "",
+			"several": ""
+		},
+		"schedule_once_missed": {
+			"sentence": ""
 		},
 		"scope": {
 			"device": ""
@@ -3180,6 +3247,10 @@
 				"agentUpdateAvailable": "",
 				"backgroundTaskFailing": "",
 				"backupSlotsNearlyFull": "",
+				"botConflict": "",
+				"botHeld": "",
+				"botIntentsRefused": "",
+				"botTokenRefused": "",
 				"certificateExpired": "",
 				"certificateExpiring": "",
 				"certificateInventoryStale": "",
@@ -3229,6 +3300,9 @@
 				"rolloutNotApplied": "",
 				"rolloutRolledBack": "",
 				"rolloutStagedWaiting": "",
+				"scheduleFailed": "",
+				"scheduleHeld": "",
+				"scheduleOnceMissed": "",
 				"secretWriteFailed": "",
 				"secretWritePending": "",
 				"serviceCrashLooping": "",
@@ -3301,7 +3375,8 @@
 				"waitingForApply": "",
 				"waitingForBackup": "",
 				"waitingForDevice": "",
-				"waitingForHeartbeat": ""
+				"waitingForHeartbeat": "",
+				"waitingForRun": ""
 			},
 			"finished": "",
 			"finishedEmpty": "",
@@ -3314,6 +3389,7 @@
 				"accountBackup": "",
 				"agentUpdate": "",
 				"command": "",
+				"eventRun": "",
 				"historyReaders": "",
 				"metricReaders": "",
 				"offlineWriteRetry": "",
@@ -3559,6 +3635,17 @@
 			"replaceHalf": ""
 		},
 		"retry": "",
+		"revoke": {
+			"bots": "",
+			"botsNoDate": "",
+			"provider": {
+				"both": "",
+				"discord": "",
+				"telegram": ""
+			},
+			"schedules": "",
+			"schedulesOffline": ""
+		},
 		"row": {
 			"approval": "",
 			"approvalActive": "",
@@ -3945,6 +4032,7 @@
 			"keepHint": "",
 			"lede": "",
 			"ledeLimits": "",
+			"ledeOnDemand": "",
 			"local": "",
 			"localHint": "",
 			"none": "",
@@ -3956,6 +4044,10 @@
 			"ownPort": "",
 			"ownPortHint": "",
 			"ownPortWhy": "",
+			"personStarted_one": "",
+			"personStarted_few": "",
+			"personStarted_many": "",
+			"personStarted_other": "",
 			"pickEventsText": "",
 			"port": "",
 			"portHint": "",
@@ -3971,6 +4063,7 @@
 			"sharedOwn": "",
 			"sharedPerDevice": "",
 			"sharedSame": "",
+			"sharedToken": "",
 			"sheetDone": "",
 			"sheetSub": "",
 			"sheetTitle": "",
@@ -3988,11 +4081,20 @@
 			"who": ""
 		},
 		"exception": {
+			"botOpen": "",
+			"botOpenDiffers": "",
+			"botOtherComputers": "",
+			"botOtherComputersDiffers": "",
 			"cantSandboxWhy": "",
 			"duplicateWhy": "",
+			"endpointSharedToken": "",
+			"endpointSharedTokenDiffers": "",
+			"endpointSharedTokenFix": "",
 			"leftOut": "",
 			"noCertificate": "",
 			"noCertificateWhy": "",
+			"onceSoon": "",
+			"onceSoonDiffers": "",
 			"portMoved": "",
 			"portMovedService": "",
 			"portMovedUsedBy": "",
@@ -4001,7 +4103,15 @@
 			"renamed": "",
 			"renamedWhy": "",
 			"runsAsAgent": "",
-			"runsAsAgentWhy": ""
+			"runsAsAgentWhy": "",
+			"scheduleAlso": "",
+			"scheduleLocalTrigger": "",
+			"scheduleTwoDevices_one": "",
+			"scheduleTwoDevices_few": "",
+			"scheduleTwoDevices_many": "",
+			"scheduleTwoDevices_other": "",
+			"stopLocalTrigger": "",
+			"stopLocalTriggerFailed": ""
 		},
 		"exceptions": {
 			"action": "",
@@ -4262,6 +4372,13 @@
 			"trustWho": ""
 		},
 		"issue": {
+			"acknowledge": {
+				"botOpen": "",
+				"botOtherComputers": "",
+				"endpointSharedToken": "",
+				"onceSoon": "",
+				"other": ""
+			},
 			"agentTrust": "",
 			"appMissing": "",
 			"approvalExpiryFar": "",
@@ -4276,17 +4393,40 @@
 			"approvalInstancesRange": "",
 			"approvalModels": "",
 			"approvalNothing": "",
+			"botElsewhere": "",
+			"botElsewhereHidden": "",
+			"botLocalTrigger": "",
+			"botReturning": "",
+			"botRole": "",
+			"botToken": "",
+			"botTokenShape": "",
+			"formNeedsPage": "",
 			"hostInvalid": "",
 			"instancesRange": "",
 			"isolationRequired": "",
 			"isolationUnavailable": "",
 			"localOnlyWeb": "",
+			"needsSingleInstance_one": "",
+			"needsSingleInstance_few": "",
+			"needsSingleInstance_many": "",
+			"needsSingleInstance_other": "",
+			"needsSingleInstanceBot_one": "",
+			"needsSingleInstanceBot_few": "",
+			"needsSingleInstanceBot_many": "",
+			"needsSingleInstanceBot_other": "",
 			"noEvents": "",
 			"noTargets": "",
+			"oncePassed": "",
 			"portInUse": "",
 			"portInUseBy": "",
 			"portInvalid": "",
 			"removedEvents": "",
+			"routeConflict": "",
+			"scheduleElsewhere": "",
+			"scheduleElsewhereHidden": "",
+			"scheduleReturning": "",
+			"scheduleRole": "",
+			"scheduleTwice": "",
 			"secretSize": "",
 			"serviceIdInvalid": "",
 			"serviceIdReserved": "",
@@ -4301,7 +4441,15 @@
 			"targetLocked": "",
 			"targetNoEvents": "",
 			"tokenInvalid": "",
+			"tooManyClaimed_one": "",
+			"tooManyClaimed_few": "",
+			"tooManyClaimed_many": "",
+			"tooManyClaimed_other": "",
 			"tooManyEvents": "",
+			"tooManyLatest_one": "",
+			"tooManyLatest_few": "",
+			"tooManyLatest_many": "",
+			"tooManyLatest_other": "",
 			"unencrypted": "",
 			"updateNeedsService": "",
 			"variableInvalid": "",
@@ -4318,6 +4466,12 @@
 			"copyHash": "",
 			"eventBlocked": "",
 			"eventMissing": "",
+			"flowBusy": "",
+			"flowCreated": "",
+			"flowIncomparable": "",
+			"flowMoved": "",
+			"flowOf": "",
+			"flowUnchanged": "",
 			"footOffline": "",
 			"footOnline": "",
 			"limits": "",
@@ -4326,6 +4480,8 @@
 			"noSecrets": "",
 			"notChecked": "",
 			"noWriters": "",
+			"publishFlows": "",
+			"publishFlowsNone": "",
 			"readApp": "",
 			"readHub": "",
 			"readImport": "",
@@ -4333,6 +4489,11 @@
 			"stampDone": "",
 			"stampRunning": "",
 			"title": ""
+		},
+		"provider": {
+			"discord": "",
+			"other": "",
+			"telegram": ""
 		},
 		"services": {
 			"events": "",
@@ -4347,13 +4508,23 @@
 			"perEventHint": "",
 			"perEventHintOffline": "",
 			"renamed": "",
-			"whyBackground": "",
+			"whyBot": "",
+			"whyOnDemand": "",
+			"whyRunsAlone": "",
+			"whyScheduled": "",
 			"whySplit": "",
 			"whyWrites": ""
 		},
 		"settings": {
 			"blocked": "",
 			"blockedText": "",
+			"botToken": {
+				"eachDevice": "",
+				"enter": "",
+				"hint": "",
+				"label": "",
+				"saved": ""
+			},
 			"differs": "",
 			"foot": "",
 			"footMulti": "",
@@ -4456,6 +4627,10 @@
 			"barDevices_other": "",
 			"barNoDevices": "",
 			"barStep": "",
+			"botTokens_one": "",
+			"botTokens_few": "",
+			"botTokens_many": "",
+			"botTokens_other": "",
 			"copyToDevices_one": "",
 			"copyToDevices_few": "",
 			"copyToDevices_many": "",
@@ -4555,6 +4730,14 @@
 			"appId": "",
 			"appLegend": "",
 			"appsError": "",
+			"botAnswers": "",
+			"botAnswersEvery": "",
+			"botAnswersNone": "",
+			"botAnswersPrefix": "",
+			"botAnswersPrefixOnly": "",
+			"botDevice": "",
+			"botHere": "",
+			"botNowhere": "",
 			"cantRun_one": "",
 			"cantRun_few": "",
 			"cantRun_many": "",
@@ -4566,6 +4749,11 @@
 			"colVersions": "",
 			"copyAppId": "",
 			"copyHash": "",
+			"createsFlow": "",
+			"deploysFlow": "",
+			"endpoint": "",
+			"endpointOpen": "",
+			"endpointToken": "",
 			"events": "",
 			"eventsCount_one": "",
 			"eventsCount_few": "",
@@ -4573,11 +4761,10 @@
 			"eventsCount_other": "",
 			"eventsIn": "",
 			"eventsLabel": "",
-			"flowLatest": "",
 			"footOffline": "",
 			"footOnline": "",
 			"footPick": "",
-			"footWhole": "",
+			"footWholeClaimed": "",
 			"keep": "",
 			"keepHint": "",
 			"lede": "",
@@ -4601,6 +4788,14 @@
 			"notServed": "",
 			"olderVersions": "",
 			"on": "",
+			"once": "",
+			"oncePassed": "",
+			"onDemand": "",
+			"onDemandFile": "",
+			"onDemandForm_one": "",
+			"onDemandForm_few": "",
+			"onDemandForm_many": "",
+			"onDemandForm_other": "",
 			"pickApp": "",
 			"pins": "",
 			"removed_one": "",
@@ -4612,6 +4807,9 @@
 			"runsOn_few": "",
 			"runsOn_many": "",
 			"runsOn_other": "",
+			"scheduleHub": "",
+			"scheduleLocal": "",
+			"scheduleNext": "",
 			"scope": "",
 			"scopeApp": "",
 			"scopeEvent": "",
@@ -4632,15 +4830,25 @@
 			"updateFootKeep": "",
 			"updateFootKept": "",
 			"updateFootNewest": "",
+			"updateTakesEdits": "",
 			"version": "",
 			"versionPins": ""
 		},
 		"where": {
+			"acknowledge": {
+				"botOpen": "",
+				"botOtherComputers": "",
+				"endpointSharedToken": "",
+				"onceSoon": ""
+			},
 			"addHint": "",
 			"addHintOne": "",
 			"addOption": "",
 			"addRunning": "",
 			"addStopped": "",
+			"confirmShared": "",
+			"confirmTable": "",
+			"confirmTitle": "",
 			"devices": "",
 			"events_one": "",
 			"events_few": "",
@@ -4667,6 +4875,7 @@
 			"leaveOut": "",
 			"lede": "",
 			"ledeOffline": "",
+			"leftOutAgent": "",
 			"leftOutDuplicate": "",
 			"leftOutRefuse": "",
 			"legend": "",
@@ -4689,6 +4898,10 @@
 			"revoked_few": "",
 			"revoked_many": "",
 			"revoked_other": "",
+			"schedulesShared": "",
+			"schedulesTable": "",
+			"schedulesTitle": "",
+			"scheduleTwice": "",
 			"selected_one": "",
 			"selected_few": "",
 			"selected_many": "",
@@ -4801,18 +5014,41 @@
 		"conseq": {
 			"answersAt": "",
 			"background": "",
+			"bot": "",
+			"botGap": "",
+			"botUndo": "",
+			"botWebhook": "",
 			"cloud": "",
 			"cloudSpend": "",
 			"creates": "",
+			"endpoint": "",
+			"endpointAnswers": "",
+			"endpointElsewhere": "",
+			"endpointElsewhereLocal": "",
+			"endpointShared": "",
+			"endpointToken": "",
+			"flowCreated": "",
+			"flowUndo": "",
 			"model": "",
 			"modelSpend": "",
 			"nobody": "",
 			"nobodyYet": "",
 			"noSafe": "",
+			"once": "",
+			"onceAfter": "",
+			"onDemand": "",
+			"onDemandPage": "",
 			"quick": "",
 			"quickWho": "",
 			"safe": "",
 			"safeWho": "",
+			"schedule": "",
+			"scheduleLimit": "",
+			"scheduleMoves": "",
+			"scheduleReadOnly": "",
+			"scheduleSwitch": "",
+			"scheduleUndo": "",
+			"seconds": "",
 			"settings": "",
 			"staysKeep": "",
 			"staysOffline": "",
@@ -4929,22 +5165,53 @@
 		},
 		"exception": {
 			"agent": "",
+			"agentFeature": "",
+			"botOpen": "",
+			"botOtherComputers": "",
 			"duplicate": "",
+			"endpointSharedToken": "",
+			"onceSoon": "",
 			"portMoved": "",
 			"refuse": "",
 			"renamed": "",
+			"scheduleLocalTrigger": "",
+			"scheduleTwoDevices_one": "",
+			"scheduleTwoDevices_few": "",
+			"scheduleTwoDevices_many": "",
+			"scheduleTwoDevices_other": "",
 			"unencrypted": ""
 		},
 		"fail": {
+			"agentFeature": {
+				"apiEvents": "",
+				"discordBots": "",
+				"onDemandEvents": "",
+				"other": "",
+				"scheduledOnce": "",
+				"telegramBots": ""
+			},
+			"agentSchedules": "",
 			"appliedOnly": "",
+			"botElsewhere": "",
+			"botHub": "",
+			"botReturning": "",
+			"botRole": "",
 			"busy": "",
 			"changed": "",
 			"deviceUnread": "",
+			"eventMissing": "",
 			"eventRefused": "",
 			"failed": "",
+			"flowBusy": "",
+			"flowHub": "",
+			"flowIncomparable": "",
+			"flowMoved": "",
+			"flowRole": "",
+			"flowTarget": "",
 			"hostPolicy": "",
 			"hub": "",
 			"hubRefused": "",
+			"hubType": "",
 			"interrupted": "",
 			"invalid": "",
 			"invalidPlan": "",
@@ -4957,6 +5224,10 @@
 			"rolledBack": "",
 			"rolloutCancelled": "",
 			"rolloutFailed": "",
+			"scheduleElsewhere": "",
+			"scheduleHub": "",
+			"scheduleReturning": "",
+			"scheduleRole": "",
 			"secret": "",
 			"serviceExists": "",
 			"sourceChanged": "",
@@ -5021,6 +5292,7 @@
 		},
 		"phase": {
 			"apply": "",
+			"bots": "",
 			"checkEvents": "",
 			"checkNew": "",
 			"cloudAccess": "",
@@ -5028,6 +5300,8 @@
 			"install": "",
 			"modelAccess": "",
 			"prepareUpdate": "",
+			"schedules": "",
+			"schedulesBots": "",
 			"secrets": "",
 			"secretsCount_one": "",
 			"secretsCount_few": "",
@@ -5282,11 +5556,13 @@
 		"while": {
 			"apply": "",
 			"approve": "",
+			"bots": "",
 			"checkEvents": "",
 			"checkNew": "",
 			"create": "",
 			"install": "",
 			"prepareUpdate": "",
+			"schedules": "",
 			"secrets": "",
 			"spending": "",
 			"start": "",
@@ -5350,8 +5626,12 @@
 			"checked": "",
 			"checkedNone": "",
 			"checkFailed": "",
+			"checkRefused": "",
 			"manifestTooLarge": "",
+			"needsShortRelease": "",
 			"noReleaseTrust": "",
+			"releaseFailed": "",
+			"releaseRanOut": "",
 			"releaseReading": "",
 			"releaseUnread": "",
 			"rows": {
@@ -5376,7 +5656,6 @@
 			"close": "",
 			"copyHash": "",
 			"event": "",
-			"eventPin": "",
 			"how": {
 				"afterCheckIn": "",
 				"afterKeys": "",
@@ -5401,7 +5680,6 @@
 				"unreadableOnline": ""
 			},
 			"newest": "",
-			"newIn": "",
 			"noEvents": "",
 			"noEventsText": "",
 			"noFlows": "",
@@ -5742,6 +6020,15 @@
 		"scopeNote": "",
 		"services": {
 			"appVersionUnknown": "",
+			"bot": "",
+			"botState": {
+				"connected": "",
+				"connecting": "",
+				"elsewhere": "",
+				"intentsRefused": "",
+				"off": "",
+				"tokenRefused": ""
+			},
 			"cloud": "",
 			"cloudSpend": "",
 			"confirmLabel": "",
@@ -5757,6 +6044,8 @@
 			"modeUnknown": "",
 			"newVersion": "",
 			"noUpdate": "",
+			"onceNotRun": "",
+			"onceRan": "",
 			"oneApp": "",
 			"open": "",
 			"othersHidden_one": "",
@@ -5871,8 +6160,10 @@
 			"releaseError": "",
 			"releaseExpires": "",
 			"releaseFacts": "",
+			"releaseFailed": "",
 			"releaseLoading": "",
 			"releaseNone": "",
+			"releaseRanOut": "",
 			"remoteUpdate": "",
 			"remoteUpdateLinux": "",
 			"remoteUpdateNo": "",
@@ -6585,9 +6876,36 @@
 		}
 	},
 	"eligibility": {
-		"apiType": {
+		"agent": {
+			"apiEvents": {
+				"fix": "",
+				"long": ""
+			},
+			"discordBots": {
+				"fix": "",
+				"long": ""
+			},
+			"fix": "",
 			"long": "",
-			"short": ""
+			"onDemandEvents": {
+				"fix": "",
+				"long": ""
+			},
+			"scheduledOnce": {
+				"fix": "",
+				"long": ""
+			},
+			"short": "",
+			"telegramBots": {
+				"fix": "",
+				"long": ""
+			}
+		},
+		"bot": {
+			"invalid": {
+				"long": "",
+				"short": ""
+			}
 		},
 		"canary": {
 			"long": "",
@@ -6596,33 +6914,66 @@
 		"eventType": {
 			"api": "",
 			"chat": "",
-			"chatBot": "",
 			"cron": "",
 			"daemon": "",
 			"deeplink": "",
+			"discord": "",
 			"email": "",
 			"form": "",
 			"geolocation": "",
-			"http": "",
 			"inboundEmail": "",
 			"mcp": "",
 			"other": "",
 			"page": "",
 			"quickAction": "",
 			"rest": "",
-			"teams": ""
+			"teams": "",
+			"telegram": ""
 		},
 		"fix": {
-			"openEvents": "",
-			"pinFlow": ""
+			"openEvents": ""
 		},
 		"flowError": {
 			"long": "",
 			"short": ""
 		},
-		"latestFlow": {
+		"hubSchedules": {
 			"long": "",
 			"short": ""
+		},
+		"hubType": {
+			"bot": {
+				"long": ""
+			},
+			"endpoint": {
+				"long": ""
+			},
+			"onDemand": {
+				"long": ""
+			},
+			"short": ""
+		},
+		"latestFlow": {
+			"copy": {
+				"long": "",
+				"short": ""
+			},
+			"hub": {
+				"long": "",
+				"short": ""
+			},
+			"other": {
+				"long": "",
+				"short": ""
+			},
+			"role": {
+				"long": "",
+				"short": ""
+			},
+			"target": {
+				"long": "",
+				"short": ""
+			}
 		},
 		"paused": {
 			"long": "",
@@ -6632,19 +6983,74 @@
 			"long": "",
 			"short": ""
 		},
+		"route": {
+			"invalid": {
+				"long": "",
+				"short": ""
+			},
+			"missing": {
+				"long": "",
+				"short": ""
+			},
+			"reserved": {
+				"long": "",
+				"short": ""
+			}
+		},
 		"runs": {
+			"bot": {
+				"discord": "",
+				"telegram": ""
+			},
 			"explicit": "",
 			"hosted": "",
+			"once": "",
+			"onceAt": "",
+			"onDemand": "",
 			"ownServer": "",
+			"route": "",
+			"schedule": "",
+			"scheduled": "",
 			"unsupported": ""
+		},
+		"runsElsewhere": "",
+		"runsElsewhereBot": "",
+		"schedule": {
+			"detail": {
+				"both": "",
+				"date": "",
+				"fields_one": "",
+				"fields_few": "",
+				"fields_many": "",
+				"fields_other": "",
+				"gap": "",
+				"length": "",
+				"parser": "",
+				"range": "",
+				"syntax": "",
+				"time": "",
+				"zone": ""
+			},
+			"invalid": {
+				"long": "",
+				"short": ""
+			},
+			"missing": {
+				"long": "",
+				"short": ""
+			},
+			"once": {
+				"long": "",
+				"short": ""
+			},
+			"tooOften": {
+				"long": "",
+				"short": ""
+			}
 		},
 		"thisDevice": "",
 		"type": {
 			"chatBot": {
-				"long": "",
-				"short": ""
-			},
-			"cron": {
 				"long": "",
 				"short": ""
 			},
@@ -6653,10 +7059,6 @@
 				"short": ""
 			},
 			"email": {
-				"long": "",
-				"short": ""
-			},
-			"inApp": {
 				"long": "",
 				"short": ""
 			},
@@ -7370,6 +7772,10 @@
 			"blind": "",
 			"cantRun": "",
 			"checking": "",
+			"edits_one": "",
+			"edits_few": "",
+			"edits_many": "",
+			"edits_other": "",
 			"hubOff": "",
 			"locked_one": "",
 			"locked_few": "",
@@ -7386,7 +7792,12 @@
 			"older_many": "",
 			"older_other": "",
 			"run": "",
+			"runsOnce": "",
 			"signIn": "",
+			"stillRuns_one": "",
+			"stillRuns_few": "",
+			"stillRuns_many": "",
+			"stillRuns_other": "",
 			"unavailable": "",
 			"unknown_one": "",
 			"unknown_few": "",
@@ -7401,7 +7812,8 @@
 		},
 		"chip": {
 			"title": "",
-			"titleBehind": ""
+			"titleBehind": "",
+			"titleEdits": ""
 		},
 		"column": {
 			"actions": "",
@@ -7419,7 +7831,6 @@
 		"eventVersion": "",
 		"fix": {
 			"canary": "",
-			"latestFlow": "",
 			"lead": "",
 			"open": "",
 			"paused": "",
@@ -7431,14 +7842,58 @@
 		"flowVersion": "",
 		"openInDevices": "",
 		"pop": {
+			"accessEndedNoNext": "",
+			"action": "",
+			"aDevice": "",
 			"behind": "",
 			"behindTitle": "",
+			"botHub": "",
+			"botIdle": "",
+			"botIdleWhy": {
+				"conflict": "",
+				"failed": "",
+				"intentsRefused": "",
+				"removed": "",
+				"stopped": "",
+				"tokenRefused": "",
+				"webhookSet": ""
+			},
+			"botLocal": "",
+			"botOn": "",
+			"botReleased": "",
+			"botReleasedHidden": "",
+			"botReturning": "",
+			"botTakeBack": {
+				"done": "",
+				"doneReleased": "",
+				"label": "",
+				"provider": {
+					"discord": "",
+					"telegram": ""
+				},
+				"released": "",
+				"token": "",
+				"tokenNoDate": "",
+				"undo": "",
+				"what": "",
+				"who": ""
+			},
 			"deployHere": "",
 			"elsewhere": "",
+			"endpoint": "",
+			"form": "",
 			"group_one": "",
 			"group_few": "",
 			"group_many": "",
 			"group_other": "",
+			"hold": {
+				"hubTooOld": "",
+				"hubTooOldBot": "",
+				"hubUnreachable": "",
+				"notReleased": "",
+				"otherService": "",
+				"runsElsewhere": ""
+			},
 			"lockedWhy": "",
 			"modeOffline": "",
 			"modeOnline": "",
@@ -7452,7 +7907,13 @@
 			"none": "",
 			"noneVisible": "",
 			"notOnIt": "",
+			"onceChanged": "",
+			"onceHub": "",
+			"onceMissed": "",
+			"oncePassed": "",
+			"onceRan": "",
 			"open": "",
+			"openService": "",
 			"others_one": "",
 			"others_few": "",
 			"others_many": "",
@@ -7461,15 +7922,54 @@
 			"pin": "",
 			"restoreKeys": "",
 			"runAnother": "",
+			"runHeld": "",
+			"runHeldBot": "",
+			"runNow": "",
+			"runOnHub": {
+				"conseq": "",
+				"conseqReleased": "",
+				"done": "",
+				"doneNow": "",
+				"label": "",
+				"needsRole": "",
+				"offline": "",
+				"once": "",
+				"onceDone": "",
+				"refused": "",
+				"undo": "",
+				"who": ""
+			},
+			"scheduleChanged": "",
+			"scheduleHidden": "",
+			"scheduleHub": "",
+			"scheduleIdle": {
+				"accessEnded": "",
+				"failed": "",
+				"held": "",
+				"removed": "",
+				"stopped": ""
+			},
+			"scheduleOn": "",
+			"schedulePaused": "",
+			"scheduleReleased": "",
+			"scheduleReleasedHidden": "",
+			"scheduleReturning": "",
+			"scheduleUnconfirmed": {
+				"recent": "",
+				"silent": "",
+				"stale": ""
+			},
 			"serves": "",
 			"snapshotWhy": "",
 			"snapshotWhyPlain": "",
 			"staged": "",
 			"startInstructions": "",
+			"stillServed": "",
 			"stoppedAsAsked": "",
 			"typeAndHow": "",
 			"unknown": "",
-			"unlock": ""
+			"unlock": "",
+			"whereLabel": ""
 		},
 		"row": {
 			"actions": "",
@@ -7514,6 +8014,10 @@
 		"summary": {
 			"cantRun": "",
 			"comma": "",
+			"edits_one": "",
+			"edits_few": "",
+			"edits_many": "",
+			"edits_other": "",
 			"older_one": "",
 			"older_few": "",
 			"older_many": "",
@@ -8111,6 +8615,7 @@
 		"lockedLogs": "",
 		"lockedLookup": "",
 		"lockedMetrics": "",
+		"lockedRun": "",
 		"lockedStatus": "",
 		"lockedText": "",
 		"lockUnsupported": "",
@@ -8360,8 +8865,8 @@
 			"shown": "",
 			"summary": "",
 			"summaryOutdated": "",
-			"title": "",
-			"unknown": ""
+			"summaryPlain": "",
+			"title": ""
 		},
 		"diagnostics": {
 			"action": "",
@@ -8396,6 +8901,7 @@
 				"ok": ""
 			},
 			"setup": {
+				"expired": "",
 				"full": "",
 				"label": "",
 				"need": "",
@@ -8414,6 +8920,8 @@
 			},
 			"title": "",
 			"update": {
+				"endsSoon": "",
+				"expired": "",
 				"label": "",
 				"missing": "",
 				"need": "",
@@ -8429,6 +8937,8 @@
 			"allPass": "",
 			"checking": "",
 			"checkingRest": "",
+			"endsSoon": "",
+			"expired": "",
 			"full": "",
 			"near": "",
 			"noRelease": "",
@@ -8438,6 +8948,7 @@
 			"offRest": "",
 			"over": "",
 			"ready": "",
+			"releaseBlocks": "",
 			"supports": "",
 			"supportsChecking": "",
 			"supportsNoChecks": "",
@@ -8649,8 +9160,11 @@
 			"issued": "",
 			"keys": "",
 			"keysHint": "",
+			"lastDay": "",
 			"loading": "",
 			"minimum": "",
+			"minimumBehind": "",
+			"minimumBehindOne": "",
 			"minimumHint": "",
 			"missing": {
 				"address": "",
@@ -8664,29 +9178,34 @@
 			"number": "",
 			"publishedAt": "",
 			"publishedHint": "",
+			"ranOut": "",
 			"reason": {
 				"expired": "",
 				"invalid": "",
+				"lifetime": "",
+				"notYetValid": "",
 				"sequence": "",
 				"signature": ""
 			},
-			"rejected": {
-				"text": "",
-				"title": ""
-			},
 			"result": {
 				"failed": "",
+				"refused": "",
 				"verified": ""
 			},
+			"sequence": "",
+			"sequenceHint": "",
 			"signedBy": "",
 			"title": "",
-			"unfetched": {
-				"text": "",
-				"title": ""
-			},
+			"unfetchedOther": "",
 			"valid": "",
 			"validHint": "",
-			"validMax": "",
+			"verdict": {
+				"endsSoon": "",
+				"expired": "",
+				"failed": "",
+				"ok": "",
+				"unfetched": ""
+			},
 			"verification": "",
 			"verified": "",
 			"verifiedBy": "",
@@ -8696,7 +9215,8 @@
 			"window_one": "",
 			"window_few": "",
 			"window_many": "",
-			"window_other": ""
+			"window_other": "",
+			"windowDates": ""
 		},
 		"setup": {
 			"action": "",
@@ -8713,6 +9233,8 @@
 			"checks": "",
 			"checksNotRun": "",
 			"devices": "",
+			"endsSoon": "",
+			"expiredSub": "",
 			"fails": "",
 			"full": "",
 			"lastKnown": "",
@@ -8740,6 +9262,8 @@
 			"until_few": "",
 			"until_many": "",
 			"until_other": "",
+			"untilDate": "",
+			"untilLastDay": "",
 			"unverified": "",
 			"unverifiedSub": "",
 			"upTo": "",
@@ -10519,6 +11043,154 @@
 		"slotsFullLimit": "",
 		"tokenRestricted": ""
 	},
+	"runNow": {
+		"again": "",
+		"againAction": "",
+		"cancel": "",
+		"checkAgain": "",
+		"close": "",
+		"closeKeepsRunning": "",
+		"conseq": {
+			"local": "",
+			"online": "",
+			"spending": "",
+			"undo": "",
+			"unknownSource": "",
+			"what": "",
+			"when": "",
+			"whoLabel": ""
+		},
+		"failure": {
+			"cancelled": "",
+			"flowFailed": "",
+			"interrupted": "",
+			"invalidFields": "",
+			"needsInteraction": "",
+			"notStarted": "",
+			"other": "",
+			"timedOut": "",
+			"timedOutLimit": ""
+		},
+		"field": {
+			"array": "",
+			"choose": "",
+			"date": "",
+			"defaultOmitted": "",
+			"file": "",
+			"integer": "",
+			"items": "",
+			"json": "",
+			"noChoice": "",
+			"number": "",
+			"object": "",
+			"option": "",
+			"refused": "",
+			"required": "",
+			"requiredMark": "",
+			"sensitive": "",
+			"unique": "",
+			"unknown": ""
+		},
+		"loading": "",
+		"noInput": "",
+		"noReply": "",
+		"notSent": "",
+		"paused": "",
+		"pausedLocked": "",
+		"payload": {
+			"tooLarge": "",
+			"tooMany": ""
+		},
+		"progress": {
+			"reading": "",
+			"running": "",
+			"sent": "",
+			"waiting": ""
+		},
+		"readFailed": "",
+		"readRetry": "",
+		"recorded": "",
+		"rejected": {
+			"busy": "",
+			"invalid": "",
+			"limit": "",
+			"other": "",
+			"reason": "",
+			"revisionConflict": "",
+			"unauthorized": "",
+			"unsupported": ""
+		},
+		"reload": "",
+		"result": {
+			"attachments_one": "",
+			"attachments_few": "",
+			"attachments_many": "",
+			"attachments_other": "",
+			"copied": "",
+			"copy": "",
+			"finished": "",
+			"gone": "",
+			"none": "",
+			"output": "",
+			"succeeded": "",
+			"took": "",
+			"truncated": ""
+		},
+		"run": "",
+		"started": {
+			"finished": "",
+			"follow": "",
+			"foot": "",
+			"sent": "",
+			"show": "",
+			"state": {
+				"failed": "",
+				"noReply": "",
+				"running": "",
+				"stopped": "",
+				"succeeded": "",
+				"waiting": ""
+			},
+			"title": "",
+			"tracked": ""
+		},
+		"stop": "",
+		"stopFailed": "",
+		"stopping": "",
+		"sub": "",
+		"support": {
+			"endpoint": "",
+			"file": "",
+			"truncated": "",
+			"unknownField": ""
+		},
+		"title": "",
+		"titleFallback": "",
+		"tryAgain": "",
+		"unknownRun": ""
+	},
+	"schedule": {
+		"expression": "",
+		"expressionInline": "",
+		"head": "",
+		"headOnce": "",
+		"outcome": {
+			"cancelled": "",
+			"failed": "",
+			"succeeded": "",
+			"timedOut": ""
+		},
+		"place": "",
+		"skip": {
+			"busy": "",
+			"missed": "",
+			"overlap": ""
+		},
+		"time": "",
+		"timeOwn": "",
+		"timeOwnOnly": "",
+		"zoneUnset": ""
+	},
 	"service": {
 		"actions": {
 			"addNone": "",
@@ -10533,8 +11205,11 @@
 			"moreFor": "",
 			"ofMax": "",
 			"oneBackground": "",
+			"oneBot": "",
 			"oneBuffering": "",
 			"oneMax": "",
+			"oneNoEndpoint": "",
+			"oneScheduled": "",
 			"openEndpoint": "",
 			"openLoopback": "",
 			"openPage": "",
@@ -10734,6 +11409,7 @@
 			"openPageNote": "",
 			"remove": "",
 			"removeNote": "",
+			"runNow": "",
 			"stagedFirst": "",
 			"whereRuns": "",
 			"whereRunsNote": ""
@@ -10985,6 +11661,11 @@
 			"no": "",
 			"yes": ""
 		},
+		"botToken": {
+			"hint": "",
+			"label": "",
+			"setNew": ""
+		},
 		"buffer": {
 			"automatic": "",
 			"behind_one": "",
@@ -11212,9 +11893,6 @@
 			"exposedText": "",
 			"exposure": "",
 			"https": "",
-			"kindBackground": "",
-			"kindMcp": "",
-			"kindRest": "",
 			"lan": "",
 			"lanUnsupported": "",
 			"limits": "",
@@ -11311,6 +11989,7 @@
 		},
 		"json": {
 			"bytes": "",
+			"eventAdded": "",
 			"identity": "",
 			"invalid": "",
 			"label": "",
@@ -11355,6 +12034,7 @@
 			"packages_other": ""
 		},
 		"remove": {
+			"bots": "",
 			"button": "",
 			"cloudForeign": "",
 			"cloudHidden": "",
@@ -11369,6 +12049,11 @@
 			"firstWaiting_many": "",
 			"firstWaiting_other": "",
 			"firstWaitingUnknown": "",
+			"giveBack": "",
+			"giveBackBoth": "",
+			"giveBackBots": "",
+			"giveBackNeedsRole": "",
+			"giveBackNeedsRoleBots": "",
 			"interrupted": "",
 			"lead": "",
 			"lose_one": "",
@@ -11376,10 +12061,14 @@
 			"lose_many": "",
 			"lose_other": "",
 			"needLose": "",
+			"notGivenBack": "",
+			"notGivenBackStopped": "",
 			"notRemoved": "",
 			"notRevoked": "",
 			"notRevokedStopped": "",
 			"notStopped": "",
+			"notTakenBack": "",
+			"notTakenBackStopped": "",
 			"revokeAccess": "",
 			"revokeAccessLabel": "",
 			"revokeBoth": "",
@@ -11574,6 +12263,165 @@
 			"unnamed": ""
 		}
 	},
+	"serviceEndpoint": {
+		"alsoOnPage_one": "",
+		"alsoOnPage_few": "",
+		"alsoOnPage_many": "",
+		"alsoOnPage_other": "",
+		"requests": {
+			"changed": "",
+			"copyAddress": "",
+			"copyCurl": "",
+			"noAddress": "",
+			"noRoute": "",
+			"title": "",
+			"token": "",
+			"tokenPlaceholder": "",
+			"unknown": "",
+			"why": {
+				"failed": "",
+				"live": "",
+				"role": ""
+			}
+		},
+		"runFromDevices": ""
+	},
+	"serviceStatus": {
+		"actions": {
+			"action": "",
+			"fileOnly": "",
+			"fileOnlyNoPage": "",
+			"form_one": "",
+			"form_few": "",
+			"form_many": "",
+			"form_other": "",
+			"last": "",
+			"needsAgent": "",
+			"noRuns": "",
+			"notReported": "",
+			"openPage": "",
+			"rule": "",
+			"running_one": "",
+			"running_few": "",
+			"running_many": "",
+			"running_other": "",
+			"runNow": "",
+			"runs_one": "",
+			"runs_few": "",
+			"runs_many": "",
+			"runs_other": "",
+			"stopped": "",
+			"title": "",
+			"truncated": "",
+			"unknown": ""
+		},
+		"bots": {
+			"conflict": "",
+			"connected": "",
+			"connectedAs": "",
+			"connectedAsNow": "",
+			"connectedSince": "",
+			"connecting": "",
+			"dropped_one": "",
+			"dropped_few": "",
+			"dropped_many": "",
+			"dropped_other": "",
+			"hold": {
+				"anotherService": "",
+				"hubTooOld": "",
+				"hubUnreachable": "",
+				"notReleased": "",
+				"otherService": "",
+				"runsElsewhere": ""
+			},
+			"intentsRefused": "",
+			"lastMessage": "",
+			"lastMessageRun": "",
+			"needsAgent": "",
+			"notReported": "",
+			"ok": "",
+			"openConfiguration": "",
+			"reconnecting": "",
+			"rule": "",
+			"runHereConseq": "",
+			"runHereDone": "",
+			"runHereElsewhere": "",
+			"runHereUndo": "",
+			"runHereWho": "",
+			"running_one": "",
+			"running_few": "",
+			"running_many": "",
+			"running_other": "",
+			"runs_one": "",
+			"runs_few": "",
+			"runs_many": "",
+			"runs_other": "",
+			"stopped": "",
+			"title": "",
+			"tokenRefused": {
+				"discord": "",
+				"telegram": ""
+			},
+			"truncated": "",
+			"unknown": "",
+			"waiting": "",
+			"webhookSet": ""
+		},
+		"schedules": {
+			"clockBehind": "",
+			"clockChange": "",
+			"hold": {
+				"anotherService": "",
+				"hubTooOld": "",
+				"hubUnreachable": "",
+				"notReleased": "",
+				"otherService": "",
+				"runsElsewhere": ""
+			},
+			"last": "",
+			"lastOutcome": "",
+			"lastRunning": "",
+			"needsAgent": "",
+			"next": "",
+			"nextComputed": "",
+			"noNext": "",
+			"notReported": "",
+			"once": {
+				"cutOff": "",
+				"done": "",
+				"missed": "",
+				"passed": "",
+				"ran": "",
+				"ranAt": "",
+				"thisService": "",
+				"willRun": ""
+			},
+			"onceRule": "",
+			"rule": "",
+			"runHere": "",
+			"runHereConseq": "",
+			"runHereDone": "",
+			"runHereElsewhere": "",
+			"runHereReturning": "",
+			"runHereUndo": "",
+			"runHereWhen": "",
+			"runHereWho": "",
+			"running": "",
+			"skipped_one": "",
+			"skipped_few": "",
+			"skipped_many": "",
+			"skipped_other": "",
+			"skippedCount_one": "",
+			"skippedCount_few": "",
+			"skippedCount_many": "",
+			"skippedCount_other": "",
+			"stale": "",
+			"stopped": "",
+			"title": "",
+			"truncated": "",
+			"unknown": ""
+		}
+	},
 	"setup": {
 		"aside": {
 			"backupOff": "",
@@ -11659,14 +12507,9 @@
 			},
 			"openHub": "",
 			"openPending": "",
-			"reason": {
-				"digest": "",
-				"expired": "",
-				"invalid": "",
-				"sequence": "",
-				"signature": ""
-			},
 			"rejected": {
+				"expired": "",
+				"here": "",
 				"text": "",
 				"title": ""
 			},
@@ -11675,6 +12518,7 @@
 				"agent": "",
 				"copyFingerprint": "",
 				"docker": "",
+				"endsSoon": "",
 				"floor": "",
 				"guard": "",
 				"loading": "",
@@ -11688,6 +12532,7 @@
 				"unreachableText": "",
 				"valid": "",
 				"validity": "",
+				"validityLong": "",
 				"verifiedAgo": "",
 				"verifying": "",
 				"version": "",
@@ -11712,6 +12557,7 @@
 				"when_few": "",
 				"when_many": "",
 				"when_other": "",
+				"whenOnly": "",
 				"who": ""
 			},
 			"change": "",
@@ -11838,6 +12684,8 @@
 			"limitRest": "",
 			"notReady": "",
 			"notReadyRest": "",
+			"ranOut": "",
+			"ranOutRest": "",
 			"ready": "",
 			"readyRest_one": "",
 			"readyRest_few": "",
@@ -11917,6 +12765,7 @@
 			"time_few": "",
 			"time_many": "",
 			"time_other": "",
+			"timeOnly": "",
 			"title": ""
 		},
 		"next": {
@@ -12043,6 +12892,7 @@
 				"registered": "",
 				"status": "",
 				"then": "",
+				"thenRelease": "",
 				"title": "",
 				"waiting": "",
 				"waitingPlain": ""
@@ -12145,6 +12995,8 @@
 				"title": ""
 			}
 		},
+		"startBy": "",
+		"startByNew": "",
 		"steps": {
 			"check": "",
 			"create": "",
@@ -12479,7 +13331,8 @@
 		},
 		"event": {
 			"newIn": "",
-			"pins": ""
+			"pins": "",
+			"route": ""
 		},
 		"fleet": {
 			"active": "",

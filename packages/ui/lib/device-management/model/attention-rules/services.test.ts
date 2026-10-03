@@ -219,3 +219,166 @@ describe("secrets and endpoints", () => {
 		expect(evaluate("endpoint_unencrypted_exposed", { ...input })).toEqual([]);
 	});
 });
+
+describe("schedules", () => {
+	const schedule = {
+		event_id: "evt_nightly",
+		expression: "0 0 2 * * *",
+		timezone: "Europe/Berlin",
+		hold: null,
+		last_outcome: "succeeded",
+	} as const;
+
+	test("a running service that holds a schedule is a Warning that names the reason", () => {
+		expect(
+			evaluate("schedule_held", edgeWith({ schedules: [schedule] })),
+		).toEqual([]);
+		const [item] = evaluate(
+			"schedule_held",
+			edgeWith({
+				schedules: [
+					schedule,
+					{ ...schedule, event_id: "evt_mail", hold: "not_released" },
+				],
+			}),
+		);
+		expect(item.severity).toBe("warning");
+		expect(item.dwellS).toBeGreaterThan(0);
+		expect(item.subject).toMatchObject({
+			deviceId: SAMPLE_IDS.edge,
+			serviceId: "support-bot",
+		});
+		expect(item.copy.params).toMatchObject({ hold: "not_released", held: 1 });
+	});
+
+	test("a service that is not running or reports no schedules holds nothing", () => {
+		const held = [{ ...schedule, hold: "hub_unreachable" as const }];
+		expect(
+			evaluate(
+				"schedule_held",
+				edgeWith({ schedules: held, observed_state: "stopping" }),
+			),
+		).toEqual([]);
+		expect(evaluate("schedule_held", sampleFleet())).toEqual([]);
+	});
+
+	test("a failed or timed-out last run is a Notice; a cut-off one is not", () => {
+		expect(
+			evaluate(
+				"schedule_failed",
+				edgeWith({ schedules: [{ ...schedule, last_outcome: "cancelled" }] }),
+			),
+		).toEqual([]);
+		const [item] = evaluate(
+			"schedule_failed",
+			edgeWith({
+				schedules: [
+					{ ...schedule, last_outcome: "failed" },
+					{ ...schedule, event_id: "evt_mail", last_outcome: "timed_out" },
+				],
+			}),
+		);
+		expect(item.severity).toBe("notice");
+		expect(item.copy.params).toMatchObject({ failed: 2 });
+	});
+
+	test("a missed one-time schedule is a Notice, also on a stopped service; ran or passed are not", () => {
+		const once = {
+			event_id: "evt_once",
+			once_at: SAMPLE_NOW - 3600,
+			timezone: "Europe/Berlin",
+			hold: null,
+			last_outcome: null,
+		} as const;
+		for (const once_state of ["pending", "ran", "passed"] as const)
+			expect(
+				evaluate(
+					"schedule_once_missed",
+					edgeWith({ schedules: [{ ...once, once_state }] }),
+				),
+			).toEqual([]);
+		const [item] = evaluate(
+			"schedule_once_missed",
+			edgeWith({
+				schedules: [{ ...once, once_state: "missed" }],
+				desired_state: "stopped",
+				observed_state: "stopped",
+			}),
+		);
+		expect(item.severity).toBe("notice");
+		expect(item.copy.params).toMatchObject({
+			event: "evt_once",
+			time: SAMPLE_NOW - 3600,
+		});
+	});
+});
+
+describe("bots", () => {
+	const bot = {
+		event_id: "evt_helper",
+		provider: "telegram",
+		state: "connected",
+		hold: null,
+	} as const;
+
+	test("a running service that holds a bot is a Warning after 2 min, with the reason", () => {
+		expect(evaluate("bot_held", edgeWith({ bots: [bot] }))).toEqual([]);
+		const [item] = evaluate(
+			"bot_held",
+			edgeWith({
+				bots: [
+					bot,
+					{
+						...bot,
+						event_id: "evt_x",
+						state: "waiting",
+						hold: "runs_elsewhere",
+					},
+				],
+			}),
+		);
+		expect(item).toMatchObject({ severity: "warning", dwellS: 120 });
+		expect(item.copy.params).toMatchObject({ hold: "runs_elsewhere", held: 1 });
+		expect(
+			evaluate(
+				"bot_held",
+				edgeWith({
+					bots: [{ ...bot, state: "waiting", hold: "not_released" }],
+					observed_state: "stopping",
+				}),
+			),
+		).toEqual([]);
+	});
+
+	test("a refused token, refused permissions and another consumer are Warnings; a network blip is none", () => {
+		for (const state of ["connecting", "reconnecting", "ok"] as const)
+			for (const key of [
+				"bot_token_refused",
+				"bot_intents_refused",
+				"bot_conflict",
+			] as const)
+				expect(evaluate(key, edgeWith({ bots: [{ ...bot, state }] }))).toEqual(
+					[],
+				);
+		const one = (key: AttentionKey, state: (typeof bot)["state"] | string) =>
+			evaluate(key, edgeWith({ bots: [{ ...bot, state } as never] }))[0];
+		expect(one("bot_token_refused", "token_refused")).toMatchObject({
+			severity: "warning",
+			copy: { params: { provider: "telegram", state: "token_refused" } },
+		});
+		expect(one("bot_intents_refused", "intents_refused")?.severity).toBe(
+			"warning",
+		);
+		expect(one("bot_conflict", "conflict")?.copy.params?.state).toBe(
+			"conflict",
+		);
+		expect(one("bot_conflict", "webhook_set")?.copy.params?.state).toBe(
+			"webhook_set",
+		);
+	});
+
+	test("an agent that can't report bots, or a service without any, says nothing", () => {
+		expect(evaluate("bot_conflict", sampleFleet())).toEqual([]);
+		expect(evaluate("bot_held", edgeWith({ bots: [] }))).toEqual([]);
+	});
+});

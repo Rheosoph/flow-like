@@ -17,6 +17,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { type ReactNode, useCallback, useId, useMemo, useState } from "react";
 import type { PlacementConfiguration } from "../../../../lib/device-management/deployment";
 import type { NetworkInterface } from "../../../../lib/device-management/model/types";
+import { eventTypeLabel } from "../copy/eligibility-copy";
 import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import { Block } from "../primitives/block";
 import { DvButton } from "../primitives/dv-button";
@@ -37,6 +38,7 @@ import {
 	type HostingView,
 	type PlacementConfig,
 	hostingOf,
+	serviceOrigin,
 	servicePageAddress,
 } from "./config-model";
 import {
@@ -48,6 +50,11 @@ import {
 	type Note,
 	gateLine,
 } from "./config-parts";
+import {
+	type RequestOrigin,
+	RequestsBlock,
+	useEndpointsOnly,
+} from "./requests-block";
 import { NewTokenSheet } from "./secret-fields";
 import {
 	EditSettingsSheet,
@@ -794,7 +801,7 @@ function Rows({
 			<KvRow label={t("serviceConfig.endpoint.exposed", "Exposed")}>
 				{t(
 					"serviceConfig.endpoint.exposedText",
-					"Pages and chats, listed on the service page · REST and MCP endpoints work but aren't listed there",
+					"Pages, chats, quick actions and forms, listed on the service page · Endpoints and REST and MCP servers work but aren't listed there",
 				)}
 			</KvRow>
 			<KvRow label={t("serviceConfig.endpoint.limits", "Limits")}>
@@ -817,23 +824,31 @@ function Rows({
 	);
 }
 
-/* Services without a web endpoint. */
+/* What the service's events are, by the app's list. */
 
-function useEventKinds(projectId: string | undefined, eventIds: string[]) {
-	const { t } = useTranslation("devices");
-	const { view } = useAppView(projectId);
-	const kinds: Record<string, string> = {
-		rest: t("serviceConfig.endpoint.kindRest", "REST"),
-		mcp: t("serviceConfig.endpoint.kindMcp", "MCP"),
-		daemon: t("serviceConfig.endpoint.kindBackground", "Background"),
-	};
-	const rows = view ? [...view.events.rows, ...view.events.ineligible] : [];
-	const found = eventIds.flatMap((id) => {
-		const kind = kinds[rows.find((row) => row.eventId === id)?.eventType ?? ""];
-		return kind ? [kind] : [];
-	});
-	return [...new Set(found)];
+/** The app's rows of the events the service serves; empty while the app's events can't be read. */
+function useServedRows(configuration: PlacementConfiguration) {
+	const { view } = useAppView(configuration.project_id);
+	return useMemo(() => {
+		const rows = new Map(
+			view
+				? [...view.events.rows, ...view.events.ineligible].map((row) => [
+						row.eventId,
+						row,
+					])
+				: [],
+		);
+		return configuration.config.events.flatMap((event) => {
+			const row = rows.get(event.event_id);
+			return row ? [row] : [];
+		});
+	}, [view, configuration]);
 }
+
+const startedByPerson = (row: { eligibility: { kind: unknown } }) =>
+	row.eligibility.kind === "on_demand";
+
+/* Services without a web endpoint. */
 
 function NoEndpoint({
 	read,
@@ -844,10 +859,11 @@ function NoEndpoint({
 }>) {
 	const { t } = useTranslation("devices");
 	const { locale } = useAreaTime();
-	const kinds = useEventKinds(
-		configuration.project_id,
-		configuration.config.events.map((event) => event.event_id),
-	);
+	const served = useServedRows(configuration);
+	const kinds = [
+		...new Set(served.map((row) => eventTypeLabel(t, row.eventType))),
+	];
+	const runFromDevices = served.some(startedByPerson);
 	return (
 		<Block
 			id="svc-endpoint"
@@ -863,19 +879,47 @@ function NoEndpoint({
 					"This service has no web endpoint.",
 				)}
 				text={
-					kinds.length
-						? t(
-								"serviceConfig.endpoint.noneKinds",
-								"Its events run as {{kinds}}, so it has no service page.",
-								{ kinds: new Intl.ListFormat(locale).format(kinds) },
-							)
-						: t(
-								"serviceConfig.endpoint.noneText",
-								"Its events don't answer page or chat requests, so it has no service page.",
-							)
+					<>
+						{kinds.length
+							? t(
+									"serviceConfig.endpoint.noneKinds",
+									"Its events run as {{kinds}}, so it has no service page.",
+									{ kinds: new Intl.ListFormat(locale).format(kinds) },
+								)
+							: t(
+									"serviceConfig.endpoint.noneText",
+									"Its events don't answer page or chat requests, so it has no service page.",
+								)}
+						{runFromDevices
+							? ` ${t(
+									"serviceEndpoint.runFromDevices",
+									"Run its actions and forms from Devices, under Status.",
+								)}`
+							: null}
+					</>
 				}
 			/>
 		</Block>
+	);
+}
+
+/** "Also on the service page: 2 actions and forms": a service page lists the person-started events too. */
+function AlsoOnPage({
+	configuration,
+}: Readonly<{ configuration: PlacementConfiguration }>) {
+	const { t } = useTranslation("devices");
+	const count = useServedRows(configuration).filter(startedByPerson).length;
+	if (!count) return null;
+	return (
+		<p data-also-on-page="" className="text-xs text-muted-foreground">
+			{t("serviceEndpoint.alsoOnPage", {
+				count,
+				defaultValue_one:
+					"Also on the service page: {{count, number}} action or form",
+				defaultValue_other:
+					"Also on the service page: {{count, number}} actions and forms",
+			})}
+		</p>
 	);
 }
 
@@ -904,10 +948,26 @@ function Hosted({
 	);
 	const [sheet, setSheet] = useState<"token" | "settings" | null>(null);
 	const [note, setNote] = useState<Note | null>(null);
+	const endpointsOnly = useEndpointsOnly(configuration);
 	if (!facts) return <NoEndpoint read={read} configuration={configuration} />;
+	const where: RequestOrigin = {
+		origin: serviceOrigin(facts.hosting, facts.tls, saved.address),
+		scheme: facts.tls ? "https" : "http",
+		port: facts.hosting.port,
+	};
+	const requests = (
+		<RequestsBlock
+			deviceId={deviceId}
+			serviceId={serviceId}
+			read={read}
+			configuration={configuration}
+			where={where}
+		/>
+	);
 	const body: ReactNode = (
 		<>
 			<LinkBlock facts={facts} device={read.deviceLabel} />
+			<AlsoOnPage configuration={configuration} />
 			<hr className="border-hairline" />
 			<Rows
 				deviceId={deviceId}
@@ -926,7 +986,7 @@ function Hosted({
 			/>
 		</>
 	);
-	return (
+	const page = (
 		<Block
 			id="svc-endpoint"
 			icon={Globe}
@@ -961,6 +1021,13 @@ function Hosted({
 				focus="cert"
 			/>
 		</Block>
+	);
+	// A service called only by programs leads with what they call, not with the page link.
+	return (
+		<div data-service-endpoint="" className="flex min-w-0 flex-col gap-4">
+			{endpointsOnly ? requests : page}
+			{endpointsOnly ? page : requests}
+		</div>
 	);
 }
 

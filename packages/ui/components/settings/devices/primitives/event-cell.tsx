@@ -18,13 +18,15 @@ import {
 	Zap,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { eventTypeLabel } from "../copy/eligibility-copy";
-import { useAreaPrefs } from "./area-context";
+import type { EventEligibility } from "../../../../lib/device-management/deployment";
+import { appCopy } from "../copy/app-copy";
+import { eventRunsCopy, eventTypeLabel } from "../copy/eligibility-copy";
+import { type DevicesT, useAreaPrefs } from "./area-context";
 import { CellSub } from "./dv-table";
 import { StatusChip } from "./status-chip";
 import { cx } from "./tone";
 
-/* Event types on devices (APP §7.3). */
+/* Event types on devices (APP §7.3): the one icon map of the area. */
 const EVENT_ICON: Record<string, LucideIcon> = {
 	simple_chat: MessageSquare,
 	page: Monitor,
@@ -73,6 +75,45 @@ export function EventTile({
 
 const PIN_VERSION = "font-mono text-[11.5px]";
 
+type RunsRule = Pick<EventEligibility, "hosted" | "readiness"> &
+	Partial<
+		Pick<EventEligibility, "kind" | "schedule" | "once" | "bot" | "route">
+	>;
+
+/**
+ * The line under an event that can run, in its kind's own words: an
+ * Endpoint's method and path, when a schedule runs, or how a device runs it.
+ */
+export function eventRunsLine(t: DevicesT, rule: RunsRule): string {
+	return rule.route
+		? t("devices:view.event.route", "{{method}} {{path}}", {
+				method: rule.route.method,
+				path: rule.route.path,
+			})
+		: eventRunsCopy(t, rule);
+}
+
+/**
+ * The tag of an event whose record has no flow pin. What a device runs is
+ * always a concrete flow version, shown beside it: a device never "runs Latest".
+ */
+export function LatestTag({ className }: Readonly<{ className?: string }>) {
+	const { t } = useTranslation("devices");
+	const copy = appCopy(t);
+	return (
+		<span
+			data-follows-latest=""
+			title={copy.followsLatestTitle()}
+			className={cx(
+				"rounded border border-border px-1 text-[11px] font-normal whitespace-nowrap text-muted-foreground",
+				className,
+			)}
+		>
+			{copy.followsLatest()}
+		</span>
+	);
+}
+
 export interface EventCellProps {
 	eventType: string;
 	hasPage?: boolean;
@@ -81,6 +122,10 @@ export interface EventCellProps {
 	eventId?: string;
 	/** The pinned versions as text: `{ event: "1.5.0", flow: "2.2.0" }`. */
 	pin?: { event: string; flow: string };
+	/** The line that stands in for the pins when there are none ("event 0.9.0 · flow as it is now"). */
+	pinNote?: ReactNode;
+	/** The event follows Latest: the tag after its type. */
+	followsLatest?: boolean;
 	/** How the event runs on a device, or why it cannot: `howItRunsCopy`, `eligibilityCopy`. */
 	runs?: ReactNode;
 	/** The version that introduced the event ("v1.5.0"): shows the "New in …" chip. */
@@ -98,6 +143,8 @@ export function EventCell({
 	name,
 	eventId,
 	pin,
+	pinNote,
+	followsLatest = false,
 	runs,
 	newIn,
 	className,
@@ -116,6 +163,7 @@ export function EventCell({
 					<span className="text-muted-foreground">
 						{eventTypeLabel(t, eventType, hasPage)}
 					</span>
+					{followsLatest ? <LatestTag /> : null}
 					{newIn ? (
 						<StatusChip tone="info">
 							{t("view.event.newIn", "New in {{version}}", { version: newIn })}
@@ -142,6 +190,8 @@ export function EventCell({
 							}}
 						/>
 					</CellSub>
+				) : pinNote ? (
+					<CellSub>{pinNote}</CellSub>
 				) : null}
 				{runs ? <CellSub>{runs}</CellSub> : null}
 			</span>

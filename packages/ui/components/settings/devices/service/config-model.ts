@@ -1,4 +1,9 @@
 import {
+	botTokenEventId,
+	botTokenVariable,
+	isBotTokenKey,
+} from "../../../../lib/device-management/bot-config";
+import {
 	DEPLOYMENT_CONFIG_BYTES,
 	type DeploymentPlan,
 	type DeploymentVariable,
@@ -99,8 +104,8 @@ export function jsonBytes(value: unknown): number {
 	return new TextEncoder().encode(JSON.stringify(value)).length;
 }
 
-/** `http(s)://host:port/ui/`; a wildcard address needs the name people use (BG20). */
-export function servicePageAddress(
+/** `http(s)://host:port`; a wildcard address needs the name people use (BG20). */
+export function serviceOrigin(
 	hosting: Pick<HostingView, "host" | "port" | "exposure">,
 	tls: boolean,
 	publicHost?: string,
@@ -110,7 +115,17 @@ export function servicePageAddress(
 	if (!host) return undefined;
 	const authority =
 		host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
-	return `${tls ? "https" : "http"}://${authority}:${hosting.port}/ui/`;
+	return `${tls ? "https" : "http"}://${authority}:${hosting.port}`;
+}
+
+/** `http(s)://host:port/ui/`. */
+export function servicePageAddress(
+	hosting: Pick<HostingView, "host" | "port" | "exposure">,
+	tls: boolean,
+	publicHost?: string,
+): string | undefined {
+	const origin = serviceOrigin(hosting, tls, publicHost);
+	return origin && `${origin}/ui/`;
 }
 
 /* Variable definitions of an online service's flows. */
@@ -158,6 +173,27 @@ export function boardDefinitions(board: BoardLike): DeploymentVariable[] {
 					]
 				: [],
 		);
+}
+
+/**
+ * The variables a service's settings may hold: what its flows define, without
+ * an id that is a bot token key (a flow never receives the token), and the
+ * token of each bot the settings hold one for. The token's name is the event
+ * id; screens label it "Bot token of {event}".
+ */
+export function serviceDefinitions(
+	config: PlacementConfig,
+	flows: readonly DeploymentVariable[],
+): DeploymentVariable[] {
+	const served = new Set(config.events.map((event) => event.event_id));
+	const tokens = Object.keys(config.secret_overrides ?? {}).flatMap((key) => {
+		const eventId = botTokenEventId(key);
+		return eventId && served.has(eventId)
+			? [botTokenVariable({ id: eventId, name: eventId })]
+			: [];
+	});
+	const usable = (variable: DeploymentVariable) => !isBotTokenKey(variable.id);
+	return [...flows.filter(usable), ...tokens];
 }
 
 /* Editable fields. */
@@ -799,6 +835,7 @@ export type JsonErrorCode =
 	| "not_an_object"
 	| "identity_changed"
 	| "nothing_changed"
+	| "event_added"
 	| "too_large";
 
 export interface JsonError {
@@ -808,10 +845,54 @@ export interface JsonError {
 
 const IDENTITY = ["id", "project_id", "deployment_id", "source"] as const;
 
-/** The settings a person typed as JSON; the device validates the rest and names what it refuses. */
+/** The event ids a typed config names; anything that is not an event entry is left to the device to refuse. */
+function typedEventIds(events: unknown): string[] {
+	if (!Array.isArray(events)) return [];
+	return events.flatMap((entry: unknown) => {
+		const id = (entry as { event_id?: unknown } | null)?.event_id;
+		return typeof id === "string" ? [id] : [];
+	});
+}
+
+/**
+ * The first event a typed config adds that needs an agent flag, a claim or a
+ * token (an Endpoint, a form or quick action, a schedule, a bot). Such an event
+ * goes through "Add an event…", which checks the device's agent, moves a
+ * claimed event off the hub and asks for a bot's token; typed in by hand it
+ * would skip all three. `gated` null: the app's events are not loaded, so the
+ * kind of an added event is not known.
+ */
+function addedGatedEvent(
+	base: PlacementConfig,
+	next: Mutable,
+	gated: ReadonlySet<string> | null,
+): string | undefined {
+	const served = new Set(base.events.map((event) => event.event_id));
+	return typedEventIds(next.events).find(
+		(id) => !served.has(id) && (gated === null || gated.has(id)),
+	);
+}
+
+/** The event of a bot token key typed in by hand; a token is entered in the deploy wizard only. */
+function addedTokenEvent(
+	base: PlacementConfig,
+	next: Mutable,
+): string | undefined {
+	const stored = new Set(Object.keys(base.secret_overrides ?? {}));
+	const typed = (key: string) => isBotTokenKey(key) && !stored.has(key);
+	const key = Object.keys(record(next.secret_overrides)).find(typed);
+	return key === undefined ? undefined : (botTokenEventId(key) ?? key);
+}
+
+/**
+ * The settings a person typed as JSON; the device validates the rest and
+ * names what it refuses. `gated`: the app's events that need an agent flag,
+ * a claim or a token, by id; null while its events are not loaded.
+ */
 export function parseJsonSettings(
 	base: PlacementConfig,
 	text: string,
+	gated: ReadonlySet<string> | null,
 ): { config: PlacementConfig } | { error: JsonError } {
 	let value: unknown;
 	try {
@@ -837,6 +918,10 @@ export function parseJsonSettings(
 		};
 	if (JSON.stringify(next) === JSON.stringify(base))
 		return { error: { code: "nothing_changed" } };
+	const added =
+		addedGatedEvent(base, next, gated) ?? addedTokenEvent(base, next);
+	if (added !== undefined)
+		return { error: { code: "event_added", params: { event: added } } };
 	const bytes = jsonBytes(next);
 	if (bytes > CONFIG_MAX_BYTES)
 		return {

@@ -89,11 +89,12 @@ impl Modify for DeviceDocs {
     }
 }
 
-fn device_docs() -> [utoipa::openapi::OpenApi; 3] {
+fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
     [
         crate::devices::openapi_registry::RegistryApi::openapi(),
         crate::devices::certificates::CertificatesApi::openapi(),
         crate::instances::routes::CloudApprovalsApi::openapi(),
+        crate::routes::app::device_metadata::DeviceMetadataApi::openapi(),
     ]
 }
 
@@ -303,6 +304,8 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 3] {
         crate::routes::app::board::upsert_board::upsert_board,
         crate::routes::app::board::delete_board::delete_board,
         crate::routes::app::board::version_board::version_board,
+        crate::routes::app::board::version_current::get_version_current,
+        crate::routes::app::board::version_current::publish_version_current,
         crate::routes::app::board::execute_commands::execute_commands,
         crate::routes::app::board::undo_redo_board::undo_board,
         crate::routes::app::board::undo_redo_board::redo_board,
@@ -979,6 +982,8 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 3] {
         crate::routes::app::board::summaries::BoardSummary,
         crate::routes::app::board::get_board_variables::BoardVariables,
         flow_like::flow::board::BoardVersionInfo,
+        flow_like::flow::board::BoardVersionCurrent,
+        flow_like::flow::board::BoardVersionPublished,
         crate::routes::app::board::render_flowscript::RenderFlowScriptRequest,
         crate::routes::app::board::get_flowscript::FlowScriptResponse,
         crate::routes::app::page::get_pages::PageInfo,

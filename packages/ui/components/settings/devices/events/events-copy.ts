@@ -1,5 +1,6 @@
-import { eligibilityCopy } from "../copy/eligibility-copy";
+import { eligibilityCopy, eligibilityInput } from "../copy/eligibility-copy";
 import { enumLabel } from "../copy/enum-labels";
+import type { WhereKind } from "../copy/schedule-copy";
 import type { DevicesT } from "../primitives/area-context";
 import type { GateKind } from "../primitives/icons";
 import { convergenceLabel } from "../primitives/status-chip";
@@ -29,11 +30,13 @@ export function cantRun(
 ): CantRun | null {
 	const rule = devices.eligibility.get(eventId);
 	if (!rule?.code) return null;
-	const { short } = eligibilityCopy(t, {
-		code: rule.code,
-		eventType: devices.events.get(eventId)?.event_type ?? "",
-		...(rule.detail ? { detail: rule.detail } : {}),
-	});
+	const { short } = eligibilityCopy(
+		t,
+		eligibilityInput(
+			{ ...rule, code: rule.code },
+			devices.events.get(eventId)?.event_type ?? "",
+		),
+	);
 	const paused = rule.code === "paused";
 	return {
 		short,
@@ -46,6 +49,25 @@ export function cantRun(
 					{ reason: short },
 				),
 	};
+}
+
+/** What a claimed event's "where it runs" sentences speak of: a bot, a one-time or a repeating schedule. */
+export function whereKind(row: Pick<RunsOnRow, "kind" | "once">): WhereKind {
+	if (row.kind === "bot") return "bot";
+	return row.once ? "once" : "schedule";
+}
+
+/** Why another device can't take a claimed event while one service holds it. */
+export function heldText(t: DevicesT, row: Pick<RunsOnRow, "kind">): string {
+	return row.kind === "bot"
+		? t(
+				"devices:events.pop.runHeldBot",
+				"A bot runs in one place. Take it back first.",
+			)
+		: t(
+				"devices:events.pop.runHeld",
+				"A schedule runs in one place. Run it on the hub again first.",
+			);
 }
 
 type ObservedState = Parameters<typeof enumLabel<"observed">>[2];

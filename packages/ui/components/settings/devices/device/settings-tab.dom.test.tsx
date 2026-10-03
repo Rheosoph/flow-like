@@ -1,5 +1,10 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import {
+	DAY_S,
+	type TestReleaseOptions,
+	publishTestRelease,
+} from "../hub/release-test-kit";
+import {
 	allByRole,
 	byRole,
 	click,
@@ -12,6 +17,7 @@ import type { DeviceView, OpenOptions } from "./device-test-kit";
 
 const dom = installDom();
 const kit = await import("./device-test-kit");
+const { createFakeWorkspace } = await import("../testing/fake-workspace");
 const { sampleFleet } = await import(
 	"../../../../lib/device-management/model/__fixtures__/sample-fleet"
 );
@@ -54,6 +60,20 @@ function settledSeed(agentRelease = "0.9.4") {
 	return seed;
 }
 
+/** The first release cut from this work: agent 0.1.1 as release number 3, valid for a year. */
+const NEXT_RELEASE: TestReleaseOptions = {
+	version: "0.1.1",
+	sequence: 3,
+	minimum: 1,
+};
+
+/** edge-berlin-01 on the given agent, on a hub that serves a release list signed here. */
+async function openWithRelease(agent: string, release: TestReleaseOptions) {
+	const fake = await createFakeWorkspace(settledSeed(agent));
+	await publishTestRelease(fake, release);
+	return open(IDS.edge, { fake });
+}
+
 const hubWrites = (view: DeviceView, method: string, path: RegExp) =>
 	view.fake.api
 		.writes()
@@ -88,7 +108,7 @@ describe("layers", () => {
 		const agent = text(layer(view, "agent"));
 		expect(agent).toContain("Running0.9.4live read");
 		expect(agent).toContain(
-			"Latest verified release0.9.4· release #44 · signed by",
+			"Latest verified release0.9.4· release number 44 · signed by",
 		);
 		expect(agent).toContain("Remote updateLinux with systemd");
 		expect(agent).toContain("Background tasks1 running normally");
@@ -137,7 +157,7 @@ describe("host operations", () => {
 		const reboot = byRole("button", "Reboot device…", host);
 		expect(reboot.getAttribute("aria-disabled")).toBe("true");
 		expect(text(host)).toMatch(
-			/Wait for invoice-extractor's update to finish \(by .+ at the latest\)\./,
+			/Wait for invoice-extractor.s update to finish \(by .+ at the latest\)\./,
 		);
 		await click(reboot);
 		expect(queryByRole("alertdialog")).toBeNull();
@@ -196,7 +216,7 @@ describe("host operations", () => {
 		await click(byRole("button", "Update agent…", agent));
 		const sheet = inPortal("alertdialog");
 		expect(text(sheet)).toContain(
-			"Installs verified release 0.9.4 (release #44). If the new agent doesn't start, the device rolls back to 0.9.2.",
+			"Installs verified release 0.9.4 (release number 44). If the new agent doesn't start, the device rolls back to 0.9.2.",
 		);
 		await click(byRole("checkbox", undefined, sheet));
 		await click(sheet.querySelector("[data-confirm]") as HTMLElement);
@@ -229,6 +249,107 @@ describe("host operations", () => {
 		await click(update);
 		expect(queryByRole("alertdialog")).toBeNull();
 		expect(commandTypes(view)).not.toContain("update_agent");
+	});
+
+	test("a release with a far end date shows no end; inside its last 30 days it says when it runs out", async () => {
+		const far = await openWithRelease("0.9.4", {});
+		const shown = text(layer(far, "agent"));
+		expect(shown).toContain(
+			"Latest verified release0.9.4· release number 44 · signed by",
+		);
+		expect(shown).toMatch(/signed by[^·]+·Hub status/);
+		expect(shown).not.toContain("runs out");
+		expect(shown).not.toContain("expires");
+		await kit.resetDevices();
+
+		const soon = await openWithRelease("0.9.4", { endsInS: 12 * DAY_S });
+		expect(text(layer(soon, "agent"))).toMatch(
+			/signed by[^·]+· runs out on [^·]+·Hub status/,
+		);
+	});
+
+	test("an agent before 0.1.1 can't take a release valid for longer than 30 days: disabled with the reason", async () => {
+		const year = await openWithRelease("0.1.0", NEXT_RELEASE);
+		const agent = layer(year, "agent");
+		const update = byRole("button", "Update agent…", agent);
+		expect(update.getAttribute("aria-disabled")).toBe("true");
+		expect(text(agent)).toContain(
+			"This device's agent (0.1.0) only accepts releases valid for 30 days or less. Ask the hub operator to renew the release for 30 days, or set this device up again.",
+		);
+		await click(update);
+		expect(queryByRole("alertdialog")).toBeNull();
+		expect(commandTypes(year)).not.toContain("update_agent");
+		await kit.resetDevices();
+
+		// The bridge release: signed for exactly 30 days, so the same agent takes it.
+		const bridge = await openWithRelease("0.1.0", {
+			...NEXT_RELEASE,
+			issuedAgoS: 300,
+			endsInS: 30 * DAY_S - 300,
+		});
+		const open = byRole("button", "Update agent…", layer(bridge, "agent"));
+		expect(open.getAttribute("aria-disabled")).toBeNull();
+		expect(text(layer(bridge, "agent"))).not.toContain("only accepts releases");
+		await kit.resetDevices();
+
+		// From 0.1.1 on the lifetime no longer matters.
+		const current = await openWithRelease("0.1.1", {
+			...NEXT_RELEASE,
+			version: "0.1.2",
+			sequence: 4,
+		});
+		expect(
+			byRole("button", "Update agent…", layer(current, "agent")).getAttribute(
+				"aria-disabled",
+			),
+		).toBeNull();
+	});
+
+	test("a release that fails a check after it was verified is not offered and not sent", async () => {
+		const fake = await createFakeWorkspace(settledSeed("0.9.2"));
+		const published = await publishTestRelease(fake, {});
+		const view = await open(IDS.edge, { fake });
+		const agent = layer(view, "agent");
+		expect(
+			byRole("button", "Update agent…", agent).getAttribute("aria-disabled"),
+		).toBeNull();
+
+		const [head, body] = published.jws.split(".");
+		published.serve(`${head}.${body}.${"A".repeat(86)}`);
+		await click(byRole("button", "Check for agent update", agent));
+		await view.settle();
+
+		expect(text(agent)).toContain(
+			"Latest verified releaseThe hub's agent release failed a check·Hub status",
+		);
+		expect(text(agent)).toMatch(
+			/Checked at \d\d:\d\d:\d\d\. The hub.s agent release failed a check: it isn.t signed by a key the hub operator pinned\./,
+		);
+		const update = byRole("button", "Update agent…", agent);
+		expect(update.getAttribute("aria-disabled")).toBe("true");
+		expect(text(agent)).toContain(
+			"The hub's agent release failed a check, so there is nothing to install. Hub status says which.",
+		);
+		await click(update);
+		expect(queryByRole("alertdialog")).toBeNull();
+		expect(commandTypes(view)).not.toContain("update_agent");
+	});
+
+	test("a release that has run out is named with its date and blocks the update", async () => {
+		const view = await openWithRelease("0.9.2", {
+			issuedAgoS: 40 * DAY_S,
+			endsInS: -DAY_S,
+		});
+		const agent = layer(view, "agent");
+		expect(text(agent)).toMatch(
+			/Latest verified releaseThe hub.s agent release ran out on [^·]+·Hub status/,
+		);
+		expect(
+			byRole("button", "Update agent…", agent).getAttribute("aria-disabled"),
+		).toBe("true");
+		expect(text(agent)).toMatch(
+			/The hub.s agent release ran out on .+\. Updates wait until the hub operator publishes or renews a release\./,
+		);
 	});
 
 	test("the device's last operation shows whoever started it", async () => {

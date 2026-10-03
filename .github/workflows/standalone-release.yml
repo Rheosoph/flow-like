@@ -7,6 +7,11 @@ on:
         description: Monotonically increasing standalone release sequence
         required: true
         type: string
+      validity_days:
+        description: Days the signed release stays valid, 1 to 1825 (agents of release 0.1.0 accept at most 30)
+        required: false
+        default: '365'
+        type: string
       artifact_base_url:
         description: Optional override matching STANDALONE_RELEASE_PUBLIC_BASE_URL
         required: false
@@ -36,6 +41,7 @@ jobs:
       sequence: ${{ steps.inputs.outputs.sequence }}
       base: ${{ steps.inputs.outputs.base }}
       image: ${{ steps.inputs.outputs.image }}
+      validity_days: ${{ steps.inputs.outputs.validity_days }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -43,6 +49,7 @@ jobs:
       - id: inputs
         env:
           RELEASE_SEQUENCE: ${{ inputs.sequence }}
+          RELEASE_VALIDITY_DAYS: ${{ inputs.validity_days }}
           RELEASE_ARTIFACT_BASE: ${{ inputs.artifact_base_url || vars.STANDALONE_RELEASE_PUBLIC_BASE_URL }}
           RELEASE_CONFIGURED_BASE: ${{ vars.STANDALONE_RELEASE_PUBLIC_BASE_URL }}
           RELEASE_BUCKET: ${{ vars.STANDALONE_RELEASE_BUCKET }}
@@ -53,9 +60,21 @@ jobs:
         # validated by the jobs that are allowed to read them.
         run: |
           python3 - <<'PY'
-          import os, subprocess, json, base64, re
+          import os, subprocess, json, base64, re, tomllib, importlib.util
           from urllib.parse import urlsplit
+          spec = importlib.util.spec_from_file_location('release', '.github/scripts/standalone_release.py')
+          release = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(release)
           sequence = int(os.environ['RELEASE_SEQUENCE'])
+          try:
+              validity_days = int(os.environ['RELEASE_VALIDITY_DAYS'])
+              release.validity(validity_days)
+          except ValueError as error:
+              raise SystemExit(f'Invalid validity_days: {error}')
+          with open('apps/standalone/Cargo.toml', 'rb') as manifest:
+              version = tomllib.load(manifest)['package']['version']
+          if not isinstance(version, str) or not re.fullmatch(r'[0-9A-Za-z.+-]{1,64}', version):
+              raise SystemExit('apps/standalone/Cargo.toml must state the agent version as a literal')
           base = os.environ['RELEASE_ARTIFACT_BASE']
           parsed = urlsplit(base)
           if base != os.environ['RELEASE_CONFIGURED_BASE'] or not base:
@@ -75,15 +94,16 @@ jobs:
           epoch = subprocess.check_output(['git', 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
           image = 'ghcr.io/' + os.environ['GITHUB_REPOSITORY'].lower() + '-standalone'
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write(f'epoch={epoch}\nsequence={sequence}\nbase={base}\nimage={image}\n')
+              output.write(f'epoch={epoch}\nsequence={sequence}\nbase={base}\nimage={image}\nvalidity_days={validity_days}\nversion={version}\n')
           PY
       - run: python3 -m unittest discover -s .github/scripts/tests -p 'test_standalone_release*.py'
-      - name: Refuse a sequence that is already published or partly uploaded
+      - name: Refuse a sequence that is already published or partly uploaded, and an agent version that was not bumped
         env:
           RELEASE_BASE: ${{ steps.inputs.outputs.base }}
           RELEASE_SEQUENCE: ${{ steps.inputs.outputs.sequence }}
+          RELEASE_VERSION: ${{ steps.inputs.outputs.version }}
           RELEASE_PUBLIC_KEYS: ${{ vars.STANDALONE_RELEASE_PUBLIC_KEYS }}
-        run: python3 .github/scripts/standalone_release.py preflight --base-url "$RELEASE_BASE" --sequence "$RELEASE_SEQUENCE" --public-keys "$RELEASE_PUBLIC_KEYS"
+        run: python3 .github/scripts/standalone_release.py preflight --base-url "$RELEASE_BASE" --sequence "$RELEASE_SEQUENCE" --public-keys "$RELEASE_PUBLIC_KEYS" --release-version "$RELEASE_VERSION"
 
   frontend:
     needs: prepare
@@ -258,8 +278,9 @@ jobs:
         env:
           ARTIFACT_BASE: ${{ needs.prepare.outputs.base }}
           RELEASE_SEQUENCE: ${{ needs.prepare.outputs.sequence }}
+          RELEASE_VALIDITY_DAYS: ${{ needs.prepare.outputs.validity_days }}
           RELEASE_IMAGE: ${{ needs.prepare.outputs.image }}@${{ needs.container.outputs.digest }}
-        run: python3 .github/scripts/standalone_release.py manifest --artifacts release-bundle --base-url "$ARTIFACT_BASE/releases/$RELEASE_SEQUENCE" --sequence "$RELEASE_SEQUENCE" --image "$RELEASE_IMAGE" --output release-bundle/release.json
+        run: python3 .github/scripts/standalone_release.py manifest --artifacts release-bundle --base-url "$ARTIFACT_BASE/releases/$RELEASE_SEQUENCE" --sequence "$RELEASE_SEQUENCE" --image "$RELEASE_IMAGE" --validity-days "$RELEASE_VALIDITY_DAYS" --output release-bundle/release.json
       # Build scripts and proc macros run here, before any key material exists on the runner.
       - name: Build the release signer
         run: CARGO_TARGET_DIR="$RUNNER_TEMP/release-signer" cargo build --locked --package flow-like-device-protocol --example sign-release
@@ -349,3 +370,7 @@ jobs:
           spec.loader.exec_module(release)
           release.publish(Path('release-bundle'), os.environ['RELEASE_BASE'], os.environ['RELEASE_BUCKET'], os.environ['RELEASE_PREFIX'], os.environ['RELEASE_PUBLIC_KEYS'], os.environ.get('RELEASE_ENDPOINT') or None)
           PY
+      - name: State the release number, version, end date and the next step
+        env:
+          RELEASE_PUBLIC_KEYS: ${{ vars.STANDALONE_RELEASE_PUBLIC_KEYS }}
+        run: python3 .github/scripts/standalone_release.py summary --artifacts release-bundle --public-keys "$RELEASE_PUBLIC_KEYS" >> "$GITHUB_STEP_SUMMARY"

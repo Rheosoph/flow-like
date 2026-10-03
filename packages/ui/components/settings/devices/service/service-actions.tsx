@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import {
+	CirclePlay,
 	Copy,
 	Ellipsis,
 	ExternalLink,
@@ -27,6 +28,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import type { EventKind } from "../../../../lib/device-management/deployment";
 import { deviceName } from "../../../../lib/device-management/model/device-view";
 import type {
 	DeviceViewModel,
@@ -43,8 +45,9 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../../../ui/dropdown-menu";
+import { agentTooOldCopy } from "../copy/eligibility-copy";
 import { gateCopy } from "../copy/gate-copy";
-import { useAreaTime } from "../primitives/area-context";
+import { type DevicesT, useAreaTime } from "../primitives/area-context";
 import { DvButton } from "../primitives/dv-button";
 import { type Gate, GateInline } from "../primitives/gate-notice";
 import { InlineConfirm } from "../primitives/inline-confirm";
@@ -57,10 +60,16 @@ import {
 	type ServiceCommand,
 	serviceGateExtra,
 	useFixAction,
+	useGate,
 	useGates,
 	useInlineResults,
+	useOverlayStore,
 	useServiceCommands,
 } from "../workspace";
+import { actionRows, runEventTarget } from "./actions-block";
+import { botRows } from "./bots-block";
+import { scheduleRows } from "./schedules-block";
+import { addableEvents, appEventRows, formTakesFile } from "./service-events";
 import { type ServiceApp, isBehind } from "./service-header";
 
 const WILDCARD = new Set(["0.0.0.0", "::", "[::]"]);
@@ -125,22 +134,120 @@ function MenuRow({
 	);
 }
 
+type AloneWhy = "background" | "scheduled" | "bot" | "no_endpoint";
+
+const ALONE_BY_KIND: Partial<Record<EventKind, AloneWhy>> = {
+	own_server: "background",
+	background: "background",
+	scheduled: "scheduled",
+	bot: "bot",
+};
+
 /**
- * A service without a web endpoint runs once per device. The settings read on
- * this computer say so; before they were read, the app's events do.
+ * Why a service runs once per device: an event of a kind that limits it to
+ * one instance (from the app's events), or no web endpoint (the settings read
+ * on this computer, else the app's events). null: it could run more.
  */
 function runsAlone(
 	endpoint: PlacementConfigFacts | undefined,
 	app: ServiceApp,
-) {
-	if (endpoint) return !endpoint.host;
-	const { view, events } = app;
-	if (!view || !events) return false;
-	const known = [...view.events.rows, ...view.events.ineligible];
-	return events.some(
-		(event) =>
-			known.find((row) => row.eventId === event.id)?.eligibility.hosted ===
-			false,
+): AloneWhy | null {
+	const known = appEventRows(app);
+	const kinds = (app.events ?? []).map(
+		(event) => known.get(event.id)?.eligibility.kind ?? null,
+	);
+	const limiting = kinds.find((kind) => kind && ALONE_BY_KIND[kind]);
+	if (limiting) return ALONE_BY_KIND[limiting] ?? null;
+	if (endpoint) return endpoint.host ? null : "no_endpoint";
+	const allKnown = kinds.length > 0 && kinds.every((kind) => kind !== null);
+	return allKnown && !kinds.includes("served") ? "no_endpoint" : null;
+}
+
+/** The sentence beside a single instance, by why it is one. */
+function oneInstanceText(t: DevicesT, why: AloneWhy | null): string {
+	switch (why) {
+		case "background":
+			return t(
+				"devices:service.actions.oneBackground",
+				"This service runs one instance: its background event runs once per device.",
+			);
+		case "scheduled":
+			return t(
+				"devices:service.actions.oneScheduled",
+				"This service runs one instance: two would start every scheduled run twice.",
+			);
+		case "bot":
+			return t(
+				"devices:service.actions.oneBot",
+				"This service runs one instance: two would answer every message to its bot twice.",
+			);
+		case "no_endpoint":
+			return t(
+				"devices:service.actions.oneNoEndpoint",
+				"This service runs one instance: only a service with a web endpoint can run more.",
+			);
+		default:
+			return t(
+				"devices:service.actions.oneMax",
+				"This service runs one instance. Raise Max instances in Configuration to run more.",
+			);
+	}
+}
+
+/**
+ * "Run {event} now…" for each quick action and form of the service (design
+ * R2 §6.5), disabled with why when it can't be run from here.
+ */
+function RunNowItems({
+	service,
+	app,
+}: Readonly<{ service: ServiceView; app: ServiceApp }>) {
+	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	const openRunNow = useOverlayStore((store) => store.openRunNow);
+	const target = useMemo(() => runEventTarget(service), [service]);
+	const gate = useGate("run_event", service.deviceId, target);
+	const rows = actionRows(service, app);
+	if (!rows.length) return null;
+	const why = (eventId: string) => {
+		if (formTakesFile(service, eventId))
+			return t(
+				"serviceStatus.actions.fileOnly",
+				"This form takes a file. Open it on the service page.",
+			);
+		return gate.ok ? undefined : gateCopy(t, gate, time).inline;
+	};
+	return (
+		<>
+			<DropdownMenuSeparator />
+			{rows.map((row) => {
+				const note = why(row.eventId);
+				const open = () =>
+					openRunNow({
+						deviceId: service.deviceId,
+						serviceId: service.serviceId,
+						eventId: row.eventId,
+					});
+				return (
+					<DropdownMenuItem
+						key={row.eventId}
+						className={MENU_ITEM_CLASS}
+						disabled={!!note}
+						data-menu="run-now"
+						onSelect={open}
+					>
+						<MenuRow
+							icon={CirclePlay}
+							label={t("service.menu.runNow", "Run {{event}} now…", {
+								event:
+									row.name ?? t("service.serves.removed", "A removed event"),
+							})}
+							note={note}
+						/>
+					</DropdownMenuItem>
+				);
+			})}
+		</>
 	);
 }
 
@@ -199,7 +306,11 @@ export function ServiceActions({
 	const deviceId = device.row.device_id;
 	const { serviceId, projectId } = service;
 	const name = deviceName(device.row);
-	const commands = useServiceCommands(deviceId, serviceId);
+	// A stopped service reports no schedules or bots; the app's events still say it has them.
+	const commands = useServiceCommands(deviceId, serviceId, {
+		hasSchedules: scheduleRows(service, app).length > 0,
+		hasBots: botRows(service, app).length > 0,
+	});
 	const results = useInlineResults(commands.resultKey);
 	const gates = useGates(["update_service"], deviceId, {
 		placementId: serviceId,
@@ -320,15 +431,7 @@ export function ServiceActions({
 					"service.actions.oneBuffering",
 					"This service runs one instance because write buffering is on.",
 				)
-			: runsAlone(endpoint, app)
-				? t(
-						"service.actions.oneBackground",
-						"This service runs one instance: its background event runs once per device.",
-					)
-				: t(
-						"service.actions.oneMax",
-						"This service runs one instance. Raise Max instances in Configuration to run more.",
-					);
+			: oneInstanceText(t, runsAlone(endpoint, app));
 
 	const pageUrl = servicePageUrl(endpoint);
 	const hosted = !!endpoint?.host && !!endpoint.port;
@@ -352,17 +455,18 @@ export function ServiceActions({
 			: t("service.actions.update", "Update…");
 	const updateGate = gates.update_service;
 	const served = new Set((app.events ?? []).map((event) => event.id));
-	const addable = app.view?.events.rows.some(
-		(row) => row.eligibility.eligible && !served.has(row.eventId),
-	);
+	const offer = addableEvents(app.view?.events.rows ?? [], deviceId, served);
+	const noneLeft = offer.needs
+		? agentTooOldCopy(t, name, offer.needs).long
+		: t(
+				"service.actions.addNone",
+				"Every event of {{app}} that can run on a device is already served here.",
+				{ app: app.name },
+			);
 	const addNote = !updateGate.ok
 		? inline(updateGate, true)
-		: app.view && app.events && !addable
-			? t(
-					"service.actions.addNone",
-					"Every event of {{app}} that can run on a device is already served here.",
-					{ app: app.name },
-				)
+		: app.view && app.events && !offer.addable
+			? noneLeft
 			: undefined;
 	const removeDenied =
 		!commands.remove.gate.ok && commands.remove.gate.kind === "noaccess";
@@ -684,6 +788,7 @@ export function ServiceActions({
 									note={addNote}
 								/>
 							</DropdownMenuItem>
+							<RunNowItems service={service} app={app} />
 							<DropdownMenuSeparator />
 							<DropdownMenuItem
 								className={MENU_ITEM_CLASS}

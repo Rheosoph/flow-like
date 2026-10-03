@@ -13,12 +13,14 @@ import {
 	SlidersHorizontal,
 } from "lucide-react";
 import { Fragment, type ReactNode, useId, useMemo, useState } from "react";
+import { isBotTokenKey } from "../../../../lib/device-management/bot-config";
 import type { PlacementConfiguration } from "../../../../lib/device-management/deployment";
 import type {
 	AppServiceRow,
 	AppView,
 } from "../../../../lib/device-management/model/app-plan";
 import type {
+	AgentFeature,
 	DevicesRoute,
 	DevicesScope,
 	GateNoticeKind,
@@ -28,7 +30,11 @@ import type {
 import type { ActivityItem } from "../../../../lib/device-management/workspace/types";
 import { humanFileSize } from "../../../../lib/utils";
 import { appCopy } from "../copy/app-copy";
-import { eventTypeLabel, howItRunsCopy } from "../copy/eligibility-copy";
+import {
+	agentTooOldCopy,
+	eventRunsCopy,
+	eventTypeLabel,
+} from "../copy/eligibility-copy";
 import { gateCopy } from "../copy/gate-copy";
 import { DriftChip, MODE_ICON, VersionCell } from "../primitives/app-chips";
 import {
@@ -38,7 +44,8 @@ import {
 } from "../primitives/area-context";
 import { Block } from "../primitives/block";
 import { DvButton } from "../primitives/dv-button";
-import { GateInline } from "../primitives/gate-notice";
+import { LatestTag } from "../primitives/event-cell";
+import { GateInline, GatedAction } from "../primitives/gate-notice";
 import { IdRef } from "../primitives/id-ref";
 import { KvGroup, KvRow } from "../primitives/key-value-list";
 import { Meter } from "../primitives/meter";
@@ -83,6 +90,7 @@ import {
 import { BufferTarget } from "./offline-tab";
 import { RemoveServiceZone } from "./remove-service";
 import { ChangeSecretSheet, type SecretChoice } from "./secret-fields";
+import { type AppEventRow, addableEvents } from "./service-events";
 import {
 	EditJsonSheet,
 	EditSettingsSheet,
@@ -124,10 +132,14 @@ interface UpdateFacts {
 	/** Versions behind, "pins" when only the pins say so, 0 on the newest, `null` when unknown. */
 	behind: number | "pins" | null;
 	pins: PinChange[];
+	/** Served events that follow Latest whose flow has edits no version holds: an update takes them. */
+	flowEdits: string[];
 	/** Events that are new in the newest version and not served here. */
 	fresh: string[];
-	/** Events of the app that can run on a device and aren't served here. */
+	/** Events of the app that can run on this device and aren't served here. */
 	addable: number;
+	/** Nothing else can be added because the device's agent lacks this flag. */
+	addNeeds?: AgentFeature;
 	upload: Upload | null;
 }
 
@@ -196,9 +208,19 @@ function uploadOf(items: readonly ActivityItem[], projectId: string) {
 const viewName = (view: AppView | undefined, projectId: string) =>
 	view && view.app.name !== projectId ? view.app.name : undefined;
 
+const nameOf = (entry: { name: string }) => entry.name;
+
 type VersionFacts = Pick<
 	UpdateFacts,
-	"view" | "row" | "newestLabel" | "behind" | "pins" | "fresh" | "addable"
+	| "view"
+	| "row"
+	| "newestLabel"
+	| "behind"
+	| "pins"
+	| "flowEdits"
+	| "fresh"
+	| "addable"
+	| "addNeeds"
 >;
 
 const UNKNOWN_VERSION: Omit<VersionFacts, "view"> = {
@@ -206,6 +228,7 @@ const UNKNOWN_VERSION: Omit<VersionFacts, "view"> = {
 	newestLabel: null,
 	behind: null,
 	pins: [],
+	flowEdits: [],
 	fresh: [],
 	addable: 0,
 };
@@ -225,21 +248,28 @@ function versionFacts(
 	const served = new Set(events.map((event) => event.event_id));
 	const pins = pinChanges(view, events);
 	const newest = view.versions[0]?.label ?? null;
-	const open = view.events.rows.filter(
-		(entry) => entry.eligibility.eligible && !served.has(entry.eventId),
+	const { open, addable, needs } = addableEvents(
+		view.events.rows,
+		deviceId,
+		served,
 	);
+	const hasEdits = (entry: AppEventRow) =>
+		served.has(entry.eventId) &&
+		entry.cells[deviceId]?.drift?.state === "edits";
+	const isNew = (entry: AppEventRow) => entry.newIn === newest;
+	const flowEdits = [...view.events.rows, ...view.events.ineligible]
+		.filter(hasEdits)
+		.map(nameOf);
 	return {
 		view,
 		row,
 		newestLabel: newest,
 		behind: behindOf(row, mode === "online", pins),
 		pins: pins.changes,
-		fresh: newest
-			? open
-					.filter((entry) => entry.newIn === newest)
-					.map((entry) => entry.name)
-			: [],
-		addable: open.length,
+		flowEdits,
+		fresh: newest ? open.filter(isNew).map(nameOf) : [],
+		addable,
+		...(needs ? { addNeeds: needs } : {}),
 	};
 }
 
@@ -431,6 +461,15 @@ function BehindLines({
 					device={device}
 				/>
 			</p>
+			{facts.flowEdits.map((event) => (
+				<p key={event} data-update-line="flow-edits" className="text-ui">
+					{t(
+						"deploy.what.updateTakesEdits",
+						"Updating also takes the current flow edits of {{event}}.",
+						{ event },
+					)}
+				</p>
+			))}
 			{facts.fresh.length ? (
 				<p data-update-line="fresh" className="text-ui">
 					{t("serviceConfig.update.fresh", {
@@ -676,6 +715,8 @@ interface ActionModel {
 		update: DevicesRoute;
 		resume: DevicesRoute;
 		add: DevicesRoute;
+		/** A bot's new token: an update of the service, from its Settings step. */
+		token: DevicesRoute;
 		scope?: DevicesScope;
 	};
 }
@@ -765,11 +806,13 @@ function useActionModel(
 			facts.view && facts.addable === 0
 				? {
 						kind: "unsupported",
-						text: t(
-							"serviceConfig.gate.noMoreEvents",
-							"Every event of {{app}} that can run on a device is already served here.",
-							{ app: facts.appName },
-						),
+						text: facts.addNeeds
+							? agentTooOldCopy(t, editor.read.deviceLabel, facts.addNeeds).long
+							: t(
+									"serviceConfig.gate.noMoreEvents",
+									"Every event of {{app}} that can run on a device is already served here.",
+									{ app: facts.appName },
+								),
 					}
 				: null;
 		const own: Record<ActionId, LineGate | null> = {
@@ -811,6 +854,7 @@ function useActionModel(
 				update: base,
 				resume: { ...base, step: "copy_upload" },
 				add: { ...base, step: "what" },
+				token: { ...base, step: "settings" },
 				...(foreign ? { scope: { kind: "app", appId: projectId } } : {}),
 			},
 		};
@@ -885,14 +929,14 @@ function ConnectLive({ read }: Readonly<{ read: ServiceConfigRead }>) {
 type OpenSheet = "edit" | "secret" | "json" | null;
 
 function ConfigActions({
-	scope,
+	model,
 	editor,
 	facts,
 	secrets,
 	note,
 	onNote,
 }: Readonly<{
-	scope: DevicesScope;
+	model: ActionModel;
 	editor: SettingsEditor;
 	facts: UpdateFacts;
 	secrets: readonly SecretChoice[];
@@ -904,7 +948,6 @@ function ConfigActions({
 	const link = useRouteLink();
 	const lineId = useId();
 	const { deviceId, serviceId, read, configuration } = editor;
-	const model = useActionModel(scope, editor, facts, secrets.length > 0);
 	const writer = useSecretWrite(
 		deviceId,
 		serviceId,
@@ -1078,9 +1121,6 @@ const Muted = ({ children }: Readonly<{ children: ReactNode }>) => (
 	<span className="text-muted-foreground">{children}</span>
 );
 
-/** Types whose own label already says how they are reached; any other hosted event reads "Page". */
-const WEB_TYPES = new Set(["http", "simple_chat"]);
-
 /** "Web request · event 1.4.0 · flow 2.1.0". */
 function EventPins({
 	event,
@@ -1181,6 +1221,8 @@ function EventRows({
 					: t("serviceConfig.summary.eventNumber", "Event {{number}}", {
 							number: index + 1,
 						});
+				// An event that follows Latest is never "newest" while its flow has edits no version holds, or while its state isn't known.
+				const note = appCopy(t).servedNote(row?.cells[editor.deviceId]?.drift);
 				return (
 					<KvRow key={event.event_id} label={label}>
 						<span data-event={event.event_id}>
@@ -1188,11 +1230,7 @@ function EventRows({
 								event={event}
 								type={
 									row
-										? eventTypeLabel(
-												t,
-												row.eventType,
-												row.eligibility.hosted && !WEB_TYPES.has(row.eventType),
-											)
+										? eventTypeLabel(t, row.eventType, row.hasPage)
 										: undefined
 								}
 							/>{" "}
@@ -1200,13 +1238,30 @@ function EventRows({
 								<span data-pin="behind" className={TONE_TEXT.info}>
 									<NewerPins pin={pin} version={facts.newestLabel} />
 								</span>
+							) : note ? (
+								<span
+									data-pin={note.tone === "info" ? "edits" : "unknown"}
+									className={
+										note.tone === "info"
+											? TONE_TEXT.info
+											: "text-muted-foreground"
+									}
+								>
+									{note.text}
+								</span>
 							) : row?.pin ? (
 								<span data-pin="newest" className={TONE_TEXT.good}>
 									{t("serviceConfig.summary.newest", "newest")}
 								</span>
 							) : null}
+							{row?.eligibility.followsLatest ? (
+								<>
+									{" "}
+									<LatestTag />
+								</>
+							) : null}
 						</span>
-						{row ? <Hint>{howItRunsCopy(t, row.eligibility)}</Hint> : null}
+						{row ? <Hint>{eventRunsCopy(t, row.eligibility)}</Hint> : null}
 					</KvRow>
 				);
 			})}
@@ -1214,14 +1269,74 @@ function EventRows({
 	);
 }
 
+/**
+ * "Set new…" for a bot's token: an update of the service, from the wizard's
+ * Settings step, so the running version keeps its token until the switch.
+ */
+function TokenSetNew({
+	model,
+	serviceId,
+	explain,
+}: Readonly<{
+	model: ActionModel;
+	serviceId: string;
+	/** Says what a new token does; shown under the last token only. */
+	explain: boolean;
+}>) {
+	const { t } = useTranslation("devices");
+	const link = useRouteLink();
+	const update = model.actions.find((action) => action.id === "update");
+	const gate = update?.gate
+		? { kind: update.gate.kind, reason: update.gate.text }
+		: null;
+	const label = t("serviceConfig.botToken.setNew", "Set new…");
+	const options = model.routes.scope
+		? { scope: model.routes.scope }
+		: undefined;
+	return (
+		<span className="mt-1 flex flex-col items-start gap-1">
+			{gate ? (
+				<GatedAction gate={gate}>
+					<DvButton size="xs" icon={KeyRound} data-act="config-token">
+						{label}
+					</DvButton>
+				</GatedAction>
+			) : (
+				<DvButton asChild size="xs" icon={KeyRound}>
+					<a data-act="config-token" {...link(model.routes.token, options)}>
+						{label}
+					</a>
+				</DvButton>
+			)}
+			{explain ? (
+				<Hint>
+					{t(
+						"serviceConfig.botToken.hint",
+						"A new token goes to {{service}} in an update. The bot keeps the stored one until the update switches over, and nobody can read a token back.",
+						{ service: serviceId },
+					)}
+				</Hint>
+			) : null}
+		</span>
+	);
+}
+
 function VariableRows({
 	fields,
 	editor,
-}: Readonly<{ fields: readonly SettingField[]; editor: SettingsEditor }>) {
+	model,
+}: Readonly<{
+	fields: readonly SettingField[];
+	editor: SettingsEditor;
+	model: ActionModel;
+}>) {
 	const { t } = useTranslation("devices");
 	const stored = fields.filter(
 		(field) => field.section === "variables" && field.variable?.stored,
 	);
+	const isToken = (field: SettingField) =>
+		isBotTokenKey(field.variable?.id ?? "");
+	const lastToken = stored.filter(isToken).at(-1);
 	return (
 		<>
 			<KvGroup>{t("serviceConfig.section.variables", "Variables")}</KvGroup>
@@ -1229,12 +1344,21 @@ function VariableRows({
 				stored.map((field) => (
 					<KvRow key={field.id} label={fieldLabel(t, editor.names, field)}>
 						{field.kind === "secret" ? (
-							<Muted>
-								{t(
-									"serviceConfig.summary.storedSecret",
-									"stored secret · can't be read back",
-								)}
-							</Muted>
+							<>
+								<Muted>
+									{t(
+										"serviceConfig.summary.storedSecret",
+										"stored secret · can't be read back",
+									)}
+								</Muted>
+								{isToken(field) ? (
+									<TokenSetNew
+										model={model}
+										serviceId={editor.serviceId}
+										explain={field === lastToken}
+									/>
+								) : null}
+							</>
 						) : (
 							<>
 								<Mono>{field.value}</Mono>{" "}
@@ -1563,10 +1687,12 @@ function ConfigSummary({
 	editor,
 	facts,
 	fields,
+	model,
 }: Readonly<{
 	editor: SettingsEditor;
 	facts: UpdateFacts;
 	fields: readonly SettingField[];
+	model: ActionModel;
 }>) {
 	const { config } = editor.configuration;
 	return (
@@ -1574,7 +1700,7 @@ function ConfigSummary({
 			<div className="grid min-w-0 gap-x-10 gap-y-1 @min-[860px]/cfg:grid-cols-2">
 				<FactList>
 					<EventRows config={config} facts={facts} editor={editor} />
-					<VariableRows fields={fields} editor={editor} />
+					<VariableRows fields={fields} editor={editor} model={model} />
 					<EndpointRows config={config} editor={editor} />
 				</FactList>
 				<FactList>
@@ -1609,23 +1735,28 @@ function SettingsBlock({
 		() => settingFields(configuration.config, editor.context),
 		[configuration, editor.context],
 	);
+	// A bot's token changes in an update ("Set new…"), never in place.
 	const secrets = useMemo<SecretChoice[]>(
 		() =>
-			Object.entries(configuration.config.secret_overrides ?? {}).map(
+			Object.entries(configuration.config.secret_overrides ?? {}).flatMap(
 				([id, reference]) => {
+					if (isBotTokenKey(id)) return [];
 					const definition = editor.definitions.definitions?.find(
 						(entry) => entry.id === id,
 					);
-					return {
-						id,
-						reference,
-						label: editor.names.variable(id),
-						...(definition ? { definition } : {}),
-					};
+					return [
+						{
+							id,
+							reference,
+							label: editor.names.variable(id),
+							...(definition ? { definition } : {}),
+						},
+					];
 				},
 			),
 		[configuration, editor.definitions.definitions, editor.names],
 	);
+	const model = useActionModel(scope, editor, facts, secrets.length > 0);
 	const applied = read.service?.settings.applied;
 	return (
 		<Block
@@ -1644,7 +1775,7 @@ function SettingsBlock({
 			stamp={<ConfigStamp read={read} />}
 		>
 			<ConfigActions
-				scope={scope}
+				model={model}
 				editor={editor}
 				facts={facts}
 				secrets={secrets}
@@ -1652,7 +1783,12 @@ function SettingsBlock({
 				onNote={setNote}
 			/>
 			<hr className="border-hairline" />
-			<ConfigSummary editor={editor} facts={facts} fields={fields} />
+			<ConfigSummary
+				editor={editor}
+				facts={facts}
+				fields={fields}
+				model={model}
+			/>
 		</Block>
 	);
 }

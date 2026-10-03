@@ -27,11 +27,14 @@ import type {
 	Freshness,
 	GateResult,
 	HubErrorCode,
+	ServiceView,
 } from "../../../../lib/device-management/model/types";
 import type { IEvent } from "../../../../lib/schema/flow/event";
 import type { IHub } from "../../../../lib/schema/hub/hub";
 import { useBackend, useBackendReady } from "../../../../state/backend-state";
+import { runNowGateTarget } from "../app/run-now";
 import { appCopy } from "../copy/app-copy";
+import { useDeployRole } from "../deploy/use-deploy-reads";
 import { AreaOverlays } from "../overlays/area-overlays";
 import { DvSheet } from "../primitives/dv-sheet";
 import { ModeExplainer } from "../primitives/how-runs";
@@ -42,6 +45,7 @@ import {
 	type DeviceWorkspaceOverrides,
 	DeviceWorkspaceProvider,
 	type FixOutcome,
+	type ScheduleMoves,
 	buildGateContext,
 	useAppView,
 	useAreaGate,
@@ -50,6 +54,7 @@ import {
 	useDeviceRows,
 	useDeviceViews,
 	useFixAction,
+	useScheduleMoves,
 } from "../workspace";
 import { type RunsOnRow, runsOnDeviceNames, runsOnRows } from "./runs-on-model";
 
@@ -84,6 +89,13 @@ export interface EventsDevicesLive {
 	hub: Freshness;
 	/** Runs a gate's fix: overlays open here, places come back as a route. */
 	runFix(fix: FixAction): FixOutcome;
+	/** Hands a schedule back to the hub. `canEdit` is undefined while the role is unknown: the hub decides then. */
+	schedules: {
+		canEdit: boolean | undefined;
+		giveBack: ScheduleMoves["giveBack"];
+	};
+	/** Whether a person may start a run of this service's actions and forms now (`run_event`). */
+	runGate(deviceId: string, service: ServiceView): GateResult;
 }
 
 export interface EventsDevicesProblem {
@@ -229,6 +241,9 @@ function useLiveReport(appId: string): LiveReport {
 	const coverage = useCoverage(appId);
 	const { view } = app;
 	const runFix = useFixAction();
+	const { giveBack } = useScheduleMoves(appId);
+	const canEdit = useDeployRole(appId).canEditEvents;
+	const schedules = useMemo(() => ({ canEdit, giveBack }), [canEdit, giveBack]);
 	const canDeploy = useMemo(
 		() =>
 			devices.some((row) =>
@@ -240,6 +255,14 @@ function useLiveReport(appId: string): LiveReport {
 				),
 			),
 		[devices, state, appId],
+	);
+	const runGate = useCallback(
+		(deviceId: string, service: ServiceView) =>
+			evaluateGate(
+				"run_event",
+				buildGateContext(state, deviceId, runNowGateTarget(service)),
+			),
+		[state],
 	);
 
 	return useMemo<LiveReport>(() => {
@@ -279,10 +302,22 @@ function useLiveReport(appId: string): LiveReport {
 				canDeploy,
 				hub: list.freshness,
 				runFix,
+				schedules,
+				runGate,
 			},
 			problem: null,
 		};
-	}, [gate, list, app.error, view, coverage, canDeploy, runFix]);
+	}, [
+		gate,
+		list,
+		app.error,
+		view,
+		coverage,
+		canDeploy,
+		runFix,
+		schedules,
+		runGate,
+	]);
 }
 
 /** Reads the fleet for one app under the passive workspace and reports it to the provider above. */
@@ -343,17 +378,26 @@ function idleStatus(
 	return canReadBoards ? null : "blind";
 }
 
-/** The page's events by id, each with the device's event rule. */
-function useEventRules(events: readonly IEvent[]) {
-	return useMemo(
-		() => ({
+/**
+ * The page's events by id, each with the device's event rule. Once the device
+ * area has read the app, its rule wins: only it knows what the hub can do and
+ * whether a flow that follows Latest can be deployed.
+ */
+function useEventRules(events: readonly IEvent[], view: AppView | undefined) {
+	return useMemo(() => {
+		const eligibility = new Map(
+			events.map((event) => [event.id, eventEligibility(event)]),
+		);
+		for (const row of view
+			? [...view.events.rows, ...view.events.ineligible]
+			: [])
+			if (eligibility.has(row.eventId))
+				eligibility.set(row.eventId, row.eligibility);
+		return {
 			events: new Map(events.map((event) => [event.id, event])),
-			eligibility: new Map(
-				events.map((event) => [event.id, eventEligibility(event)]),
-			),
-		}),
-		[events],
-	);
+			eligibility,
+		};
+	}, [events, view]);
 }
 
 /** Requests to open one event's popover (a deep link, the row menu): each opens exactly one. */
@@ -425,7 +469,7 @@ export function AreaEventsDevices({
 		[appId],
 		appId !== "",
 	);
-	const rules = useEventRules(events.data ?? NO_EVENTS);
+	const rules = useEventRules(events.data ?? NO_EVENTS, report.live?.view);
 	const [explaining, setExplaining] = useState(false);
 	const open = useCallback(
 		(route: DevicesRoute, scope: DevicesScope) => navigate(route, { scope }),
@@ -474,7 +518,10 @@ export function EventsDevicesProvider(
 	const [reported, setReported] = useState<LiveReport>(LOADING);
 	const [explaining, setExplaining] = useState(false);
 	const idle = idleStatus(signedOut, props.hub, props.canReadBoards);
-	const rules = useEventRules(props.events);
+	const rules = useEventRules(
+		props.events,
+		idle ? undefined : reported.live?.view,
+	);
 	const requests = usePopoverRequests();
 	const open = useMemo(
 		() =>

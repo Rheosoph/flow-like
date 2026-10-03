@@ -1,8 +1,16 @@
 import { z } from "zod";
-import type {
-	InspectionPlus,
-	PlacementStatusPlus,
-	ReplicaStatusPlus,
+import { ONCE_MAX_AT, ONCE_MIN_AT } from "../schedule-instant";
+import {
+	type AgentFeatures,
+	BOT_PROVIDERS,
+	BOT_STATES,
+	type InspectionPlus,
+	ONCE_STATES,
+	type PlacementStatusPlus,
+	type ReplicaStatusPlus,
+	SCHEDULE_HOLDS,
+	SCHEDULE_OUTCOMES,
+	SCHEDULE_SKIP_REASONS,
 } from "./model/types";
 import type { ManagementCall } from "./telemetry";
 import {
@@ -69,6 +77,93 @@ const restarts = z.object({
 	last_started_at: count.nullish().transform((value) => value ?? null),
 });
 
+/**
+ * What a schedule entry says in every plane: values that do not change by
+ * themselves. A repeating entry has `expression`; a one-time entry `once_at`
+ * and `once_state` instead.
+ */
+const scheduleEntry = z.object({
+	event_id: id,
+	expression: z
+		.string()
+		.regex(/^[0-9A-Za-z*/,\- ]{1,128}$/u)
+		.optional(),
+	once_at: count.min(ONCE_MIN_AT).max(ONCE_MAX_AT).optional(),
+	once_state: z.enum(ONCE_STATES).optional(),
+	timezone: z.string().regex(/^[A-Za-z0-9_+\-/]{1,64}$/u),
+	hold: z.enum(SCHEDULE_HOLDS).nullable(),
+	last_outcome: z.enum(SCHEDULE_OUTCOMES).nullish(),
+});
+/** Exactly one form: an expression, or an instant with its state. */
+const oneForm = (entry: z.output<typeof scheduleEntry>) =>
+	entry.expression !== undefined
+		? entry.once_at === undefined && entry.once_state === undefined
+		: entry.once_at !== undefined && entry.once_state !== undefined;
+const stableSchedule = scheduleEntry.refine(oneForm);
+const liveSchedule = scheduleEntry
+	.extend({
+		next_at: count.nullish(),
+		running: z.boolean().optional(),
+		last_at: count.nullish(),
+		runs: count.optional(),
+		failed: count.optional(),
+		skipped: count.optional(),
+		last_skip: z
+			.object({ at: count, reason: z.enum(SCHEDULE_SKIP_REASONS) })
+			.nullish()
+			.catch(undefined),
+		clock_behind: z.boolean().optional(),
+	})
+	.refine(oneForm);
+/** An entry with a state, hold or result this client does not know is dropped, not the row. */
+const entries = <T extends z.ZodTypeAny>(entry: T) =>
+	z
+		.array(z.unknown())
+		.max(64)
+		.transform((rows) =>
+			rows.flatMap((row): z.output<T>[] => {
+				const parsed = entry.safeParse(row);
+				return parsed.success ? [parsed.data] : [];
+			}),
+		);
+
+/** A bot name a device may show; any other name reads as none, and the entry stays. */
+const botName = z
+	.string()
+	.regex(/^[A-Za-z0-9_.\- ]{1,64}$/u)
+	.nullish()
+	.catch(null);
+const stableBot = z.object({
+	event_id: id,
+	provider: z.enum(BOT_PROVIDERS),
+	state: z.enum(BOT_STATES),
+	hold: z.enum(SCHEDULE_HOLDS).nullable(),
+});
+const liveBot = stableBot.extend({
+	bot_name: botName,
+	connected_at: count.nullish(),
+	last_message_at: count.nullish(),
+	last_outcome: z.enum(SCHEDULE_OUTCOMES).nullish(),
+	running: count.optional(),
+	runs: count.optional(),
+	runs_today: count.optional(),
+	failed: count.optional(),
+	dropped: count.optional(),
+});
+const stableAction = z.object({
+	event_id: id,
+	kind: z.enum(["action", "form"]),
+	fields: count.max(64),
+	file_fields: count.max(64),
+});
+const liveAction = stableAction.extend({
+	running: count.optional(),
+	last_at: count.nullish(),
+	last_outcome: z.enum(SCHEDULE_OUTCOMES).nullish(),
+	runs: count.optional(),
+	failed: count.optional(),
+});
+
 const PLACEMENT_FACTS = {
 	process_id: count.nullable(),
 	last_error: text(1024).nullable(),
@@ -98,6 +193,12 @@ const PLACEMENT_FACTS = {
 		.string()
 		.regex(/^[a-f0-9]{64}$/u)
 		.nullable(),
+	schedules: entries(liveSchedule),
+	schedules_truncated: z.boolean(),
+	bots: entries(liveBot),
+	bots_truncated: z.boolean(),
+	actions: entries(liveAction),
+	actions_truncated: z.boolean(),
 } satisfies Partial<
 	Record<keyof PlacementStatusPlus, z.ZodType<unknown, z.ZodTypeDef, unknown>>
 >;
@@ -246,6 +347,13 @@ const SNAPSHOT_PLACEMENT_FACTS = {
 	events: PLACEMENT_FACTS.events,
 	events_truncated: PLACEMENT_FACTS.events_truncated,
 	online_metadata_sha256: PLACEMENT_FACTS.online_metadata_sha256,
+	// Next run and counters change by themselves; a snapshot never carries them.
+	schedules: entries(stableSchedule),
+	schedules_truncated: PLACEMENT_FACTS.schedules_truncated,
+	bots: entries(stableBot),
+	bots_truncated: PLACEMENT_FACTS.bots_truncated,
+	actions: entries(stableAction),
+	actions_truncated: PLACEMENT_FACTS.actions_truncated,
 };
 const SNAPSHOT_REPLICA_FACTS = {
 	has_error: PLACEMENT_FACTS.has_error,
@@ -256,13 +364,18 @@ const SNAPSHOT_DEVICE_FACTS = {
 	host: DEVICE_FACTS.host,
 	tasks: DEVICE_FACTS.tasks,
 	host_operation: DEVICE_FACTS.host_operation,
+	features: z.record(z.unknown()).transform((flags) => agentFeatures(flags)),
 };
 
-/** Device-scope facts of a status snapshot: only unhealthy tasks, without their failure counter. */
+/**
+ * Device-scope facts of a status snapshot: only unhealthy tasks, without their
+ * failure counter. `features` is absent for an agent that sends none and for a
+ * reader below device scope: it then means "unknown", never "too old".
+ */
 export type SnapshotDeviceFacts = Pick<
 	InspectionPlus,
 	"agent" | "host" | "tasks" | "hostOperation"
->;
+> & { features?: AgentFeatures };
 
 export function snapshotDeviceFacts(source: unknown): SnapshotDeviceFacts {
 	const { host_operation, ...facts } = validFacts(

@@ -29,7 +29,7 @@ import { WizardStepHeader } from "../../primitives/wizard";
 import { hubErrorCopy } from "../../workspace";
 import { useSetup } from "../setup-context";
 import { IconList, Mono, PendingSetupsStamp } from "../setup-parts";
-import { type CreatedSetup, STEP_COUNT } from "../setup-state";
+import { type CreatedSetup, STEP_COUNT, startBy } from "../setup-state";
 import { WAIT_POLL_MS } from "../use-setup-wait";
 
 const LINK =
@@ -165,7 +165,7 @@ function Expired({ created }: Readonly<{ created: CreatedSetup }>) {
 						t={t}
 						i18nKey="setup.wait.expired.text"
 						defaults="The setup package for <1/> expired on {{when}} and no longer works. Nothing was installed."
-						values={{ when: time.at(created.expiresAt) }}
+						values={{ when: time.at(startBy(created)) }}
 						components={{ 1: <Mono>{draft.name}</Mono> }}
 					/>
 				}
@@ -222,7 +222,7 @@ export function WaitingStep({
 			),
 			note: t("setup.wait.createdNote", "{{when}} · works until {{until}}", {
 				when: time.at(created.createdAt),
-				until: time.at(created.expiresAt),
+				until: time.at(startBy(created)),
 			}),
 		},
 		{
@@ -240,7 +240,7 @@ export function WaitingStep({
 					? t(
 							"setup.wait.waitingNote",
 							"The package expires {{left}}. The app checks the hub every {{count, number}} s.",
-							{ left: time.ago(created.expiresAt), count: POLL_S },
+							{ left: time.ago(startBy(created)), count: POLL_S },
 						)
 					: t(
 							"setup.wait.startedNote",

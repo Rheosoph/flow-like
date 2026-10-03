@@ -1,17 +1,19 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
 	Ban,
 	Box,
 	CircleSlash,
+	Clock,
 	Copy,
 	Lock,
 	LockOpen,
 	OctagonX,
 	Server,
 	Sparkles,
+	TriangleAlert,
 } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import {
@@ -19,23 +21,37 @@ import {
 	agentSupports,
 	readArtifactUsage,
 } from "../../../../../lib/device-management/agent-reads";
-import type {
-	DeployTargetDraft,
-	PlanTarget,
-	PlanTargetService,
-	TargetChoice,
+import {
+	type DeployTargetDraft,
+	PLAN_ACKNOWLEDGEMENTS,
+	type PlanAcknowledgement,
+	type PlanException,
+	type PlanExceptionCode,
+	type PlanTarget,
+	type PlanTargetService,
+	type TargetChoice,
+	claimedEventIds,
 } from "../../../../../lib/device-management/model/deploy-plan";
 import { humanFileSize } from "../../../../../lib/utils";
-import type { DevicesT } from "../../primitives/area-context";
+import { useBackend } from "../../../../../state/backend-state";
+import { agentTooOldCopy } from "../../copy/eligibility-copy";
+import { type DevicesT, useAreaTime } from "../../primitives/area-context";
 import { Block } from "../../primitives/block";
 import { DvButton } from "../../primitives/dv-button";
+import { CheckField } from "../../primitives/form-fields";
 import { FreshnessStamp } from "../../primitives/freshness-stamp";
 import { StateView } from "../../primitives/state-view";
 import { WizardStepHeader } from "../../primitives/wizard";
+import { useDevicesRoute } from "../../routing/use-devices-route";
 import { useDeviceWorkspace } from "../../workspace/device-workspace-provider";
 import { useOverlay } from "../../workspace/overlay-store";
 import { deviceCall } from "../../workspace/use-live";
-import { eventName, issueText, planNames } from "../deploy-copy";
+import {
+	eventName,
+	issueText,
+	ownServiceFixLabel,
+	planNames,
+} from "../deploy-copy";
 import type { DeployDevice } from "../deploy-facts";
 import {
 	DeploySelect,
@@ -45,9 +61,14 @@ import {
 	type SelectOption,
 	TargetsStamp,
 } from "../deploy-parts";
-import { ExceptionsTable, exceptionRows } from "../exceptions-table";
+import {
+	type ExceptionRow,
+	ExceptionsTable,
+	exceptionRows,
+} from "../exceptions-table";
 import type { PlanStepProps } from "../step-props";
 import { TargetCard } from "../target-card";
+import { localTriggerKey } from "../use-deploy-reads";
 
 /* Step 3 · Where (APP §3.7): devices as checkbox cards, each with its plan line; gated ones say why. */
 
@@ -324,7 +345,10 @@ function ServiceNotes({
 	check,
 }: Readonly<PlanLineProps & { service: PlanTargetService }>) {
 	const { t } = useTranslation("devices");
+	const { navigate } = useDevicesRoute();
+	const time = useAreaTime();
 	const { plan } = state;
+	const claimed = claimedEventIds(plan.app);
 	const issues = check.issues.filter(
 		(issue) =>
 			issue.step === "where" &&
@@ -351,8 +375,21 @@ function ServiceNotes({
 				</p>
 			) : null}
 			{issues.map((issue) => (
-				<PlanText key={issue.code} icon={OctagonX} tone="critical">
-					{issueText(t, issue, planNames(t, plan))}
+				<PlanText
+					key={`${issue.code}:${String(issue.params?.event ?? "")}`}
+					icon={issue.severity === "warning" ? TriangleAlert : OctagonX}
+					tone={issue.severity === "warning" ? "warning" : "critical"}
+				>
+					{issueText(t, issue, planNames(t, plan, state.facts, time.at))}
+					{/* A bot can't be connected from two programs: the deploy waits until this computer stops it. */}
+					{issue.code === "bot_local_trigger" ? (
+						<span className="mt-1.5 block">
+							<StopLocalTrigger
+								appId={plan.app?.id}
+								eventId={String(issue.params?.event ?? "")}
+							/>
+						</span>
+					) : null}
 				</PlanText>
 			))}
 			{service.leftOut.map((row) => (
@@ -366,15 +403,40 @@ function ServiceNotes({
 									reason: row.detail,
 								},
 							)
-						: t(
-								"deploy.where.leftOutDuplicate",
-								"Leaves out {{event}}: {{service}} already serves it here.",
-								{
-									event: eventName(plan, row.eventId),
-									service: row.serviceId,
-								},
-							)}{" "}
-					{row.why === "duplicate" ? (
+						: row.why === "agent"
+							? t(
+									"deploy.where.leftOutAgent",
+									"Leaves out {{event}}: {{reason}}",
+									{
+										event: eventName(plan, row.eventId),
+										reason: agentTooOldCopy(t, device.name, row.feature).long,
+									},
+								)
+							: t(
+									"deploy.where.leftOutDuplicate",
+									"Leaves out {{event}}: {{service}} already serves it here.",
+									{
+										event: eventName(plan, row.eventId),
+										service: row.serviceId,
+									},
+								)}{" "}
+					{row.why === "agent" ? (
+						<DvButton
+							variant="link"
+							size="xs"
+							onClick={() =>
+								navigate({
+									screen: "device",
+									deviceId: device.id,
+									tab: "settings",
+								})
+							}
+						>
+							{agentTooOldCopy(t, device.name, row.feature).fix}
+						</DvButton>
+					) : null}
+					{/* A schedule or bot runs in one place: it is never served by two services of one device. */}
+					{row.why === "duplicate" && !claimed.has(row.eventId) ? (
 						<DvButton
 							variant="link"
 							size="xs"
@@ -393,7 +455,15 @@ function PlanLine(props: Readonly<PlanLineProps>) {
 	const { t } = useTranslation("devices");
 	const { device, target, own, state } = props;
 	const { plan, draft } = state;
-	if (draft.entry === "update") return <UpdateLine {...props} />;
+	if (draft.entry === "update") {
+		const [updated] = target.services;
+		return (
+			<>
+				<UpdateLine {...props} />
+				{updated ? <ServiceNotes {...props} service={updated} /> : null}
+			</>
+		);
+	}
 	const addable =
 		plan.services.length === 1 &&
 		appServices(device, draft.appId).some((row) => row.events !== null);
@@ -705,36 +775,331 @@ function DevicesBlock(props: Readonly<PlanStepProps>) {
 	);
 }
 
-/** "Events on these devices": only pairs that differ are rows (APP §3.7 item 4). */
-function EventsOnDevices({ state, check }: Readonly<PlanStepProps>) {
+const SCHEDULE_WARNINGS: readonly PlanExceptionCode[] = [
+	"schedule_two_devices",
+	"schedule_local_trigger",
+];
+
+/** A schedule that would run in more than one place needs the person's yes, once per device. */
+function ScheduleTwiceCheck({
+	state,
+	deviceId,
+}: Readonly<{ state: PlanStepProps["state"]; deviceId: string }>) {
 	const { t } = useTranslation("devices");
+	const own = state.draft.targets.find((row) => row.deviceId === deviceId);
+	return (
+		<CheckField
+			id={`deploy-schedule-twice-${deviceId}`}
+			checked={own?.over.scheduleTwice === true}
+			onCheckedChange={(scheduleTwice) =>
+				state.updateTarget(deviceId, (value) => ({
+					...value,
+					over: { ...value.over, scheduleTwice },
+				}))
+			}
+		>
+			{t(
+				"deploy.where.scheduleTwice",
+				"Run it here as well: it then runs in more than one place",
+			)}
+		</CheckField>
+	);
+}
+
+/**
+ * The desktop app runs this schedule itself. One click removes that trigger
+ * here, so the device is the only place that runs it and nothing is left to
+ * acknowledge.
+ */
+function StopLocalTrigger({
+	appId,
+	eventId,
+}: Readonly<{ appId: string | undefined; eventId: string }>) {
+	const { t } = useTranslation("devices");
+	const backend = useBackend();
+	const queryClient = useQueryClient();
+	const [stop, setStop] = useState<"idle" | "busy" | "failed">("idle");
+	const sinks = backend.sinkState;
+	if (!sinks) return null;
+	const run = async () => {
+		setStop("busy");
+		try {
+			await sinks.removeEventSink(eventId);
+			await queryClient.invalidateQueries({
+				queryKey: localTriggerKey(appId, eventId),
+			});
+			setStop("idle");
+		} catch {
+			setStop("failed");
+		}
+	};
+	return (
+		<span className="flex flex-col items-start gap-1">
+			<DvButton
+				size="xs"
+				busy={stop === "busy"}
+				data-act="stop-local-trigger"
+				onClick={() => void run()}
+			>
+				{t(
+					"deploy.exception.stopLocalTrigger",
+					"Stop running it on this computer",
+				)}
+			</DvButton>
+			{stop === "failed" ? (
+				<span role="alert" className="text-xs text-critical">
+					{t(
+						"deploy.exception.stopLocalTriggerFailed",
+						"It couldn't be stopped here. Turn it off in Events on this computer.",
+					)}
+				</span>
+			) : null}
+		</span>
+	);
+}
+
+const isAcknowledgement = (
+	code: PlanExceptionCode,
+): code is PlanAcknowledgement =>
+	(PLAN_ACKNOWLEDGEMENTS as readonly string[]).includes(code);
+
+const ACKNOWLEDGE_LABEL: Record<PlanAcknowledgement, (t: DevicesT) => string> =
+	{
+		once_soon: (t) =>
+			t(
+				"devices:deploy.where.acknowledge.onceSoon",
+				"Deploy it anyway: it may not run",
+			),
+		bot_open: (t) =>
+			t(
+				"devices:deploy.where.acknowledge.botOpen",
+				"Let anyone who can message it start runs",
+			),
+		bot_other_computers: (t) =>
+			t(
+				"devices:deploy.where.acknowledge.botOtherComputers",
+				"No other computer runs it",
+			),
+		endpoint_shared_token: (t) =>
+			t(
+				"devices:deploy.where.acknowledge.endpointSharedToken",
+				"Let the service's token call it",
+			),
+	};
+
+/** One yes per device and warning: it covers every row of that warning on the device. */
+function AcknowledgeCheck({
+	state,
+	deviceId,
+	code,
+}: Readonly<{
+	state: PlanStepProps["state"];
+	deviceId: string;
+	code: PlanAcknowledgement;
+}>) {
+	const { t } = useTranslation("devices");
+	const own = state.draft.targets.find((row) => row.deviceId === deviceId);
+	const given = own?.over.acknowledged ?? [];
+	return (
+		<CheckField
+			id={`deploy-acknowledge-${code}-${deviceId}`}
+			checked={given.includes(code)}
+			onCheckedChange={(on) =>
+				state.updateTarget(deviceId, (value) => {
+					const current = value.over.acknowledged ?? [];
+					return {
+						...value,
+						over: {
+							...value.over,
+							acknowledged: on
+								? [...new Set([...current, code])]
+								: current.filter((row) => row !== code),
+						},
+					};
+				})
+			}
+		>
+			{ACKNOWLEDGE_LABEL[code](t)}
+		</CheckField>
+	);
+}
+
+/** "Deploy it as its own service": the Endpoint keeps a token of its own, so nothing is left to confirm. */
+function OwnServiceFix({
+	state,
+	eventId,
+}: Readonly<{ state: PlanStepProps["state"]; eventId: string }>) {
+	const { t } = useTranslation("devices");
+	return (
+		<DvButton
+			size="xs"
+			data-act="own-service"
+			onClick={() =>
+				state.update({
+					ownService: [
+						...new Set([...(state.draft.ownService ?? []), eventId]),
+					],
+				})
+			}
+		>
+			{ownServiceFixLabel(t)}
+		</DvButton>
+	);
+}
+
+/**
+ * What an exception row offers besides its sentence: "Serve it in both" for an
+ * event another service already serves (never for a schedule or a bot), the
+ * acknowledgement on the first row of each device's warning, the way to stop
+ * a schedule that this computer runs itself, and the own service of an
+ * Endpoint that has its own token.
+ */
+function useExceptionExtras({ state }: PlanStepProps) {
+	const { t } = useTranslation("devices");
+	const claimed = claimedEventIds(state.plan.app);
+	const asked = new Set<string>();
+	const first = (key: string) => {
+		if (asked.has(key)) return false;
+		asked.add(key);
+		return true;
+	};
+	return (
+		exception: PlanException,
+	): Partial<Pick<ExceptionRow, "check" | "action">> => {
+		const eventId = String(exception.params?.event ?? "");
+		const { code, deviceId } = exception;
+		if (isAcknowledgement(code)) {
+			const action =
+				code === "endpoint_shared_token" ? (
+					<OwnServiceFix state={state} eventId={eventId} />
+				) : undefined;
+			return {
+				...(first(`${deviceId}\n${code}`)
+					? {
+							check: (
+								<AcknowledgeCheck
+									state={state}
+									deviceId={deviceId}
+									code={code}
+								/>
+							),
+						}
+					: {}),
+				...(action ? { action } : {}),
+			};
+		}
+		if (SCHEDULE_WARNINGS.includes(code)) {
+			const action =
+				code === "schedule_local_trigger" ? (
+					<StopLocalTrigger appId={state.plan.app?.id} eventId={eventId} />
+				) : undefined;
+			if (!first(deviceId)) return action ? { action } : {};
+			return {
+				check: <ScheduleTwiceCheck state={state} deviceId={deviceId} />,
+				...(action ? { action } : {}),
+			};
+		}
+		if (code !== "left_out_duplicate" || claimed.has(eventId)) return {};
+		return {
+			action: (
+				<DvButton
+					size="xs"
+					onClick={() =>
+						state.updateTarget(exception.deviceId, (value) => ({
+							...value,
+							serveBoth: [...value.serveBoth, eventId],
+						}))
+					}
+				>
+					{t("deploy.where.serveBoth", "Serve it in both")}
+				</DvButton>
+			),
+		};
+	};
+}
+
+/**
+ * An update has no "Events on these devices" block. A schedule it adds that
+ * would run in a second place is still said, with its acknowledgement, and so
+ * is every other warning that needs a yes (a one-time schedule due very soon,
+ * a bot it adds, an Endpoint that loses its own token).
+ */
+function ScheduleWarnings(props: Readonly<PlanStepProps>) {
+	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	const { state, check } = props;
+	const extras = useExceptionExtras(props);
+	const exceptions = check.exceptions.filter(
+		(exception) =>
+			exception.step === "where" &&
+			(SCHEDULE_WARNINGS.includes(exception.code) ||
+				isAcknowledgement(exception.code)),
+	);
+	if (!exceptions.length) return null;
+	const schedulesOnly = exceptions.every((exception) =>
+		SCHEDULE_WARNINGS.includes(exception.code),
+	);
+	const rows = exceptionRows(
+		t,
+		state.plan,
+		exceptions,
+		extras,
+		state.facts,
+		time.at,
+	);
+	return (
+		<Block
+			title={
+				schedulesOnly
+					? t("deploy.where.schedulesTitle", "Schedules in this update")
+					: t("deploy.where.confirmTitle", "To confirm in this update")
+			}
+			icon={schedulesOnly ? Clock : TriangleAlert}
+			stamp={
+				<TargetsStamp targets={state.plan.targets} devices={state.devices} />
+			}
+		>
+			{schedulesOnly ? (
+				<ExceptionsTable
+					label={t(
+						"deploy.where.schedulesTable",
+						"Schedules that run in more than one place",
+					)}
+					shared={t(
+						"deploy.where.schedulesShared",
+						"A schedule runs once in every place it is deployed to.",
+					)}
+					rows={rows}
+				/>
+			) : (
+				<ExceptionsTable
+					label={t(
+						"deploy.where.confirmTable",
+						"Warnings this update asks you to confirm",
+					)}
+					shared={t(
+						"deploy.where.confirmShared",
+						"Each warning needs your yes on its device.",
+					)}
+					rows={rows}
+				/>
+			)}
+		</Block>
+	);
+}
+
+/** "Events on these devices": only pairs that differ are rows (APP §3.7 item 4). */
+function EventsOnDevices(props: Readonly<PlanStepProps>) {
+	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	const { state, check } = props;
 	const { plan, mode, devices } = state;
 	const count = plan.targets.length;
+	const extras = useExceptionExtras(props);
 	const exceptions = check.exceptions.filter(
 		(exception) => exception.step === "where" && exception.code !== "renamed",
 	);
-	const rows = exceptionRows(t, plan, exceptions, (exception) =>
-		exception.code === "left_out_duplicate"
-			? {
-					action: (
-						<DvButton
-							size="xs"
-							onClick={() =>
-								state.updateTarget(exception.deviceId, (value) => ({
-									...value,
-									serveBoth: [
-										...value.serveBoth,
-										String(exception.params?.event ?? ""),
-									],
-								}))
-							}
-						>
-							{t("deploy.where.serveBoth", "Serve it in both")}
-						</DvButton>
-					),
-				}
-			: {},
-	);
+	const rows = exceptionRows(t, plan, exceptions, extras, state.facts, time.at);
 	const events = new Set(plan.services.flatMap((service) => service.events));
 	const shared = !count
 		? t(
@@ -817,7 +1182,11 @@ export function WhereStep(props: Readonly<PlanStepProps>) {
 			{app ? (
 				<>
 					<DevicesBlock {...props} />
-					{draft.entry === "update" ? null : <EventsOnDevices {...props} />}
+					{draft.entry === "update" ? (
+						<ScheduleWarnings {...props} />
+					) : (
+						<EventsOnDevices {...props} />
+					)}
 				</>
 			) : (
 				<StateView

@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	type DeploymentRolloutStatus,
 	cancelDeploymentRollout,
@@ -12,19 +12,38 @@ import type {
 	AppVersionView,
 	AppView,
 } from "../../../../lib/device-management/model/app-plan";
+import { schedulesClaimedBy } from "../../../../lib/device-management/model/schedule-where";
 import type { DeviceWorkspace } from "../../../../lib/device-management/workspace/types";
-import { revokeDeviceGrant } from "../../../../lib/device-resources";
+import {
+	type HeldEvents,
+	botCutOffText,
+	splitHeld,
+} from "../cloud/held-events";
+import { useDeployRole } from "../deploy/use-deploy-reads";
+import { useAreaTime } from "../primitives/area-context";
 import { useConfirm } from "../primitives/confirm-sheet";
 import type { ConsequenceRows } from "../primitives/consequence-preview";
 import { CheckField } from "../primitives/form-fields";
 import type { Gate } from "../primitives/gate-notice";
+import type { Note } from "../service/config-parts";
+import {
+	FRESH_CHOICE,
+	type RemovalFlow,
+	type RemoveChoice,
+	ScheduleGiveBack,
+	giveBackLabel,
+	removeService,
+} from "../service/remove-service";
 import {
 	type GateTarget,
+	type ServiceCommands,
 	serviceGateExtra,
 	serviceResultKey,
+	useAppPlacements,
 	useDeviceAction,
 	useDeviceWorkspace,
 	useGates,
+	useScheduleMoves,
 } from "../workspace";
 import { useGateText } from "./app-shared";
 import { type AppApproval, runsElsewhere, versionName } from "./app-view-local";
@@ -49,39 +68,6 @@ const targetOf = (row: AppServiceRow): GateTarget => ({
 	labels: { service: row.serviceId },
 	extra: serviceGateExtra(row.view),
 });
-
-const STOP_POLLS = 40;
-const STOP_POLL_MS = 500;
-const STOPPED: readonly string[] = ["stopped", "failed"];
-
-/**
- * A stop command only records the intent, and the device removes a service
- * only once it reports it stopped: wait for that before sending the removal.
- * After 20 s the removal is sent anyway and the device's answer is the result.
- */
-async function stoppedOnDevice(
-	workspace: DeviceWorkspace,
-	deviceId: string,
-	serviceId: string,
-): Promise<void> {
-	const sinceS = Math.floor(workspace.clock.now() / 1000);
-	for (let attempt = 0; attempt < STOP_POLLS; attempt++) {
-		await workspace.live.refreshInspection(deviceId).catch(() => undefined);
-		const inspection = workspace.live.inspection(deviceId);
-		// Only a status read after the stop counts: an older one still shows it running, or stopped by chance.
-		if (inspection && inspection.readAt >= sinceS) {
-			const status = inspection.value.placements.find(
-				(entry) => entry.id === serviceId,
-			);
-			if (
-				!status ||
-				(STOPPED.includes(status.observed_state) && !status.running_replicas)
-			)
-				return;
-		}
-		await new Promise((resolve) => setTimeout(resolve, STOP_POLL_MS));
-	}
-}
 
 export interface StagedActions {
 	activate(): void;
@@ -372,27 +358,56 @@ export interface RemoveService {
 	run(): void;
 	gate: Gate | null;
 	pending: boolean;
+	/** The sentence of a step that didn't finish (stop, give back, revoke, remove). */
+	note: Note | null;
+	dismiss(): void;
 }
+
+/** The schedules and bots a service took off the hub, with their event ids. */
+type Held = HeldEvents & { ids: string[] };
 
 function RemoveOptions({
 	approval,
 	waiting,
+	held,
+	mayGiveBack,
+	deviceLabel,
 	onChange,
 }: Readonly<{
 	approval: AppApproval | null;
 	waiting: number;
-	onChange(next: { revoke: boolean; lose: boolean }): void;
+	held: Held | null;
+	mayGiveBack: boolean;
+	deviceLabel: string;
+	onChange(patch: Partial<RemoveChoice>): void;
 }>) {
 	const { t } = useTranslation("devices");
 	const [state, setState] = useState({ revoke: false, lose: false });
 	const set = (patch: Partial<typeof state>) => {
-		const next = { ...state, ...patch };
-		setState(next);
-		onChange(next);
+		setState({ ...state, ...patch });
+		onChange(patch);
 	};
-	if (!approval && !waiting) return null;
+	if (!approval && !waiting && !held) return null;
 	return (
 		<div data-remove-options="" className="flex flex-col gap-2">
+			{held ? (
+				<ScheduleGiveBack
+					id="app-remove-give-back"
+					held={held}
+					allowed={mayGiveBack}
+					onGiveBack={(giveBack) => onChange({ giveBack })}
+				/>
+			) : null}
+			{held?.bots ? (
+				<span data-remove-bots="">
+					{botCutOffText(t, {
+						device: deviceLabel,
+						bots: held.bots,
+						date: undefined,
+						removing: true,
+					})}
+				</span>
+			) : null}
 			{approval ? (
 				<CheckField
 					id="app-remove-revoke"
@@ -419,24 +434,57 @@ function RemoveOptions({
 }
 
 /**
- * Remove service… (typed service id): stops it first when it runs, and
- * revokes its cloud access afterwards when asked.
+ * Remove service… (typed service id), with the sequence of the service page:
+ * stop it when it runs, hand its schedules and bots back to the hub, revoke
+ * its cloud access when asked, then remove it.
  */
 export function useRemoveService(
 	input: AwareInput,
 	approval: AppApproval | null,
+	commands: ServiceCommands,
 ): RemoveService {
 	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	const workspace = useDeviceWorkspace();
 	const actions = useDeviceAction();
 	const confirm = useConfirm();
 	const gateText = useGateText();
 	const whoNotices = useWhoNotices();
-	const { row, deviceLabel } = input;
+	const { view, row, deviceLabel } = input;
 	const { deviceId, serviceId } = row;
+	const appId = row.view.projectId;
 	const target = useMemo(() => targetOf(row), [row]);
 	const gates = useGates(["remove_service", "stop"], deviceId, target);
 	const resultKey = serviceResultKey(deviceId, serviceId);
-	const choice = useRef({ revoke: false, lose: false });
+	const choice = useRef<RemoveChoice>({ ...FRESH_CHOICE });
+	const [busy, setBusy] = useState(false);
+	const [note, setNote] = useState<Note | null>(null);
+	const mounted = useRef(true);
+	useEffect(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+		};
+	}, []);
+	const placements = useAppPlacements(appId);
+	const moves = useScheduleMoves(appId ?? "");
+	const { canEditEvents } = useDeployRole(appId);
+	const held = useMemo<Held | null>(() => {
+		const ids = schedulesClaimedBy(
+			placements.data?.schedules,
+			deviceId,
+			serviceId,
+		);
+		if (!ids.length) return null;
+		const known = new Map(
+			[...view.events.rows, ...view.events.ineligible].map((event) => [
+				event.eventId,
+				{ name: event.name, eventType: event.eventType },
+			]),
+		);
+		return { ids, ...splitHeld(ids, known, time.locale) };
+	}, [placements.data, view, deviceId, serviceId, time.locale]);
+	const mayGiveBack = canEditEvents !== false;
 	const running = row.view.desired !== "stopped";
 	const waiting = row.mode === "online" ? waitingWrites(row) : 0;
 	// A running service is stopped first, so "stop it first" gates only when Stop itself can't run.
@@ -447,7 +495,7 @@ export function useRemoveService(
 	const gate = failing.ok ? null : gateText(failing);
 
 	const run = useCallback(() => {
-		choice.current = { revoke: false, lose: false };
+		choice.current = { ...FRESH_CHOICE };
 		const label = running
 			? t("app.action.remove.stopAndRemove", "Stop and remove {{service}}", {
 					service: serviceId,
@@ -519,8 +567,11 @@ export function useRemoveService(
 				<RemoveOptions
 					approval={approval}
 					waiting={waiting}
-					onChange={(next) => {
-						choice.current = next;
+					held={held}
+					mayGiveBack={mayGiveBack}
+					deviceLabel={deviceLabel}
+					onChange={(patch) => {
+						choice.current = { ...choice.current, ...patch };
 					}}
 				/>
 			),
@@ -535,97 +586,84 @@ export function useRemoveService(
 			},
 		}).then(async (result) => {
 			if (!result.ok) return;
-			const { revoke } = choice.current;
-			const outcome = await actions.run({
-				action: "remove_service",
+			const say = (next: Note | null) => {
+				if (mounted.current) setNote(next);
+			};
+			say(null);
+			setBusy(true);
+			const flow: RemovalFlow = {
+				t,
+				time,
+				actions,
+				workspace,
+				commands,
 				deviceId,
-				target: {
-					...target,
-					extra: { ...target.extra, desiredState: "stopped" },
-				},
-				label,
+				serviceId,
+				deviceLabel,
+				projectId: appId,
 				resultKey,
-				call: async (context) => {
-					const expected = row.view.settings.latest;
-					if (running)
-						await context.request({
-							type: "stop",
-							placement_id: serviceId,
-							expected_revision: expected,
-						});
-					await stoppedOnDevice(context.workspace, deviceId, serviceId);
-					return context.request({
-						type: "remove",
-						placement_id: serviceId,
-						expected_revision: expected,
-					});
+				cloud: {
+					state: approval ? "listed" : "unknown",
+					approvals: approval ? [approval.grantId] : [],
+					limits: approval?.billing?.payerIsMe ? [approval.billing.id] : [],
 				},
-				activity: {
-					kind: "command",
-					params: { command: "remove" },
-					deviceName: deviceLabel,
-					serviceId,
-					projectId: row.view.projectId,
-					href: { screen: "device", deviceId, tab: "services" },
-				},
-			});
-			if (outcome.status !== "done" || !revoke || !approval) return;
-			if (approval.billing?.payerIsMe)
-				await actions.run({
-					action: "spending_limit_revoke",
-					deviceId,
-					target: { placementId: serviceId, projectId: row.view.projectId },
-					label: t(
-						"app.spending.revokeLimitLabel",
-						"Revoke the spending limit of {{service}}",
-						{ service: serviceId },
+				stopFirst: stopFirst && gates.stop.ok,
+				schedules:
+					held && mayGiveBack
+						? {
+								ids: held.ids,
+								giveBack: moves.giveBack,
+								...(held.bots ? { box: giveBackLabel(t, held) } : {}),
+							}
+						: null,
+				say,
+			};
+			try {
+				if (await removeService(flow, choice.current))
+					void workspace.live.refreshInspection(deviceId);
+			} catch {
+				say({
+					tone: "critical",
+					text: t(
+						"serviceConfig.remove.interrupted",
+						"Removing {{service}} was interrupted before {{device}} confirmed it. Check its status, then try again.",
+						{ service: serviceId, device: deviceLabel },
 					),
-					resultKey,
-					call: ({ workspace }) =>
-						revokeDeviceGrant(
-							workspace.hub.api,
-							workspace.hub.profile,
-							deviceId,
-							"billing",
-							approval.billing?.id ?? "",
-						),
 				});
-			await actions.run({
-				action: "cloud_access_revoke",
-				deviceId,
-				target: { placementId: serviceId, projectId: row.view.projectId },
-				label: t(
-					"app.spending.revokeApprovalLabel",
-					"Revoke the cloud access of {{service}}",
-					{ service: serviceId },
-				),
-				resultKey,
-				call: ({ workspace }) =>
-					revokeDeviceGrant(
-						workspace.hub.api,
-						workspace.hub.profile,
-						deviceId,
-						"resource",
-						approval.grantId,
-					),
-			});
+			} finally {
+				if (mounted.current) setBusy(false);
+			}
 		});
 	}, [
 		actions,
 		confirm,
 		whoNotices,
+		workspace,
+		commands,
+		moves,
+		time,
 		input,
 		approval,
+		held,
+		mayGiveBack,
+		appId,
+		stopFirst,
+		gates.stop.ok,
 		row,
 		deviceId,
 		serviceId,
 		deviceLabel,
-		target,
 		resultKey,
 		running,
 		waiting,
 		t,
 	]);
 
-	return { run, gate, pending: actions.pending(resultKey) };
+	return {
+		run,
+		gate,
+		pending: busy || actions.pending(resultKey),
+		note,
+		dismiss: () => setNote(null),
+	};
 }

@@ -1803,6 +1803,7 @@
 	"offlineProjectsAreNeverListedSoNoConformityAssessmentOrPublicationReviewIsRequiredBringTheProjectOnlineToStart": "离线项目永远不会被列出,因此无需进行合规评估或发布审核。请将项目上线以开始。",
 	"offlineUsingCachedData": "离线 - 使用缓存数据",
 	"offOnThisDevice": "在此设备上已关闭",
+	"onADeviceLatestMeansTheFlowAsItWasWhenYouLastDeployedOrUpdated": "",
 	"onCompletion": "完成时",
 	"onDisk": "磁盘占用",
 	"oneModelfileDependencyBitPerLineOrCommaSeparated": "每行一个模型文件依赖 Bit,或用逗号分隔",

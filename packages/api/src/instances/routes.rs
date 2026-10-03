@@ -20,7 +20,9 @@ use utoipa::{OpenApi, ToSchema};
     billing_eligibility,
     billing_usage,
     resource_summary,
-    super::app_placements::device_placements
+    super::app_placements::device_placements,
+    super::schedules::release,
+    super::schedules::give_back
 ))]
 pub(crate) struct CloudApprovalsApi;
 
@@ -581,7 +583,7 @@ mod tests {
         }
     }
 
-    const DOCUMENTED_PATHS: [&str; 9] = [
+    const DOCUMENTED_PATHS: [&str; 10] = [
         "/devices/{id}/resource-grants",
         "/devices/{id}/resource-grants/{grant}",
         "/devices/{id}/resource-grants/{grant}/billing",
@@ -591,9 +593,13 @@ mod tests {
         "/devices/{id}/billing-grants/{billing}/usage",
         "/devices/resource-summary",
         "/apps/{app_id}/device-placements",
+        "/apps/{app_id}/device-metadata",
     ];
 
-    const DOCUMENTED_FIELDS: [(&str, &[&str]); 15] = [
+    /// Moving a schedule between the hub and a service: one path, two operations.
+    const SCHEDULE_PATH: &str = "/apps/{app_id}/device-schedules/{event_id}";
+
+    const DOCUMENTED_FIELDS: [(&str, &[&str]); 19] = [
         ("ResourceSummary", &["server_time", "devices"]),
         (
             "DeviceResourceSummary",
@@ -627,7 +633,26 @@ mod tests {
                 "payer_is_me",
             ],
         ),
-        ("AppDevicePlacements", &["server_time", "placements"]),
+        (
+            "AppDevicePlacements",
+            &["server_time", "placements", "schedules", "event_types"],
+        ),
+        (
+            "AppDeviceSchedule",
+            &[
+                "event_id",
+                "state",
+                "since",
+                "seen_at",
+                "hub_resumes_at",
+                "grant_id",
+                "device_id",
+                "placement_id",
+            ],
+        ),
+        ("ReleaseScheduleRequest", &["device_id", "placement_id"]),
+        ("ReleasedSchedule", &["state", "since"]),
+        ("GivenBackSchedule", &["hub_resumes_at"]),
         (
             "AppDevicePlacement",
             &[
@@ -689,9 +714,16 @@ mod tests {
     #[test]
     fn cloud_paths_are_documented() {
         let spec = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
-        for path in DOCUMENTED_PATHS {
-            let operation = &spec["paths"][path]["get"];
-            assert!(operation.is_object(), "no OpenAPI operation GET {path}");
+        let operations = DOCUMENTED_PATHS
+            .into_iter()
+            .map(|path| ("get", path))
+            .chain([("put", SCHEDULE_PATH), ("delete", SCHEDULE_PATH)]);
+        for (method, path) in operations {
+            let operation = &spec["paths"][path][method];
+            assert!(
+                operation.is_object(),
+                "no OpenAPI operation {method} {path}"
+            );
             assert_eq!(operation["tags"], serde_json::json!(["devices"]), "{path}");
             assert!(
                 operation["description"]

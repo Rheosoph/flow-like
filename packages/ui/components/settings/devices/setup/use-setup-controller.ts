@@ -12,6 +12,7 @@ import type {
 	SetupRoute,
 	SetupStep,
 } from "../../../../lib/device-management/model/types";
+import type { VerifiedRelease } from "../../../../lib/device-management/package";
 import { useAreaTime } from "../primitives/area-context";
 import { useDevicesRoute } from "../routing/use-devices-route";
 import { useHubSupport } from "../workspace";
@@ -27,6 +28,7 @@ import {
 	nameIssue,
 	packsAgent,
 	passwordIssue,
+	releaseCutoff,
 	repeatIssue,
 } from "./setup-state";
 import { type SetupChecks, useSetupChecks } from "./use-setup-checks";
@@ -99,10 +101,12 @@ function useCreateHandlers(input: CreateInput) {
 	const { password, repeat, clear } = secrets;
 
 	const finish = useCallback(
-		(result: CreatedResult | undefined) => {
+		(result: CreatedResult | undefined, packed: VerifiedRelease) => {
 			if (!result) return;
 			clear();
 			const { registration, finishedAt } = result;
+			const expiresAt = registration?.expiresAt ?? finishedAt + lifetimeS;
+			const releaseEndsAt = packed.manifest.expires_at;
 			update({
 				keySaved: false,
 				packageSaved: false,
@@ -111,7 +115,8 @@ function useCreateHandlers(input: CreateInput) {
 					...(registration ? { enrollmentId: registration.enrollmentId } : {}),
 					deviceId: result.deviceId,
 					createdAt: registration?.createdAt ?? finishedAt,
-					expiresAt: registration?.expiresAt ?? finishedAt + lifetimeS,
+					expiresAt,
+					...(releaseEndsAt < expiresAt ? { releaseEndsAt } : {}),
 					outcome: result.outcome,
 				},
 			});
@@ -135,13 +140,14 @@ function useCreateHandlers(input: CreateInput) {
 				verified,
 				gateExtra: { readinessOk: true, releaseTrust: true },
 			}),
+			verified,
 		);
 	}, [checks, draft, option, password, repeat, create, finish]);
 
 	const retry = useCallback(async () => {
 		const { verified, config, pass } = checks;
 		if (!pass || !verified || !config) return;
-		finish(await create.retry({ release: config, verified }));
+		finish(await create.retry({ release: config, verified }), verified);
 	}, [checks, create, finish]);
 
 	return { start, retry };
@@ -257,6 +263,7 @@ export function useSetupController(input: SetupFlowInput): SetupFlowState {
 		if (next.field) showMissing();
 	};
 
+	const cutoff = releaseCutoff(release?.manifest, nowS, limits.lifetimeS);
 	const controller: SetupController = {
 		host,
 		draft,
@@ -267,6 +274,7 @@ export function useSetupController(input: SetupFlowInput): SetupFlowState {
 		goTo,
 		checks,
 		release,
+		...(cutoff === undefined ? {} : { releaseCutoff: cutoff }),
 		options,
 		option,
 		secrets,

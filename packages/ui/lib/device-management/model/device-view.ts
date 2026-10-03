@@ -17,6 +17,8 @@ import { classify } from "./freshness";
 import { presence, relationshipOf } from "./presence";
 import type {
 	AgeState,
+	AgentFeature,
+	AgentFeatures,
 	AttentionAction,
 	AttentionInput,
 	AttentionItem,
@@ -70,6 +72,8 @@ export interface DeviceFacts {
 	inspection?: InspectionPlus;
 	inspectionSource?: Freshness;
 	services: ServiceView[] | ServicesUnavailable;
+	/** The agent's flags on the plane the services come from; absent = unknown, never "too old". */
+	features?: AgentFeatures;
 	/** The installed release; `sequence` when the agent reports it (BG8). */
 	agent?: { version: string; sequence?: number; source: Freshness };
 }
@@ -150,7 +154,7 @@ function deviceFacts(input: AttentionInputExt, row: DeviceRow): DeviceFacts {
 		inspectionSource,
 		services: [],
 	};
-	facts.services = serviceViewsOf(input, facts);
+	Object.assign(facts, readServices(input, facts));
 	facts.agent = agentOf(input, facts);
 	return facts;
 }
@@ -205,7 +209,15 @@ interface PlacementSource {
 	placements: PlacementStatusPlus[];
 	freshness: Freshness;
 	at: number;
+	/** The agent's flags on this plane; absent = this plane does not say. */
+	features?: AgentFeatures;
 }
+
+/** A snapshot carries the flags only for a device-scope reader, on the observation that holds the device facts. */
+const snapshotFeatures = (
+	observations: readonly { features?: AgentFeatures }[],
+): AgentFeatures | undefined =>
+	observations.find((observation) => observation.features)?.features;
 
 /** Newest row per placement id across observations (`observed_at` is milliseconds). */
 function latestPlacements(
@@ -231,7 +243,8 @@ function placementSources(
 ): PlacementSource[] {
 	const sources: PlacementSource[] = [];
 	const fleet = input.fleet[facts.id];
-	if (fleet?.status)
+	if (fleet?.status) {
+		const features = snapshotFeatures(fleet.status.observations);
 		sources.push({
 			placements: latestPlacements(fleet.status.observations),
 			at: fleet.status.observedAt,
@@ -241,7 +254,9 @@ function placementSources(
 				loaded: true,
 				...keptError(fleet.freshness.status),
 			}),
+			...(features ? { features } : {}),
 		});
+	}
 	if (fleet?.saved)
 		sources.push({
 			placements: latestPlacements(fleet.saved.observations),
@@ -259,6 +274,7 @@ function placementSources(
 			placements: inspection.value.placements,
 			at: inspection.readAt,
 			freshness: facts.inspectionSource,
+			features: inspection.value.features,
 		});
 	return sources;
 }
@@ -278,17 +294,21 @@ function pickSource(
 	);
 }
 
-function serviceViewsOf(
+/** The device's service rows and the agent flags of the plane they come from. */
+function readServices(
 	input: AttentionInputExt,
 	facts: DeviceFacts,
-): ServiceView[] | ServicesUnavailable {
+): Pick<DeviceFacts, "services" | "features"> {
 	const unavailable = servicesUnavailable(input, facts);
-	if (unavailable) return unavailable;
+	if (unavailable) return { services: unavailable };
 	const source = pickSource(placementSources(input, facts), facts.liveOpen);
-	if (!source) return { state: "notloaded" };
-	return source.placements.map((placement) =>
-		serviceView(facts.id, placement, source.freshness, facts.liveInput),
-	);
+	if (!source) return { services: { state: "notloaded" } };
+	return {
+		services: source.placements.map((placement) =>
+			serviceView(facts.id, placement, source, facts.liveInput),
+		),
+		...(source.features ? { features: source.features } : {}),
+	};
 }
 
 const LOCKED_KEYS = new Set<KeySessionSnapshot["state"]>([
@@ -454,10 +474,61 @@ function diagnosticsOf(
 	};
 }
 
+type ReportedList<T> = T[] | "not_reported" | "needs_agent" | "not_loaded";
+
+/**
+ * A row carries `schedules`, `bots` and `actions` only while a process of the
+ * service runs and reported them (a finished one-time schedule also while it
+ * is stopped). Without the key, the agent's flags decide what that means: not
+ * running or not reported yet, an agent too old to say, or unknown.
+ */
+function reportedList<T>(
+	list: T[] | undefined,
+	features: AgentFeatures | undefined,
+	flags: readonly AgentFeature[],
+): ReportedList<T> {
+	if (list) return list;
+	if (!features) return "not_loaded";
+	return flags.some((flag) => features[flag]) ? "not_reported" : "needs_agent";
+}
+
+function rowListsOf(
+	placement: PlacementStatusPlus,
+	features: AgentFeatures | undefined,
+): Pick<
+	ServiceView,
+	| "schedules"
+	| "schedulesTruncated"
+	| "bots"
+	| "botsTruncated"
+	| "actions"
+	| "actionsTruncated"
+> {
+	return {
+		schedules: reportedList(placement.schedules, features, [
+			"scheduled_events",
+		]),
+		...(placement.schedules && placement.schedules_truncated
+			? { schedulesTruncated: true }
+			: {}),
+		bots: reportedList(placement.bots, features, [
+			"telegram_bots",
+			"discord_bots",
+		]),
+		...(placement.bots && placement.bots_truncated
+			? { botsTruncated: true }
+			: {}),
+		actions: reportedList(placement.actions, features, ["on_demand_events"]),
+		...(placement.actions && placement.actions_truncated
+			? { actionsTruncated: true }
+			: {}),
+	};
+}
+
 function serviceView(
 	deviceId: string,
 	placement: PlacementStatusPlus,
-	freshness: Freshness,
+	{ freshness, features }: Pick<PlacementSource, "freshness" | "features">,
 	live: LiveDeviceInputExt | undefined,
 ): ServiceView {
 	const rollout = currentRollout(live?.rollouts, placement.id);
@@ -486,6 +557,7 @@ function serviceView(
 		events: placement.events ?? null,
 		appVersion: placement.revision ? { hash: placement.revision } : null,
 		offlineWrites: offlineWritesOf(placement, live),
+		...rowListsOf(placement, features),
 	};
 	const diagnostics = diagnosticsOf(placement);
 	if (diagnostics) view.diagnostics = diagnostics;
@@ -553,6 +625,7 @@ export function buildDeviceView(
 		attention,
 	};
 	if (facts.agent) view.agent = facts.agent;
+	if (facts.features) view.features = facts.features;
 	const certificates = input.certInventory[deviceId];
 	if (certificates) view.certificates = certificates;
 	const resources = input.resources[deviceId];

@@ -10,6 +10,7 @@ pub(crate) mod project;
 mod repository;
 mod resource_summary;
 pub(crate) mod routes;
+pub(crate) mod schedules;
 
 pub(crate) use budget::{
     BillingEligibility, authorize_start, billing_eligibility, reserve_budget, settle_budget,
@@ -361,6 +362,8 @@ pub(crate) async fn revoke_grant(
     grant_id: &str,
 ) -> Result<ResourceGrantResponse, ApiError> {
     visible_grant(state, owner, device_id, grant_id).await?;
+    // A hub that got this code before the schedules migration never handed one to a device.
+    let has_schedules = schedules::table_exists(state.db).await?;
     let owner = owner.to_owned();
     let device_id = device_id.to_owned();
     let grant_id = grant_id.to_owned();
@@ -373,6 +376,8 @@ pub(crate) async fn revoke_grant(
             let device=devices::repository::current_device(tx,&device_id).await?;
             if grant.info.device_id!=device_id || (device.status.owner_id!=owner && grant.info.delegating_user_id!=owner) {return Err(ApiError::NOT_FOUND);}
             if tx.execute_raw(sql(r#"UPDATE "PlacementResourceGrant" SET status='revoked',"authzVersion"="authzVersion"+1 WHERE id=$1 AND status='active'"#,[grant_id.clone().into()])).await?.rows_affected()!=1 {return Err(ApiError::NOT_FOUND);}
+            // The schedules its device ran return to the hub with the same commit.
+            if has_schedules {schedules::hand_back_grant(tx,&grant.info,now()).await?;}
             Ok(read_grant(tx,&grant_id).await?.info)
         })
     }).await

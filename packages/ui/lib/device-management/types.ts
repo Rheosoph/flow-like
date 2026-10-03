@@ -490,6 +490,34 @@ export function managementRejection(response: {
 				: code === "busy" || code === "failed",
 	};
 }
+/** Commands of person-started runs (design R2 §1.8): sent only to an agent with `on_demand_events`, each needs `start`. */
+export const ON_DEMAND_COMMANDS = [
+	"run_event",
+	"cancel_run",
+	"event_form",
+] as const;
+export type OnDemandCommand = (typeof ON_DEMAND_COMMANDS)[number];
+/** Journaled; answered `accepted` with a run id at once. */
+export interface RunEventCommand {
+	type: "run_event";
+	placement_id: string;
+	event_id: string;
+	/** The placement's configuration revision, as for `start`. */
+	expected_revision: number;
+	/** Field name → value: at most 64 keys and 12,288 bytes serialised. */
+	payload?: Record<string, unknown>;
+}
+/** Journaled; only the run's issuer or the owner may send it. */
+export interface CancelRunCommand {
+	type: "cancel_run";
+	operation_id: string;
+}
+/** A read: the fields of the flow version the service runs. */
+export interface EventFormCommand {
+	type: "event_form";
+	placement_id: string;
+	event_id: string;
+}
 export interface PlacementStatus {
 	id: string;
 	project_id: string;

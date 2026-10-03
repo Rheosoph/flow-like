@@ -1,6 +1,6 @@
 [package]
 name = "flow-like-standalone"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Persistent Flow-Like device agent and project service host"
 
@@ -15,8 +15,22 @@ runtime = [
     "dep:flow-like-types",
     "dep:jsonschema",
     "dep:flow-like-wasm",
+    "dep:croner",
+    "dep:chrono",
+    "dep:chrono-tz",
     "flow-like-offline-writes/runtime",
+    "api-events",
+    "scheduled-once",
+    "on-demand",
+    "bots-telegram",
+    "bots-discord",
 ]
+api-events = []
+scheduled-once = []
+on-demand = []
+bots = ["dep:flow-like-bots"]
+bots-telegram = ["bots", "flow-like-bots/telegram"]
+bots-discord = ["bots", "flow-like-bots/discord"]
 
 [dependencies]
 axum = { workspace = true, optional = true }
@@ -72,12 +86,17 @@ flow-like-storage = { workspace = true, optional = true, features = ["files", "d
 flow-like-types = { workspace = true, optional = true }
 jsonschema = { workspace = true, optional = true }
 flow-like-wasm = { workspace = true, optional = true, features = ["model"] }
+croner = { version = "2.2.0", optional = true }
+chrono = { workspace = true, optional = true }
+chrono-tz = { workspace = true, optional = true }
+flow-like-bots = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
 axum.workspace = true
+tokio = { version = "1", features = ["full", "test-util"] }
 flow-like-offline-writes = { workspace = true, features = ["test-support"] }
 tempfile = "3"
 wat = "1"

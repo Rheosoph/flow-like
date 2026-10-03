@@ -13,6 +13,7 @@ members = [
     "packages/device-crypto",
     "packages/device-protocol",
     "packages/offline-writes",
+    "packages/bots",
     "apps/desktop/src-tauri",
     "apps/backend/local/api",
     "apps/backend/local/runtime",
@@ -198,6 +199,7 @@ flow-like-aws-data = { path = "packages/aws-data" }
 flow-like-db = { path = "packages/db" }
 flow-like-device-protocol = { path = "packages/device-protocol" }
 flow-like-offline-writes = { path = "packages/offline-writes" }
+flow-like-bots = { path = "packages/bots", default-features = false }
 flow-like-device-crypto = { path = "packages/device-crypto" }
 flow-like-azure-data = { path = "packages/azure-data" }
 flow-like-gcp-data = { path = "packages/gcp-data" }

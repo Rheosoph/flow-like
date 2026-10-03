@@ -12,12 +12,27 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
+	type ScheduleRun,
+	holdsSchedule,
+	scheduleRun,
+} from "../../../../lib/device-management/model/schedule-where";
+import {
 	Popover,
 	PopoverAnchor,
 	PopoverContent,
 	PopoverTrigger,
 } from "../../../ui/popover";
-import type { DevicesT } from "../primitives/area-context";
+import {
+	scheduleRunLines,
+	scheduleTime,
+	scheduleWhereText,
+	whereNames,
+} from "../copy/schedule-copy";
+import {
+	type AreaTime,
+	type DevicesT,
+	useAreaTime,
+} from "../primitives/area-context";
 import { DvButton } from "../primitives/dv-button";
 import { CONVERGENCE_LOOK } from "../primitives/status-chip";
 import { TONE_SOLID, type Tone, cx } from "../primitives/tone";
@@ -29,6 +44,7 @@ import {
 	newerParts,
 	servedActual,
 	versionLabel,
+	whereKind,
 } from "./events-copy";
 import {
 	AreaEventsDevices,
@@ -87,6 +103,12 @@ function chipTitle(t: DevicesT, served: RunsOnServed, row: RunsOnRow) {
 	const [drift] = newerParts(served, row);
 	const version = (value: string) =>
 		drift?.kind === "flow" ? versionLabel(t, "flow", value) : value;
+	if (!drift && served.cell.drift?.state === "edits")
+		return t(
+			"devices:events.chip.titleEdits",
+			"{{service}} · {{actual}} · newer flow edits are available",
+			{ service, actual },
+		);
 	return drift
 		? t(
 				"devices:events.chip.titleBehind",
@@ -161,7 +183,8 @@ export function runsOnExplains(
 
 type CellCase =
 	| { kind: "plain"; text: string }
-	| { kind: "cant"; reason: CantRun }
+	/** `row`: devices that still serve an event that can't be deployed any more. */
+	| { kind: "cant"; reason: CantRun; row?: RunsOnRow }
 	| { kind: "row"; row: RunsOnRow };
 
 function cellCase(
@@ -171,11 +194,86 @@ function cellCase(
 ): CellCase {
 	const kind = cellKind(devices, eventId);
 	const reason = kind === "cant" ? cantRun(t, devices, eventId) : null;
-	if (reason) return { kind: "cant", reason };
-	const row = kind === "row" ? devices.live?.rows.get(eventId) : undefined;
-	return row
-		? { kind: "row", row }
+	const known =
+		devices.status === "ready" ? devices.live?.rows.get(eventId) : undefined;
+	if (reason) return { kind: "cant", reason, ...(known ? { row: known } : {}) };
+	return kind === "row" && known
+		? { kind: "row", row: known }
 		: { kind: "plain", text: statusText(t, devices.status) };
+}
+
+/** When an armed schedule runs next: a one-time schedule once, a repeating one by its time or its expression. */
+function armedText(
+	t: DevicesT,
+	run: Extract<ScheduleRun, { state: "armed" }>,
+	time: AreaTime,
+): string | null {
+	if (!run.next) return null;
+	const when = scheduleTime(t, run.next.at, run.entry.timezone, time);
+	if (run.entry.once_at !== undefined)
+		return t("devices:events.cell.runsOnce", "Runs once {{time}}", {
+			time: when,
+		});
+	return run.next.computed
+		? t(
+				"devices:serviceStatus.schedules.nextComputed",
+				"Next run by its schedule: {{time}}",
+				{ time: when },
+			)
+		: t("devices:serviceStatus.schedules.next", "Next run {{time}}", {
+				time: when,
+			});
+}
+
+/**
+ * The next run of a schedule on the first device that is known to run it;
+ * without a hub that says where it ran, how a one-time schedule ended there.
+ * Null when no device says either.
+ */
+function nextRunText(
+	t: DevicesT,
+	row: RunsOnRow,
+	time: AreaTime,
+): string | null {
+	if (!row.schedule && !row.once) return null;
+	for (const served of row.served) {
+		const view = served.service?.view;
+		const run = view ? scheduleRun(view, row.eventId, time.nowS) : null;
+		if (run?.state === "finished" && !row.where)
+			return (
+				scheduleRunLines(
+					t,
+					run,
+					{ device: served.device, own: view?.serviceId },
+					time,
+				)[0] ?? null
+			);
+		const text = run?.state === "armed" ? armedText(t, run, time) : null;
+		if (text) return text;
+	}
+	return null;
+}
+
+/**
+ * A schedule or bot that is assigned to a service, released or on its way
+ * back, said under the cell since no chip shows it; and a one-time schedule
+ * that finished on its device, which never reads "runs on".
+ */
+function whereLine(
+	t: DevicesT,
+	row: RunsOnRow,
+	devices: EventsDevicesValue,
+	time: AreaTime,
+): string | null {
+	const { where } = row;
+	if (!where || where.fact === "hub") return null;
+	if (where.fact === "device" && !where.finished) return null;
+	return scheduleWhereText(
+		t,
+		where,
+		whereNames(t, devices.live?.names, time),
+		whereKind(row),
+	);
 }
 
 interface TriggerProps {
@@ -300,11 +398,14 @@ function FullCell({
 	TriggerProps & { eventId: string; name: string; state: CellCase }
 >) {
 	const { t } = useTranslation("devices");
-	const { link, block } = useEventsDevices();
+	const devices = useEventsDevices();
+	const time = useAreaTime();
+	const { link, block } = devices;
 	const line = "flex min-w-0 flex-wrap items-center gap-1";
 	if (state.kind === "plain")
 		return <span className="text-muted-foreground">{state.text}</span>;
-	if (state.kind === "cant")
+	if (state.kind === "cant") {
+		const still = state.row?.served ?? [];
 		return (
 			<>
 				<span className={line}>
@@ -322,14 +423,31 @@ function FullCell({
 				{state.reason.paused ? null : (
 					<span className={SUB}>{state.reason.short}</span>
 				)}
+				{still.length ? (
+					<span className={SUB} data-runs-on-still="">
+						{t("events.cell.stillRuns", {
+							count: still.length,
+							device: still[0]?.device ?? "",
+							defaultValue_one: "{{device}} still runs it",
+							defaultValue_other: "{{count, number}} devices still run it",
+						})}
+					</span>
+				) : null}
 			</>
 		);
+	}
 	const { row } = state;
 	const details = (
 		<DetailsButton
 			label={t("events.cell.where", "Where {{event}} runs", { event: name })}
 		/>
 	);
+	const where = whereLine(t, row, devices, time);
+	const assigned = where ? (
+		<span className={SUB} data-runs-on-where={row.where?.fact}>
+			{where}
+		</span>
+	) : null;
 	if (!row.served.length)
 		return (
 			<>
@@ -338,7 +456,8 @@ function FullCell({
 					<UnknownChip row={row} open={open} toggle={toggle} />
 					{details}
 				</span>
-				{block ? null : (
+				{assigned}
+				{block || holdsSchedule(row.where) ? null : (
 					<a
 						{...link({
 							screen: "deploy",
@@ -354,6 +473,7 @@ function FullCell({
 				)}
 			</>
 		);
+	const next = nextRunText(t, row, time);
 	return (
 		<>
 			<span className={line}>
@@ -370,6 +490,23 @@ function FullCell({
 					})}
 				</span>
 			) : null}
+			{row.edits ? (
+				<span className={SUB} data-runs-on-edits="">
+					{t("events.cell.edits", {
+						count: row.edits,
+						defaultValue_one:
+							"{{count, number}} runs the flow from before its current edits",
+						defaultValue_other:
+							"{{count, number}} run the flow from before its current edits",
+					})}
+				</span>
+			) : null}
+			{next ? (
+				<span className={SUB} data-runs-on-next="">
+					{next}
+				</span>
+			) : null}
+			{assigned}
 		</>
 	);
 }
@@ -395,6 +532,15 @@ function summaryText(t: DevicesT, row: RunsOnRow) {
 			? t("devices:events.summary.older", "{{count, number}} older", {
 					count: row.older,
 				})
+			: "",
+		row.edits
+			? t(
+					"devices:events.summary.edits",
+					"{{count, number}} before the edits",
+					{
+						count: row.edits,
+					},
+				)
 			: "",
 		row.unknown.length ? unknownLabel(t, row) : "",
 	]

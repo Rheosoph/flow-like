@@ -1,0 +1,162 @@
+name: Renew standalone release
+
+on:
+  workflow_dispatch:
+    inputs:
+      sequence:
+        description: Number of the published release to renew
+        required: true
+        type: string
+      validity_days:
+        description: Days the renewed release stays valid, 1 to 1825 (agents of release 0.1.0 accept at most 30)
+        required: false
+        default: '365'
+        type: string
+      only_if_days_left:
+        description: Renew only when at most this many days are left (empty renews always)
+        required: false
+        type: string
+  # Unattended re-signing is off, and 365-day releases do not need it. Before uncommenting the two
+  # lines below, accept that the signing key is then used without a person, that this cannot coexist
+  # with required reviewers on the standalone-release environment, that GitHub disables scheduled
+  # workflows in a repository without activity for 60 days, and that a scheduled run names no release
+  # number, so it renews whatever genuine list the CDN serves. A scheduled run renews for 365 days,
+  # and only when at most 60 days are left (RELEASE_ONLY_IF_DAYS_LEFT below).
+  # schedule:
+  #   - cron: '0 6 1 * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standalone-release
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_NET_RETRY: '10'
+
+jobs:
+  sign:
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-24.04
+    environment: standalone-release
+    outputs:
+      renewed: ${{ steps.manifest.outputs.renewed }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s .github/scripts/tests -p 'test_standalone_release*.py'
+      - uses: ./.github/actions/setup-rust
+      # Build scripts and proc macros run here, before any key material exists on the runner.
+      - name: Build the release signer
+        run: CARGO_TARGET_DIR="$RUNNER_TEMP/release-signer" cargo build --locked --package flow-like-device-protocol --example sign-release
+      - id: manifest
+        name: Copy the published release and set its new dates
+        env:
+          RELEASE_BASE: ${{ vars.STANDALONE_RELEASE_PUBLIC_BASE_URL }}
+          RELEASE_PUBLIC_KEYS: ${{ vars.STANDALONE_RELEASE_PUBLIC_KEYS }}
+          RELEASE_SEQUENCE: ${{ inputs.sequence }}
+          RELEASE_VALIDITY_DAYS: ${{ inputs.validity_days || '365' }}
+          RELEASE_ONLY_IF_DAYS_LEFT: ${{ github.event_name == 'schedule' && '60' || inputs.only_if_days_left }}
+        run: |
+          mkdir release-renewal
+          arguments=(--base-url "$RELEASE_BASE" --public-keys "$RELEASE_PUBLIC_KEYS" --validity-days "$RELEASE_VALIDITY_DAYS" --output release-renewal/release.json)
+          if [ -n "$RELEASE_SEQUENCE" ]; then arguments+=(--sequence "$RELEASE_SEQUENCE"); fi
+          if [ -n "$RELEASE_ONLY_IF_DAYS_LEFT" ]; then arguments+=(--only-if-days-left "$RELEASE_ONLY_IF_DAYS_LEFT"); fi
+          python3 .github/scripts/standalone_release.py renew-manifest "${arguments[@]}"
+          if [ -f release-renewal/release.json ]; then echo "renewed=true" >> "$GITHUB_OUTPUT"; fi
+      - name: Sign the renewed manifest using the configured private release key
+        if: steps.manifest.outputs.renewed == 'true'
+        env:
+          STANDALONE_RELEASE_SIGNING_KEY: ${{ secrets.STANDALONE_RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$STANDALONE_RELEASE_SIGNING_KEY" ]; then
+            echo "::error::Configure STANDALONE_RELEASE_SIGNING_KEY as a secret of the standalone-release environment"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import os
+          path = os.path.join(os.environ['RUNNER_TEMP'], 'standalone-signing-key')
+          with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as key:
+              key.write(os.environ['STANDALONE_RELEASE_SIGNING_KEY'])
+          PY
+          unset STANDALONE_RELEASE_SIGNING_KEY
+          trap 'rm -f "$RUNNER_TEMP/standalone-signing-key"' EXIT
+          "$RUNNER_TEMP/release-signer/debug/examples/sign-release" "$RUNNER_TEMP/standalone-signing-key" release-renewal/release.json release-renewal/release.jws
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: steps.manifest.outputs.renewed == 'true'
+        with:
+          name: standalone-renewed-release
+          path: release-renewal/
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
+
+  publish:
+    needs: sign
+    if: needs.sign.outputs.renewed == 'true'
+    runs-on: ubuntu-24.04
+    environment: standalone-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: standalone-renewed-release
+          path: release-renewal
+      - name: Require exactly one publisher identity
+        env:
+          RELEASE_ROLE: ${{ vars.STANDALONE_RELEASE_ROLE_ARN }}
+          RELEASE_ACCESS_KEY_PRESENT: ${{ secrets.STANDALONE_RELEASE_ACCESS_KEY_ID != '' }}
+          RELEASE_SECRET_KEY_PRESENT: ${{ secrets.STANDALONE_RELEASE_SECRET_ACCESS_KEY != '' }}
+        run: |
+          python3 - <<'PY'
+          import os
+          access = os.environ['RELEASE_ACCESS_KEY_PRESENT'] == 'true'
+          secret = os.environ['RELEASE_SECRET_KEY_PRESENT'] == 'true'
+          if access != secret or bool(os.environ['RELEASE_ROLE']) == (access and secret):
+              raise SystemExit('Configure one publisher identity: STANDALONE_RELEASE_ROLE_ARN or both dedicated S3 access-key secrets of the standalone-release environment')
+          PY
+      - name: Obtain short-lived AWS publisher credentials
+        if: vars.STANDALONE_RELEASE_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ vars.STANDALONE_RELEASE_ROLE_ARN }}
+          aws-region: ${{ vars.STANDALONE_RELEASE_REGION }}
+          role-session-name: standalone-release-renew-${{ github.run_id }}
+      - name: Replace the stable signed manifest only if nothing but its dates changed
+        env:
+          RELEASE_BASE: ${{ vars.STANDALONE_RELEASE_PUBLIC_BASE_URL }}
+          RELEASE_BUCKET: ${{ vars.STANDALONE_RELEASE_BUCKET }}
+          RELEASE_PREFIX: ${{ vars.STANDALONE_RELEASE_PREFIX }}
+          RELEASE_PUBLIC_KEYS: ${{ vars.STANDALONE_RELEASE_PUBLIC_KEYS }}
+          RELEASE_ENDPOINT: ${{ secrets.STANDALONE_RELEASE_S3_ENDPOINT }}
+          AWS_REGION: ${{ vars.STANDALONE_RELEASE_REGION }}
+          RELEASE_S3_ACCESS_KEY_ID: ${{ secrets.STANDALONE_RELEASE_ACCESS_KEY_ID }}
+          RELEASE_S3_SECRET_ACCESS_KEY: ${{ secrets.STANDALONE_RELEASE_SECRET_ACCESS_KEY }}
+          RELEASE_S3_SESSION_TOKEN: ${{ secrets.STANDALONE_RELEASE_SESSION_TOKEN }}
+          AWS_EC2_METADATA_DISABLED: 'true'
+        run: |
+          python3 - <<'PY'
+          import importlib.util, os
+          from pathlib import Path
+          if os.environ.get('RELEASE_S3_ACCESS_KEY_ID'):
+              os.environ['AWS_ACCESS_KEY_ID'] = os.environ.pop('RELEASE_S3_ACCESS_KEY_ID')
+              os.environ['AWS_SECRET_ACCESS_KEY'] = os.environ.pop('RELEASE_S3_SECRET_ACCESS_KEY')
+              if os.environ.get('RELEASE_S3_SESSION_TOKEN'):
+                  os.environ['AWS_SESSION_TOKEN'] = os.environ.pop('RELEASE_S3_SESSION_TOKEN')
+          spec = importlib.util.spec_from_file_location('release', '.github/scripts/standalone_release.py')
+          release = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(release)
+          release.renew_publish(Path('release-renewal'), os.environ['RELEASE_BASE'], os.environ['RELEASE_BUCKET'], os.environ['RELEASE_PREFIX'], os.environ['RELEASE_PUBLIC_KEYS'], os.environ.get('RELEASE_ENDPOINT') or None)
+          PY
+      - name: State the release number, version and new end date
+        env:
+          RELEASE_PUBLIC_KEYS: ${{ vars.STANDALONE_RELEASE_PUBLIC_KEYS }}
+        run: python3 .github/scripts/standalone_release.py summary --artifacts release-renewal --public-keys "$RELEASE_PUBLIC_KEYS" --renewed >> "$GITHUB_STEP_SUMMARY"

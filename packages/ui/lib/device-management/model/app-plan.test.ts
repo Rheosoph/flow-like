@@ -3,6 +3,7 @@ import {
 	APPS,
 	CHANGES,
 	HASH,
+	NOW0,
 	PLACEMENTS,
 	SERVICES,
 	type SampleAppId,
@@ -10,14 +11,20 @@ import {
 } from "./__fixtures__/apps";
 import {
 	type AppDeviceInput,
+	type AppInput,
 	type AppServiceRow,
 	type AppUploadInput,
 	type AppView,
+	type EventFlowState,
 	appMode,
 	appUnknownOf,
 	buildAppView,
+	hubSchedulesOf,
+	hubTypesOf,
+	pinDrift,
+	resolvedPin,
 } from "./app-plan";
-import type { GateFailure } from "./types";
+import type { AppDevicePlacements, GateFailure, ServiceView } from "./types";
 
 function view(
 	appId: SampleAppId,
@@ -186,25 +193,32 @@ describe("APP §5.5 resulting picture per app", () => {
 		);
 	});
 
-	test("Visitor Check-in is never deployed and 2 of its 4 events can run", () => {
+	test("Visitor Check-in is never deployed and 3 of its 4 events can run", () => {
 		const result = view("app_visitor_checkin");
 		expect(result.layout).toBe("never");
 		expect(result.app.mode).toBe("online");
 		expect(result.newestRuns).toMatchObject({ services: 0, of: 0 });
 		expect(result.versions[0].runningOn).toEqual([]);
-		expect(result.events.rows.map((row) => row.eventId)).toEqual([
-			"evt_visitor_page",
-			"evt_badge_printer",
+		expect(
+			result.events.rows.map((row) => [row.eventId, row.eligibility.kind]),
+		).toEqual([
+			["evt_visitor_page", "served"],
+			["evt_badge_printer", "background"],
+			["evt_visitor_report", "scheduled"],
 		]);
+		// The hub runs the schedule: nobody released it to a device.
+		expect(result.events.rows[2].where).toEqual({ fact: "hub" });
+		expect(result.events.rows[2].eligibility.schedule).toEqual({
+			expression: "0 0 18 * * *",
+			timezone: "Europe/Berlin",
+			zoneSet: true,
+		});
 		expect(
 			result.events.ineligible.map((row) => [
 				row.eventId,
 				row.eligibility.code,
 			]),
-		).toEqual([
-			["evt_visitor_mail", "type"],
-			["evt_visitor_report", "type"],
-		]);
+		).toEqual([["evt_visitor_mail", "type"]]);
 		expect(
 			result.everywhereElse.notDeployed.map((row) => row.deviceId),
 		).toEqual(["edge-berlin-01", "studio-mac-mini", "warehouse-pi"]);
@@ -430,11 +444,24 @@ describe("By event matrix (APP §2.10)", () => {
 				row.eventId,
 				row.eligibility.code,
 			]),
-		).toEqual([
-			["evt_invoice_review", "latest_flow"],
-			["evt_invoice_inbox", "type"],
-			["evt_invoice_reconcile", "type"],
-		]);
+		).toEqual([["evt_invoice_inbox", "type"]]);
+		// The review Page follows Latest: it runs on a device at the flow version that equals its flow.
+		const review = locked.events.rows.find(
+			(row) => row.eventId === "evt_invoice_review",
+		);
+		expect(review).toMatchObject({
+			eligibility: { eligible: true, followsLatest: true, boardVersion: null },
+			pin: { eventVersion: [0, 9, 0], boardVersion: [0, 9, 2] },
+			flow: { current: [0, 9, 2], newest: [0, 9, 2] },
+		});
+		expect(review?.cells["edge-berlin-01"]?.state).toBe("not_served");
+		const reconcile = locked.events.rows.find(
+			(row) => row.eventId === "evt_invoice_reconcile",
+		);
+		expect(reconcile).toMatchObject({
+			eligibility: { eligible: true, kind: "scheduled" },
+			where: { fact: "hub" },
+		});
 		const unlocked = view("app_invoice_ai", { labUnlocked: true });
 		expect(cell(unlocked, "evt_gpu_extract", "lab-gpu-02")).toMatchObject({
 			state: "served",
@@ -457,6 +484,7 @@ describe("By event matrix (APP §2.10)", () => {
 		expect(watch?.newIn).toBe("v3.1.0");
 		expect(watch?.cells["edge-berlin-01"]).toMatchObject({
 			state: "cant_here",
+			why: "refuse",
 			reason: expect.stringContaining("requires sandboxed services"),
 		});
 		expect(watch?.cells["studio-mac-mini"]?.state).toBe("not_served");
@@ -469,13 +497,20 @@ describe("By event matrix (APP §2.10)", () => {
 				row.eventId,
 				row.eligibility.code,
 			]),
-		).toEqual([
-			["evt_crm_hourly", "type"],
-			["evt_crm_rest", "canary"],
-		]);
+		).toEqual([["evt_crm_rest", "canary"]]);
+		// A local-only app has no hub: where its schedule runs is not a hub fact.
+		const hourly = result.events.rows.find(
+			(row) => row.eventId === "evt_crm_hourly",
+		);
+		expect(hourly?.eligibility).toMatchObject({
+			kind: "scheduled",
+			schedule: { expression: "0 0 * * * *", timezone: "UTC", zoneSet: false },
+		});
+		expect(hourly?.where).toBeUndefined();
+		expect(result.schedules).toBeNull();
 	});
 
-	test("Support Portal serves both events on edge; the paused mailbox can't run", () => {
+	test("Support Portal serves both events on edge; its quick action can run there too; the paused mailbox can't run", () => {
 		const result = view("app_support_portal");
 		expect(
 			result.events.rows.map((row) => [
@@ -484,18 +519,21 @@ describe("By event matrix (APP §2.10)", () => {
 			]),
 		).toEqual([
 			["evt_support_chat", "served"],
+			["evt_support_reply", "not_served"],
 			["evt_support_http", "served"],
+			["evt_support_digest", "not_served"],
 		]);
+		expect(
+			result.events.rows.find((row) => row.eventId === "evt_support_reply")
+				?.eligibility,
+		).toMatchObject({ eligible: true, kind: "on_demand", hosted: false });
 		expect(
 			result.events.ineligible.map((row) => [
 				row.eventId,
 				row.eligibility.code,
+				Object.keys(row.cells),
 			]),
-		).toEqual([
-			["evt_support_reply", "type"],
-			["evt_support_digest", "type"],
-			["evt_support_mailbox", "paused"],
-		]);
+		).toEqual([["evt_support_mailbox", "paused", []]]);
 	});
 
 	test("a conflict at the head of a write queue ranks the service as 'writes need you'", () => {
@@ -914,4 +952,424 @@ test("the mode follows visibility (A1)", () => {
 			] as const
 		).map(appMode),
 	).toEqual(["offline", "online", "online", "online", "online"]);
+});
+
+describe("schedules in the By event matrix", () => {
+	const RECONCILE = "evt_invoice_reconcile";
+	const invoice = (
+		change: Partial<Parameters<typeof buildAppView>[0]> = {},
+		devices = sampleDevices({ labUnlocked: true }),
+	) =>
+		buildAppView({
+			app: APPS.app_invoice_ai,
+			devices,
+			placements: PLACEMENTS.app_invoice_ai,
+			now: NOW0,
+			...change,
+		});
+	const row = (result: AppView, eventId = RECONCILE) =>
+		[...result.events.rows, ...result.events.ineligible].find(
+			(value) => value.eventId === eventId,
+		);
+	const serving = (schedules: ServiceView["schedules"]) => {
+		const devices = sampleDevices({ labUnlocked: true });
+		devices[0] = {
+			...devices[0],
+			services: [
+				{
+					...SERVICES.invoiceExtractor,
+					conv: "converged",
+					events: [
+						...(SERVICES.invoiceExtractor.events ?? []),
+						{
+							event_id: RECONCILE,
+							event_version: [1, 0, 0],
+							board_version: [1, 3, 0],
+						},
+					],
+					schedules,
+				},
+			],
+		};
+		return devices;
+	};
+	const claimed = {
+		event_id: RECONCILE,
+		state: "device" as const,
+		since: NOW0 - 86_400,
+		seen_at: NOW0 - 600,
+		device_id: "edge-berlin-01",
+		placement_id: "invoice-extractor",
+	};
+	const armed = {
+		event_id: RECONCILE,
+		expression: "0 0 2 * * *",
+		timezone: "Europe/Berlin",
+		hold: null,
+	};
+
+	test("a device whose agent is known to be too old can't take a schedule; unknown flags say nothing", () => {
+		const devices = sampleDevices({ labUnlocked: true });
+		devices[0] = { ...devices[0], features: { placement_events: 1 } };
+		devices[1] = { ...devices[1], features: { scheduled_events: 1 } };
+		const cells = row(invoice({}, devices))?.cells ?? {};
+		expect(cells["edge-berlin-01"]).toMatchObject({
+			state: "cant_here",
+			why: "agent",
+		});
+		expect(cells["lab-gpu-02"].state).toBe("not_served");
+		expect(row(invoice())?.cells["edge-berlin-01"].state).toBe("not_served");
+		// Only schedules need the flag.
+		expect(
+			row(invoice({}, devices), "evt_invoice_mcp")?.cells["edge-berlin-01"]
+				.state,
+		).toBe("not_served");
+	});
+
+	test("a schedule another service holds can't go to a second device", () => {
+		const result = invoice(
+			{
+				placements: { ...PLACEMENTS.app_invoice_ai, schedules: [claimed] },
+			},
+			serving([armed]),
+		);
+		const reconcile = row(result);
+		expect(reconcile?.where).toMatchObject({
+			fact: "device",
+			deviceId: "edge-berlin-01",
+			serviceId: "invoice-extractor",
+		});
+		expect(reconcile?.cells["edge-berlin-01"].state).toBe("served");
+		expect(reconcile?.cells["lab-gpu-02"]).toMatchObject({
+			state: "cant_here",
+			why: "runs_elsewhere",
+		});
+		expect(result.schedules).toEqual({
+			[RECONCILE]: reconcile?.where,
+		} as never);
+		// Released or returning: nothing runs it on a device, so no cell is refused.
+		for (const schedules of [
+			[{ ...claimed, state: "released" as const }],
+			[
+				{
+					event_id: RECONCILE,
+					state: "returning" as const,
+					hub_resumes_at: NOW0 + 300,
+				},
+			],
+		])
+			expect(
+				row(
+					invoice({
+						placements: { ...PLACEMENTS.app_invoice_ai, schedules },
+					}),
+				)?.cells["lab-gpu-02"].state,
+			).toBe("not_served");
+	});
+
+	test("a paused schedule that a device still serves keeps that cell", () => {
+		const paused = {
+			...APPS.app_invoice_ai,
+			events: APPS.app_invoice_ai.events.map((event) =>
+				event.id === RECONCILE ? { ...event, active: false } : event,
+			),
+		};
+		const result = invoice({ app: paused }, serving([armed]));
+		expect(
+			result.events.rows.some((value) => value.eventId === RECONCILE),
+		).toBe(false);
+		const reconcile = result.events.ineligible.find(
+			(value) => value.eventId === RECONCILE,
+		);
+		expect(reconcile?.eligibility.code).toBe("paused");
+		expect(Object.keys(reconcile?.cells ?? {})).toEqual(["edge-berlin-01"]);
+		expect(reconcile?.cells["edge-berlin-01"]).toMatchObject({
+			state: "served",
+			serviceIds: ["invoice-extractor"],
+			pin: { eventVersion: [1, 0, 0], boardVersion: [1, 3, 0] },
+		});
+		// An event that can't run and that nothing serves has no cells.
+		expect(
+			result.events.ineligible.find(
+				(value) => value.eventId === "evt_invoice_inbox",
+			)?.cells,
+		).toEqual({});
+	});
+
+	test("an older hub refuses every schedule of an online app; a loading list refuses none", () => {
+		const { schedules: _schedules, ...older } = PLACEMENTS.app_invoice_ai;
+		expect(row(invoice({ placements: older }))?.eligibility.code).toBe(
+			"hub_schedules",
+		);
+		expect(
+			row(invoice({ placements: null, placementsOnHub: false }))?.eligibility
+				.code,
+		).toBe("hub_schedules");
+		const loading = invoice({ placements: undefined });
+		expect(row(loading)?.eligibility.eligible).toBe(true);
+		expect(row(loading)?.where).toBeUndefined();
+		expect(loading.schedules).toBeNull();
+		expect(hubSchedulesOf("online", { placements: older })).toBe(false);
+		expect(
+			hubSchedulesOf("online", { placements: PLACEMENTS.app_invoice_ai }),
+		).toBe(true);
+		expect(hubSchedulesOf("online", {})).toBeUndefined();
+		expect(
+			hubSchedulesOf("offline", { placements: older, placementsOnHub: false }),
+		).toBeUndefined();
+	});
+});
+
+describe("events that follow Latest", () => {
+	const REVIEW = "evt_invoice_review";
+	const review = APPS.app_invoice_ai.events[0];
+	const served = (boardVersion: [number, number, number]) => ({
+		eventVersion: [0, 9, 0] as const,
+		boardVersion,
+	});
+
+	test("the resolved pin is the flow version that equals the flow", () => {
+		expect(resolvedPin(review)).toEqual({
+			eventVersion: [0, 9, 0],
+			boardVersion: [0, 9, 2],
+		});
+		expect(
+			resolvedPin({ ...review, flow: { current: null, newest: [0, 9, 2] } }),
+		).toBeNull();
+		expect(resolvedPin({ ...review, flow: undefined })).toBeNull();
+		expect(resolvedPin({ ...review, flow: "missing_on_hub" })).toBeNull();
+		// A pinned event never reads its flow's state.
+		expect(
+			resolvedPin({
+				...APPS.app_invoice_ai.events[1],
+				flow: { current: [9, 9, 9], newest: [9, 9, 9] },
+			}),
+		).toEqual({ eventVersion: [1, 5, 0], boardVersion: [2, 2, 0] });
+	});
+
+	test("a served Latest event is newest, behind a version, behind unpublished edits, or unknown", () => {
+		expect(pinDrift(review, served([0, 9, 2]))).toEqual({ state: "newest" });
+		expect(pinDrift(review, served([0, 9, 1]))).toEqual({
+			state: "behind",
+			newest: { eventVersion: [0, 9, 0], boardVersion: [0, 9, 2] },
+		});
+		expect(
+			pinDrift(
+				{ ...review, flow: { current: null, newest: [0, 9, 2] } },
+				served([0, 9, 2]),
+			),
+		).toEqual({ state: "edits" });
+		expect(pinDrift({ ...review, flow: undefined }, served([0, 9, 2]))).toEqual(
+			{ state: "unknown", why: "not_loaded" },
+		);
+		expect(
+			pinDrift({ ...review, flow: "missing_on_hub" }, served([0, 9, 2])),
+		).toEqual({ state: "unknown", why: "hub" });
+		expect(
+			pinDrift(
+				{ ...review, board_version: [4294967295, 0, 0] },
+				served([0, 9, 2]),
+			),
+		).toEqual({ state: "unknown", why: "pin" });
+	});
+
+	test("the matrix never calls a Latest event newest while its flow is unknown or has edits", () => {
+		const cell = (
+			flow: EventFlowState | undefined,
+			versions: AppInput["versions"] = [],
+		) => {
+			const devices = sampleDevices();
+			devices[0] = {
+				...devices[0],
+				services: [
+					{
+						...SERVICES.invoiceExtractor,
+						events: [
+							{
+								event_id: REVIEW,
+								event_version: [0, 9, 0],
+								board_version: [0, 9, 2],
+							},
+						],
+					},
+				],
+			};
+			const { flow: _flow, ...event } = review;
+			const result = buildAppView({
+				app: {
+					...APPS.app_invoice_ai,
+					versions,
+					events: [flow === undefined ? event : { ...event, flow }],
+				},
+				devices,
+				placements: PLACEMENTS.app_invoice_ai,
+			});
+			return [...result.events.rows, ...result.events.ineligible][0];
+		};
+		expect(
+			cell({ current: [0, 9, 2], newest: [0, 9, 2] }).cells["edge-berlin-01"],
+		).toMatchObject({ behind: false, drift: { state: "newest" } });
+		expect(
+			cell({ current: [0, 9, 3], newest: [0, 9, 3] }).cells["edge-berlin-01"],
+		).toMatchObject({ behind: true, drift: { state: "behind" } });
+		const edits = cell({ current: null, newest: [0, 9, 2] });
+		expect(edits.pin).toBeNull();
+		expect(edits.cells["edge-berlin-01"]).toMatchObject({
+			behind: true,
+			drift: { state: "edits" },
+		});
+		expect(cell(undefined).cells["edge-berlin-01"]).toMatchObject({
+			behind: false,
+			drift: { state: "unknown", why: "not_loaded" },
+		});
+		// A version list that still pins the event says nothing about the flow's edits.
+		const listed = cell(
+			{ current: null, newest: [0, 9, 2] },
+			APPS.app_invoice_ai.versions,
+		);
+		expect(listed.pin).toBeNull();
+		expect(listed.cells["edge-berlin-01"]).toMatchObject({
+			drift: { state: "edits" },
+		});
+		// An older hub: the event can't be deployed, and the service that still serves it keeps its cell.
+		const older = cell("missing_on_hub");
+		expect(older.eligibility).toMatchObject({
+			code: "latest_flow",
+			latestFlow: "hub",
+		});
+		expect(older.cells["edge-berlin-01"]).toMatchObject({
+			state: "served",
+			drift: { state: "unknown", why: "hub" },
+		});
+	});
+});
+
+describe("round two's kinds in App › Devices", () => {
+	const SHOP = APPS.app_shop_assistant;
+	const shopView = (
+		placements: AppDevicePlacements | null | undefined,
+		devices: AppDeviceInput[] = sampleDevices(),
+		extra: { placementsOnHub?: boolean } = {},
+	) =>
+		buildAppView({
+			app: SHOP,
+			devices,
+			placements,
+			now: NOW0,
+			focusDeviceIds: ["studio-mac-mini"],
+			...extra,
+		});
+
+	test("Endpoints, forms, bots and one-time schedules are runnable rows; inbound email still can't run", () => {
+		const result = shopView(PLACEMENTS.app_shop_assistant);
+		expect(
+			result.events.rows.map((row) => [row.eventId, row.eligibility.kind]),
+		).toEqual([
+			["evt_shop_orders", "served"],
+			["evt_shop_return", "on_demand"],
+			["evt_shop_telegram", "bot"],
+			["evt_shop_discord", "bot"],
+			["evt_shop_prices", "scheduled"],
+		]);
+		expect(
+			result.events.ineligible.map((row) => [
+				row.eventId,
+				row.eligibility.code,
+			]),
+		).toEqual([["evt_shop_mail", "type"]]);
+		expect(result.events.rows.some((row) => row.hasPage)).toBe(false);
+		expect(
+			view("app_invoice_ai").events.rows.find(
+				(row) => row.eventId === "evt_invoice_review",
+			)?.hasPage,
+		).toBe(true);
+		// Field Notes runs both of its events now.
+		expect(view("app_field_notes").events.rows).toHaveLength(2);
+	});
+
+	test("an older hub can't hand Endpoints, forms or bots to devices; one-time schedules need nothing new", () => {
+		const { event_types: _types, ...older } = PLACEMENTS.app_shop_assistant;
+		const result = shopView(older);
+		expect(
+			result.events.ineligible.map((row) => [
+				row.eventId,
+				row.eligibility.code,
+			]),
+		).toEqual([
+			["evt_shop_orders", "hub_type"],
+			["evt_shop_return", "hub_type"],
+			["evt_shop_telegram", "hub_type"],
+			["evt_shop_discord", "hub_type"],
+			["evt_shop_mail", "type"],
+		]);
+		expect(result.events.rows.map((row) => row.eventId)).toEqual([
+			"evt_shop_prices",
+		]);
+		// A hub whose placement list can't be read at all is older still.
+		expect(
+			shopView(null, sampleDevices(), { placementsOnHub: false }).events.rows
+				.length,
+		).toBe(0);
+		// While the list loads, every event counts as runnable.
+		expect(shopView(undefined).events.rows).toHaveLength(5);
+		expect(
+			hubTypesOf("online", { placements: PLACEMENTS.app_shop_assistant }),
+		).toContain("telegram");
+		expect(hubTypesOf("offline", { placements: undefined })).toBeUndefined();
+	});
+
+	test("a device whose agent lacks a part says which, per event; another place that runs a bot says so", () => {
+		const devices = sampleDevices().map((device) =>
+			device.id === "studio-mac-mini"
+				? {
+						...device,
+						features: { scheduled_events: 1, telegram_bots: 1 } as const,
+					}
+				: device,
+		);
+		const placements: AppDevicePlacements = {
+			...PLACEMENTS.app_shop_assistant,
+			schedules: [
+				{
+					event_id: "evt_shop_telegram",
+					state: "device",
+					since: NOW0 - 3600,
+					seen_at: NOW0 - 60,
+					device_id: "edge-berlin-01",
+					placement_id: "shop-edge",
+				},
+			],
+		};
+		const result = shopView(placements, devices);
+		const cell = (eventId: string) =>
+			result.events.rows.find((row) => row.eventId === eventId)?.cells[
+				"studio-mac-mini"
+			];
+		expect(cell("evt_shop_orders")).toMatchObject({
+			state: "cant_here",
+			why: "agent",
+			feature: "api_events",
+		});
+		expect(cell("evt_shop_return")).toMatchObject({
+			why: "agent",
+			feature: "on_demand_events",
+		});
+		expect(cell("evt_shop_discord")).toMatchObject({
+			why: "agent",
+			feature: "discord_bots",
+		});
+		expect(cell("evt_shop_prices")).toMatchObject({
+			why: "agent",
+			feature: "scheduled_once",
+		});
+		expect(cell("evt_shop_telegram")).toMatchObject({
+			state: "cant_here",
+			why: "runs_elsewhere",
+			bot: true,
+		});
+		expect(
+			result.events.rows.find((row) => row.eventId === "evt_shop_telegram")
+				?.where,
+		).toMatchObject({ fact: "device_idle", why: "removed" });
+	});
 });

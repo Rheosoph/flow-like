@@ -13,6 +13,7 @@ import {
 	getFleetCertificateInventory,
 	getMyAccess,
 	getResourceSummary,
+	giveBackSchedule,
 	isMissingOnHub,
 	listAccountBackups,
 	listAppDevicePlacements,
@@ -21,8 +22,11 @@ import {
 	listEnrollments,
 	muteCertificateNotices,
 	parseHubStandalone,
+	publishFlowVersion,
 	readCertificateInventory,
+	readFlowVersion,
 	readHubStandalone,
+	releaseSchedule,
 	sendTestCertificateNotice,
 	toHubError,
 	unmuteCertificateNotices,
@@ -546,6 +550,274 @@ describe("older hubs and refusals", () => {
 		expect((await hubError(getBillingUsage(api, profile, "d", "b"))).code).toBe(
 			"invalid_response",
 		);
+	});
+});
+
+/* run-more-design §1.7: the literal the hub adds to `device-placements`. */
+const SCHEDULE_LISTING = JSON.parse(
+	`{"schedules":[
+ {"event_id":"evt_report","state":"device","since":1790000000,"seen_at":1790001800,"grant_id":"g-1","device_id":"dev-1","placement_id":"reports"},
+ {"event_id":"evt_mail","state":"released","since":1790000000,"device_id":"dev-1","placement_id":"reports"},
+ {"event_id":"evt_sync","state":"returning","hub_resumes_at":1790000300}]}`,
+);
+
+describe("schedules on devices (hub)", () => {
+	const listing = async (body: Record<string, unknown>) => {
+		const { api } = fakeApi(() => ({
+			server_time: 1,
+			placements: [],
+			...body,
+		}));
+		const result = await listAppDevicePlacements(api, profile, "app");
+		if (result.kind !== "ok") throw new Error("expected a listing");
+		return result.data;
+	};
+
+	test("the placement list says which service runs which schedule", async () => {
+		expect((await listing(SCHEDULE_LISTING)).schedules).toEqual(
+			SCHEDULE_LISTING.schedules,
+		);
+		// A device the viewer can't see: no ids, and the entry stays.
+		const hidden = {
+			event_id: "evt_report",
+			state: "device",
+			since: 1790000000,
+			seen_at: 1790001800,
+		};
+		expect((await listing({ schedules: [hidden] })).schedules).toEqual([
+			hidden,
+		] as never);
+		const resuming = {
+			event_id: "evt_mail",
+			state: "released",
+			since: 5,
+			hub_resumes_at: 9,
+			a_later_field: true,
+		};
+		expect((await listing({ schedules: [resuming] })).schedules).toEqual([
+			{ event_id: "evt_mail", state: "released", since: 5, hub_resumes_at: 9 },
+		]);
+	});
+
+	test("a hub without the list is an older hub, never 'nothing runs on a device'", async () => {
+		const older = await listing({});
+		expect("schedules" in older).toBe(false);
+		expect((await listing({ schedules: [] })).schedules).toEqual([]);
+	});
+
+	/* run-more-2-design §1.9 item 2: the hub's export list, the capability "round two". */
+	const EVENT_TYPES = JSON.parse(
+		`{"event_types":["http","simple_chat","rest","mcp","daemon","cron","api","quick_action","generic_form","telegram","discord"]}`,
+	);
+
+	test("the placement list says which event types the hub hands to devices", async () => {
+		expect((await listing(EVENT_TYPES)).event_types).toEqual(
+			EVENT_TYPES.event_types,
+		);
+		// A hub before Endpoints, forms and bots on devices sends none: absent, never "no type".
+		expect("event_types" in (await listing({}))).toBe(false);
+		expect((await listing({ event_types: [] })).event_types).toEqual([]);
+		// A later type is kept as a name; a name that is none is dropped.
+		expect(
+			(
+				await listing({
+					event_types: ["api", "inbound_email", 7, "Not A Type", ""],
+				})
+			).event_types,
+		).toEqual(["api", "inbound_email"]);
+		// A malformed list reads as an older hub's, and the listing stays.
+		const malformed = await listing({
+			event_types: "api",
+			...SCHEDULE_LISTING,
+		});
+		expect(malformed.event_types).toBeUndefined();
+		expect(malformed.schedules).toEqual(SCHEDULE_LISTING.schedules);
+	});
+
+	test("an entry with a state this client does not know is dropped, not the list", async () => {
+		const [device, , returning] = SCHEDULE_LISTING.schedules;
+		expect(
+			(
+				await listing({
+					schedules: [
+						device,
+						{ event_id: "evt_later", state: "paused", since: 1 },
+						{ event_id: "evt_broken", state: "device", since: "soon" },
+						{ event_id: "evt_no_time", state: "returning" },
+						7,
+						returning,
+					],
+				})
+			).schedules,
+		).toEqual([device, returning]);
+		const { api } = fakeApi(() => ({
+			server_time: 1,
+			placements: [],
+			schedules: "none",
+		}));
+		expect(
+			(await hubError(listAppDevicePlacements(api, profile, "app"))).code,
+		).toBe("invalid_response");
+	});
+
+	test("releasing a schedule names the service and returns what the hub decided", async () => {
+		const { api, calls } = fakeApi(() => ({ state: "released", since: 9 }));
+		expect(
+			await releaseSchedule(api, profile, "app#1", "evt/1", "dev-1", "reports"),
+		).toEqual({ kind: "ok", data: { state: "released", since: 9 } });
+		expect(calls).toEqual([
+			[
+				"PUT",
+				"apps/app%231/device-schedules/evt%2F1",
+				{ device_id: "dev-1", placement_id: "reports" },
+			],
+		]);
+		const running = fakeApi(() => ({ state: "device", since: 4, extra: 1 }));
+		expect(
+			await releaseSchedule(running.api, profile, "app", "evt", "d", "p"),
+		).toEqual({ kind: "ok", data: { state: "device", since: 4 } });
+		const unknown = fakeApi(() => ({ state: "claimed", since: 4 }));
+		expect(
+			(
+				await hubError(
+					releaseSchedule(unknown.api, profile, "app", "evt", "d", "p"),
+				)
+			).code,
+		).toBe("invalid_response");
+	});
+
+	test("giving a schedule back says when the hub runs it again", async () => {
+		const { api, calls } = fakeApi(() => ({ hub_resumes_at: 1790000300 }));
+		expect(await giveBackSchedule(api, profile, "app", "evt_report")).toEqual({
+			kind: "ok",
+			data: { hub_resumes_at: 1790000300 },
+		});
+		expect(calls).toEqual([["DELETE", "apps/app/device-schedules/evt_report"]]);
+		for (const body of [{ hub_resumes_at: null }, {}]) {
+			const hub = fakeApi(() => body);
+			expect(await giveBackSchedule(hub.api, profile, "app", "evt")).toEqual({
+				kind: "ok",
+				data: { hub_resumes_at: null },
+			});
+		}
+	});
+
+	test("a refused move names its reason; anything else stays an error", async () => {
+		const outcomes: [Error, unknown][] = [
+			[refusal(404), { kind: "missing_on_hub" }],
+			[refusal(405), { kind: "missing_on_hub" }],
+			[refusal(403, "FORBIDDEN"), { kind: "schedule_role" }],
+			[refusal(409, "SCHEDULE_RUNS_ELSEWHERE"), { kind: "schedule_elsewhere" }],
+			[refusal(409, "SCHEDULE_RETURNING"), { kind: "schedule_returning" }],
+		];
+		for (const [answer, outcome] of outcomes) {
+			const { api } = fakeApi(() => answer);
+			expect(
+				await releaseSchedule(api, profile, "app", "evt", "dev-1", "reports"),
+			).toEqual(outcome as never);
+			expect(await giveBackSchedule(api, profile, "app", "evt")).toEqual(
+				outcome as never,
+			);
+		}
+		const errors: [Error, HubErrorCode][] = [
+			[refusal(409, "SOMETHING_ELSE"), "invalid_response"],
+			[refusal(409), "invalid_response"],
+			[
+				refusal(
+					403,
+					"FORBIDDEN",
+					"Device registry access requires an unrestricted personal access token",
+				),
+				"token_restricted",
+			],
+			[refusal(404, "NOT_FOUND"), "not_found"],
+			[refusal(503), "server_error"],
+			[new TypeError("Failed to fetch"), "network"],
+		];
+		for (const [answer, code] of errors) {
+			const { api } = fakeApi(() => answer);
+			expect(
+				(
+					await hubError(
+						releaseSchedule(api, profile, "app", "evt", "dev-1", "reports"),
+					)
+				).code,
+			).toBe(code);
+		}
+	});
+});
+
+describe("the flow as a version (hub)", () => {
+	/* run-more-design §1.8 literals. */
+	const CURRENT = JSON.parse(`{"current":[0,0,7],"newest":[0,0,7]}`);
+	const PUBLISHED = JSON.parse(`{"version":[0,0,8],"created":true}`);
+
+	test("reads which published version equals the flow", async () => {
+		const { api, calls } = fakeApi(() => CURRENT);
+		expect(await readFlowVersion(api, profile, "app#1", "board/1")).toEqual({
+			kind: "ok",
+			data: { current: [0, 0, 7], newest: [0, 0, 7] },
+		});
+		expect(calls).toEqual([
+			["GET", "apps/app%231/board/board%2F1/version/current"],
+		]);
+		const edited = fakeApi(() => ({ current: null, newest: [0, 0, 7] }));
+		expect(await readFlowVersion(edited.api, profile, "app", "board")).toEqual({
+			kind: "ok",
+			data: { current: null, newest: [0, 0, 7] },
+		});
+		const never = fakeApi(() => ({}));
+		expect(await readFlowVersion(never.api, profile, "app", "board")).toEqual({
+			kind: "ok",
+			data: { current: null, newest: null },
+		});
+		const older = fakeApi(() => refusal(404));
+		expect(await readFlowVersion(older.api, profile, "app", "board")).toEqual({
+			kind: "missing_on_hub",
+		});
+		const malformed = fakeApi(() => ({ current: [0, 7], newest: null }));
+		expect(
+			(await hubError(readFlowVersion(malformed.api, profile, "app", "board")))
+				.code,
+		).toBe("invalid_response");
+	});
+
+	test("publishes a version of the current edits and names each refusal", async () => {
+		const { api, calls } = fakeApi(() => PUBLISHED);
+		expect(await publishFlowVersion(api, profile, "app", "board")).toEqual({
+			kind: "ok",
+			data: { version: [0, 0, 8], created: true },
+		});
+		expect(calls).toEqual([["POST", "apps/app/board/board/version/current"]]);
+		const outcomes: [Error, unknown][] = [
+			[refusal(404), { kind: "missing_on_hub" }],
+			[refusal(405), { kind: "missing_on_hub" }],
+			[refusal(403, "FORBIDDEN"), { kind: "flow_role" }],
+			[refusal(423, "BOARD_LOCKED"), { kind: "flow_busy" }],
+			[
+				refusal(
+					422,
+					"UNPROCESSABLE",
+					"This flow can't be compared with its published version. Pin a flow version in Events to deploy this event.",
+				),
+				{
+					kind: "flow_incomparable",
+					message:
+						"This flow can't be compared with its published version. Pin a flow version in Events to deploy this event.",
+				},
+			],
+		];
+		for (const [answer, outcome] of outcomes) {
+			const hub = fakeApi(() => answer);
+			expect(
+				await publishFlowVersion(hub.api, profile, "app", "board"),
+			).toEqual(outcome as never);
+		}
+		const failing = fakeApi(() => refusal(500));
+		expect(
+			(await hubError(publishFlowVersion(failing.api, profile, "app", "board")))
+				.code,
+		).toBe("server_error");
 	});
 });
 

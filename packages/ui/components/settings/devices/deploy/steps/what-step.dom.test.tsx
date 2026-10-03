@@ -11,6 +11,11 @@ const dom = installDom();
 const { mountDevices, cleanupDevices, preloadDevices } = await import(
 	"../../testing/mount-devices"
 );
+const { createFakeWorkspace } = await import("../../testing/fake-workspace");
+const { serveShopOnEdge } = await import("../../testing/schedule-scenarios");
+const { APPS, BOTS, configBytes } = await import(
+	"../../../../../lib/device-management/model/__fixtures__/apps"
+);
 const kit = await import("../deploy-test-kit");
 const { EDGE, VISITOR, CRM, INVOICE, text } = kit;
 await preloadDevices();
@@ -62,11 +67,13 @@ describe("What · events (APP §3.5)", () => {
 	test("Can't run on devices is collapsed, with the reason and its fix", async () => {
 		const view = await kit.mountApp(mountDevices, CRM);
 		expect(text(view.container)).not.toContain("Not offered when you deploy");
-		await clickByText(/Can't run on devices · 2/, view.container);
+		await clickByText(/Can't run on devices · 1/, view.container);
 		const page = text(view.container);
 		expect(page).toContain("Not offered when you deploy");
-		expect(page).toContain("Schedules can't run on a device yet.");
-		const row = view.container.querySelector('[data-event="evt_crm_hourly"]');
+		expect(page).toContain(
+			"Splits traffic with a canary. A device can't split traffic; end the canary first.",
+		);
+		const row = view.container.querySelector('[data-event="evt_crm_rest"]');
 		expect(row?.getAttribute("data-dim")).toBe("true");
 		expect(
 			row?.querySelector<HTMLButtonElement>("button[role=checkbox]")?.disabled,
@@ -77,13 +84,358 @@ describe("What · events (APP §3.5)", () => {
 		).toBe(`/library/config/events?id=${CRM}&event=evt_crm_rest`);
 		expect(kit.copyOf(view.container)).not.toMatch(kit.MACHINE_WORDS);
 	});
+});
 
-	test("an event that follows the latest flow links to Events to pin it", async () => {
-		const view = await kit.mountApp(mountDevices, INVOICE);
+describe("What · schedules", () => {
+	const SCHEDULE = "evt_visitor_report";
+	const rowOf = (root: ParentNode, eventId: string) =>
+		root.querySelector<HTMLElement>(`[data-event="${eventId}"]`);
+
+	test("a schedule is offered unticked, also under Whole app, and says when and where it runs", async () => {
+		const view = await kit.mountApp(mountDevices, VISITOR);
+		const box = checkbox(view.container, SCHEDULE);
+		expect(box?.getAttribute("data-state")).toBe("unchecked");
+		// The other ticks are fixed by Whole app; a schedule's is the person's own.
+		expect(box?.disabled).toBe(false);
+		expect(summary()).toContain("2 events · 1 service");
+		const row = text(rowOf(view.container, SCHEDULE) ?? undefined);
+		expect(row).toContain("Schedule");
+		expect(row).toContain("At 18:00 every day · Europe/Berlin");
+		expect(row).toContain("Runs on a schedule · the device starts it");
+		expect(row).toContain(
+			"Next run by its schedule: 18:00 GMT+2 · in 4 hr. · 16:00 your time",
+		);
+		expect(row).toContain(
+			"Runs on the hub today. Tick it to run it on the device instead.",
+		);
+		expect(text(view.container)).toContain(
+			"Whole app ticks every event that can run on a device, except schedules and bots: tick one yourself to move it to the device.",
+		);
+	});
+
+	test("ticking a schedule adds it and limits its service to one instance, with the reason", async () => {
+		const view = await kit.mountApp(mountDevices, VISITOR);
+		await click(checkbox(view.container, SCHEDULE) as Element);
+		expect(summary()).toContain("3 events · 1 service");
+		expect(text(view.container)).toContain(
+			"Daily visitor report runs on a schedule, so this service runs 1 instance. Two instances would start every run twice.",
+		);
+		// Whole app again leaves it out: it never ticks a schedule.
+		await clickByText("Choose events", view.container);
+		await clickByText("Whole app", view.container);
+		expect(checkbox(view.container, SCHEDULE)?.getAttribute("data-state")).toBe(
+			"unchecked",
+		);
+		expect(summary()).toContain("2 events · 1 service");
+	});
+
+	test("a local-only app has no hub: its schedule runs in the desktop app today", async () => {
+		const view = await kit.mountApp(mountDevices, CRM);
+		const row = text(rowOf(view.container, "evt_crm_hourly") ?? undefined);
+		expect(row).toContain(
+			"At :00 past every hour · UTC (the event sets no time zone)",
+		);
+		expect(row).toContain(
+			"Runs in the desktop app while it is open. On a device it runs without a computer.",
+		);
+		expect(row).not.toContain("Runs on the hub today");
+		expect(
+			checkbox(view.container, "evt_crm_hourly")?.getAttribute("data-state"),
+		).toBe("unchecked");
+	});
+
+	test("a hub that can't hand schedules to devices: the schedule is listed under Can't run, with that reason", async () => {
+		const view = await kit.mountApp(
+			mountDevices,
+			VISITOR,
+			{},
+			{
+				hubVersion: "old",
+			},
+		);
 		await clickByText(/Can't run on devices/, view.container);
-		const fix = byRole("link", "Pin a flow version in Events", view.container);
-		expect(fix.getAttribute("href")).toBe(
-			`/library/config/events?id=${INVOICE}&event=evt_invoice_review`,
+		expect(text(rowOf(view.container, SCHEDULE) ?? undefined)).toContain(
+			"This hub can't run schedules on devices yet. Update the hub.",
+		);
+		expect(checkbox(view.container, SCHEDULE)?.disabled).toBe(true);
+	});
+});
+
+describe("What · Endpoints, forms, one-time schedules and bots (R2 §6.4)", () => {
+	const SHOP = "app_shop_assistant";
+	const ORDERS = "evt_shop_orders";
+	const FORM = "evt_shop_return";
+	const TELEGRAM = "evt_shop_telegram";
+	const DISCORD = "evt_shop_discord";
+	const ONCE = "evt_shop_prices";
+	const rowOf = (root: ParentNode, eventId: string) =>
+		text(
+			root.querySelector<HTMLElement>(`[data-event="${eventId}"]`) ?? undefined,
+		);
+	/**
+	 * Shop Assistant as its records come from the hub: the form's record lists
+	 * its fields (`inputs`), and the one-time schedule's time is `once` when given.
+	 */
+	const shopApps = (once?: { date: string; time: string }) => ({
+		...APPS,
+		[SHOP]: {
+			...APPS.app_shop_assistant,
+			events: APPS.app_shop_assistant.events.map((event) => {
+				if (event.id === FORM)
+					return {
+						...event,
+						inputs: ["String", "Integer", "PathBuf"].map((data_type) => ({
+							data_type,
+						})),
+					} as typeof event;
+				return event.id === ONCE && once
+					? {
+							...event,
+							schedule: { scheduled_for: once, timezone: "Europe/Berlin" },
+						}
+					: event;
+			}),
+		},
+	});
+	const pastOnce = () => shopApps({ date: "2026-09-01", time: "09:00" });
+
+	test("Whole app ticks the Endpoint and the form; bots and the one-time schedule start unticked, each in its own words", async () => {
+		const view = await kit.mountApp(
+			mountDevices,
+			SHOP,
+			{},
+			{ apps: shopApps() },
+		);
+		for (const eventId of [ORDERS, FORM]) {
+			const box = checkbox(view.container, eventId);
+			expect(box?.getAttribute("data-state")).toBe("checked");
+			expect(box?.disabled).toBe(true);
+		}
+		for (const eventId of [TELEGRAM, DISCORD, ONCE]) {
+			const box = checkbox(view.container, eventId);
+			expect(box?.getAttribute("data-state")).toBe("unchecked");
+			expect(box?.disabled).toBe(false);
+		}
+		expect(summary()).toContain("2 events · 1 service");
+		const orders = rowOf(view.container, ORDERS);
+		expect(orders).toContain("Endpoint");
+		expect(orders).toContain("GET /orders");
+		expect(orders).toContain(
+			"Its own token from Events is not used on a device.",
+		);
+		const form = rowOf(view.container, FORM);
+		expect(form).toContain("Started by a person · 3 fields");
+		expect(form).toContain(
+			"It takes a file: only a service page can send one.",
+		);
+		const telegram = rowOf(view.container, TELEGRAM);
+		expect(telegram).toContain("Telegram bot");
+		expect(telegram).toContain("Runs on its own · stays connected to Telegram");
+		expect(telegram).toContain(
+			"No device runs it. Tick it to keep it connected from the device.",
+		);
+		expect(telegram).toContain(
+			"In groups and servers it answers mentions, replies and every message that starts with /.",
+		);
+		// A Discord bot reads no prefix, like the desktop app's; the saved "!" starts nothing.
+		const discord = rowOf(view.container, DISCORD);
+		expect(discord).toContain(
+			"In groups and servers it answers mentions and replies.",
+		);
+		expect(discord).not.toContain("starts with");
+		const once = rowOf(view.container, ONCE);
+		expect(once).toContain("Runs once on 2026-10-15 at 09:00 (Europe/Berlin)");
+		expect(once).toContain("Runs once · the device starts it");
+		// Only some hubs fire a one-time schedule: the row never says "runs on the hub".
+		expect(once).not.toContain("hub");
+		expect(text(view.container)).toContain(
+			"Whole app ticks every event that can run on a device, except schedules and bots: tick one yourself to move it to the device.",
+		);
+		await clickByText(/Can't run on devices · 1/, view.container);
+		expect(rowOf(view.container, "evt_shop_mail")).toContain(
+			"Inbound email is handled by the hub.",
+		);
+		expect(kit.copyOf(view.container)).not.toMatch(kit.MACHINE_WORDS);
+	});
+
+	test("a Discord bot with mention-only off says it answers every message", async () => {
+		const everyMessage = configBytes({
+			...BOTS.discord,
+			respond_to_mentions: false,
+		});
+		const apps = {
+			...APPS,
+			[SHOP]: {
+				...APPS.app_shop_assistant,
+				events: APPS.app_shop_assistant.events.map((event) =>
+					event.id === DISCORD ? { ...event, config: everyMessage } : event,
+				),
+			},
+		};
+		const view = await kit.mountApp(mountDevices, SHOP, {}, { apps });
+		const discord = rowOf(view.container, DISCORD);
+		expect(discord).toContain(
+			"In servers it answers every message in its channels, not only mentions and replies.",
+		);
+		expect(discord).not.toContain("starts with");
+	});
+
+	test("a bot ticked by hand gives its service one instance, with the reason", async () => {
+		const view = await kit.mountApp(mountDevices, SHOP);
+		await click(checkbox(view.container, TELEGRAM) as Element);
+		expect(summary()).toContain("3 events · 1 service");
+		expect(text(view.container)).toContain(
+			"Shop helper is a bot, so this service runs 1 instance. Two instances would answer every message twice.",
+		);
+	});
+
+	test("a bot this computer runs says so in its row", async () => {
+		const view = await kit.mountApp(
+			mountDevices,
+			SHOP,
+			{},
+			{ platform: "desktop", localTriggers: [TELEGRAM] },
+		);
+		await view.settle();
+		expect(rowOf(view.container, TELEGRAM)).toContain(
+			"Runs in the desktop app on this computer today. Tick it to keep it connected from the device instead.",
+		);
+		expect(rowOf(view.container, DISCORD)).toContain("No device runs it.");
+	});
+
+	test("a one-time schedule whose time has passed can't be added: the row and Continue say why", async () => {
+		const view = await kit.mountApp(
+			mountDevices,
+			SHOP,
+			{ device: EDGE },
+			{ apps: pastOnce() },
+		);
+		await view.settle();
+		expect(rowOf(view.container, ONCE)).toContain(
+			"Its time has passed. Set a new time in Events.",
+		);
+		await click(checkbox(view.container, ONCE) as Element);
+		expect(kit.footBlocking(view.container)).toMatch(
+			/^Price update's time \(.+\) has passed\. Set a new time in Events, or leave it out\.$/,
+		);
+		await click(checkbox(view.container, ONCE) as Element);
+		expect(kit.footBlocking(view.container)).toBeNull();
+	});
+
+	test("an update of a service that has a passed one-time schedule is not blocked by it", async () => {
+		const fake = await createFakeWorkspace();
+		await serveShopOnEdge(fake);
+		const view = await kit.mountApp(
+			mountDevices,
+			SHOP,
+			{ mode: undefined, device: EDGE, service: "shop-assistant" },
+			{ fake, apps: pastOnce() },
+		);
+		await view.settle();
+		expect(checkbox(view.container, ONCE)?.getAttribute("data-state")).toBe(
+			"checked",
+		);
+		expect(rowOf(view.container, ONCE)).toContain("Served now");
+		expect(kit.footBlocking(view.container)).toBeNull();
+	});
+
+	test("a hub that can't hand the new types to devices: they are listed under Can't run, with Update the hub", async () => {
+		const fake = await createFakeWorkspace();
+		fake.hub.capabilities.eventTypes = false;
+		const view = await kit.mountApp(mountDevices, SHOP, {}, { fake });
+		await view.settle();
+		await clickByText(/Can't run on devices/, view.container);
+		expect(rowOf(view.container, ORDERS)).toContain(
+			"This hub can't hand Endpoints to devices yet. Update the hub.",
+		);
+		expect(rowOf(view.container, FORM)).toContain(
+			"This hub can't hand forms and quick actions to devices yet. Update the hub.",
+		);
+		expect(rowOf(view.container, TELEGRAM)).toContain(
+			"This hub can't hand bots to devices yet. Update the hub.",
+		);
+		expect(checkbox(view.container, ORDERS)?.disabled).toBe(true);
+		// One-time schedules need nothing new from the hub.
+		expect(checkbox(view.container, ONCE)?.disabled).toBe(false);
+	});
+});
+
+describe("What · events that follow Latest", () => {
+	const REVIEW = "evt_invoice_review";
+	const rowText = (root: ParentNode) =>
+		text(
+			root.querySelector<HTMLElement>(`[data-event="${REVIEW}"]`) ?? undefined,
+		);
+
+	test("it is offered like any other event, and says which flow version the deploy takes", async () => {
+		const view = await kit.mountApp(mountDevices, INVOICE);
+		expect(checkbox(view.container, REVIEW)?.getAttribute("data-state")).toBe(
+			"checked",
+		);
+		const row = rowText(view.container);
+		expect(row).toContain("event 0.9.0 · flow as it is now");
+		expect(row).toContain("Follows Latest");
+		expect(row).toContain("Deploys flow 0.9.2.");
+		expect(row).not.toContain("Preparing creates");
+	});
+
+	test("flow edits no version holds: the row says that Preparing creates the version", async () => {
+		const fake = await createFakeWorkspace();
+		fake.api.hub.flows.edit(INVOICE, "flow_review");
+		const view = await kit.mountApp(mountDevices, INVOICE, {}, { fake });
+		const row = rowText(view.container);
+		expect(row).toContain(
+			"Preparing creates a flow version from the current edits. It stays in the flow's history.",
+		);
+		expect(row).not.toContain("Deploys flow");
+		expect(checkbox(view.container, REVIEW)?.disabled).toBe(true);
+		expect(checkbox(view.container, REVIEW)?.getAttribute("data-state")).toBe(
+			"checked",
+		);
+	});
+
+	test("a role that can't create a flow version can't deploy flow edits, and is told who can", async () => {
+		const fake = await createFakeWorkspace();
+		fake.api.hub.flows.edit(INVOICE, "flow_review");
+		const view = await kit.mountApp(
+			mountDevices,
+			INVOICE,
+			{},
+			{
+				fake,
+				backend: {
+					roleState: {
+						// Read boards and Write events, no Write boards.
+						getOwnRole: async () => ({
+							role_id: "role-operator",
+							role_name: "Operator",
+							permissions: 256 + 16_384,
+							is_owner: false,
+							can_leave: true,
+						}),
+					},
+				} as never,
+			},
+		);
+		await clickByText(/Can't run on devices · 2/, view.container);
+		expect(rowText(view.container)).toContain(
+			"This flow has edits that aren't published as a version, and your role can't create one. Ask someone who can edit the app to create a version.",
+		);
+		expect(checkbox(view.container, REVIEW)?.disabled).toBe(true);
+	});
+
+	test("a hub that can't deploy Latest yet says so and points at Events", async () => {
+		const view = await kit.mountApp(
+			mountDevices,
+			INVOICE,
+			{},
+			{
+				hubVersion: "old",
+			},
+		);
+		await clickByText(/Can't run on devices/, view.container);
+		expect(rowText(view.container)).toContain(
+			"This hub can't deploy events that follow Latest yet. Update the hub, or pin a flow version in Events.",
 		);
 	});
 });
@@ -96,7 +448,7 @@ describe("What · services (A5)", () => {
 		);
 		expect(id?.value).toBe("visitor-check-in");
 		expect(text(view.container)).toContain(
-			"Badge printer runs on its own, so this service runs 1 instance. Only Web request, Chat and Page events can run several.",
+			"Badge printer runs on its own, so this service runs 1 instance. Only services with a Page, chat or Endpoint can run several.",
 		);
 	});
 
@@ -156,17 +508,27 @@ describe("What · the viewer's role on the app (APP §3.5 item 1)", () => {
 			is_owner,
 			can_leave: true,
 		});
+		const all = { canEditEvents: true, canEditFlows: true };
 		expect(roleFacts(role(1, true))).toEqual({
 			canReadFlows: true,
 			isOwner: true,
+			...all,
 		});
 		expect(roleFacts(role(2, true))).toEqual({
 			canReadFlows: true,
 			isOwner: false,
+			...all,
 		});
+		// Reading the flows gives neither the right to move a schedule nor to create a flow version.
 		expect(roleFacts(role(READ_TEAM + READ_BOARDS, false))).toEqual({
 			canReadFlows: true,
 			isOwner: false,
+			canEditEvents: false,
+			canEditFlows: false,
+		});
+		expect(roleFacts(role(READ_BOARDS + 1024 + 16_384, false))).toMatchObject({
+			canEditEvents: true,
+			canEditFlows: true,
 		});
 		// No role answer (local-only app, signed out): nothing is claimed either way.
 		expect(roleFacts(null)).toEqual({ canReadFlows: true });

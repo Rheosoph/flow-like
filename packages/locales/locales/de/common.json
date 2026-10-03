@@ -1803,6 +1803,7 @@
 	"offlineProjectsAreNeverListedSoNoConformityAssessmentOrPublicationReviewIsRequiredBringTheProjectOnlineToStart": "Offline-Projekte werden nie aufgeführt, daher ist keine Konformitätsbewertung oder Veröffentlichungsüberprüfung erforderlich.",
 	"offlineUsingCachedData": "Offline - Verwendung von gespeicherten Daten",
 	"offOnThisDevice": "Aus auf diesem Gerät",
+	"onADeviceLatestMeansTheFlowAsItWasWhenYouLastDeployedOrUpdated": "",
 	"onCompletion": "Bei Abschluss",
 	"onDisk": "auf der Festplatte",
 	"oneModelfileDependencyBitPerLineOrCommaSeparated": "Ein Modell-Datei Abhängigkeit Bit pro Zeile oder Komma getrennt",

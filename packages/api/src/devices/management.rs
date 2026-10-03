@@ -883,6 +883,7 @@ mod tests {
             include_str!("../../prisma/migrations/20260921120000_standalone_devices/migration.sql"),
             include_str!("../../prisma/migrations/20260922120000_device_management/migration.sql"),
             include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
+            include_str!("../../prisma/migrations/20261002120000_device_schedules/migration.sql"),
         ] {
             for statement in migration.split(';') {
                 if !statement.trim().is_empty() {

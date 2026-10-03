@@ -3,6 +3,7 @@ import { orderCapabilities } from "./permissions";
 import { presence } from "./presence";
 import {
 	type ActionId,
+	type AgentFeature,
 	type CopyParams,
 	type FixAction,
 	GATE_IDS,
@@ -588,6 +589,16 @@ const mustBeRunning: Check = (ctx) =>
 			})
 		: null;
 
+/** A person-started run needs a process that runs now: the device refuses one for a service that is starting or failing. */
+const runsNow: Check = (ctx) => {
+	const observed = ctx.extra?.observedState;
+	return observed !== undefined && observed !== "running"
+		? late("G8", "busy", "service_must_be_running", {
+				params: serviceParams(ctx),
+			})
+		: null;
+};
+
 const singleInstance: Check = (ctx) => {
 	const max = ctx.extra?.maxReplicas;
 	return max !== undefined && max <= 1
@@ -751,6 +762,11 @@ const flag =
 	(features: GateFeatures, ctx: GateContext): GateCheck | null =>
 		features[key] ? null : agentUpdate(features, ctx);
 
+const agentFlag =
+	(key: AgentFeature) =>
+	(features: GateFeatures, ctx: GateContext): GateCheck | null =>
+		features.flags[key] ? null : agentUpdate(features, ctx);
+
 function rolloutSource(
 	features: GateFeatures,
 	ctx: GateContext,
@@ -850,6 +866,11 @@ export const ACTION_GATES: Readonly<Record<ActionId, ActionGate>> = {
 	}),
 	scale: live(["scale"], { checks: [singleInstance, busyRollout] }),
 	remove_service: live(["remove"], { checks: [mustBeStopped, busyRollout] }),
+	run_event: live(["start"], {
+		locked: "locked_run",
+		features: agentFlag("on_demand_events"),
+		checks: [mustBeRunning, runsNow, busyRollout, busyHostOperation],
+	}),
 	upload_revision: live(["deploy"], { checks: [uploadPlatform] }),
 	create_service: live(["deploy"], {
 		hostPolicy: true,

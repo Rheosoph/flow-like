@@ -1803,6 +1803,7 @@
 	"offlineProjectsAreNeverListedSoNoConformityAssessmentOrPublicationReviewIsRequiredBringTheProjectOnlineToStart": "オフラインのプロジェクトは一切公開されないため、適合性評価や公開レビューは不要です。開始するにはプロジェクトをオンライン化してください。",
 	"offlineUsingCachedData": "オフライン - キャッシュデータを使用中",
 	"offOnThisDevice": "このデバイスではOFF",
+	"onADeviceLatestMeansTheFlowAsItWasWhenYouLastDeployedOrUpdated": "",
 	"onCompletion": "完了時",
 	"onDisk": "ディスク上",
 	"oneModelfileDependencyBitPerLineOrCommaSeparated": "1行に1つのモデルファイル依存Bit、またはカンマ区切り",

@@ -30,6 +30,7 @@ import {
 	DeploymentRolloutEndedError,
 	type DeploymentRolloutStatus,
 	type DeploymentVariable,
+	HUB_EXPORT_TYPES,
 	type InstalledProject,
 	type PlacementConfiguration,
 	StaleDeploymentRevisionError,
@@ -43,7 +44,21 @@ import {
 	readExistingDeployment,
 	removesOfflineBuffering,
 } from "../../../../lib/device-management/deployment";
+import {
+	listAppDevicePlacements,
+	releaseSchedule,
+} from "../../../../lib/device-management/hub/endpoints";
 import { deviceKeys } from "../../../../lib/device-management/hub/queries";
+import {
+	type LatestEvent,
+	LatestFlowError,
+	type LatestFlows,
+	type PreparedFlow,
+	latestPinsOffline,
+	latestPinsOnline,
+	publishLatestFlows,
+} from "../../../../lib/device-management/latest-flows";
+import type { AppEventInput } from "../../../../lib/device-management/model/app-plan";
 import {
 	type DeployFailure,
 	type DeployPhase,
@@ -54,6 +69,9 @@ import {
 	type WireFacts,
 	approvalRequest,
 	draftWithoutSecrets,
+	isBot,
+	planLatestFlows,
+	releasedSchedules,
 	wirePlan,
 } from "../../../../lib/device-management/model/deploy-plan";
 import {
@@ -66,6 +84,8 @@ import {
 	reduceDeployRun,
 } from "../../../../lib/device-management/model/deploy-run";
 import type {
+	AppDevicePlacements,
+	AppScheduleRow,
 	CopyRef,
 	DeployRoute,
 } from "../../../../lib/device-management/model/types";
@@ -104,6 +124,7 @@ import {
 	requestOrReject,
 	useDeviceWorkspace,
 } from "../workspace";
+import { latestFlowsOf } from "../workspace/use-latest-flows";
 import type { DeployPrepared } from "./step-props";
 import {
 	type CopyEventCheck,
@@ -116,11 +137,15 @@ import {
 	type SafeUpdateTimings,
 	type StrategyReason,
 	type UpdateStrategy,
+	agentGap,
 	blocksNewUpdate,
+	catalogGap,
 	deployTarget,
 	installedFromExisting,
 	installedProject,
+	needsAgentFlags,
 	planCatalog,
+	planExportTypes,
 	secretCount,
 	startsAfter,
 	targetPhases,
@@ -298,6 +323,14 @@ const CLASSIFIERS: ((error: unknown) => Classified | undefined)[] = [
 		error instanceof DeployRunFailure
 			? { code: error.code, detail: error.message }
 			: undefined,
+	// An event that follows Latest could not be shipped as a flow version.
+	(error) =>
+		error instanceof LatestFlowError
+			? {
+					code: `flow_${error.problem}`,
+					detail: error.detail || error.at.eventId || error.at.boardId,
+				}
+			: undefined,
 	(error) =>
 		error instanceof DeploymentRolloutEndedError
 			? {
@@ -379,6 +412,8 @@ function dropsPlan(error: unknown): boolean {
 
 interface TargetMemo {
 	existing?: PlacementConfiguration;
+	/** Every schedule of the service is released to it on the hub. */
+	released?: boolean;
 	grant?: ResourceGrant;
 	billing?: BillingGrant;
 	installed?: InstalledProject;
@@ -434,30 +469,117 @@ function newToken(): string {
 
 /* Preparing the bundle (the shared phase) when step 2 handed none over. */
 
+type LatestFacts = Pick<DeployPrepared, "flows" | "latest">;
+
 function bundleOf(
 	artifact: PreparedProjectArtifact,
+	latest: LatestFacts,
 	approved?: DeployPrepared["approved"],
 ): DeployPrepared {
 	return {
 		artifact,
 		...(approved ? { approved } : {}),
 		preparedAt: Date.now(),
+		...latest,
 	};
+}
+
+/**
+ * What a run that prepares by itself does first for the events that follow
+ * Latest, exactly as step 2 does: every flow becomes a version when no
+ * published one equals it. The screen that starts such a run says so before.
+ */
+async function publishFlows(
+	run: DeployRun,
+	plan: DeployPlan,
+	appId: string,
+	signal: AbortSignal,
+): Promise<{
+	latest: LatestEvent[];
+	flows: LatestFlows | null;
+	published: PreparedFlow[];
+}> {
+	const latest = planLatestFlows(plan);
+	const { deps } = run.workspace;
+	const flows = latestFlowsOf(plan.mode, {
+		api: deps.api,
+		profile: deps.profile,
+		desktop: deps.platform === "desktop",
+		account: deps.scope.account,
+	});
+	const published =
+		flows && latest.length
+			? await publishLatestFlows(flows, appId, latest, { signal })
+			: [];
+	return { latest, flows, published };
+}
+
+const latestFacts = (
+	published: readonly PreparedFlow[],
+	pins: NonNullable<DeployPrepared["latest"]>,
+): LatestFacts => ({
+	...(published.length ? { flows: published } : {}),
+	...(Object.keys(pins).length ? { latest: pins } : {}),
+});
+
+/**
+ * The export's `types` for a run that prepares by itself: the hub's
+ * placement list says which types it hands to devices, read only when the
+ * plan has an event of a type the hub exports only when asked. A list that
+ * can't be read names none; a target whose event is then missing stops with
+ * that reason.
+ */
+async function runExportTypes(
+	run: DeployRun,
+	plan: DeployPlan,
+	appId: string,
+): Promise<string[]> {
+	if (!planExportTypes(plan, HUB_EXPORT_TYPES).length) return [];
+	const { api, profile } = run.workspace.deps;
+	try {
+		const listed = await listAppDevicePlacements(api, profile, appId);
+		return planExportTypes(
+			plan,
+			listed.kind === "ok" ? listed.data.event_types : undefined,
+		);
+	} catch {
+		return [];
+	}
 }
 
 async function prepareOnline(
 	run: DeployRun,
-	appId: string,
+	plan: DeployPlan,
 	signal: AbortSignal,
 ): Promise<Prepared> {
 	const { deps } = run.workspace;
+	const appId = appIdOf(plan);
 	const backend = run.requireBackend();
+	const { latest, flows, published } = await publishFlows(
+		run,
+		plan,
+		appId,
+		signal,
+	);
 	const approved = await prepareOnlineMetadata(
 		appId,
 		backend,
 		deps.profile,
 		signal,
+		latest.map((row) => row.eventId),
+		await runExportTypes(run, plan, appId),
 	);
+	const pins = flows
+		? await latestPinsOnline(
+				flows,
+				appId,
+				latest,
+				(eventId) =>
+					approved.catalog.events.find((row) => row.id === eventId)
+						?.board_version,
+			)
+		: {};
+	const facts = latestFacts(published, pins);
 	const { app } = approved;
 	const native =
 		deps.platform === "desktop" &&
@@ -470,7 +592,7 @@ async function prepareOnline(
 			signal,
 			approved,
 		);
-		return { bundle: bundleOf(exported.artifact, approved) };
+		return { bundle: bundleOf(exported.artifact, facts, approved) };
 	}
 	const exported = await prepareDesktopProject(
 		appId,
@@ -479,24 +601,35 @@ async function prepareOnline(
 		approved,
 	);
 	return {
-		bundle: bundleOf(exported.artifact, approved),
+		bundle: bundleOf(exported.artifact, facts, approved),
 		release: exported.release,
 	};
 }
 
 async function prepareOffline(
 	run: DeployRun,
-	appId: string,
+	plan: DeployPlan,
 	signal: AbortSignal,
 ): Promise<Prepared> {
 	const { deps } = run.workspace;
 	if (deps.platform !== "desktop") throw new DeployRunFailure("local_only_web");
+	const appId = appIdOf(plan);
+	const { latest, published } = await publishFlows(run, plan, appId, signal);
 	const exported = await prepareDesktopProject(
 		appId,
 		await desktopExportCommands(undefined, deps.scope.account),
 		signal,
 	);
-	return { bundle: bundleOf(exported.artifact), release: exported.release };
+	try {
+		const pins = latestPinsOffline(latest, exported.latestEvents);
+		return {
+			bundle: bundleOf(exported.artifact, latestFacts(published, pins)),
+			release: exported.release,
+		};
+	} catch (error) {
+		await exported.release().catch(() => undefined);
+		throw error;
+	}
 }
 
 /* Shipping the version: upload and install. */
@@ -771,11 +904,13 @@ export async function checkCopyEvents(
 }
 
 function refusedEvent(event: DeploymentEvent): CopyRefusedEvent {
-	const reason = event.ineligible_reason;
+	const reason = event.readiness_error || event.ineligible_reason;
 	return {
 		id: event.id,
 		name: event.name || event.id,
 		...(reason ? { reason } : {}),
+		// A copy whose event still follows Latest holds no published version of its flow.
+		...(event.board_version === null ? { cause: "latest_copy" as const } : {}),
 	};
 }
 
@@ -1083,6 +1218,12 @@ async function wireDeployment(job: Job): Promise<DeploymentPlan> {
 	const installed = memo.installed;
 	if (!installed) throw new DeployRunFailure("not_prepared");
 	memo.catalog ??= await catalogOf(job);
+	const missing = catalogGap(memo.catalog, job.service);
+	if (missing)
+		throw new DeployRunFailure(
+			"event_missing",
+			eventOf(job, missing)?.name ?? missing,
+		);
 	await requireDrainedQueues(job);
 	const serviceToken = tokenFor(job);
 	const deployment = buildDeployment(job, {
@@ -1155,8 +1296,131 @@ async function startService(job: Job) {
 	}
 }
 
+/**
+ * A config with an event that needs an agent flag (a schedule, an Endpoint, a
+ * form, a bot) goes only to an agent that is known to have that flag: an
+ * older one accepts it and then fails the service on every start. Asked again
+ * here, because the plan may be older than the agent. Nothing of the target
+ * is approved, uploaded or applied after a refusal.
+ */
+async function requireAgentFlags(job: Job) {
+	if (!needsAgentFlags(job.plan.app, job.service)) return;
+	guard(job);
+	const { live } = job.run.workspace;
+	const { deviceId } = job.device;
+	await live.refreshInspection(deviceId);
+	job.run.alive();
+	const inspection = live.inspection(deviceId);
+	if (!inspection || inspection.error)
+		throw new DeployRunFailure("device_unread");
+	const gap = agentGap(job.plan.app, job.service, inspection.value.features);
+	if (gap)
+		throw new DeployRunFailure(
+			"agent_feature",
+			gap.feature === "unknown" ? undefined : gap.feature,
+		);
+}
+
+const eventOf = (job: Job, eventId: string) =>
+	job.plan.app?.events.find((event) => event.id === eventId);
+
+/** The refusal code for a schedule's or a bot's release: the same refusal, in the words of its kind. */
+function releaseRefusal(job: Job, eventId: string, code: string): string {
+	const event = eventOf(job, eventId);
+	if (!event || !isBot(event)) return code;
+	return code.startsWith("schedule_") ? `bot_${code.slice(9)}` : code;
+}
+
+/**
+ * Online apps: a person's release lets this service take each of its
+ * schedules and bots off the hub once it runs. Done before anything is
+ * approved or sent to the device, so a refusal (not allowed, assigned
+ * elsewhere, still returning, a hub that can't hand it over) changes nothing.
+ * One the service already has moves nothing.
+ */
+async function releaseSchedules(job: Job) {
+	const moved = releasedSchedules(job.plan, job.service);
+	if (!moved.length || job.memo.released) return;
+	job.run.alive();
+	job.run.phase(job.target, "schedules");
+	const listing = await appScheduleRows(job, moved);
+	for (const eventId of moved) {
+		if (!releasedHere(job, listing, eventId)) await releaseOne(job, eventId);
+	}
+	job.memo.released = true;
+}
+
+/**
+ * The hub's rows of the app's moved schedules and bots. Without them the hub
+ * can't hand a schedule to a device; without the bot's type in its
+ * `event_types` its doors don't honour a device's claim of a bot.
+ */
+async function appScheduleRows(
+	job: Job,
+	moved: readonly string[],
+): Promise<AppScheduleRow[]> {
+	const { api, profile } = job.run.workspace.deps;
+	const listed = await listAppDevicePlacements(api, profile, appIdOf(job.plan));
+	job.run.alive();
+	const data = listed.kind === "ok" ? listed.data : undefined;
+	const refused = moved.find(
+		(eventId) => !hubHandsOver(data, eventOf(job, eventId)),
+	);
+	if (refused !== undefined)
+		throw new DeployRunFailure(
+			releaseRefusal(job, refused, "schedule_hub"),
+			eventOf(job, refused)?.name ?? refused,
+		);
+	return data?.schedules ?? [];
+}
+
+/** A hub hands a schedule to a device when its list has schedules, and a bot when its `event_types` names the bot's type too. */
+function hubHandsOver(
+	data: AppDevicePlacements | undefined,
+	event: AppEventInput | undefined,
+) {
+	const types = data?.event_types ?? [];
+	const bot = event && isBot(event) ? event.event_type : null;
+	return !!data?.schedules && (bot === null || types.includes(bot));
+}
+
+/** Released to this service already, or run by it: nothing to ask. */
+function releasedHere(job: Job, rows: AppScheduleRow[], eventId: string) {
+	const row = rows.find((value) => value.event_id === eventId);
+	return (
+		row !== undefined &&
+		row.state !== "returning" &&
+		row.device_id === job.device.deviceId &&
+		row.placement_id === job.service.serviceId
+	);
+}
+
+async function releaseOne(job: Job, eventId: string) {
+	const { api, profile } = job.run.workspace.deps;
+	const result = await releaseSchedule(
+		api,
+		profile,
+		appIdOf(job.plan),
+		eventId,
+		job.device.deviceId,
+		job.service.serviceId,
+	);
+	job.run.alive();
+	if (result.kind === "ok") return;
+	throw new DeployRunFailure(
+		releaseRefusal(
+			job,
+			eventId,
+			result.kind === "missing_on_hub" ? "schedule_hub" : result.kind,
+		),
+		eventOf(job, eventId)?.name ?? eventId,
+	);
+}
+
 async function runChain(job: Job) {
 	if (!job.memo.applied) {
+		await requireAgentFlags(job);
+		await releaseSchedules(job);
 		await loadExisting(job);
 		await approveAccess(job);
 		await shipVersion(job);
@@ -1696,10 +1960,9 @@ class DeployRun {
 	private async prepare(): Promise<DeployPrepared> {
 		const plan = this.plan;
 		if (!plan) throw new DeployRunFailure("app_missing");
-		const appId = appIdOf(plan);
 		const result = await (plan.mode === "offline"
-			? prepareOffline(this, appId, this.abort.signal)
-			: prepareOnline(this, appId, this.abort.signal));
+			? prepareOffline(this, plan, this.abort.signal)
+			: prepareOnline(this, plan, this.abort.signal));
 		this.release = result.release;
 		this.own = result.bundle;
 		return result.bundle;

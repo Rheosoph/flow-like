@@ -8,7 +8,21 @@ import {
 	projectFilesFromSelection,
 	selectedProjectAssetFiles,
 } from "../../../../lib/device-management/artifacts";
-import type { DeployPlan } from "../../../../lib/device-management/model/deploy-plan";
+import {
+	type LatestEvent,
+	LatestFlowError,
+	type LatestFlows,
+	type LatestProblem,
+	type PreparedFlow,
+	type PublishFlowOptions,
+	latestPinsOffline,
+	latestPinsOnline,
+	publishLatestFlows,
+} from "../../../../lib/device-management/latest-flows";
+import {
+	type DeployPlan,
+	planLatestFlows,
+} from "../../../../lib/device-management/model/deploy-plan";
 import { prepareOnlineDependencies } from "../../../../lib/device-management/online-dependencies";
 import {
 	type ApprovedOnlineMetadata,
@@ -27,20 +41,27 @@ import {
 	useDeviceAuth,
 	useDeviceWorkspace,
 } from "../workspace/device-workspace-provider";
+import { useLatestFlows } from "../workspace/use-latest-flows";
 import type { DeployPrepared } from "./step-props";
+import { planExportTypes } from "./update-path";
 
 /*
  * Step 2 "Preparing" (APP §3.6): one bundle per choice of app, version and
  * events, prepared on this computer and handed to every later step.
  */
 
+/** First of all: every flow a chosen Latest event follows becomes a version when no published one equals it. */
+const PUBLISH_FLOWS = "publish_flows";
+
 export const ONLINE_CHECKS = [
+	PUBLISH_FLOWS,
 	"read_hub",
 	"check_events",
 	"collect",
 	"approved",
 ] as const;
 export const OFFLINE_CHECKS = [
+	PUBLISH_FLOWS,
 	"read_app",
 	"no_secrets",
 	"no_history",
@@ -53,15 +74,24 @@ export type PrepareCheckId =
 
 export interface PrepareCheck {
 	id: PrepareCheckId;
+	/** `skip` on `publish_flows`: no chosen event follows Latest. */
 	state: "pending" | "active" | "pass" | "fail" | "skip";
+	/** `publish_flows`, once it passed: what was done per flow. */
+	flows?: readonly PreparedFlow[];
 }
 
 export interface PrepareFailure {
 	check: PrepareCheckId;
-	/** `event`: a chosen event isn't in the approved definitions; `error`: what the hub or this computer answered. */
-	kind: "event" | "error";
+	/**
+	 * `event`: a chosen event isn't in the approved definitions; `flow`: an
+	 * event that follows Latest can't be shipped; `error`: what the hub or this
+	 * computer answered.
+	 */
+	kind: "event" | "flow" | "error";
 	eventId?: string;
 	detail: string;
+	/** `flow`: why. Only `moved` is cured by preparing again. */
+	flow?: LatestProblem;
 }
 
 /** A copy prepared elsewhere (advanced, offline, desktop): the app folder, the pins file's text and the assets folder. */
@@ -81,14 +111,24 @@ export interface DeployPrepareState {
 	importCopy(copy: ImportedCopy | null): void;
 }
 
-/** Test seam: the native export is only reachable inside the desktop app. */
-export const deployPrepareSeams = {
+/** Test seams: the native export is only reachable inside the desktop app, and a busy flow is retried after a pause. */
+export const deployPrepareSeams: {
+	exportCommands: typeof desktopExportCommands;
+	publish: PublishFlowOptions;
+} = {
 	exportCommands: desktopExportCommands,
+	publish: {},
 };
 
 interface PrepareContext {
 	appId: string;
 	events: readonly string[];
+	/** The plan's events that follow Latest, each with its flow. */
+	latest: readonly LatestEvent[];
+	/** The event types the hub exports only when asked (`exportTypes`). */
+	types: readonly string[];
+	/** Where a flow is read and published as a version; null where nothing can. */
+	flows: LatestFlows | null;
 	backend: IBackendState;
 	profile: IProfile;
 	desktop: boolean;
@@ -96,6 +136,8 @@ interface PrepareContext {
 	signal: AbortSignal;
 	/** Called as each check starts. */
 	enter(check: PrepareCheckId): void;
+	/** Called once `publish_flows` is over. */
+	published(flows: PreparedFlow[]): void;
 }
 
 interface PrepareResult {
@@ -147,13 +189,75 @@ function assertEventsApproved(
 	}
 }
 
+/** A Latest event that can't be shipped stops the check it was found in, with its own cause. */
+async function latestChecked<T>(
+	check: PrepareCheckId,
+	run: () => Promise<T> | T,
+): Promise<T> {
+	try {
+		return await run();
+	} catch (error) {
+		if (!(error instanceof LatestFlowError)) throw error;
+		throw new PrepareBlocked({
+			check,
+			kind: "flow",
+			flow: error.problem,
+			...(error.at.eventId ? { eventId: error.at.eventId } : {}),
+			detail: error.detail,
+		});
+	}
+}
+
+/** Publish-if-changed for the flows of the plan's Latest events; nothing when there are none. */
+async function publishFlows(context: PrepareContext): Promise<PreparedFlow[]> {
+	const { latest, flows } = context;
+	if (!latest.length || !flows) return [];
+	context.enter(PUBLISH_FLOWS);
+	const done = await latestChecked(PUBLISH_FLOWS, () =>
+		publishLatestFlows(flows, context.appId, latest, {
+			signal: context.signal,
+			...deployPrepareSeams.publish,
+		}),
+	);
+	context.published(done);
+	return done;
+}
+
+/** The parts of the bundle that come from its Latest events: what was published, and each event's pin. */
+function latestFacts(
+	flows: readonly PreparedFlow[],
+	pins: Readonly<Record<string, [number, number, number]>>,
+): Pick<DeployPrepared, "flows" | "latest"> {
+	return {
+		...(flows.length ? { flows } : {}),
+		...(Object.keys(pins).length ? { latest: pins } : {}),
+	};
+}
+
 async function prepareOnline(context: PrepareContext): Promise<PrepareResult> {
-	const { appId, backend, profile, signal } = context;
+	const { appId, backend, profile, signal, latest } = context;
+	const flows = await publishFlows(context);
 	context.enter("read_hub");
-	const approved = await prepareOnlineMetadata(appId, backend, profile, signal);
+	const approved = await prepareOnlineMetadata(
+		appId,
+		backend,
+		profile,
+		signal,
+		latest.map((row) => row.eventId),
+		context.types,
+	);
 	context.enter("check_events");
+	const hub = context.flows;
+	const pinOf = (eventId: string) =>
+		approved.catalog.events.find((row) => row.id === eventId)?.board_version;
+	const pins = hub
+		? await latestChecked("check_events", () =>
+				latestPinsOnline(hub, appId, latest, pinOf),
+			)
+		: {};
 	assertEventsApproved(approved, context.events);
 	context.enter("collect");
+	const facts = latestFacts(flows, pins);
 	const needsNative =
 		context.desktop &&
 		(approved.app.bits.length > 0 ||
@@ -167,7 +271,9 @@ async function prepareOnline(context: PrepareContext): Promise<PrepareResult> {
 			approved,
 		);
 		context.enter("approved");
-		return { prepared: { artifact, approved, preparedAt: Date.now() } };
+		return {
+			prepared: { artifact, approved, preparedAt: Date.now(), ...facts },
+		};
 	}
 	const exported = await prepareDesktopProject(
 		appId,
@@ -177,22 +283,40 @@ async function prepareOnline(context: PrepareContext): Promise<PrepareResult> {
 	);
 	context.enter("approved");
 	return {
-		prepared: { artifact: exported.artifact, approved, preparedAt: Date.now() },
+		prepared: {
+			artifact: exported.artifact,
+			approved,
+			preparedAt: Date.now(),
+			...facts,
+		},
 		release: exported.release,
 	};
 }
 
 async function prepareOffline(context: PrepareContext): Promise<PrepareResult> {
+	const flows = await publishFlows(context);
 	context.enter("read_app");
 	const exported = await prepareDesktopProject(
 		context.appId,
 		await deployPrepareSeams.exportCommands(undefined, context.account),
 		context.signal,
 	);
-	return {
-		prepared: { artifact: exported.artifact, preparedAt: Date.now() },
-		release: exported.release,
-	};
+	try {
+		const pins = await latestChecked("read_app", () =>
+			latestPinsOffline(context.latest, exported.latestEvents),
+		);
+		return {
+			prepared: {
+				artifact: exported.artifact,
+				preparedAt: Date.now(),
+				...latestFacts(flows, pins),
+			},
+			release: exported.release,
+		};
+	} catch (error) {
+		await exported.release().catch(() => undefined);
+		throw error;
+	}
 }
 
 async function prepareImported(
@@ -243,7 +367,7 @@ function relativeState(
 
 function checksOf(
 	ids: readonly PrepareCheckId[],
-	run: Pick<RunState, "status" | "active" | "failure">,
+	run: Pick<RunState, "status" | "active" | "failure" | "flows">,
 ): PrepareCheck[] {
 	const failed = run.failure ? ids.indexOf(run.failure.check) : -1;
 	const active = run.active ? ids.indexOf(run.active) : -1;
@@ -256,7 +380,13 @@ function checksOf(
 		blocked: (index) => relativeState(index, failed, "fail", "skip"),
 		running: (index) => relativeState(index, active, "active", "pending"),
 	};
-	return ids.map((id, index) => ({ id, state: states[run.status](index) }));
+	return ids.map((id, index) => {
+		const state = states[run.status](index);
+		if (id !== PUBLISH_FLOWS) return { id, state };
+		// Passed without a flow to publish: nothing was checked, and the list says so.
+		if (state === "pass" && !run.flows?.length) return { id, state: "skip" };
+		return { id, state, ...(run.flows?.length ? { flows: run.flows } : {}) };
+	});
 }
 
 interface RunState {
@@ -265,6 +395,8 @@ interface RunState {
 	active: PrepareCheckId | null;
 	failure: PrepareFailure | null;
 	prepared: DeployPrepared | null;
+	/** What `publish_flows` did, once it is over. */
+	flows: readonly PreparedFlow[] | null;
 }
 
 const IDLE: Omit<RunState, "key"> = {
@@ -272,16 +404,31 @@ const IDLE: Omit<RunState, "key"> = {
 	active: null,
 	failure: null,
 	prepared: null,
+	flows: null,
 };
 
-/** What to prepare: the app, its mode and the chosen events; nothing for `version: "keep"` or a local-only app on web. */
+const NO_LATEST: readonly LatestEvent[] = [];
+
+/**
+ * What to prepare: the app, its mode, the chosen events and the types the
+ * export is asked for; nothing for `version: "keep"` or a local-only app on
+ * web. `hubTypes` is the hub's `event_types` (undefined while unknown).
+ */
 function prepareTarget(
 	plan: DeployPlan | null,
 	enabled: boolean,
 	desktop: boolean,
+	hubTypes: readonly string[] | undefined,
 ) {
 	if (!plan?.app)
-		return { appId: "", offline: false, eventKey: "", wanted: false };
+		return {
+			appId: "",
+			offline: false,
+			eventKey: "",
+			typeKey: "",
+			latest: NO_LATEST,
+			wanted: false,
+		};
 	const offline = plan.mode === "offline";
 	const events = plan.services.flatMap((service) => service.events);
 	const eventKey = [...new Set(events)].sort().join(",");
@@ -290,6 +437,8 @@ function prepareTarget(
 		appId: plan.app.id,
 		offline,
 		eventKey,
+		typeKey: offline ? "" : planExportTypes(plan, hubTypes).join(","),
+		latest: planLatestFlows(plan),
 		wanted: enabled && !skipped && eventKey !== "",
 	};
 }
@@ -297,6 +446,9 @@ function prepareTarget(
 interface PrepareJob {
 	appId: string;
 	events: readonly string[];
+	latest: readonly LatestEvent[];
+	types: readonly string[];
+	flows: LatestFlows | null;
 	offline: boolean;
 	desktop: boolean;
 	backend: IBackendState;
@@ -314,8 +466,9 @@ function startPrepare(
 	let alive = true;
 	let release: PrepareResult["release"];
 	let active: PrepareCheckId = job.offline ? "read_app" : "read_hub";
-	const apply = (next: Omit<RunState, "key">) => {
-		if (alive) report(next);
+	let flows: RunState["flows"] = null;
+	const apply = (next: Omit<RunState, "key" | "flows">) => {
+		if (alive) report({ ...next, flows });
 	};
 	const context: PrepareContext = {
 		...job,
@@ -323,6 +476,9 @@ function startPrepare(
 		enter(check) {
 			active = check;
 			apply({ ...IDLE, status: "running", active: check });
+		},
+		published(done) {
+			flows = done;
 		},
 	};
 	const run = job.imported
@@ -357,10 +513,11 @@ function startPrepare(
  * Prepares the bundle for the plan's app, version and events once `enabled`
  * (step 2 or later), again whenever that choice changes or `again()` is
  * called. Skipped for `version: "keep"` and for a local-only app on web.
+ * `hubTypes` (the hub's `event_types`) decides which types the export names.
  */
 export function useDeployPrepare(
 	plan: DeployPlan | null,
-	options: { enabled?: boolean } = {},
+	options: { enabled?: boolean; hubTypes?: readonly string[] } = {},
 ): DeployPrepareState {
 	const backend = useBackend();
 	const workspace = useDeviceWorkspace();
@@ -371,13 +528,37 @@ export function useDeployPrepare(
 	const [imported, setImported] = useState<ImportedCopy | null>(null);
 	const [run, setRun] = useState<RunState>({ key: "", ...IDLE });
 
-	const target = prepareTarget(plan, options.enabled !== false, desktop);
-	const { appId, offline, eventKey } = target;
+	const target = prepareTarget(
+		plan,
+		options.enabled !== false,
+		desktop,
+		options.hubTypes,
+	);
+	const { appId, offline, eventKey, typeKey } = target;
+	const flows = useLatestFlows(plan?.app ? (plan.mode ?? null) : null);
+	// The names of the Latest events and the exported types are part of the choice: another set is another bundle.
+	const latestKey = target.latest
+		.map((row) => `${row.eventId}@${row.boardId}`)
+		.join(",");
 	const key = target.wanted
-		? `${appId}|${offline ? "offline" : "online"}|${eventKey}|${attempt}|${imported ? "import" : "app"}`
+		? `${appId}|${offline ? "offline" : "online"}|${eventKey}|${latestKey}|${typeKey}|${attempt}|${imported ? "import" : "app"}`
 		: "";
-	const latest = useRef({ backend, profile, account, imported });
-	latest.current = { backend, profile, account, imported };
+	const newest = useRef({
+		backend,
+		profile,
+		account,
+		imported,
+		flows,
+		latest: target.latest,
+	});
+	newest.current = {
+		backend,
+		profile,
+		account,
+		imported,
+		flows,
+		latest: target.latest,
+	};
 
 	useEffect(() => {
 		if (!key) return;
@@ -385,13 +566,14 @@ export function useDeployPrepare(
 			{
 				appId,
 				events: eventKey.split(","),
+				types: typeKey ? typeKey.split(",") : [],
 				offline,
 				desktop,
-				...latest.current,
+				...newest.current,
 			},
 			(next) => setRun({ key, ...next }),
 		);
-	}, [key, appId, eventKey, offline, desktop]);
+	}, [key, appId, eventKey, typeKey, offline, desktop]);
 
 	const current = run.key === key && key ? run : { key, ...IDLE };
 	const again = useCallback(() => setAttempt((value) => value + 1), []);
@@ -401,16 +583,27 @@ export function useDeployPrepare(
 	}, []);
 	const ids = offline ? OFFLINE_CHECKS : ONLINE_CHECKS;
 	const { status, active, failure, prepared } = current;
+	const published = current.flows;
 	return useMemo(
 		() => ({
 			state: status,
-			checks: checksOf(ids, { status, active, failure }),
+			checks: checksOf(ids, { status, active, failure, flows: published }),
 			prepared,
 			failure,
 			imported: imported !== null,
 			again,
 			importCopy,
 		}),
-		[status, active, failure, prepared, ids, imported, again, importCopy],
+		[
+			status,
+			active,
+			failure,
+			published,
+			prepared,
+			ids,
+			imported,
+			again,
+			importCopy,
+		],
 	);
 }

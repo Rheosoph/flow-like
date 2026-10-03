@@ -215,6 +215,12 @@ const GATE_COPY = {
 			"Unlock {{device}} to manage its certificates.",
 			{ device },
 		),
+	locked_run: ({ t, device }) =>
+		t(
+			"devices:gate.lockedRun",
+			"Unlock {{device}} to run its actions and forms.",
+			{ device },
+		),
 	unlocking: ({ t, device }) =>
 		t("devices:gate.unlocking", "Unlocking {{device}}…", { device }),
 	held_elsewhere: ({ t, device }) =>

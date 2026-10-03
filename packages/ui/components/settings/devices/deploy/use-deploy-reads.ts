@@ -12,6 +12,10 @@ import {
 	readExistingDeployment,
 } from "../../../../lib/device-management/deployment";
 import { queries } from "../../../../lib/device-management/hub/queries";
+import {
+	type PlanApp,
+	claimedEventIds,
+} from "../../../../lib/device-management/model/deploy-plan";
 import type { AttentionInput } from "../../../../lib/device-management/model/types";
 import { prepareOnlineMetadata } from "../../../../lib/device-management/online-metadata";
 import type { DeviceWorkspace } from "../../../../lib/device-management/workspace/types";
@@ -46,6 +50,10 @@ export interface DeployRole {
 	canReadFlows: boolean;
 	/** Undefined without a role answer (local-only app, signed out, older hub). */
 	isOwner?: boolean;
+	/** May edit the app's events: moves a schedule off the hub and gives it back. Undefined = unknown, never a refusal. */
+	canEditEvents?: boolean;
+	/** May edit the app's flows: creates the flow version a Latest event is deployed at. Undefined = unknown. */
+	canEditFlows?: boolean;
 }
 
 type OwnRoleReader = (appId: string) => Promise<IOwnRole>;
@@ -76,6 +84,8 @@ export function roleFacts(role: IOwnRole | null | undefined): DeployRole {
 		canReadFlows: bits.hasPermission(RolePermissions.ReadBoards),
 		// `is_owner` also holds for an Admin; only the Owner permission itself names the app's owner.
 		isOwner: bits.contains(RolePermissions.Owner),
+		canEditEvents: bits.hasPermission(RolePermissions.WriteEvents),
+		canEditFlows: bits.hasPermission(RolePermissions.WriteBoards),
 	};
 }
 
@@ -129,6 +139,65 @@ const stampOf = (
 	results
 		.map((result) => `${result.dataUpdatedAt}:${result.errorUpdatedAt}`)
 		.join("|");
+
+const NO_NAMES: ReadonlyMap<string, string> = new Map();
+
+/** The app's flow names by flow id, for sentences that name a flow; empty until they are read, and when they can't be. */
+export function useFlowNames(
+	appId: string | null | undefined,
+	enabled: boolean,
+): ReadonlyMap<string, string> {
+	const backend = useBackend();
+	const boards = useInvoke(
+		backend.boardState.getBoardSummaries,
+		backend.boardState,
+		[appId ?? ""],
+		enabled && !!appId,
+	);
+	return useMemo(
+		() =>
+			boards.data?.length
+				? new Map(boards.data.map((board) => [board.id, board.name]))
+				: NO_NAMES,
+		[boards.data],
+	);
+}
+
+const NO_TRIGGERS: readonly string[] = [];
+
+/** The read of whether this computer runs one schedule or bot itself; read again after the trigger is removed here. */
+export const localTriggerKey = (appId: string | undefined, eventId: string) =>
+	["devices-local-trigger", appId, eventId] as const;
+
+/**
+ * The app's schedules and bots that this computer runs itself while
+ * Flow-Like is open. Only the desktop app has such a trigger; a read that
+ * fails says nothing.
+ */
+export function useLocalTriggers(
+	app: PlanApp | null,
+	platform: "desktop" | "web",
+): readonly string[] {
+	const backend = useBackend();
+	const ids = useMemo(
+		() =>
+			platform === "desktop" ? [...claimedEventIds(app)].sort() : NO_TRIGGERS,
+		[app, platform],
+	);
+	const results = useQueries({
+		queries: ids.map((eventId) => ({
+			queryKey: localTriggerKey(app?.id, eventId),
+			queryFn: () => backend.eventState.isEventSinkActive(eventId),
+			staleTime: 30_000,
+			retry: false,
+		})),
+	});
+	// One string, so the list keeps its identity until an answer changes (a read time can repeat).
+	const active = ids
+		.filter((_, index) => results[index]?.data === true)
+		.join("\n");
+	return useMemo(() => (active ? active.split("\n") : NO_TRIGGERS), [active]);
+}
 
 /** A selected device that is unlocked gets a live session while the wizard is open. */
 export function useLiveDemand(
@@ -335,21 +404,31 @@ export function useInstalledVariables(
 	}, [own, stamp, loading]);
 }
 
-/** Online apps whose update keeps each service's version are never prepared; their settings still need the definitions. */
+/**
+ * Online apps whose update keeps each service's version are never prepared;
+ * their settings still need the definitions. `types` names the event types
+ * the hub exports only when asked (`exportTypes`); another set is another
+ * bundle, so it is part of the cache key.
+ */
 export function useKeepCatalog(
 	workspace: DeviceWorkspace,
 	appId: string | null,
 	enabled: boolean,
+	types: readonly string[] = [],
 ): { catalog?: DeploymentCatalog; loading: boolean; error?: string } {
 	const backend = useBackend();
+	const typeKey = types.join(",");
 	const query = useQuery({
-		queryKey: ["devices-deploy-catalog", workspace.scopeKey, appId],
+		queryKey: ["devices-deploy-catalog", workspace.scopeKey, appId, typeKey],
 		queryFn: async () =>
 			(
 				await prepareOnlineMetadata(
 					appId ?? "",
 					backend,
 					workspace.deps.profile,
+					undefined,
+					[],
+					typeKey ? typeKey.split(",") : [],
 				)
 			).catalog,
 		enabled: enabled && !!appId,

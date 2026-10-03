@@ -12,32 +12,50 @@ import {
 	Settings,
 	Sparkles,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useInvoke } from "../../../../../hooks/use-invoke";
-import {
-	type EventEligibility,
-	eventEligibility,
-} from "../../../../../lib/device-management/deployment";
+import type { BotFacts } from "../../../../../lib/device-management/bot-config";
+import type { EventEligibility } from "../../../../../lib/device-management/deployment";
 import {
 	type AppEventInput,
 	type AppMode,
 	type AppVisibility,
+	appEventRule,
 	appMode,
+	isClaimedKind,
 } from "../../../../../lib/device-management/model/app-plan";
-import type {
-	DeployDraft,
-	PlanTarget,
+import {
+	type DeployDraft,
+	type PlanTarget,
+	wholeAppEvents,
 } from "../../../../../lib/device-management/model/deploy-plan";
+import { whereOf } from "../../../../../lib/device-management/model/schedule-where";
+import {
+	nextRuns,
+	onceAhead,
+} from "../../../../../lib/device-management/schedule";
 import { useBackend } from "../../../../../state/backend-state";
 import { appCopy } from "../../copy/app-copy";
 import {
 	eligibilityCopy,
 	eligibilityFixLabel,
+	eligibilityInput,
+	eventRunsCopy,
 	eventTypeLabel,
 	howItRunsCopy,
 } from "../../copy/eligibility-copy";
+import {
+	scheduleTime,
+	scheduleWhereText,
+	scheduleZone,
+	whereNames,
+} from "../../copy/schedule-copy";
 import { ModeChip, VisibilityChip } from "../../primitives/app-chips";
-import { useAreaPrefs } from "../../primitives/area-context";
+import {
+	type DevicesT,
+	useAreaPrefs,
+	useAreaTime,
+} from "../../primitives/area-context";
 import { Block } from "../../primitives/block";
 import { DvButton } from "../../primitives/dv-button";
 import { DvSheet } from "../../primitives/dv-sheet";
@@ -49,6 +67,7 @@ import {
 	Th,
 	Tr,
 } from "../../primitives/dv-table";
+import { LatestTag } from "../../primitives/event-cell";
 import {
 	CheckField,
 	ChoiceCards,
@@ -100,7 +119,8 @@ function useEventRows({ state }: PlanStepProps): {
 	ok: EventRow[];
 	cant: EventRow[];
 } {
-	const { app, appRead } = state;
+	const { app, appRead, facts } = state;
+	const { hub } = facts;
 	return useMemo(() => {
 		const served = new Map<string, number>(
 			(appRead.view?.events.rows ?? []).map((row) => [
@@ -111,16 +131,14 @@ function useEventRows({ state }: PlanStepProps): {
 		);
 		const rows = (app?.events ?? []).map((event) => ({
 			event,
-			rule: eventEligibility(event, {
-				ineligibleReason: event.ineligibleReason,
-			}),
+			rule: appEventRule(event, hub),
 			servedOn: served.get(event.id) ?? 0,
 		}));
 		return {
 			ok: rows.filter((row) => row.rule.eligible),
 			cant: rows.filter((row) => !row.rule.eligible),
 		};
-	}, [app, appRead.view]);
+	}, [app, appRead.view, hub]);
 }
 
 function ExplainSheet({
@@ -446,7 +464,7 @@ function VersionBlock(props: Readonly<PlanStepProps>) {
 						)
 					: t(
 							"deploy.what.versionPins",
-							"An app version pins one version of each event and its flow.",
+							"An app version pins one version of each event and its flow. An event that follows Latest is deployed as the flow is at that moment.",
 						)}{" "}
 				{copy.publishNote(mode)}
 			</p>
@@ -459,8 +477,9 @@ interface EventRowProps {
 	checked: boolean;
 	locked?: boolean;
 	appId: string;
+	state: PlanStepProps["state"];
 	/** Third column: versions and how it runs (new) or what it does now (update). */
-	now?: string;
+	now?: ReactNode;
 	onToggle(on: boolean): void;
 }
 
@@ -498,30 +517,353 @@ function EventNameCell({
 	);
 }
 
-function VersionsCell({ rule }: Readonly<{ rule: EventEligibility }>) {
+/**
+ * The pins of one event. An event that follows Latest has no flow pin: the
+ * deploy takes the flow as it is then, so the row says which version that is,
+ * or that Preparing creates one.
+ */
+function VersionsCell({ row }: Readonly<{ row: EventRow }>) {
 	const { t } = useTranslation("devices");
+	const { rule, event } = row;
+	const flow = typeof event.flow === "object" ? event.flow : null;
 	return (
-		<span className="font-mono text-xs">
-			{t("deploy.what.pins", "event {{event}} · flow {{flow}}", {
-				event: versionOf(rule.eventVersion) ?? "–",
-				flow:
-					versionOf(rule.boardVersion) ?? t("deploy.what.flowLatest", "latest"),
-			})}
-		</span>
+		<>
+			<span className="font-mono text-xs">
+				{rule.followsLatest
+					? appCopy(t).pinLatest(versionOf(rule.eventVersion) ?? "–")
+					: t("deploy.what.pins", "event {{event}} · flow {{flow}}", {
+							event: versionOf(rule.eventVersion) ?? "–",
+							flow: versionOf(rule.boardVersion) ?? "–",
+						})}
+			</span>
+			{rule.followsLatest ? (
+				<CellSub data-latest={flow?.current ? "version" : "edits"}>
+					<LatestTag className="mr-1.5" />
+					{flow?.current
+						? t("deploy.what.deploysFlow", "Deploys flow {{version}}.", {
+								version: versionOf(flow.current),
+							})
+						: flow
+							? t(
+									"deploy.what.createsFlow",
+									"Preparing creates a flow version from the current edits. It stays in the flow's history.",
+								)
+							: null}
+				</CellSub>
+			) : null}
+		</>
 	);
+}
+
+/** A schedule: when it runs, that the device starts it, its next time and where it runs today. */
+function ScheduleLines({
+	row,
+	state,
+	sub = false,
+}: Readonly<{
+	row: EventRow;
+	state: PlanStepProps["state"];
+	/** Every line under another one, the first included. */
+	sub?: boolean;
+}>) {
+	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	const { schedule } = row.rule;
+	if (!schedule) return null;
+	const when = eventRunsCopy(t, row.rule);
+	const [next] = nextRuns(schedule, time.now, 1);
+	const where = whereOf(state.facts.schedules, row.event.id);
+	const today =
+		state.mode === "offline"
+			? t(
+					"deploy.what.scheduleLocal",
+					"Runs in the desktop app while it is open. On a device it runs without a computer.",
+				)
+			: where?.fact === "hub"
+				? t(
+						"deploy.what.scheduleHub",
+						"Runs on the hub today. Tick it to run it on the device instead.",
+					)
+				: where
+					? scheduleWhereText(t, where, whereNames(t, deviceNames(state), time))
+					: null;
+	return (
+		<>
+			{sub ? <CellSub>{when}</CellSub> : when}
+			<CellSub>{howItRunsCopy(t, row.rule)}</CellSub>
+			{next === undefined ? null : (
+				<CellSub data-schedule-next="">
+					{t("deploy.what.scheduleNext", "Next run by its schedule: {{time}}", {
+						time: scheduleTime(
+							t,
+							Math.floor(next / 1000),
+							schedule.timezone,
+							time,
+						),
+					})}
+				</CellSub>
+			)}
+			{today ? (
+				<CellSub data-schedule-where={where?.fact ?? "local"}>{today}</CellSub>
+			) : null}
+		</>
+	);
+}
+
+/** An Endpoint: its method and path, and who may call it on a device. */
+function EndpointLines({ row }: Readonly<{ row: EventRow }>) {
+	const { t } = useTranslation("devices");
+	const { rule, event } = row;
+	if (!rule.route) return null;
+	return (
+		<>
+			<span data-route="" className="font-mono text-xs">
+				{t("deploy.what.endpoint", "{{method}} {{path}}", {
+					method: rule.route.method,
+					path: rule.route.path,
+				})}
+			</span>
+			<CellSub>{howItRunsCopy(t, rule)}</CellSub>
+			{event.ownToken === undefined ? null : (
+				<CellSub data-endpoint-token={event.ownToken ? "own" : "open"}>
+					{event.ownToken
+						? t(
+								"deploy.what.endpointToken",
+								"Its own token from Events is not used on a device.",
+							)
+						: t(
+								"deploy.what.endpointOpen",
+								"Open on the hub. On a device callers need the service's access token.",
+							)}
+				</CellSub>
+			)}
+		</>
+	);
+}
+
+/** A form or quick action: a person starts it, with its fields; a file field needs a service page. */
+function OnDemandLines({ row }: Readonly<{ row: EventRow }>) {
+	const { t } = useTranslation("devices");
+	const form = row.event.form;
+	const count = form?.fields ?? 0;
+	return (
+		<>
+			{count > 0
+				? t("deploy.what.onDemandForm", {
+						count,
+						defaultValue_one: "Started by a person · {{count, number}} field",
+						defaultValue_other:
+							"Started by a person · {{count, number}} fields",
+					})
+				: t("deploy.what.onDemand", "Started by a person")}
+			{form?.fileFields ? (
+				<CellSub data-file-field="">
+					{t(
+						"deploy.what.onDemandFile",
+						"It takes a file: only a service page can send one.",
+					)}
+				</CellSub>
+			) : null}
+		</>
+	);
+}
+
+/** A one-time schedule: when it runs, whether that time has passed, and where it runs today. */
+function OnceLines({
+	row,
+	state,
+	sub = false,
+}: Readonly<{ row: EventRow; state: PlanStepProps["state"]; sub?: boolean }>) {
+	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	const { once } = row.rule;
+	if (!once) return null;
+	const when = t(
+		"deploy.what.once",
+		"Runs once on {{date}} at {{time}} ({{zone}})",
+		{ date: once.date, time: once.time, zone: scheduleZone(t, once) },
+	);
+	const where = whereOf(state.facts.schedules, row.event.id);
+	// A one-time schedule never reads "runs on the hub": only some hubs run it, once.
+	const today =
+		where && where.fact !== "hub"
+			? scheduleWhereText(
+					t,
+					where,
+					whereNames(t, deviceNames(state), time),
+					"once",
+				)
+			: null;
+	return (
+		<>
+			{sub ? <CellSub>{when}</CellSub> : when}
+			{onceAhead(once, time.now) ? null : (
+				<CellSub data-once-passed="" className="text-critical">
+					{t(
+						"deploy.what.oncePassed",
+						"Its time has passed. Set a new time in Events.",
+					)}
+				</CellSub>
+			)}
+			<CellSub>{howItRunsCopy(t, row.rule)}</CellSub>
+			{today ? (
+				<CellSub data-schedule-where={where?.fact}>{today}</CellSub>
+			) : null}
+		</>
+	);
+}
+
+const deviceNames = (state: PlanStepProps["state"]) =>
+	new Map(state.devices.map((device) => [device.id, device.name]));
+
+/** A local-only app's bot: a device the viewer sees whose service of the app runs it. */
+function localHolder(state: PlanStepProps["state"], eventId: string) {
+	const isIt = (event: { event_id: string }) => event.event_id === eventId;
+	for (const device of state.devices)
+		for (const service of device.services ?? []) {
+			const runs = service.events?.some(isIt) ?? false;
+			if (runs && service.projectId === state.draft.appId)
+				return { device: device.name, service: service.serviceId };
+		}
+	return null;
+}
+
+/** Where a bot runs today: this computer, a device, or nowhere. Unknown while the hub's list loads. */
+function botToday(
+	t: DevicesT,
+	row: EventRow,
+	state: PlanStepProps["state"],
+	time: ReturnType<typeof useAreaTime>,
+): { at: string; text: string } | null {
+	const id = row.event.id;
+	const nowhere = {
+		at: "nowhere",
+		text: t(
+			"deploy.what.botNowhere",
+			"No device runs it. Tick it to keep it connected from the device.",
+		),
+	};
+	if (state.facts.localTriggers?.includes(id))
+		return {
+			at: "here",
+			text: t(
+				"deploy.what.botHere",
+				"Runs in the desktop app on this computer today. Tick it to keep it connected from the device instead.",
+			),
+		};
+	if (state.mode === "offline") {
+		const holder = localHolder(state, id);
+		return holder
+			? {
+					at: "device",
+					text: t(
+						"deploy.what.botDevice",
+						"Connected from {{device}} › {{service}} today.",
+						holder,
+					),
+				}
+			: nowhere;
+	}
+	const where = whereOf(state.facts.schedules, id);
+	if (!where) return null;
+	return where.fact === "hub"
+		? nowhere
+		: {
+				at: where.fact,
+				text: scheduleWhereText(
+					t,
+					where,
+					whereNames(t, deviceNames(state), time),
+					"bot",
+				),
+			};
+}
+
+/**
+ * What a bot answers in groups and servers (§5.5). A Telegram bot: mentions and
+ * replies, its prefix, both or nothing. A Discord bot reads no prefix, like the
+ * desktop app's: mentions and replies, or every message.
+ */
+function botAnswersText(t: DevicesT, bot: BotFacts): string {
+	if (bot.provider === "discord" && !bot.mentions)
+		return t(
+			"deploy.what.botAnswersEvery",
+			"In servers it answers every message in its channels, not only mentions and replies.",
+		);
+	if (bot.mentions)
+		return bot.prefix
+			? t(
+					"deploy.what.botAnswersPrefix",
+					"In groups and servers it answers mentions, replies and every message that starts with {{prefix}}.",
+					{ prefix: bot.prefix },
+				)
+			: t(
+					"deploy.what.botAnswers",
+					"In groups and servers it answers mentions and replies.",
+				);
+	return bot.prefix
+		? t(
+				"deploy.what.botAnswersPrefixOnly",
+				"In groups and servers it answers every message that starts with {{prefix}}.",
+				{ prefix: bot.prefix },
+			)
+		: t(
+				"deploy.what.botAnswersNone",
+				"In groups and servers it answers nothing; only private messages start runs.",
+			);
+}
+
+/** A Telegram or Discord bot: where it runs today, what it answers in groups, and that it stays connected. */
+function BotLines({
+	row,
+	state,
+	sub = false,
+}: Readonly<{ row: EventRow; state: PlanStepProps["state"]; sub?: boolean }>) {
+	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	const { bot } = row.rule;
+	if (!bot) return null;
+	const runs = howItRunsCopy(t, row.rule);
+	const today = botToday(t, row, state, time);
+	return (
+		<>
+			{sub ? <CellSub>{runs}</CellSub> : runs}
+			{today ? <CellSub data-bot-where={today.at}>{today.text}</CellSub> : null}
+			<CellSub data-bot-answers="">{botAnswersText(t, bot)}</CellSub>
+		</>
+	);
+}
+
+/** How the event runs on a device, in the words of its kind. */
+function KindLines({
+	row,
+	state,
+	sub = false,
+}: Readonly<{ row: EventRow; state: PlanStepProps["state"]; sub?: boolean }>) {
+	const { t } = useTranslation("devices");
+	const { rule } = row;
+	if (rule.route) return <EndpointLines row={row} />;
+	if (rule.once) return <OnceLines row={row} state={state} sub={sub} />;
+	if (rule.schedule) return <ScheduleLines row={row} state={state} sub={sub} />;
+	if (rule.bot) return <BotLines row={row} state={state} sub={sub} />;
+	if (rule.kind === "on_demand") return <OnDemandLines row={row} />;
+	return <>{howItRunsCopy(t, rule)}</>;
 }
 
 function OnDeviceCell({
 	row,
 	appId,
-}: Readonly<Pick<EventRowProps, "row" | "appId">>) {
+	state,
+}: Readonly<
+	Pick<EventRowProps, "row" | "appId"> & { state: PlanStepProps["state"] }
+>) {
 	const { t } = useTranslation("devices");
 	const hostLink = useHostLink();
 	const { event, rule, servedOn } = row;
 	if (rule.eligible)
 		return (
 			<>
-				{howItRunsCopy(t, rule)}
+				<KindLines row={row} state={state} />
 				{servedOn > 0 ? (
 					<CellSub>
 						{t("deploy.what.runsOn", {
@@ -533,11 +875,10 @@ function OnDeviceCell({
 				) : null}
 			</>
 		);
-	const reason = eligibilityCopy(t, {
-		code: rule.code ?? "type",
-		eventType: event.event_type,
-		...(rule.detail ? { detail: rule.detail } : {}),
-	});
+	const reason = eligibilityCopy(
+		t,
+		eligibilityInput({ ...rule, code: rule.code ?? "type" }, event.event_type),
+	);
 	return (
 		<>
 			<span className="text-muted-foreground">{reason.long}</span>
@@ -571,10 +912,12 @@ function EventTableRow(props: Readonly<EventRowProps>) {
 				{eventTypeLabel(t, event.event_type, Boolean(event.default_page_id))}
 			</Td>
 			<Td label={t("deploy.what.colVersions", "Versions")}>
-				<VersionsCell rule={rule} />
+				<VersionsCell row={row} />
 			</Td>
 			<Td label={t("deploy.what.colOnDevice", "On a device")}>
-				{props.now ?? <OnDeviceCell row={row} appId={appId} />}
+				{props.now ?? (
+					<OnDeviceCell row={row} appId={appId} state={props.state} />
+				)}
 			</Td>
 		</Tr>
 	);
@@ -619,10 +962,9 @@ type Scope = DeployDraft["scope"];
 
 function ScopeSwitch({ state, update, route }: Readonly<PlanStepProps>) {
 	const { t } = useTranslation("devices");
-	const { draft, plan } = state;
-	const all = (plan.app?.events ?? [])
-		.filter((event) => eventEligibility(event).eligible)
-		.map((event) => event.id);
+	const { draft, plan, facts } = state;
+	// Whole app leaves schedules unticked: a deploy of the app's pages must not move its nightly jobs off the hub by itself.
+	const all = wholeAppEvents(plan.app, facts.hub);
 	const pick = (scope: Scope) => {
 		if (scope === "app") update({ scope, events: all });
 		else if (scope === "event" && route.eventId)
@@ -678,8 +1020,10 @@ function EventsBlock(props: Readonly<PlanStepProps>) {
 			key={row.event.id}
 			row={row}
 			appId={app.id}
+			state={state}
 			checked={picked.has(row.event.id)}
-			locked={draft.scope === "app"}
+			// Whole app fixes every tick but a schedule's or a bot's: those are always the person's own choice.
+			locked={draft.scope === "app" && !isClaimedKind(row.rule.kind)}
 			onToggle={(on) => toggle(row.event.id, on)}
 		/>
 	);
@@ -720,8 +1064,8 @@ function EventsBlock(props: Readonly<PlanStepProps>) {
 				<>
 					{draft.scope === "app"
 						? t(
-								"deploy.what.footWhole",
-								"Whole app ticks every event that can run on a device.",
+								"deploy.what.footWholeClaimed",
+								"Whole app ticks every event that can run on a device, except schedules and bots: tick one yourself to move it to the device.",
 							)
 						: t(
 								"deploy.what.footPick",
@@ -867,11 +1211,20 @@ function UpdateEventsTable(props: Readonly<PlanStepProps>) {
 					key={row.event.id}
 					row={row}
 					appId={app.id}
+					state={state}
 					checked={picked.has(row.event.id)}
 					now={
-						servesNow(target, row.event.id, state)
-							? t("deploy.what.servedNow", "Served now")
-							: t("deploy.what.notServed", "Not served yet")
+						servesNow(target, row.event.id, state) ? (
+							t("deploy.what.servedNow", "Served now")
+						) : isClaimedKind(row.rule.kind) ? (
+							// Adding a schedule or a bot moves it: the row says when it runs or what it answers, and where it runs today.
+							<>
+								{t("deploy.what.notServed", "Not served yet")}
+								<KindLines row={row} state={state} sub />
+							</>
+						) : (
+							t("deploy.what.notServed", "Not served yet")
+						)
 					}
 					onToggle={(on) =>
 						update({
@@ -951,6 +1304,57 @@ function KeptEvents({ state }: Readonly<PlanStepProps>) {
 	);
 }
 
+/**
+ * Events that follow Latest which an updated service already serves and whose
+ * flow moved on since: every update that sends a new copy takes the flow as it
+ * is then, also one made for another reason.
+ */
+function movedLatestEvents(state: PlanStepProps["state"]): string[] {
+	const { plan, devices, draft } = state;
+	if (draft.version === "keep") return [];
+	const moved = new Set<string>();
+	for (const target of plan.targets) {
+		const device = devices.find((row) => row.id === target.deviceId);
+		for (const service of target.services) {
+			const served =
+				device?.services?.find((row) => row.serviceId === service.serviceId)
+					?.events ?? [];
+			for (const pin of served) {
+				const event = plan.app?.events.find((row) => row.id === pin.event_id);
+				if (!event || !service.events.includes(event.id)) continue;
+				const flow = typeof event.flow === "object" ? event.flow : null;
+				if (!flow || !appEventRule(event).followsLatest) continue;
+				if (flow.current?.join(".") !== pin.board_version.join("."))
+					moved.add(event.id);
+			}
+		}
+	}
+	return [...moved];
+}
+
+function UpdateTakesEdits({ state }: Readonly<PlanStepProps>) {
+	const { t } = useTranslation("devices");
+	const moved = movedLatestEvents(state);
+	if (!moved.length) return null;
+	return (
+		<ul data-takes-edits="" className="flex flex-col gap-1 px-4 pb-3 text-xs">
+			{moved.map((eventId) => (
+				<li key={eventId} className="flex items-start gap-1.5 text-ink-2">
+					<CircleArrowUp
+						aria-hidden
+						className="mt-0.5 size-3 shrink-0 text-info"
+					/>
+					{t(
+						"deploy.what.updateTakesEdits",
+						"Updating also takes the current flow edits of {{event}}.",
+						{ event: eventName(state.plan, eventId) },
+					)}
+				</li>
+			))}
+		</ul>
+	);
+}
+
 function UpdateEventsBlock(props: Readonly<PlanStepProps>) {
 	const { t } = useTranslation("devices");
 	const { state } = props;
@@ -985,6 +1389,7 @@ function UpdateEventsBlock(props: Readonly<PlanStepProps>) {
 			) : (
 				<UpdateEventsTable {...props} />
 			)}
+			<UpdateTakesEdits {...props} />
 			<div className={cx("px-4 pb-3 empty:hidden")}>
 				<RemovedEvents {...props} />
 			</div>

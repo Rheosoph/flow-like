@@ -11,7 +11,13 @@ import {
 	Undo2,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import type { PlacementConfiguration } from "../../../../lib/device-management/deployment";
+import { botTokenEventId } from "../../../../lib/device-management/bot-config";
+import {
+	type EventKind,
+	type PlacementConfiguration,
+	limitsInstances,
+} from "../../../../lib/device-management/deployment";
+import { ROUTE_EVENT_TYPES } from "../../../../lib/device-management/event-route";
 import type {
 	GateNoticeKind,
 	GateResult,
@@ -139,11 +145,41 @@ function editGateOf(
 /** Ids up to this length are shown whole when a variable's name isn't known. */
 const SHORT_ID = 24;
 
+/** An event the settings name and the app's list doesn't: removed, or the list can't be read. */
+const unknownEvent = (t: DevicesT, listed: boolean) =>
+	listed
+		? t("devices:serviceConfig.event.removed", "A removed event")
+		: t("devices:serviceConfig.event.unread", "An event of this app");
+
+/** A variable by the name its flow gives it; a bot's token by its bot. */
+function variableName(
+	t: DevicesT,
+	id: string,
+	definitions: readonly { id: string; name: string }[] | undefined,
+	event: (eventId: string) => string,
+) {
+	const bot = botTokenEventId(id);
+	if (bot)
+		return t("devices:serviceConfig.botToken.label", "Bot token of {{event}}", {
+			event: event(bot),
+		});
+	const same = (entry: { id: string }) => entry.id === id;
+	return (
+		definitions?.find(same)?.name ||
+		t("devices:serviceConfig.variable.unnamed", "Unnamed variable {{id}}", {
+			id: id.length > SHORT_ID ? `${id.slice(0, 8)}…` : id,
+		})
+	);
+}
+
 function useNames(
 	deviceId: string,
 	definitions: DefinitionsRead,
 	projectId: string | undefined,
-): { names: DiffNames; hosted: (eventId: string) => boolean | undefined } {
+): {
+	names: DiffNames;
+	kind: (eventId: string) => EventKind | null | undefined;
+} {
 	const { t } = useTranslation("devices");
 	const { input } = useAttentionState();
 	const { view } = useAppView(projectId);
@@ -157,27 +193,36 @@ function useNames(
 					])
 				: [],
 		);
+		const event = (id: string) =>
+			events.get(id)?.name ?? unknownEvent(t, !!view);
 		return {
 			names: {
-				variable: (id) =>
-					definitions.definitions?.find((entry) => entry.id === id)?.name ||
-					t("serviceConfig.variable.unnamed", "Unnamed variable {{id}}", {
-						id: id.length > SHORT_ID ? `${id.slice(0, 8)}…` : id,
-					}),
-				event: (id) =>
-					events.get(id)?.name ??
-					(view
-						? t("serviceConfig.event.removed", "A removed event")
-						: t("serviceConfig.event.unread", "An event of this app")),
+				variable: (id) => variableName(t, id, definitions.definitions, event),
+				event,
 				certificate: (id) =>
 					certificates?.find((entry) => entry.certificate_id === id)?.label ??
 					t("serviceConfig.cert.unnamed", "Certificate {{id}}", {
 						id: id.slice(0, 8),
 					}),
 			},
-			hosted: (id) => events.get(id)?.eligibility.hosted,
+			kind: (id) => events.get(id)?.eligibility.kind,
 		};
 	}, [t, view, definitions.definitions, certificates]);
+}
+
+/**
+ * More than one instance needs a web endpoint and no event that limits a
+ * service to one (a schedule, a bot, a background or own-server event);
+ * forms and quick actions don't. An event whose kind isn't known limits it.
+ */
+function allowsInstances(
+	events: readonly { event_id: string }[],
+	kind: (eventId: string) => EventKind | null | undefined,
+) {
+	const kinds = events.map((event) => kind(event.event_id));
+	const free = (value: EventKind | null | undefined) =>
+		!!value && !limitsInstances(value);
+	return kinds.includes("served") && kinds.every(free);
 }
 
 type LiveFacts = LiveDeviceInput | undefined;
@@ -246,7 +291,7 @@ export function useSettingsEditor(
 		configuration,
 		read.gate === null,
 	);
-	const { names, hosted } = useNames(deviceId, definitions, service?.projectId);
+	const { names, kind } = useNames(deviceId, definitions, service?.projectId);
 	const live = input.live[deviceId];
 	const grants = input.resources[deviceId]?.grants;
 	return useMemo(() => {
@@ -267,8 +312,7 @@ export function useSettingsEditor(
 				certificates: certificateIds(live),
 				canAssignCertificate: gates.gates.change_tls.ok,
 				multiInstance:
-					config.max_replicas > 1 ||
-					config.events.every((event) => hosted(event.event_id) === true),
+					config.max_replicas > 1 || allowsInstances(config.events, kind),
 			},
 			facts: draftFactsOf(serviceId, config, live, grants),
 			names,
@@ -289,7 +333,7 @@ export function useSettingsEditor(
 		apply,
 		definitions,
 		names,
-		hosted,
+		kind,
 		live,
 		grants,
 	]);
@@ -464,6 +508,10 @@ function jsonErrorText(t: DevicesT, error: JsonError): string {
 			"devices:serviceConfig.json.nothingChanged",
 			"Nothing changed yet.",
 		),
+		event_added: t(
+			"devices:serviceConfig.json.eventAdded",
+			"Add it with Add an event…: it checks the device's agent and, for a bot, asks for its token.",
+		),
 		too_large: t(
 			"devices:serviceConfig.error.tooLarge",
 			"The settings are {{bytes, number}} bytes. The device accepts up to {{max, number}}. Remove something and try again.",
@@ -471,6 +519,37 @@ function jsonErrorText(t: DevicesT, error: JsonError): string {
 		),
 	};
 	return texts[error.code];
+}
+
+/** Kinds whose events need an agent flag, a claim or a token on a device. */
+const GATED_KINDS = new Set(["scheduled", "bot", "on_demand"]);
+
+type AppRow = NonNullable<
+	ReturnType<typeof useAppView>["view"]
+>["events"]["rows"][number];
+
+/** An Endpoint, a form or quick action, a schedule of either kind, a bot: added by hand it would skip the wizard's checks. */
+const needsWizard = (row: AppRow) =>
+	GATED_KINDS.has(row.eligibility.kind ?? "") ||
+	(!row.hasPage &&
+		(ROUTE_EVENT_TYPES as readonly string[]).includes(row.eventType));
+
+/** Such events of the app by id; null while its events are not loaded, when the kind of an event is not known. */
+function useGatedEvents(
+	projectId: string | undefined,
+): ReadonlySet<string> | null {
+	const { view } = useAppView(projectId);
+	return useMemo(
+		() =>
+			view
+				? new Set(
+						[...view.events.rows, ...view.events.ineligible]
+							.filter(needsWizard)
+							.map((row) => row.eventId),
+					)
+				: null,
+		[view],
+	);
 }
 
 /** What an apply that didn't finish says, next to the control that started it. */
@@ -1520,9 +1599,10 @@ export function EditJsonSheet({
 			run.reset();
 		}
 	}
+	const gated = useGatedEvents(base.config.project_id);
 	const parsed = useMemo(
-		() => parseJsonSettings(base.config, text),
-		[base, text],
+		() => parseJsonSettings(base.config, text, gated),
+		[base, text, gated],
 	);
 	const stale =
 		run.stale || editor.configuration.config_revision !== base.config_revision;

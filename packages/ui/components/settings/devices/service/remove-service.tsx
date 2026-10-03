@@ -11,11 +11,18 @@ import {
 	useState,
 } from "react";
 import { deviceKeys } from "../../../../lib/device-management/hub/queries";
+import { schedulesClaimedBy } from "../../../../lib/device-management/model/schedule-where";
 import type { GateResult } from "../../../../lib/device-management/model/types";
 import type { ManagementResponse } from "../../../../lib/device-management/types";
 import type { DeviceWorkspace } from "../../../../lib/device-management/workspace/types";
 import { revokeDeviceGrant } from "../../../../lib/device-resources";
+import {
+	type HeldEvents,
+	botCutOffText,
+	splitHeld,
+} from "../cloud/held-events";
 import { gateCopy } from "../copy/gate-copy";
+import { useDeployRole } from "../deploy/use-deploy-reads";
 import {
 	type AreaTime,
 	type DevicesT,
@@ -32,11 +39,14 @@ import {
 	type DeviceActionOutcome,
 	type DeviceActions,
 	type GateTarget,
+	type ScheduleMoves,
 	type ServiceCommands,
+	useAppView,
 	useAttentionState,
 	useDeviceAction,
 	useDeviceResources,
 	useGates,
+	useScheduleMoves,
 	useServiceCommands,
 } from "../workspace";
 import { hostingOf } from "./config-model";
@@ -55,9 +65,98 @@ import type { ServiceConfigRead } from "./use-service-config";
 const STOP_POLLS = 30;
 const STOP_POLL_MS = 1_000;
 
-interface RemoveChoice {
+export interface RemoveChoice {
 	revoke: boolean;
 	lose: boolean;
+	giveBack: boolean;
+}
+
+export const FRESH_CHOICE: RemoveChoice = {
+	revoke: false,
+	lose: false,
+	giveBack: true,
+};
+
+/** The box that hands the service's schedules and bots back: "Run its schedules on the hub again", "Take its bots back", or both. */
+export function giveBackLabel(t: DevicesT, held: HeldEvents): string {
+	if (held.schedules && held.bots)
+		return t(
+			"devices:serviceConfig.remove.giveBackBoth",
+			"Run its schedules on the hub again ({{schedules}}) and take its bots back ({{bots}})",
+			{ schedules: held.schedules, bots: held.bots.names },
+		);
+	return held.bots
+		? t(
+				"devices:serviceConfig.remove.giveBackBots",
+				"Take its bots back ({{events}})",
+				{
+					events: held.bots.names,
+				},
+			)
+		: t(
+				"devices:serviceConfig.remove.giveBack",
+				"Run its schedules on the hub again ({{events}})",
+				{ events: held.schedules ?? "" },
+			);
+}
+
+/** Who can hand them back, for someone who can't edit the app's events. */
+function needsRoleText(t: DevicesT, held: HeldEvents): string {
+	const schedules = held.schedules
+		? t(
+				"devices:serviceConfig.remove.giveBackNeedsRole",
+				"{{events}} stays assigned to this service and nothing runs it. Ask someone who can edit this app's events to run it on the hub again.",
+				{ events: held.schedules },
+			)
+		: null;
+	const bots = held.bots
+		? t(
+				"devices:serviceConfig.remove.giveBackNeedsRoleBots",
+				"{{events}} stays assigned to this service and nothing answers it. Ask someone who can edit this app's events to take it back.",
+				{ events: held.bots.names },
+			)
+		: null;
+	return [schedules, bots].filter(Boolean).join(" ");
+}
+
+/**
+ * The schedules and bots the service took off the hub: with the service gone
+ * nothing runs them, so they go back unless the person unticks it. Someone
+ * who can't edit the app's events is told who can.
+ */
+export function ScheduleGiveBack({
+	held,
+	allowed,
+	onGiveBack,
+	id = "svc-remove-give-back",
+}: Readonly<{
+	held: HeldEvents;
+	allowed: boolean;
+	onGiveBack(giveBack: boolean): void;
+	id?: string;
+}>) {
+	const { t } = useTranslation("devices");
+	const [giveBack, setGiveBack] = useState(FRESH_CHOICE.giveBack);
+	if (!allowed)
+		return (
+			<span data-remove-schedules="role" className="mt-1.5 block">
+				{needsRoleText(t, held)}
+			</span>
+		);
+	return (
+		<div data-remove-schedules="give-back" className="mt-1.5">
+			<CheckField
+				id={id}
+				checked={giveBack}
+				onCheckedChange={(next) => {
+					setGiveBack(next);
+					onGiveBack(next);
+				}}
+			>
+				{giveBackLabel(t, held)}
+			</CheckField>
+		</div>
+	);
 }
 
 /* The confirm's rows. */
@@ -133,7 +232,7 @@ function CloudAccessLine({
 	serviceId: string;
 	cloud: ServiceCloudAccess;
 	gate: ReactNode;
-	/** Another sentence stands before this one. */
+	/** Another sentence stands in this row. */
 	hosted: boolean;
 	/** The sentence for when the hub's list wasn't read. */
 	unknown: ReactNode;
@@ -229,9 +328,16 @@ function BeforeRemoval({
 	);
 }
 
-/* The sequence: stop and wait, revoke, remove. Every step that doesn't finish leaves its sentence in the zone. */
+/* The sequence: stop and wait, hand the schedules back, revoke, remove. Every step that doesn't finish leaves its sentence in the zone. */
 
-interface Flow {
+export interface RemovalFlow {
+	/** The schedules and bots to hand back to the hub, with the call that does it; null when there are none or this person can't. */
+	schedules: {
+		ids: readonly string[];
+		giveBack: ScheduleMoves["giveBack"];
+		/** The box's words, for a sentence that says what to untick; set when bots are among them. */
+		box?: string;
+	} | null;
 	t: DevicesT;
 	time: AreaTime;
 	actions: DeviceActions;
@@ -248,12 +354,12 @@ interface Flow {
 	say(note: Note | null): void;
 }
 
-const namesOf = (flow: Flow) => ({
+const namesOf = (flow: RemovalFlow) => ({
 	service: flow.serviceId,
 	device: flow.deviceLabel,
 });
 
-function targetOf(flow: Flow): GateTarget {
+function targetOf(flow: RemovalFlow): GateTarget {
 	return {
 		placementId: flow.serviceId,
 		...(flow.projectId ? { projectId: flow.projectId } : {}),
@@ -264,7 +370,7 @@ function targetOf(flow: Flow): GateTarget {
 /** The lists hold only what this account may end, so the gates check the hub side alone. */
 const REVOCABLE = { delegatorIsMe: true, payerIsMe: true };
 
-function sendCommand(flow: Flow, command: "stop" | "remove") {
+function sendCommand(flow: RemovalFlow, command: "stop" | "remove") {
 	const { deviceId, serviceId, commands, projectId } = flow;
 	const stop = command === "stop";
 	return flow.actions.run<ManagementResponse>({
@@ -295,7 +401,11 @@ function sendCommand(flow: Flow, command: "stop" | "remove") {
 	});
 }
 
-function revokeGrant(flow: Flow, kind: "resource" | "billing", id: string) {
+function revokeGrant(
+	flow: RemovalFlow,
+	kind: "resource" | "billing",
+	id: string,
+) {
 	const { t, deviceId, projectId } = flow;
 	const scope = flow.workspace.scopeKey;
 	return flow.actions.run<void>({
@@ -334,7 +444,7 @@ function revokeGrant(flow: Flow, kind: "resource" | "billing", id: string) {
 
 /** A failing gate sends nothing and leaves no result line, so its reason goes in front of what it means here. */
 function explain(
-	flow: Flow,
+	flow: RemovalFlow,
 	outcome: DeviceActionOutcome<unknown>,
 	then: string,
 ) {
@@ -345,7 +455,7 @@ function explain(
 	flow.say({ tone: "warning", text: reason ? `${reason} ${then}` : then });
 }
 
-async function waitStopped(flow: Flow, sinceS: number) {
+async function waitStopped(flow: RemovalFlow, sinceS: number) {
 	const { workspace, deviceId, serviceId } = flow;
 	for (let attempt = 0; attempt < STOP_POLLS; attempt++) {
 		await workspace.live.refreshInspection(deviceId);
@@ -360,7 +470,7 @@ async function waitStopped(flow: Flow, sinceS: number) {
 	return false;
 }
 
-async function stopAndWait(flow: Flow) {
+async function stopAndWait(flow: RemovalFlow) {
 	const { t } = flow;
 	const names = namesOf(flow);
 	const sinceS = Math.floor(flow.workspace.clock.now() / 1000);
@@ -404,7 +514,7 @@ async function stopAndWait(flow: Flow) {
 	return stopped;
 }
 
-async function revokeAll(flow: Flow) {
+async function revokeAll(flow: RemovalFlow) {
 	const { t, cloud } = flow;
 	const steps = [
 		...cloud.limits.map((id) => ({ kind: "billing" as const, id })),
@@ -433,10 +543,57 @@ async function revokeAll(flow: Flow) {
 	return true;
 }
 
-/** True once the device removed the service. */
-async function removeService(flow: Flow, revoking: boolean) {
+/**
+ * Hands the service's schedules back while the zone can still say what
+ * happened: the service is stopped by now and runs none of them, and once it
+ * is removed the screen that could report a refusal is gone.
+ */
+/** Why the removal stopped when the hub didn't take back what the service holds. */
+function notGivenBackText(flow: RemovalFlow, box: string | undefined): string {
 	const { t } = flow;
+	const names = namesOf(flow);
+	if (box)
+		return flow.stopFirst
+			? t(
+					"devices:serviceConfig.remove.notTakenBackStopped",
+					"The hub didn't take back what {{service}} runs, so it wasn't removed. It stays stopped. Try again, or untick “{{box}}”.",
+					{ ...names, box },
+				)
+			: t(
+					"devices:serviceConfig.remove.notTakenBack",
+					"The hub didn't take back what {{service}} runs, so it wasn't removed. Try again, or untick “{{box}}”.",
+					{ ...names, box },
+				);
+	return flow.stopFirst
+		? t(
+				"devices:serviceConfig.remove.notGivenBackStopped",
+				"The hub didn't take its schedules back, so {{service}} wasn't removed. It stays stopped. Try again, or untick “Run its schedules on the hub again”.",
+				names,
+			)
+		: t(
+				"devices:serviceConfig.remove.notGivenBack",
+				"The hub didn't take its schedules back, so {{service}} wasn't removed. Try again, or untick “Run its schedules on the hub again”.",
+				names,
+			);
+}
+
+async function giveBackAll(flow: RemovalFlow) {
+	const { schedules } = flow;
+	for (const eventId of schedules?.ids ?? []) {
+		const result = await schedules?.giveBack(eventId);
+		if (result?.kind === "ok") continue;
+		flow.say({ tone: "warning", text: notGivenBackText(flow, schedules?.box) });
+		return false;
+	}
+	return true;
+}
+
+/** True once the device removed the service. */
+export async function removeService(flow: RemovalFlow, choice: RemoveChoice) {
+	const { t } = flow;
+	const revoking = choice.revoke;
 	if (flow.stopFirst && !(await stopAndWait(flow))) return false;
+	if (choice.giveBack && !(await giveBackAll(flow))) return false;
 	if (revoking && !(await revokeAll(flow))) return false;
 	const removed = await sendCommand(flow, "remove");
 	if (removed.status === "done") return true;
@@ -548,9 +705,31 @@ function useRemoval(
 	const mounted = useMounted();
 	const [busy, setBusy] = useState(false);
 	const [note, setNote] = useState<Note | null>(null);
-	const choice = useRef<RemoveChoice>({ revoke: false, lose: false });
+	const choice = useRef<RemoveChoice>({ ...FRESH_CHOICE });
 	const resultKey = `service-remove:${deviceId}/${serviceId}`;
 	const { service, deviceLabel, configuration } = read;
+	const appId = service?.projectId;
+	const { view, placements } = useAppView(appId);
+	const moves = useScheduleMoves(appId ?? "");
+	const { canEditEvents } = useDeployRole(appId);
+	const held = useMemo(() => {
+		const ids = schedulesClaimedBy(
+			placements.data?.schedules,
+			deviceId,
+			serviceId,
+		);
+		if (!ids.length) return null;
+		const known = new Map(
+			view
+				? [...view.events.rows, ...view.events.ineligible].map((row) => [
+						row.eventId,
+						{ name: row.name, eventType: row.eventType },
+					])
+				: [],
+		);
+		return { ids, ...splitHeld(ids, known, time.locale) };
+	}, [placements.data, view, deviceId, serviceId, time.locale]);
+	const mayGiveBack = canEditEvents !== false;
 
 	const removeGate = commands.remove.gate;
 	// A running service is stopped first when the person may stop it; the confirm says so.
@@ -591,12 +770,31 @@ function useRemoval(
 					serviceId={serviceId}
 					cloud={cloud}
 					gate={gate}
-					hosted={authority !== null}
+					hosted={authority !== null || held !== null}
 					unknown={commands.remove.rows.who}
 					onRevoke={(revoke) => {
 						choice.current.revoke = revoke;
 					}}
 				/>
+				{held ? (
+					<ScheduleGiveBack
+						held={held}
+						allowed={mayGiveBack}
+						onGiveBack={(giveBack) => {
+							choice.current.giveBack = giveBack;
+						}}
+					/>
+				) : null}
+				{held?.bots ? (
+					<span data-remove-bots="" className="mt-1.5 block">
+						{botCutOffText(t, {
+							device: deviceLabel,
+							bots: held.bots,
+							date: undefined,
+							removing: true,
+						})}
+					</span>
+				) : null}
 			</>
 		),
 		...(online
@@ -622,7 +820,7 @@ function useRemoval(
 			) : undefined,
 	};
 
-	const flow: Flow = {
+	const flow: RemovalFlow = {
 		t,
 		time,
 		actions,
@@ -635,6 +833,14 @@ function useRemoval(
 		resultKey,
 		cloud,
 		stopFirst,
+		schedules:
+			held && mayGiveBack
+				? {
+						ids: held.ids,
+						giveBack: moves.giveBack,
+						...(held.bots ? { box: giveBackLabel(t, held) } : {}),
+					}
+				: null,
 		say: (next) => {
 			if (mounted.current) setNote(next);
 		},
@@ -642,7 +848,7 @@ function useRemoval(
 
 	const open = async () => {
 		if (busy || blocked) return;
-		choice.current = { revoke: false, lose: false };
+		choice.current = { ...FRESH_CHOICE };
 		const answer = await confirm({
 			icon: Trash2,
 			title: commands.remove.title,
@@ -673,7 +879,7 @@ function useRemoval(
 		setBusy(true);
 		let removed = false;
 		try {
-			removed = await removeService(flow, choice.current.revoke);
+			removed = await removeService(flow, choice.current);
 		} catch {
 			// A step that broke outside the action layer still ends in a sentence and a free button.
 			flow.say({

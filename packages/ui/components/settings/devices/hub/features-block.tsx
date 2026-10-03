@@ -23,6 +23,7 @@ import {
 	useAreaTime,
 } from "../primitives/area-context";
 import { Block } from "../primitives/block";
+import { dayText } from "../primitives/day";
 import { DvButton } from "../primitives/dv-button";
 import { FreshnessStamp } from "../primitives/freshness-stamp";
 import { StatusChip } from "../primitives/status-chip";
@@ -30,7 +31,15 @@ import type { ChipTone } from "../primitives/tone";
 import { useRouteLink } from "../routing/use-devices-route";
 import { stampOf } from "../shell/attention-popover";
 import { HubReadStamp } from "./hub-parts";
-import { type HubView, failsCheck, firstFailing, jumpTo } from "./hub-view";
+import {
+	type HubView,
+	type ReleaseVerdict,
+	failsCheck,
+	firstFailing,
+	jumpTo,
+	usableRelease,
+	useReleaseVerdict,
+} from "./hub-view";
 import { checkCopy } from "./readiness-list";
 
 const LINK = "underline decoration-border-strong underline-offset-2";
@@ -61,6 +70,8 @@ const FEATURE_CHIP: Record<FeatureState, { tone: ChipTone; icon: LucideIcon }> =
 interface Facts {
 	t: DevicesT;
 	view: HubView;
+	/** The one verdict about the agent release; no rule here judges the release by itself. */
+	verdict: ReleaseVerdict;
 	time: AreaTime;
 }
 
@@ -150,9 +161,8 @@ const noDeviceSlot: Rule = ({ t, view }) => {
 	};
 };
 
-const releasePending: Rule = ({ t, view }) => {
-	const { releaseState } = view;
-	if (releaseState !== "verifying" && releaseState !== "waiting")
+const releasePending: Rule = ({ t, verdict }) => {
+	if (verdict.kind !== "checking" && verdict.kind !== "waiting")
 		return undefined;
 	return {
 		state: "unknown",
@@ -163,8 +173,32 @@ const releasePending: Rule = ({ t, view }) => {
 	};
 };
 
-const noReleaseToPackage: Rule = ({ t, view }) =>
-	view.releaseState === "verified"
+const setupRanOut: Rule = ({ t, verdict, time }) =>
+	verdict.kind === "expired"
+		? {
+				state: "blocked",
+				why: t(
+					"devices:hub.features.setup.expired",
+					"The agent release ran out on {{until}}, so no setup package can be made.",
+					{ until: dayText(time, verdict.facts.expires_at) },
+				),
+			}
+		: undefined;
+
+const updateRanOut: Rule = ({ t, verdict, time }) =>
+	verdict.kind === "expired"
+		? {
+				state: "blocked",
+				why: t(
+					"devices:hub.features.update.expired",
+					"The agent release ran out on {{until}}. Devices keep the agent they have.",
+					{ until: dayText(time, verdict.facts.expires_at) },
+				),
+			}
+		: undefined;
+
+const noReleaseToPackage: Rule = ({ t, verdict }) =>
+	usableRelease(verdict)
 		? undefined
 		: {
 				state: "blocked",
@@ -196,8 +230,8 @@ const noConnectionService: Rule = ({ t, view }) =>
 			}
 		: undefined;
 
-const noSignedReleases: Rule = ({ t, view }) =>
-	view.releaseState === "missing"
+const noSignedReleases: Rule = ({ t, verdict }) =>
+	verdict.kind === "missing"
 		? {
 				state: "blocked",
 				why: t(
@@ -229,8 +263,8 @@ const updateNeedsLive: Rule = ({ t, view }) =>
 			}
 		: undefined;
 
-const releaseUnverified: Rule = ({ t, view }) =>
-	view.releaseState === "failed"
+const releaseUnverified: Rule = ({ t, verdict }) =>
+	verdict.kind === "failed" || verdict.kind === "unfetched"
 		? {
 				state: "blocked",
 				why: t(
@@ -273,7 +307,7 @@ const checkInBlocked: Rule = ({ t, view }) => {
 };
 
 const setupVerdict = (facts: Facts) => {
-	const release = facts.view.release.data;
+	const release = usableRelease(facts.verdict);
 	const platforms = release
 		? release.targets.map((target) => enumLabel(facts.t, "targetShort", target))
 		: [];
@@ -287,6 +321,7 @@ const setupVerdict = (facts: Facts) => {
 			anyCheckFails,
 			noDeviceSlot,
 			releasePending,
+			setupRanOut,
 			noReleaseToPackage,
 		],
 		facts.t(
@@ -316,9 +351,28 @@ const liveVerdict = (facts: Facts) =>
 		),
 	);
 
-const updateVerdict = (facts: Facts) => {
-	const release = facts.view.release.data;
-	return decide(
+/** What a usable release means for updates; inside the last 30 days it says when updates stop. */
+const updateWorks = ({ t, verdict, time }: Facts) => {
+	const release = usableRelease(verdict);
+	const values = {
+		version: release ? release.manifest.release_version : "",
+		until: release ? dayText(time, release.manifest.expires_at) : "",
+	};
+	return verdict.kind === "ends_soon"
+		? t(
+				"devices:hub.features.update.endsSoon",
+				"Current release {{version}} · runs out on {{until}}. After that, updates wait for a new or renewed release.",
+				values,
+			)
+		: t(
+				"devices:hub.features.update.ok",
+				"Current release {{version}} · verified until {{until}}.",
+				values,
+			);
+};
+
+const updateVerdict = (facts: Facts) =>
+	decide(
 		facts,
 		[
 			whileChecking,
@@ -328,18 +382,11 @@ const updateVerdict = (facts: Facts) => {
 			withoutChecks,
 			updateNeedsLive,
 			releaseUnverified,
+			updateRanOut,
 			releasePending,
 		],
-		facts.t(
-			"devices:hub.features.update.ok",
-			"Current release {{version}} · verified until {{until}}.",
-			{
-				version: release ? release.manifest.release_version : "",
-				until: release ? facts.time.at(release.manifest.expires_at) : "",
-			},
-		),
+		updateWorks(facts),
 	);
-};
 
 const checkInVerdict = (facts: Facts) =>
 	decide(
@@ -408,7 +455,8 @@ function useUpdateFeature(facts: Facts): Feature {
 function useFeatures(view: HubView): Feature[] {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
-	const facts: Facts = { t, view, time };
+	const verdict = useReleaseVerdict(view);
+	const facts: Facts = { t, view, verdict, time };
 	const setup = useSetupFeature(facts);
 	const update = useUpdateFeature(facts);
 	const away = stateIs(view, "off") || stateIs(view, "unreachable");

@@ -1,14 +1,17 @@
+import type { IScheduleConfig } from "../../../schedule-config";
 import type {
 	DeploymentEvent,
 	DeploymentVariable,
 	InstalledProject,
 } from "../../deployment";
-import type {
-	AppDeviceInput,
-	AppEventInput,
-	AppInput,
-	AppVersionInput,
-	LocalServiceChange,
+import {
+	type AppDeviceInput,
+	type AppEventInput,
+	type AppInput,
+	type AppVersionInput,
+	type LocalServiceChange,
+	endpointOwnToken,
+	eventFormFacts,
 } from "../app-plan";
 import type { PlanApp, PlanDevice } from "../deploy-plan";
 import type {
@@ -30,14 +33,32 @@ export function v(text: string): [number, number, number] {
 interface EventSeed {
 	type: string;
 	ver: string;
-	/** null = follows the latest flow edits. */
+	/** null = follows the Latest flow. */
 	board: string | null;
 	active?: boolean;
 	page?: boolean;
 	canary?: boolean;
+	/** `cron` events: the schedule half of the event's config. */
+	schedule?: IScheduleConfig;
+	/** The record's config (routes, bot settings, tokens), as the hub keeps it. */
+	config?: Record<string, unknown>;
+	/** A form's fields, by data type. */
+	fields?: string[];
+	/** The event's flow; `flow_main` unless the event names another. */
+	flow?: string;
+	/** A Latest event: the published version that equals its flow (null = unpublished edits). */
+	current?: string | null;
+}
+
+/** A config as the bytes an event record carries. */
+export function configBytes(config: unknown): number[] {
+	return [...new TextEncoder().encode(JSON.stringify(config))];
 }
 
 function evt(id: string, name: string, seed: EventSeed): AppEventInput {
+	const current = seed.current ? v(seed.current) : null;
+	const ownToken = endpointOwnToken(seed.type, seed.config ?? null);
+	const form = eventFormFacts(seed.type, seed.fields ?? []);
 	return {
 		id,
 		name,
@@ -47,8 +68,83 @@ function evt(id: string, name: string, seed: EventSeed): AppEventInput {
 		board_version: seed.board ? v(seed.board) : null,
 		default_page_id: seed.page ? `page_${id}` : null,
 		...(seed.canary ? { canary: { percent: 10 } } : {}),
+		...(seed.schedule ? { schedule: seed.schedule } : {}),
+		...(seed.config ? { config: configBytes(seed.config) } : {}),
+		...(ownToken === undefined ? {} : { ownToken }),
+		...(form ? { form } : {}),
+		boardId: seed.flow ?? "flow_main",
+		...(seed.current === undefined
+			? {}
+			: { flow: { current, newest: current } }),
 	};
 }
+
+/** The route configs of the sample's Endpoints, as the editor saves them. */
+export const ROUTES = {
+	support: { sink_type: "http", method: "POST", path: "/support" },
+	extract: { sink_type: "http", method: "POST", path: "/extract" },
+	extractGpu: { sink_type: "http", method: "POST", path: "/extract-gpu" },
+	crmWebhook: { sink_type: "http", method: "POST", path: "/crm/webhook" },
+	notes: { sink_type: "http", method: "GET", path: "/notes" },
+	orders: {
+		sink_type: "http",
+		method: "GET",
+		path: "/orders",
+		public_endpoint: false,
+		auth_token: "shop-orders-own-token-0123456789abcdef",
+	},
+} satisfies Record<string, Record<string, unknown>>;
+
+/** Bot configs as the editor saves them; the token only on the record, never on a device. */
+export const BOTS = {
+	telegram: {
+		sink_type: "telegram",
+		bot_token: "123456789:AAHfixture-token-0123456789abcdef",
+		bot_name: "Shop helper",
+		bot_description: "",
+		chat_whitelist: [],
+		chat_blacklist: [],
+		respond_to_mentions: true,
+		respond_to_private: true,
+		command_prefix: "/",
+	},
+	discord: {
+		sink_type: "discord",
+		token: "",
+		bot_name: "Shop support",
+		bot_description: "",
+		intents: ["Guilds", "GuildMessages", "MessageContent"],
+		channel_whitelist: ["1180000000000000001"],
+		channel_blacklist: [],
+		respond_to_mentions: true,
+		respond_to_dms: true,
+		command_prefix: "!",
+	},
+} satisfies Record<string, Record<string, unknown>>;
+
+/** The types a hub of round two hands to devices (`event_types`, design R2 §1.9). */
+export const HUB_EVENT_TYPES = [
+	"http",
+	"simple_chat",
+	"rest",
+	"mcp",
+	"daemon",
+	"cron",
+	"api",
+	"quick_action",
+	"generic_form",
+	"telegram",
+	"discord",
+];
+
+/** The schedules of the sample: weekdays, nightly, hourly without a zone (UTC on a device), three shifts, daily. */
+export const SCHEDULES = {
+	weekdays: { expression: "0 0 8 * * 1-5", timezone: "Europe/Berlin" },
+	nightly: { expression: "0 0 2 * * *", timezone: "Europe/Berlin" },
+	hourly: { expression: "0 0 * * * *" },
+	shifts: { expression: "0 0 6,14,22 * * *", timezone: "Europe/Berlin" },
+	evening: { expression: "0 0 18 * * *", timezone: "Europe/Berlin" },
+} satisfies Record<string, IScheduleConfig>;
 
 function version(
 	hash: string,
@@ -86,7 +182,15 @@ export const HASH = {
 	notes19: "2b17fa9604d3cd1e9ba786c47861395f8909f8a0e7350ecfa9cb2d4ee3a9bbea",
 	visitor04: "bfbae1d8cfe7b880ea5c3d99a6d26b53aa48b08c63b4054aa5a37b46df968a1d",
 	visitor03: "247853dd8ea1aa70ad31cca473a712cad70a0fabb22128e212ec64e31fa00176",
+	shop10: "5a1e0c3b9d7f2e4a6c8b0d1f3e5a7c9b2d4f6a8c0e1b3d5f7a9c2e4b6d8f0a1c",
 } as const;
+
+/** The one-time schedule of Shop Assistant: 2026-10-15 09:00 in Berlin (07:00 UTC), after `NOW0`. */
+export const SHOP_ONCE = {
+	scheduled_for: { date: "2026-10-15", time: "09:00" },
+	timezone: "Europe/Berlin",
+} satisfies IScheduleConfig;
+export const SHOP_ONCE_AT = 1792047600;
 
 export const APPS = {
 	app_support_portal: {
@@ -97,10 +201,12 @@ export const APPS = {
 			version(HASH.support24, "v2.4.0", 1790760600, null, [
 				["evt_support_chat", "2.4.0", "5.2.0"],
 				["evt_support_http", "1.0.4", "5.2.0"],
+				["evt_support_digest", "1.1.0", "5.2.0"],
 			]),
 			version(HASH.support23, "v2.3.0", 1789819200, null, [
 				["evt_support_chat", "2.3.0", "5.1.2"],
 				["evt_support_http", "1.0.4", "5.1.2"],
+				["evt_support_digest", "1.1.0", "5.2.0"],
 			]),
 		],
 		events: [
@@ -118,11 +224,13 @@ export const APPS = {
 				type: "http",
 				ver: "1.0.4",
 				board: "5.2.0",
+				config: ROUTES.support,
 			}),
 			evt("evt_support_digest", "Escalation digest", {
 				type: "cron",
 				ver: "1.1.0",
 				board: "5.2.0",
+				schedule: SCHEDULES.weekdays,
 			}),
 			evt("evt_support_mailbox", "Support inbox", {
 				type: "email",
@@ -138,17 +246,23 @@ export const APPS = {
 		visibility: "Prototype",
 		versions: [
 			version(HASH.invoice15, "v1.5.0", 1790766000, ME, [
+				["evt_invoice_review", "0.9.0", "0.9.2"],
 				["evt_extract_http", "1.5.0", "2.2.0"],
 				["evt_gpu_extract", "1.1.0", "1.4.0"],
 				["evt_invoice_mcp", "1.0.2", "2.2.0"],
+				["evt_invoice_reconcile", "1.0.0", "1.3.0"],
 			]),
 			version(HASH.invoice14, "v1.4.0", 1790691600, ME, [
+				["evt_invoice_review", "0.9.0", "0.9.2"],
 				["evt_extract_http", "1.4.0", "2.1.0"],
 				["evt_gpu_extract", "1.0.2", "1.3.0"],
+				["evt_invoice_reconcile", "1.0.0", "1.3.0"],
 			]),
 			version(HASH.invoice13, "v1.3.0", 1789212000, "usr_9QmT3rVb", [
+				["evt_invoice_review", "0.9.0", "0.9.2"],
 				["evt_extract_http", "1.3.0", "2.0.0"],
 				["evt_gpu_extract", "1.0.2", "1.3.0"],
+				["evt_invoice_reconcile", "1.0.0", "1.3.0"],
 			]),
 		],
 		events: [
@@ -157,16 +271,21 @@ export const APPS = {
 				ver: "0.9.0",
 				board: null,
 				page: true,
+				flow: "flow_review",
+				current: "0.9.2",
 			}),
 			evt("evt_extract_http", "Extract invoice", {
 				type: "http",
 				ver: "1.5.0",
 				board: "2.2.0",
+				config: ROUTES.extract,
 			}),
 			evt("evt_gpu_extract", "Extract invoice (GPU)", {
 				type: "http",
 				ver: "1.1.0",
 				board: "1.4.0",
+				flow: "flow_gpu",
+				config: ROUTES.extractGpu,
 			}),
 			evt("evt_invoice_mcp", "Invoice tools (MCP)", {
 				type: "mcp",
@@ -182,6 +301,8 @@ export const APPS = {
 				type: "cron",
 				ver: "1.0.0",
 				board: "1.3.0",
+				flow: "flow_reconcile",
+				schedule: SCHEDULES.nightly,
 			}),
 		],
 	},
@@ -194,10 +315,12 @@ export const APPS = {
 				["evt_crm_nightly", "1.2.0", "4.1.0"],
 				["evt_crm_webhook", "1.0.0", "4.1.0"],
 				["evt_crm_watch", "0.3.0", "4.1.0"],
+				["evt_crm_hourly", "1.0.0", "4.1.0"],
 			]),
 			version(HASH.crm30, "v3.0.0", 1790006400, null, [
 				["evt_crm_nightly", "1.1.0", "4.0.0"],
 				["evt_crm_webhook", "1.0.0", "4.0.0"],
+				["evt_crm_hourly", "1.0.0", "4.1.0"],
 			]),
 		],
 		events: [
@@ -210,6 +333,7 @@ export const APPS = {
 				type: "http",
 				ver: "1.0.0",
 				board: "4.1.0",
+				config: ROUTES.crmWebhook,
 			}),
 			evt("evt_crm_watch", "Watch import folder", {
 				type: "daemon",
@@ -220,6 +344,7 @@ export const APPS = {
 				type: "cron",
 				ver: "1.0.0",
 				board: "4.1.0",
+				schedule: SCHEDULES.hourly,
 			}),
 			evt("evt_crm_rest", "Sync REST API", {
 				type: "rest",
@@ -237,9 +362,11 @@ export const APPS = {
 			version(HASH.scan12, "v1.2.0", 1790665200, null, [
 				["evt_scan_ingest", "2.0.1", "1.4.0"],
 				["evt_scan_station", "1.0.0", "1.0.0"],
+				["evt_shift_report", "1.0.0", "1.0.0"],
 			]),
 			version(HASH.scan11, "v1.1.0", 1789387200, null, [
 				["evt_scan_ingest", "2.0.0", "1.3.0"],
+				["evt_shift_report", "1.0.0", "1.0.0"],
 			]),
 		],
 		events: [
@@ -248,6 +375,7 @@ export const APPS = {
 				ver: "1.0.0",
 				board: "1.0.0",
 				page: true,
+				flow: "flow_station",
 			}),
 			evt("evt_scan_ingest", "Scan ingest", {
 				type: "daemon",
@@ -258,11 +386,14 @@ export const APPS = {
 				type: "deeplink",
 				ver: "1.0.0",
 				board: "1.0.0",
+				flow: "flow_station",
 			}),
 			evt("evt_shift_report", "Shift report", {
 				type: "cron",
 				ver: "1.0.0",
 				board: "1.0.0",
+				flow: "flow_station",
+				schedule: SCHEDULES.shifts,
 			}),
 		],
 	},
@@ -283,11 +414,13 @@ export const APPS = {
 				type: "generic_form",
 				ver: "1.0.0",
 				board: "3.0.1",
+				fields: ["String"],
 			}),
 			evt("evt_notes_http", "Notes page", {
 				type: "http",
 				ver: "1.2.0",
 				board: "3.0.1",
+				config: ROUTES.notes,
 			}),
 		],
 	},
@@ -322,10 +455,12 @@ export const APPS = {
 			version(HASH.visitor04, "v0.4.0", 1790757000, ME, [
 				["evt_visitor_page", "0.4.0", "0.4.0"],
 				["evt_badge_printer", "0.2.1", "0.4.0"],
+				["evt_visitor_report", "0.1.0", "0.2.0"],
 			]),
 			version(HASH.visitor03, "v0.3.0", 1788339600, ME, [
 				["evt_visitor_page", "0.3.0", "0.3.0"],
 				["evt_badge_printer", "0.2.0", "0.3.0"],
+				["evt_visitor_report", "0.1.0", "0.2.0"],
 			]),
 		],
 		events: [
@@ -349,6 +484,60 @@ export const APPS = {
 				type: "cron",
 				ver: "0.1.0",
 				board: "0.2.0",
+				flow: "flow_report",
+				schedule: SCHEDULES.evening,
+			}),
+		],
+	},
+	/* Round two: one event of every new kind, and one that still can't run. */
+	app_shop_assistant: {
+		id: "app_shop_assistant",
+		name: "Shop Assistant",
+		visibility: "Private",
+		versions: [
+			version(HASH.shop10, "v1.0.0", 1790762400, ME, [
+				["evt_shop_orders", "1.0.0", "1.2.0"],
+				["evt_shop_return", "1.0.0", "1.2.0"],
+				["evt_shop_telegram", "1.0.0", "1.2.0"],
+				["evt_shop_discord", "1.0.0", "1.2.0"],
+				["evt_shop_prices", "1.0.0", "1.2.0"],
+			]),
+		],
+		events: [
+			evt("evt_shop_orders", "Orders", {
+				type: "api",
+				ver: "1.0.0",
+				board: "1.2.0",
+				config: ROUTES.orders,
+			}),
+			evt("evt_shop_return", "Return request", {
+				type: "generic_form",
+				ver: "1.0.0",
+				board: "1.2.0",
+				fields: ["String", "Integer", "PathBuf"],
+			}),
+			evt("evt_shop_telegram", "Shop helper", {
+				type: "telegram",
+				ver: "1.0.0",
+				board: "1.2.0",
+				config: BOTS.telegram,
+			}),
+			evt("evt_shop_discord", "Shop support", {
+				type: "discord",
+				ver: "1.0.0",
+				board: "1.2.0",
+				config: BOTS.discord,
+			}),
+			evt("evt_shop_prices", "Price update", {
+				type: "cron",
+				ver: "1.0.0",
+				board: "1.2.0",
+				schedule: SHOP_ONCE,
+			}),
+			evt("evt_shop_mail", "Order mail", {
+				type: "inbound_email",
+				ver: "1.0.0",
+				board: "1.2.0",
 			}),
 		],
 	},
@@ -567,11 +756,17 @@ function grantRow(
 	};
 }
 
-/** E20 per app: what the hub lets this viewer see. */
+/**
+ * E20 per app: what the hub lets this viewer see. The hub runs every schedule
+ * and bot of the online apps (none is listed) and hands every type of round
+ * two to devices (`event_types`).
+ */
 export const PLACEMENTS: Record<SampleAppId, AppDevicePlacements> = {
 	app_support_portal: { server_time: NOW0, placements: [] },
 	app_invoice_ai: {
 		server_time: NOW0,
+		schedules: [],
+		event_types: HUB_EVENT_TYPES,
 		placements: [
 			grantRow(
 				"edge-berlin-01",
@@ -592,6 +787,8 @@ export const PLACEMENTS: Record<SampleAppId, AppDevicePlacements> = {
 	app_warehouse_scan: { server_time: NOW0, placements: [] },
 	app_field_notes: {
 		server_time: NOW0,
+		schedules: [],
+		event_types: HUB_EVENT_TYPES,
 		placements: [
 			grantRow(
 				"studio-mac-mini",
@@ -603,6 +800,8 @@ export const PLACEMENTS: Record<SampleAppId, AppDevicePlacements> = {
 	},
 	app_partner_reports: {
 		server_time: NOW0,
+		schedules: [],
+		event_types: HUB_EVENT_TYPES,
 		placements: [
 			grantRow(
 				"partner-edge",
@@ -619,7 +818,18 @@ export const PLACEMENTS: Record<SampleAppId, AppDevicePlacements> = {
 			),
 		],
 	},
-	app_visitor_checkin: { server_time: NOW0, placements: [] },
+	app_visitor_checkin: {
+		server_time: NOW0,
+		schedules: [],
+		event_types: HUB_EVENT_TYPES,
+		placements: [],
+	},
+	app_shop_assistant: {
+		server_time: NOW0,
+		schedules: [],
+		event_types: HUB_EVENT_TYPES,
+		placements: [],
+	},
 };
 
 /** APP §5.4: what this computer recorded when it deployed each service. */
@@ -705,7 +915,9 @@ function catalogEvent(
 	event: AppEventInput,
 	hosted: boolean,
 	readiness: DeploymentEvent["readiness_kind"],
+	kind?: DeploymentEvent["kind"],
 ): DeploymentEvent {
+	const { schedule } = event;
 	return {
 		id: event.id,
 		name: event.name,
@@ -716,20 +928,32 @@ function catalogEvent(
 		readiness_kind: readiness,
 		rollout_supported: true,
 		eligible: true,
+		...(kind ? { kind } : {}),
+		...(kind === "scheduled" && schedule?.expression
+			? {
+					schedule: {
+						expression: schedule.expression,
+						timezone: schedule.timezone ?? "UTC",
+					},
+				}
+			: {}),
 	};
 }
 
-const [visitorPage, badgePrinter] = APPS.app_visitor_checkin.events;
+const [visitorPage, badgePrinter, , visitorReport] =
+	APPS.app_visitor_checkin.events;
 
 /** The approved bundle for Visitor Check-in v0.4.0, as the device verifies it. */
 export const VISITOR_CATALOG = {
 	events: [
-		catalogEvent(badgePrinter, false, "explicit"),
-		catalogEvent(visitorPage, true, "listener"),
+		catalogEvent(badgePrinter, false, "explicit", "background"),
+		catalogEvent(visitorPage, true, "listener", "served"),
+		catalogEvent(visitorReport, false, "explicit", "scheduled"),
 	],
 	variables: {
 		evt_visitor_page: [VARIABLES.hostToken, VARIABLES.siteName],
 		evt_badge_printer: [VARIABLES.printer, VARIABLES.siteName],
+		evt_visitor_report: [],
 	},
 };
 

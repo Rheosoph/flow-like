@@ -1,14 +1,16 @@
 import { sha256 } from "@noble/hashes/sha2";
-import { eventEligibility } from "../deployment";
 import type { ActivityItem } from "../workspace/types";
-import type {
-	AppEventInput,
-	AppServiceRow,
-	AppVersionInput,
-	AppVersionPin,
-	AppVersionView,
-	AppView,
-	VersionDiffRow,
+import {
+	type AppEventInput,
+	type AppHubFacts,
+	type AppServiceRow,
+	type AppVersionInput,
+	type AppVersionPin,
+	type AppVersionView,
+	type AppView,
+	type VersionDiffRow,
+	appEventRule,
+	resolvedPin,
 } from "./app-plan";
 import { fleetFacts } from "./device-view";
 import type { AttentionInput, PlacementEvent, ServiceView } from "./types";
@@ -56,22 +58,59 @@ export function versionName(
 	return version.label ?? version.short;
 }
 
-/** A7: the newest app version pins every event that can run on a device at the versions published now. */
-export function newestPins(events: readonly AppEventInput[]): AppVersionPin[] {
+/**
+ * A7: the newest app version pins every event that can run on a device at the
+ * versions published now. An event that follows Latest is pinned to the flow
+ * version that equals its flow; while none does, it has no pin yet.
+ */
+export function newestPins(
+	events: readonly AppEventInput[],
+	hub?: AppHubFacts,
+): AppVersionPin[] {
 	return events.flatMap((event) => {
-		const rule = eventEligibility(event, {
-			ineligibleReason: event.ineligibleReason,
-		});
-		return rule.eligible && rule.eventVersion && rule.boardVersion
-			? [
-					{
-						eventId: event.id,
-						eventVersion: rule.eventVersion,
-						boardVersion: rule.boardVersion,
-					},
-				]
-			: [];
+		const pin = appEventRule(event, hub).eligible ? resolvedPin(event) : null;
+		return pin ? [{ eventId: event.id, ...pin }] : [];
 	});
+}
+
+/** The events that can run, follow Latest and whose flow has edits no published version holds: the next deploy creates one. */
+function editedEvents(
+	events: readonly AppEventInput[],
+	hub?: AppHubFacts,
+): string[] {
+	return events
+		.filter((event) => {
+			const rule = appEventRule(event, hub);
+			return (
+				rule.eligible &&
+				rule.followsLatest &&
+				typeof event.flow === "object" &&
+				event.flow.current === null
+			);
+		})
+		.map((event) => event.id);
+}
+
+export function hasUnpublishedEdits(
+	events: readonly AppEventInput[],
+	hub?: AppHubFacts,
+): boolean {
+	return editedEvents(events, hub).length > 0;
+}
+
+/**
+ * Events that follow Latest whose flow state is not known (not read yet, or a
+ * hub that can't say): what the app pins for them now can't be told.
+ */
+function undecidedEvents(events: readonly AppEventInput[]): Set<string> {
+	return new Set(
+		events
+			.filter(
+				(event) =>
+					appEventRule(event).followsLatest && typeof event.flow !== "object",
+			)
+			.map((event) => event.id),
+	);
 }
 
 /** A stable identifier of a pin set, the same on every computer. */
@@ -95,6 +134,8 @@ export interface VersionSources {
 	services: readonly Pick<ServiceView, "appVersion" | "events">[];
 	/** Unix seconds this computer sent a revision, by hash. */
 	sentAt?: Readonly<Record<string, number>>;
+	/** What the app's hub can do for its events. */
+	hub?: AppHubFacts;
 }
 
 interface Observed {
@@ -157,16 +198,21 @@ function byAge(sentAt: VersionSources["sentAt"] = {}) {
  * older revision a readable service still runs, newest first.
  */
 export function versionInputs(sources: VersionSources): AppVersionInput[] {
-	const pins = newestPins(sources.events);
+	const pins = newestPins(sources.events, sources.hub);
 	const newest = new Map(pins.map((pin) => [pin.eventId, pin]));
-	const observed = observedRevisions(sources.services);
+	// A revision that serves an event whose newest pin is unknown is neither current nor older: unknown.
+	const undecided = undecidedEvents(sources.events);
+	const observed = observedRevisions(sources.services).filter(
+		(entry) => ![...entry.pins.keys()].some((id) => undecided.has(id)),
+	);
 	const current = observed.find((entry) =>
 		isCurrent(entry.pins.values(), newest),
 	);
 	const older = observed
 		.filter((entry) => !isCurrent(entry.pins.values(), newest))
 		.sort(byAge(sources.sentAt));
-	if (!pins.length && !older.length) return [];
+	const edited = editedEvents(sources.events, sources.hub);
+	if (!pins.length && !older.length && !edited.length) return [];
 	return [
 		{
 			hash: current?.hash ?? definitionHash(pins),
@@ -174,6 +220,7 @@ export function versionInputs(sources: VersionSources): AppVersionInput[] {
 			builtAt: sources.changedAt ?? null,
 			by: null,
 			pins,
+			...(edited.length ? { unpublished: true, edited } : {}),
 		},
 		...older.map((entry) => ({
 			hash: entry.hash,
@@ -204,7 +251,8 @@ function knownDiff(
 	return version.diff.filter(
 		(row) =>
 			row.kind === "changed" ||
-			(row.kind === "removed" && version.index === newestIndex),
+			((row.kind === "removed" || row.kind === "edits") &&
+				version.index === newestIndex),
 	);
 }
 

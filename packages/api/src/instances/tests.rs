@@ -609,6 +609,7 @@ async fn migrate(db: &DatabaseConnection) {
             "../../prisma/migrations/20260923150000_instance_offline_replay/migration.sql"
         ),
         include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
+        include_str!("../../prisma/migrations/20261002120000_device_schedules/migration.sql"),
     ] {
         for statement in migration.split(';').filter(|s| !s.trim().is_empty()) {
             db.execute_unprepared(statement).await.unwrap();
@@ -3373,5 +3374,1234 @@ async fn fleet_reads_list_only_what_the_caller_may_see() {
         app_placements::placements(&context(&db, &disabled), "owner", "fleet-app").await,
         StatusCode::SERVICE_UNAVAILABLE,
     );
+    schema.drop().await;
+}
+
+const SCHEDULE_APP: &str = "schedule-app";
+const SCHEDULE_ROLE: &str = "schedule-owner-role";
+
+/// A running service of the schedule app: its cloud approval, one registered instance and
+/// that instance's project session.
+struct ScheduleService {
+    grant: ResourceGrantResponse,
+    key: SigningKey,
+    session: InstanceTokenResponse,
+}
+
+async fn schedule_service(
+    state: &DeviceContext<'_>,
+    device_id: &str,
+    device_key: &SigningKey,
+    placement: &str,
+) -> ScheduleService {
+    let grant = create_grant(
+        state,
+        "owner",
+        device_id,
+        CreateResourceGrantRequest {
+            placement_id: placement.into(),
+            deployment_id: format!("deployment-{placement}"),
+            project_id: SCHEDULE_APP.into(),
+            app_id: Some(SCHEDULE_APP.into()),
+            online_access: Some(OnlineProjectAccess::ReadOnly),
+            model_ids: Vec::new(),
+            max_instances: 2,
+            expires_at: now() + 3_600,
+        },
+    )
+    .await
+    .unwrap();
+    let key = SigningKey::generate();
+    let instance_id = format!("instance-{}", uuid::Uuid::new_v4().simple());
+    register(
+        state,
+        device_id,
+        registration_optional(&grant, None, &instance_id, device_key, &key),
+    )
+    .await
+    .unwrap();
+    let session = project::token(
+        state,
+        &instance_id,
+        InstanceTokenRequest {
+            client_assertion: assertion(
+                &instance_id,
+                &format!("/instances/{instance_id}/project-token"),
+                &key,
+            ),
+        },
+    )
+    .await
+    .unwrap();
+    ScheduleService {
+        grant,
+        key,
+        session,
+    }
+}
+
+/// The claim call of a service, as its device signs it.
+async fn claim_schedules(
+    state: &DeviceContext<'_>,
+    service: &ScheduleService,
+    event_ids: &[&str],
+) -> Result<serde_json::Value, ApiError> {
+    let headers = proof_headers(
+        &service.session,
+        &service.key,
+        Some(&service.session.dpop_nonce),
+        "POST",
+        schedules::CLAIM_PATH,
+    );
+    let authorization =
+        project::authenticate(state, &headers, "POST", schedules::CLAIM_PATH).await?;
+    let event_ids = event_ids.iter().map(|id| (*id).to_owned()).collect();
+    let (answer, _) = schedules::claim_for(state, &authorization, event_ids).await?;
+    Ok(serde_json::to_value(answer).unwrap())
+}
+
+fn held(event_id: &str, reason: &str) -> serde_json::Value {
+    serde_json::json!([{ "event_id": event_id, "reason": reason }])
+}
+
+async fn release_schedule(
+    state: &DeviceContext<'_>,
+    event_id: &str,
+    device_id: &str,
+    placement: &str,
+) -> Result<(serde_json::Value, bool), ApiError> {
+    let request = serde_json::from_value(
+        serde_json::json!({ "device_id": device_id, "placement_id": placement }),
+    )
+    .unwrap();
+    let (released, changed) =
+        schedules::release_to(state, "owner", SCHEDULE_APP, event_id, &request).await?;
+    Ok((serde_json::to_value(released).unwrap(), changed))
+}
+
+fn assert_schedule_refusal<T: std::fmt::Debug>(result: Result<T, ApiError>, code: &str) {
+    let error = result.expect_err("the release must be refused");
+    assert_eq!(error.status(), StatusCode::CONFLICT);
+    assert_eq!(error.public_code(), code);
+}
+
+/// When the hub runs it again, and whether a release ended.
+async fn give_back_schedule(state: &DeviceContext<'_>, event_id: &str) -> (Option<i64>, bool) {
+    let (given_back, changed) = schedules::give_back_from(state, SCHEDULE_APP, event_id)
+        .await
+        .unwrap();
+    let answer = serde_json::to_value(given_back).unwrap();
+    (answer["hub_resumes_at"].as_i64(), changed)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct StoredSchedule {
+    service: Option<(String, String)>,
+    grant_id: Option<String>,
+    claimed_at: Option<i64>,
+    seen_at: Option<i64>,
+    resume_at: Option<i64>,
+}
+
+async fn stored_schedule(db: &DatabaseConnection, event_id: &str) -> Option<StoredSchedule> {
+    let row = db
+        .query_one_raw(sql(
+            r#"SELECT "deviceId","placementId","grantId","claimedAt","seenAt","resumeAt" FROM "DeviceScheduleClaim" WHERE "appId"=$1 AND "eventId"=$2"#,
+            [SCHEDULE_APP.into(), event_id.into()],
+        ))
+        .await
+        .unwrap()?;
+    let device: Option<String> = row.try_get("", "deviceId").unwrap();
+    let placement: Option<String> = row.try_get("", "placementId").unwrap();
+    Some(StoredSchedule {
+        service: device.zip(placement),
+        grant_id: row.try_get("", "grantId").unwrap(),
+        claimed_at: row.try_get("", "claimedAt").unwrap(),
+        seen_at: row.try_get("", "seenAt").unwrap(),
+        resume_at: row.try_get("", "resumeAt").unwrap(),
+    })
+}
+
+/// `value` lies `offset` seconds after a moment between `from` and now.
+fn after(value: Option<i64>, from: i64, offset: i64) -> bool {
+    value.is_some_and(|value| (from + offset..=now() + offset).contains(&value))
+}
+
+async fn end_approval(db: &DatabaseConnection, service: &ScheduleService, ended_at: i64) {
+    db.execute_raw(sql(
+        r#"UPDATE "PlacementResourceGrant" SET "expiresAt"=$2 WHERE id=$1"#,
+        [service.grant.grant_id.clone().into(), ended_at.into()],
+    ))
+    .await
+    .unwrap();
+}
+
+async fn retire_processes(db: &DatabaseConnection, service: &ScheduleService) {
+    db.execute_raw(sql(
+        r#"UPDATE "WorkloadInstance" SET status='retired' WHERE "grantId"=$1"#,
+        [service.grant.grant_id.clone().into()],
+    ))
+    .await
+    .unwrap();
+}
+
+async fn skipped_by_the_hub(
+    state: &DeviceContext<'_>,
+    event_id: &str,
+    scheduled: Option<i64>,
+) -> bool {
+    let (db, dialect) = (state.db, state.dialect);
+    schedules::runs_on_device(db, dialect, SCHEDULE_APP, event_id, scheduled, now())
+        .await
+        .unwrap()
+}
+
+async fn a_device_claims_only_what_was_released_to_its_service(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    device_id: &str,
+    device_key: &SigningKey,
+) {
+    let reports = schedule_service(state, device_id, device_key, "claim-reports").await;
+    let other = schedule_service(state, device_id, device_key, "claim-other").await;
+    let approval = Some(reports.grant.grant_id.clone());
+
+    let answer = claim_schedules(state, &reports, &["claim-a"])
+        .await
+        .unwrap();
+    assert_eq!(answer["held"], held("claim-a", "not_released"));
+    assert_eq!(answer["claimed"], serde_json::json!([]));
+    assert_eq!(
+        stored_schedule(db, "claim-a").await,
+        None,
+        "a claim nobody released leaves nothing behind"
+    );
+
+    let started = now();
+    let (released, changed) = release_schedule(state, "claim-a", device_id, "claim-reports")
+        .await
+        .unwrap();
+    assert!(changed);
+    assert_eq!(released["state"], "released");
+    assert_eq!(
+        release_schedule(state, "claim-a", device_id, "claim-reports")
+            .await
+            .unwrap(),
+        (released, false),
+        "releasing to the same service again changes nothing"
+    );
+    for event_id in ["claim-b", "claim-c"] {
+        release_schedule(state, event_id, device_id, "claim-reports")
+            .await
+            .unwrap();
+    }
+
+    let answer = claim_schedules(state, &reports, &["claim-a", "claim-b"])
+        .await
+        .unwrap();
+    let since = answer["server_time"].as_i64().unwrap();
+    assert!((started..=now()).contains(&since));
+    assert_eq!(
+        answer,
+        serde_json::json!({
+            "server_time": since,
+            "claimed": [
+                { "event_id": "claim-a", "since": since },
+                { "event_id": "claim-b", "since": since }
+            ],
+            "held": []
+        })
+    );
+    assert_eq!(
+        stored_schedule(db, "claim-a").await.unwrap(),
+        StoredSchedule {
+            service: Some((device_id.to_owned(), "claim-reports".to_owned())),
+            grant_id: approval.clone(),
+            claimed_at: Some(since),
+            seen_at: Some(since),
+            resume_at: None,
+        }
+    );
+    assert_eq!(
+        release_schedule(state, "claim-a", device_id, "claim-reports")
+            .await
+            .unwrap(),
+        (
+            serde_json::json!({ "state": "device", "since": since }),
+            false
+        )
+    );
+
+    // A confirmation returns when the approval got the schedule and only moves `seenAt`.
+    let got_it = since - 5_000;
+    db.execute_raw(sql(
+        r#"UPDATE "DeviceScheduleClaim" SET "claimedAt"=$2,"seenAt"=$2 WHERE "appId"=$1 AND "grantId"=$3"#,
+        [
+            SCHEDULE_APP.into(),
+            got_it.into(),
+            reports.grant.grant_id.clone().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    let confirmed = claim_schedules(state, &reports, &["claim-a", "claim-b"])
+        .await
+        .unwrap();
+    assert_eq!(confirmed["claimed"][0]["since"], got_it);
+    assert_eq!(confirmed["claimed"][1]["since"], got_it);
+    let stored = stored_schedule(db, "claim-a").await.unwrap();
+    assert_eq!(stored.claimed_at, Some(got_it));
+    assert!(stored.seen_at.is_some_and(|seen_at| seen_at >= since));
+
+    let answer = claim_schedules(state, &other, &["claim-a", "claim-new"])
+        .await
+        .unwrap();
+    assert_eq!(
+        answer["held"],
+        serde_json::json!([
+            { "event_id": "claim-a", "reason": "runs_elsewhere" },
+            { "event_id": "claim-new", "reason": "not_released" }
+        ])
+    );
+    assert_eq!(
+        stored_schedule(db, "claim-a").await.unwrap().grant_id,
+        approval
+    );
+
+    // A set that no longer names a schedule hands it back, confirmed by the device.
+    let before = now();
+    let answer = claim_schedules(state, &reports, &["claim-a"])
+        .await
+        .unwrap();
+    assert_eq!(
+        answer["claimed"],
+        serde_json::json!([{ "event_id": "claim-a", "since": got_it }])
+    );
+    let handed_back = stored_schedule(db, "claim-b").await.unwrap();
+    assert_eq!(
+        (
+            &handed_back.service,
+            &handed_back.grant_id,
+            handed_back.claimed_at
+        ),
+        (&None, &None, None)
+    );
+    assert!(after(handed_back.resume_at, before, 300));
+    let answer = claim_schedules(state, &reports, &["claim-a", "claim-b"])
+        .await
+        .unwrap();
+    assert_eq!(
+        answer["held"],
+        held("claim-b", "not_released"),
+        "taking it again needs a new release"
+    );
+    let answer = claim_schedules(state, &reports, &[]).await.unwrap();
+    assert_eq!(
+        (&answer["claimed"], &answer["held"]),
+        (&serde_json::json!([]), &serde_json::json!([]))
+    );
+    let handed_back = stored_schedule(db, "claim-a").await.unwrap();
+    assert_eq!(
+        (&handed_back.service, &handed_back.grant_id),
+        (&None, &None)
+    );
+    assert!(after(handed_back.resume_at, before, 300));
+
+    // An approval that ended without a revocation keeps the row until the service's next
+    // approval takes it over; the old process is gone with the old approval.
+    let answer = claim_schedules(state, &reports, &["claim-c"])
+        .await
+        .unwrap();
+    assert_eq!(answer["claimed"][0]["event_id"], "claim-c");
+    end_approval(db, &reports, now() - 10).await;
+    assert_status(
+        claim_schedules(state, &reports, &["claim-c"]).await,
+        StatusCode::UNAUTHORIZED,
+    );
+    let renewed = schedule_service(state, device_id, device_key, "claim-reports").await;
+    let before = now();
+    let answer = claim_schedules(state, &renewed, &["claim-c"])
+        .await
+        .unwrap();
+    let taken_over = answer["claimed"][0]["since"].as_i64().unwrap();
+    assert!((before..=now()).contains(&taken_over));
+    assert_eq!(
+        stored_schedule(db, "claim-c").await.unwrap().grant_id,
+        Some(renewed.grant.grant_id.clone())
+    );
+
+    // A rollout check can read metadata; it never runs, or moves, a schedule.
+    let validation_key = SigningKey::generate();
+    register(
+        state,
+        device_id,
+        registration_for_purpose(
+            &renewed.grant,
+            None,
+            "claim-validation",
+            device_key,
+            &validation_key,
+            InstancePurpose::RolloutValidation,
+        ),
+    )
+    .await
+    .unwrap();
+    let validation = project::token(
+        state,
+        "claim-validation",
+        InstanceTokenRequest {
+            client_assertion: assertion(
+                "claim-validation",
+                "/instances/claim-validation/project-token",
+                &validation_key,
+            ),
+        },
+    )
+    .await
+    .unwrap();
+    assert_status(
+        project::authenticate(
+            state,
+            &proof_headers(
+                &validation,
+                &validation_key,
+                Some(&validation.dpop_nonce),
+                "POST",
+                schedules::CLAIM_PATH,
+            ),
+            "POST",
+            schedules::CLAIM_PATH,
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+    );
+}
+
+async fn a_release_moves_only_a_schedule_nobody_runs(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    device_id: &str,
+    device_key: &SigningKey,
+) {
+    let first = schedule_service(state, device_id, device_key, "move-first").await;
+    let second = schedule_service(state, device_id, device_key, "move-second").await;
+    let service = |placement: &str| Some((device_id.to_owned(), placement.to_owned()));
+
+    release_schedule(state, "move-a", device_id, "move-first")
+        .await
+        .unwrap();
+    let (moved, changed) = release_schedule(state, "move-a", device_id, "move-second")
+        .await
+        .unwrap();
+    assert!(changed, "a release nobody claimed is re-targeted");
+    assert_eq!(moved["state"], "released");
+    assert_eq!(
+        stored_schedule(db, "move-a").await.unwrap().service,
+        service("move-second")
+    );
+    let answer = claim_schedules(state, &first, &["move-a"]).await.unwrap();
+    assert_eq!(answer["held"], held("move-a", "runs_elsewhere"));
+
+    claim_schedules(state, &second, &["move-a"]).await.unwrap();
+    assert_schedule_refusal(
+        release_schedule(state, "move-a", device_id, "move-first").await,
+        "SCHEDULE_RUNS_ELSEWHERE",
+    );
+    assert_eq!(
+        stored_schedule(db, "move-a").await.unwrap().grant_id,
+        Some(second.grant.grant_id.clone())
+    );
+
+    // Its approval stopped working: the hub hands it back first, and the move still waits
+    // for the grace period, because the device may be running it.
+    let ended = now() - 10;
+    end_approval(db, &second, ended).await;
+    assert_schedule_refusal(
+        release_schedule(state, "move-a", device_id, "move-first").await,
+        "SCHEDULE_RETURNING",
+    );
+    let handed_back = stored_schedule(db, "move-a").await.unwrap();
+    assert_eq!(
+        handed_back,
+        StoredSchedule {
+            service: service("move-second"),
+            grant_id: None,
+            claimed_at: None,
+            seen_at: None,
+            resume_at: Some(ended + 3_900),
+        },
+        "the hand-back is committed although the release was refused"
+    );
+    assert_schedule_refusal(
+        release_schedule(state, "move-a", device_id, "move-first").await,
+        "SCHEDULE_RETURNING",
+    );
+
+    // The service that ran it last may take it again at once: its old process is gone.
+    let renewed = schedule_service(state, device_id, device_key, "move-second").await;
+    let (same, changed) = release_schedule(state, "move-a", device_id, "move-second")
+        .await
+        .unwrap();
+    assert!(!changed);
+    assert_eq!(same["state"], "released");
+    let answer = claim_schedules(state, &renewed, &["move-a"]).await.unwrap();
+    assert_eq!(answer["claimed"][0]["event_id"], "move-a");
+    assert_eq!(stored_schedule(db, "move-a").await.unwrap().resume_at, None);
+
+    // An approval that ended longer ago than the grace period protects nothing any more.
+    end_approval(db, &renewed, now() - 5_000).await;
+    let (moved, changed) = release_schedule(state, "move-a", device_id, "move-first")
+        .await
+        .unwrap();
+    assert!(changed);
+    assert_eq!(moved["state"], "released");
+    assert_eq!(
+        stored_schedule(db, "move-a").await.unwrap(),
+        StoredSchedule {
+            service: service("move-first"),
+            grant_id: None,
+            claimed_at: None,
+            seen_at: None,
+            resume_at: None,
+        }
+    );
+
+    // Two services racing for one schedule: one of them ends up running it.
+    let third = schedule_service(state, device_id, device_key, "move-third").await;
+    let (one, two) = flow_like_types::tokio::join!(
+        release_schedule(state, "move-race", device_id, "move-first"),
+        release_schedule(state, "move-race", device_id, "move-third")
+    );
+    one.unwrap();
+    two.unwrap();
+    let (one, two) = flow_like_types::tokio::join!(
+        claim_schedules(state, &first, &["move-race"]),
+        claim_schedules(state, &third, &["move-race"])
+    );
+    let answers = [one.unwrap(), two.unwrap()];
+    let claimed = answers
+        .iter()
+        .filter(|answer| answer["claimed"][0]["event_id"] == "move-race")
+        .count();
+    let elsewhere = answers
+        .iter()
+        .filter(|answer| answer["held"] == held("move-race", "runs_elsewhere"))
+        .count();
+    assert_eq!((claimed, elsewhere), (1, 1));
+}
+
+async fn a_schedule_returns_to_the_hub_after_a_grace_period(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    device_id: &str,
+    device_key: &SigningKey,
+) {
+    assert_eq!(give_back_schedule(state, "back-none").await, (None, false));
+    let reports = schedule_service(state, device_id, device_key, "back-reports").await;
+    let released_to = Some((device_id.to_owned(), "back-reports".to_owned()));
+
+    release_schedule(state, "back-a", device_id, "back-reports")
+        .await
+        .unwrap();
+    assert_eq!(
+        give_back_schedule(state, "back-a").await,
+        (None, true),
+        "the hub ran a schedule nobody claimed all along"
+    );
+    assert_eq!(stored_schedule(db, "back-a").await, None);
+
+    for event_id in ["back-a", "back-b", "back-c"] {
+        release_schedule(state, event_id, device_id, "back-reports")
+            .await
+            .unwrap();
+    }
+    claim_schedules(state, &reports, &["back-a", "back-b", "back-c"])
+        .await
+        .unwrap();
+
+    // While a process may still run it, the hub waits out a storage lease.
+    let before = now();
+    let (resumes_at, changed) = give_back_schedule(state, "back-a").await;
+    assert!(changed);
+    assert!(after(resumes_at, before, 3_900));
+    assert_eq!(
+        stored_schedule(db, "back-a").await.unwrap(),
+        StoredSchedule {
+            service: None,
+            grant_id: None,
+            claimed_at: None,
+            seen_at: None,
+            resume_at: resumes_at,
+        }
+    );
+    assert_eq!(
+        give_back_schedule(state, "back-a").await,
+        (resumes_at, false)
+    );
+    assert_schedule_refusal(
+        release_schedule(state, "back-a", device_id, "back-reports").await,
+        "SCHEDULE_RETURNING",
+    );
+    let answer = claim_schedules(state, &reports, &["back-a", "back-b", "back-c"])
+        .await
+        .unwrap();
+    assert_eq!(
+        answer["held"],
+        held("back-a", "not_released"),
+        "the device learns of a give-back at its next confirmation"
+    );
+    assert_eq!(answer["claimed"].as_array().unwrap().len(), 2);
+
+    // A revocation hands back what the approval ran. The release stays, and a schedule
+    // that was released but never claimed is left alone.
+    release_schedule(state, "back-d", device_id, "back-reports")
+        .await
+        .unwrap();
+    let before = now();
+    revoke_grant(state, "owner", device_id, &reports.grant.grant_id)
+        .await
+        .unwrap();
+    for event_id in ["back-b", "back-c"] {
+        let handed_back = stored_schedule(db, event_id).await.unwrap();
+        assert_eq!(
+            (
+                &handed_back.service,
+                &handed_back.grant_id,
+                handed_back.claimed_at
+            ),
+            (&released_to, &None, None),
+            "{event_id}"
+        );
+        assert!(after(handed_back.resume_at, before, 3_900), "{event_id}");
+    }
+    assert_eq!(
+        stored_schedule(db, "back-d").await.unwrap(),
+        StoredSchedule {
+            service: released_to.clone(),
+            grant_id: None,
+            claimed_at: None,
+            seen_at: None,
+            resume_at: None,
+        }
+    );
+
+    // A new approval of the same service claims again at once.
+    let renewed = schedule_service(state, device_id, device_key, "back-reports").await;
+    let answer = claim_schedules(state, &renewed, &["back-b"]).await.unwrap();
+    assert_eq!(answer["claimed"][0]["event_id"], "back-b");
+    assert_eq!(stored_schedule(db, "back-b").await.unwrap().resume_at, None);
+
+    // Once the device retired every process, a short grace is enough.
+    retire_processes(db, &renewed).await;
+    let before = now();
+    let (resumes_at, changed) = give_back_schedule(state, "back-b").await;
+    assert!(changed);
+    assert!(after(resumes_at, before, 300));
+
+    let retired = schedule_service(state, device_id, device_key, "back-retired").await;
+    release_schedule(state, "back-e", device_id, "back-retired")
+        .await
+        .unwrap();
+    claim_schedules(state, &retired, &["back-e"]).await.unwrap();
+    retire_processes(db, &retired).await;
+    let before = now();
+    revoke_grant(state, "owner", device_id, &retired.grant.grant_id)
+        .await
+        .unwrap();
+    assert!(after(
+        stored_schedule(db, "back-e").await.unwrap().resume_at,
+        before,
+        300
+    ));
+}
+
+async fn the_hub_skips_a_schedule_while_a_working_approval_holds_it(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    device_id: &str,
+    device_key: &SigningKey,
+) {
+    assert!(!skipped_by_the_hub(state, "skip-none", None).await);
+    let reports = schedule_service(state, device_id, device_key, "skip-reports").await;
+    let released_to = Some((device_id.to_owned(), "skip-reports".to_owned()));
+    for event_id in ["skip-a", "skip-b"] {
+        release_schedule(state, event_id, device_id, "skip-reports")
+            .await
+            .unwrap();
+    }
+    assert!(
+        !skipped_by_the_hub(state, "skip-a", None).await,
+        "a released schedule nobody claimed is the hub's to run"
+    );
+    claim_schedules(state, &reports, &["skip-a", "skip-b"])
+        .await
+        .unwrap();
+    assert!(skipped_by_the_hub(state, "skip-a", None).await);
+    let devices_off = StandaloneConfig::default();
+    assert!(
+        skipped_by_the_hub(&context(db, &devices_off), "skip-a", None).await,
+        "a hub that turned devices off still has devices running claimed schedules"
+    );
+
+    // Handed back: skipped until the resume time, judged by the scheduled time when the
+    // trigger names one.
+    let (resumes_at, _) = give_back_schedule(state, "skip-a").await;
+    let resumes_at = resumes_at.unwrap();
+    assert!(skipped_by_the_hub(state, "skip-a", None).await);
+    assert!(skipped_by_the_hub(state, "skip-a", Some(resumes_at)).await);
+    assert!(!skipped_by_the_hub(state, "skip-a", Some(resumes_at + 1)).await);
+    db.execute_raw(sql(
+        r#"UPDATE "DeviceScheduleClaim" SET "resumeAt"=$3 WHERE "appId"=$1 AND "eventId"=$2"#,
+        [SCHEDULE_APP.into(), "skip-a".into(), (now() - 60).into()],
+    ))
+    .await
+    .unwrap();
+    assert!(!skipped_by_the_hub(state, "skip-a", None).await);
+    assert!(
+        skipped_by_the_hub(state, "skip-a", Some(now() - 120)).await,
+        "a late replay of a time the device may have run stays skipped"
+    );
+
+    // The approval expired: the first scheduled time notices and hands it back from then.
+    let ended = now() - 100;
+    end_approval(db, &reports, ended).await;
+    assert!(skipped_by_the_hub(state, "skip-b", None).await);
+    let handed_back = StoredSchedule {
+        service: released_to.clone(),
+        grant_id: None,
+        claimed_at: None,
+        seen_at: None,
+        resume_at: Some(ended + 3_900),
+    };
+    assert_eq!(stored_schedule(db, "skip-b").await.unwrap(), handed_back);
+    assert!(skipped_by_the_hub(state, "skip-b", None).await);
+    assert_eq!(
+        stored_schedule(db, "skip-b").await.unwrap(),
+        handed_back,
+        "a second look does not move the resume time"
+    );
+    assert!(!skipped_by_the_hub(state, "skip-b", Some(ended + 3_901)).await);
+
+    // The approver lost the right in the app: nothing on the approval changed.
+    let lost = schedule_service(state, device_id, device_key, "skip-lost").await;
+    release_schedule(state, "skip-c", device_id, "skip-lost")
+        .await
+        .unwrap();
+    claim_schedules(state, &lost, &["skip-c"]).await.unwrap();
+    let set_role = |permissions: i64| {
+        sql(
+            r#"UPDATE "Role" SET permissions=$2 WHERE id=$1"#,
+            [SCHEDULE_ROLE.into(), permissions.into()],
+        )
+    };
+    db.execute_raw(set_role(0)).await.unwrap();
+    let before = now();
+    assert!(skipped_by_the_hub(state, "skip-c", None).await);
+    let handed_back = stored_schedule(db, "skip-c").await.unwrap();
+    assert_eq!(
+        (&handed_back.service, &handed_back.grant_id),
+        (&Some((device_id.to_owned(), "skip-lost".to_owned())), &None)
+    );
+    assert!(after(handed_back.resume_at, before, 3_900));
+    assert!(skipped_by_the_hub(state, "skip-c", None).await);
+    assert_eq!(stored_schedule(db, "skip-c").await.unwrap(), handed_back);
+    db.execute_raw(set_role(1)).await.unwrap();
+
+    // The device was removed from the hub: no row keeps pointing at it.
+    let gone_key = SigningKey::generate();
+    let (gone_id, _, _) = seed_device(db, &gone_key).await;
+    let gone = schedule_service(state, &gone_id, &gone_key, "skip-gone").await;
+    release_schedule(state, "skip-d", &gone_id, "skip-gone")
+        .await
+        .unwrap();
+    claim_schedules(state, &gone, &["skip-d"]).await.unwrap();
+    let removed_at = now() - 50;
+    db.execute_raw(sql(
+        r#"UPDATE "ManagedDevice" SET status='revoked',"authEpoch"="authEpoch"+1,"revokedAt"=$2 WHERE id=$1"#,
+        [gone_id.clone().into(), removed_at.into()],
+    ))
+    .await
+    .unwrap();
+    assert!(skipped_by_the_hub(state, "skip-d", None).await);
+    let handed_back = StoredSchedule {
+        service: None,
+        grant_id: None,
+        claimed_at: None,
+        seen_at: None,
+        resume_at: Some(removed_at + 3_900),
+    };
+    assert_eq!(stored_schedule(db, "skip-d").await.unwrap(), handed_back);
+    assert!(skipped_by_the_hub(state, "skip-d", None).await);
+    assert_eq!(stored_schedule(db, "skip-d").await.unwrap(), handed_back);
+}
+
+async fn where_an_apps_schedules_run_is_listed(
+    state: &DeviceContext<'_>,
+    device_id: &str,
+    device_key: &SigningKey,
+) {
+    let reports = schedule_service(state, device_id, device_key, "list-reports").await;
+    for event_id in ["list-device", "list-released", "list-returning"] {
+        release_schedule(state, event_id, device_id, "list-reports")
+            .await
+            .unwrap();
+    }
+    let answer = claim_schedules(state, &reports, &["list-device", "list-returning"])
+        .await
+        .unwrap();
+    let since = answer["server_time"].as_i64().unwrap();
+    let (resumes_at, _) = give_back_schedule(state, "list-returning").await;
+    let listed = |viewer: &'static str| async move {
+        let found = app_placements::placements(state, viewer, SCHEDULE_APP)
+            .await
+            .unwrap();
+        serde_json::to_value(found).unwrap()["schedules"]
+            .as_array()
+            .expect("a hub that manages devices always lists schedules")
+            .iter()
+            .filter(|entry| {
+                entry["event_id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("list-"))
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let released_at = listed("owner").await[1]["since"].clone();
+    assert_eq!(
+        listed("owner").await,
+        vec![
+            serde_json::json!({
+                "event_id": "list-device", "state": "device", "since": since, "seen_at": since,
+                "grant_id": reports.grant.grant_id, "device_id": device_id,
+                "placement_id": "list-reports"
+            }),
+            serde_json::json!({
+                "event_id": "list-released", "state": "released", "since": released_at,
+                "device_id": device_id, "placement_id": "list-reports"
+            }),
+            serde_json::json!({
+                "event_id": "list-returning", "state": "returning", "hub_resumes_at": resumes_at
+            }),
+        ]
+    );
+    assert_eq!(
+        listed("other").await,
+        vec![
+            serde_json::json!({
+                "event_id": "list-device", "state": "device", "since": since, "seen_at": since
+            }),
+            serde_json::json!({
+                "event_id": "list-released", "state": "released", "since": released_at
+            }),
+            serde_json::json!({
+                "event_id": "list-returning", "state": "returning", "hub_resumes_at": resumes_at
+            }),
+        ],
+        "a device outside the caller's device list is not named"
+    );
+}
+
+/// Sets the time the hub takes an event back, as if a grace period had run out.
+async fn grace_over(db: &DatabaseConnection, event_id: &str) {
+    db.execute_raw(sql(
+        r#"UPDATE "DeviceScheduleClaim" SET "resumeAt"=$3 WHERE "appId"=$1 AND "eventId"=$2"#,
+        [SCHEDULE_APP.into(), event_id.into(), (now() - 60).into()],
+    ))
+    .await
+    .unwrap();
+}
+
+/// A bot moves between the hub and a service as a schedule does: every row of the claim and of
+/// the release and give-back rules, with the doors' decision at each step. Nothing on the hub
+/// looks at the event's type.
+async fn a_bot_runs_in_one_place_like_a_schedule(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    device_id: &str,
+    device_key: &SigningKey,
+) {
+    let first = schedule_service(state, device_id, device_key, "bot-first").await;
+    let second = schedule_service(state, device_id, device_key, "bot-second").await;
+    let service = |placement: &str| Some((device_id.to_owned(), placement.to_owned()));
+
+    // Claim: nobody released it.
+    let answer = claim_schedules(state, &first, &["bot-tg"]).await.unwrap();
+    assert_eq!(answer["held"], held("bot-tg", "not_released"));
+    assert_eq!(stored_schedule(db, "bot-tg").await, None);
+    assert!(!skipped_by_the_hub(state, "bot-tg", None).await);
+
+    // Release to a service with nothing on the row; a claim by another service is held.
+    let (released, changed) = release_schedule(state, "bot-tg", device_id, "bot-second")
+        .await
+        .unwrap();
+    assert!(changed);
+    assert_eq!(released["state"], "released");
+    let answer = claim_schedules(state, &first, &["bot-tg"]).await.unwrap();
+    assert_eq!(answer["held"], held("bot-tg", "runs_elsewhere"));
+    assert!(
+        !skipped_by_the_hub(state, "bot-tg", None).await,
+        "a released bot nobody claimed is still the hub's"
+    );
+
+    // Re-targeted while nobody claimed it; the same service again changes nothing.
+    let (moved, changed) = release_schedule(state, "bot-tg", device_id, "bot-first")
+        .await
+        .unwrap();
+    assert!(changed);
+    assert_eq!(
+        stored_schedule(db, "bot-tg").await.unwrap().service,
+        service("bot-first")
+    );
+    assert_eq!(
+        release_schedule(state, "bot-tg", device_id, "bot-first")
+            .await
+            .unwrap(),
+        (moved, false)
+    );
+
+    // Claimed by the service it was released to; from now on the hub's doors step aside.
+    let started = now();
+    let answer = claim_schedules(state, &first, &["bot-tg"]).await.unwrap();
+    let since = answer["server_time"].as_i64().unwrap();
+    assert!((started..=now()).contains(&since));
+    assert_eq!(
+        answer,
+        serde_json::json!({
+            "server_time": since,
+            "claimed": [{ "event_id": "bot-tg", "since": since }],
+            "held": []
+        })
+    );
+    assert!(skipped_by_the_hub(state, "bot-tg", None).await);
+    assert_eq!(
+        release_schedule(state, "bot-tg", device_id, "bot-first")
+            .await
+            .unwrap(),
+        (
+            serde_json::json!({ "state": "device", "since": since }),
+            false
+        )
+    );
+
+    // A confirmation keeps when the approval got it and only moves `seenAt`.
+    let got_it = since - 5_000;
+    db.execute_raw(sql(
+        r#"UPDATE "DeviceScheduleClaim" SET "claimedAt"=$2,"seenAt"=$2 WHERE "appId"=$1 AND "eventId"=$3"#,
+        [SCHEDULE_APP.into(), got_it.into(), "bot-tg".into()],
+    ))
+    .await
+    .unwrap();
+    let confirmed = claim_schedules(state, &first, &["bot-tg"]).await.unwrap();
+    assert_eq!(confirmed["claimed"][0]["since"], got_it);
+    let stored = stored_schedule(db, "bot-tg").await.unwrap();
+    assert_eq!(stored.claimed_at, Some(got_it));
+    assert!(stored.seen_at.is_some_and(|seen_at| seen_at >= since));
+
+    // Another service cannot take it while the approval works.
+    assert_schedule_refusal(
+        release_schedule(state, "bot-tg", device_id, "bot-second").await,
+        "SCHEDULE_RUNS_ELSEWHERE",
+    );
+    let answer = claim_schedules(state, &second, &["bot-tg"]).await.unwrap();
+    assert_eq!(answer["held"], held("bot-tg", "runs_elsewhere"));
+
+    // The next approval of the same service takes it over at once.
+    end_approval(db, &first, now() - 10).await;
+    let renewed = schedule_service(state, device_id, device_key, "bot-first").await;
+    let before = now();
+    let answer = claim_schedules(state, &renewed, &["bot-tg"]).await.unwrap();
+    let taken_over = answer["claimed"][0]["since"].as_i64().unwrap();
+    assert!((before..=now()).contains(&taken_over));
+    assert_eq!(
+        stored_schedule(db, "bot-tg").await.unwrap().grant_id,
+        Some(renewed.grant.grant_id.clone())
+    );
+
+    // A set without it hands it back, confirmed by the device: release and claim end, and
+    // every service waits out the grace period, the last one too.
+    let before = now();
+    claim_schedules(state, &renewed, &[]).await.unwrap();
+    let handed_back = stored_schedule(db, "bot-tg").await.unwrap();
+    assert_eq!(
+        (
+            &handed_back.service,
+            &handed_back.grant_id,
+            handed_back.claimed_at
+        ),
+        (&None, &None, None)
+    );
+    assert!(after(handed_back.resume_at, before, 300));
+    assert!(skipped_by_the_hub(state, "bot-tg", None).await);
+    for placement in ["bot-first", "bot-second"] {
+        assert_schedule_refusal(
+            release_schedule(state, "bot-tg", device_id, placement).await,
+            "SCHEDULE_RETURNING",
+        );
+    }
+    grace_over(db, "bot-tg").await;
+    assert!(!skipped_by_the_hub(state, "bot-tg", None).await);
+    let (released, changed) = release_schedule(state, "bot-tg", device_id, "bot-second")
+        .await
+        .unwrap();
+    assert!(changed);
+    assert_eq!(released["state"], "released");
+
+    // Its approval stopped working: a release elsewhere hands it back first, and still waits
+    // for the long grace period, because the device may still answer as the bot.
+    release_schedule(state, "bot-dc", device_id, "bot-second")
+        .await
+        .unwrap();
+    claim_schedules(state, &second, &["bot-dc"]).await.unwrap();
+    let ended = now() - 10;
+    end_approval(db, &second, ended).await;
+    assert_schedule_refusal(
+        release_schedule(state, "bot-dc", device_id, "bot-first").await,
+        "SCHEDULE_RETURNING",
+    );
+    assert_eq!(
+        stored_schedule(db, "bot-dc").await.unwrap(),
+        StoredSchedule {
+            service: service("bot-second"),
+            grant_id: None,
+            claimed_at: None,
+            seen_at: None,
+            resume_at: Some(ended + 3_900),
+        }
+    );
+    assert!(skipped_by_the_hub(state, "bot-dc", None).await);
+
+    // Given back: never claimed, the hub had it all along; claimed, the hub waits out a
+    // storage lease, or less once the device retired every process.
+    assert_eq!(give_back_schedule(state, "bot-tg").await, (None, true));
+    assert_eq!(stored_schedule(db, "bot-tg").await, None);
+    for event_id in ["bot-gb", "bot-gb-retired"] {
+        release_schedule(state, event_id, device_id, "bot-first")
+            .await
+            .unwrap();
+    }
+    claim_schedules(state, &renewed, &["bot-gb", "bot-gb-retired"])
+        .await
+        .unwrap();
+    let before = now();
+    let (resumes_at, changed) = give_back_schedule(state, "bot-gb").await;
+    assert!(changed);
+    assert!(after(resumes_at, before, 3_900));
+    retire_processes(db, &renewed).await;
+    let before = now();
+    let (resumes_at, _) = give_back_schedule(state, "bot-gb-retired").await;
+    assert!(after(resumes_at, before, 300));
+
+    // The bot list asks once for every listed event and leaves out what a device runs or may
+    // still run; another app's event with the same id is another event.
+    let third = schedule_service(state, device_id, device_key, "bot-third").await;
+    for event_id in ["bot-held", "bot-released", "bot-over"] {
+        release_schedule(state, event_id, device_id, "bot-third")
+            .await
+            .unwrap();
+    }
+    claim_schedules(state, &third, &["bot-held", "bot-over"])
+        .await
+        .unwrap();
+    give_back_schedule(state, "bot-over").await;
+    grace_over(db, "bot-over").await;
+    let mut events = [
+        "bot-held",
+        "bot-dc",
+        "bot-gb",
+        "bot-released",
+        "bot-over",
+        "bot-none",
+    ]
+    .map(|id| (SCHEDULE_APP.to_owned(), id.to_owned()))
+    .to_vec();
+    events.push(("other-app".to_owned(), "bot-held".to_owned()));
+    let claimed = schedules::claimed_events(db, &events, now()).await.unwrap();
+    assert_eq!(
+        claimed,
+        ["bot-held", "bot-dc", "bot-gb"]
+            .map(|id| (SCHEDULE_APP.to_owned(), id.to_owned()))
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>()
+    );
+    let sinks = events
+        .iter()
+        .map(|(app_id, event_id)| {
+            (
+                event_id.clone(),
+                app_id.clone(),
+                "telegram".to_owned(),
+                true,
+            )
+        })
+        .collect::<Vec<_>>();
+    let listed = crate::routes::sink::trigger::without_device_bots(db, "telegram", sinks)
+        .await
+        .unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|(event_id, app_id, ..)| (app_id.as_str(), event_id.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (SCHEDULE_APP, "bot-released"),
+            (SCHEDULE_APP, "bot-over"),
+            (SCHEDULE_APP, "bot-none"),
+            ("other-app", "bot-held"),
+        ]
+    );
+
+    // The listing shows the bots as it shows schedules, beside the types this hub hands over.
+    let found = serde_json::to_value(
+        app_placements::placements(state, "owner", SCHEDULE_APP)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        found["event_types"],
+        serde_json::json!([
+            "http",
+            "simple_chat",
+            "rest",
+            "mcp",
+            "daemon",
+            "cron",
+            "api",
+            "quick_action",
+            "generic_form",
+            "telegram",
+            "discord"
+        ])
+    );
+    let states = found["schedules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| {
+            entry["event_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("bot-"))
+        })
+        .map(|entry| {
+            (
+                entry["event_id"].as_str().unwrap(),
+                entry["state"].as_str().unwrap(),
+                entry.get("hub_resumes_at").is_some(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        states,
+        [
+            ("bot-dc", "released", true),
+            ("bot-gb", "returning", true),
+            ("bot-gb-retired", "returning", true),
+            ("bot-held", "device", false),
+            ("bot-released", "released", false),
+        ]
+    );
+}
+
+/// Code can reach a hub before its migration: nothing was ever handed to a device then, so
+/// every schedule fires, revoking still works and the listing reads like an older hub's.
+async fn a_hub_without_the_schedules_table_runs_every_schedule_itself(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    device_id: &str,
+    device_key: &SigningKey,
+) {
+    let service = schedule_service(state, device_id, device_key, "missing-table").await;
+    db.execute_unprepared(r#"DROP TABLE "DeviceScheduleClaim""#)
+        .await
+        .unwrap();
+    assert!(!schedules::table_exists(db).await.unwrap());
+    assert!(!skipped_by_the_hub(state, "skip-a", None).await);
+    assert!(
+        !skipped_by_the_hub(state, "bot-held", None).await,
+        "the bot doors behave as before"
+    );
+    let events = vec![(SCHEDULE_APP.to_owned(), "bot-held".to_owned())];
+    assert!(
+        schedules::claimed_events(db, &events, now())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let sinks = vec![(
+        "bot-held".to_owned(),
+        SCHEDULE_APP.to_owned(),
+        "discord".to_owned(),
+        true,
+    )];
+    assert_eq!(
+        crate::routes::sink::trigger::without_device_bots(db, "discord", sinks.clone())
+            .await
+            .unwrap(),
+        sinks
+    );
+    let found = serde_json::to_value(
+        app_placements::placements(state, "owner", SCHEDULE_APP)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(found.get("schedules").is_none());
+    assert_eq!(
+        found["event_types"],
+        serde_json::json!([
+            "http",
+            "simple_chat",
+            "rest",
+            "mcp",
+            "daemon",
+            "api",
+            "quick_action",
+            "generic_form"
+        ]),
+        "a hub that cannot record where a schedule or bot runs hands over neither"
+    );
+    let revoked = revoke_grant(state, "owner", device_id, &service.grant.grant_id)
+        .await
+        .unwrap();
+    assert_eq!(revoked.status, "revoked");
+}
+
+#[flow_like_types::tokio::test]
+#[ignore = "requires FLOW_LIKE_DEVICE_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+async fn a_schedule_runs_in_one_place_and_returns_to_the_hub() {
+    let schema = TestSchema::create().await;
+    let db = schema.db.clone();
+    let policy = standalone();
+    let state = context(&db, &policy);
+    db.execute_unprepared(&format!(
+        r#"INSERT INTO "App" VALUES ('{SCHEDULE_APP}','ACTIVE','{SCHEDULE_ROLE}'); INSERT INTO "Role" VALUES ('{SCHEDULE_ROLE}','{SCHEDULE_APP}',1); INSERT INTO "Membership" VALUES ('owner','{SCHEDULE_APP}','{SCHEDULE_ROLE}')"#
+    ))
+    .await
+    .unwrap();
+    let device_key = SigningKey::generate();
+    let (device_id, _, _) = seed_device(&db, &device_key).await;
+    assert!(schedules::table_exists(&db).await.unwrap());
+
+    a_device_claims_only_what_was_released_to_its_service(&state, &db, &device_id, &device_key)
+        .await;
+    a_release_moves_only_a_schedule_nobody_runs(&state, &db, &device_id, &device_key).await;
+    a_schedule_returns_to_the_hub_after_a_grace_period(&state, &db, &device_id, &device_key).await;
+    the_hub_skips_a_schedule_while_a_working_approval_holds_it(
+        &state,
+        &db,
+        &device_id,
+        &device_key,
+    )
+    .await;
+    where_an_apps_schedules_run_is_listed(&state, &device_id, &device_key).await;
+    a_bot_runs_in_one_place_like_a_schedule(&state, &db, &device_id, &device_key).await;
+    a_hub_without_the_schedules_table_runs_every_schedule_itself(
+        &state,
+        &db,
+        &device_id,
+        &device_key,
+    )
+    .await;
     schema.drop().await;
 }

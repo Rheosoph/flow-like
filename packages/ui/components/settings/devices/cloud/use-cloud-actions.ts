@@ -3,12 +3,17 @@
 import { useTranslation } from "@flow-like/locales";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { deviceKeys } from "../../../../lib/device-management/hub/queries";
+import {
+	deviceKeys,
+	queries,
+} from "../../../../lib/device-management/hub/queries";
 import {
 	type ApprovalDraft,
 	type SpendingDraft,
 	approvalRequest,
 } from "../../../../lib/device-management/model/deploy-plan";
+import { presence } from "../../../../lib/device-management/model/presence";
+import { schedulesClaimedBy } from "../../../../lib/device-management/model/schedule-where";
 import type {
 	GateContext,
 	GateResult,
@@ -18,6 +23,7 @@ import {
 	createDeviceResourceGrant,
 	revokeDeviceGrant,
 } from "../../../../lib/device-resources";
+import { useBackend } from "../../../../state/backend-state";
 import { useAreaTime } from "../primitives/area-context";
 import type { Gate } from "../primitives/gate-notice";
 import type { ResultTone } from "../primitives/inline-result";
@@ -28,8 +34,14 @@ import {
 	useDeviceAction,
 	useGates,
 } from "../workspace";
-import type { CloudApproval } from "./cloud-model";
+import { type CloudApproval, endOf } from "./cloud-model";
 import { money, useGateOf, useMoney, usePersonName } from "./cloud-parts";
+import {
+	type HeldEvents,
+	type KnownEvent,
+	botCutOffText,
+	splitHeld,
+} from "./held-events";
 
 /** Which block an action belongs to: the approval or its spending limit. */
 export type CloudActionGroup = "approval" | "limit";
@@ -116,7 +128,8 @@ const firstFailure = (...gates: (GateResult | undefined)[]) =>
 export function useCloudActions(subject: CloudSubject): CloudActions {
 	const { t } = useTranslation("devices");
 	const time = useAreaTime();
-	const { workspace } = useAttentionState();
+	const { workspace, input } = useAttentionState();
+	const backend = useBackend();
 	const actions = useDeviceAction();
 	const queryClient = useQueryClient();
 	const gateOf = useGateOf();
@@ -131,6 +144,9 @@ export function useCloudActions(subject: CloudSubject): CloudActions {
 	const appId = identity?.appId ?? approval?.appId ?? null;
 	const approverName = usePersonName(approval?.details?.approvedBy);
 	const payerName = usePersonName(limit?.payerId);
+	const row = input.devices.find((device) => device.device_id === deviceId);
+	const connected =
+		!!row && ["online", "late"].includes(presence(row, input.now).kind);
 
 	const [note, setNote] = useState<ActionNote>();
 	const [running, setRunning] = useState<CloudActionName>();
@@ -275,11 +291,80 @@ export function useCloudActions(subject: CloudSubject): CloudActions {
 		? t("cloud.word.modelAccess", "model access")
 		: t("cloud.word.cloudAccess", "cloud access");
 
+	/**
+	 * The schedules and bots this service took off the hub, by name. Revoking
+	 * hands them back, so the confirm says it. Read when the person asks to
+	 * revoke: a list of approvals reads nothing for it.
+	 */
+	const heldEvents = async (): Promise<HeldEvents> => {
+		const none: HeldEvents = { schedules: null, bots: null };
+		if (!appId) return none;
+		const ids = await queryClient
+			.fetchQuery(queries.appPlacements(workspace.hub, appId))
+			.then(
+				(listing) =>
+					listing.kind === "ok"
+						? schedulesClaimedBy(listing.data.schedules, deviceId, serviceId)
+						: [],
+				() => [],
+			);
+		if (!ids.length) return none;
+		// Names and types are a courtesy: an account that can't read the app's events still sees which ones.
+		const known = await Promise.resolve()
+			.then(() => backend.eventState.getEvents(appId))
+			.then(
+				(events) =>
+					new Map(
+						events.map((event) => [
+							event.id,
+							{ name: event.name, eventType: event.event_type },
+						]),
+					),
+				() => new Map<string, KnownEvent>(),
+			);
+		return splitHeld(ids, known, time.locale);
+	};
+
+	/** What a revoke means for the service's schedules; nothing when it runs none. */
+	const scheduleSentences = (events: string | null) => {
+		if (!events) return [];
+		const names = { events, device: deviceName, service: serviceId };
+		return [
+			t(
+				"cloud.revoke.schedules",
+				"The hub runs {{events}} again in about 5 minutes, or in about an hour while {{device}} is still running {{service}}.",
+				names,
+			),
+			...(connected
+				? []
+				: [
+						t(
+							"cloud.revoke.schedulesOffline",
+							"{{device}} is offline. If it is still running, it keeps running {{events}} from its cache until it reconnects.",
+							names,
+						),
+					]),
+		];
+	};
+
+	/** What a revoke means for the service's bots: the device keeps their tokens. */
+	const heldSentences = (held: HeldEvents) => [
+		...scheduleSentences(held.schedules),
+		...(held.bots && approval
+			? [
+					botCutOffText(t, {
+						device: deviceName,
+						bots: held.bots,
+						date: time.at(endOf(approval)),
+					}),
+				]
+			: []),
+	];
+
 	const revokeApproval = () => {
 		if (!approval) return Promise.resolve(false);
 		setNote(undefined);
-		return finish(
-			"revokeApproval",
+		const run = async () =>
 			actions.run({
 				action: "cloud_access_revoke",
 				deviceId,
@@ -295,12 +380,15 @@ export function useCloudActions(subject: CloudSubject): CloudActions {
 						"{{service}}'s instances lose {{access}} within minutes.",
 						{ service: serviceId, access },
 					),
-					who: modelOnly
-						? t("cloud.conseq.revokeModelWho", "Its model calls fail.")
-						: t(
-								"cloud.conseq.revokeApprovalWho",
-								"Model calls and project-file access fail; buffered writes pause and are kept.",
-							),
+					who: [
+						modelOnly
+							? t("cloud.conseq.revokeModelWho", "Its model calls fail.")
+							: t(
+									"cloud.conseq.revokeApprovalWho",
+									"Model calls and project-file access fail; buffered writes pause and are kept.",
+								),
+						...heldSentences(await heldEvents()),
+					].join(" "),
 					when: t(
 						"cloud.conseq.revokeApprovalWhen",
 						"Credentials already issued stay valid for up to 10 minutes. In-flight requests may still complete and bill.",
@@ -325,16 +413,15 @@ export function useCloudActions(subject: CloudSubject): CloudActions {
 						"resource",
 						approval.grantId,
 					),
-			}),
-			() => ({
-				tone: "good",
-				text: t(
-					"cloud.result.approvalRevoked",
-					"The {{access}} of {{service}} was revoked at {{time}}. Credentials already issued stay valid for up to 10 minutes.",
-					{ access, service: serviceId, time: at() },
-				),
-			}),
-		);
+			});
+		return finish("revokeApproval", run(), () => ({
+			tone: "good",
+			text: t(
+				"cloud.result.approvalRevoked",
+				"The {{access}} of {{service}} was revoked at {{time}}. Credentials already issued stay valid for up to 10 minutes.",
+				{ access, service: serviceId, time: at() },
+			),
+		}));
 	};
 
 	const revokeLimit = () => {

@@ -330,7 +330,7 @@ function serviceCapabilities(
 			t("devices:enum.capability.start", "Start services"),
 			t(
 				"devices:enum.capability.startExplain",
-				"Start stopped services and activate updates.",
+				"Start stopped services, activate updates, and run a service's quick actions and forms.",
 			),
 			runsCode,
 		),
@@ -694,7 +694,7 @@ const BUILDERS: { [F in EnumFamily]: Builder<F> } = {
 				explain,
 			),
 			release: row(
-				t("devices:enum.readinessCheck.release", "Signed agent releases"),
+				t("devices:enum.readinessCheck.release", "Release settings"),
 				explain,
 			),
 			database: row(
@@ -1219,7 +1219,7 @@ const BUILDERS: { [F in EnumFamily]: Builder<F> } = {
 			"Served by the device's web server.",
 		);
 		return {
-			http: row(t("devices:enum.eventType.http", "Web request"), served),
+			http: row(t("devices:enum.eventType.http", "Endpoint"), served),
 			simple_chat: row(t("devices:enum.eventType.simpleChat", "Chat"), served),
 			page: row(t("devices:enum.eventType.page", "Page"), served),
 			rest: row(t("devices:enum.eventType.rest", "REST")),

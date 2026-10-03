@@ -48,8 +48,29 @@ export interface CreatedSetup {
 	/** Unix seconds. */
 	createdAt: number;
 	expiresAt: number;
+	/**
+	 * Unix seconds at which the agent release inside the package runs out, when
+	 * that is before the package's own end: the device refuses the package from
+	 * then on. Unknown for a setup this window did not create.
+	 */
+	releaseEndsAt?: number;
 	/** Unknown for a setup this window did not create. */
 	outcome?: BackupOutcome;
+}
+
+/** The time a package has to be started by: its own end, or the earlier end of the agent release it carries. */
+export const startBy = (created: CreatedSetup) =>
+	created.releaseEndsAt ?? created.expiresAt;
+
+/** The end of the agent release when a package made now would outlive it: such a package has to be started before then. */
+export function releaseCutoff(
+	release: Pick<StandaloneRelease, "expires_at"> | undefined,
+	nowS: number,
+	lifetimeS: number,
+): number | undefined {
+	return release && release.expires_at < nowS + lifetimeS
+		? release.expires_at
+		: undefined;
 }
 
 export interface SetupDraft {
@@ -101,6 +122,7 @@ const draftSchema = z.object({
 			deviceId: z.string().min(1).max(128),
 			createdAt: seconds,
 			expiresAt: seconds,
+			releaseEndsAt: seconds.optional(),
 			outcome: z.enum(["saved", "local_only", "limit", "off"]).optional(),
 		})
 		.optional(),
@@ -355,12 +377,13 @@ export const keyBackupFile = (name: string) =>
 
 /* Step flow. */
 
+/** The package can't be started any more: it ran out, or the agent release it carries did. */
 export const isExpired = (draft: SetupDraft, nowS: number) =>
 	!!draft.created &&
 	!draft.cancelledAt &&
 	!draft.checkedInAt &&
 	!draft.registeredAt &&
-	draft.created.expiresAt <= nowS;
+	startBy(draft.created) <= nowS;
 
 /** A finished or cancelled setup: opening the wizard again starts a new one. */
 export const isClosed = (draft: SetupDraft) =>

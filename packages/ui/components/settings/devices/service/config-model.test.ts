@@ -17,6 +17,7 @@ import {
 	parseJsonSettings,
 	queueTarget,
 	restartOf,
+	serviceDefinitions,
 	servicePageAddress,
 	settingFields,
 	settingsPlan,
@@ -362,7 +363,7 @@ describe("JSON", () => {
 	test("identity, validity, size and no-change are checked before anything is sent", () => {
 		const base = config();
 		const code = (text: string) => {
-			const parsed = parseJsonSettings(base, text);
+			const parsed = parseJsonSettings(base, text, new Set());
 			return "error" in parsed ? parsed.error.code : "ok";
 		};
 		expect(code("{")).toBe("invalid_json");
@@ -375,6 +376,114 @@ describe("JSON", () => {
 			code(JSON.stringify({ ...base, padding: "x".repeat(CONFIG_MAX_BYTES) })),
 		).toBe("too_large");
 		expect(code(JSON.stringify({ ...base, max_replicas: 3 }))).toBe("ok");
+	});
+
+	test("an event that needs the wizard can't be typed in: it would skip the agent check, the hub and the token", () => {
+		const base = config();
+		const event = (id: string) => ({
+			event_id: id,
+			event_version: [1, 0, 0],
+			board_version: [1, 0, 0],
+		});
+		const withEvents = (...ids: string[]) =>
+			JSON.stringify({ ...base, events: [...base.events, ...ids.map(event)] });
+		const result = (text: string, gated: ReadonlySet<string> | null) => {
+			const parsed = parseJsonSettings(base, text, gated);
+			return "error" in parsed ? parsed.error : "ok";
+		};
+		const gated = new Set(["evt_nightly", "evt_orders", "evt_helper"]);
+
+		for (const id of gated)
+			expect(result(withEvents(id), gated)).toEqual({
+				code: "event_added",
+				params: { event: id },
+			});
+		expect(result(withEvents("evt_faq"), gated)).toBe("ok");
+		// The app's events are not loaded: what an added event is, isn't known.
+		expect(result(withEvents("evt_faq"), null)).toEqual({
+			code: "event_added",
+			params: { event: "evt_faq" },
+		});
+		// Nothing is added: removing by hand, and other edits, stay possible.
+		expect(result(JSON.stringify({ ...base, events: [] }), null)).toBe("ok");
+		expect(result(JSON.stringify({ ...base, max_replicas: 3 }), null)).toBe(
+			"ok",
+		);
+		// A schedule the service already runs is not "added".
+		const running = config({
+			events: [...base.events, event("evt_nightly")],
+		});
+		const kept = parseJsonSettings(
+			running,
+			JSON.stringify({ ...running, max_replicas: 3 }),
+			gated,
+		);
+		expect("config" in kept).toBe(true);
+		// Something that is not an event list is left to the device.
+		expect(result(JSON.stringify({ ...base, events: "none" }), null)).toBe(
+			"ok",
+		);
+	});
+
+	test("a bot token key typed in by hand is refused; one the settings hold already stays", () => {
+		const base = config();
+		const typed = (overrides: Record<string, string>) =>
+			parseJsonSettings(
+				base,
+				JSON.stringify({ ...base, secret_overrides: overrides }),
+				new Set(),
+			);
+		expect(typed({ "event.evt_helper.bot_token": "secret-1" })).toEqual({
+			error: { code: "event_added", params: { event: "evt_helper" } },
+		});
+		expect("config" in typed({ erp_password: "variable-7f3a" })).toBe(true);
+		const holding = config({
+			secret_overrides: { "event.evt_helper.bot_token": "secret-1" },
+		});
+		const kept = parseJsonSettings(
+			holding,
+			JSON.stringify({ ...holding, max_replicas: 3 }),
+			new Set(),
+		);
+		expect("config" in kept).toBe(true);
+	});
+
+	test("definitions: a bot token is a secret of its bot, and a flow can't define one", () => {
+		const base = config({
+			events: [
+				{
+					event_id: "evt_helper",
+					event_version: [1, 0, 0],
+					board_version: [1, 0, 0],
+				},
+			],
+			secret_overrides: {
+				"event.evt_helper.bot_token": "secret-1",
+				"event.evt_gone.bot_token": "secret-2",
+			},
+		});
+		const flow = (id: string) => ({
+			id,
+			name: id,
+			data_type: "String",
+			value_type: "Normal",
+			secret: true,
+		});
+		expect(
+			serviceDefinitions(base, [
+				flow("erp_password"),
+				flow("event.evt_helper.bot_token"),
+			]),
+		).toEqual([
+			flow("erp_password"),
+			{
+				id: "event.evt_helper.bot_token",
+				name: "evt_helper",
+				data_type: "String",
+				value_type: "Normal",
+				secret: true,
+			},
+		]);
 	});
 
 	test("what the shared diff doesn't cover still shows as a row", () => {

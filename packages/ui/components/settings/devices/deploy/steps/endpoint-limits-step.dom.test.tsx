@@ -248,6 +248,77 @@ describe("Endpoint (APP §3.9)", () => {
 	});
 });
 
+describe("Endpoint · Endpoints, forms and bots (R2 §6.4)", () => {
+	const SHOP = "app_shop_assistant";
+	const shopDraft = async (events: string[]) => {
+		const fake = await createFakeWorkspace();
+		kit.seedDraft(fake, {
+			appId: SHOP,
+			scope: { kind: "app", appId: SHOP },
+			route: { deviceIds: [], mode: "new" },
+			reached: 4,
+			change: (draft) => ({ ...draft, scope: "events", events }),
+		});
+		return fake;
+	};
+
+	test("an Endpoint is named where the step says how it is reached", async () => {
+		const fake = await shopDraft(["evt_shop_orders"]);
+		const view = await endpoint(SHOP, { device: EDGE }, { fake });
+		expect(byRole("heading", /Endpoint/, view.container).textContent).toBe(
+			"Step 5 of 8: Endpoint & limits",
+		);
+		expect(text(view.container)).toContain(
+			"How Orders is reached, how many instances run, and what they may do on the device.",
+		);
+		expect(text(view.container)).toContain("Web endpoint for Orders");
+		// Alone in its service, nothing else shares its token.
+		expect(text(view.container)).not.toContain("One access token calls");
+	});
+
+	test("Endpoints beside Pages or chats share the service's token, and the step says so", async () => {
+		const fake = await createFakeWorkspace();
+		const view = await endpoint(
+			"app_support_portal",
+			{ device: STUDIO },
+			{ fake, platform: "desktop" },
+		);
+		expect(text(view.container)).toContain(
+			"One access token calls everything support-portal serves: whoever has it to open a Page or a chat can also call Support API. Deploy an Endpoint as its own service to give it a token of its own.",
+		);
+	});
+
+	test("only forms and quick actions: Limits, run from Devices, no service page", async () => {
+		const fake = await shopDraft(["evt_shop_return"]);
+		const view = await endpoint(SHOP, { device: EDGE }, { fake });
+		expect(byRole("heading", /Limits/, view.container).textContent).toBe(
+			"Step 5 of 8: Limits",
+		);
+		const page = text(view.container);
+		expect(page).toContain(
+			"No event you picked is served by the device's web server, so only limits apply. Run its forms and quick actions from Devices: this service has no service page.",
+		);
+		expect(page).toContain(
+			"Return request starts when a person runs it from Devices.",
+		);
+		expect(page).not.toContain("run on their own");
+		expect(page).toContain(
+			"Return request is started by a person and nothing in this service is served on the web, so it runs 1 instance. More instances need a Page, chat or Endpoint.",
+		);
+	});
+
+	test("a form beside a Page keeps the Page's instances", async () => {
+		const view = await endpoint(
+			"app_field_notes",
+			{ device: EDGE },
+			{ fake: await createFakeWorkspace() },
+		);
+		expect(
+			byRole("button", "More", view.container).hasAttribute("disabled"),
+		).toBe(false);
+	});
+});
+
 describe("Instances and isolation", () => {
 	test("a background event limits the service to one instance, with the reason", async () => {
 		const view = await endpoint(VISITOR, { device: EDGE });

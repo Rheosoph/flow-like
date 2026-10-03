@@ -15,12 +15,20 @@ import {
 } from "lucide-react";
 import { type Ref, useState } from "react";
 import type { GateFailure } from "../../../../../lib/device-management/model/types";
+import type { VerifiedRelease } from "../../../../../lib/device-management/package";
 import { enumLabel } from "../../copy/enum-labels";
 import { gateCopy } from "../../copy/gate-copy";
-import { HubLimitsUsage, ReadinessList } from "../../hub/readiness-list";
+import { RELEASE_ENDS_SOON_S } from "../../hub/hub-view";
+import {
+	HubLimitsUsage,
+	ReadinessList,
+	checkLabel,
+} from "../../hub/readiness-list";
+import { releaseCheckText, releaseLeftText } from "../../hub/release-copy";
 import { type DevicesT, useAreaTime } from "../../primitives/area-context";
 import { Banner } from "../../primitives/banner";
 import { Block } from "../../primitives/block";
+import { dayText } from "../../primitives/day";
 import { DvButton } from "../../primitives/dv-button";
 import { FreshnessStamp } from "../../primitives/freshness-stamp";
 import { InlineResult } from "../../primitives/inline-result";
@@ -31,30 +39,34 @@ import { useCopy } from "../../primitives/use-copy";
 import { WizardStepHeader } from "../../primitives/wizard";
 import { useDeviceWorkspace, useLocalSummary } from "../../workspace";
 import { useSetup } from "../setup-context";
-import { KeyFingerprint, Mono, TechnicalDetails } from "../setup-parts";
+import {
+	FieldNote,
+	KeyFingerprint,
+	Mono,
+	TechnicalDetails,
+	startByReleaseText,
+} from "../setup-parts";
 import { STEP_COUNT } from "../setup-state";
 import type { ReleaseCheck, SetupChecks } from "../use-setup-checks";
 
-/** Why a release failed verification, in the words of IA §6.2 N5; the verifier's sentence stays behind "Details". */
-export function releaseReason(t: DevicesT, detail: string): string {
-	if (/signature/i.test(detail))
+type RejectedRelease = Extract<ReleaseCheck, { state: "rejected" }>;
+
+/** Who can do something about a release that failed a check: the hub operator, or the viewer on this computer. */
+function rejectedNext(t: DevicesT, release: RejectedRelease): string {
+	if (release.check === "expired")
 		return t(
-			"devices:setup.check.reason.signature",
-			"the signature doesn't match",
+			"devices:setup.check.rejected.expired",
+			"Ask your hub operator to publish or renew a release. Nothing was created.",
 		);
-	if (/expired/i.test(detail))
-		return t("devices:setup.check.reason.expired", "it has expired");
-	if (/older than the configured minimum/i.test(detail))
+	if (release.check === "not_yet_valid" || release.check === "lifetime")
 		return t(
-			"devices:setup.check.reason.sequence",
-			"it's older than the hub's minimum release",
+			"devices:setup.check.rejected.here",
+			"This can be fixed on this computer; then check again. Nothing was created.",
 		);
-	if (/digest|size/i.test(detail))
-		return t(
-			"devices:setup.check.reason.digest",
-			"its size or checksum doesn't match",
-		);
-	return t("devices:setup.check.reason.invalid", "it isn't a valid release");
+	return t(
+		"devices:setup.check.rejected.text",
+		"Ask your hub operator. Nothing on this computer can work around it, and nothing was created.",
+	);
 }
 
 /** Machine-oriented on purpose (SPEC §3.10): what a hub operator needs, never translated. */
@@ -75,7 +87,7 @@ function diagnosticsOf(host: string, checks: SetupChecks): string {
 		release.state === "verified"
 			? `release: ${release.release.manifest.release_version} (#${release.release.manifest.sequence}) · verified`
 			: release.state === "rejected"
-				? `release: rejected · ${release.detail}`
+				? `release: rejected (${release.check}) · ${release.detail}`
 				: `release: ${release.state}`;
 	const trust = checks.config
 		? [
@@ -207,7 +219,7 @@ function CheckBanner() {
 					"Send them the diagnostics, or open Hub status to see what {{check}} needs. Then check again here.",
 					{
 						check: failing
-							? enumLabel(t, "readinessCheck", failing.id)
+							? checkLabel(t, failing.id)
 							: t("setup.check.notReady.theHub", "the hub"),
 					},
 				)}
@@ -236,15 +248,12 @@ function CheckBanner() {
 				tone="critical"
 				title={t(
 					"setup.check.rejected.title",
-					"The hub's agent release couldn't be verified: {{reason}}.",
-					{ reason: releaseReason(t, release.detail) },
+					"The hub's agent release failed a check: {{reason}}.",
+					{ reason: releaseCheckText(t, release.check) },
 				)}
 				actions={<HubActions diagnostics={diagnostics} />}
 			>
-				{t(
-					"setup.check.rejected.text",
-					"Ask your hub operator. The app won't package an agent it can't trace to a key they pinned, so nothing on this computer can work around it.",
-				)}
+				{rejectedNext(t, release)}
 			</Banner>
 		);
 	if (!gate.ok && readiness.state === "loaded")
@@ -263,9 +272,9 @@ function ReleaseChip({ release }: Readonly<{ release: ReleaseCheck }>) {
 	if (release.state === "rejected")
 		return (
 			<StatusChip tone="critical" icon={OctagonX}>
-				{enumLabel(t, "releaseVerification", "rejected", {
-					reason: releaseReason(t, release.detail),
-				})}
+				{release.check === "expired"
+					? t("hub.release.expired", "Expired")
+					: enumLabel(t, "releaseVerification", "rejected")}
 			</StatusChip>
 		);
 	if (release.state === "checking")
@@ -277,11 +286,57 @@ function ReleaseChip({ release }: Readonly<{ release: ReleaseCheck }>) {
 	return null;
 }
 
+/** How long the verified release lasts: its end, and the days left only once they are few. */
+function ReleaseValidity({
+	manifest,
+}: Readonly<{ manifest: VerifiedRelease["manifest"] }>) {
+	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	const dates = {
+		issued: time.at(manifest.issued_at),
+		expires: time.at(manifest.expires_at),
+	};
+	if (manifest.expires_at - time.nowS > RELEASE_ENDS_SOON_S)
+		return t(
+			"setup.check.release.validityLong",
+			"issued {{issued}} · valid until {{expires}}",
+			dates,
+		);
+	return t(
+		"setup.check.release.validity",
+		"issued {{issued}} · valid until {{expires}} ({{left}})",
+		{
+			...dates,
+			left: releaseLeftText(t, manifest.expires_at, time.nowS),
+		},
+	);
+}
+
+/** Inside the last 30 days of a release: until when setup works, or until when a package made now has to be started. */
+function ReleaseEndNote({
+	manifest,
+}: Readonly<{ manifest: VerifiedRelease["manifest"] }>) {
+	const { t } = useTranslation("devices");
+	const time = useAreaTime();
+	const { releaseCutoff } = useSetup();
+	if (manifest.expires_at - time.nowS > RELEASE_ENDS_SOON_S) return null;
+	return (
+		<FieldNote tone="warning" icon={TriangleAlert}>
+			{releaseCutoff === undefined
+				? t(
+						"setup.check.release.endsSoon",
+						"This hub's agent release runs out on {{date}}. Setup works until then.",
+						{ date: dayText(time, manifest.expires_at) },
+					)
+				: startByReleaseText(t, time, releaseCutoff, false)}
+		</FieldNote>
+	);
+}
+
 function ReleaseFacts({
 	release,
 }: Readonly<{ release: Extract<ReleaseCheck, { state: "verified" }> }>) {
 	const { t } = useTranslation("devices");
-	const time = useAreaTime();
 	const { manifest, signerFingerprint, targets } = release.release;
 	const packages = [
 		...targets.map((target) => enumLabel(t, "targetShort", target)),
@@ -290,59 +345,54 @@ function ReleaseFacts({
 			: []),
 	];
 	return (
-		<KeyValueList>
-			<KvRow label={t("setup.check.release.agent", "Agent")}>
-				<Trans
-					t={t}
-					i18nKey="setup.check.release.version"
-					defaults="<1>{{version}}</1> · release #{{sequence, number}}"
-					values={{
-						version: manifest.release_version,
-						sequence: manifest.sequence,
-					}}
-					components={{ 1: <Mono /> }}
-				/>
-			</KvRow>
-			<KvRow
-				label={t("setup.check.release.signedBy", "Signed by")}
-				provenance={t(
-					"setup.check.release.pinned",
-					"a key the hub operator pinned",
-				)}
-			>
-				<KeyFingerprint
-					value={signerFingerprint}
-					copyLabel={t(
-						"setup.check.release.copyFingerprint",
-						"Copy signing key fingerprint",
+		<>
+			<KeyValueList>
+				<KvRow label={t("setup.check.release.agent", "Agent")}>
+					<Trans
+						t={t}
+						i18nKey="setup.check.release.version"
+						defaults="<1>{{version}}</1> · release number {{sequence, number}}"
+						values={{
+							version: manifest.release_version,
+							sequence: manifest.sequence,
+						}}
+						components={{ 1: <Mono /> }}
+					/>
+				</KvRow>
+				<KvRow
+					label={t("setup.check.release.signedBy", "Signed by")}
+					provenance={t(
+						"setup.check.release.pinned",
+						"a key the hub operator pinned",
 					)}
-				/>
-			</KvRow>
-			<KvRow label={t("setup.check.release.valid", "Valid")}>
-				{t(
-					"setup.check.release.validity",
-					"issued {{issued}} · expires {{expires}} ({{left}})",
-					{
-						issued: time.at(manifest.issued_at),
-						expires: time.at(manifest.expires_at),
-						left: time.ago(manifest.expires_at),
-					},
-				)}
-			</KvRow>
-			<KvRow label={t("setup.check.release.packages", "Packages")}>
-				{packages.join(" · ")}
-			</KvRow>
-			<KvRow
-				label={t("setup.check.release.after", "After setup")}
-				provenance={t("setup.check.release.guard", "rollback guard")}
-			>
-				{t(
-					"setup.check.release.floor",
-					"The device refuses any release older than #{{sequence, number}}.",
-					{ sequence: manifest.sequence },
-				)}
-			</KvRow>
-		</KeyValueList>
+				>
+					<KeyFingerprint
+						value={signerFingerprint}
+						copyLabel={t(
+							"setup.check.release.copyFingerprint",
+							"Copy signing key fingerprint",
+						)}
+					/>
+				</KvRow>
+				<KvRow label={t("setup.check.release.valid", "Valid")}>
+					<ReleaseValidity manifest={manifest} />
+				</KvRow>
+				<KvRow label={t("setup.check.release.packages", "Packages")}>
+					{packages.join(" · ")}
+				</KvRow>
+				<KvRow
+					label={t("setup.check.release.after", "After setup")}
+					provenance={t("setup.check.release.guard", "rollback guard")}
+				>
+					{t(
+						"setup.check.release.floor",
+						"The device refuses any release with a number below {{sequence, number}}.",
+						{ sequence: manifest.sequence },
+					)}
+				</KvRow>
+			</KeyValueList>
+			<ReleaseEndNote manifest={manifest} />
+		</>
 	);
 }
 
@@ -399,11 +449,13 @@ function ReleaseUnreachable() {
 	);
 }
 
-/** No trusted release: the hub publishes none, or the one it publishes failed verification. */
-function ReleaseUntrusted({ detail }: Readonly<{ detail?: string }>) {
+/** No usable release: the hub publishes none, or the one it publishes failed a check. */
+function ReleaseUnusable({
+	rejected,
+}: Readonly<{ rejected?: RejectedRelease }>) {
 	const { t } = useTranslation("devices");
 	const { checks, host } = useSetup();
-	if (detail === undefined)
+	if (!rejected)
 		return (
 			<StateView
 				kind="unsupported"
@@ -421,14 +473,15 @@ function ReleaseUntrusted({ detail }: Readonly<{ detail?: string }>) {
 		<>
 			<StateView
 				kind="error"
-				title={t("setup.check.release.rejected", "This release is not trusted")}
+				title={t("setup.check.release.rejected", "This release can't be used")}
 				text={t(
 					"setup.check.release.rejectedText",
-					"It can't be traced to a key the hub operator pinned, so no package is built from it.",
+					"It failed a check: {{reason}}. No package is built from it.",
+					{ reason: releaseCheckText(t, rejected.check) },
 				)}
 			/>
 			<TechnicalDetails
-				detail={detail}
+				detail={rejected.detail}
 				diagnostics={diagnosticsOf(host, checks)}
 			/>
 		</>
@@ -440,9 +493,9 @@ function ReleaseBody({ release }: Readonly<{ release: ReleaseCheck }>) {
 		case "verified":
 			return <ReleaseFacts release={release} />;
 		case "rejected":
-			return <ReleaseUntrusted detail={release.detail} />;
+			return <ReleaseUnusable rejected={release} />;
 		case "missing":
-			return <ReleaseUntrusted />;
+			return <ReleaseUnusable />;
 		case "unreachable":
 			return <ReleaseUnreachable />;
 		default:

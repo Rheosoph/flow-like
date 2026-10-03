@@ -20,9 +20,22 @@ import type {
 	ServiceView,
 } from "../../../../lib/device-management/model/types";
 import type { ManagementResponse } from "../../../../lib/device-management/types";
+import type { StandaloneRelease } from "../../../../lib/device-package";
 import { type EnumValues, enumLabel } from "../copy/enum-labels";
-import { type DevicesT, useAreaTime } from "../primitives/area-context";
+import {
+	type ReleaseVerdict,
+	releaseCheckFailure,
+	usableRelease,
+	useAgentReleaseVerdict,
+} from "../hub/hub-view";
+import { releaseCheckText } from "../hub/release-copy";
+import {
+	type AreaTime,
+	type DevicesT,
+	useAreaTime,
+} from "../primitives/area-context";
 import type { ConsequenceRows } from "../primitives/consequence-preview";
+import { dayText } from "../primitives/day";
 import { DvButton } from "../primitives/dv-button";
 import { GatedAction } from "../primitives/gate-notice";
 import { IdRef } from "../primitives/id-ref";
@@ -104,28 +117,83 @@ function blockedByIdentity(t: DevicesT, page: DevicePage): GateView | null {
 		: null;
 }
 
-/** Release trust is set up but no verified release is in hand: there is nothing to send to the device yet. */
-function releaseUnread(
+/** Release trust is set up but no usable release is in hand: there is nothing to send to the device. */
+function releaseUnusable(
 	t: DevicesT,
-	release: ReturnType<typeof useReleaseTrust>,
+	time: AreaTime,
+	verdict: ReleaseVerdict,
 ): GateView | null {
-	if (!release.configured || release.data) return null;
-	return {
-		gate: release.error
-			? {
+	switch (verdict.kind) {
+		case "ok":
+		case "ends_soon":
+		case "missing":
+			return null;
+		case "unfetched":
+			return {
+				gate: {
 					kind: "hub",
 					reason: t(
 						"devices:device.agent.releaseUnread",
 						"The latest verified release couldn't be read from the hub. Check for an agent update again.",
 					),
-				}
-			: {
+				},
+			};
+		case "failed":
+			return {
+				gate: {
+					kind: "hub",
+					reason: t(
+						"devices:device.agent.releaseFailed",
+						"The hub's agent release failed a check, so there is nothing to install. Hub status says which.",
+					),
+				},
+			};
+		case "expired":
+			return {
+				gate: {
+					kind: "hub",
+					reason: t(
+						"devices:device.agent.releaseRanOut",
+						"The hub's agent release ran out on {{date}}. Updates wait until the hub operator publishes or renews a release.",
+						{ date: dayText(time, verdict.facts.expires_at) },
+					),
+				},
+			};
+		default:
+			return {
+				gate: {
 					kind: "busy",
 					reason: t(
 						"devices:device.agent.releaseReading",
 						"Reading the latest verified release…",
 					),
 				},
+			};
+	}
+}
+
+/** Agents before this version refuse any release list valid for longer than 30 days. */
+const LONG_RELEASES_FROM = "0.1.1";
+const SHORT_RELEASE_S = 30 * 86_400;
+
+/** The device's agent would refuse this list for its lifetime: said here, before the device answers "invalid". */
+function refusedByOlderAgent(
+	t: DevicesT,
+	current: string | undefined,
+	latest: StandaloneRelease | undefined,
+): GateView | null {
+	if (!current || !latest) return null;
+	if (compareVersions(current, LONG_RELEASES_FROM) >= 0) return null;
+	if (latest.expires_at - latest.issued_at <= SHORT_RELEASE_S) return null;
+	return {
+		gate: {
+			kind: "unsupported",
+			reason: t(
+				"devices:device.agent.needsShortRelease",
+				"This device's agent ({{version}}) only accepts releases valid for 30 days or less. Ask the hub operator to renew the release for 30 days, or set this device up again.",
+				{ version: current },
+			),
+		},
 	};
 }
 
@@ -322,12 +390,15 @@ export function AgentUpdateActions({ page }: Readonly<{ page: DevicePage }>) {
 	const actions = useDeviceAction();
 	const rows = useHostRows(page);
 	const release = useReleaseTrust();
+	// The one verdict about the hub's release: a list that failed a check or ran out is never sent to a device.
+	const verdict = useAgentReleaseVerdict();
+	const usable = usableRelease(verdict);
 	const result = useHostGate(page, "agent_update", release.configured);
 	const resultKey = actionResultKey("agent_update", page.deviceId);
 	const [checked, setChecked] = useState<{ at: number; version?: string }>();
 	const [checking, setChecking] = useState(false);
 	const hidden = !result.ok && result.hide;
-	const latest = release.data?.manifest;
+	const latest = usable?.manifest;
 	const current = page.view.agent?.version;
 	const upToDate =
 		!!latest &&
@@ -347,7 +418,10 @@ export function AgentUpdateActions({ page }: Readonly<{ page: DevicePage }>) {
 						),
 					},
 				}
-			: (gateView(t, time, result) ?? releaseUnread(t, release)));
+			: (gateView(t, time, result) ??
+				refusedByOlderAgent(t, current, latest) ??
+				releaseUnusable(t, time, verdict)));
+	const refused = releaseCheckFailure(release.error);
 	const check = async () => {
 		setChecking(true);
 		try {
@@ -358,7 +432,7 @@ export function AgentUpdateActions({ page }: Readonly<{ page: DevicePage }>) {
 		}
 	};
 	const update = () => {
-		const verified = release.data;
+		const verified = usable;
 		if (!verified) return;
 		return actions.run<ManagementResponse>({
 			action: "agent_update",
@@ -377,7 +451,7 @@ export function AgentUpdateActions({ page }: Readonly<{ page: DevicePage }>) {
 				current
 					? t(
 							"device.agent.rows.install",
-							"Installs verified release {{version}} (release #{{sequence, number}}). If the new agent doesn't start, the device rolls back to {{current}}.",
+							"Installs verified release {{version}} (release number {{sequence, number}}). If the new agent doesn't start, the device rolls back to {{current}}.",
 							{
 								version: verified.manifest.release_version,
 								sequence: verified.manifest.sequence,
@@ -386,7 +460,7 @@ export function AgentUpdateActions({ page }: Readonly<{ page: DevicePage }>) {
 						)
 					: t(
 							"device.agent.rows.installNoCurrent",
-							"Installs verified release {{version}} (release #{{sequence, number}}). If the new agent doesn't start, the device rolls back.",
+							"Installs verified release {{version}} (release number {{sequence, number}}). If the new agent doesn't start, the device rolls back.",
 							{
 								version: verified.manifest.release_version,
 								sequence: verified.manifest.sequence,
@@ -483,24 +557,33 @@ export function AgentUpdateActions({ page }: Readonly<{ page: DevicePage }>) {
 					tone={release.error ? "warning" : "good"}
 					onDismiss={() => setChecked(undefined)}
 				>
-					{release.error
+					{refused
 						? t(
-								"device.agent.checkFailed",
-								"Couldn't check at {{time}}. The release shown was read earlier.",
-								{ time: time.clock(checked.at) },
-							)
-						: latest
-							? t(
-									"device.agent.checked",
-									"Checked at {{time}}: {{version}} is the latest verified release.",
-									{
-										time: time.clock(checked.at),
-										version: latest.release_version,
-									},
-								)
-							: t("device.agent.checkedNone", "Checked at {{time}}.", {
+								"device.agent.checkRefused",
+								"Checked at {{time}}. The hub's agent release failed a check: {{check}}.",
+								{
 									time: time.clock(checked.at),
-								})}
+									check: releaseCheckText(t, refused.check),
+								},
+							)
+						: release.error
+							? t(
+									"device.agent.checkFailed",
+									"Couldn't check at {{time}}. The release shown was read earlier.",
+									{ time: time.clock(checked.at) },
+								)
+							: latest
+								? t(
+										"device.agent.checked",
+										"Checked at {{time}}: {{version}} is the latest verified release.",
+										{
+											time: time.clock(checked.at),
+											version: latest.release_version,
+										},
+									)
+								: t("device.agent.checkedNone", "Checked at {{time}}.", {
+										time: time.clock(checked.at),
+									})}
 				</InlineResult>
 			) : null}
 			<Results scopeKey={resultKey} />
