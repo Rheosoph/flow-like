@@ -51,6 +51,7 @@ function cachedWidgets() {
 	const queries = [
 		["getWidgets", "app-1"],
 		["getWidget", "app-1", "widget-1"],
+		["app-package-widgets", "app-1"],
 	].map((queryKey) => {
 		queryClient.setQueryData(queryKey, "local widget cache");
 		const queryFn = vi.fn().mockResolvedValue("remote widgets");
@@ -74,6 +75,26 @@ async function expectRemoteWidgets({
 }
 
 describe("native widget cache after session bootstrap", () => {
+	test("an absent auth provider ends package session waits and clears their timers", async () => {
+		vi.useFakeTimers();
+		const backend = new TauriBackend(() => undefined);
+		const waits = [
+			backend.waitForPackageSession(),
+			backend.waitForPackageSession(),
+		];
+		const rejected = waits.map((wait) =>
+			expect(wait).rejects.toThrow(
+				"initialization did not finish within 30 seconds",
+			),
+		);
+		await vi.advanceTimersByTimeAsync(30_000);
+		await Promise.all(rejected);
+		expect(vi.getTimerCount()).toBe(0);
+		backend.pushProfile(profile as never);
+		backend.pushAuthContext(auth as never);
+		await expect(backend.waitForPackageSession()).resolves.toBeUndefined();
+	});
+
 	test("refreshes mounted widgets when the profile arrives after auth", async () => {
 		const cached = cachedWidgets();
 		const backend = new TauriBackend(
@@ -126,6 +147,7 @@ describe("native widget cache after session bootstrap", () => {
 	test.each([
 		["getWidgets", "app-1"],
 		["getWidget", "app-1", "widget-1"],
+		["app-package-widgets", "app-1"],
 	])(
 		"restarts an unfinished local %s read once auth is ready",
 		async (...queryKey) => {

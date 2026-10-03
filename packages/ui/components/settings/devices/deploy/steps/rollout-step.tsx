@@ -1244,6 +1244,8 @@ interface FootProps {
 	gated: boolean;
 	goTo: DeployStepProps["goTo"];
 	startOver: DeployStepProps["startOver"];
+	embedded: DeployStepProps["embedded"];
+	deployMore: DeployStepProps["deployMore"];
 	eventId: string | undefined;
 }
 
@@ -1299,15 +1301,17 @@ function DoneButtons(props: Readonly<FootProps>) {
 			<DvButton
 				icon={Plus}
 				className={PHONE_OTHER}
-				onClick={() => navigate(more)}
+				onClick={() => (props.deployMore ? props.deployMore() : navigate(more))}
 			>
 				{t("deployShip.rollout.deployMore", "Deploy to more devices…")}
 			</DvButton>
-			<DvButton className={PHONE_OTHER} asChild>
-				<a {...hostLink(deployExitHref(navigation.route, navigation.scope))}>
-					{t("deployShip.rollout.exit", "Exit deploy")}
-				</a>
-			</DvButton>
+			{props.embedded ? null : (
+				<DvButton className={PHONE_OTHER} asChild>
+					<a {...hostLink(deployExitHref(navigation.route, navigation.scope))}>
+						{t("deployShip.rollout.exit", "Exit deploy")}
+					</a>
+				</DvButton>
+			)}
 			{single ? (
 				<DvButton variant="primary" className={PHONE_PRIMARY} asChild>
 					<a {...link(serviceRoute(single), { scope: navigation.scope })}>
@@ -1881,6 +1885,8 @@ function RolloutBody({
 					gated={gated}
 					goTo={props.goTo}
 					startOver={props.startOver}
+					embedded={props.embedded}
+					deployMore={props.deployMore}
 					eventId={draft.scope === "event" ? draft.events[0] : undefined}
 				/>
 			</div>

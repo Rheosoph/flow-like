@@ -259,6 +259,33 @@ describe("a schedule that is released, returning or on the hub", () => {
 		expect(whereOf(null, EVENT)).toBeUndefined();
 		expect(whereOf(undefined, EVENT)).toBeUndefined();
 	});
+
+	test("a device-only event the hub does not list, released or hands back is device-only, never the hub; a service that holds it still shows", () => {
+		const input = { devices: [{ id: DEVICE, services: [runs()] }], now: NOW0 };
+		const wheres = scheduleWheres(
+			{
+				...placements,
+				schedules: [
+					CLAIMED,
+					{
+						event_id: "evt_back",
+						state: "returning",
+						hub_resumes_at: NOW0 + 9,
+					},
+					{ event_id: "evt_rel", state: "released", since: NOW0 },
+				],
+			},
+			input,
+		);
+		const deviceOnly = { fact: "device_only" };
+		expect(whereOf(wheres, "evt_unlisted", true)).toEqual(deviceOnly);
+		expect(whereOf(wheres, "evt_back", true)).toEqual(deviceOnly);
+		expect(whereOf(wheres, "evt_rel", true)).toEqual(deviceOnly);
+		expect(whereOf(wheres, EVENT, true)?.fact).toBe("device");
+		expect(whereOf(wheres, "evt_unlisted")).toEqual({ fact: "hub" });
+		expect(whereOf(wheres, "evt_back")?.fact).toBe("returning");
+		expect(whereOf(null, "evt_unlisted", true)).toBeUndefined();
+	});
 });
 
 describe("the schedules a service took off the hub", () => {

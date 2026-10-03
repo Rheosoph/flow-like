@@ -15,6 +15,7 @@ import type {
 import type { IEvent } from "../../../lib/schema/flow/event";
 import type { IHub } from "../../../lib/schema/hub/hub";
 import { useBackend } from "../../../state/backend-state";
+import type { IEventUpsertOptions } from "../../../state/backend-state/event-state";
 
 export interface SinkActivationOptions {
 	appId: string;
@@ -26,13 +27,15 @@ export interface SinkActivationOptions {
 		provider: IOAuthProvider,
 		token: IStoredOAuthToken,
 	) => Promise<IStoredOAuthToken>;
-	/** Called after a successful write, so the caller can re-read sink state. */
+	/** Called after a successful write with the stored event, so the caller can re-read sink state. */
 	onChanged?: (event: IEvent) => void | Promise<void>;
 }
 
 interface ToggleTarget {
 	event: IEvent;
 	active: boolean;
+	upsertOptions?: IEventUpsertOptions;
+	onSettled?: (error?: unknown) => void;
 }
 
 export interface RequestToggleOptions {
@@ -40,6 +43,10 @@ export interface RequestToggleOptions {
 	active: boolean;
 	/** Whether this event type registers a sink, which is what needs authorizing. */
 	requiresSink: boolean;
+	/** Passed to the upsert, e.g. `{ source: "default" }` to take a device-only event back. */
+	upsertOptions?: IEventUpsertOptions;
+	/** Runs once the write finished, with its error when it failed. */
+	onSettled?: (error?: unknown) => void;
 }
 
 /**
@@ -97,19 +104,22 @@ export function useSinkActivation({
 			const tokens = typeof patOrTokens === "object" ? patOrTokens : undefined;
 			setPendingId(next.event.id);
 			try {
-				await backend.eventState.upsertEvent(
+				const saved = await backend.eventState.upsertEvent(
 					appId,
 					{ ...next.event, active: next.active },
 					undefined,
 					pat,
 					tokens,
+					next.upsertOptions,
 				);
-				await onChanged?.(next.event);
+				await onChanged?.(saved ?? next.event);
+				next.onSettled?.();
 			} catch (error) {
 				console.error(
 					`Failed to set event ${next.event.id} active=${next.active}:`,
 					error,
 				);
+				next.onSettled?.(error);
 			} finally {
 				reset();
 			}
@@ -118,8 +128,11 @@ export function useSinkActivation({
 	);
 
 	const requestToggle = useCallback(
-		async (event: IEvent, { active, requiresSink }: RequestToggleOptions) => {
-			const next: ToggleTarget = { event, active };
+		async (
+			event: IEvent,
+			{ active, requiresSink, upsertOptions, onSettled }: RequestToggleOptions,
+		) => {
+			const next: ToggleTarget = { event, active, upsertOptions, onSettled };
 			setTarget(next);
 
 			if (!requiresSink) {

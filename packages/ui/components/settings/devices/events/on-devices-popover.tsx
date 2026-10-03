@@ -43,6 +43,7 @@ import {
 	type WhereKind,
 	type WhereNames,
 	canRunOnHubAgain,
+	deviceOnlyText,
 	scheduleHead,
 	scheduleOnceHead,
 	scheduleRunLines,
@@ -1052,12 +1053,14 @@ function WhereSection({
 	rule,
 	where,
 	kind,
+	deviceOnly,
 	live,
 }: Readonly<{
 	event: IEvent;
 	rule: EventEligibility;
 	where: ScheduleWhere;
 	kind: WhereKind;
+	deviceOnly: boolean;
 	live: EventsDevicesLive;
 }>) {
 	const { t } = useTranslation("devices");
@@ -1089,7 +1092,8 @@ function WhereSection({
 					{givenBackText(context, kind, resumes)}
 				</InlineResult>
 			) : null}
-			{!canRunOnHubAgain(where) ? null : asking ? (
+			{!canRunOnHubAgain(where) ||
+			(deviceOnly && kind !== "bot") ? null : asking ? (
 				<InlineConfirm
 					label={label}
 					title={label}
@@ -1196,7 +1200,12 @@ function WhereBody({
 						{appCopy(t).explainButton()}
 					</DvButton>
 				</p>
-				{localOnly && isClaimedRow(row) ? (
+				{localOnly && row.deviceOnly && !row.served.length ? (
+					<p className={SUB} data-schedule-where="device_only">
+						{deviceOnlyText(t)}
+					</p>
+				) : null}
+				{localOnly && isClaimedRow(row) && !row.deviceOnly ? (
 					<p className={SUB} data-schedule-where="local">
 						{row.kind === "bot"
 							? t(
@@ -1216,6 +1225,7 @@ function WhereBody({
 					rule={rule}
 					where={row.where}
 					kind={whereKind(row)}
+					deviceOnly={row.deviceOnly === true}
 					live={live}
 				/>
 			) : null}

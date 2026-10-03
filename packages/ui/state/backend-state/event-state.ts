@@ -46,8 +46,12 @@ export interface IEventSinkStatusContext {
 }
 
 export interface IEventUpsertOptions {
-	/** Save a deployable definition without starting its trigger on this computer or hub. */
-	source?: "device";
+	/**
+	 * `"device"` saves a deployable definition without starting its trigger on this computer or
+	 * hub. `"default"` clears that marker explicitly, so the event runs where its execution mode
+	 * says. Omitted keeps whatever the stored event has.
+	 */
+	source?: "device" | "default";
 }
 
 export interface IEventRegistration {

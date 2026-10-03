@@ -51,6 +51,7 @@ import {
 	isEmptyPolicy,
 	isPolicyChangedError,
 	isWidgetAccessRefusedError,
+	isWidgetBundleUnavailableError,
 	isWidgetGrantUnavailableError,
 	isWidgetRuntimeDescribeUnsupportedError,
 	maxWidgetSourceLevel,
@@ -137,6 +138,7 @@ export interface MicroWidgetFrameMount {
 
 export type MicroWidgetGrantError =
 	| { reason: "policy_unstable" }
+	| { reason: "bundle_unavailable"; detail: string }
 	| { reason: "mint_failed"; detail: string };
 
 export type MicroWidgetGrantState =
@@ -829,6 +831,7 @@ export interface MicroWidgetGrantControllerInputs {
 
 type DescribeOutcome =
 	| { kind: "described"; descriptor: WidgetPolicyDescriptor }
+	| { kind: "bundle_unavailable"; detail: string }
 	| { kind: "fallback"; detail: string | null };
 
 interface Candidate {
@@ -1318,7 +1321,12 @@ export class MicroWidgetGrantController {
 				(error) => {
 					if (!this.isCurrent(generation)) return;
 					this.d0Pending = false;
-					this.d0 = { kind: "fallback", detail: errorMessage(error) };
+					this.d0 = {
+						kind: isWidgetBundleUnavailableError(error)
+							? "bundle_unavailable"
+							: "fallback",
+						detail: errorMessage(error),
+					};
 					this.reconcile();
 				},
 			);
@@ -2444,13 +2452,20 @@ export class MicroWidgetGrantController {
 			runtimeRequest: null,
 		};
 		if (inputs?.active && this.active && this.d0) {
-			computed =
-				this.d0.kind === "fallback"
-					? {
-							...this.computeLegacy(inputs, this.d0.detail),
-							runtimeRequest: null,
-						}
-					: this.computeDescribed(this.d0.descriptor);
+			if (this.d0.kind === "bundle_unavailable") {
+				computed.state = {
+					status: "error",
+					reason: "bundle_unavailable",
+					detail: this.d0.detail,
+				};
+			} else if (this.d0.kind === "fallback") {
+				computed = {
+					...this.computeLegacy(inputs, this.d0.detail),
+					runtimeRequest: null,
+				};
+			} else {
+				computed = this.computeDescribed(this.d0.descriptor);
+			}
 		}
 		this.snapshot = {
 			...computed,

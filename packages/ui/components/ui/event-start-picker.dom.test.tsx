@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState } from "react";
+import { act, useState } from "react";
 import type { IBoard, INode } from "../../lib/schema/flow/board";
 import {
 	IExecutionMode,
@@ -12,9 +12,11 @@ import type { IBackendState } from "../../state/backend-state";
 import type { PageListItem } from "../../state/backend-state/page-state";
 import type { IEventMapping } from "../interfaces/interfaces";
 import {
+	allByRole,
 	byRole,
 	click,
 	installDom,
+	keyDown,
 	queryByRole,
 	settle,
 	typeInto,
@@ -105,6 +107,7 @@ async function mount(
 		getBoard?: IBackendState["boardState"]["getBoard"];
 		selected?: EventStartSelection;
 		disabled?: boolean;
+		onRowRender?: (key: string) => void;
 	} = {},
 ) {
 	const boardCalls: unknown[][] = [];
@@ -147,6 +150,7 @@ async function mount(
 				eventConfig={mapping}
 				selected={selected}
 				disabled={options.disabled}
+				onRowRender={options.onRowRender}
 				onSelect={(target) => {
 					selections.push(target);
 					setSelected(target);
@@ -161,6 +165,29 @@ async function mount(
 	);
 	for (let i = 0; i < 4; i++) await settle();
 	return { ...view, boardCalls, selections };
+}
+
+async function chooseFlow(name: string) {
+	await click(byRole("combobox", /^Filter by flow/));
+	await click(byRole("option", name));
+}
+
+const radios = () => allByRole("radio");
+const labelOf = (key: string) => {
+	const [, flow, node] = key.split(":");
+	return `Flow ${flow?.replace("flow-", "")}: Refund ${node?.slice(1)}`;
+};
+const search = () => byRole("textbox", "Search start nodes, pages and flows");
+
+function volume(flowCount: number, perFlow: number): IBoardSummary[] {
+	return Array.from({ length: flowCount }, (_, flow) => ({
+		...summary(`flow-${flow}`, `Flow ${flow}`, "unused", ""),
+		entryNodes: Array.from({ length: perFlow }, (_, node) => ({
+			nodeId: `n${flow * perFlow + node}`,
+			nodeType: "events_simple",
+			friendlyName: `Refund ${flow * perFlow + node}`,
+		})),
+	}));
 }
 
 describe("Event start picker", () => {
@@ -188,7 +215,7 @@ describe("Event start picker", () => {
 			byRole("textbox", "Search start nodes, pages and flows"),
 			"",
 		);
-		await typeInto(byRole("combobox", "Filter by flow"), "orders");
+		await chooseFlow("Order intake");
 		expect(queryByRole("radio", "Returns: Refund approved")).toBeNull();
 		expect(view.container.textContent).toContain(
 			"Chosen Returns › Refund approved",
@@ -236,11 +263,8 @@ describe("Event start picker", () => {
 		});
 		expect(view.boardCalls).toEqual([["app", "orders", [0, 9, 0]]]);
 		expect(queryByRole("radio", "Order intake: Receive order")).toBeNull();
-		const selected = byRole(
-			"radio",
-			"Order intake: Legacy intake",
-		) as HTMLInputElement;
-		expect(selected.checked).toBe(true);
+		const selected = byRole("radio", "Order intake: Legacy intake");
+		expect(selected.getAttribute("aria-checked")).toBe("true");
 		expect(view.container.textContent).toContain(
 			"Chosen Order intake › Legacy intake",
 		);
@@ -278,5 +302,230 @@ describe("Event start picker", () => {
 		expect(view.container.textContent).toContain("Page unavailable");
 		await click(choice);
 		expect(view.selections).toEqual([]);
+	});
+
+	test("counts name the flow plural correctly", async () => {
+		const view = await mount({ summaries: [summaries[0]], pages: [] });
+		expect(view.container.textContent).toContain("1 in 1 flow");
+		expect(view.container.textContent).not.toContain("1 flows");
+	});
+
+	test("items without a friendly name sort by name then id, and duplicates in one flow get an id suffix", async () => {
+		const bare = (nodeId: string) => ({
+			nodeId,
+			nodeType: "events_simple",
+			friendlyName: "",
+		});
+		const flow = {
+			...summaries[0],
+			entryNodes: [bare("zz-b2b2b2"), bare("aa-a1a1a1")],
+		};
+		const other = {
+			...summaries[1],
+			entryNodes: [bare("only-one")],
+		};
+		await mount({
+			summaries: [flow, other],
+			pages: [],
+			selected: { boardId: "none" },
+		});
+		const names = radios().map((radio) => radio.getAttribute("aria-label"));
+		expect(names).toEqual([
+			"Order intake: Simple · a1a1a1",
+			"Order intake: Simple · b2b2b2",
+			"Returns: Simple",
+		]);
+	});
+
+	test("5,000 start nodes in 300 flows render a capped DOM and stay selectable", async () => {
+		const view = await mount({
+			summaries: volume(300, 17),
+			pages: [],
+			selected: { boardId: "none" },
+		});
+		expect(view.container.textContent).toContain("5100 in 300 flows");
+		expect(radios().length).toBeLessThanOrEqual(150);
+		expect(radios().length).toBeGreaterThan(0);
+		expect(view.container.textContent).toContain("more flows not shown");
+		expect(view.boardCalls).toEqual([]);
+		await typeInto(search(), "refund 17");
+		expect(radios().length).toBeLessThanOrEqual(150);
+		expect(radios()[0]?.getAttribute("aria-label")).toContain("Refund 17");
+		await click(radios()[0] as HTMLElement);
+		expect(view.selections[0]).toMatchObject({ name: "Refund 17" });
+		expect(radios()[0]?.getAttribute("aria-checked")).toBe("true");
+	});
+
+	test("typing re-renders only the rows whose props changed", async () => {
+		const renders = new Map<string, number>();
+		await mount({
+			summaries: volume(300, 17),
+			pages: [],
+			selected: { boardId: "none" },
+			onRowRender: (key) => renders.set(key, (renders.get(key) ?? 0) + 1),
+		});
+		expect(renders.size).toBeLessThanOrEqual(150);
+		await typeInto(search(), "refund 17");
+		const shown = radios().map((radio) => {
+			const [flow, name] = (radio.getAttribute("aria-label") ?? "").split(": ");
+			return `node:flow-${flow?.replace("Flow ", "")}:n${name?.replace("Refund ", "")}`;
+		});
+		const before = new Map(renders);
+		await typeInto(search(), "refund 170");
+		const survivors = radios().filter((radio) =>
+			shown.some((key) => radio.getAttribute("aria-label") === labelOf(key)),
+		);
+		expect(survivors.length).toBeGreaterThan(0);
+		const rerendered = shown.reduce(
+			(sum, key) => sum + ((renders.get(key) ?? 0) - (before.get(key) ?? 0)),
+			0,
+		);
+		expect(rerendered).toBeLessThanOrEqual(2);
+	});
+
+	test("arrow keys move focus without selecting", async () => {
+		const view = await mount({
+			summaries: volume(2, 5),
+			pages: [],
+			selected: { boardId: "none" },
+		});
+		const rows = radios();
+		await act(async () => (rows[0] as HTMLElement).focus());
+		await keyDown(rows[0] as HTMLElement, "ArrowDown");
+		expect(document.activeElement).toBe(rows[1]);
+		await keyDown(rows[1] as HTMLElement, "End");
+		expect(document.activeElement).toBe(rows.at(-1));
+		await keyDown(rows.at(-1) as HTMLElement, "Home");
+		expect(document.activeElement).toBe(rows[0]);
+		expect(view.selections).toEqual([]);
+		expect(
+			rows.some((row) => row.getAttribute("aria-checked") === "true"),
+		).toBe(false);
+		await click(rows[1] as HTMLElement);
+		expect(view.selections).toHaveLength(1);
+	});
+
+	test("groups show 50 rows and reveal the rest on request", async () => {
+		await mount({
+			summaries: volume(1, 120),
+			pages: [],
+			selected: { boardId: "none" },
+		});
+		expect(radios()).toHaveLength(50);
+		await click(byRole("button", "Show 50 more"));
+		expect(radios()).toHaveLength(100);
+		await click(byRole("button", "Show 20 more"));
+		expect(radios()).toHaveLength(120);
+		expect(queryByRole("button", /^Show/)).toBeNull();
+	});
+
+	test("the flow filter searches hundreds of flows", async () => {
+		await mount({
+			summaries: volume(300, 17),
+			pages: [],
+			selected: { boardId: "none" },
+		});
+		await click(byRole("combobox", /^Filter by flow/));
+		expect(allByRole("option").length).toBeLessThanOrEqual(101);
+		await typeInto(
+			document.querySelector("input[placeholder='Search flows']") as Element,
+			"Flow 299",
+		);
+		await click(byRole("option", "Flow 299"));
+		expect(radios()).toHaveLength(17);
+		expect(
+			radios().every((radio) =>
+				radio.getAttribute("aria-label")?.startsWith("Flow 299:"),
+			),
+		).toBe(true);
+	});
+
+	test("legacy flows load their graph on demand instead of all at once", async () => {
+		const legacy = Array.from({ length: 30 }, (_, flow) => ({
+			...summary(`legacy-${flow}`, `Legacy ${flow}`, "x", "x"),
+			entryNodes: undefined,
+		}));
+		const view = await mount({
+			summaries: legacy,
+			pages: [],
+			selected: { boardId: "legacy-0" },
+			getBoard: async (_app, boardId) =>
+				({ ...graph("Receive order"), id: boardId }) as IBoard,
+		});
+		expect(view.boardCalls).toEqual([["app", "legacy-0", undefined]]);
+		expect(queryByRole("radio", "Legacy 0: Receive order")).not.toBeNull();
+		await click(byRole("button", "Load start nodes in Legacy 7"));
+		for (let i = 0; i < 3; i++) await settle();
+		expect(view.boardCalls).toHaveLength(2);
+		expect(queryByRole("radio", "Legacy 7: Receive order")).not.toBeNull();
+		expect(queryByRole("button", "Load start nodes in Legacy 7")).toBeNull();
+	});
+
+	test("rows keep an inset focus ring so content-visibility clipping cannot hide it", async () => {
+		await mount();
+		const row = radios()[0] as HTMLElement;
+		expect(row.className).toContain("[content-visibility:auto]");
+		expect(row.className).toContain("focus-visible:ring-inset");
+		expect(row.className).toContain("focus-visible:ring-2");
+	});
+
+	test("a legacy flow with a page still offers to load its start nodes", async () => {
+		const legacy = { ...summaries[0], entryNodes: undefined };
+		const view = await mount({
+			summaries: [legacy],
+			selected: { boardId: "none" },
+		});
+		expect(view.boardCalls).toEqual([]);
+		expect(radios().map((radio) => radio.getAttribute("aria-label"))).toEqual([
+			"Order intake: Order desk",
+		]);
+		await click(byRole("button", "Load start nodes in Order intake"));
+		for (let i = 0; i < 3; i++) await settle();
+		expect(view.boardCalls).toHaveLength(1);
+		expect(queryByRole("radio", "Order intake: Receive order")).not.toBeNull();
+		expect(queryByRole("radio", "Order intake: Order desk")).not.toBeNull();
+		expect(queryByRole("button", /^Load start nodes/)).toBeNull();
+	});
+
+	test("a chosen unavailable page does not remove the list from the tab order", async () => {
+		await mount({
+			pages: [{ ...page, unavailable: true }],
+			selected: { boardId: "orders", pageId: "desk" },
+		});
+		expect(queryByRole("radio", "Order intake: Order desk")).not.toBeNull();
+		const tabbable = radios().filter((radio) => radio.tabIndex === 0);
+		expect(tabbable).toHaveLength(1);
+		expect((tabbable[0] as HTMLButtonElement).disabled).toBe(false);
+	});
+
+	test("the flow filter announces the listbox it opens", async () => {
+		await mount();
+		expect(
+			byRole("combobox", /^Filter by flow/).getAttribute("aria-haspopup"),
+		).toBe("listbox");
+	});
+
+	test("expanded groups consume the shared row budget and reset when the search or flow changes", async () => {
+		await mount({
+			summaries: volume(4, 120),
+			pages: [],
+			selected: { boardId: "none" },
+		});
+		const inFlow = (flow: number) =>
+			radios().filter((radio) =>
+				radio.getAttribute("aria-label")?.startsWith(`Flow ${flow}:`),
+			).length;
+		expect(radios()).toHaveLength(150);
+		await click(byRole("button", "Show 50 more"));
+		expect(inFlow(0)).toBe(100);
+		expect(radios()).toHaveLength(150);
+		expect(inFlow(2)).toBe(0);
+		await typeInto(search(), "Refund");
+		await typeInto(search(), "");
+		expect(inFlow(0)).toBe(50);
+		await click(byRole("button", "Show 50 more"));
+		expect(inFlow(0)).toBe(100);
+		await chooseFlow("Flow 0");
+		expect(radios()).toHaveLength(50);
 	});
 });

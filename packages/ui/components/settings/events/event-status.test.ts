@@ -33,4 +33,23 @@ describe("event overview status", () => {
 			).toBe("attention");
 		}
 	});
+
+	test("a device-only event is neither live nor in need of attention", () => {
+		expect(getEventStatus({ ...trigger, deviceOnly: true })).toBe("device");
+		expect(
+			getEventStatus({ ...trigger, deviceOnly: true, sinkActive: false }),
+		).toBe("device");
+		expect(
+			getEventStatus({ ...trigger, requiresSink: false, deviceOnly: true }),
+		).toBe("device");
+	});
+
+	test("a device-only event still reports pause and blocking setup issues", () => {
+		expect(
+			getEventStatus({ ...trigger, deviceOnly: true, active: false }),
+		).toBe("paused");
+		expect(
+			getEventStatus({ ...trigger, deviceOnly: true, blocking: true }),
+		).toBe("attention");
+	});
 });

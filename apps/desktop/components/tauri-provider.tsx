@@ -135,6 +135,8 @@ declare global {
 	var __FL_DL_RESUMED__: boolean | undefined;
 }
 
+const PACKAGE_SESSION_BOOTSTRAP_TIMEOUT_MS = 30_000;
+
 export class TauriBackend implements IBackendState {
 	appState: IAppState;
 	apiState: IApiState;
@@ -164,6 +166,11 @@ export class TauriBackend implements IBackendState {
 
 	private _apiState: TauriApiState;
 	private executionAuthHub?: string;
+	private packageProfileError: Error | null = null;
+	private readonly packageSessionWaiters = new Set<{
+		resolve: () => void;
+		reject: (error: Error) => void;
+	}>();
 	private readonly executionAuth = new ExecutionAuthBridge(
 		() => invoke<string>("execution_open_auth_session"),
 		(update) => invoke<void>("execution_set_auth", { ...update }),
@@ -219,6 +226,8 @@ export class TauriBackend implements IBackendState {
 
 	pushProfile(profile: IProfile) {
 		this.profile = profile;
+		this.packageProfileError = null;
+		this.resolvePackageSessionWaiters();
 		this.syncExecutionAuth().catch(() =>
 			console.warn("[ExecutionAuth] Failed to update native session"),
 		);
@@ -228,6 +237,7 @@ export class TauriBackend implements IBackendState {
 	pushAuthContext(auth: AuthContextProps, hub = getApiOrigin(this.profile)) {
 		this.auth = auth;
 		this.executionAuthHub = hub;
+		this.resolvePackageSessionWaiters();
 		this.syncExecutionAuth().catch(() =>
 			console.warn("[ExecutionAuth] Failed to update native session"),
 		);
@@ -242,6 +252,62 @@ export class TauriBackend implements IBackendState {
 				console.warn("[RegistryAuth] Failed to set auth token:", e),
 			);
 		this.refreshRemoteCatalogQueries();
+	}
+
+	/** Missing project bundles wait for bootstrap; installed widgets can be described immediately. */
+	waitForPackageSession(): Promise<void> {
+		if (this.packageSessionReady()) return Promise.resolve();
+		if (this.packageProfileError) {
+			return Promise.reject(this.packageProfileError);
+		}
+		return new Promise((resolve, reject) => {
+			const waiter = {
+				resolve: () => {
+					clearTimeout(timer);
+					this.packageSessionWaiters.delete(waiter);
+					resolve();
+				},
+				reject: (error: Error) => {
+					clearTimeout(timer);
+					this.packageSessionWaiters.delete(waiter);
+					reject(error);
+				},
+			};
+			const timer = setTimeout(
+				() =>
+					waiter.reject(
+						new Error(
+							"Sign-in or profile initialization did not finish within 30 seconds.",
+						),
+					),
+				PACKAGE_SESSION_BOOTSTRAP_TIMEOUT_MS,
+			);
+			this.packageSessionWaiters.add(waiter);
+		});
+	}
+
+	pushProfileError(error: Error): void {
+		this.packageProfileError = error;
+		this.resolvePackageSessionWaiters();
+	}
+
+	private packageSessionReady(): boolean {
+		return Boolean(
+			this.auth &&
+				!this.auth.isLoading &&
+				(!this.auth.isAuthenticated || this.profile),
+		);
+	}
+
+	private resolvePackageSessionWaiters(): void {
+		const ready = this.packageSessionReady();
+		if (!ready && !this.packageProfileError) return;
+		for (const waiter of this.packageSessionWaiters) {
+			if (ready) waiter.resolve();
+			else if (this.packageProfileError)
+				waiter.reject(this.packageProfileError);
+		}
+		this.packageSessionWaiters.clear();
 	}
 
 	/**
@@ -299,10 +365,10 @@ export class TauriBackend implements IBackendState {
 		const queryClient = this.queryClient;
 		await Promise.all(
 			[
-				this.widgetState.getWidgets.name || "backendFn",
-				this.widgetState.getWidget.name || "backendFn",
-			].map(async (name) => {
-				const queryKey = [name];
+				[this.widgetState.getWidgets.name || "backendFn"],
+				[this.widgetState.getWidget.name || "backendFn"],
+				["app-package-widgets"],
+			].map(async (queryKey) => {
 				// Invalidation alone reuses an unfinished first read, which may have
 				// already chosen local storage before the session became available.
 				await queryClient.cancelQueries({ queryKey });
@@ -1056,8 +1122,10 @@ export function ProfileSyncer({
 	useEffect(() => {
 		if (profile.data && backend instanceof TauriBackend) {
 			backend.pushProfile(profile.data);
+		} else if (profile.error && backend instanceof TauriBackend) {
+			backend.pushProfileError(profile.error);
 		}
-	}, [profile.data, backend]);
+	}, [profile.data, profile.error, backend]);
 
 	useEffect(() => {
 		if (!(backend instanceof TauriBackend)) {

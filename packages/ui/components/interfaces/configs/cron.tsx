@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CheckIcon, ChevronsUpDown, Clock } from "lucide-react";
 
 import { humanizeCron } from "../../../lib/cron-words";
+import { IEventExecutionMode } from "../../../lib/schema/flow/event";
 import { cn } from "../../../lib/utils";
 import {
 	Alert,
@@ -205,15 +206,13 @@ export function CronJobConfig({
 	onConfigUpdate,
 	hub,
 	canExecuteLocally,
+	eventExecutionMode,
 	section,
 }: IConfigInterfaceProps) {
 	const { t } = useTranslation("interfaces");
-	const browserTZ =
-		typeof Intl !== "undefined"
-			? Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
-			: "UTC";
 
-	const timezone = (config?.timezone as string) || browserTZ;
+	// A schedule without a zone runs in UTC, so that is the zone shown.
+	const timezone = (config?.timezone as string) || "UTC";
 
 	const initialMode: Mode =
 		(config?.expression && config.expression.trim().length > 0) ||
@@ -318,14 +317,20 @@ export function CronJobConfig({
 
 	const supportsRemote = hub?.domain != null;
 	const supportsLocal = canExecuteLocally ?? false;
-	const supportsBoth = supportsRemote && supportsLocal;
+	const executionFollowsEvent = eventExecutionMode !== undefined;
+	const supportsBoth =
+		supportsRemote && supportsLocal && !executionFollowsEvent;
 
 	const effectiveExecution: SinkExecutionTarget = useMemo(() => {
+		if (eventExecutionMode)
+			return eventExecutionMode === IEventExecutionMode.Remote
+				? "REMOTE"
+				: "LOCAL";
 		if (sinkExecution) return sinkExecution;
 		if (supportsBoth) return "HYBRID";
 		if (supportsRemote) return "REMOTE";
 		return "LOCAL";
-	}, [sinkExecution, supportsBoth, supportsRemote]);
+	}, [eventExecutionMode, sinkExecution, supportsBoth, supportsRemote]);
 	const includesRemoteExecution = effectiveExecution !== "LOCAL";
 	const remoteCronUnsupportedSeconds = useMemo(() => {
 		if (!includesRemoteExecution || mode !== "recurring") return null;
@@ -380,6 +385,20 @@ export function CronJobConfig({
 						)}
 					</p>
 				</div>
+			)}
+
+			{shows("runtime") && executionFollowsEvent && (
+				<p className="text-sm text-muted-foreground">
+					{effectiveExecution === "REMOTE"
+						? t(
+								"scheduleRunsOnTheHub",
+								"This schedule runs on the hub, like the event it belongs to.",
+							)
+						: t(
+								"scheduleRunsOnThisDevice",
+								"This schedule runs in the desktop app, like the event it belongs to.",
+							)}
+				</p>
 			)}
 
 			{/* Execution Target */}

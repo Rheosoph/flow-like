@@ -1,8 +1,10 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
 import {
 	Check,
+	ChevronDown,
 	Cloud,
 	Info,
 	Loader2,
@@ -10,17 +12,36 @@ import {
 	Server,
 	Zap,
 } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+	memo,
+	useCallback,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import type { IOAuthConsentStore } from "../../db/oauth-db";
 import { useInvoke } from "../../hooks/use-invoke";
 import type { IEvent, IOAuthProvider, IOAuthToken } from "../../lib";
-import { eventKind } from "../../lib/device-management/deployment";
 import {
 	isServerOnlyEventType,
 	serverEventBlocker,
 	serverEventBlockerMessage,
-	sinkSupportsEventExecution,
 } from "../../lib/event-definitions";
+import {
+	type Destination,
+	type DestinationEnvironment,
+	type DestinationReason,
+	type DestinationTarget,
+	blockingReason,
+	destinationHintText,
+	destinationReasonText,
+	destinationSinkExecution,
+	destinationStatuses,
+	initialDestination,
+	resolveDestination,
+} from "../../lib/event-destination";
 import { getEventSections, isTriggerSection } from "../../lib/event-sections";
 import {
 	eventTriggerConfig,
@@ -55,6 +76,11 @@ import { OAuthConsentDialog } from "../oauth/oauth-consent-dialog";
 import type { DeviceWorkspaceOverrides } from "../settings/devices/workspace/device-workspace-provider";
 import { NewEventDeployment } from "../settings/events/new-event-deployment";
 import { Button } from "./button";
+import {
+	Collapsible,
+	CollapsibleContent,
+	CollapsibleTrigger,
+} from "./collapsible";
 import { EventStartPicker, type EventStartTarget } from "./event-start-picker";
 import { Input } from "./input";
 import { Label } from "./label";
@@ -82,6 +108,7 @@ interface EventFormProps {
 	onDeploymentComplete?: (event: IEvent) => void;
 	onNavigateDeployment?: (href: string) => void;
 	onBusyChange?: (busy: boolean) => void;
+	onSavedChange?: (event: IEvent | null) => void;
 	onCancel: () => void;
 	isSubmitting?: boolean;
 	tokenStore?: IOAuthTokenStoreWithPending;
@@ -94,7 +121,61 @@ interface EventFormProps {
 	) => Promise<IStoredOAuthToken>;
 }
 
-type Destination = "computer" | "hub" | "device";
+const HTTP_METHODS = [
+	"GET",
+	"POST",
+	"PUT",
+	"PATCH",
+	"DELETE",
+	"HEAD",
+	"OPTIONS",
+];
+
+const browserTimeZone = () =>
+	Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+/** A schedule without a zone runs in UTC, so a new one starts in the zone its editor shows. */
+function triggerDefaults(type: string, config: object | undefined): object {
+	const base = (config ?? {}) as Record<string, unknown>;
+	return type === "cron" && !base.timezone
+		? { ...base, timezone: browserTimeZone() }
+		: base;
+}
+
+/** A schedule runs where its event runs, so its target follows the destination. */
+function withScheduleTarget(
+	config: number[],
+	eventType: string | undefined,
+	destination: Destination,
+): number[] {
+	if (eventType !== "cron" || config.length === 0) return config;
+	const parsed = parseUint8ArrayToJson(config);
+	if (!parsed || typeof parsed !== "object") return config;
+	const { sink_execution: _previous, ...rest } = parsed as Record<
+		string,
+		unknown
+	>;
+	const target = destinationSinkExecution(destination);
+	return (
+		convertJsonToUint8Array(
+			target ? { ...rest, sink_execution: target } : rest,
+		) ?? config
+	);
+}
+
+const DeploymentPanel = memo(NewEventDeployment);
+
+function shallowEqual(
+	a: Record<string, unknown>,
+	b: Record<string, unknown>,
+): boolean {
+	const keys = Object.keys(a);
+	return (
+		keys.length === Object.keys(b).length &&
+		keys.every((key) => Object.is(a[key], b[key]))
+	);
+}
+
 interface EventFormData {
 	name: string;
 	description: string;
@@ -122,6 +203,7 @@ export function EventForm({
 	onDeploymentComplete,
 	onNavigateDeployment,
 	onBusyChange,
+	onSavedChange,
 	onCancel,
 	isSubmitting = false,
 	tokenStore,
@@ -133,16 +215,35 @@ export function EventForm({
 	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const formId = useId();
+	const hintId = `${formId}-hint`;
 	const formRef = useRef<HTMLFormElement>(null);
 	const [footerContainer, setFooterContainer] = useState<HTMLDivElement | null>(
 		null,
 	);
+	const planRef = useRef<HTMLElement>(null);
+	const nameTouched = useRef(!!event?.name?.trim());
+	const onSavedChangeRef = useRef(onSavedChange);
+	onSavedChangeRef.current = onSavedChange;
 	const canExecuteLocally = backend.capabilities().canExecuteLocally;
-	const [destination, setDestination] = useState<Destination>(
-		onCreateDevice ? "device" : canExecuteLocally ? "computer" : "hub",
+	const [preferredDestination, setPreferredDestination] = useState<Destination>(
+		() =>
+			initialDestination(
+				{ deviceCreation: !!onCreateDevice, canExecuteLocally },
+				event,
+			),
 	);
+	const draftCache = useRef<{
+		inputs: Record<string, unknown>;
+		value: Partial<IEvent>;
+	} | null>(null);
+	const [configEpoch, setConfigEpoch] = useState(0);
 	const [deploymentBusy, setDeploymentBusy] = useState(false);
 	const [deploymentSaved, setDeploymentSaved] = useState(false);
+	const [deployed, setDeployed] = useState(false);
+	const handleSavedChange = useCallback((saved: IEvent | null) => {
+		setDeploymentSaved(!!saved);
+		onSavedChangeRef.current?.(saved);
+	}, []);
 	const [checkingOAuth, setCheckingOAuth] = useState(false);
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [configSection, setConfigSection] = useState<string | undefined>();
@@ -228,55 +329,44 @@ export function EventForm({
 	const typeLabel = formData.event_type
 		? triggerLabel(formData.event_type)
 		: t("event", "Event");
-	const deviceSupported =
-		!formData.event_type ||
-		eventKind({
-			event_type: formData.event_type,
-			default_page_id: formData.default_page_id,
-		}) !== null;
-	const supportsDestination = (target: Destination) => {
-		if (target === "device") return !!onCreateDevice && deviceSupported;
-		if (
-			target === "computer" &&
-			(!canExecuteLocally ||
-				boardExecutionMode === IExecutionMode.Remote ||
-				isServerEvent)
-		)
-			return false;
-		if (
-			target === "hub" &&
-			(offline.data !== false || boardExecutionMode === IExecutionMode.Local)
-		)
-			return false;
-		if (mapping?.withSink.includes(formData.event_type ?? "")) {
-			const mode =
-				target === "computer"
-					? IEventExecutionMode.Local
-					: IEventExecutionMode.Remote;
-			if (
-				!sinkSupportsEventExecution(
-					mapping.sinkAvailability?.[formData.event_type ?? ""],
-					mode,
-					canExecuteLocally,
-				)
-			)
-				return false;
-			if (
-				target === "hub" &&
-				isServerEvent &&
-				hub &&
-				hub.supported_sinks?.[formData.event_type ?? ""] !== true
-			)
-				return false;
-		}
-		return true;
+	const destinationEnvironment: DestinationEnvironment = {
+		deviceCreation: !!onCreateDevice,
+		canExecuteLocally,
+		isOffline: offline.data,
+		offlineCheckFailed: offline.isError,
+		boardMode: boardExecutionMode,
+		hubSupportedSinks: hub ? (hub.supported_sinks ?? {}) : undefined,
 	};
-	const destinationAvailable = supportsDestination(destination);
+	const targetFor = (type: string | undefined): DestinationTarget => ({
+		eventType: type,
+		pageId: formData.default_page_id,
+		sink:
+			type && mapping?.withSink.includes(type)
+				? mapping.sinkAvailability?.[type]
+				: undefined,
+	});
+	const destinationStates = destinationStatuses(
+		targetFor(formData.event_type),
+		destinationEnvironment,
+	);
+	const resolution = resolveDestination(
+		preferredDestination,
+		destinationStates,
+	);
+	const destination = resolution.destination;
+	const destinationAvailable = !resolution.none;
 	const busy = isSubmitting || checkingOAuth || deploymentBusy;
 	const locked = busy || deploymentSaved;
 	const availableTriggers = isPageEvent
 		? ["page"]
 		: (mapping?.eventTypes ?? (node?.start ? ["default"] : []));
+	const blockedTriggers: Record<string, DestinationReason> = {};
+	for (const type of availableTriggers) {
+		const reason = blockingReason(
+			destinationStatuses(targetFor(type), destinationEnvironment),
+		);
+		if (reason) blockedTriggers[type] = reason;
+	}
 	const validTrigger = availableTriggers.includes(formData.event_type ?? "");
 	const validTarget =
 		!!formData.board_id &&
@@ -292,6 +382,18 @@ export function EventForm({
 		!board.isError &&
 		(!shouldRequireRoutePath || routes.isSuccess) &&
 		!(isServerEvent && offline.isLoading);
+	const cancelLabel = !deploymentSaved
+		? t("cancel", "Cancel")
+		: deployed
+			? t("close", "Close")
+			: t("closeAndDeployLater", "Close and deploy later");
+	const submitHint = canSubmit
+		? null
+		: !validTarget
+			? t("pickStartToCreate", "Pick what starts the flow to continue.")
+			: !formData.name.trim()
+				? t("nameToCreate", "Give the event a name to continue.")
+				: null;
 	useEffect(() => {
 		onBusyChange?.(busy);
 	}, [busy, onBusyChange]);
@@ -308,15 +410,19 @@ export function EventForm({
 		);
 	}, [destination, boardExecutionMode, deploymentBusy, deploymentSaved]);
 	useEffect(() => {
-		if (deploymentBusy || deploymentSaved || !isServerEvent || serverBlocker)
-			return;
-		setDestination("hub");
-	}, [isServerEvent, serverBlocker, deploymentBusy, deploymentSaved]);
+		if (deploymentBusy || deploymentSaved) setPreferredDestination(destination);
+	}, [destination, deploymentBusy, deploymentSaved]);
+	useEffect(() => {
+		const plan = planRef.current;
+		if (deploymentSaved && plan && !plan.contains(document.activeElement))
+			plan.focus();
+	}, [deploymentSaved]);
 	function handleInputChange<K extends keyof EventFormData>(
 		field: K,
 		value: EventFormData[K],
 	) {
 		setSubmitError(null);
+		if (field === "name") nameTouched.current = true;
 		setFormData((previous) => ({
 			...previous,
 			[field]:
@@ -332,6 +438,7 @@ export function EventForm({
 			: (nextMapping?.defaultEventType ?? "default");
 		setPathError(null);
 		setConfigSection(undefined);
+		setConfigEpoch((epoch) => epoch + 1);
 		setSubmitError(null);
 		setFormData((previous) => ({
 			...previous,
@@ -341,17 +448,27 @@ export function EventForm({
 			board_version: target.boardVersion,
 			target_kind: target.pageId ? "page" : "board",
 			event_type: type,
-			config: convertJsonToUint8Array(nextMapping?.configs[type] ?? {}) ?? [],
-			name: previous.name || target.name,
+			config:
+				convertJsonToUint8Array(
+					triggerDefaults(type, nextMapping?.configs[type]),
+				) ?? [],
+			name:
+				nameTouched.current && previous.name.trim()
+					? previous.name
+					: target.name,
 		}));
 	}
 	function selectType(type: string) {
 		setConfigSection(undefined);
+		setConfigEpoch((epoch) => epoch + 1);
 		setPathError(null);
 		setFormData((previous) => ({
 			...previous,
 			event_type: type,
-			config: convertJsonToUint8Array(mapping?.configs[type] ?? {}) ?? [],
+			config:
+				convertJsonToUint8Array(
+					triggerDefaults(type, mapping?.configs[type]),
+				) ?? [],
 		}));
 	}
 	function buildEventData(): Partial<IEvent> {
@@ -359,13 +476,32 @@ export function EventForm({
 		return {
 			...data,
 			name: data.name.trim(),
-			config: eventTriggerConfig(data.config),
+			config: withScheduleTarget(
+				eventTriggerConfig(data.config),
+				data.event_type,
+				destination,
+			),
 			...(shouldRequireRoutePath
 				? { path: normalizeRoutePath(path), route: normalizeRoutePath(path) }
 				: {}),
 			variables: event?.variables ?? {},
 		};
 	}
+	const { name: _name, description: _description, ...draftFields } = formData;
+	const draftInputs = {
+		...draftFields,
+		destination,
+		shouldRequireRoutePath,
+		variables: event?.variables,
+	};
+	if (
+		!draftCache.current ||
+		!shallowEqual(draftCache.current.inputs, draftInputs)
+	) {
+		const { name: _n, description: _d, ...value } = buildEventData();
+		draftCache.current = { inputs: draftInputs, value };
+	}
+	const panelDraft = draftCache.current.value;
 	function validate(): boolean {
 		if (!canSubmit || !formRef.current?.reportValidity()) return false;
 		if (shouldRequireRoutePath) {
@@ -395,6 +531,24 @@ export function EventForm({
 		setPathError(null);
 		return true;
 	}
+	function pickDestination(next: Destination) {
+		setPreferredDestination(next);
+		setPathError(null);
+	}
+	const createDeviceEvent = async (): Promise<IEvent> => {
+		if (!onCreateDevice) throw new Error("Device creation is not available.");
+		if (!validate())
+			throw new Error(
+				t(
+					"completeEventDetails",
+					"Complete the event details before deploying.",
+				),
+			);
+		return onCreateDevice(buildEventData());
+	};
+	const createDeviceRef = useRef(createDeviceEvent);
+	createDeviceRef.current = createDeviceEvent;
+	const handleCreateDevice = useCallback(() => createDeviceRef.current(), []);
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
 		if (locked || destination === "device" || !validate()) return;
@@ -570,13 +724,15 @@ export function EventForm({
 	]);
 
 	const ConfigInterface = mapping?.configInterfaces[formData.event_type ?? ""];
+	// The runtime section is hidden: a schedule runs where the chosen destination runs it.
 	const triggerSections = getEventSections(buildEventData() as IEvent).filter(
-		(section) => isTriggerSection(section.id),
+		(section) => isTriggerSection(section.id) && section.id !== "runtime",
 	);
 	const activeSection = configSection ?? triggerSections[0]?.id;
 	const configEditor =
 		ConfigInterface && node ? (
 			<ConfigInterface
+				key={`${formData.board_id}:${formData.node_id}:${formData.event_type}:${configEpoch}`}
 				isEditing={!locked}
 				appId={appId}
 				boardId={formData.board_id}
@@ -598,18 +754,21 @@ export function EventForm({
 			icon: Monitor,
 			title: t("thisComputer", "This computer"),
 			detail: t("runsInDesktopApp", "Desktop app"),
+			phrase: t("destinationPhraseComputer", "this computer"),
 		},
 		{
 			id: "hub" as const,
 			icon: Cloud,
 			title: t("hub", "Hub"),
 			detail: t("runsOnServer", "On the server"),
+			phrase: t("destinationPhraseHub", "the hub"),
 		},
 		{
 			id: "device" as const,
 			icon: Server,
 			title: t("device", "Device"),
 			detail: t("chooseDevices", "Choose devices"),
+			phrase: t("destinationPhraseDevice", "a device"),
 		},
 	];
 	return (
@@ -679,61 +838,76 @@ export function EventForm({
 						)}
 						{availableTriggers.length > 0 && (
 							<section className="space-y-3 border-t pt-5">
-								<Label>{t("triggeredBy", "Triggered by")}</Label>
-								<div
+								<Label id={`${formId}-trigger`}>
+									{t("triggeredBy", "Triggered by")}
+								</Label>
+								<RadioGroupPrimitive.Root
+									aria-labelledby={`${formId}-trigger`}
+									value={formData.event_type ?? ""}
+									onValueChange={selectType}
 									className="flex flex-wrap gap-1.5"
-									aria-roledescription="choices"
-									aria-label={t("eventType", "Event type")}
 								>
 									{availableTriggers.map((type) => (
-										<button
+										<RadioGroupPrimitive.Item
 											key={type}
-											type="button"
-											aria-pressed={formData.event_type === type}
-											onClick={() => selectType(type)}
+											value={type}
+											disabled={!!blockedTriggers[type]}
+											aria-describedby={
+												blockedTriggers[type]
+													? `${formId}-trigger-${type}-why`
+													: undefined
+											}
 											className={cn(
-												"rounded-md border px-3 py-2 text-xs font-medium transition-colors hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+												"rounded-md border px-3 py-2 text-xs font-medium transition-colors hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-border",
 												formData.event_type === type
 													? "border-primary bg-primary/8 text-foreground"
 													: "border-border bg-background text-muted-foreground",
 											)}
 										>
 											{triggerLabel(type)}
-										</button>
+										</RadioGroupPrimitive.Item>
 									))}
-								</div>
+								</RadioGroupPrimitive.Root>
+								{Object.keys(blockedTriggers).length > 0 && (
+									<ul className="space-y-0.5 text-xs text-muted-foreground">
+										{Object.entries(blockedTriggers).map(([type, reason]) => (
+											<li key={type} id={`${formId}-trigger-${type}-why`}>
+												{triggerLabel(type)}:{" "}
+												{destinationReasonText(t, reason, type)}
+											</li>
+										))}
+									</ul>
+								)}
 								{formData.event_type === "api" ? (
 									<div className="grid grid-cols-[110px_minmax(0,1fr)] gap-3 rounded-lg bg-muted/40 p-3">
 										<div className="space-y-1.5">
 											<Label htmlFor={`${formId}-method`} className="text-xs">
 												{t("method", "Method")}
 											</Label>
-											<select
-												id={`${formId}-method`}
+											<Select
 												value={config.method ?? "POST"}
-												onChange={(e) =>
+												onValueChange={(method) =>
 													handleInputChange(
 														"config",
-														convertJsonToUint8Array({
-															...config,
-															method: e.target.value,
-														}) ?? [],
+														convertJsonToUint8Array({ ...config, method }) ??
+															[],
 													)
 												}
-												className="h-10 w-full rounded-md border bg-background px-2 font-mono text-xs"
 											>
-												{[
-													"GET",
-													"POST",
-													"PUT",
-													"PATCH",
-													"DELETE",
-													"HEAD",
-													"OPTIONS",
-												].map((method) => (
-													<option key={method}>{method}</option>
-												))}
-											</select>
+												<SelectTrigger
+													id={`${formId}-method`}
+													className="h-10 w-full bg-background font-mono text-xs"
+												>
+													<SelectValue />
+												</SelectTrigger>
+												<SelectContent>
+													{HTTP_METHODS.map((method) => (
+														<SelectItem key={method} value={method}>
+															{method}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
 										</div>
 										<div className="space-y-1.5">
 											<Label htmlFor={`${formId}-endpoint`} className="text-xs">
@@ -757,38 +931,54 @@ export function EventForm({
 											/>
 										</div>
 									</div>
-								) : (
-									configEditor && (
-										<details
-											className="rounded-lg border bg-muted/20"
-											open={undefined}
-										>
-											<summary className="cursor-pointer px-3 py-3 text-xs font-medium">
-												{t("triggerSettings", "Trigger settings")}
-											</summary>
-											<div className="space-y-3 border-t p-3">
-												{triggerSections.length > 1 && (
-													<select
+								) : configEditor ? (
+									<Collapsible
+										key={formData.event_type}
+										defaultOpen
+										className="rounded-lg border bg-muted/20"
+									>
+										<CollapsibleTrigger className="group flex w-full items-center justify-between px-3 py-3 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+											{t("triggerSettings", "Trigger settings")}
+											<ChevronDown
+												aria-hidden
+												className="size-4 transition-transform group-data-[state=closed]:-rotate-90"
+											/>
+										</CollapsibleTrigger>
+										<CollapsibleContent className="space-y-3 border-t p-3">
+											{triggerSections.length > 1 && (
+												<Select
+													value={activeSection}
+													onValueChange={setConfigSection}
+												>
+													<SelectTrigger
 														aria-label={t(
 															"settingsSection",
 															"Settings section",
 														)}
-														value={activeSection}
-														onChange={(e) => setConfigSection(e.target.value)}
-														className="h-9 w-full rounded-md border bg-background px-2 text-xs"
+														className="h-9 w-full text-xs"
 													>
+														<SelectValue />
+													</SelectTrigger>
+													<SelectContent>
 														{triggerSections.map((section) => (
-															<option key={section.id} value={section.id}>
+															<SelectItem key={section.id} value={section.id}>
 																{section.label}
-															</option>
+															</SelectItem>
 														))}
-													</select>
-												)}
-												{configEditor}
-											</div>
-										</details>
-									)
-								)}
+													</SelectContent>
+												</Select>
+											)}
+											{configEditor}
+										</CollapsibleContent>
+									</Collapsible>
+								) : validTrigger ? (
+									<p className="text-xs text-muted-foreground">
+										{t(
+											"triggerNothingToSet",
+											"Nothing to set for this trigger.",
+										)}
+									</p>
+								) : null}
 								{shouldRequireRoutePath && (
 									<div className="space-y-1.5">
 										<Label htmlFor={`${formId}-path`}>
@@ -884,59 +1074,62 @@ export function EventForm({
 										)}
 							</p>
 						</section>
-						<details className="text-xs">
-							<summary className="cursor-pointer font-medium text-muted-foreground">
+						<Collapsible
+							defaultOpen={!!formData.description}
+							className="text-xs"
+						>
+							<CollapsibleTrigger className="cursor-pointer font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
 								{t("addDescription", "Add a description")}
-							</summary>
-							<Textarea
-								aria-label={t("description", "Description")}
-								value={formData.description}
-								onChange={(e) =>
-									handleInputChange("description", e.target.value)
-								}
-								rows={2}
-								className="mt-2"
-							/>
-						</details>
+							</CollapsibleTrigger>
+							<CollapsibleContent>
+								<Textarea
+									aria-label={t("description", "Description")}
+									value={formData.description}
+									onChange={(e) =>
+										handleInputChange("description", e.target.value)
+									}
+									rows={2}
+									className="mt-2"
+								/>
+							</CollapsibleContent>
+						</Collapsible>
 					</fieldset>
 				</form>
 				<section
-					className="min-w-0 space-y-5 border-t bg-muted/25 p-5 sm:p-7 lg:border-l lg:border-t-0"
+					ref={planRef}
+					tabIndex={-1}
+					className="min-w-0 space-y-5 border-t bg-muted/25 p-5 outline-none sm:p-7 lg:border-l lg:border-t-0"
 					aria-label={t("whereItRuns", "Where it runs")}
 				>
 					{!deploymentSaved && (
 						<>
 							<div className="space-y-3">
-								<Label>{t("whereItRuns", "Where it runs")}</Label>
-								<div
-									aria-roledescription="choices"
-									aria-label={t(
-										"executionDestination",
-										"Execution destination",
-									)}
+								<Label id={`${formId}-where`}>
+									{t("whereItRuns", "Where it runs")}
+								</Label>
+								<RadioGroupPrimitive.Root
+									aria-labelledby={`${formId}-where`}
+									value={destination}
+									onValueChange={(next) => pickDestination(next as Destination)}
 									className="grid grid-cols-3 gap-2"
 								>
 									{destinations.map((target) => {
 										const Icon = target.icon;
-										const enabled = supportsDestination(target.id);
+										const status = destinationStates[target.id];
 										return (
-											<button
-												type="button"
+											<RadioGroupPrimitive.Item
 												key={target.id}
-												aria-pressed={destination === target.id}
-												disabled={locked || !enabled}
-												onClick={() => {
-													setDestination(target.id);
-													setPathError(null);
-												}}
+												value={target.id}
+												disabled={locked || !status.available}
+												onClick={() => pickDestination(target.id)}
 												className={cn(
-													"flex min-h-24 flex-col items-start gap-2 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-45",
+													"flex min-h-24 flex-col items-start gap-2 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
 													destination === target.id
 														? "border-primary bg-primary/8 ring-1 ring-primary"
 														: "border-border bg-background hover:border-primary/50",
 												)}
 											>
-												<div className="flex w-full items-center justify-between">
+												<span className="flex w-full items-center justify-between">
 													<Icon
 														aria-hidden
 														className="size-4 text-muted-foreground"
@@ -947,18 +1140,44 @@ export function EventForm({
 															className="size-3.5 text-primary"
 														/>
 													)}
-												</div>
+												</span>
 												<span className="text-xs font-semibold">
 													{target.title}
 												</span>
-												<span className="text-[11px] text-muted-foreground">
-													{target.detail}
+												<span className="text-[11px] leading-snug text-muted-foreground">
+													{status.available
+														? status.hint
+															? destinationHintText(t, status.hint)
+															: target.detail
+														: destinationReasonText(
+																t,
+																status.reason,
+																formData.event_type,
+															)}
 												</span>
-											</button>
+											</RadioGroupPrimitive.Item>
 										);
 									})}
-								</div>
+								</RadioGroupPrimitive.Root>
 							</div>
+							{resolution.fellBackFrom && (
+								<output className="block text-xs text-muted-foreground">
+									{t(
+										"destinationFallback",
+										"{{reason}} It was set to {{where}}.",
+										{
+											reason: destinationReasonText(
+												t,
+												resolution.fellBackFrom.reason,
+												formData.event_type,
+											),
+											where: destinations.find(
+												(target) => target.id === destination,
+											)?.phrase,
+										},
+									)}
+								</output>
+							)}
 							{!destinationAvailable && (
 								<p role="alert" className="text-xs text-destructive">
 									{t(
@@ -975,25 +1194,17 @@ export function EventForm({
 						</>
 					)}
 					{destination === "device" && onCreateDevice ? (
-						<NewEventDeployment
+						<DeploymentPanel
 							overrides={deviceWorkspaceOverrides}
 							footerContainer={footerContainer}
 							onNavigate={onNavigateDeployment}
 							appId={appId}
-							draftEvent={buildEventData()}
+							draftEvent={panelDraft}
 							disabled={!canSubmit || isSubmitting || checkingOAuth}
 							onBusyChange={setDeploymentBusy}
-							onSavedChange={setDeploymentSaved}
-							onCreate={async () => {
-								if (!validate())
-									throw new Error(
-										t(
-											"completeEventDetails",
-											"Complete the event details before deploying.",
-										),
-									);
-								return onCreateDevice(buildEventData());
-							}}
+							onSavedChange={handleSavedChange}
+							onDeployedChange={setDeployed}
+							onCreate={handleCreateDevice}
 							onComplete={onDeploymentComplete}
 						/>
 					) : (
@@ -1045,17 +1256,9 @@ export function EventForm({
 						<span role="alert" className="text-destructive">
 							{submitError}
 						</span>
-					) : deploymentSaved ? (
-						t(
-							"finishDeploymentHere",
-							"Finish deployment here. Your event definition is saved.",
-						)
-					) : destination === "device" ? (
-						t(
-							"createDirectlyForDevices",
-							"Create the event and deploy its flow to your selected devices.",
-						)
-					) : (
+					) : submitHint ? (
+						<span id={hintId}>{submitHint}</span>
+					) : destination === "device" ? null : (
 						t("eventCanBeChangedLater", "You can change these settings later.")
 					)}
 				</div>
@@ -1064,9 +1267,9 @@ export function EventForm({
 					variant="outline"
 					onClick={onCancel}
 					disabled={busy}
-					className="h-10"
+					className="h-11"
 				>
-					{deploymentSaved ? t("close", "Close") : t("cancel", "Cancel")}
+					{cancelLabel}
 				</Button>
 				{destination === "device" && (
 					<div
@@ -1083,7 +1286,8 @@ export function EventForm({
 							!canSubmit ||
 							(shouldRequireRoutePath && (routes.isLoading || routes.isError))
 						}
-						className="h-10"
+						aria-describedby={submitHint ? hintId : undefined}
+						className="h-11"
 					>
 						{locked ? (
 							<Loader2 aria-hidden className="size-4 animate-spin" />

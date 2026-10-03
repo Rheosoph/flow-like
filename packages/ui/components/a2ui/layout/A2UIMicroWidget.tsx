@@ -243,6 +243,7 @@ function grantErrorMessage(
 	state: Extract<MicroWidgetGrantState, { status: "error" }>,
 	t: Translate,
 ): string {
+	if (state.reason === "bundle_unavailable") return state.detail;
 	return state.reason === "policy_unstable"
 		? t(
 				"widgetPolicyChangedRepeatedly",

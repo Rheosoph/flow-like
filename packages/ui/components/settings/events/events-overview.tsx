@@ -40,11 +40,13 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import type { ComponentType } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import type { IOAuthConsentStore } from "../../../db/oauth-db";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks/use-invoke";
 import { useSearch } from "../../../hooks/use-search-index";
 import { describeEventEntry } from "../../../lib/event-entry";
 import { getEventTypeGlyph } from "../../../lib/event-sections";
+import { isDeviceEventSource } from "../../../lib/event-source";
 import { formatEventTypeLabel } from "../../../lib/event-type-label";
 import type {
 	IOAuthProvider,
@@ -96,6 +98,7 @@ import { Banner } from "../devices/primitives/banner";
 import { DvButton } from "../devices/primitives/dv-button";
 import { useCopy } from "../devices/primitives/use-copy";
 import { PermissionNotice } from "../permission/permission-notice";
+import { EventDeleteDialog } from "./event-delete-dialog";
 import { type EventStatus, getEventStatus } from "./event-status";
 import { computeEventIssues } from "./use-event-issues";
 import type { IEventIssue } from "./use-event-issues";
@@ -139,6 +142,8 @@ interface EventRowModel {
 	/** The issue worth putting on the row — blocking first, then check. */
 	topIssue: IEventIssue | null;
 	blocking: boolean;
+	/** Saved for devices only: this app and hub register no trigger for it. */
+	deviceOnly: boolean;
 	requiresSink: boolean;
 	sinkActive?: boolean;
 	sinkStatusLoading: boolean;
@@ -298,8 +303,10 @@ export function EventsOverview({
 
 	const sinkEvents = useMemo(
 		() =>
-			events.filter((event) =>
-				eventRequiresSink(eventMapping, event, nodeNames.get(event.id)),
+			events.filter(
+				(event) =>
+					!isDeviceEventSource(event) &&
+					eventRequiresSink(eventMapping, event, nodeNames.get(event.id)),
 			),
 		[events, eventMapping, nodeNames],
 	);
@@ -352,11 +359,10 @@ export function EventsOverview({
 					string,
 					unknown
 				> | null) ?? {};
-			const requiresSink = eventRequiresSink(
-				eventMapping,
-				event,
-				nodeNames.get(event.id),
-			);
+			const deviceOnly = isDeviceEventSource(event);
+			const requiresSink =
+				!deviceOnly &&
+				eventRequiresSink(eventMapping, event, nodeNames.get(event.id));
 			const issues = computeEventIssues({ event, config, requiresSink });
 			const blockingIssue = issues.find((i) => i.severity === "blocking");
 			const sinkQuery = sinkStatuses.get(event.id);
@@ -373,6 +379,7 @@ export function EventsOverview({
 				blocking: !!blockingIssue,
 				requiresSink,
 				sinkActive,
+				deviceOnly,
 			});
 
 			return {
@@ -381,6 +388,7 @@ export function EventsOverview({
 				status,
 				topIssue: blockingIssue ?? issues[0] ?? null,
 				blocking: !!blockingIssue,
+				deviceOnly,
 				requiresSink,
 				sinkActive,
 				sinkStatusLoading: sinkQuery?.isPending ?? true,
@@ -408,6 +416,7 @@ export function EventsOverview({
 			paused: 0,
 			attention: 0,
 			unknown: 0,
+			device: 0,
 		};
 		for (const row of rows) counts[row.status] += 1;
 		return counts;
@@ -472,12 +481,29 @@ export function EventsOverview({
 	const handleToggleActive = useCallback(
 		async (row: EventRowModel) => {
 			if (!canEdit) return;
+			const pausing = row.event.active;
 			await requestToggle(row.event, {
-				active: !row.event.active,
+				active: !pausing,
 				requiresSink: row.requiresSink,
+				onSettled: (error) => {
+					if (!error && pausing && row.deviceOnly)
+						toast.info(
+							t(
+								"devicePauseKeepsRunning",
+								"Devices that already run it keep running until you update or stop their service.",
+							),
+						);
+				},
 			});
 		},
-		[canEdit, requestToggle],
+		[canEdit, requestToggle, t],
+	);
+
+	const [deleting, setDeleting] = useState<IEvent | null>(null);
+	const requestDelete = useCallback(
+		(eventId: string) =>
+			setDeleting(events.find((event) => event.id === eventId) ?? null),
+		[events],
 	);
 
 	const handleRouteChange = useCallback(
@@ -527,7 +553,7 @@ export function EventsOverview({
 		canEdit,
 		writeDeniedMessage,
 		onEdit,
-		onDelete,
+		onDelete: requestDelete,
 		onNavigateToNode,
 		onToggleActive: handleToggleActive,
 		onRouteChange: handleRouteChange,
@@ -658,6 +684,14 @@ export function EventsOverview({
 					)}
 				/>
 				<OAuthConsentDialog {...dialogProps.consent} />
+				<EventDeleteDialog
+					event={deleting}
+					onCancel={() => setDeleting(null)}
+					onConfirm={(eventId) => {
+						setDeleting(null);
+						onDelete(eventId);
+					}}
+				/>
 			</div>
 		</EventsDevicesProvider>
 	);
@@ -804,7 +838,7 @@ function StatusFilterBar({
 	onChange: (next: StatusFilter) => void;
 }>) {
 	const { t } = useTranslation("settings");
-	const options: Array<{
+	const candidates: Array<{
 		key: StatusFilter;
 		label: string;
 		dot?: string;
@@ -826,7 +860,16 @@ function StatusFilterBar({
 			label: t("statusUnknown", "Unknown"),
 			dot: "bg-muted-foreground/50",
 		},
+		{
+			key: "device",
+			label: t("devicesOnly", "Devices only"),
+			dot: "bg-info-solid",
+		},
 	];
+	const options = candidates.filter(
+		(option) =>
+			option.key !== "device" || counts.device > 0 || value === "device",
+	);
 
 	return (
 		<div className="inline-flex max-w-full flex-wrap items-center gap-0.5 rounded-md border bg-muted/40 p-0.5">
@@ -1225,6 +1268,7 @@ const STRIPE: Record<EventStatus, string> = {
 	live: "bg-emerald-500/60",
 	paused: "bg-transparent",
 	unknown: "bg-muted-foreground/30",
+	device: "bg-muted-foreground/30",
 };
 
 const DOT: Record<EventStatus, string> = {
@@ -1232,6 +1276,7 @@ const DOT: Record<EventStatus, string> = {
 	live: "bg-emerald-500",
 	paused: "bg-muted-foreground/50",
 	unknown: "bg-muted-foreground/50",
+	device: "bg-info-solid",
 };
 
 /** The row's own four actions as an icon strip, from 900 px of list width. */
@@ -1327,6 +1372,11 @@ function EventNameBlock({
 				<span className={cn(chip, "bg-secondary text-secondary-foreground")}>
 					{formatEventTypeLabel(event.event_type)}
 				</span>
+				{row.deviceOnly && (
+					<span data-device-only className={cn(chip, "bg-info-bg text-info")}>
+						{t("devicesOnly", "Devices only")}
+					</span>
+				)}
 				{onDevice && (
 					<span
 						data-sink-chip={onDevice}

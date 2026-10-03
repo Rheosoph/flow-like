@@ -27,7 +27,10 @@ pub struct EventUpsertBody {
     /// Optional profile ID to use for the sink (the user's currently active profile)
     #[serde(default)]
     profile_id: Option<String>,
-    /// False saves a deployable event without starting a trigger or publishing endpoints on the hub.
+    /// False saves a deployable event without starting a trigger or publishing endpoints on the
+    /// hub (device-only). True on a stored device-only event is an explicit clear: the marker is
+    /// removed and the hub trigger is registered like for any other event. Omitted keeps the
+    /// stored state; a device-only event stays device-only.
     #[serde(default)]
     register_source: Option<bool>,
 }
@@ -69,13 +72,9 @@ pub async fn upsert_event(
     let user_context = permission.to_user_context();
 
     let mut event = params.event;
-    if params.register_source == Some(false) {
-        event
-            .set_device_source()
-            .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    }
     event.id = event_id.clone();
     let saved_event = super::db::get_event_from_db_opt(&state.db, &event_id, &app_id).await?;
+    apply_register_source(&mut event, params.register_source, saved_event.as_ref())?;
     crate::teams::management::validate_event_type(&state, saved_event.as_ref(), &event).await?;
     if event.event_type == "ontology_action"
         || saved_event
@@ -85,6 +84,11 @@ pub async fn upsert_event(
         return Err(ApiError::forbidden(
             "Ontology action events are managed through Data Studio actions",
         ));
+    }
+
+    let preserve_id = event.is_device_source().then_some(true);
+    if preserve_id.is_some() && saved_event.is_none() {
+        ensure_client_event_id_available(&state, &event_id).await?;
     }
 
     // Secret overrides are blanked on read, so the client sends them back empty.
@@ -116,7 +120,6 @@ pub async fn upsert_event(
     let mut app = super::editable_event_app(&state, &sub, &app_id).await?;
 
     // Upsert to bucket (handles versioning)
-    let preserve_id = event.is_device_source().then_some(true);
     let event = app
         .upsert_event(event, params.version_type, preserve_id)
         .await?;
@@ -204,6 +207,55 @@ pub async fn upsert_event(
     prune_versions_after_save(&state, &app_id, &app, saved_event.as_ref(), &event).await;
 
     Ok(Json(event))
+}
+
+fn apply_register_source(
+    event: &mut Event,
+    register_source: Option<bool>,
+    saved_event: Option<&Event>,
+) -> Result<(), ApiError> {
+    let stored_is_device = saved_event.is_some_and(Event::is_device_source);
+    let outcome = match register_source {
+        Some(false) => event.set_device_source(),
+        Some(true) if stored_is_device => event.request_default_source(),
+        _ if stored_is_device => event.ensure_source_settings(),
+        _ => Ok(()),
+    };
+    outcome.map_err(|error| ApiError::bad_request(error.to_string()))
+}
+
+async fn ensure_client_event_id_available(
+    state: &AppState,
+    event_id: &str,
+) -> Result<(), ApiError> {
+    validate_client_event_id(event_id)?;
+    if super::db::event_row_app_id(&state.db, event_id)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::conflict(
+            "This event ID is already used by another event. Choose a different ID.",
+        ));
+    }
+    Ok(())
+}
+
+const MAX_CLIENT_EVENT_ID_LEN: usize = 128;
+
+/// A client-chosen id outlives this handler: device exports, run history and regression
+/// suites all require this alphabet.
+fn validate_client_event_id(event_id: &str) -> Result<(), ApiError> {
+    let valid = !event_id.is_empty()
+        && event_id.len() <= MAX_CLIENT_EVENT_ID_LEN
+        && event_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if valid {
+        return Ok(());
+    }
+    Err(ApiError::bad_request(format!(
+        "Event IDs must be 1 to {MAX_CLIENT_EVENT_ID_LEN} characters of letters, digits, '-' and '_'"
+    )))
 }
 
 /// Retention gate shared with the restore endpoint: only a save that actually
@@ -327,6 +379,91 @@ async fn rollback_failed_setup(
             event_id = %event_id,
             error = %e,
             "rollback: failed to delete event from db/sink"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_types::FromProto;
+
+    fn event(config: &[u8]) -> Event {
+        let mut event = Event::from_proto(flow_like_types::proto::Event::default());
+        event.config = config.to_vec();
+        event
+    }
+
+    fn device_event() -> Event {
+        let mut event = event(br#"{"expression":"0 9 * * *"}"#);
+        event.set_device_source().unwrap();
+        event
+    }
+
+    fn source_of(event: &Event) -> Option<serde_json::Value> {
+        serde_json::from_slice::<serde_json::Value>(&event.config)
+            .ok()?
+            .get("__flow_like_source")
+            .cloned()
+    }
+
+    #[test]
+    fn register_source_false_marks_the_event_device_only() {
+        let mut incoming = event(b"");
+        apply_register_source(&mut incoming, Some(false), None).unwrap();
+        assert!(incoming.is_device_source());
+    }
+
+    #[test]
+    fn register_source_true_on_a_device_only_event_requests_an_explicit_clear() {
+        let stored = device_event();
+        let mut incoming = event(br#"{"expression":"0 10 * * *"}"#);
+        apply_register_source(&mut incoming, Some(true), Some(&stored)).unwrap();
+        assert!(!incoming.is_device_source());
+        assert_eq!(source_of(&incoming), Some(serde_json::json!("default")));
+    }
+
+    #[test]
+    fn register_source_true_on_an_ordinary_event_changes_nothing() {
+        let stored = event(br#"{"expression":"0 9 * * *"}"#);
+        let mut incoming = event(br#"{"expression":"0 10 * * *"}"#);
+        let before = incoming.config.clone();
+        apply_register_source(&mut incoming, Some(true), Some(&stored)).unwrap();
+        assert_eq!(incoming.config, before);
+    }
+
+    #[test]
+    fn omitted_register_source_leaves_the_incoming_config_alone() {
+        let stored = device_event();
+        let mut incoming = event(br#"{"expression":"0 10 * * *"}"#);
+        let before = incoming.config.clone();
+        apply_register_source(&mut incoming, None, Some(&stored)).unwrap();
+        assert_eq!(incoming.config, before);
+    }
+
+    #[test]
+    fn non_object_settings_for_a_device_only_event_are_a_bad_request() {
+        let stored = device_event();
+        for register_source in [None, Some(true)] {
+            let mut incoming = event(b"[1,2]");
+            let error =
+                apply_register_source(&mut incoming, register_source, Some(&stored)).unwrap_err();
+            assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[test]
+    fn client_event_ids_are_limited_to_the_safe_alphabet_and_length() {
+        assert!(validate_client_event_id("my-event_1").is_ok());
+        assert!(validate_client_event_id(&"a".repeat(128)).is_ok());
+        assert!(validate_client_event_id("").is_err());
+        assert!(validate_client_event_id(&"a".repeat(129)).is_err());
+        assert!(validate_client_event_id("my event:1").is_err());
+        assert!(validate_client_event_id("a.b").is_err());
+        assert!(validate_client_event_id("ünï").is_err());
+        assert_eq!(
+            validate_client_event_id("a b").unwrap_err().status(),
+            axum::http::StatusCode::BAD_REQUEST
         );
     }
 }

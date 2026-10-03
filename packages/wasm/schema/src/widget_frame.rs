@@ -516,6 +516,8 @@ pub fn widget_frame_meta_csp(child_urls: &[String]) -> String {
 /// an absolute bundle source, so the child is a relative document path or an
 /// absolute URL accepted by [`is_child_document_url`]. Returns `None` for any
 /// other combination.
+/// The bridge opts out of Rocket Loader, whose external script the wrapper's
+/// CSP blocks.
 pub fn widget_frame_document(
     child_base: &str,
     widget_id: &str,
@@ -542,7 +544,7 @@ pub fn widget_frame_document(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
 <style>html,body{{margin:0;height:100%;overflow:hidden;background:transparent}}\
-body>div{{display:block;width:100%;height:100%}}</style></head><body><script>\
+body>div{{display:block;width:100%;height:100%}}</style></head><body><script data-cfasync=\"false\">\
 (()=>{{\
 const host=document.body.appendChild(document.createElement('div'));\
 const root=host.attachShadow({{mode:'closed'}});\
@@ -1121,6 +1123,7 @@ mod tests {
     #[test]
     fn wrapper_builds_the_child_in_a_closed_shadow_root_and_only_relays() {
         let document = widget_frame_document("../../", "live-map", "0", None, false).unwrap();
+        assert!(document.contains("<script data-cfasync=\"false\">"));
         assert!(document.contains("attachShadow({mode:'closed'})"));
         assert!(document.contains("frame.setAttribute('sandbox','allow-scripts');"));
         assert!(document.contains("frame.setAttribute('referrerpolicy','no-referrer');"));

@@ -8,9 +8,9 @@ function configObject(
 ): Record<string, unknown> | null {
 	if (!config?.length) return {};
 	try {
-		const value: unknown = JSON.parse(
-			new TextDecoder().decode(new Uint8Array(config)),
-		);
+		const text = new TextDecoder().decode(new Uint8Array(config));
+		if (!text.trim()) return {};
+		const value: unknown = JSON.parse(text);
 		return value && typeof value === "object" && !Array.isArray(value)
 			? (value as Record<string, unknown>)
 			: null;
@@ -32,6 +32,34 @@ export function withDeviceEventSource<T extends Pick<IEvent, "config">>(
 	const config = configObject(event.config);
 	if (!config) throw new Error("Device event settings must be a JSON object.");
 	return { ...event, config: encode({ ...config, [SOURCE_KEY]: "device" }) };
+}
+
+/** Explicitly clears the device-only marker, so the event runs where its execution mode says. */
+export function withDefaultEventSource<T extends Pick<IEvent, "config">>(
+	event: T,
+): T {
+	const config = configObject(event.config);
+	if (!config) throw new Error("Event settings must be a JSON object.");
+	return { ...event, config: encode({ ...config, [SOURCE_KEY]: "default" }) };
+}
+
+export type EventSourceIntent = "device" | "clear" | "keep";
+
+/**
+ * `source` wins over the marker in the config. Without either, the stored event decides, which
+ * only the transport can read.
+ */
+export function resolveEventSourceIntent<T extends Pick<IEvent, "config">>(
+	event: T,
+	source?: "device" | "default",
+): { event: T; intent: EventSourceIntent } {
+	if (source === "default") {
+		return { event: withDefaultEventSource(event), intent: "clear" };
+	}
+	if (source === "device" || isDeviceEventSource(event)) {
+		return { event: withDeviceEventSource(event), intent: "device" };
+	}
+	return { event, intent: "keep" };
 }
 
 /** Trigger editors receive only their settings, without deployment metadata. */

@@ -128,6 +128,28 @@ describe("runsOnRows", () => {
 		expect(
 			rowOf("app_invoice_ai", "evt_extract_http").schedule,
 		).toBeUndefined();
+		expect(online.deviceOnly).toBeUndefined();
+	});
+
+	test("a device-only schedule carries the marker and a device-only fact, not the hub's", () => {
+		const base = APPS.app_invoice_ai;
+		const devices = sampleDevices();
+		const view = buildAppView({
+			app: {
+				...base,
+				events: base.events.map((event) =>
+					event.id === "evt_invoice_reconcile"
+						? { ...event, deviceOnly: true }
+						: event,
+				),
+			},
+			devices,
+			placements: PLACEMENTS.app_invoice_ai,
+			focusDeviceIds: devices.map((device) => device.id),
+		});
+		const row = runsOnRows(view).get("evt_invoice_reconcile");
+		expect(row?.deviceOnly).toBe(true);
+		expect(row?.where).toEqual({ fact: "device_only" });
 	});
 
 	test("an event that follows Latest says so", () => {

@@ -7,10 +7,12 @@ import {
 	PLACEMENTS,
 	SERVICES,
 	type SampleAppId,
+	configBytes,
 	sampleDevices,
 } from "./__fixtures__/apps";
 import {
 	type AppDeviceInput,
+	type AppEventInput,
 	type AppInput,
 	type AppServiceRow,
 	type AppUploadInput,
@@ -474,6 +476,42 @@ describe("By event matrix (APP §2.10)", () => {
 		expect(unlocked.versions[2].runningOn.map((row) => row.serviceId)).toEqual([
 			"invoice-extractor-gpu",
 		]);
+	});
+
+	test("a device-only schedule the hub does not list is device-only, by flag or by the source marker; ordinary events stay on the hub", () => {
+		const base = APPS.app_visitor_checkin;
+		const withEvent = (patch: Partial<AppEventInput>): AppView =>
+			buildAppView({
+				app: {
+					...base,
+					events: base.events.map((event) =>
+						event.id === "evt_visitor_report" ? { ...event, ...patch } : event,
+					),
+				},
+				devices: sampleDevices({}),
+				placements: PLACEMENTS.app_visitor_checkin,
+				changes: CHANGES,
+			});
+		const row = (result: AppView) =>
+			result.events.rows.find(
+				(value) => value.eventId === "evt_visitor_report",
+			);
+		const flagged = row(withEvent({ deviceOnly: true }));
+		expect(flagged?.where).toEqual({ fact: "device_only" });
+		expect(flagged?.deviceOnly).toBe(true);
+		const marked = row(
+			withEvent({ config: configBytes({ __flow_like_source: "device" }) }),
+		);
+		expect(marked?.where).toEqual({ fact: "device_only" });
+		const cleared = row(
+			withEvent({
+				deviceOnly: false,
+				config: configBytes({ __flow_like_source: "device" }),
+			}),
+		);
+		expect(cleared?.where).toEqual({ fact: "hub" });
+		expect(cleared?.deviceOnly).toBeUndefined();
+		expect(row(withEvent({}))?.where).toEqual({ fact: "hub" });
 	});
 
 	test("CRM Sync: the device's refusal is Can't run here; focus adds a column", () => {

@@ -2401,8 +2401,8 @@ impl Board {
         }
     }
 
-    /// Publish the draft as a Patch version unless the newest version already holds it. Returns
-    /// the version that holds the draft and whether this call created it.
+    /// Publish the stored draft as a Patch version unless the newest version already holds it.
+    /// Returns the version that holds the draft and whether this call created it.
     pub async fn publish_if_changed(
         &mut self,
         store: Option<Arc<dyn ObjectStore>>,
@@ -2411,9 +2411,28 @@ impl Board {
         if let Some(version) = self.published_version_of_draft(Some(store.clone())).await? {
             return Ok((version, false));
         }
-        let (_draft, published) = self
+        // Loading derives node metadata without saving it. Publish from the same stored
+        // draft that the snapshot's final check reads, so hydration cannot look like an edit.
+        let mut draft = match self.reloaded_persisted_draft(Some(store.clone())).await {
+            Ok(draft) => draft,
+            Err(error)
+                if matches!(
+                    error.downcast_ref::<object_store::Error>(),
+                    Some(object_store::Error::NotFound { .. })
+                ) =>
+            {
+                self.clone()
+            }
+            Err(error) => return Err(error),
+        };
+        let (version, published) = draft
             .create_version_returning_published(VersionType::Patch, Some(store))
             .await?;
+        // Retain the caller's runtime logic and any unsaved edits.
+        self.version = version;
+        self.format_version = self.required_format_version();
+        self.updated_at = draft.updated_at;
+        self.hash();
         Ok((published, true))
     }
 
@@ -5727,6 +5746,111 @@ mod tests {
             (second, false)
         );
         assert_eq!(board.get_versions(None).await.unwrap(), vec![second, first]);
+    }
+
+    #[tokio::test]
+    async fn publish_if_changed_publishes_the_stored_draft_after_node_hydration() {
+        use crate::flow::node::NodeLogic;
+
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = super::Board::new(None, base_dir.clone(), state.clone());
+        let node = RefreshDefinitionLogic {
+            label: "Stored label",
+        }
+        .get_node();
+        let node_id = node.id.clone();
+        board.nodes.insert(node_id.clone(), node);
+        board.cleanup();
+        board.mark_changed();
+        board.save(None).await.unwrap();
+        state
+            .node_registry()
+            .write()
+            .await
+            .push_node(Arc::new(RefreshDefinitionLogic {
+                label: "Hydrated label",
+            }));
+
+        let mut loaded = super::Board::load(base_dir, &board.id, state, None)
+            .await
+            .unwrap();
+        assert_eq!(loaded.nodes[&node_id].friendly_name, "Hydrated label");
+        assert_ne!(loaded.content_hash(), board.content_hash());
+        let logic = loaded.logic_nodes["refresh_definition_test"].clone();
+        let page_metadata_source = loaded.page_metadata_source();
+
+        let (published, created) = loaded.publish_if_changed(None).await.unwrap();
+        assert_eq!((published, created), (board.version, true));
+        assert_eq!(loaded.version, (published.0, published.1, published.2 + 1));
+        assert_eq!(loaded.nodes[&node_id].friendly_name, "Hydrated label");
+        assert!(Arc::ptr_eq(
+            &logic,
+            &loaded.logic_nodes["refresh_definition_test"]
+        ));
+        assert_eq!(loaded.page_metadata_source(), page_metadata_source);
+        assert!(
+            board
+                .snapshot_matches_current(published, None)
+                .await
+                .unwrap()
+        );
+        let stored = loaded.reloaded_persisted_draft(None).await.unwrap();
+        assert_eq!(stored.nodes[&node_id].friendly_name, "Stored label");
+        assert_eq!(stored.version, loaded.version);
+        assert_eq!(
+            loaded.published_version_of_draft(None).await.unwrap(),
+            Some(published)
+        );
+        assert_eq!(
+            loaded.publish_if_changed(None).await.unwrap(),
+            (published, false)
+        );
+        assert_eq!(loaded.get_versions(None).await.unwrap(), vec![published]);
+    }
+
+    #[tokio::test]
+    async fn publish_if_changed_recovers_from_an_orphan_of_an_unsaved_draft() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = board_with_protobuf_flattened_pin_options(state, base_dir);
+        board.cleanup();
+        board.mark_changed();
+        board.save(None).await.unwrap();
+        let mut loaded = board.clone();
+        loaded.name = "Unsaved content".to_string();
+        loaded.mark_changed();
+        let orphan = loaded.version;
+        let error = loaded.snapshot_at_version(orphan, None).await.unwrap_err();
+        assert!(super::is_board_draft_race(&error));
+
+        let (published, created) = loaded.publish_if_changed(None).await.unwrap();
+
+        assert_eq!(
+            (published, created),
+            ((orphan.0, orphan.1, orphan.2 + 1), true)
+        );
+        assert_eq!(loaded.name, "Unsaved content");
+        assert_eq!(loaded.version, (published.0, published.1, published.2 + 1));
+        assert!(loaded.snapshot_matches_current(orphan, None).await.unwrap());
+        assert!(
+            board
+                .snapshot_matches_current(published, None)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            loaded.published_version_of_draft(None).await.unwrap(),
+            Some(published)
+        );
+        assert_eq!(
+            loaded.publish_if_changed(None).await.unwrap(),
+            (published, false)
+        );
+        assert_eq!(
+            loaded.get_versions(None).await.unwrap(),
+            vec![published, orphan]
+        );
     }
 
     #[tokio::test]

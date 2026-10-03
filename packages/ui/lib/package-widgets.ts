@@ -169,7 +169,7 @@ export const microWidgetPreviewLru = new MicroWidgetPreviewLru();
 export interface AppPackageWidget {
 	packageId: string;
 	packageName: string;
-	/** Version pinned for the app (falls back to the installed version). */
+	/** Version of the resolved manifest (falls back to the app's pin). */
 	packageVersion: string;
 	/** Widget bundle sha256 (desktop `flow-widget://` serving); may be absent. */
 	bundleHash?: string;
@@ -226,7 +226,7 @@ export async function listAppPackageWidgets(
 					readString(manifestRecord?.name) ??
 					packageId;
 				const bundleHash = readManifestWidgetBundleHash(installed.manifest);
-				const packageVersion = pinned[packageId] || installed.version;
+				const packageVersion = installed.version || pinned[packageId];
 				return widgets.map(
 					(widget): AppPackageWidget => ({
 						packageId,
