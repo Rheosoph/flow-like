@@ -356,12 +356,13 @@ async fn instantiate_package_widget(
             flow_like_types::anyhow!("Invalid package widget reference '{}'", widget_selector)
         })?;
 
-    let provider = WidgetProvider::load(app_id, context.app_state.clone()).await?;
-    let entry = provider
-        .resolve_package(package_id, widget_id)
+    let widgets = micro_widget::load_package_widgets(app_id, context.app_state.clone()).await?;
+    let entry = widgets
+        .iter()
+        .find(|entry| entry.package_id == package_id && entry.widget_id == widget_id)
         .ok_or_else(|| {
             flow_like_types::anyhow!(
-                "Package widget '{}' not found — is package '{}' added to the app?",
+                "Package widget '{}' not found: package '{}' must be added to this project in a version that ships the widget, its licence there must not have expired, and on a device it must be installed",
                 widget_selector,
                 package_id
             )
@@ -1148,5 +1149,169 @@ mod tests {
             component.get("actionBindings"),
             Some(&Value::Object(action_bindings))
         );
+    }
+
+    mod package_widget_run {
+        use super::*;
+        use ahash::AHashMap;
+        use flow_like::a2ui::micro_widget::PackageWidgetSource;
+        use flow_like::flow::{
+            board::ExecutionStage,
+            execution::{LogLevel, Run, internal_node::InternalNode, internal_pin::InternalPin},
+            variable::Variable,
+        };
+        use flow_like::profile::Profile;
+        use flow_like::state::{FlowLikeConfig, FlowLikeState};
+        use flow_like::utils::http::HTTPClient;
+        use flow_like_types::Cacheable;
+        use flow_like_types::sync::{Mutex, RwLock};
+        use std::sync::{Arc, Weak};
+
+        const SELECTOR: &str = "pkg:com.example.sales/sales-chart";
+
+        fn sales_chart() -> PackageWidgetRef {
+            PackageWidgetRef {
+                package_id: "com.example.sales".to_string(),
+                package_version: "1.2.0".to_string(),
+                widget_id: "sales-chart".to_string(),
+                name: "Sales Chart".to_string(),
+                description: String::new(),
+                bundle_hash: Some("deadbeef".to_string()),
+                contract: json!({
+                    "contractVersion": 1,
+                    "id": "sales-chart",
+                    "inputs": {
+                        "title": { "type": "string", "default": "Sales" }
+                    }
+                }),
+            }
+        }
+
+        /// Answers like a hub or an executor: for the app alone, from no store.
+        struct PinnedBy(&'static str);
+
+        #[async_trait]
+        impl PackageWidgetSource for PinnedBy {
+            async fn list_widgets(
+                &self,
+                app_id: &str,
+                _state: Arc<FlowLikeState>,
+            ) -> flow_like_types::Result<Vec<PackageWidgetRef>> {
+                Ok(if app_id == self.0 {
+                    vec![sales_chart()]
+                } else {
+                    Vec::new()
+                })
+            }
+        }
+
+        fn internal_node() -> Arc<InternalNode> {
+            let logic: Arc<dyn NodeLogic> = Arc::new(InstantiateWidget::new());
+            let mut node = logic.get_node();
+            let contract = sales_chart().parsed_contract().expect("contract parses");
+            add_contract_input_pins(&mut node, &contract, true);
+
+            let mut pins = AHashMap::new();
+            let mut name_cache: AHashMap<String, Vec<Arc<InternalPin>>> = AHashMap::new();
+            for pin in node.pins.values() {
+                let internal_pin = Arc::new(InternalPin::new(pin, false));
+                name_cache
+                    .entry(pin.name.clone())
+                    .or_default()
+                    .push(internal_pin.clone());
+                pins.insert(pin.id.clone(), internal_pin);
+            }
+
+            let internal = Arc::new(InternalNode::new(node, pins, logic, name_cache));
+            for pin in internal.pins.iter() {
+                pin.init_node(Arc::downgrade(&internal));
+                pin.init_connected_to(Vec::new());
+                pin.init_depends_on(Vec::new());
+            }
+            internal
+        }
+
+        /// The state has no store at all, as on a server executor: nothing in
+        /// this run can read an app manifest.
+        async fn context_of_a_host_that_pins_for(app_id: &'static str) -> ExecutionContext {
+            let current = internal_node();
+            let mut node_map = AHashMap::new();
+            node_map.insert(current.node_id().to_string(), current.clone());
+
+            let state = Arc::new(FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            ));
+            state
+                .register_package_widget_source(Arc::new(PinnedBy(app_id)))
+                .await;
+            let variables = Arc::new(Mutex::new(AHashMap::<String, Variable>::new()));
+            let cache = Arc::new(RwLock::new(AHashMap::<String, Arc<dyn Cacheable>>::new()));
+            let run: Weak<Mutex<Run>> = Weak::new();
+
+            ExecutionContext::new(
+                Arc::new(node_map),
+                &run,
+                &state,
+                &current,
+                &variables,
+                &cache,
+                LogLevel::Debug,
+                ExecutionStage::Dev,
+                Arc::new(Profile::default()),
+                None,
+                Arc::new(RwLock::new(Vec::new())),
+                None,
+                None,
+                Arc::new(AHashMap::new()),
+                None,
+            )
+            .await
+        }
+
+        #[flow_like_types::tokio::test]
+        async fn a_package_widget_is_instantiated_from_what_the_host_lists_for_the_app() {
+            let mut context = context_of_a_host_that_pins_for("app-1").await;
+
+            instantiate_package_widget(&mut context, SELECTOR, "instance-1", "app-1")
+                .await
+                .expect("the host lists the widget for this app");
+
+            let element: Value = context
+                .get_pin_by_name("element_ref")
+                .await
+                .expect("the node has an element ref pin")
+                .get_value()
+                .await
+                .expect("the element ref is set");
+            assert_eq!(
+                element["component"],
+                json!({
+                    "type": "microWidgetInstance",
+                    "instanceId": "instance-1",
+                    "packageId": "com.example.sales",
+                    "widgetId": "sales-chart",
+                    "packageVersion": "1.2.0",
+                    "bundleHash": "deadbeef",
+                    "contract": sales_chart().contract,
+                    "props": { "title": "Sales" },
+                    "actionBindings": {},
+                    "preview": false,
+                })
+            );
+        }
+
+        #[flow_like_types::tokio::test]
+        async fn a_package_widget_the_host_does_not_list_for_the_app_fails_naming_both() {
+            let mut context = context_of_a_host_that_pins_for("app-1").await;
+
+            let error = instantiate_package_widget(&mut context, SELECTOR, "instance-1", "app-2")
+                .await
+                .expect_err("app-2 pins no package");
+
+            let message = error.to_string();
+            assert!(message.contains(SELECTOR), "{message}");
+            assert!(message.contains("'com.example.sales'"), "{message}");
+        }
     }
 }

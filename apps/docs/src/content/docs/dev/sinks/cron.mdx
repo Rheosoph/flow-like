@@ -14,6 +14,7 @@ The Cron sink triggers an event on a recurring cron expression or at one future 
 | **Local** | Scheduler inside the desktop app | Runs only while the app is open |
 | **Remote** | The hub's configured scheduling backend | Runs independently of the desktop app |
 | **Hybrid** | Both schedulers register the event | May create two runs for the same scheduled time |
+| **Device** | The service the event is deployed to, on a device you manage | Runs while that service runs; see [On a device](#on-a-device) |
 
 For a conceptual view of how both paths converge on the event, see [Event Sinks](/dev/sinks/).
 
@@ -96,6 +97,36 @@ If the workflow needs stable context, put it in the event's configured payload o
 - A hosted provider may retry failed delivery; the internal service endpoint supports idempotency keys for callers that supply them.
 - Hybrid scheduling intentionally registers more than one delivery path and can therefore produce duplicate real-world invocations.
 - For critical schedules, make the workflow idempotent and record the business period it is processing.
+
+## On a device
+
+A schedule, recurring or one-time, can be deployed to a device as part of a service, next to pages, endpoints and background flows. The `sink_execution` field does not decide this: deploying the event does. A Cron event that has a default Page is deployed as that Page, and the device does not run its schedule.
+
+A device applies these rules:
+
+- **One place.** For an online app, only someone who can edit the app's events can move a schedule to a device; the deploy does it for them. The hub stops running the schedule once the service on the device has taken it over, and no second service can take it. Stopping the service does not hand it back: nothing runs it until the service starts again, the event leaves the service, or someone who can edit the app's events chooses to run it on the hub again. When the service's cloud access ends, the hub takes the schedule back by itself and runs it again from 65 minutes after the end. An offline app has no coordinator, so the desktop app and each device it is deployed to run their own copy.
+- **The documented syntax only.** Five fields, or six with one fixed number in the seconds field. Day of week `0`–`7` with Sunday as `0` or `7`, and three-letter month and weekday names. `?`, `L`, `W`, `#` and shortcuts such as `@daily` are not accepted. When day of month and day of week are both set, either one matches.
+- **Once a minute at most.** A seconds field with `*`, a list, a range or a step is refused.
+- **Timezone.** The schedule's `timezone`, or `UTC` when none is saved. The device's own timezone is never used; its clock is.
+- **No run at start, no catch-up.** The first run of a recurring schedule is the first scheduled time after the service started. A time that passed while the device was off, asleep or restarting is skipped, and a time the device notices more than a minute late is counted as missed.
+- **No overlap.** A scheduled time that arrives while the previous run of the same schedule is still going is skipped. A service runs at most eight scheduled runs at once, and a run is stopped after 24 hours.
+- **Daylight saving time.** In a recurring schedule, a local time that occurs twice runs once. A local time that does not exist runs at the first minute after the gap. An "every N minutes" schedule does not run during the repeated hour.
+- **The deployed version.** The device runs the event version it was deployed with. Pausing or editing the event takes effect on the device with the next update of the service.
+
+A `payload` object in the event configuration is passed to each run. For an online app, runs use the service's cloud access and act as the person who approved it; they carry no personal access token and no signed-in provider tokens, so a flow that needs a signed-in provider works on the hub's schedule and fails on a device.
+
+### One-time schedules on a device
+
+A one-time schedule runs once, at its `date` and `time` in the schedule's timezone, by the device's clock. The time of the deployed event version counts.
+
+- **Never twice.** The device records the run before it starts and keeps that record across restarts, updates, Start, rollbacks and clock changes. A run that a stop, an update or a crash cut off is not started again.
+- **Up to 15 minutes late.** When the device was asleep at its time, or the service was restarting, updating or stopped, the schedule still runs if the service is back within 15 minutes and had it armed before its time. Later than that it is *missed* and never runs. When all eight run slots of the service are busy at its time, it waits for one within the same 15 minutes.
+- **Time had passed.** When its time was already over the first time the service could run it, it does not run and is shown as *time had passed*: it was deployed after its time, the hub or another service held it over its time, or the hub handed it over at or after its time and may have run it itself. The deploy wizard does not add a one-time schedule whose time has passed and asks before adding one that is less than five minutes away. An update of a service that already has it is never blocked by its time.
+- **Exact local times.** `date` is `YYYY-MM-DD` and `time` is `HH:MM` (no seconds), between the years 2000 and 2100. A local time that occurs twice because clocks go back runs at the first of the two. A local time that does not exist because clocks go forward is refused: choose a time outside the gap.
+- **It stays assigned.** After it ran, was missed or had passed, the service keeps running and keeps the schedule. A new time set in Events runs only after the service is updated; until then neither the device nor the hub runs it. When the service's cloud access ends, the hub does not take a one-time schedule back by itself, because it has no later time at which it would notice: someone who can edit the app's events chooses to run it on the hub again.
+- **The device's clock decides.** A device whose clock is ahead runs it early, and then never again. A clock that is more than 15 minutes past its time when the service first has it ends it as *time had passed* or *missed*; setting the clock right afterwards does not bring it back.
+
+Device agents from before one-time schedules refuse them; update the device agent to deploy one.
 
 ## Operational checks
 

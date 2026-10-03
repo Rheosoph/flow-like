@@ -8,6 +8,8 @@
 //!   declared entry with the document CSP in the header and in an injected
 //!   `<meta>`.
 //! - Anything else is a bundle file under the locked asset CSP.
+//! - Any of these behind a leading `~{access}/` segment is authorized by that
+//!   `widget-access` token instead of the request's (absent) credentials.
 //!
 //! The wrapper and the document only load as iframes. A bundle file a browser
 //! would render as a scriptable document (HTML, SVG, XML) is refused to any
@@ -24,9 +26,10 @@
 //! prefix on each serving origin and never `'self'`, since the API origin also
 //! hosts endpoints a publisher can reach.
 
+use super::widget_access::{WIDGET_ACCESS_SEGMENT_PREFIX, split_access_segment};
 use super::widget_asset::{
-    AuthorizedWidgetVersion, authorize_widget_version, content_type_for, is_active_document_type,
-    is_safe_asset_path, read_widget_entry,
+    AuthorizedWidgetVersion, authorize_widget_access_token, authorize_widget_version,
+    content_type_for, is_active_document_type, is_safe_asset_path, read_widget_entry,
 };
 use super::widget_grant_jwt::{WidgetGrantCheck, WidgetGrantClaims, verify_widget_grant};
 use super::widget_policy::{
@@ -59,6 +62,7 @@ const API_BASE_PATH: &str = "/api/v1";
 const HTML_CONTENT_TYPE: &str = "text/html; charset=utf-8";
 const NO_STORE: &str = "no-store";
 const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable";
+const ACCESS_ASSET_CACHE: &str = "private, max-age=43200, immutable";
 const SEC_FETCH_DEST: &str = "sec-fetch-dest";
 /// `Sec-Fetch-Dest` values of Fetch navigation requests, whose response the
 /// browser renders as a document.
@@ -349,6 +353,28 @@ pub fn document_response(
     response
 }
 
+/// Sandbox sources under an access segment: the wrapper pins its child
+/// document there. Documents keep the plain sources, whose path prefix
+/// already covers every file under the segment.
+pub fn access_sources(sources: &[String], access: Option<&str>) -> Vec<String> {
+    match access {
+        Some(token) => sources
+            .iter()
+            .map(|source| format!("{source}{WIDGET_ACCESS_SEGMENT_PREFIX}{token}/"))
+            .collect(),
+        None => sources.to_vec(),
+    }
+}
+
+/// A bundle file reached through an access token stays out of shared caches.
+fn with_private_cache(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(ACCESS_ASSET_CACHE),
+    );
+    response
+}
+
 /// A bundle file. Active document types vary on `Sec-Fetch-Dest`, so a cached
 /// subresource load is never replayed to a navigation the route refuses.
 pub fn asset_response(path: &str, bytes: Vec<u8>) -> Response {
@@ -584,11 +610,11 @@ async fn resolve_document_grant(
     get,
     path = "/registry/package/{package_id}/widget-sandbox/{version}/{path}",
     tag = "registry",
-    description = "Serve a package widget inside its sandbox: the host wrapper (frame/{widget_id}/{grant}), the widget document (widgets/{widget_id}/index.{grant}.html) or a bundle file. Use grant 0 to run the widget without extra permissions, or a grant from the widget-grant endpoint to run it with the permissions the viewer approved. A grant with approved runtime addresses is written as {grant}~{runtime}.",
+    description = "Serve a package widget inside its sandbox: the host wrapper (frame/{widget_id}/{grant}), the widget document (widgets/{widget_id}/index.{grant}.html) or a bundle file. Use grant 0 to run the widget without extra permissions, or a grant from the widget-grant endpoint to run it with the permissions the viewer approved. A grant with approved runtime addresses is written as {grant}~{runtime}. When the widget-access endpoint returned access, put ~{access} in front of the path.",
     params(
         ("package_id" = String, Path, description = "Package ID"),
         ("version" = String, Path, description = "Package version"),
-        ("path" = String, Path, description = "frame/{widget_id}/{grant}[~{runtime}], widgets/{widget_id}/index.{grant}[~{runtime}].html, or a file path inside the widget bundle")
+        ("path" = String, Path, description = "[~{access}/]frame/{widget_id}/{grant}[~{runtime}], [~{access}/]widgets/{widget_id}/index.{grant}[~{runtime}].html, or [~{access}/] followed by a file path inside the widget bundle")
     ),
     responses(
         (status = 200, description = "Wrapper or widget document (no-store; documents vary on User-Agent), or a bundle file (immutable-cached)"),
@@ -610,10 +636,17 @@ pub async fn get_widget_sandbox(
             package_id
         )));
     }
+    let (access, path) = match split_access_segment(&path) {
+        Some((token, rest)) => (Some(token), rest),
+        None => (None, path.as_str()),
+    };
     let route =
-        parse_sandbox_path(&path).ok_or_else(|| ApiError::not_found("Widget asset not found"))?;
+        parse_sandbox_path(path).ok_or_else(|| ApiError::not_found("Widget asset not found"))?;
 
-    let authorized = authorize_widget_version(&state, &user, &package_id, &version).await?;
+    let authorized = match access {
+        Some(token) => authorize_widget_access_token(&state, &package_id, &version, token).await?,
+        None => authorize_widget_version(&state, &user, &package_id, &version, None).await?,
+    };
 
     if is_refused_sandbox_navigation(route, &headers) {
         return Ok(non_iframe_refusal());
@@ -622,17 +655,29 @@ pub async fn get_widget_sandbox(
     if let SandboxPath::Asset(asset_path) = route {
         let bytes =
             read_widget_entry(&authorized.registry, &package_id, &version, asset_path).await?;
-        return Ok(asset_response(asset_path, bytes));
+        let response = asset_response(asset_path, bytes);
+        return Ok(match access {
+            Some(_) => with_private_cache(response),
+            None => response,
+        });
     }
 
     let context = WidgetRequestContext::from_request(&state, &headers, &package_id, &version);
     let sources = &context.bundle_sources;
+    let frame_sources = access_sources(sources, access);
+    let frame_sources = &frame_sources;
 
     match route {
         SandboxPath::Frame {
             widget_id,
             grant: None,
-        } => frame_response("../", sources, widget_id, BASELINE_GRANT_SEGMENT, false),
+        } => frame_response(
+            "../",
+            frame_sources,
+            widget_id,
+            BASELINE_GRANT_SEGMENT,
+            false,
+        ),
         SandboxPath::Frame {
             widget_id,
             grant: Some(grant),
@@ -643,8 +688,16 @@ pub async fn get_widget_sandbox(
                 widget_id,
             };
             match resolve_frame_grant(&state, &context, &authorized, target, grant).await? {
-                Some(downloads) => frame_response("../../", sources, widget_id, grant, downloads),
-                None => frame_response("../../", sources, widget_id, BASELINE_GRANT_SEGMENT, false),
+                Some(downloads) => {
+                    frame_response("../../", frame_sources, widget_id, grant, downloads)
+                }
+                None => frame_response(
+                    "../../",
+                    frame_sources,
+                    widget_id,
+                    BASELINE_GRANT_SEGMENT,
+                    false,
+                ),
             }
         }
         SandboxPath::Document { widget_id, grant } => {
@@ -1247,6 +1300,39 @@ mod tests {
         );
         assert!(
             frame_response("../../", &sources, WIDGET, &format!("0~{RUNTIME}"), false).is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn widget_sandbox_access_segment_moves_the_pinned_child_under_it() {
+        let sources = sandbox_sources();
+        let access = "eyJhbGciOiJFUzI1NiJ9.eyJ2IjoxfQ.c2ln";
+        let under_access = access_sources(&sources, Some(access));
+        assert_eq!(
+            under_access,
+            vec![format!(
+                "https://api.flow-like.com/api/v1/registry/package/com.example.maps/widget-sandbox/1.2.0/~{access}/"
+            )]
+        );
+        assert!(under_access.iter().all(|source| is_bundle_source(source)));
+        assert_eq!(access_sources(&sources, None), sources);
+
+        let response = frame_response("../../", &under_access, WIDGET, JWT, false).unwrap();
+        let csp = header(&response, header::CONTENT_SECURITY_POLICY).to_string();
+        assert!(csp.contains(&format!(
+            "frame-src https://api.flow-like.com/api/v1/registry/package/com.example.maps/widget-sandbox/1.2.0/~{access}/widgets/live-map/index.{JWT}.html;"
+        )));
+        assert!(
+            body(response)
+                .await
+                .contains(&format!("'../../widgets/live-map/index.{JWT}.html'")),
+            "the relative child resolves under the access segment of the wrapper's own URL"
+        );
+
+        let asset = with_private_cache(asset_response("assets/app.js", b"0".to_vec()));
+        assert_eq!(
+            header(&asset, header::CACHE_CONTROL),
+            "private, max-age=43200, immutable"
         );
     }
 

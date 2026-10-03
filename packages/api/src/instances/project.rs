@@ -1,5 +1,12 @@
 use super::*;
-use crate::credentials::instance_storage::{StorageIssueRequest, issue};
+use crate::{
+    credentials::instance_storage::{StorageIssueRequest, issue},
+    permission::role_permission::{RolePermissions, has_role_permission},
+};
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+};
 
 const JOSE_TYPE: &str = "flow-like-instance-project+jwt";
 
@@ -397,6 +404,101 @@ fn quota_access(quota: Result<(), ApiError>) -> Result<OnlineProjectAccess, ApiE
     }
 }
 
+/// How approval lists report that narrowing. A quota that cannot be read right now is
+/// unknown, not full.
+fn write_block(quota: Result<(), ApiError>) -> Option<OnlineWriteBlock> {
+    matches!(quota_access(quota), Ok(OnlineProjectAccess::ReadOnly))
+        .then_some(OnlineWriteBlock::StorageFull)
+}
+
+/// The projects among `project_ids` that `viewer` can read as a member.
+async fn readable_projects<C: ConnectionTrait>(
+    db: &C,
+    viewer: &str,
+    project_ids: &[String],
+) -> Result<HashSet<String>, ApiError> {
+    if project_ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let rows = db
+        .query_all_raw(sql(
+            &format!(
+                r#"SELECT m."appId",r.permissions FROM "Membership" m JOIN "Role" r ON r.id=m."roleId" AND r."appId"=m."appId" JOIN "App" a ON a.id=m."appId" WHERE m."userId"=$1 AND a.status='ACTIVE' AND m."appId" IN ({})"#,
+                placeholders(2, project_ids.len())
+            ),
+            std::iter::once(viewer.into()).chain(project_ids.iter().map(|id| id.clone().into())),
+        ))
+        .await?;
+    let mut readable = HashSet::new();
+    for row in rows {
+        let permissions = RolePermissions::from_bits(row.try_get::<i64>("", "permissions")?);
+        if permissions.is_some_and(|permissions| {
+            has_role_permission(&permissions, RolePermissions::ReadBoards)
+        }) {
+            readable.insert(row.try_get("", "appId")?);
+        }
+    }
+    Ok(readable)
+}
+
+/// Marks the read-and-write approvals whose next lease `storage` would narrow to reads.
+/// Only the approver and people who can read the project learn its storage state: a device
+/// owner outside the project must not.
+pub(crate) async fn mark_blocked_writes(
+    state: &AppState,
+    viewer: &str,
+    grants: &mut [ResourceGrantResponse],
+) -> Result<(), ApiError> {
+    mark_blocked_writes_with(&state.db, viewer, grants, |project_id, payer| async move {
+        crate::capacity::check_storage_write(state, &project_id, &payer, 0).await
+    })
+    .await
+}
+
+/// `quota` answers for a project and its fallback payer, once per pair.
+pub(super) async fn mark_blocked_writes_with<C, Q, F>(
+    db: &C,
+    viewer: &str,
+    grants: &mut [ResourceGrantResponse],
+    quota: Q,
+) -> Result<(), ApiError>
+where
+    C: ConnectionTrait,
+    Q: Fn(String, String) -> F,
+    F: Future<Output = Result<(), ApiError>>,
+{
+    let now = now();
+    let writes = |grant: &ResourceGrantResponse| {
+        grant.status == "active"
+            && grant.online_access == Some(OnlineProjectAccess::ReadWrite)
+            && grant.expires_at > now
+    };
+    let mut foreign: Vec<String> = grants
+        .iter()
+        .filter(|grant| writes(grant) && grant.delegating_user_id != viewer)
+        .map(|grant| grant.project_id.clone())
+        .collect();
+    foreign.sort();
+    foreign.dedup();
+    let readable = readable_projects(db, viewer, &foreign).await?;
+    let mut checked = HashMap::new();
+    for grant in grants.iter_mut().filter(|grant| writes(grant)) {
+        if grant.delegating_user_id != viewer && !readable.contains(&grant.project_id) {
+            continue;
+        }
+        let project = (grant.project_id.clone(), grant.delegating_user_id.clone());
+        grant.online_write_blocked = match checked.get(&project) {
+            Some(block) => *block,
+            None => {
+                let block = write_block(quota(project.0.clone(), project.1.clone()).await);
+                checked.insert(project, block);
+                block
+            }
+        };
+    }
+    Ok(())
+}
+
 pub(crate) async fn storage(
     state: &AppState,
     headers: &HeaderMap,
@@ -702,6 +804,21 @@ mod tests {
         );
         let outage = quota_access(Err(ApiError::internal("capacity lookup failed")));
         assert_eq!(outage.unwrap_err().status().as_u16(), 500);
+    }
+
+    #[test]
+    fn approval_lists_report_a_full_quota_and_never_guess() {
+        let full = ApiError::coded(
+            axum::http::StatusCode::PAYMENT_REQUIRED,
+            "PLAN_LIMIT_EXCEEDED",
+            "Storage is full",
+        );
+        assert_eq!(write_block(Err(full)), Some(OnlineWriteBlock::StorageFull));
+        assert_eq!(write_block(Ok(())), None);
+        assert_eq!(
+            write_block(Err(ApiError::internal("capacity lookup failed"))),
+            None
+        );
     }
 
     #[test]

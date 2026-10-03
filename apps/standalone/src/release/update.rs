@@ -235,6 +235,7 @@ fn historical(compact: &str, trust: &ReleaseTrust) -> Result<StandaloneRelease> 
         .context("Stored release manifest has no payload")?;
     let value: StandaloneRelease = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload)?)?;
     // Expiry prevents new downloads, while a previously installed release remains a rollback candidate.
+    // The running binary's lifetime cap applies to this record too, so MAX_RELEASE_LIFETIME may only rise.
     Ok(verify_standalone_release(
         compact,
         &trust.keys()?,
@@ -985,6 +986,73 @@ mod tests {
             &serde_json::to_vec(&operation_id)?,
         )?;
         Ok((directory, journal))
+    }
+    /// Signs what `sign_standalone_release` refuses, as a signer with a higher cap would.
+    fn sign_unvalidated(release: &StandaloneRelease, key: &SigningKey) -> Result<String> {
+        use openmls_traits::{crypto::OpenMlsCrypto, types::SignatureScheme};
+        let header = serde_json::json!({
+            "alg": "EdDSA",
+            "typ": flow_like_device_protocol::STANDALONE_RELEASE_JWS_TYPE,
+            "kid": key.public_key().thumbprint()?,
+        });
+        let signed = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header)?),
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(release)?)
+        );
+        let signature = openmls_rust_crypto::RustCrypto::default()
+            .sign(SignatureScheme::ED25519, signed.as_bytes(), &key.to_bytes())
+            .map_err(|error| anyhow::anyhow!("Sign test release: {error:?}"))?;
+        Ok(format!("{signed}.{}", URL_SAFE_NO_PAD.encode(signature)))
+    }
+    /// Issued in 1970, so it ran out long ago; that never disqualifies an installed record.
+    fn installed_for(lifetime: i64) -> StandaloneRelease {
+        StandaloneRelease {
+            version: 1,
+            state_schema_version: crate::state::SCHEMA_VERSION.try_into().unwrap(),
+            sequence: 2,
+            release_version: "1.2.3".into(),
+            issued_at: 1_000,
+            expires_at: 1_000 + lifetime,
+            artifacts: vec![StandaloneArtifact {
+                target: ReleaseTarget::LinuxX86_64,
+                url: "https://releases.example/agent".into(),
+                size: 5,
+                sha256: "a".repeat(64),
+            }],
+            container: None,
+        }
+    }
+    #[test]
+    fn an_installed_record_is_held_to_the_running_binarys_lifetime_cap() -> Result<()> {
+        use flow_like_device_protocol::{MAX_RELEASE_LIFETIME, ProtocolError};
+        let key = SigningKey::generate();
+        let trust = ReleaseTrust {
+            manifest_url: "https://releases.example/release.jws".into(),
+            public_keys: vec![URL_SAFE_NO_PAD.encode(key.public_key().to_bytes()?)],
+            minimum_sequence: 1,
+        };
+        let at_cap = installed_for(MAX_RELEASE_LIFETIME);
+        let signed = sign_standalone_release(&at_cap, &key)?;
+        let download = VerifiedRelease::verify(signed.clone(), &trust).err();
+        assert!(matches!(
+            download.and_then(|error| error.downcast::<ProtocolError>().ok()),
+            Some(ProtocolError::InvalidTime)
+        ));
+        for compact in [signed, sign_unvalidated(&at_cap, &key)?] {
+            assert_eq!(historical(&compact, &trust)?, at_cap);
+        }
+        let beyond = installed_for(MAX_RELEASE_LIFETIME + 1);
+        assert!(sign_standalone_release(&beyond, &key).is_err());
+        let refused = historical(&sign_unvalidated(&beyond, &key)?, &trust).unwrap_err();
+        assert!(
+            matches!(
+                refused.downcast_ref::<ProtocolError>(),
+                Some(ProtocolError::Invalid("standalone release shape"))
+            ),
+            "{refused:#}"
+        );
+        Ok(())
     }
     #[test]
     fn readiness_requires_exact_new_binary_operation_device_boot_and_run() {

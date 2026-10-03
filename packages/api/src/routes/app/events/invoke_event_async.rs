@@ -283,6 +283,7 @@ pub async fn invoke_event_async(
 
     // Get the event from database (validates event belongs to this app)
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
+    super::ensure_source_execution_allowed(&event)?;
     super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
 
     let resolved_page_trigger = match (event.default_page_id.as_ref(), params.page_trigger.as_ref())

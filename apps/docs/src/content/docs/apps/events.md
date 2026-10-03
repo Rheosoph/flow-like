@@ -143,6 +143,52 @@ Self-hosted installations use their existing web deployment and login callback.
 See [Host chat, form and page frontends](/self-hosting/containers/#host-chat-form-and-page-frontends)
 for static route and API redirect configuration.
 
+### Quick actions and forms on a device
+
+A Quick Action or Generic Form Event without a default Page can be deployed to a
+device as part of a service. People start it there from **Devices** with
+**Run now…**; nothing on the device runs it by itself. Deploying it moves
+nothing away from the App: the App, the desktop app and every device it is
+deployed to can offer it at the same time, and **Whole app** in the deploy
+wizard includes it. An Event with a default Page is deployed as that Page.
+
+- **Who may run it.** Everyone who may start the service may run its quick
+  actions and forms, with inputs of their choice. App roles are not checked on
+  the device. For an online App the run acts as the person who approved the
+  service's cloud access, not as the person who pressed **Run**; for an offline
+  App, as the device's local user.
+- **The form comes from the device.** Its fields are the outputs of the Event's
+  node in the Flow version the service runs, so a service that is not running
+  shows no form. After the service is updated, an open form must be reloaded
+  before it can run. File fields cannot be filled from **Devices**.
+- **Limits.** The inputs of one run are at most 64 fields and 12 KiB. A service
+  runs four of these runs at once and keeps eight more waiting; beyond that it
+  answers that it is busy. A run that no instance of the service picks up
+  within 30 seconds does not start. A run is stopped at the service's request
+  time limit, or after one hour when the service has no web endpoint.
+  **Stop this run** cancels it.
+- **The result.** The device returns the Flow's result only to the person who
+  started the run, shortened beyond 8 KiB, and keeps it for at most 24 hours and
+  only until the device agent restarts. A failed run reports a fixed reason; the
+  service's log has the details. A Flow that asks a question is stopped, because
+  nobody can answer it on a device.
+- **What is recorded.** The device's operation journal records who ran which
+  Event and when, never the inputs or the result. The run itself records its
+  input in the service's run history on the device, as every run does,
+  including fields marked sensitive.
+- **Spending.** Hosted models a run uses count against the service's spending
+  limit.
+
+A service that holds only quick actions and forms has no web endpoint and runs
+one instance.
+
+When the service also serves a Page, a chat or an Endpoint, its quick actions
+and forms are on the service's page as well, where file fields can be filled.
+That page runs them with `POST /run/{event id}` on the service's address, so
+everyone who holds the service's access token can run them. These runs are not
+in the operation journal; they count in the service's runs and its usage like
+every other request.
+
 ### Location Regions
 
 Add a **Location Event** node to a Flow, then create a **Location Region** Event

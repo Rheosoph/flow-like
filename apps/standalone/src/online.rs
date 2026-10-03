@@ -119,15 +119,37 @@ impl ProjectClient {
         self.request(&self.client, method, path, None).await
     }
     async fn replay<T: DeserializeOwned>(&self, path: &str, body: Vec<u8>) -> Result<T> {
-        self.request(&self.replay_client, reqwest::Method::POST, path, Some(body))
-            .await
+        let deadline = replay_timeout(body.len());
+        self.request(
+            &self.replay_client,
+            reqwest::Method::POST,
+            path,
+            Some((body, deadline)),
+        )
+        .await
+    }
+    /// A small control request with a body. Its deadline is the caller's, not the one a
+    /// buffered replay gets.
+    async fn post<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+        deadline: Duration,
+    ) -> Result<T> {
+        self.request(
+            &self.client,
+            reqwest::Method::POST,
+            path,
+            Some((body, deadline)),
+        )
+        .await
     }
     async fn request<T: DeserializeOwned>(
         &self,
         client: &reqwest::Client,
         method: reqwest::Method,
         path: &str,
-        body: Option<Vec<u8>>,
+        body: Option<(Vec<u8>, Duration)>,
     ) -> Result<T> {
         let url = format!("{}/{}", self.base, path);
         let authorization = self
@@ -150,13 +172,99 @@ impl ProjectClient {
             .request(method, url)
             .header("authorization", auth)
             .header("dpop", proof);
-        if let Some(body) = body {
+        if let Some((body, deadline)) = body {
             request = request
-                .timeout(replay_timeout(body.len()))
+                .timeout(deadline)
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(body);
         }
         instance_json(request.send().await?).await
+    }
+}
+
+const SCHEDULE_CLAIM_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Tells the hub which schedules this placement process runs. The hub stops running a
+/// schedule it answers as claimed, so nothing is armed on any other answer.
+struct HubSchedules {
+    client: ProjectClient,
+    skew_logged: AtomicBool,
+}
+
+impl HubSchedules {
+    fn outcome(&self, answer: &serde_json::Value) -> crate::schedule::ClaimOutcome {
+        use crate::schedule::HoldReason;
+        if let (Some(hub), Ok(device)) = (answer["server_time"].as_i64(), unix_time())
+            && (device - hub).abs() > 60
+            && !self.skew_logged.swap(true, Ordering::Relaxed)
+        {
+            tracing::warn!(
+                seconds_ahead = device - hub,
+                "The device clock differs from the hub's by more than a minute; schedules run by the device clock"
+            );
+        }
+        let entries = |key: &str| answer[key].as_array().into_iter().flatten();
+        crate::schedule::ClaimOutcome {
+            claimed: entries("claimed")
+                .filter_map(|entry| {
+                    Some((
+                        entry["event_id"].as_str()?.to_owned(),
+                        entry["since"].as_i64()?,
+                    ))
+                })
+                .collect(),
+            held: entries("held")
+                .filter_map(|entry| {
+                    let reason = match entry["reason"].as_str() {
+                        Some("not_released") => HoldReason::NotReleased,
+                        Some("runs_elsewhere") => HoldReason::RunsElsewhere,
+                        // A reason this agent does not know still means "do not run it".
+                        _ => HoldReason::HubUnreachable,
+                    };
+                    Some((entry["event_id"].as_str()?.to_owned(), reason))
+                })
+                .collect(),
+        }
+    }
+}
+
+#[async_trait]
+impl crate::schedule::ScheduleClaims for HubSchedules {
+    async fn claim(
+        &self,
+        ids: &[String],
+    ) -> std::result::Result<crate::schedule::ClaimOutcome, crate::schedule::ClaimError> {
+        use crate::schedule::ClaimError;
+        use reqwest::StatusCode;
+        let body = serde_json::to_vec(&serde_json::json!({ "event_ids": ids }))
+            .map_err(|_| ClaimError::Unreachable)?;
+        // `ProjectClient` addresses paths below the project API root.
+        let path = crate::broker::SCHEDULE_CLAIM_PATH.trim_start_matches("/instances/project/");
+        match self
+            .client
+            .post::<serde_json::Value>(path, body, SCHEDULE_CLAIM_TIMEOUT)
+            .await
+        {
+            Ok(answer) => Ok(self.outcome(&answer)),
+            // A hub that has no such route, or refuses a field of it, predates this agent.
+            Err(error)
+                if matches!(
+                    api_status(&error),
+                    Some(
+                        StatusCode::NOT_FOUND
+                            | StatusCode::METHOD_NOT_ALLOWED
+                            | StatusCode::BAD_REQUEST
+                            | StatusCode::UNPROCESSABLE_ENTITY
+                    )
+                ) =>
+            {
+                Err(ClaimError::HubTooOld)
+            }
+            Err(error) if authorization_error(&error) == AuthorizationError::Denied => {
+                Err(ClaimError::Denied)
+            }
+            Err(_) => Err(ClaimError::Unreachable),
+        }
     }
 }
 
@@ -1209,6 +1317,7 @@ pub(crate) struct OnlineRuntime {
     pub(crate) registry: Arc<flow_like_storage::lance_io::object_store::ObjectStoreRegistry>,
     pub(crate) delegating_user_id: String,
     pub(crate) revoked: tokio_util::sync::CancellationToken,
+    pub(crate) schedules: Arc<dyn crate::schedule::ScheduleClaims>,
 }
 
 fn shared_cloud_store(
@@ -1333,6 +1442,10 @@ pub(crate) async fn configure_with_local_data(
         registry,
         delegating_user_id: credentials.delegating_user_id.clone(),
         revoked: credentials.revoked.clone(),
+        schedules: Arc::new(HubSchedules {
+            client,
+            skew_logged: AtomicBool::new(false),
+        }),
     })
 }
 
@@ -2142,7 +2255,7 @@ mod tests {
             Box::pin(async move {
                 if request.audience != ResourceAudience::ProjectApi
                     || !((request.method == "POST"
-                        && ["storage", "offline/replay"]
+                        && ["storage", "offline/replay", "schedules"]
                             .iter()
                             .any(|path| request.url == format!("{}/{path}", self.base)))
                         || (request.method == "GET"
@@ -2460,6 +2573,162 @@ mod tests {
         project.refresh(true).await?;
         gate.put(&path, "resumed".into()).await?;
         server.abort();
+        Ok(())
+    }
+
+    /// A hub whose claim route answers with the status and body last set, and keeps what
+    /// it was sent.
+    async fn claim_hub() -> Result<(
+        HubSchedules,
+        Arc<std::sync::Mutex<(u16, String)>>,
+        Arc<std::sync::Mutex<Vec<String>>>,
+        tokio::task::JoinHandle<()>,
+    )> {
+        use axum::response::IntoResponse;
+        let answer = Arc::new(std::sync::Mutex::new((200, String::from("{}"))));
+        let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (answers, received) = (answer.clone(), bodies.clone());
+        let router = axum::Router::new().route(
+            "/instances/project/schedules",
+            axum::routing::post(move |body: String| {
+                received.lock().unwrap().push(body);
+                let (status, body) = answers.lock().unwrap().clone();
+                async move {
+                    (
+                        axum::http::StatusCode::from_u16(status).unwrap(),
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        body,
+                    )
+                        .into_response()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}/instances/project", listener.local_addr()?);
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let hub = HubSchedules {
+            client: ProjectClient::new(Arc::new(TestAuthorizer { base }))?,
+            skew_logged: AtomicBool::new(false),
+        };
+        Ok((hub, answer, bodies, server))
+    }
+
+    #[tokio::test]
+    async fn schedule_claims_send_the_full_set_and_arm_only_what_the_hub_claims() -> Result<()> {
+        use crate::schedule::{ClaimError, HoldReason, ScheduleClaims};
+        let (hub, answer, bodies, server) = claim_hub().await?;
+        let ids = |ids: &[&str]| ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+        let answers = |status: u16, body: &str| *answer.lock().unwrap() = (status, body.to_owned());
+
+        // The literal request and response of the hub contract.
+        answers(
+            200,
+            r#"{"server_time":1790000000,
+ "claimed":[{"event_id":"evt_report","since":1789990000}],
+ "held":[{"event_id":"evt_sync","reason":"not_released"}]}"#,
+        );
+        let outcome = hub.claim(&ids(&["evt_report", "evt_sync"])).await.unwrap();
+        assert_eq!(
+            bodies.lock().unwrap()[0],
+            r#"{"event_ids":["evt_report","evt_sync"]}"#
+        );
+        assert_eq!(outcome.claimed, [("evt_report".to_owned(), 1789990000)]);
+        assert_eq!(
+            outcome.held,
+            [("evt_sync".to_owned(), HoldReason::NotReleased)]
+        );
+        // A device clock that differs from the hub's is said once per start.
+        assert!(hub.skew_logged.load(Ordering::Relaxed));
+
+        // Fields and reasons a newer hub adds: a reason this agent does not know is never
+        // read as "claimed", and an entry without its time is not a claim.
+        answers(
+            200,
+            r#"{"server_time":1790000000,"hub":{"version":9},
+ "claimed":[{"event_id":"evt_report","since":1789990000,"by":"g-1"},{"event_id":"evt_mail"}],
+ "held":[{"event_id":"evt_sync","reason":"a_newer_reason","until":5},{"event_id":"evt_log","reason":"runs_elsewhere"}]}"#,
+        );
+        let outcome = hub
+            .claim(&ids(&["evt_report", "evt_mail", "evt_sync", "evt_log"]))
+            .await
+            .unwrap();
+        assert_eq!(outcome.claimed, [("evt_report".to_owned(), 1789990000)]);
+        assert_eq!(
+            outcome.held,
+            [
+                ("evt_sync".to_owned(), HoldReason::HubUnreachable),
+                ("evt_log".to_owned(), HoldReason::RunsElsewhere)
+            ]
+        );
+
+        // A placement without schedules still says so.
+        answers(200, r#"{"server_time":1790000000,"claimed":[],"held":[]}"#);
+        let outcome = hub.claim(&[]).await.unwrap();
+        assert!(outcome.claimed.is_empty() && outcome.held.is_empty());
+        assert_eq!(bodies.lock().unwrap()[2], r#"{"event_ids":[]}"#);
+
+        let refused = r#"{"error":{"code":"INSTANCE_REVOKED","message":"Revoked"}}"#;
+        let proof = r#"{"error":{"code":"INSTANCE_PROOF_INVALID","message":"Clock"}}"#;
+        for (status, body, expected) in [
+            (404, "", ClaimError::HubTooOld),
+            (405, "", ClaimError::HubTooOld),
+            (
+                400,
+                r#"{"error":{"code":"BAD_REQUEST"}}"#,
+                ClaimError::HubTooOld,
+            ),
+            (422, "", ClaimError::HubTooOld),
+            (403, refused, ClaimError::Denied),
+            (401, refused, ClaimError::Denied),
+            (401, proof, ClaimError::Unreachable),
+            (409, "", ClaimError::Unreachable),
+            (429, "", ClaimError::Unreachable),
+            (500, "", ClaimError::Unreachable),
+            (503, "", ClaimError::Unreachable),
+            (200, "not json", ClaimError::Unreachable),
+        ] {
+            answers(status, body);
+            assert_eq!(
+                hub.claim(&ids(&["evt_report"])).await.err(),
+                Some(expected),
+                "{status} {body}"
+            );
+        }
+        server.abort();
+        let _ = server.await;
+        assert_eq!(
+            hub.claim(&ids(&["evt_report"])).await.err(),
+            Some(ClaimError::Unreachable)
+        );
+
+        // The parent that refuses to sign the call has revoked the workload.
+        struct Revoked(String);
+        impl RequestAuthorizer for Revoked {
+            fn resource_base_url(&self, _: ResourceAudience) -> Option<String> {
+                Some(self.0.clone())
+            }
+            fn authorize<'a>(&'a self, _: AuthorizationRequest<'a>) -> AuthorizationFuture<'a> {
+                Box::pin(async { Err(AuthorizationError::Denied) })
+            }
+        }
+        let revoked = HubSchedules {
+            client: ProjectClient::new(Arc::new(Revoked(hub.client.base.clone())))?,
+            skew_logged: AtomicBool::new(false),
+        };
+        assert_eq!(
+            revoked.claim(&ids(&["evt_report"])).await.err(),
+            Some(ClaimError::Denied)
+        );
+
+        // The path the process called above is the one its parent signs.
+        let api = "https://api.example/api/v1";
+        let called = "/instances/project/schedules";
+        assert_eq!(crate::broker::SCHEDULE_CLAIM_PATH, called);
+        assert!(crate::broker::allowed_project_request(
+            api,
+            "POST",
+            &format!("{api}{called}")
+        ));
         Ok(())
     }
 

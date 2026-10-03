@@ -66,11 +66,14 @@
 //! Offline apps never reach this module — their cache nodes write to the local
 //! filesystem instead. See `packages/catalog/data/src/data/cache/`.
 
+pub mod best_effort;
 mod platform;
 mod postgres;
 pub mod sweeper;
 mod types;
 
+#[cfg(test)]
+pub(crate) use platform::tests::cache as memory_platform_cache;
 pub use platform::{
     CacheBackendHandle, PLATFORM_APP_ID, PlatformCache, Reservation, is_platform_app_id,
     require_cache_store,

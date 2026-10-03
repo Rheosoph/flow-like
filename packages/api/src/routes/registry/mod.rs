@@ -18,6 +18,7 @@ pub mod server;
 pub mod types;
 pub mod upload;
 pub mod users;
+pub mod widget_access;
 pub mod widget_asset;
 pub mod widget_grant_jwt;
 pub mod widget_policy;
@@ -34,8 +35,10 @@ use axum::{
 pub use server::ServerRegistry;
 
 /// Check that the caller has at least the given `WasmPackagePermission` on a
-/// package. Uses the in-memory permission cache (120 s TTL) to avoid repeated
-/// DB look-ups. Returns the resolved `WasmPackagePermission` on success.
+/// package. A grant is read from the in-memory permission cache (120 s TTL);
+/// a caller without one is looked up in the DB every time, because access can
+/// be granted on another API process. Returns the resolved
+/// `WasmPackagePermission` on success.
 ///
 /// Usage:
 /// ```ignore
@@ -179,6 +182,12 @@ pub fn routes() -> Router<AppState> {
                 .layer(DefaultBodyLimit::max(
                     widget_policy::MAX_WIDGET_POLICY_REQUEST_BYTES,
                 )),
+        )
+        .route(
+            "/package/{package_id}/widget-access",
+            post(widget_access::mint_widget_access).layer(DefaultBodyLimit::max(
+                widget_policy::MAX_WIDGET_POLICY_REQUEST_BYTES,
+            )),
         )
         .route(
             "/package/{package_id}/widget-grant",

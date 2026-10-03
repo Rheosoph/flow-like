@@ -1,0 +1,89 @@
+---
+title: "Dots, Muse and Grok Bot: build a local agent with Flow-Like"
+description: "A quick comparison of OpenAI dots, Meta Muse and Grok Bot, plus a practical way to build a recurring AI assistant on your own device with Flow-Like."
+date: 2026-10-03
+tags: ["agents", "comparison", "local-ai", "automation"]
+cover: "/images/dots-muse-grok-bot-local-agents.jpg"
+draft: false
+---
+
+A morning brief is more useful when it is ready before you open a chat. An assistant can read yesterday's project notes and leave you a list of decisions for the day.
+
+OpenAI's dots, Meta's Muse and Grok Bot offer versions of that experience. They combine a model with tools, retained context and a computer where work can continue between conversations. You can also build recurring assistants in Flow-Like, with the workflow and model running on your own device.
+
+*This overview reflects official product documentation checked on October 3, 2026. It compares documented capabilities, without ranking model quality.*
+
+## What are dots, Muse and Grok Bot?
+
+Each product can act across apps and return with results or a request for your input.
+
+| Product | Main emphasis | Where the work runs |
+| --- | --- | --- |
+| [OpenAI dots](https://learn.chatgpt.com/docs/dots) | An ongoing assistant inside ChatGPT. It uses relevant memory, coordinates background tasks, and can be reached through ChatGPT, Slack or Teams. | Its own cloud computer and browser, with optional access to a connected personal computer. |
+| [Meta Muse](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/) | A personal assistant for goals and everyday tasks, including travel, email and shopping. You can talk to it in the Muse app or WhatsApp. | A dedicated cloud virtual machine and browser that keep working after you close the app. |
+| [Grok Bot](https://docs.x.ai/grok-bot/overview) | Named bots with different responsibilities. They can work in parallel, hand tasks to each other and turn repeatable work into skills or schedules. | A persistent computer in Cursor's cloud. An account's bots share files and browser sessions, while keeping separate conversation context. |
+
+The emphasis differs more than the basic idea. Dots builds on your ChatGPT context. Muse starts from personal goals and now also has [small-business tools](https://about.fb.com/news/2026/09/introducing-muse-small-business/), including connections to Shopify and Meta business accounts. Grok Bot makes a team of persistent specialists part of the interface.
+
+Desktop access is already part of this category. Dots can [connect to your computer](https://learn.chatgpt.com/docs/dots/computers-and-apps), and Muse offers a [Mac app](https://ai.meta.com/muse/download/) with permissioned access to local files and apps. That access does not make their cloud agent a model running on your device.
+
+<figure>
+  <a href="/posts/dots-muse-grok-bot/execution-options.svg" aria-label="Open the execution comparison at full size">
+    <img src="/posts/dots-muse-grok-bot/execution-options.svg" alt="A managed agent runs in its provider's cloud and can continue while your laptop is off. A Flow-Like workflow with a local model and chosen files runs on your own machine, which must stay awake and running." width="1200" height="1060" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Connecting a cloud agent to your desktop and running a workflow with local inference are different setups.</figcaption>
+</figure>
+
+## Where Flow-Like fits
+
+Flow-Like gives you a visual workflow to build the assistant's job. You choose what starts it, which information it reads, where a model helps, and what happens with the result. Its [agent nodes](https://docs.flow-like.com/topics/genai/agents/) let a model choose between tools you provide when the task needs that flexibility.
+
+For a project brief, the flow can read selected notes, compare them with the previous brief, and save a summary. If it misses something, you can inspect the inputs and change the relevant step on the canvas.
+
+The tradeoff is setup. A managed agent comes with its own conversational experience and operating environment. In Flow-Like, you assemble the workflow for the responsibility you want to hand over.
+
+## Build a daily brief on your own device
+
+Start with a small folder of text or Markdown project notes. The goal is a saved brief that identifies changes and open questions, with filenames beside the claims.
+
+<figure>
+  <a href="/posts/dots-muse-grok-bot/local-brief-workflow.svg" aria-label="Open the morning brief workflow at full size">
+    <img src="/posts/dots-muse-grok-bot/local-brief-workflow.svg" alt="At 09:00, a local schedule starts a workflow that reads chosen notes and the previous brief, sends them to a local model, and saves brief.md. The saved brief becomes context for the next run. External actions follow a separate human review." width="1200" height="1080" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>A conceptual view of the daily brief. The saved result supplies context for the next run.</figcaption>
+</figure>
+
+### Set up local execution and a local model
+
+Install [Flow-Like Desktop](/download/), enable **Developer Mode**, and create an **Offline App**. Create a flow, set its execution mode to **Local**, and add a **Simple Event** as its starting node. [Offline apps](https://docs.flow-like.com/apps/offline-online/) keep their primary app data on the device and work without signing in.
+
+Start Ollama or LM Studio on the same machine and load a suitable local text model. In your flow, use **Ollama Model** or **LM Studio Model** with that service's endpoint and model ID. The [model setup guide](https://docs.flow-like.com/topics/genai/models/) covers both connections. Choose a model that fits your hardware; verify tool calling too if you add an agent.
+
+**Local execution and local inference are separate choices.** A local workflow that calls a hosted model still sends its model inputs to that provider. For this example, keep the files, model endpoint and output local, and avoid an automatic fallback to a hosted model.
+
+### Read the notes and write the brief
+
+Create a separate output directory outside the notes folder. In Studio, use **Local Path to Path** on that existing directory, then **Child** to construct the path for `brief.md`. The workflow can then follow this sequence:
+
+1. Use **Local Path to Path** for the notes directory, then **List Paths**. Disable recursive listing if subfolders are outside the task.
+2. Select the text and Markdown files you want, limit their number and size, then load them with **Read to String**. Include each filename with its contents.
+3. Check `brief.md` with **Path Exists?** and load it with **Read to String** when present. Pass the notes and previous brief to [**Invoke Simple**](https://docs.flow-like.com/nodes/ai/generative/ai-generative-invoke-simple/). Connect your local model, disable streaming, and ask for changed facts, unresolved questions and source filenames. On the missing-file branch, pass an empty previous brief and request a baseline summary.
+4. Connect the model's **Done** output to **Write String**, with **Result** as its content and the `brief.md` path as its destination. Keeping that file outside the input folder prevents the flow from reading its own output as new evidence.
+
+This follows a fixed sequence. If you want the assistant to decide which notes to inspect, use **Agent from Model**, expose a bounded read function through **Register Function Tools**, and run **Invoke Agent**. Enforce the permitted folder in that function. The [agent guide](https://docs.flow-like.com/topics/genai/agents/) explains the tool setup and iteration limits.
+
+The saved brief supplies context for the next run.
+
+### Put the working flow on a schedule
+
+Run it manually and check the summary against the source files. Then create an active **Cron Event** pointing to the **Simple Event**, choose **Local**, and set `0 9 * * 1-5` with your timezone, such as `Europe/Berlin`. That schedules a weekday run at 09:00. See the [Cron guide](https://docs.flow-like.com/dev/sinks/cron/).
+
+Keep Desktop and the local model service running, and the device awake. Do not assume a run missed during sleep will be replayed. For continuous availability, use an always-running machine you control. You can also adapt the flow for a [self-hosted deployment](https://docs.flow-like.com/self-hosting/containers/), replacing desktop paths with that deployment's storage access.
+
+### Add actions when the brief is useful
+
+A saved brief is a good first result. Later, you might add a proposed email or a task update. Save the proposal for review before connecting the sending or updating step. Our [interactive approval walkthrough](/blog/workflow-approval-with-channels/) shows how an attended remote run can wait for a decision and check the selected response before acting.
+
+You can also extend the flow to operate other software. [Browser automation](/blog/browser-automation-with-cdp/) can work with Chrome or Edge, while [desktop automation](/blog/find-desktop-controls-by-text/) can find controls through accessibility information or text recognized on screen. Desktop control needs the applicable OS permissions and a compatible active session. Check the resulting file or application state before reporting success.
+
+Flow-Like is useful when you want to define the recurring job yourself and control its execution, model and data. Start with one folder and one brief. Once it earns its place in your morning, extend the flow.

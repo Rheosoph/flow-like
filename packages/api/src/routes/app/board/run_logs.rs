@@ -3,9 +3,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like::flow::execution::log::LogMessage;
-use flow_like::flow::execution::log_query::{
-    LogQuery, MAX_PAGE_SIZE, count_logs, query_log_page, scan_log_summary,
-};
+use flow_like::flow::execution::log_query::{LogQuery, MAX_PAGE_SIZE, count_logs, query_log_page};
 use flow_like::flow::execution::log_summary::{LogSummary, read_run_summary};
 use flow_like_types::anyhow;
 use serde::{Deserialize, Serialize};
@@ -16,6 +14,8 @@ use crate::{
     ensure_permission, error::ApiError, execution::run_summary::logs_store,
     middleware::jwt::AppUser, permission::role_permission::RolePermissions, state::AppState,
 };
+
+mod summary_cache;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct QueryRunLogsRequest {
@@ -197,8 +197,16 @@ pub async fn get_run_log_summary(
     else {
         return Ok(Json(None));
     };
-    let summary = scan_log_summary(&table, None)
-        .await
-        .map_err(|e| query_failed(&params.run_id, "summarize logs", e))?;
+    let cache = summary_cache::platform_cache(&state.cache).await;
+    let summary = summary_cache::summarize(
+        cache.as_ref(),
+        &sub,
+        &app_id,
+        &board_id,
+        &params.run_id,
+        &table,
+    )
+    .await
+    .map_err(|e| query_failed(&params.run_id, "summarize logs", e))?;
     Ok(Json(Some(summary)))
 }

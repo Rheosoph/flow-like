@@ -10,11 +10,13 @@ import { EmptyHint, Section } from "./parts";
 const SKELETON_KEYS = ["a", "b", "c"] as const;
 
 export function PackageWidgetsSection({
+	appId,
 	widgets,
 	loading,
 	limit,
 	onShowAll,
 }: Readonly<{
+	appId: string;
 	widgets: readonly AppPackageWidget[];
 	loading: boolean;
 	limit?: number;
@@ -70,6 +72,7 @@ export function PackageWidgetsSection({
 							packageVersion={entry.packageVersion}
 							bundleHash={entry.bundleHash}
 							packageName={entry.packageName}
+							appId={appId}
 						/>
 					))}
 				</div>

@@ -1,4 +1,5 @@
 import { sha256 } from "@noble/hashes/sha2";
+import { type DeviceAccountScope, accountStorageKey } from "./storage";
 import { type ManagementRejection, managementRejection } from "./types";
 
 export const ARTIFACT_CHUNK_BYTES = 8192;
@@ -946,13 +947,24 @@ export type PendingArtifactTransfer = {
 	confirmed?: boolean;
 };
 const MAX_PENDING_TRANSFERS = 32;
-function pendingTransfersKey(deviceId: string): string {
-	return `flow-like.device-artifact-transfers.${deviceId}`;
+/** Before C8 these hints were not account-scoped; the activity tray imports them once. */
+const LEGACY_TRANSFERS_PREFIX = "flow-like.device-artifact-transfers.";
+function pendingTransfersKey(
+	deviceId: string,
+	scope?: DeviceAccountScope,
+): string {
+	return scope
+		? `flow-like.device-transfers.${accountStorageKey(scope)}.${deviceId}`
+		: `${LEGACY_TRANSFERS_PREFIX}${deviceId}`;
 }
-function readPendingTransfers(deviceId: string): PendingArtifactTransfer[] {
+function readPendingTransfers(
+	deviceId: string,
+	scope?: DeviceAccountScope,
+): PendingArtifactTransfer[] {
 	try {
 		const value: unknown = JSON.parse(
-			globalThis.localStorage?.getItem(pendingTransfersKey(deviceId)) ?? "[]",
+			globalThis.localStorage?.getItem(pendingTransfersKey(deviceId, scope)) ??
+				"[]",
 		);
 		const now = Date.now() / 1000;
 		return Array.isArray(value)
@@ -976,9 +988,10 @@ function readPendingTransfers(deviceId: string): PendingArtifactTransfer[] {
 function writePendingTransfers(
 	deviceId: string,
 	transfers: PendingArtifactTransfer[],
+	scope?: DeviceAccountScope,
 ): void {
 	try {
-		const key = pendingTransfersKey(deviceId);
+		const key = pendingTransfersKey(deviceId, scope);
 		if (transfers.length)
 			globalThis.localStorage?.setItem(
 				key,
@@ -989,12 +1002,16 @@ function writePendingTransfers(
 		// Unavailable storage only loses the resume hint; the device keeps the transfer.
 	}
 }
-/** Unfinished uploads this browser began on a device, kept so a later session can resume or abort them. */
+/**
+ * Unfinished uploads this browser began on a device, kept so a later session can resume or abort them.
+ * With `scope` the hints belong to one account and hub (C8); without it, to the legacy per-device key.
+ */
 export function pendingArtifactTransfers(
 	deviceId: string,
 	project?: string,
+	scope?: DeviceAccountScope,
 ): PendingArtifactTransfer[] {
-	return readPendingTransfers(deviceId).filter(
+	return readPendingTransfers(deviceId, scope).filter(
 		(transfer) => project === undefined || transfer.project_id === project,
 	);
 }
@@ -1002,32 +1019,109 @@ export function pendingArtifactTransfers(
 export function rememberArtifactTransfer(
 	deviceId: string,
 	transfer: Omit<PendingArtifactTransfer, "expires_at">,
+	scope?: DeviceAccountScope,
 ): void {
-	const transfers = readPendingTransfers(deviceId);
+	const transfers = readPendingTransfers(deviceId, scope);
 	const existing = transfers.find(
 		(entry) => entry.transfer_id === transfer.transfer_id,
 	);
 	if (existing && (existing.confirmed || !transfer.confirmed)) return;
-	writePendingTransfers(deviceId, [
-		...transfers.filter((entry) => entry !== existing),
-		{
-			...transfer,
-			expires_at:
-				existing?.expires_at ??
-				Date.now() / 1000 + ARTIFACT_TRANSFER_TTL_SECONDS,
-		},
-	]);
+	writePendingTransfers(
+		deviceId,
+		[
+			...transfers.filter((entry) => entry !== existing),
+			{
+				...transfer,
+				expires_at:
+					existing?.expires_at ??
+					Date.now() / 1000 + ARTIFACT_TRANSFER_TTL_SECONDS,
+			},
+		],
+		scope,
+	);
 }
 export function forgetArtifactTransfer(
 	deviceId: string,
 	transferId: string,
+	scope?: DeviceAccountScope,
 ): void {
 	writePendingTransfers(
 		deviceId,
-		readPendingTransfers(deviceId).filter(
+		readPendingTransfers(deviceId, scope).filter(
 			(entry) => entry.transfer_id !== transferId,
 		),
+		scope,
 	);
+}
+/** Devices that still have pre-C8 upload hints in this browser. */
+export function legacyArtifactTransferDevices(): string[] {
+	try {
+		const storage = globalThis.localStorage;
+		if (!storage) return [];
+		const devices: string[] = [];
+		for (let index = 0; index < storage.length; index++) {
+			const key = storage.key(index);
+			if (key?.startsWith(LEGACY_TRANSFERS_PREFIX))
+				devices.push(key.slice(LEGACY_TRANSFERS_PREFIX.length));
+		}
+		return devices;
+	} catch {
+		return [];
+	}
+}
+/** Reads a device's pre-C8 upload hints once and deletes them; expired hints are dropped. */
+export function takeLegacyArtifactTransfers(
+	deviceId: string,
+): PendingArtifactTransfer[] {
+	const transfers = readPendingTransfers(deviceId);
+	writePendingTransfers(deviceId, []);
+	return transfers;
+}
+/**
+ * The device's view of an upload this browser began, for resuming it after a reload.
+ * Null when the device no longer holds the transfer (it answers an unknown one with a coded `failed`).
+ */
+export async function readArtifactTransfer(
+	request: ArtifactManagementCall,
+	transfer: Pick<
+		PendingArtifactTransfer,
+		"transfer_id" | "project_id" | "manifest_sha256"
+	>,
+	signal?: AbortSignal,
+): Promise<ArtifactTransferStatus | null> {
+	projectId(transfer.project_id);
+	id(transfer.transfer_id);
+	const response = await requestArtifact(
+		request,
+		{
+			type: "artifact",
+			request: {
+				kind: "status",
+				project_id: transfer.project_id,
+				transfer_id: transfer.transfer_id,
+				file_index: null,
+			},
+		},
+		undefined,
+		signal,
+	);
+	const rejection = managementRejection(response);
+	if (rejection?.code === "failed") return null;
+	if (rejection)
+		throw new Error(
+			`The device refused to report upload ${transfer.transfer_id}: ${rejection.error}`,
+		);
+	const status = response.result as Partial<ArtifactTransferStatus> | null;
+	check(
+		["accepted", "completed"].includes(response.state) &&
+			status?.transfer_id === transfer.transfer_id &&
+			status.descriptor?.project_id === transfer.project_id &&
+			status.descriptor.manifest_sha256 === transfer.manifest_sha256 &&
+			["receiving", "committed", "aborted"].includes(status.state ?? "") &&
+			Number.isSafeInteger(status.expires_at),
+		`The device's status of upload ${transfer.transfer_id} does not match this upload.`,
+	);
+	return status as ArtifactTransferStatus;
 }
 export async function prepareOnlineProjectCache(
 	request: ArtifactManagementCall,

@@ -235,6 +235,8 @@ class EmbeddingResult:
     embeddings: list[list[float]] = field(default_factory=list)
     usage: UsageInfo = field(default_factory=UsageInfo)
     raw: dict[str, Any] = field(default_factory=dict)
+    usage_estimated: bool | None = None
+    usage_available: bool | None = None
 
 
 @dataclass

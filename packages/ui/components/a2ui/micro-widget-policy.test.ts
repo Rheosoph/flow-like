@@ -10,12 +10,16 @@ import {
 	isDesktopWidgetGrant,
 	isEmptyPolicy,
 	isPolicyChangedError,
+	isWebWidgetAccess,
 	isWebWidgetGrant,
+	isWidgetAccessRefusedError,
+	isWidgetAccessUnsupportedError,
 	isWidgetGrantUnavailableError,
 	isWidgetRuntimeComponent,
 	isWidgetRuntimeDescribeUnsupportedError,
 	maxWidgetSourceLevel,
 	normalizeWidgetPolicy,
+	parseWidgetAccessResponse,
 	parseWidgetGrantResponse,
 	parseWidgetInputPath,
 	parseWidgetPolicyDescriptor,
@@ -362,6 +366,111 @@ describe("grants", () => {
 			),
 		).toBe(false);
 		expect(isWidgetGrantUnavailableError("503")).toBe(false);
+	});
+});
+
+describe("sandbox access", () => {
+	test("access tokens have the shape of a web grant", () => {
+		expect(isWebWidgetAccess("a-_.b.c")).toBe(true);
+		expect(isWebWidgetAccess(`${"a".repeat(2044)}.b.c`)).toBe(true);
+		expect(isWebWidgetAccess(`${"a".repeat(2045)}.b.c`)).toBe(false);
+		expect(isWebWidgetAccess("0f".repeat(32))).toBe(false);
+		expect(isWebWidgetAccess("a.b/../c.d")).toBe(false);
+	});
+
+	test("access responses are validated", () => {
+		expect(parseWidgetAccessResponse({ access: null, expiresIn: 0 })).toEqual({
+			access: null,
+			expiresIn: 0,
+		});
+		expect(
+			parseWidgetAccessResponse({ access: "a.b.c", expiresIn: 43_200 }),
+		).toEqual({ access: "a.b.c", expiresIn: 43_200 });
+		expect(() => parseWidgetAccessResponse("a.b.c")).toThrow(/not an object/);
+		for (const access of [
+			undefined,
+			"",
+			"a.b",
+			"a.b.c~d",
+			"0f".repeat(32),
+			1,
+		]) {
+			expect(() =>
+				parseWidgetAccessResponse({ access, expiresIn: 60 }),
+			).toThrow(/malformed access token/);
+		}
+		for (const expiresIn of [-1, Number.NaN, "60", undefined]) {
+			expect(() =>
+				parseWidgetAccessResponse({ access: "a.b.c", expiresIn }),
+			).toThrow(/expiresIn/);
+		}
+	});
+
+	test("only a route the API lacks counts as an API without access tokens", () => {
+		expect(
+			isWidgetAccessUnsupportedError(
+				new ApiResponseError({ status: 405, message: "Method Not Allowed" }),
+			),
+		).toBe(true);
+		expect(
+			isWidgetAccessUnsupportedError(
+				new ApiResponseError({ status: 404, message: "Not Found" }),
+			),
+		).toBe(true);
+		expect(
+			isWidgetAccessUnsupportedError(
+				new ApiResponseError({
+					status: 404,
+					code: "NOT_FOUND",
+					message: "Package not found",
+				}),
+			),
+		).toBe(false);
+		expect(
+			isWidgetAccessUnsupportedError(
+				new ApiResponseError({ status: 403, message: "Forbidden" }),
+			),
+		).toBe(false);
+		expect(isWidgetAccessUnsupportedError("404")).toBe(false);
+	});
+
+	test("only a verdict of the API counts as refused access", () => {
+		expect(
+			isWidgetAccessRefusedError(
+				new ApiResponseError({
+					status: 403,
+					code: "FORBIDDEN",
+					message: "Forbidden",
+				}),
+			),
+		).toBe(true);
+		expect(isWidgetAccessRefusedError({ status: 403 })).toBe(true);
+		expect(
+			isWidgetAccessRefusedError(
+				new ApiResponseError({
+					status: 404,
+					code: "NOT_FOUND",
+					message: "Package not found",
+				}),
+			),
+		).toBe(true);
+		expect(
+			isWidgetAccessRefusedError(
+				new ApiResponseError({ status: 404, message: "Not Found" }),
+			),
+		).toBe(false);
+		for (const status of [401, 408, 429, 500, 502, 503, 504]) {
+			expect(
+				isWidgetAccessRefusedError(
+					new ApiResponseError({ status, code: "ERROR", message: "failed" }),
+				),
+			).toBe(false);
+		}
+		expect(isWidgetAccessRefusedError(new TypeError("Failed to fetch"))).toBe(
+			false,
+		);
+		expect(isWidgetAccessRefusedError("403 Forbidden")).toBe(false);
+		expect(isWidgetAccessRefusedError(undefined)).toBe(false);
 	});
 });
 

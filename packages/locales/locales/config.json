@@ -11,7 +11,8 @@
 		"interfaces",
 		"admin",
 		"audit",
-		"payments"
+		"payments",
+		"devices"
 	],
 	"languages": ["de", "en", "es", "fr", "ja", "ko", "pl", "pt-BR", "zh"]
 }

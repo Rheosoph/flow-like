@@ -4092,6 +4092,7 @@ function FlowPilotImpl({
 								components={pendingComponents}
 								canvasSettings={pendingCanvasSettings}
 								warnings={validationWarnings}
+								appId={activeAppId}
 								onApply={handleApplyComponents}
 								onDismiss={handleDismissComponents}
 							/>

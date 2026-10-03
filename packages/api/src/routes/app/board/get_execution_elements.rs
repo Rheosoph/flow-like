@@ -42,7 +42,8 @@ pub struct GetExecutionElementsResponse {
     ),
     responses(
         (status = 200, description = "Execution elements for the page", body = GetExecutionElementsResponse),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Board or requested board version not found")
     )
 )]
 #[tracing::instrument(

@@ -52,6 +52,7 @@ pub mod egress;
 pub mod internal_node;
 pub mod internal_pin;
 pub mod log;
+mod log_flush_policy;
 #[cfg(feature = "flow-runtime")]
 pub mod log_query;
 pub mod log_summary;
@@ -62,12 +63,12 @@ pub mod service;
 pub mod trace;
 pub mod user_context;
 
+use log_flush_policy::LogFlushPolicy;
+pub use log_flush_policy::{DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD, DEFAULT_RUN_LOG_FLUSH_INTERVAL};
 pub use user_context::{ExecutionPrincipal, LOCAL_USER_SUB, RoleContext, UserExecutionContext};
 
 const USE_DEPENDENCY_GRAPH: bool = false;
 const RUN_LOCK_TIMEOUT: Duration = Duration::from_secs(3);
-pub const DEFAULT_RUN_LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
-pub const DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD: usize = 500;
 
 async fn wait_for_flush_tick_or_cancel(
     interval: &mut flow_like_types::tokio::time::Interval,
@@ -395,6 +396,7 @@ pub struct Run {
     pub logs: u64,
     pub stream_state: bool,
     pub log_spill_threshold: usize,
+    pub log_flush_interval: Duration,
     pub nodes_executed: Arc<AtomicU64>,
     /// Shadow/replay isolation: app storage, user store and app meta store are
     /// wrapped read-only for every context built from this run.
@@ -1198,6 +1200,7 @@ impl InternalRun {
             payload.payload.as_ref(),
         )));
         let resources = Arc::new(resources::RunResources::default());
+        let log_flush_policy = LogFlushPolicy::from_env();
         let run = Run {
             executor_payment_auth: None,
             executor_api_auth: None,
@@ -1218,7 +1221,8 @@ impl InternalRun {
             log_initialized: false,
             logs: 0,
             stream_state,
-            log_spill_threshold: DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
+            log_spill_threshold: log_flush_policy.spill_threshold,
+            log_flush_interval: log_flush_policy.interval,
             nodes_executed: nodes_executed.clone(),
             shadow: false,
 
@@ -1406,7 +1410,7 @@ impl InternalRun {
             channel,
             resource_owner: Arc::new(resources::RunResourceOwner(resources.clone())),
             has_node_errors: Arc::new(AtomicBool::new(false)),
-            log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
+            log_flush_interval: log_flush_policy.interval,
             cancellation_token: None,
             cancellation_log_level: LogLevel::Fatal,
             cancellation_log_message: "Run cancelled".to_string(),
@@ -1427,8 +1431,8 @@ impl InternalRun {
                 // host functions must not fail open by omission.
                 environment: handler.execution_environment,
                 execution_mode,
-                log_spill_threshold: DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
-                log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
+                log_spill_threshold: log_flush_policy.spill_threshold,
+                log_flush_interval: log_flush_policy.interval,
                 nodes_executed,
                 elements,
                 resources,
@@ -1443,18 +1447,19 @@ impl InternalRun {
         flush_interval: Duration,
         spill_threshold: usize,
     ) -> flow_like_types::Result<()> {
-        self.log_flush_interval = if flush_interval.is_zero() {
+        let flush_interval = if flush_interval.is_zero() {
             DEFAULT_RUN_LOG_FLUSH_INTERVAL
         } else {
             flush_interval
         };
 
         let spill_threshold = spill_threshold.max(1);
-        self.meta.log_spill_threshold = spill_threshold;
-        self.meta.log_flush_interval = self.log_flush_interval;
-
         let mut run = lock_with_timeout(self.run.as_ref(), "set_log_flush_policy").await?;
         run.log_spill_threshold = spill_threshold;
+        run.log_flush_interval = flush_interval;
+        self.log_flush_interval = flush_interval;
+        self.meta.log_spill_threshold = spill_threshold;
+        self.meta.log_flush_interval = self.log_flush_interval;
 
         Ok(())
     }
@@ -3365,6 +3370,78 @@ mod tests {
                 .log_table
                 .get()
                 .expect("flush caches the log table")
+        }
+
+        #[tokio::test]
+        async fn explicit_log_flush_policy_overrides_defaults_for_every_context_path() {
+            let (_state, mut run) = run_with_log_db(Arc::new(AtomicUsize::new(0))).await;
+            run.set_log_flush_policy(Duration::from_secs(30), 250)
+                .await
+                .unwrap();
+
+            assert_eq!(run.log_flush_interval, Duration::from_secs(30));
+            assert_eq!(run.meta.log_flush_interval, Duration::from_secs(30));
+            assert_eq!(run.meta.log_spill_threshold, 250);
+            {
+                let shared = run.run.lock().await;
+                assert_eq!(shared.log_flush_interval, Duration::from_secs(30));
+                assert_eq!(shared.log_spill_threshold, 250);
+            }
+
+            run.set_log_flush_policy(Duration::ZERO, 0).await.unwrap();
+            assert_eq!(run.meta.log_flush_interval, DEFAULT_RUN_LOG_FLUSH_INTERVAL);
+            assert_eq!(run.meta.log_spill_threshold, 1);
+            let shared = run.run.lock().await;
+            assert_eq!(shared.log_flush_interval, DEFAULT_RUN_LOG_FLUSH_INTERVAL);
+            assert_eq!(shared.log_spill_threshold, 1);
+        }
+
+        #[tokio::test]
+        async fn final_flush_keeps_short_run_and_error_logs_below_the_batch_threshold() {
+            for failed in [false, true] {
+                let (_state, mut run) = run_with_log_db(Arc::new(AtomicUsize::new(0))).await;
+                run.set_log_flush_policy(Duration::from_secs(60), 500)
+                    .await
+                    .unwrap();
+                let prepared = {
+                    let mut shared = run.run.lock().await;
+                    shared.status = if failed {
+                        RunStatus::Failed
+                    } else {
+                        RunStatus::Success
+                    };
+                    shared.push_node_log("node", None, "final diagnostic", LogLevel::Error);
+                    shared.prepare_flush(true).unwrap().unwrap()
+                };
+                assert_eq!(prepared.arrow_batch.num_rows(), 1);
+                assert_eq!(prepared.meta.as_ref().unwrap().logs, Some(1));
+                assert_eq!(matches!(run.get_status().await, RunStatus::Failed), failed);
+                prepared.write().await.unwrap();
+                assert_eq!(cached_table(&run).await.count_rows(None).await.unwrap(), 1);
+            }
+        }
+
+        #[tokio::test]
+        async fn cancellation_flush_does_not_wait_for_the_configured_interval() {
+            let (_state, mut run) = run_with_log_db(Arc::new(AtomicUsize::new(0))).await;
+            run.set_log_flush_policy(Duration::from_secs(60), 500)
+                .await
+                .unwrap();
+            run.run
+                .lock()
+                .await
+                .push_node_log("node", None, "tail", LogLevel::Info);
+            let meta = flow_like_types::tokio::time::timeout(
+                Duration::from_secs(5),
+                run.flush_logs_cancelled(),
+            )
+            .await
+            .expect("cancellation must not wait for the 60-second interval")
+            .unwrap()
+            .unwrap();
+            assert_eq!(meta.logs, Some(2));
+            assert!(matches!(run.get_status().await, RunStatus::Stopped));
+            assert_eq!(cached_table(&run).await.count_rows(None).await.unwrap(), 2);
         }
 
         #[tokio::test]

@@ -9,8 +9,20 @@ model ManagedDevice {
   receipt      String
   registeredAt BigInt
   lastSeenAt   BigInt?
+  revokedAt    BigInt?
+  displayName  String?
 
   @@index([ownerId, status])
+}
+
+/// Last attributable authentication rejection per device. Overwritten, never a log.
+model DeviceAuthRejection {
+  deviceId    String  @id
+  code        String
+  skewSeconds BigInt?
+  count       BigInt  @default(1)
+  firstAt     BigInt
+  lastAt      BigInt
 }
 
 /// The exact unsigned manifest template is immutable after the JWT is issued.
@@ -134,6 +146,27 @@ model InstanceUsageAdmission {
 
   @@index([billingGrantId, status])
   @@index([instanceId, createdAt])
+}
+
+/// Where an app's schedule runs when it is not the hub. At most one row per event.
+model DeviceScheduleClaim {
+  appId       String
+  eventId     String
+  /// The service a person released the schedule to. Both null once handed back.
+  deviceId    String?
+  placementId String?
+  releasedBy  String?
+  releasedAt  BigInt?
+  /// The approval whose device runs it now. Null while released but not claimed.
+  grantId     String?
+  claimedAt   BigInt?
+  /// The device's last claim or confirmation.
+  seenAt      BigInt?
+  /// Set on a hand-back: the hub fires again after it.
+  resumeAt    BigInt?
+
+  @@id([appId, eventId])
+  @@index([grantId])
 }
 
 /// A retained attempt is never dispatched again after an uncertain cloud outcome.

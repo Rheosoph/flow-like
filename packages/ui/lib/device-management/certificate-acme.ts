@@ -5,6 +5,25 @@ const id = z.string().uuid();
 const revision = z.number().int().nonnegative().safe();
 const timestamp = z.number().int().safe();
 const environment = z.enum(["lets_encrypt_staging", "lets_encrypt_production"]);
+export const CERTIFICATE_ERROR_CATEGORIES = [
+	"dns",
+	"port_bind",
+	"rate_limited",
+	"ca_rejected",
+	"authority_expired",
+	"network",
+	"internal",
+] as const;
+export type CertificateErrorCategory =
+	(typeof CERTIFICATE_ERROR_CATEGORIES)[number];
+/** BG27: attached by agents with `acme_failure_detail`; absent or malformed reads as unknown. */
+export const certificateFailureFields = {
+	failures: z.number().int().nonnegative().safe().optional().catch(undefined),
+	error_category: z
+		.enum(CERTIFICATE_ERROR_CATEGORIES)
+		.optional()
+		.catch(undefined),
+};
 export const acmeCertificateSchema = z.object({
 	certificate_id: id,
 	label: z.string().min(1).max(128),
@@ -15,6 +34,7 @@ export const acmeCertificateSchema = z.object({
 	next_attempt_at: timestamp,
 	last_renewed_at: timestamp.nullable(),
 	last_error: z.string().max(4096).nullable(),
+	...certificateFailureFields,
 });
 export type AcmeCertificate = z.infer<typeof acmeCertificateSchema>;
 export interface ConfigureAcmeCertificate {

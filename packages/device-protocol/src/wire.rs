@@ -1,4 +1,6 @@
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 use crate::{Ed25519PublicKey, ProtocolError, Result};
 
@@ -45,7 +47,23 @@ impl DeviceIdentity {
         validate_management_key(&self.management_key)?;
         Ok(())
     }
+
+    /// Human-comparable identity: the first 16 base64url characters of a domain-separated
+    /// SHA-256 over the three raw public keys. The UI computes the same value.
+    pub fn fingerprint(&self) -> Result<String> {
+        let mut hasher = Sha256::new();
+        hasher.update(IDENTITY_FINGERPRINT_DOMAIN);
+        hasher.update(self.auth_key.to_bytes()?);
+        hasher.update(self.telemetry_key.to_bytes()?);
+        hasher.update(self.management_key);
+        let mut encoded = URL_SAFE_NO_PAD.encode(hasher.finalize());
+        encoded.truncate(IDENTITY_FINGERPRINT_CHARS);
+        Ok(encoded)
+    }
 }
+
+const IDENTITY_FINGERPRINT_DOMAIN: &[u8] = b"flow-like-device-identity-v1";
+const IDENTITY_FINGERPRINT_CHARS: usize = 16;
 
 /// A public test scalar detects low-order inputs without handling any private key.
 pub fn validate_management_key(key: &[u8; 32]) -> Result<()> {
@@ -213,4 +231,53 @@ pub struct DeviceStatus {
     pub registered_at: i64,
     pub last_seen_at: Option<i64>,
     pub auth_epoch: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SigningKey;
+
+    #[derive(Deserialize)]
+    struct FingerprintVector {
+        identity: DeviceIdentity,
+        fingerprint: String,
+    }
+
+    #[test]
+    fn identity_fingerprint_matches_shared_vector() {
+        let vector: FingerprintVector =
+            serde_json::from_str(include_str!("../fixtures/identity-fingerprint.json")).unwrap();
+        vector.identity.validate().unwrap();
+        assert_eq!(vector.identity.fingerprint().unwrap(), vector.fingerprint);
+        assert_eq!(vector.fingerprint.len(), IDENTITY_FINGERPRINT_CHARS);
+
+        let derived = DeviceIdentity {
+            auth_key: SigningKey::from_bytes(&[1; 32]).public_key(),
+            management_key: x25519_dalek::x25519([3; 32], x25519_dalek::X25519_BASEPOINT_BYTES),
+            telemetry_key: SigningKey::from_bytes(&[2; 32]).public_key(),
+        };
+        assert_eq!(derived, vector.identity);
+    }
+
+    #[test]
+    fn identity_fingerprint_binds_every_key() {
+        let identity = DeviceIdentity {
+            auth_key: SigningKey::from_bytes(&[1; 32]).public_key(),
+            management_key: x25519_dalek::x25519([3; 32], x25519_dalek::X25519_BASEPOINT_BYTES),
+            telemetry_key: SigningKey::from_bytes(&[2; 32]).public_key(),
+        };
+        let original = identity.fingerprint().unwrap();
+        let swapped = DeviceIdentity {
+            auth_key: identity.telemetry_key.clone(),
+            telemetry_key: identity.auth_key.clone(),
+            ..identity.clone()
+        };
+        let other_management = DeviceIdentity {
+            management_key: x25519_dalek::x25519([4; 32], x25519_dalek::X25519_BASEPOINT_BYTES),
+            ..identity.clone()
+        };
+        assert_ne!(swapped.fingerprint().unwrap(), original);
+        assert_ne!(other_management.fingerprint().unwrap(), original);
+    }
 }

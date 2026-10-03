@@ -344,6 +344,28 @@ async fn package_recovery_session_renewal_and_revocation() {
         enrollment::recover_registration(&target).await.unwrap(),
         receipt
     );
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_flow-like-standalone"))
+        .current_dir(temp.path())
+        .env_remove("FLOW_LIKE_STANDALONE_STATE_DIR")
+        .arg("--state-dir")
+        .arg(&target)
+        .arg("status")
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(
+        status["identity"],
+        serde_json::json!({
+            "fingerprint": receipt.identity.fingerprint().unwrap(),
+            "auth_key": receipt.identity.auth_key.thumbprint().unwrap(),
+            "telemetry_key": receipt.identity.telemetry_key.thumbprint().unwrap(),
+        })
+    );
     let session = Arc::new(DeviceSession::load(&target).unwrap().unwrap());
     let heartbeat = DeviceHeartbeat {
         version: 1,

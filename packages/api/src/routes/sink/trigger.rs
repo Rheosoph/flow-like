@@ -17,6 +17,7 @@ use crate::{
         collect_generic_result, collect_generic_result_bytes, is_jwt_configured, rejection,
         resolve_wasm_packages, sign_execution_jwt, variant,
     },
+    instances::schedules::{BOT_EVENT_TYPES, CLAIMED_EVENT_TYPES},
     routes::app::events::db::get_event_from_db,
     state::AppState,
 };
@@ -1374,7 +1375,7 @@ pub struct TelegramQueryParams {
         ("secret_token" = Option<String>, Query, description = "Telegram secret token")
     ),
     responses(
-        (status = 200, description = "Webhook received and processing", body = TriggerResponse),
+        (status = 200, description = "Webhook received and processing, or, with `triggered: false` and no run, left to the device that runs this bot", body = TriggerResponse),
         (status = 401, description = "Invalid or missing secret token"),
         (status = 403, description = "Request not from Telegram servers"),
         (status = 404, description = "Webhook not found or inactive")
@@ -1469,6 +1470,15 @@ pub async fn trigger_telegram(
             )
                 .into_response());
         }
+    }
+
+    if bot_on_device(&state, &sink).await? {
+        tracing::info!(
+            event_id = %event_id,
+            app_id = %sink.app_id,
+            "Telegram webhook: a device runs this bot, not dispatched"
+        );
+        return Ok(telegram_runs_on_device());
     }
 
     // Parse body (Telegram sends JSON)
@@ -1746,7 +1756,7 @@ fn verify_discord_signature(
         ("event_id" = String, Path, description = "Event ID")
     ),
     responses(
-        (status = 200, description = "Interaction processed"),
+        (status = 200, description = "Interaction processed. While a device runs this bot, a command gets a notice only its sender sees and starts no run."),
         (status = 401, description = "Invalid signature"),
         (status = 404, description = "Webhook not found or inactive")
     )
@@ -1855,6 +1865,15 @@ pub async fn trigger_discord(
             })),
         )
             .into_response());
+    }
+
+    if bot_on_device(&state, &sink).await? {
+        tracing::info!(
+            event_id = %event_id,
+            app_id = %sink.app_id,
+            "Discord interaction: a device runs this bot, not dispatched"
+        );
+        return Ok(discord_runs_on_device());
     }
 
     // For other interaction types (commands, components, etc.), dispatch async
@@ -2094,6 +2113,10 @@ pub struct ServiceTriggerResponse {
     /// unknown to this replica.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub duplicate: bool,
+    /// Why the trigger was accepted without a run. `runs_on_device`: a device runs this
+    /// schedule or bot, or ran it until a moment ago, so the hub leaves it to the device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
 }
 
 impl ServiceTriggerResponse {
@@ -2103,8 +2126,130 @@ impl ServiceTriggerResponse {
             run_id: None,
             error: None,
             duplicate: true,
+            skipped: None,
         }
     }
+
+    /// Success without a run: schedulers keep the schedule and do not retry.
+    fn runs_on_device() -> Self {
+        Self {
+            success: true,
+            run_id: None,
+            error: None,
+            duplicate: false,
+            skipped: Some(SKIPPED_RUNS_ON_DEVICE.to_owned()),
+        }
+    }
+}
+
+const SKIPPED_RUNS_ON_DEVICE: &str = "runs_on_device";
+
+/// The occurrence a scheduler says it is firing, in Unix seconds. The minute-tick schedulers
+/// send it and replay late occurrences; the others send none and fire on time or not at all.
+fn scheduled_occurrence(payload: Option<&serde_json::Value>) -> Option<i64> {
+    let scheduled_for = payload?.get("scheduled_for")?.as_str()?;
+    chrono::DateTime::parse_from_rfc3339(scheduled_for)
+        .ok()
+        .map(|occurrence| occurrence.timestamp())
+}
+
+/// Whether the hub leaves this fire to a device. Only a schedule or a bot can be handed to one,
+/// so no other sink type is ever looked up, and only a schedule names the time it fires for.
+async fn left_to_device(
+    db: &sea_orm::DatabaseConnection,
+    dialect: crate::db::DbDialect,
+    sink_type: &str,
+    app_id: &str,
+    event_id: &str,
+    payload: Option<&serde_json::Value>,
+) -> Result<bool, ApiError> {
+    if !CLAIMED_EVENT_TYPES.contains(&sink_type) {
+        return Ok(false);
+    }
+    let scheduled = if sink_type == "cron" {
+        scheduled_occurrence(payload)
+    } else {
+        None
+    };
+    crate::instances::schedules::runs_on_device(
+        db,
+        dialect,
+        app_id,
+        event_id,
+        scheduled,
+        chrono::Utc::now().timestamp(),
+    )
+    .await
+}
+
+/// Whether a device holds the bot of this sink, or held it until a moment ago. Each door asks
+/// only after its own checks, so a caller it would turn away learns nothing about where the bot
+/// runs.
+async fn bot_on_device(state: &AppState, sink: &event_sink::Model) -> Result<bool, ApiError> {
+    left_to_device(
+        &state.db,
+        state.db_dialect,
+        &sink.sink_type,
+        &sink.app_id,
+        &sink.event_id,
+        None,
+    )
+    .await
+}
+
+/// Telegram's answer while a device holds the bot: a success, because Telegram delivers an
+/// update again after any other status, and no run.
+fn telegram_runs_on_device() -> Response {
+    (
+        StatusCode::OK,
+        Json(TriggerResponse {
+            triggered: false,
+            run_id: None,
+            message: "This bot runs on a device".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+/// Discord's answer to a command while a device holds the bot: a message only its sender sees
+/// (response type 4 with the ephemeral flag 64), and no run.
+fn discord_runs_on_device() -> Response {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "type": 4,
+            "data": {
+                "content": "This bot runs on a device and does not answer commands here.",
+                "flags": 64
+            }
+        })),
+    )
+        .into_response()
+}
+
+/// The listed sinks (event, app, type, active) without the bots a device runs, or whose grace
+/// period runs: one claim query for all of them, so no bot service connects such a bot a second
+/// time. Schedules stay listed, as in the schedule list: their schedulers keep ticking and are
+/// told to skip.
+pub(crate) async fn without_device_bots(
+    db: &sea_orm::DatabaseConnection,
+    sink_type: &str,
+    sinks: Vec<(String, String, String, bool)>,
+) -> Result<Vec<(String, String, String, bool)>, ApiError> {
+    if !BOT_EVENT_TYPES.contains(&sink_type) {
+        return Ok(sinks);
+    }
+    let events = sinks
+        .iter()
+        .map(|(event_id, app_id, ..)| (app_id.clone(), event_id.clone()))
+        .collect::<Vec<_>>();
+    let claimed =
+        crate::instances::schedules::claimed_events(db, &events, chrono::Utc::now().timestamp())
+            .await?;
+    Ok(sinks
+        .into_iter()
+        .filter(|(event_id, app_id, ..)| !claimed.contains(&(app_id.clone(), event_id.clone())))
+        .collect())
 }
 
 /// Platform-cache namespace holding one record per `Idempotency-Key`.
@@ -2494,6 +2639,28 @@ pub async fn trigger_service(
         )));
     }
 
+    // A schedule or bot a device runs is skipped with a success: schedulers keep ticking, so
+    // nothing is replayed once it returns to the hub. Never the 404 above, which makes the
+    // AWS scheduler delete the schedule.
+    if left_to_device(
+        &state.db,
+        state.db_dialect,
+        &sink.sink_type,
+        &sink.app_id,
+        &request.event_id,
+        request.payload.as_ref(),
+    )
+    .await?
+    {
+        tracing::info!(
+            event_id = %request.event_id,
+            app_id = %sink.app_id,
+            sink_type = %sink.sink_type,
+            "Service trigger: a device runs this schedule or bot, not dispatched"
+        );
+        return Ok(Json(ServiceTriggerResponse::runs_on_device()));
+    }
+
     // Get the event to access its config for additional payload
     let event = get_event_from_db(&state.db, &request.event_id, &sink.app_id)
         .await
@@ -2546,6 +2713,7 @@ pub async fn trigger_service(
             run_id: result.run_id,
             error: None,
             duplicate: false,
+            skipped: None,
         },
         // The run row already exists but was never dispatched; finalize it with
         // the reason instead of leaving it Pending until the sweeper times it
@@ -2567,6 +2735,7 @@ pub async fn trigger_service(
                 run_id: result.run_id,
                 error: Some(result.message),
                 duplicate: false,
+                skipped: None,
             }
         }
         Err(e) => {
@@ -2599,6 +2768,7 @@ pub async fn trigger_service(
                 run_id,
                 error: Some(reason),
                 duplicate: false,
+                skipped: None,
             }
         }
     };
@@ -2736,7 +2906,7 @@ pub struct SinkConfigsQuery {
         ("sink_type" = String, Query, description = "Sink type to filter by")
     ),
     responses(
-        (status = 200, description = "List of sink configs", body = Vec<SinkConfigInfo>),
+        (status = 200, description = "List of sink configs. A bot that a device runs, or ran until a moment ago, is left out.", body = Vec<SinkConfigInfo>),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Token not authorized for sink type")
     ),
@@ -2789,6 +2959,7 @@ pub async fn get_sink_configs(
         .all(&state.db)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Database error: {}", e)))?;
+    let sinks = without_device_bots(&state.db, &query.sink_type, sinks).await?;
 
     if sinks.is_empty() {
         return Ok(Json(Vec::new()));
@@ -2944,5 +3115,292 @@ mod tests {
             Some(TEST_SECRET),
             TEST_SECRET
         ));
+    }
+
+    /// Schedulers read a skipped fire as a success without a run: the AWS function deletes
+    /// its schedule only on the 404 "No active sink", and the others retry only a failure.
+    #[test]
+    fn a_schedule_a_device_runs_is_answered_as_a_success_without_a_run() {
+        assert_eq!(
+            serde_json::to_value(ServiceTriggerResponse::runs_on_device()).unwrap(),
+            serde_json::json!({"success": true, "run_id": null, "skipped": "runs_on_device"})
+        );
+        let dispatched = ServiceTriggerResponse {
+            success: true,
+            run_id: Some("run".into()),
+            error: None,
+            duplicate: false,
+            skipped: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&dispatched).unwrap(),
+            serde_json::json!({"success": true, "run_id": "run"}),
+            "a dispatched trigger answers as it did before"
+        );
+        let cached_by_an_older_replica: ServiceTriggerResponse =
+            serde_json::from_str(r#"{"success":true,"run_id":"run"}"#).unwrap();
+        assert_eq!(cached_by_an_older_replica.skipped, None);
+    }
+
+    #[test]
+    fn the_scheduled_time_is_taken_from_the_trigger_when_it_names_one() {
+        let payload = |value: serde_json::Value| serde_json::json!({ "scheduled_for": value });
+        assert_eq!(
+            scheduled_occurrence(Some(&payload("2026-10-02T02:00:00Z".into()))),
+            Some(1_790_906_400)
+        );
+        assert_eq!(
+            scheduled_occurrence(Some(&payload("2026-10-02T04:00:00+02:00".into()))),
+            Some(1_790_906_400)
+        );
+        for unreadable in [
+            payload("tomorrow".into()),
+            payload(1_790_906_400_i64.into()),
+            serde_json::json!({ "other": true }),
+            serde_json::json!("2026-10-02T02:00:00Z"),
+        ] {
+            assert_eq!(scheduled_occurrence(Some(&unreadable)), None);
+        }
+        assert_eq!(scheduled_occurrence(None), None);
+    }
+
+    #[tokio::test]
+    async fn only_schedules_and_bots_are_looked_up_and_an_unanswered_lookup_does_not_fire() {
+        let db = sea_orm::DatabaseConnection::default();
+        let dialect = crate::db::DbDialect::Postgres;
+        for sink_type in [
+            "http",
+            "api",
+            "quick_action",
+            "generic_form",
+            "webhook",
+            "user_mail",
+        ] {
+            assert!(
+                !left_to_device(&db, dialect, sink_type, "app", "event", None)
+                    .await
+                    .expect("no database is asked about a sink that is not a schedule or a bot")
+            );
+        }
+        for sink_type in ["cron", "telegram", "discord"] {
+            assert!(
+                left_to_device(&db, dialect, sink_type, "app", "event", None)
+                    .await
+                    .is_err(),
+                "a {sink_type} whose place cannot be read is not run"
+            );
+        }
+        assert_eq!(CLAIMED_EVENT_TYPES, ["cron", "telegram", "discord"]);
+    }
+
+    async fn answered(response: Response) -> (StatusCode, serde_json::Value) {
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    /// A non-2xx makes Telegram deliver the update again and Discord show a failure, so both
+    /// doors answer with a success that starts nothing.
+    #[tokio::test]
+    async fn a_bot_door_answers_without_a_run_while_a_device_holds_the_bot() {
+        assert_eq!(
+            answered(telegram_runs_on_device()).await,
+            (
+                StatusCode::OK,
+                serde_json::json!({"triggered":false,"run_id":null,"message":"This bot runs on a device"})
+            )
+        );
+        assert_eq!(
+            answered(discord_runs_on_device()).await,
+            (
+                StatusCode::OK,
+                serde_json::json!({"type":4,"data":{"content":"This bot runs on a device and does not answer commands here.","flags":64}})
+            )
+        );
+    }
+
+    /// The configs of other sink types are listed as before, without asking where anything
+    /// runs; a bot list whose claims cannot be read is not handed out.
+    #[tokio::test]
+    async fn only_a_bot_list_asks_which_bots_a_device_runs() {
+        let db = sea_orm::DatabaseConnection::default();
+        let sinks = vec![(
+            "event".to_owned(),
+            "app".to_owned(),
+            "cron".to_owned(),
+            true,
+        )];
+        for sink_type in ["cron", "http", "webhook"] {
+            assert_eq!(
+                without_device_bots(&db, sink_type, sinks.clone())
+                    .await
+                    .unwrap(),
+                sinks
+            );
+        }
+        for sink_type in BOT_EVENT_TYPES {
+            assert!(
+                without_device_bots(&db, sink_type, Vec::new())
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                without_device_bots(&db, sink_type, sinks.clone())
+                    .await
+                    .is_err(),
+                "{sink_type}"
+            );
+        }
+    }
+
+    /// The body of the handler `name` in this file.
+    fn handler<'a>(source: &'a str, name: &str) -> &'a str {
+        let body = source
+            .split_once(&format!("\npub async fn {name}("))
+            .unwrap_or_else(|| panic!("handler {name} exists"))
+            .1;
+        body.split_once("\n}\n").map_or(body, |(body, _)| body)
+    }
+
+    fn in_order(body: &str, name: &str, needles: &[&str]) {
+        let positions = needles
+            .iter()
+            .map(|needle| {
+                body.find(needle)
+                    .unwrap_or_else(|| panic!("{name} calls {needle}"))
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{name} must run {needles:?} in this order"
+        );
+    }
+
+    /// Each door asks where the bot runs only after the checks it makes today, so a caller it
+    /// turns away learns nothing about it, and before anything that starts a run. Discord's
+    /// PING is answered whoever holds the bot: Discord checks the address with it.
+    #[test]
+    fn each_bot_door_asks_after_its_own_checks_and_before_any_run() {
+        let source = include_str!("trigger.rs");
+        let telegram = handler(source, "trigger_telegram");
+        in_order(
+            telegram,
+            "trigger_telegram",
+            &[
+                "is_telegram_ip(&client_ip)",
+                "event_sink::Entity::find()",
+                "telegram_secret_matches(",
+                "if bot_on_device(&state, &sink).await? {",
+                "return Ok(telegram_runs_on_device());",
+                "axum::body::to_bytes(",
+                "create_id()",
+                "run.insert(&state.db)",
+                "dispatch_async(request)",
+            ],
+        );
+        let discord = handler(source, "trigger_discord");
+        in_order(
+            discord,
+            "trigger_discord",
+            &[
+                "event_sink::Entity::find()",
+                "verify_discord_signature(",
+                "if interaction_type == 1 {",
+                "\"type\": 1  // PONG",
+                "if bot_on_device(&state, &sink).await? {",
+                "return Ok(discord_runs_on_device());",
+                "create_id()",
+                "run.insert(&state.db)",
+                "dispatch_async(request)",
+            ],
+        );
+        for (name, body, answer) in [
+            (
+                "trigger_telegram",
+                telegram,
+                "return Ok(telegram_runs_on_device());",
+            ),
+            (
+                "trigger_discord",
+                discord,
+                "return Ok(discord_runs_on_device());",
+            ),
+        ] {
+            assert_eq!(body.matches("bot_on_device(").count(), 1, "{name}");
+            let check = body
+                .find("if bot_on_device(&state, &sink).await? {")
+                .unwrap();
+            let skip = &body[check..body.find(answer).unwrap()];
+            assert_eq!(
+                skip.matches(".await").count(),
+                1,
+                "{name}: a skip records and writes nothing"
+            );
+        }
+    }
+
+    /// The bot services' list leaves out what a device runs with one claim query for all
+    /// listed events, never a lookup per event, and before any event config is read.
+    #[test]
+    fn the_bot_list_asks_once_for_every_listed_event() {
+        let source = include_str!("trigger.rs");
+        let configs = handler(source, "get_sink_configs");
+        in_order(
+            configs,
+            "get_sink_configs",
+            &[
+                "validate_sink_trigger_jwt(",
+                "event_sink::Entity::find()",
+                "without_device_bots(&state.db, &query.sink_type, sinks)",
+                "event::Entity::find()",
+            ],
+        );
+        for lookup in ["runs_on_device(", "left_to_device(", "bot_on_device("] {
+            assert!(!configs.contains(lookup), "{lookup}");
+        }
+        let filter = source
+            .split_once("\npub(crate) async fn without_device_bots(")
+            .expect("the filter exists")
+            .1;
+        let filter = filter.split_once("\n}\n").map_or(filter, |(body, _)| body);
+        assert_eq!(filter.matches("claimed_events(").count(), 1);
+        assert!(!filter.contains("for ") && !filter.contains("runs_on_device("));
+    }
+
+    /// The schedulers keep ticking for a schedule a device runs and are told to skip, so
+    /// nothing is replayed once it returns to the hub. The skip comes before the event is
+    /// read, before any idempotency claim and before any dispatch.
+    #[test]
+    fn the_schedule_list_keeps_a_claimed_schedule_and_a_skip_precedes_any_dispatch() {
+        let source = include_str!("trigger.rs");
+        let listing = source
+            .split_once("\npub async fn get_cron_sinks(")
+            .expect("the schedule list exists")
+            .1;
+        let listing = listing
+            .split_once("\n}\n")
+            .map_or(listing, |(body, _)| body);
+        assert!(!listing.contains("left_to_device") && !listing.contains("runs_on_device"));
+        let funnel = source
+            .split_once("\npub async fn trigger_service(")
+            .expect("the funnel exists")
+            .1;
+        let funnel = funnel.split_once("\n}\n").map_or(funnel, |(body, _)| body);
+        let skip = funnel.find("left_to_device(").expect("the funnel asks");
+        for later in [
+            "get_event_from_db(",
+            "claim_trigger_idempotency(",
+            "trigger_event(",
+        ] {
+            assert!(skip < funnel.find(later).expect(later), "{later}");
+        }
+        let skipped = &funnel[skip..funnel.find("get_event_from_db(").unwrap()];
+        assert!(
+            !skipped.contains("record_trigger_rejection("),
+            "a skipped fire is no rejected run"
+        );
     }
 }

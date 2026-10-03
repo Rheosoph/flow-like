@@ -271,7 +271,12 @@ fn reader_bindings(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn bind_reader(connection: &Connection, scope: &str, endpoint_id: &str, relay: &str) -> Result<()> {
+pub(crate) fn bind_reader(
+    connection: &Connection,
+    scope: &str,
+    endpoint_id: &str,
+    relay: &str,
+) -> Result<()> {
     reader_bindings(connection)?;
     connection.execute(
         "INSERT INTO telemetry_reader_bindings(scope,endpoint_id,controller_key) VALUES(?1,?2,?3) ON CONFLICT(scope,endpoint_id) DO UPDATE SET controller_key=excluded.controller_key",
@@ -297,14 +302,50 @@ pub(crate) fn scope_covers(
     }
 }
 
-fn confirmed_readers(connection: &Connection, scope: &str) -> Result<Vec<String>> {
+/// Confirmed readers of a scope, each with the thumbprint of the controller key that
+/// relayed its delivery receipts.
+fn bound_readers(connection: &Connection, scope: &str) -> Result<Vec<(String, String)>> {
     reader_bindings(connection)?;
     Ok(connection
         .prepare(
-            "SELECT endpoint_id FROM telemetry_reader_bindings WHERE scope=?1 ORDER BY endpoint_id",
+            "SELECT endpoint_id,controller_key FROM telemetry_reader_bindings WHERE scope=?1 ORDER BY endpoint_id",
         )?
-        .query_map([scope], |row| row.get(0))?
+        .query_map([scope], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<Result<_, _>>()?)
+}
+
+/// Lists a scope's confirmed readers on the first roster chunk and, with `bindings`, the
+/// controller key that relayed each one's receipts. Returns the roster bytes that still
+/// fit the reply.
+fn attach_readers(
+    connection: &Connection,
+    scope: &str,
+    bindings: bool,
+    first: &mut Value,
+) -> Result<usize> {
+    let readers = bound_readers(connection, scope)?;
+    first["confirmed_readers"] = readers
+        .iter()
+        .map(|(endpoint, _)| endpoint.as_str())
+        .collect();
+    if bindings {
+        first["reader_bindings"] = readers
+            .iter()
+            .map(|(endpoint, key)| json!({"endpoint_id":endpoint,"controller_key_thumbprint":key}))
+            .collect();
+    }
+    first_chunk_bytes(first)
+}
+
+/// Roster bytes that still fit one encrypted reply next to the readers the first chunk carries.
+fn first_chunk_bytes(first: &Value) -> Result<usize> {
+    let room = (crate::crypto::noise::MAX_PLAINTEXT - 1024)
+        .saturating_sub(serde_json::to_vec(first)?.len());
+    ensure!(
+        room >= 4,
+        "Telemetry readers exceed the encrypted message limit"
+    );
+    Ok(room / 4 * 3)
 }
 
 /// Contract C6. A reader is bound to the controller key of the management
@@ -489,11 +530,14 @@ pub fn read(
     )
 }
 
+/// The first chunk lists the confirmed readers and, with `bindings` (the device owner),
+/// which controller key relayed each one's receipts. It shrinks to leave them room.
 pub fn read_roster(
     root: &Path,
     scope: &str,
     offset: u32,
     limit: u32,
+    bindings: bool,
     guard: SqliteTransactionGuard,
 ) -> Result<Value> {
     validate_management_id(scope)?;
@@ -514,11 +558,13 @@ pub fn read_roster(
         offset as usize <= bytes.len(),
         "Invalid roster chunk offset"
     );
-    let end = (offset as usize + limit as usize).min(bytes.len());
-    let mut result = json!({"available":true,"offset":offset,"total":bytes.len(),"digest":compact_digest(&compact),"chunk":URL_SAFE_NO_PAD.encode(&bytes[offset as usize..end])});
+    let mut result = json!({"available":true,"offset":offset,"total":bytes.len(),"digest":compact_digest(&compact)});
+    let mut limit = limit as usize;
     if offset == 0 {
-        result["confirmed_readers"] = json!(confirmed_readers(&transaction, scope)?);
+        limit = limit.min(attach_readers(&transaction, scope, bindings, &mut result)?);
     }
+    let end = (offset as usize + limit).min(bytes.len());
+    result["chunk"] = json!(URL_SAFE_NO_PAD.encode(&bytes[offset as usize..end]));
     guard(&transaction)?;
     transaction.commit()?;
     Ok(result)
@@ -640,6 +686,8 @@ pub async fn publish_live(
             .await
             .context("Encrypted telemetry publication pass panicked")
             .and_then(|result| result);
+        crate::diagnostics::global()
+            .report_error(crate::diagnostics::LIVE_TELEMETRY_PUBLISHER, &pass);
         match pass {
             Ok(()) => failures = 0,
             Err(error) => {
@@ -1004,14 +1052,7 @@ mod tests {
             &grantee.public_key(),
             Box::new(|_: &Connection| -> Result<()> { Ok(()) }),
         )?;
-        let first = read_roster(
-            &root,
-            "device",
-            0,
-            4096,
-            Box::new(|_: &Connection| -> Result<()> { Ok(()) }),
-        )?;
-        assert_eq!(first["confirmed_readers"], json!(["reader-endpoint"]));
+        assert_reader_binding(&root, &genesis, &grantee.public_key())?;
         let revoked = management(&owner, 2, Some(&granted), vec![], now)?;
         store.accept_management_policy(&revoked, &owner.public_key(), "device", now)?;
         let carried = sign_telemetry_roster(
@@ -1043,6 +1084,51 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(bindings, 0);
+        Ok(())
+    }
+
+    /// The first roster chunk names the confirmed reader, and only the owner's read says
+    /// which controller key relayed its receipts.
+    fn assert_reader_binding(root: &Path, roster: &str, relay: &Ed25519PublicKey) -> Result<()> {
+        let read = |bindings| {
+            read_roster(
+                root,
+                "device",
+                0,
+                4096,
+                bindings,
+                Box::new(|_: &Connection| -> Result<()> { Ok(()) }),
+            )
+        };
+        let shared = read(false)?;
+        assert_eq!(shared["confirmed_readers"], json!(["reader-endpoint"]));
+        assert!(shared.get("reader_bindings").is_none());
+        let owned = read(true)?;
+        assert_eq!(owned["confirmed_readers"], shared["confirmed_readers"]);
+        assert_eq!(
+            owned["reader_bindings"],
+            json!([{"endpoint_id":"reader-endpoint","controller_key_thumbprint":relay.thumbprint()?}])
+        );
+        assert_eq!(owned["chunk"], json!(URL_SAFE_NO_PAD.encode(roster)));
+        Ok(())
+    }
+
+    #[test]
+    fn the_first_roster_chunk_leaves_room_for_a_full_reader_list() -> Result<()> {
+        let limit = crate::crypto::noise::MAX_PLAINTEXT - 1024;
+        let readers: Vec<String> = (0..MAX_TELEMETRY_MEMBERS)
+            .map(|index| format!("{index:02}{}", "r".repeat(126)))
+            .collect();
+        let bindings: Vec<Value> = readers
+            .iter()
+            .map(|endpoint| json!({"endpoint_id":endpoint,"controller_key_thumbprint":"t".repeat(43)}))
+            .collect();
+        let first = json!({"available":true,"offset":0,"total":u32::MAX,"digest":"d".repeat(43),"confirmed_readers":readers,"reader_bindings":bindings});
+        let bytes = first_chunk_bytes(&first)?;
+        assert!((1..4096).contains(&bytes));
+        let chunk = URL_SAFE_NO_PAD.encode(vec![0; bytes]);
+        assert!(serde_json::to_vec(&first)?.len() + chunk.len() <= limit);
+        assert!(first_chunk_bytes(&json!({"confirmed_readers":"r".repeat(limit)})).is_err());
         Ok(())
     }
 

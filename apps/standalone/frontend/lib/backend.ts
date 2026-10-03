@@ -33,6 +33,27 @@ export interface Inventory {
 	project_id: string;
 	events: IEvent[];
 }
+
+const PERSON_STARTED = new Set(["quick_action", "generic_form"]);
+
+/** A quick action or form without a Page: the service runs it at `POST /run/{id}` (design R2 §4.5). */
+export function isPersonStarted(event: IEvent): boolean {
+	return !event.default_page_id && PERSON_STARTED.has(event.event_type);
+}
+
+/** The route and body of a run that is not a Page action: a chat message, or a form's fields. */
+function directRun(
+	event: IEvent,
+	payload: unknown,
+	trigger: unknown,
+): { path: string; body: unknown } {
+	const id = encodeURIComponent(event.id);
+	if (!trigger && isPersonStarted(event))
+		return { path: `/run/${id}`, body: payload ?? {} };
+	if (event.event_type !== "simple_chat" || trigger)
+		throw new Error("This event cannot run through this interface.");
+	return { path: `/chat/${id}`, body: payload };
+}
 export interface PageBootstrap {
 	project_id: string;
 	event_id: string;
@@ -164,10 +185,7 @@ export function createServiceBackend(
 					payload: payload.payload,
 				};
 			} else {
-				if (event.event_type !== "simple_chat" || trigger)
-					throw new Error("This event cannot run through this interface.");
-				path = `/chat/${encodeURIComponent(id)}`;
-				body = payload.payload;
+				({ path, body } = directRun(event, payload.payload, trigger));
 			}
 			const serialized = serializeServiceRequest(body);
 			const controller = new AbortController();

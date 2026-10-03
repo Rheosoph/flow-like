@@ -12,6 +12,10 @@ pub struct CompilerClaims {
     /// hashes, providers, or target definitions while retaining valid IDs.
     pub payload_hash: String,
     pub callback_url: String,
+    /// New jobs upload into a unique generation directory. Missing on tokens
+    /// issued before generation paths were introduced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_generation: Option<String>,
     #[serde(rename = "typ")]
     pub token_type: TokenType,
     pub iss: String,
@@ -30,6 +34,7 @@ pub struct CompilerJwtParams {
     pub version: String,
     pub payload_hash: String,
     pub callback_url: String,
+    pub artifact_generation: Option<String>,
     pub ttl_seconds: Option<i64>,
 }
 
@@ -43,6 +48,7 @@ pub fn sign(params: CompilerJwtParams) -> Result<String, BackendJwtError> {
         version: params.version,
         payload_hash: params.payload_hash,
         callback_url: params.callback_url,
+        artifact_generation: params.artifact_generation,
         token_type: TokenType::Compiler,
         iss: issuer().to_string(),
         aud: TokenType::Compiler.audience().to_string(),

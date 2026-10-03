@@ -34,6 +34,7 @@ pub struct TwoStepPublishRequest {
         (status = 400, description = "Invalid manifest or WASM binary"),
         (status = 401, description = "Authentication required"),
         (status = 403, description = "Not authorized to publish to this package"),
+        (status = 409, description = "This version already exists, or the package id differs from an existing one only in letter case"),
         (status = 503, description = "WASM registry not configured")
     ),
     security(("bearer_auth" = []))
@@ -81,6 +82,13 @@ pub async fn publish(
                 &request.manifest.id,
                 crate::permission::wasm_package_permission::WasmPackagePermission::Maintainer
             );
+        } else if let Some(taken) =
+            super::check_id::look_alike_id(&state.db, &request.manifest.id).await?
+        {
+            return Err(ApiError::conflict(format!(
+                "Package id '{}' differs from the existing '{}' only in letter case or a trailing dot. Choose another id.",
+                request.manifest.id, taken
+            )));
         }
     }
 

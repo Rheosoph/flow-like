@@ -28,6 +28,11 @@ export interface IHub {
 	/** Standalone device enrollment and inventory availability. */
 	standalone?: {
 		enabled: boolean;
+		max_devices_per_user?: number;
+		max_pending_enrollments_per_user?: number;
+		enrollment_ttl_seconds?: number;
+		/** Canonical public API base, including `/api/v1`. Defaults to the hub origin. */
+		api_base_url?: string | null;
 		telemetry_tiers?: Record<
 			string,
 			{ max_bytes: number; retention_seconds: number }

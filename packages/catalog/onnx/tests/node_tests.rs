@@ -400,14 +400,18 @@ mod node_metadata {
     }
 
     #[test]
-    fn laya_is_registered_with_one_model_directory() {
+    fn typed_decision_preserves_laya_identity_and_offers_all_model_weights() {
         let node = LayaNode::new().get_node();
         assert!(
             flow_like_catalog_onnx::get_catalog()
                 .iter()
                 .any(|logic| logic.get_node().name == node.name)
         );
-        assert_eq!(node.version, Some(2));
+        assert_eq!(node.name, "onnx_laya");
+        assert_eq!(node.friendly_name, "Typed Decision");
+        assert_eq!(node.flowscript_namespace(), "onnx");
+        assert_eq!(node.alias.as_deref(), Some("laya"));
+        assert_eq!(node.version, Some(3));
         assert!(
             pin(&node, "model_dir")
                 .schema
@@ -416,6 +420,30 @@ mod node_metadata {
                 .contains("FlowPath")
         );
         assert!(pin(&node, "model_dir").default_value.is_none());
+        assert_eq!(
+            serde_json::from_slice::<String>(pin(&node, "model").default_value.as_ref().unwrap())
+                .unwrap(),
+            "mizchi/laya-multilingual-onnx"
+        );
+        assert_eq!(
+            pin(&node, "model")
+                .options
+                .as_ref()
+                .unwrap()
+                .valid_values
+                .as_ref()
+                .unwrap(),
+            &[
+                "mizchi/laya-multilingual-onnx",
+                "fastino/GLiNER2.5-Decide",
+                "fastino/GLiNER2.5-multi-Decide",
+                "fastino/GLiNER2.5-Decide-1B",
+                "fastino/gliner2.5-multi-v1",
+                "fastino/gliner2.5-base-v1",
+                "fastino/gliner2.5-small-v1",
+                "custom",
+            ]
+        );
         for absent in [
             "weights",
             "tokenizer",
@@ -441,6 +469,98 @@ mod node_metadata {
                 .unwrap(),
             &["choice", "score", "noul"]
         );
+    }
+
+    #[tokio::test]
+    async fn decision_model_changes_preserve_mode_pins_and_validate_literals() {
+        let logic = LayaNode::new();
+        let board = laya_board();
+        let mut node = logic.get_node();
+        select_laya_mode(&mut node, "score");
+        logic.on_update(&mut node, &board).await;
+        let ids: std::collections::BTreeSet<_> = node.pins.keys().cloned().collect();
+        let models = pin(&node, "model")
+            .options
+            .as_ref()
+            .unwrap()
+            .valid_values
+            .clone()
+            .unwrap();
+        for model in models {
+            node.get_pin_mut_by_name("model")
+                .unwrap()
+                .set_default_value(Some(serde_json::json!(model)));
+            logic.on_update(&mut node, &board).await;
+            assert!(node.error.is_none(), "unexpected error for {model}");
+            assert_eq!(
+                node.pins
+                    .keys()
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                ids
+            );
+            assert!(node.get_pin_by_name("score").is_some());
+        }
+        node.get_pin_mut_by_name("model")
+            .unwrap()
+            .set_default_value(Some(serde_json::json!("unknown/model")));
+        logic.on_update(&mut node, &board).await;
+        assert!(node.error.as_ref().unwrap().contains("decision model"));
+        assert_eq!(
+            node.pins
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            ids
+        );
+        node.get_pin_mut_by_name("model")
+            .unwrap()
+            .depends_on
+            .insert("runtime-model".into());
+        logic.on_update(&mut node, &board).await;
+        assert!(node.error.is_none());
+        assert!(node.get_pin_by_name("score").is_some());
+    }
+
+    #[tokio::test]
+    async fn decision_catalog_update_defaults_existing_laya_nodes_without_changing_connections() {
+        let logic = LayaNode::new();
+        let board = laya_board();
+        let mut node = logic.get_node();
+        node.version = Some(2);
+        let model_id = pin(&node, "model").id.clone();
+        node.pins.remove(&model_id);
+        node.get_pin_mut_by_name("model_dir")
+            .unwrap()
+            .depends_on
+            .insert("cached-model".into());
+        node.get_pin_mut_by_name("choice")
+            .unwrap()
+            .connected_to
+            .insert("consumer".into());
+        let original_pins: Vec<_> = node
+            .pins
+            .values()
+            .map(|pin| (pin.name.clone(), pin.id.clone()))
+            .collect();
+        flow_like::flow::board::cleanup::sync_node_schema::sync_node_with_catalog(
+            &mut node,
+            &logic.get_node(),
+        );
+        logic.on_update(&mut node, &board).await;
+        assert_eq!(node.version, Some(3));
+        assert_eq!(node.friendly_name, "Typed Decision");
+        assert_eq!(
+            serde_json::from_slice::<String>(pin(&node, "model").default_value.as_ref().unwrap())
+                .unwrap(),
+            "mizchi/laya-multilingual-onnx"
+        );
+        for (name, id) in original_pins {
+            assert_eq!(pin(&node, &name).id, id);
+        }
+        assert!(pin(&node, "model_dir").depends_on.contains("cached-model"));
+        assert!(pin(&node, "choice").connected_to.contains("consumer"));
+        assert!(node.error.is_none());
     }
 
     #[tokio::test]
@@ -586,6 +706,8 @@ mod node_metadata {
         let board = laya_board();
         let mut node = logic.get_node();
         node.version = Some(1);
+        let model_id = pin(&node, "model").id.clone();
+        node.pins.remove(&model_id);
         let directory = node.get_pin_mut_by_name("model_dir").unwrap();
         let directory_id = directory.id.clone();
         directory.name = "cache_dir".into();
@@ -632,11 +754,12 @@ mod node_metadata {
             assert!(node.get_pin_by_name(name).is_none(), "unexpected {name}");
         }
         assert!(node.error.is_none());
-        assert_eq!(pin(&node, "text").index, 3);
-        assert_eq!(pin(&node, "instructions").index, 4);
-        assert_eq!(pin(&node, "question_type").index, 5);
-        assert_eq!(pin(&node, "false_description").index, 7);
-        assert_eq!(pin(&node, "true_description").index, 8);
+        assert_eq!(pin(&node, "model").index, 3);
+        assert_eq!(pin(&node, "text").index, 4);
+        assert_eq!(pin(&node, "instructions").index, 5);
+        assert_eq!(pin(&node, "question_type").index, 6);
+        assert_eq!(pin(&node, "false_description").index, 8);
+        assert_eq!(pin(&node, "true_description").index, 9);
         let expected = serde_json::to_value(&node).unwrap();
         logic.on_update(&mut node, &board).await;
         assert_eq!(serde_json::to_value(&node).unwrap(), expected);

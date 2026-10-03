@@ -301,6 +301,43 @@ describe("grant-aware frame URLs", () => {
 		}
 		expect(() => web(null, runtime)).toThrow(/malformed runtime component/);
 	});
+
+	test("an access token is its own segment after the version, for every grant form", () => {
+		const access = "eyJhbGciOiJFUzI1NiJ9.eyJwa2ciOiJ4In0.c2lnbmF0dXJl";
+		const runtime = "eyJ0aWxlVXJsIjpbImh0dHBzOi8vYS5leGFtcGxlLmNvbSJdfQ";
+		const web = (
+			grant: string | null,
+			parts: { runtime?: string | null; access?: string | null } = {},
+		) =>
+			buildWebMicroWidgetFramePath({
+				packageId: "com.example.maps",
+				packageVersion: "1.2.0",
+				widgetId: "live-map",
+				grant,
+				...parts,
+			});
+		expect(web(null, { access })).toBe(
+			`registry/package/com.example.maps/widget-sandbox/1.2.0/~${access}/frame/live-map/0`,
+		);
+		expect(web(WEB_GRANT, { runtime, access })).toBe(
+			`registry/package/com.example.maps/widget-sandbox/1.2.0/~${access}/frame/live-map/${WEB_GRANT}~${runtime}`,
+		);
+		expect(web(WEB_GRANT, { access: null })).toBe(web(WEB_GRANT));
+		expect(web(WEB_GRANT, { access: undefined })).not.toContain("~");
+		for (const malformed of [
+			"",
+			"0",
+			"a.b",
+			"a.b.c/../d",
+			"a.b.c?x=1",
+			`${access}~${runtime}`,
+			`${"a".repeat(2048)}.b.c`,
+		]) {
+			expect(() => web(WEB_GRANT, { access: malformed })).toThrow(
+				/malformed access token/,
+			);
+		}
+	});
 });
 
 describe("isMicroWidgetServingUrl", () => {
@@ -314,6 +351,8 @@ describe("isMicroWidgetServingUrl", () => {
 			"http://sub.flow-widget.localhost/x",
 			"http://FLOW-WIDGET.localhost./x",
 			"https://api.flow-like.com/api/v1/registry/package/com.example.maps/widget-sandbox/1.2.0/frame/live-map/0",
+			"https://api.flow-like.com/api/v1/registry/package/com.example.maps/widget-sandbox/1.2.0/~a.b.c/frame/live-map/0",
+			"https://api.flow-like.com/api/v1/registry/package/com.example.maps/widget-sandbox/1.2.0/~a.b.c/widgets/live-map/index.0.html",
 			"https://app.flow-like.com/api/v1/registry/package/com.example.maps/widget-asset/1.2.0/widgets/live-map/index.html",
 			"https://api.flow-like.com/api/v1/registry//package/x/widget-sandbox/1/frame/w/0",
 			"https://api.flow-like.com/api/v1/Registry/Package/x/Widget-Sandbox/1/frame/w/0",

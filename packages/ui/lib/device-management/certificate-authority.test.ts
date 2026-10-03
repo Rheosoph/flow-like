@@ -1,12 +1,15 @@
 import { expect, test } from "bun:test";
 import {
+	type CertificateAuthorityEnvelope,
+	MAX_AUTHORITY_BACKUP_BYTES,
 	authorityEnvelopeSchema,
 	certificateAuthorityBackup,
 	createLocalCertificateAuthority,
-	restoreCertificateAuthority,
-	signCertificateRequest,
 	renewLocalCertificateAuthority,
-	type CertificateAuthorityEnvelope,
+	restoreCertificateAuthority,
+	rewrapLocalCertificateAuthority,
+	signCertificateRequest,
+	testCertificateAuthorityPassword,
 } from "./certificate-authority";
 import { accountStorageKey } from "./storage";
 import type { DeviceCrypto } from "./types";
@@ -237,4 +240,81 @@ test("issuer renewal requires the matching offline root backup", async () => {
 	expect(() =>
 		authorityEnvelopeSchema.parse({ ...envelope, root_vault: [1] }),
 	).toThrow();
+});
+
+test("testing the authority password changes nothing and never says why it failed", async () => {
+	const seen: string[] = [];
+	const crypto = {
+		inspectCertificateAuthorityVault(
+			binding: string,
+			authorityId: string,
+			password: Uint8Array,
+			vault: Uint8Array,
+		) {
+			seen.push(`${binding === accountStorageKey(scope)} ${authorityId}`);
+			expect(vault).toBe(local.vault);
+			if (new TextDecoder().decode(password) !== "right")
+				throw new Error("-----BEGIN PRIVATE KEY-----SECRET");
+			return envelope.public_bundle;
+		},
+	} as unknown as DeviceCrypto;
+	expect(
+		await testCertificateAuthorityPassword(scope, local, "right", crypto),
+	).toBe(true);
+	expect(
+		await testCertificateAuthorityPassword(scope, local, "wrong", crypto),
+	).toBe(false);
+	expect(seen).toEqual([`true ${id}`, `true ${id}`]);
+});
+
+test("changing the authority password needs this authority's backup and seals both keys again", async () => {
+	const passwords: string[] = [];
+	const rewrapped = { ...envelope, vault: Array(80).fill(3) };
+	const crypto = {
+		rewrapCertificateAuthorityVault(
+			_binding: string,
+			_id: string,
+			current: Uint8Array,
+			next: Uint8Array,
+			vault: Uint8Array,
+			root: Uint8Array,
+		) {
+			passwords.push(
+				`${new TextDecoder().decode(current)}→${new TextDecoder().decode(next)}`,
+			);
+			expect(vault).toBe(local.vault);
+			expect([...root]).toEqual(envelope.root_vault);
+			if (new TextDecoder().decode(current) !== "old")
+				throw new Error("aead::Error");
+			return rewrapped;
+		},
+	} as unknown as DeviceCrypto;
+	const rewrap = (text: string, current = "old") =>
+		rewrapLocalCertificateAuthority(
+			scope,
+			local,
+			text,
+			{ current, next: "new" },
+			crypto,
+		);
+	expect(await rewrap(backup)).toEqual({ ok: true, envelope: rewrapped });
+	expect(await rewrap(backup, "typo")).toEqual({
+		ok: false,
+		reason: "password",
+	});
+	const other = JSON.stringify({
+		version: 1,
+		...envelope,
+		public_bundle: {
+			...envelope.public_bundle,
+			authority_id: "00000000-0000-4000-8000-000000000002",
+		},
+	});
+	for (const text of [
+		other,
+		"not json",
+		`${backup}${" ".repeat(MAX_AUTHORITY_BACKUP_BYTES)}`,
+	])
+		expect(await rewrap(text)).toEqual({ ok: false, reason: "backup" });
+	expect(passwords).toEqual(["old→new", "typo→new"]);
 });

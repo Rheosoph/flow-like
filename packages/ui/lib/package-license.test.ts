@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
 	isExpiredPin,
+	isWidgetsOnlyCopy,
 	licenseExpiresAt,
 	licenseTimeLeft,
 	packageNeedsLicense,
 	packagePinState,
+	usablePackagePins,
 } from "./package-license";
-import type { AppPackageLicense } from "./schema/wasm";
+import type { AppPackageLicense, PackageManifest } from "./schema/wasm";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -118,4 +120,84 @@ test("isExpiredPin only trusts the server status", () => {
 	expect(isExpiredPin({ license: license({ status: "expired" }) })).toBe(true);
 	expect(isExpiredPin({ license: license({ status: "lapsed" }) })).toBe(false);
 	expect(isExpiredPin({})).toBe(false);
+});
+
+test("isWidgetsOnlyCopy reads the registry's mark on the manifest", () => {
+	const copy = (manifest: unknown) => ({
+		manifest: manifest as PackageManifest,
+	});
+	expect(isWidgetsOnlyCopy(copy({ metadata: { nodes_withheld: true } }))).toBe(
+		true,
+	);
+	expect(
+		isWidgetsOnlyCopy(copy({ metadata: { nodes_withheld: "true" } })),
+	).toBe(false);
+	expect(isWidgetsOnlyCopy(copy({ metadata: {} }))).toBe(false);
+	expect(isWidgetsOnlyCopy(copy({}))).toBe(false);
+	expect(isWidgetsOnlyCopy(copy(undefined))).toBe(false);
+});
+
+describe("isWidgetsOnlyCopy of a marked manifest", () => {
+	const marked = (binary: Record<string, unknown>) => ({
+		manifest: {
+			metadata: { nodes_withheld: true },
+			...binary,
+		} as unknown as PackageManifest,
+	});
+
+	test.each(["wasm_path", "wasmPath", "wasm_hash", "wasmHash"])(
+		"a node binary named by %s makes it a full copy",
+		(field) => {
+			expect(isWidgetsOnlyCopy(marked({ [field]: "node.wasm" }))).toBe(false);
+			expect(isWidgetsOnlyCopy(marked({ [field]: "" }))).toBe(true);
+			expect(isWidgetsOnlyCopy(marked({ [field]: null }))).toBe(true);
+		},
+	);
+
+	test("the copy the desktop registry keeps for a widgets-only install counts", () => {
+		expect(
+			isWidgetsOnlyCopy(marked({ wasm_path: null, wasm_hash: null })),
+		).toBe(true);
+	});
+
+	test("a named binary without the mark stays a full copy", () => {
+		expect(
+			isWidgetsOnlyCopy({
+				manifest: {
+					metadata: {},
+					wasm_path: "node.wasm",
+				} as unknown as PackageManifest,
+			}),
+		).toBe(false);
+	});
+});
+
+describe("usablePackagePins", () => {
+	test("maps every pin to its version except the expired ones", () => {
+		expect(
+			usablePackagePins([
+				{ packageId: "pkg-old", version: "0.9.0" },
+				{
+					packageId: "pkg-active",
+					version: "1.0.0",
+					license: license({ status: "active" }),
+				},
+				{
+					packageId: "pkg-lapsed",
+					version: "2.0.0",
+					license: license({ status: "lapsed" }),
+				},
+				{
+					packageId: "pkg-expired",
+					version: "3.0.0",
+					license: license({ status: "expired" }),
+				},
+			]),
+		).toEqual({
+			"pkg-old": "0.9.0",
+			"pkg-active": "1.0.0",
+			"pkg-lapsed": "2.0.0",
+		});
+		expect(usablePackagePins([])).toEqual({});
+	});
 });

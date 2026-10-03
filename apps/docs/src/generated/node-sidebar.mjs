@@ -1133,7 +1133,7 @@ export const generatedNodeSidebar = [
                     "slug": "nodes/ai/ml/onnx/nlp/onnx-ner"
                   },
                   {
-                    "label": "Typed Decision (Laya)",
+                    "label": "Typed Decision",
                     "slug": "nodes/ai/ml/onnx/nlp/onnx-laya"
                   },
                   {

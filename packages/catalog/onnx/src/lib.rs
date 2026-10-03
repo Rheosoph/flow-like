@@ -12,7 +12,7 @@
 //! - Batch inference
 //! - Named Entity Recognition (NER)
 //! - Zero-shot NER (GLiNER)
-//! - Typed decisions (Laya)
+//! - Typed decisions (Laya and GLiNER2.5)
 
 extern crate flow_like_runtime as flow_like;
 

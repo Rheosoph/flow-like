@@ -1,6 +1,52 @@
 import type { IIntercomEvent } from "@flow-like/flow-like-ui/lib/schema/events/intercom-event";
 
 const MAX_FRAME = 10 * 1024 * 1024;
+const SERVICE_PATH =
+	/^\/(services|pages\/[A-Za-z0-9_.-]{1,128}\/(bootstrap|invoke)|(chat|run)\/[A-Za-z0-9_.-]{1,128})$/;
+
+const STATUS_ERRORS: Record<number, string> = {
+	401: "The service access token was rejected. Unlock the service again.",
+	413: "The request exceeds the service's size limit. Remove large attachments and try again.",
+	429: "This service is busy. Try again when the current request finishes.",
+};
+
+const isText = (name: unknown): name is string => typeof name === "string";
+const capName = (name: string) => name.slice(0, 64);
+
+/** The names a run through the service page was refused for, from the device's 400 answer. */
+async function refusedFields(response: Response) {
+	try {
+		const body = (await response.json()) as {
+			code?: unknown;
+			fields?: unknown;
+		};
+		if (body.code !== "invalid_fields" || !Array.isArray(body.fields))
+			return null;
+		return body.fields.filter(isText).map(capName);
+	} catch {
+		return null;
+	}
+}
+
+/** What a refused request says, without the service's own text. */
+async function requestError(response: Response) {
+	const known = STATUS_ERRORS[response.status];
+	if (known) return new Error(known);
+	const refused =
+		response.status === 400 ? await refusedFields(response) : null;
+	if (refused)
+		return new Error(
+			refused.length
+				? `The service refused these fields: ${refused.join(", ")}.`
+				: "The service refused this form's input.",
+		);
+	return new Error(
+		`The service could not complete this request (${response.status}).`,
+	);
+}
+
+const dotSegment = (part: string) => part === "." || part === "..";
+
 export function createServiceRequest(
 	token: string,
 	fetcher: typeof fetch = fetch,
@@ -8,12 +54,7 @@ export function createServiceRequest(
 	if (!/^[\x21-\x7e]{32,4096}$/.test(token))
 		throw new Error("Enter the service access token.");
 	return async (path: string, init: RequestInit = {}) => {
-		if (
-			!/^\/(services|pages\/[A-Za-z0-9_.-]{1,128}\/(bootstrap|invoke)|chat\/[A-Za-z0-9_.-]{1,128})$/.test(
-				path,
-			) ||
-			path.split("/").some((part) => part === "." || part === "..")
-		)
+		if (!SERVICE_PATH.test(path) || path.split("/").some(dotSegment))
 			throw new Error("Unsupported service endpoint.");
 		const headers = new Headers(init.headers);
 		headers.set("Authorization", `Bearer ${token}`);
@@ -25,23 +66,7 @@ export function createServiceRequest(
 			credentials: "omit",
 			redirect: "error",
 		});
-		if (!response.ok) {
-			if (response.status === 401)
-				throw new Error(
-					"The service access token was rejected. Unlock the service again.",
-				);
-			if (response.status === 413)
-				throw new Error(
-					"The request exceeds the service's size limit. Remove large attachments and try again.",
-				);
-			if (response.status === 429)
-				throw new Error(
-					"This service is busy. Try again when the current request finishes.",
-				);
-			throw new Error(
-				`The service could not complete this request (${response.status}).`,
-			);
-		}
+		if (!response.ok) throw await requestError(response);
 		return response;
 	};
 }

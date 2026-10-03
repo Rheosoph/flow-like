@@ -14,8 +14,47 @@ use serde::{Deserialize, Serialize};
 use {
     flow_like_types::{Cacheable, json::json},
     serenity::all::{ChannelId, GuildId, Http, MessageId, UserId},
-    std::{any::Any, sync::Arc},
+    std::{
+        any::Any,
+        collections::HashMap,
+        sync::{Arc, OnceLock, PoisonError, RwLock},
+    },
 };
+
+#[cfg(feature = "execute")]
+fn bot_credentials() -> &'static RwLock<HashMap<String, String>> {
+    static INSTANCE: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+    INSTANCE.get_or_init(Default::default)
+}
+
+/// Lets `handle` stand for `token` inside this process, so a run's payload carries the handle
+/// and never the token.
+#[cfg(feature = "execute")]
+pub fn register_bot_credential(handle: &str, token: &str) {
+    bot_credentials()
+        .write()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(handle.to_string(), token.to_string());
+}
+
+#[cfg(feature = "execute")]
+pub fn forget_bot_credential(handle: &str) {
+    bot_credentials()
+        .write()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(handle);
+}
+
+/// The token a registered handle stands for; any other value is returned unchanged.
+#[cfg(feature = "execute")]
+pub fn resolve(value: &str) -> String {
+    bot_credentials()
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(value)
+        .cloned()
+        .unwrap_or_else(|| value.to_string())
+}
 
 /// Discord user information
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -90,7 +129,7 @@ impl Cacheable for CachedDiscordClient {
 #[cfg(feature = "execute")]
 impl CachedDiscordClient {
     pub fn new(token: &str) -> Self {
-        let http = Arc::new(Http::new(token));
+        let http = Arc::new(Http::new(&resolve(token)));
         Self {
             http,
             bot_user_id: None,
@@ -98,7 +137,7 @@ impl CachedDiscordClient {
     }
 
     pub async fn with_bot_info(token: &str) -> flow_like_types::Result<Self> {
-        let http = Arc::new(Http::new(token));
+        let http = Arc::new(Http::new(&resolve(token)));
         let bot_info = http.get_current_user().await?;
         Ok(Self {
             http,
@@ -218,5 +257,50 @@ impl NodeLogic for ToDiscordSessionNode {
         Err(flow_like_types::anyhow!(
             "Discord functionality requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_handle_resolves_until_forgotten() {
+        let handle = "device-bot:evt_session_resolve";
+        register_bot_credential(handle, "first.token.value");
+        assert_eq!(resolve(handle), "first.token.value");
+
+        register_bot_credential(handle, "second.token.value");
+        assert_eq!(resolve(handle), "second.token.value");
+
+        forget_bot_credential(handle);
+        assert_eq!(resolve(handle), handle);
+    }
+
+    #[test]
+    fn session_values_that_are_no_handle_stay_unchanged() {
+        for value in [
+            "",
+            "MTA4.abc_def.ghi-jkl",
+            "device-bot:evt_never_registered",
+        ] {
+            assert_eq!(resolve(value), value);
+        }
+    }
+
+    #[test]
+    fn session_client_is_built_with_the_token_of_a_handle() {
+        let handle = "device-bot:evt_session_client";
+        register_bot_credential(handle, "client.token.value");
+        assert_eq!(
+            CachedDiscordClient::new(handle).http.token(),
+            "Bot client.token.value"
+        );
+
+        forget_bot_credential(handle);
+        assert_eq!(
+            CachedDiscordClient::new("plain.token.value").http.token(),
+            "Bot plain.token.value"
+        );
     }
 }

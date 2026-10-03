@@ -1,4 +1,8 @@
-import { type IProfile, isAzureBlobStorageUrl } from "@flow-like/flow-like-ui";
+import {
+	type IProfile,
+	type LessonAppCopy,
+	isAzureBlobStorageUrl,
+} from "@flow-like/flow-like-ui";
 import type {
 	AttemptResult,
 	CertificateView,
@@ -738,6 +742,25 @@ export const learnApi = {
 				refork: opts.refork,
 				language: opts.language,
 			})}`,
+			{ method: "POST" },
+			auth,
+		);
+	},
+
+	/**
+	 * Adds the template's packages the learner holds to their copy of a course
+	 * app and reports the ones they still lack. Fails for an alias the learner
+	 * has not opened yet.
+	 */
+	async syncSharedAppPackages(
+		profile: IProfile,
+		auth: AuthContextProps,
+		courseId: string,
+		alias: string,
+	): Promise<LessonAppCopy> {
+		return fetcher<LessonAppCopy>(
+			profile,
+			`/courses/${courseId}/links/${alias}/packages`,
 			{ method: "POST" },
 			auth,
 		);

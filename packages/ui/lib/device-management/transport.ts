@@ -10,8 +10,13 @@ import {
 	type SignalingAdmission,
 	managementRejection,
 } from "./types";
+import type { RelayFallbackReason } from "./workspace/types";
 
 const PROTOCOL = "flowlike.device-management.v1";
+const TIMED_OUT = "Management connection timed out.";
+const CANCELLED = "Management connection cancelled.";
+const INVALID_ADMISSION = "Invalid device signaling admission.";
+const IDENTITY_FAILED = "Encrypted device identity confirmation failed.";
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const encoder = new TextEncoder();
 const now = () => Math.floor(Date.now() / 1000);
@@ -58,7 +63,7 @@ export class FrameQueue<T> {
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => {
 				this.waiting = undefined;
-				reject(new Error("Management connection timed out."));
+				reject(new Error(TIMED_OUT));
 			}, timeout);
 			this.waiting = { resolve, reject, timer };
 		});
@@ -71,6 +76,104 @@ export class FrameQueue<T> {
 			this.waiting.reject(error);
 			this.waiting = undefined;
 		}
+	}
+}
+
+/** IA §6.4.3 connection progress steps owned by the transport; "reading_services" follows in the live layer. */
+export type ConnectStepId =
+	| "getting_pass"
+	| "reaching_device"
+	| "trying_direct"
+	| "securing";
+
+export interface ConnectProgress {
+	step: ConnectStepId;
+	state: "active" | "done" | "skipped" | "failed";
+	/** With `trying_direct` skipped: why the session runs over the relay. */
+	fallbackReason?: RelayFallbackReason;
+	/** With `getting_pass` done: the admission's expiry and this computer's raw clock at arrival (hub-offset fallback). */
+	admission?: { expiresAt: number; receivedAtMs: number };
+}
+
+export interface ConnectOptions {
+	onStep?: (progress: ConnectProgress) => void;
+}
+
+export type ConnectErrorCode =
+	| "not_configured"
+	| "needs_wss"
+	| "access_expired"
+	| "epoch_mismatch"
+	| "invalid_admission"
+	| "http"
+	| "relay_unreachable"
+	| "handshake_failed"
+	| "identity_confirmation_failed"
+	| "cancelled";
+
+/** A connect failure tied to its progress step; the message is the transport's original sentence. */
+export class ConnectError extends Error {
+	constructor(
+		readonly step: ConnectStepId,
+		readonly code: ConnectErrorCode,
+		message: string,
+		readonly detail: { status?: number; url?: string } = {},
+	) {
+		super(message);
+		this.name = "ConnectError";
+	}
+}
+
+function errorField(
+	error: unknown,
+	field: "status" | "serverMessage",
+): unknown {
+	if (!error || typeof error !== "object") return undefined;
+	return (error as Record<string, unknown>)[field];
+}
+
+function admissionCode(
+	status: number | undefined,
+	message: string,
+): ConnectErrorCode {
+	if (status === 401 || status === 403) return "access_expired";
+	if (status !== 503) return "http";
+	return message.includes("WSS") ? "needs_wss" : "not_configured";
+}
+
+function admissionFailure(error: unknown): ConnectError {
+	const status = errorField(error, "status");
+	const server = errorField(error, "serverMessage");
+	const message =
+		typeof server === "string" && server
+			? server
+			: error instanceof Error
+				? error.message
+				: String(error);
+	const known = typeof status === "number" ? status : undefined;
+	return new ConnectError(
+		"getting_pass",
+		admissionCode(known, message),
+		message,
+		{
+			status: known,
+		},
+	);
+}
+
+function hasTurnServer(servers: RTCIceServer[]): boolean {
+	return servers
+		.flatMap((server) => server.urls)
+		.some((url) => url.toLowerCase().startsWith("turn"));
+}
+
+class DirectConnectionError extends Error {
+	constructor(
+		readonly reason: RelayFallbackReason,
+		message: string,
+	) {
+		super(message);
+		this.name = "DirectConnectionError";
 	}
 }
 
@@ -117,6 +220,7 @@ class Relay {
 	private lastPong = Date.now();
 	private admitted = false;
 	private closed = false;
+	private readonly closeListeners = new Set<() => void>();
 	constructor(
 		url: string,
 		private readonly admission: SignalingAdmission,
@@ -210,6 +314,10 @@ class Relay {
 			}),
 		);
 	}
+	onClosed(listener: () => void): void {
+		if (this.closed) queueMicrotask(listener);
+		else this.closeListeners.add(listener);
+	}
 	close(): void {
 		if (this.closed) return;
 		this.closed = true;
@@ -222,6 +330,8 @@ class Relay {
 		this.socket.onmessage = null;
 		this.socket.onerror = null;
 		this.socket.close();
+		for (const listener of this.closeListeners) listener();
+		this.closeListeners.clear();
 	}
 }
 
@@ -229,6 +339,8 @@ interface Pipe {
 	send(envelope: Envelope): void;
 	next(): Promise<string>;
 	close(): void;
+	/** Fires once when the channel underneath closes. */
+	onClose?(listener: () => void): void;
 	kind: "webrtc" | "websocket";
 }
 
@@ -248,7 +360,10 @@ async function eventReady(
 			cleanup();
 			reject(new Error("WebRTC connection failed."));
 		};
-		const timer = setTimeout(failed, 15_000);
+		const timer = setTimeout(() => {
+			cleanup();
+			reject(new Error(TIMED_OUT));
+		}, 15_000);
 		const cleanup = () => {
 			clearTimeout(timer);
 			target.removeEventListener(event, finish);
@@ -268,31 +383,46 @@ async function rtcPipe(
 	admission: SignalingAdmission,
 ): Promise<Pipe> {
 	if (typeof RTCPeerConnection === "undefined")
-		throw new Error("WebRTC is unavailable.");
+		throw new DirectConnectionError(
+			"webrtc_unavailable",
+			"WebRTC is unavailable.",
+		);
 	const iceServers =
 		admission.ice_expires_at !== null && admission.ice_expires_at <= now() + 30
 			? []
 			: admission.ice_servers;
 	if (iceServers.length > 16)
-		throw new Error("Invalid device ICE configuration.");
+		throw new DirectConnectionError(
+			"webrtc_failed",
+			"Invalid device ICE configuration.",
+		);
 	const peer = new RTCPeerConnection({ iceServers });
 	const channel = peer.createDataChannel(PROTOCOL, {
 		ordered: true,
 		protocol: PROTOCOL,
 	});
 	const input = new FrameQueue<string>();
+	const closeListeners = new Set<() => void>();
+	let ended = false;
+	const end = () => {
+		input.close();
+		if (ended) return;
+		ended = true;
+		for (const listener of closeListeners) listener();
+		closeListeners.clear();
+	};
 	channel.onmessage = (event) => {
 		if (
 			typeof event.data !== "string" ||
 			encoder.encode(event.data).length > 32_768
 		) {
-			input.close();
+			end();
 			return;
 		}
 		input.push(event.data);
 	};
-	channel.onclose = () => input.close();
-	channel.onerror = () => input.close();
+	channel.onclose = end;
+	channel.onerror = end;
 	try {
 		await peer.setLocalDescription(await peer.createOffer());
 		await eventReady(
@@ -334,12 +464,24 @@ async function rtcPipe(
 				channel.close();
 				peer.close();
 			},
+			onClose: (listener) => {
+				if (ended) queueMicrotask(listener);
+				else closeListeners.add(listener);
+			},
 		};
 	} catch (error) {
 		input.close();
 		channel.close();
 		peer.close();
-		throw error;
+		const message = error instanceof Error ? error.message : String(error);
+		throw new DirectConnectionError(
+			!hasTurnServer(iceServers)
+				? "no_turn_servers"
+				: message === TIMED_OUT
+					? "ice_timeout"
+					: "webrtc_failed",
+			message,
+		);
 	}
 }
 
@@ -388,7 +530,7 @@ async function authenticate(
 			ready.expires_at > now() + 305 ||
 			typeof ready.boot_id !== "string"
 		)
-			throw new Error("Encrypted device identity confirmation failed.");
+			throw new Error(IDENTITY_FAILED);
 		return { session, expiresAt: ready.expires_at, bootId: ready.boot_id };
 	} catch (error) {
 		session.close();
@@ -442,34 +584,16 @@ export function matchesOperationResponse(
 	return response.operation_id === requestId;
 }
 
-export class DeviceManagementConnection {
-	private busy = false;
-	private closed = false;
-	private constructor(
-		private readonly pipe: Pipe,
-		private readonly relay: Relay,
-		private readonly session: NoiseSession,
-		private readonly sessionId: string,
-		readonly deviceId: string,
-		readonly expiresAt: number,
-		readonly bootId: string,
-	) {}
-	get transport(): "webrtc" | "websocket" {
-		return this.pipe.kind;
-	}
-	get open(): boolean {
-		return !this.closed && this.expiresAt > now();
-	}
-	static async connect(
-		api: IApiState,
-		profile: IProfile,
-		controller: BrowserController,
-		receipt: DeviceReceipt,
-		grantId: string,
-		signal?: AbortSignal,
-	): Promise<DeviceManagementConnection> {
-		const participant = crypto.randomUUID();
-		const admission = await api.fetch<SignalingAdmission>(
+async function requestAdmission(
+	api: IApiState,
+	profile: IProfile,
+	receipt: DeviceReceipt,
+	participant: string,
+	signal?: AbortSignal,
+): Promise<SignalingAdmission> {
+	let admission: SignalingAdmission;
+	try {
+		admission = await api.fetch<SignalingAdmission>(
 			profile,
 			`devices/${encodeURIComponent(receipt.device_id)}/signaling/controller`,
 			{
@@ -479,66 +603,248 @@ export class DeviceManagementConnection {
 				signal,
 			},
 		);
-		if (
-			admission.device_auth_epoch !== receipt.auth_epoch ||
-			admission.expires_at <= now() + 10 ||
-			admission.expires_at > now() + 305 ||
-			admission.signaling_urls.length === 0 ||
-			admission.signaling_urls.length > 4
-		)
-			throw new Error("Invalid device signaling admission.");
-		let relay: Relay | undefined;
-		for (const url of admission.signaling_urls) {
-			if (signal?.aborted) throw new Error("Management connection cancelled.");
-			const candidate = new Relay(
-				url,
+	} catch (error) {
+		if (signal?.aborted)
+			throw new ConnectError("getting_pass", "cancelled", CANCELLED);
+		throw admissionFailure(error);
+	}
+	if (admission.device_auth_epoch !== receipt.auth_epoch)
+		throw new ConnectError("getting_pass", "epoch_mismatch", INVALID_ADMISSION);
+	if (
+		admission.expires_at <= now() + 10 ||
+		admission.expires_at > now() + 305 ||
+		admission.signaling_urls.length === 0 ||
+		admission.signaling_urls.length > 4
+	)
+		throw new ConnectError(
+			"getting_pass",
+			"invalid_admission",
+			INVALID_ADMISSION,
+		);
+	return admission;
+}
+
+async function openRelay(
+	admission: SignalingAdmission,
+	participant: string,
+	deviceId: string,
+	signal?: AbortSignal,
+): Promise<Relay> {
+	for (const url of admission.signaling_urls) {
+		if (signal?.aborted)
+			throw new ConnectError("reaching_device", "cancelled", CANCELLED);
+		const candidate = new Relay(url, admission, participant, deviceId);
+		try {
+			await candidate.connect();
+			return candidate;
+		} catch {
+			candidate.close();
+		}
+	}
+	throw new ConnectError(
+		"reaching_device",
+		"relay_unreachable",
+		"Device signaling could not be reached.",
+		{ url: admission.signaling_urls[0] },
+	);
+}
+
+function relayPipe(relay: Relay): Pipe {
+	return {
+		kind: "websocket",
+		send: (envelope) => relay.send("noise", envelope),
+		next: () => relay.noise.next(),
+		close: () => relay.close(),
+		onClose: (listener) => relay.onClosed(listener),
+	};
+}
+
+function securingFailure(error: unknown, signal?: AbortSignal): ConnectError {
+	if (error instanceof ConnectError) return error;
+	if (signal?.aborted)
+		return new ConnectError("securing", "cancelled", CANCELLED);
+	const message = error instanceof Error ? error.message : String(error);
+	return new ConnectError(
+		"securing",
+		message === IDENTITY_FAILED
+			? "identity_confirmation_failed"
+			: "handshake_failed",
+		message,
+	);
+}
+
+interface SecureContext {
+	relay: Relay;
+	admission: SignalingAdmission;
+	controller: BrowserController;
+	receipt: DeviceReceipt;
+	grantId: string;
+	signal?: AbortSignal;
+	begin: (step: ConnectStepId) => void;
+	report: (progress: ConnectProgress) => void;
+}
+
+const STEP_FAILURE: Record<ConnectStepId, ConnectErrorCode> = {
+	getting_pass: "http",
+	reaching_device: "relay_unreachable",
+	trying_direct: "handshake_failed",
+	securing: "handshake_failed",
+};
+
+function asConnectError(
+	error: unknown,
+	step: ConnectStepId,
+	signal?: AbortSignal,
+): ConnectError {
+	if (error instanceof ConnectError) return error;
+	if (signal?.aborted) return new ConnectError(step, "cancelled", CANCELLED);
+	return new ConnectError(
+		step,
+		STEP_FAILURE[step],
+		error instanceof Error ? error.message : String(error),
+	);
+}
+
+export type ConnectionCloseReason = "local" | "remote";
+
+export class DeviceManagementConnection {
+	private busy = false;
+	private closed = false;
+	private closeReason: ConnectionCloseReason = "local";
+	private readonly closeListeners = new Set<
+		(reason: ConnectionCloseReason) => void
+	>();
+	private constructor(
+		private readonly pipe: Pipe,
+		private readonly relay: Relay,
+		private readonly session: NoiseSession,
+		private readonly sessionId: string,
+		readonly deviceId: string,
+		readonly expiresAt: number,
+		readonly bootId: string,
+		/** Set when the session runs over the relay because the direct connection failed. */
+		readonly fallbackReason?: RelayFallbackReason,
+	) {
+		pipe.onClose?.(() => this.shutdown("remote"));
+	}
+	get transport(): "webrtc" | "websocket" {
+		return this.pipe.kind;
+	}
+	get open(): boolean {
+		return !this.closed && this.expiresAt > now();
+	}
+	/** Fires once on close: "local" after `close()` or a failed request, "remote" when the channel dropped. */
+	onClosed(listener: (reason: ConnectionCloseReason) => void): () => void {
+		if (this.closed) {
+			const reason = this.closeReason;
+			queueMicrotask(() => listener(reason));
+			return () => {};
+		}
+		this.closeListeners.add(listener);
+		return () => this.closeListeners.delete(listener);
+	}
+	static async connect(
+		api: IApiState,
+		profile: IProfile,
+		controller: BrowserController,
+		receipt: DeviceReceipt,
+		grantId: string,
+		signal?: AbortSignal,
+		options: ConnectOptions = {},
+	): Promise<DeviceManagementConnection> {
+		const report = options.onStep ?? (() => {});
+		let step: ConnectStepId = "getting_pass";
+		const begin = (next: ConnectStepId) => {
+			step = next;
+			report({ step, state: "active" });
+		};
+		try {
+			const participant = crypto.randomUUID();
+			begin("getting_pass");
+			const admission = await requestAdmission(
+				api,
+				profile,
+				receipt,
+				participant,
+				signal,
+			);
+			report({
+				step,
+				state: "done",
+				admission: {
+					expiresAt: admission.expires_at,
+					receivedAtMs: Date.now(),
+				},
+			});
+			begin("reaching_device");
+			const relay = await openRelay(
 				admission,
 				participant,
 				receipt.device_id,
+				signal,
 			);
-			try {
-				await candidate.connect();
-				relay = candidate;
-				break;
-			} catch {
-				candidate.close();
-			}
+			report({ step, state: "done" });
+			return await DeviceManagementConnection.secure({
+				relay,
+				admission,
+				controller,
+				receipt,
+				grantId,
+				signal,
+				begin,
+				report,
+			});
+		} catch (error) {
+			report({ step, state: "failed" });
+			throw asConnectError(error, step, signal);
 		}
-		if (!relay) throw new Error("Device signaling could not be reached.");
+	}
+	private static async secure({
+		relay,
+		admission,
+		controller,
+		receipt,
+		grantId,
+		signal,
+		begin,
+		report,
+	}: SecureContext): Promise<DeviceManagementConnection> {
 		let pipe: Pipe | undefined;
 		let handshake: NoiseHandshake | undefined;
 		let finished = false;
+		let fallbackReason: RelayFallbackReason | undefined;
 		const cancel = () => {
 			pipe?.close();
-			relay?.close();
+			relay.close();
 		};
-		signal?.addEventListener("abort", cancel, { once: true });
-		try {
-			handshake = controller.beginNoise(
+		const noise = () =>
+			controller.beginNoise(
 				grantId,
 				Uint8Array.from(receipt.identity.management_key),
 				now(),
 			);
+		signal?.addEventListener("abort", cancel, { once: true });
+		try {
+			begin("trying_direct");
+			handshake = noise();
 			try {
 				pipe = await rtcPipe(relay, handshake, grantId, admission);
-			} catch {
+				report({ step: "trying_direct", state: "done" });
+			} catch (error) {
 				handshake.close();
 				handshake.free();
+				handshake = undefined;
 				if (signal?.aborted)
-					throw new Error("Management connection cancelled.");
-				handshake = controller.beginNoise(
-					grantId,
-					Uint8Array.from(receipt.identity.management_key),
-					now(),
-				);
-				const ws = relay;
-				pipe = {
-					kind: "websocket",
-					send: (envelope) => ws.send("noise", envelope),
-					next: () => ws.noise.next(),
-					close: () => ws.close(),
-				};
+					throw new ConnectError("trying_direct", "cancelled", CANCELLED);
+				fallbackReason =
+					error instanceof DirectConnectionError
+						? error.reason
+						: "webrtc_failed";
+				report({ step: "trying_direct", state: "skipped", fallbackReason });
+				handshake = noise();
+				pipe = relayPipe(relay);
 			}
+			begin("securing");
 			const sessionId = handshake.sessionId();
 			const authenticated = await authenticate(
 				pipe,
@@ -548,12 +854,15 @@ export class DeviceManagementConnection {
 				() => {
 					finished = true;
 				},
-			);
+			).catch((error: unknown) => {
+				throw securingFailure(error, signal);
+			});
 			if (signal?.aborted) {
 				authenticated.session.close();
 				authenticated.session.free();
-				throw new Error("Management connection cancelled.");
+				throw new ConnectError("securing", "cancelled", CANCELLED);
 			}
+			report({ step: "securing", state: "done" });
 			return new DeviceManagementConnection(
 				pipe,
 				relay,
@@ -562,6 +871,7 @@ export class DeviceManagementConnection {
 				receipt.device_id,
 				authenticated.expiresAt,
 				authenticated.bootId,
+				fallbackReason,
 			);
 		} catch (error) {
 			cancel();
@@ -652,11 +962,17 @@ export class DeviceManagementConnection {
 		}
 	}
 	close(): void {
+		this.shutdown("local");
+	}
+	private shutdown(reason: ConnectionCloseReason): void {
 		if (this.closed) return;
 		this.closed = true;
+		this.closeReason = reason;
 		this.pipe.close();
 		this.relay.close();
 		this.session.close();
 		this.session.free();
+		for (const listener of this.closeListeners) listener(reason);
+		this.closeListeners.clear();
 	}
 }

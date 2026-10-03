@@ -30,3 +30,15 @@ model DeviceCertificateNotice {
   @@index([status, nextAttemptAt])
   @@index([deviceId])
 }
+
+/// Per-user certificate reminder mute. certificateId '*' mutes the whole device.
+model DeviceCertificateNoticeMute {
+  userId String
+  deviceId String
+  certificateId String
+  until BigInt?
+  createdAt BigInt
+
+  @@id([userId, deviceId, certificateId])
+  @@index([deviceId])
+}

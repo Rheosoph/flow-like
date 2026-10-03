@@ -90,7 +90,7 @@ describe("event type configuration", () => {
 		const { createRoot } = await import("react-dom/client");
 		const container = window.document.createElement("div");
 		window.document.body.append(container);
-		const root = createRoot(container);
+		const root = createRoot(container as unknown as HTMLElement);
 		const updates: [string, Partial<IEventPayload>][] = [];
 		const onUpdate = (type: string, config: Partial<IEventPayload>) => {
 			updates.push([type, config]);

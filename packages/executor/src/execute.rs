@@ -9,7 +9,7 @@ use crate::resolve::{fetch_bounded, max_remote_payload_bytes};
 use crate::types::{
     EventType, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus, RunSummary,
 };
-use crate::widgets::{HubAccess, HubWidgetSource};
+use crate::widgets::HubAccess;
 use flow_like::credentials::StoreType;
 use flow_like::flow::compiled::{template_from_bytes, CompiledRunTemplate, TemplateCache};
 use flow_like::flow::event::Event;
@@ -284,7 +284,8 @@ pub(crate) fn validate_executor_request_claims(
 
 /// Build the `FlowLikeState` every execution path shares: stores from the
 /// request credentials, the logs database builder, the server execution
-/// environment and — when the run has a hub — the widget source that keeps
+/// environment and — when the run has a hub — the hub as the source of the
+/// app's own widgets and of its pinned packages' widgets, which keeps
 /// `Instantiate Widget` off the meta store. WASM registry overlays are applied
 /// by the caller.
 ///
@@ -339,12 +340,7 @@ pub(crate) async fn build_flow_state(
         FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
     state.execution_environment = ExecutionEnvironment::server_default();
     if let Some(hub) = hub {
-        if hub.hosted_frontend {
-            state.hosted_model_token = Some(hub.jwt.clone());
-        }
-        state
-            .register_app_widget_source(Arc::new(HubWidgetSource::new(&hub.callback_url, hub.jwt)))
-            .await;
+        hub.register_on(&mut state).await;
     }
     Ok(state)
 }
@@ -2268,7 +2264,7 @@ mod shadow_claim_binding_tests {
         .expect("claims deserialize")
     }
 
-    fn request(shadow: bool) -> ExecutionRequest {
+    pub(super) fn request(shadow: bool) -> ExecutionRequest {
         let mut request: ExecutionRequest = serde_json::from_value(serde_json::json!({
             "app_id": "app-1",
             "board_id": "board-1",
@@ -2407,6 +2403,37 @@ mod shadow_claim_binding_tests {
         assert!(validate_executor_request_claims(&claims(None), &request(true)).is_err());
         assert!(validate_executor_request_claims(&claims(Some(true)), &request(false)).is_err());
         assert!(validate_executor_request_claims(&claims(Some(false)), &request(true)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod hub_widget_source_tests {
+    use super::shadow_claim_binding_tests::request;
+    use super::*;
+
+    #[tokio::test]
+    async fn a_run_with_a_hub_gets_a_source_for_both_widget_lists_and_one_without_gets_none() {
+        let credentials = request(false).credentials;
+        let hub = HubAccess {
+            callback_url: "http://127.0.0.1:9".into(),
+            jwt: "jwt".into(),
+            hosted_frontend: false,
+        };
+
+        let with_hub = build_flow_state(&credentials, Some(hub))
+            .await
+            .expect("the state is built without reaching storage");
+        assert!(with_hub.app_widget_source().await.is_some());
+        assert!(
+            with_hub.package_widget_source().await.is_some(),
+            "without it Instantiate Widget finds no package widget on an executor"
+        );
+
+        let without_hub = build_flow_state(&credentials, None)
+            .await
+            .expect("the state is built without reaching storage");
+        assert!(without_hub.app_widget_source().await.is_none());
+        assert!(without_hub.package_widget_source().await.is_none());
     }
 }
 

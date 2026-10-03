@@ -1788,6 +1788,7 @@ mod tests {
     #[flow_like_types::tokio::test]
     async fn unauthenticated_replay_is_rejected_before_the_body_is_read() {
         use std::sync::atomic::{AtomicBool, Ordering};
+        crate::backend_jwt::init_for_tests();
         let db = sea_orm::DatabaseConnection::default();
         let config = flow_like::hub::StandaloneConfig {
             enabled: true,

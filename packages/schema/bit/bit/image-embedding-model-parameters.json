@@ -57,7 +57,14 @@
 					"type": ["string", "null"]
 				},
 				"api_surface": {
-					"anyOf": [{ "$ref": "#/$defs/ModelApiSurface" }, { "type": "null" }],
+					"anyOf": [
+						{
+							"$ref": "#/$defs/ModelApiSurface"
+						},
+						{
+							"type": "null"
+						}
+					],
 					"description": "API surface the upstream model speaks. `None` keeps the provider's historical default, which is `chat/completions` for every hosted Bit."
 				},
 				"params": {
@@ -72,12 +79,12 @@
 			"type": "object",
 			"properties": {
 				"endpoint": {
-					"description": "Deprecated per-bit endpoint URL. Remote embeddings now use the shared\nINTERNAL_EMBEDDING_ENDPOINT secret resolved by the API.",
+					"description": "Legacy endpoint URL retained for reading old Bits. Hosted execution\nresolves endpoints from server secrets instead of using this URL.",
 					"type": ["string", "null"],
 					"default": null
 				},
 				"secret_name": {
-					"description": "Optional API key secret override. Defaults to INTERNAL_EMBEDDING_SECRET.",
+					"description": "Optional API key secret override. Each provider has its own default.",
 					"type": ["string", "null"],
 					"default": null
 				},
@@ -97,6 +104,10 @@
 					"description": "Deployed model ID for the upstream provider (e.g., Internal gateway model name)",
 					"type": ["string", "null"],
 					"default": null
+				},
+				"endpoint_secret_name": {
+					"description": "Optional server secret containing the base endpoint. Supported by\nInternal, AzureOpenAI, HuggingfaceEndpoint and OpenAICompatible.",
+					"type": ["string", "null"]
 				}
 			}
 		},
@@ -104,9 +115,44 @@
 			"description": "Remote embedding provider implementation",
 			"oneOf": [
 				{
-					"description": "Internal OpenAI-compatible embedding gateway.\n\nOlder bit configs serialized as `HuggingfaceEndpoint` or\n`CloudflareWorkersAI` are accepted as aliases so existing records can be\nmigrated by config alone.",
+					"description": "Internal OpenAI-compatible embedding gateway.",
 					"type": "string",
 					"const": "Internal"
+				},
+				{
+					"description": "Cloudflare Workers AI through its OpenAI-compatible embeddings API.",
+					"type": "string",
+					"const": "CloudflareWorkersAI"
+				},
+				{
+					"description": "OpenAI's hosted embeddings API.",
+					"type": "string",
+					"const": "OpenAI"
+				},
+				{
+					"description": "Azure OpenAI v1 API; model_id names the deployment.",
+					"type": "string",
+					"const": "AzureOpenAI"
+				},
+				{
+					"description": "A Hugging Face Text Embeddings Inference endpoint.",
+					"type": "string",
+					"const": "HuggingfaceEndpoint"
+				},
+				{
+					"description": "An operator-configured service with an OpenAI-compatible embeddings API.",
+					"type": "string",
+					"const": "OpenAICompatible"
+				},
+				{
+					"description": "Cohere's hosted v2 embeddings API.",
+					"type": "string",
+					"const": "Cohere"
+				},
+				{
+					"description": "Voyage AI's hosted embeddings API.",
+					"type": "string",
+					"const": "VoyageAI"
 				}
 			]
 		}

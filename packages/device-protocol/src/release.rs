@@ -8,7 +8,9 @@ use std::collections::HashSet;
 pub const STANDALONE_RELEASE_JWS_TYPE: &str = "flow-like-standalone-release+jws";
 pub const MAX_STANDALONE_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
-const MAX_RELEASE_LIFETIME: i64 = 30 * 24 * 60 * 60;
+/// Every agent applies its compiled cap to the release it is installed from, so this may only rise.
+pub const MAX_RELEASE_LIFETIME: i64 = 1_825 * 24 * 60 * 60;
+const NOT_YET_VALID_TOLERANCE: i64 = 300;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub enum ReleaseTarget {
@@ -221,7 +223,8 @@ pub fn verify_standalone_release(
         .find_map(|key| verify_pinned(compact, key, STANDALONE_RELEASE_JWS_TYPE).ok())
         .ok_or(ProtocolError::InvalidSignature)?;
     validate_standalone_release(&value)?;
-    if value.issued_at > now || value.expires_at <= now {
+    // A clock slightly behind the signer's must not refuse a fresh list; expiry has no tolerance.
+    if value.issued_at > now.saturating_add(NOT_YET_VALID_TOLERANCE) || value.expires_at <= now {
         return Err(ProtocolError::InvalidTime);
     }
     if value.sequence < minimum_sequence {
@@ -239,8 +242,8 @@ mod tests {
             state_schema_version: 4,
             sequence: 12,
             release_version: "1.2.3-alpha.1+build".into(),
-            issued_at: 100,
-            expires_at: 200,
+            issued_at: 1_000,
+            expires_at: 2_000,
             artifacts: vec![StandaloneArtifact {
                 target: ReleaseTarget::LinuxX86_64,
                 url: "https://releases.example/standalone".into(),
@@ -259,15 +262,15 @@ mod tests {
         let value = release();
         let signed = sign_standalone_release(&value, &key).unwrap();
         assert_eq!(
-            verify_standalone_release(&signed, &[key.public_key()], 12, 100).unwrap(),
+            verify_standalone_release(&signed, &[key.public_key()], 12, 1_000).unwrap(),
             value
         );
-        assert!(verify_standalone_release(&signed, &[], 0, 100).is_err());
+        assert!(verify_standalone_release(&signed, &[], 0, 1_000).is_err());
         assert!(
-            verify_standalone_release(&signed, &[SigningKey::generate().public_key()], 0, 100)
+            verify_standalone_release(&signed, &[SigningKey::generate().public_key()], 0, 1_000)
                 .is_err()
         );
-        for (floor, now) in [(13, 100), (0, 99), (0, 200)] {
+        for (floor, now) in [(13, 1_000), (0, 699), (0, 2_000)] {
             assert!(verify_standalone_release(&signed, &[key.public_key()], floor, now).is_err());
         }
         let mut bad = value.clone();
@@ -282,6 +285,63 @@ mod tests {
         bad = value;
         bad.artifacts[0].url = "http://releases.example/file".into();
         assert!(sign_standalone_release(&bad, &key).is_err());
+    }
+    fn lasting(lifetime: i64) -> StandaloneRelease {
+        let mut value = release();
+        value.expires_at = value.issued_at + lifetime;
+        value
+    }
+    #[test]
+    fn lifetime_is_chosen_by_the_signer_up_to_a_cap_checked_at_signing_and_verification() {
+        const DAY: i64 = 24 * 60 * 60;
+        assert_eq!(MAX_RELEASE_LIFETIME, 1_825 * DAY);
+        let key = SigningKey::generate();
+        let keys = [key.public_key()];
+        for lifetime in [30 * DAY, 365 * DAY, MAX_RELEASE_LIFETIME] {
+            let value = lasting(lifetime);
+            let signed = sign_standalone_release(&value, &key).unwrap();
+            for now in [value.issued_at, value.expires_at - 1] {
+                assert_eq!(
+                    verify_standalone_release(&signed, &keys, 0, now).unwrap(),
+                    value
+                );
+            }
+            assert!(matches!(
+                verify_standalone_release(&signed, &keys, 0, value.expires_at),
+                Err(ProtocolError::InvalidTime)
+            ));
+        }
+        let beyond = lasting(MAX_RELEASE_LIFETIME + 1);
+        assert!(matches!(
+            sign_standalone_release(&beyond, &key),
+            Err(ProtocolError::Invalid("standalone release shape"))
+        ));
+        let signed = sign_pinned(&beyond, &key, STANDALONE_RELEASE_JWS_TYPE).unwrap();
+        assert!(matches!(
+            verify_standalone_release(&signed, &keys, 0, beyond.issued_at),
+            Err(ProtocolError::Invalid("standalone release shape"))
+        ));
+    }
+    #[test]
+    fn a_clock_slightly_behind_the_signer_accepts_a_fresh_list() {
+        let key = SigningKey::generate();
+        let keys = [key.public_key()];
+        let value = release();
+        let signed = sign_standalone_release(&value, &key).unwrap();
+        for behind in [299, 300] {
+            assert_eq!(
+                verify_standalone_release(&signed, &keys, 0, value.issued_at - behind).unwrap(),
+                value
+            );
+        }
+        assert!(matches!(
+            verify_standalone_release(&signed, &keys, 0, value.issued_at - 301),
+            Err(ProtocolError::InvalidTime)
+        ));
+        assert!(matches!(
+            verify_standalone_release(&signed, &keys, 0, i64::MAX),
+            Err(ProtocolError::InvalidTime)
+        ));
     }
     #[test]
     fn semantic_versions_and_urls_do_not_become_script_inputs() {

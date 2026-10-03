@@ -1,4 +1,4 @@
-use super::{context, enabled, human_owner};
+use super::{DeviceContext, context, enabled, human_owner, repository::count};
 use crate::{
     db::{DbDialect, RetryPolicy, retry_transaction},
     error::ApiError,
@@ -11,11 +11,19 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use flow_like_device_protocol::*;
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, Value};
+use sea_orm::{
+    ConnectionTrait, DatabaseBackend, DatabaseConnection, QueryResult, Statement, Value,
+};
 use serde::{Deserialize, Serialize};
 use std::result::Result;
+use utoipa::ToSchema;
 
-const MAX_ACCOUNT_BACKUPS: i64 = 256;
+pub(crate) const MAX_ACCOUNT_BACKUPS: u64 = 256;
+
+/// A backup keeps its slot while its device is active or its setup package can still be
+/// started; any other backup can no longer unlock anything. `v` is the backup and `$2`
+/// the current time.
+pub(crate) const HOLDS_SLOT: &str = r#"(EXISTS(SELECT 1 FROM "ManagedDevice" d WHERE d.id=v."keyId" AND d.status='active') OR EXISTS(SELECT 1 FROM "DeviceEnrollment" e WHERE e."deviceId"=v."keyId" AND e.status='pending' AND e."expiresAt">$2))"#;
 
 fn sql(query: &str, values: impl IntoIterator<Item = Value>) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Postgres, query, values)
@@ -89,6 +97,90 @@ pub(crate) async fn get(
     }))
 }
 
+/// An account backup as listed. The encrypted keys are only returned when one backup
+/// is read by its ID.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
+pub(crate) struct AccountBackupView {
+    /// The device, or the device a setup package will register, whose keys are saved.
+    pub key_id: String,
+    pub revision: u64,
+    /// When this revision was saved (Unix seconds).
+    pub updated_at: i64,
+    /// Identifies the key that saved the backup.
+    pub public_key_thumbprint: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, ToSchema)]
+pub(crate) struct AccountBackupList {
+    /// Every stored backup, newest first.
+    pub vaults: Vec<AccountBackupView>,
+    /// Backups that count toward `max`: those of active devices and of setup packages
+    /// that can still be started. The hub removes the others when a new one is saved.
+    pub used: u64,
+    pub max: u64,
+}
+
+fn listed(row: &QueryResult) -> Result<AccountBackupView, ApiError> {
+    let key_id: String = row.try_get("", "keyId")?;
+    let public_key_thumbprint =
+        serde_json::from_str::<Ed25519PublicKey>(&row.try_get::<String>("", "publicKey")?)
+            .map_err(|error| error.to_string())
+            .and_then(|key| key.thumbprint().map_err(|error| error.to_string()))
+            .map_err(|error| {
+                ApiError::internal(format!(
+                    "Account backup {key_id} has an unreadable controller key: {error}"
+                ))
+            })?;
+    Ok(AccountBackupView {
+        revision: row.try_get::<i64>("", "revision")? as u64,
+        updated_at: row.try_get("", "updatedAt")?,
+        public_key_thumbprint,
+        key_id,
+    })
+}
+
+/// The caller's account backups without their ciphertext.
+pub(crate) async fn backups(
+    state: &DeviceContext<'_>,
+    user: &str,
+) -> Result<AccountBackupList, ApiError> {
+    enabled(state)?;
+    let now = chrono::Utc::now().timestamp();
+    let rows = state.db.query_all_raw(sql(&format!(r#"SELECT v."keyId",v.revision,v."updatedAt",v."publicKey",{HOLDS_SLOT} AS "holdsSlot" FROM "DeviceControllerVault" v JOIN "User" u ON u.id=v."userId" AND u.status='ACTIVE' WHERE v."userId"=$1 ORDER BY v."updatedAt" DESC,v."keyId" LIMIT {MAX_ACCOUNT_BACKUPS}"#), [user.into(), now.into()])).await?;
+    let mut used = 0;
+    for row in &rows {
+        used += u64::from(row.try_get::<bool>("", "holdsSlot")?);
+    }
+    Ok(AccountBackupList {
+        vaults: rows.iter().map(listed).collect::<Result<_, _>>()?,
+        used,
+        max: MAX_ACCOUNT_BACKUPS,
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/devices/controller-vaults",
+    tag = "devices",
+    description = "Lists the account backups of your device keys and when each was last saved. The encrypted keys themselves are not included.",
+    responses(
+        (status = 200, description = "Your account backups, newest first, and how many of the allowed backups are in use", body = AccountBackupList),
+        (status = 401, description = "Sign-in required"),
+        (status = 403, description = "The account or access token cannot manage devices"),
+        (status = 503, description = "Device enrollment is not enabled on this hub")
+    ),
+    security(("bearer_auth" = []), ("pat" = []))
+)]
+pub(crate) async fn list(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+) -> Result<Json<AccountBackupList>, ApiError> {
+    let context = context(&state);
+    enabled(&context)?;
+    let owner = human_owner(&state, &user).await?;
+    Ok(Json(backups(&context, &owner).await?))
+}
+
 pub(crate) async fn put(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -150,9 +242,9 @@ async fn persist(
             if existing.is_none() {
                 // Backups of revoked devices and of packages that were cancelled or
                 // expired unredeemed can no longer unlock anything, so they free their slot.
-                tx.execute_raw(sql(r#"DELETE FROM "DeviceControllerVault" v WHERE v."userId"=$1 AND NOT EXISTS(SELECT 1 FROM "ManagedDevice" d WHERE d.id=v."keyId" AND d.status='active') AND NOT EXISTS(SELECT 1 FROM "DeviceEnrollment" e WHERE e."deviceId"=v."keyId" AND e.status='pending' AND e."expiresAt">$2)"#, [owner.clone().into(), now.into()])).await?;
-                let count = tx.query_one_raw(sql(r#"SELECT COUNT(*) AS count FROM "DeviceControllerVault" WHERE "userId"=$1"#, [owner.clone().into()])).await?.ok_or(ApiError::FORBIDDEN)?;
-                if count.try_get::<i64>("", "count")? >= MAX_ACCOUNT_BACKUPS { return Err(ApiError::too_many_requests(format!("Controller backup storage limit of {MAX_ACCOUNT_BACKUPS} active devices and pending packages reached"))); }
+                tx.execute_raw(sql(&format!(r#"DELETE FROM "DeviceControllerVault" v WHERE v."userId"=$1 AND NOT {HOLDS_SLOT}"#), [owner.clone().into(), now.into()])).await?;
+                let stored = tx.query_one_raw(sql(r#"SELECT COUNT(*) AS count FROM "DeviceControllerVault" WHERE "userId"=$1"#, [owner.clone().into()])).await?.ok_or(ApiError::FORBIDDEN)?;
+                if count(&stored, "count")? >= MAX_ACCOUNT_BACKUPS { return Err(ApiError::too_many_requests(format!("Controller backup storage limit of {MAX_ACCOUNT_BACKUPS} active devices and pending packages reached"))); }
             }
             tx.execute_raw(sql(r#"INSERT INTO "DeviceControllerVault"("userId","keyId","publicKey",ciphertext,revision,"updatedAt") VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT("userId","keyId") DO UPDATE SET ciphertext=excluded.ciphertext,revision=excluded.revision,"updatedAt"=excluded."updatedAt""#, [owner.into(), id.into(), public_key.into(), request.ciphertext.into(), (request.revision as i64).into(), now.into()])).await?;
             Ok(())
@@ -181,6 +273,33 @@ mod tests {
             proof_jws: sign_controller_recovery(&proof, &key).unwrap(),
         }
     }
+    #[test]
+    fn a_listed_backup_never_carries_the_encrypted_keys() {
+        let list = AccountBackupList {
+            vaults: vec![AccountBackupView {
+                key_id: "device".into(),
+                revision: 3,
+                updated_at: 1_727_700_000,
+                public_key_thumbprint: "thumbprint".into(),
+            }],
+            used: 1,
+            max: MAX_ACCOUNT_BACKUPS,
+        };
+        assert_eq!(
+            serde_json::to_value(list).unwrap(),
+            serde_json::json!({
+                "vaults": [{
+                    "key_id": "device",
+                    "revision": 3,
+                    "updated_at": 1_727_700_000,
+                    "public_key_thumbprint": "thumbprint",
+                }],
+                "used": 1,
+                "max": 256,
+            })
+        );
+    }
+
     #[test]
     fn account_session_alone_cannot_replace_controller_backups() {
         let mut value = request();
@@ -249,6 +368,8 @@ mod tests {
         for migration in [
             include_str!("../../prisma/migrations/20260921120000_standalone_devices/migration.sql"),
             include_str!("../../prisma/migrations/20260922120000_device_management/migration.sql"),
+            include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
+            include_str!("../../prisma/migrations/20261002120000_device_schedules/migration.sql"),
         ] {
             for sql in migration.split(';').filter(|s| !s.trim().is_empty()) {
                 db.execute_unprepared(sql).await.unwrap();
@@ -260,6 +381,38 @@ mod tests {
         let invitation = SigningKey::generate();
         let reader = SigningKey::generate();
         let outsider = SigningKey::generate();
+        crate::backend_jwt::init_for_tests();
+        let hub = flow_like::hub::StandaloneConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let context = DeviceContext {
+            db: &db,
+            dialect: DbDialect::Postgres,
+            config: &hub,
+            domain: "unused.example",
+            secure: true,
+        };
+        // An account's listed backups as (device, revision, saving key) and its slots in use.
+        let listing = |user: &'static str| {
+            let context = &context;
+            async move {
+                let list = backups(context, user).await.unwrap();
+                let vaults = list
+                    .vaults
+                    .into_iter()
+                    .map(|vault| (vault.key_id, vault.revision, vault.public_key_thumbprint))
+                    .collect::<Vec<_>>();
+                (vaults, list.used)
+            }
+        };
+        let listed = |device: &str, revision: u64, key: &SigningKey| {
+            (
+                device.to_owned(),
+                revision,
+                key.public_key().thumbprint().unwrap(),
+            )
+        };
         let manifest = OnboardingManifest {
             version: 1,
             enrollment_id: "recovery-enrollment".into(),
@@ -281,6 +434,11 @@ mod tests {
         write_checked(&db, "owner", &manifest.device_id, first.clone())
             .await
             .unwrap();
+        assert_eq!(
+            listing("owner").await,
+            (vec![listed("recovery-device", 1, &owner)], 1)
+        );
+        assert_eq!(listing("reader").await, (Vec::new(), 0));
         assert_eq!(
             write_checked(&db, "reader", &manifest.device_id, first.clone())
                 .await
@@ -328,6 +486,11 @@ mod tests {
             .unwrap()
             .status(),
             StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            listing("owner").await,
+            (vec![listed("recovery-device", 1, &owner)], 0),
+            "the backup of a lapsed package stays stored and holds no slot"
         );
         let identity = DeviceIdentity {
             auth_key: SigningKey::generate().public_key(),
@@ -399,6 +562,14 @@ mod tests {
         write_checked(&db, "reader", &manifest.device_id, reader_backup.clone())
             .await
             .unwrap();
+        assert_eq!(
+            listing("reader").await,
+            (vec![listed("recovery-device", 1, &reader)], 1)
+        );
+        assert_eq!(
+            listing("owner").await,
+            (vec![listed("recovery-device", 3, &owner)], 1)
+        );
         assert_eq!(
             write_checked(
                 &db,
@@ -488,6 +659,11 @@ mod tests {
             .try_get::<i64>("", "count")
             .unwrap();
         assert_eq!(count, 2);
+        assert_eq!(
+            listing("owner").await,
+            (vec![listed("recovery-device", 3, &owner)], 0),
+            "the backup of a revoked device stays stored and holds no slot"
+        );
         // Backups of the revoked device and of abandoned packages stop counting
         // against the account limit when the next device's first backup is saved.
         db.execute_raw(sql(
@@ -520,6 +696,10 @@ mod tests {
             .try_get::<i64>("", "count")
             .unwrap();
         assert_eq!(remaining, 1);
+        assert_eq!(
+            listing("owner").await,
+            (vec![listed("next-device", 1, &owner)], 1)
+        );
         db.close().await.unwrap();
         admin
             .execute_unprepared(&format!("DROP SCHEMA {schema} CASCADE"))

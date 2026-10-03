@@ -1,4 +1,8 @@
-use crate::config::{HostingConfig, PlacementConfig};
+use crate::{
+    config::{HostingConfig, PlacementConfig},
+    event_kind::EventKind,
+    run_once::RunEnd,
+};
 use anyhow::{Context, Result, ensure};
 use axum::{
     Router,
@@ -24,7 +28,6 @@ use flow_like_types::{
     intercom::{InterComCallback, InterComEvent},
     utils::constant_time_eq,
 };
-use serde::Deserialize;
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -66,36 +69,275 @@ pub(crate) struct PreparedInvocation {
     pub(crate) action_admission: Option<actions::Admission>,
 }
 
-#[derive(Deserialize)]
-struct HttpEventConfig {
-    path: String,
-    method: String,
+const METHODS: [&str; 7] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+const MAX_PATH_BYTES: usize = 2048;
+
+/// A method and literal path of a service's listener.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct Route {
+    pub(crate) method: String,
+    pub(crate) path: String,
 }
 
-fn event_route(event: &Event) -> Result<(String, String)> {
-    if event.event_type == "simple_chat" {
-        return Ok(("POST".into(), format!("/chat/{}", event.id)));
+impl Route {
+    fn new(method: &str, path: String) -> Self {
+        Self {
+            method: method.into(),
+            path,
+        }
     }
-    ensure!(event.event_type == "http", "Unsupported hosted event type");
-    let config: HttpEventConfig = serde_json::from_slice(&event.config)
-        .context("Invalid HTTP event routing configuration")?;
-    let method = config.method.to_ascii_uppercase();
-    ensure!(
-        matches!(
-            method.as_str(),
-            "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
-        ),
-        "Unsupported HTTP event method"
-    );
-    ensure!(
-        config.path.starts_with('/')
-            && config.path.len() <= 2048
-            && config.path.bytes().all(|b| b.is_ascii_graphic())
-            && !config.path.contains(['?', '#', '\\', '{', '}', '*'])
-            && !config.path.split('/').any(|p| p == "." || p == ".."),
-        "HTTP events require a literal absolute path"
-    );
-    Ok((method, config.path))
+}
+
+impl std::fmt::Display for Route {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{} {}", self.method, self.path)
+    }
+}
+
+/// The route of an `http` or `api` event, read from its config the way the hub reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct EventRoute {
+    pub(crate) route: Route,
+    /// The config had the only form agents before round two read: a `path` with a leading
+    /// `/`, and a `method`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) strict: bool,
+}
+
+/// Why a device cannot serve an event's route. The codes are shared with clients.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RouteProblem {
+    Missing,
+    Invalid(String),
+    Reserved(String),
+}
+
+impl RouteProblem {
+    pub(crate) fn code(&self) -> &'static str {
+        match self {
+            Self::Missing => "route_missing",
+            Self::Invalid(_) => "route_invalid",
+            Self::Reserved(_) => "route_reserved",
+        }
+    }
+}
+
+impl std::fmt::Display for RouteProblem {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing => {
+                formatter.write_str("The endpoint names no path; set one such as /orders in Events")
+            }
+            Self::Invalid(sentence) => formatter.write_str(sentence),
+            Self::Reserved(path) => write!(
+                formatter,
+                "The path {:?} is reserved by the service host for its own pages and channels",
+                shortened(path)
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RouteProblem {}
+
+fn shortened(text: &str) -> &str {
+    let mut end = text.len().min(64);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// Paths the service host answers itself. Nothing may be added: a route an older agent
+/// serves would stop being valid after an agent update.
+fn reserved_path(path: &str) -> bool {
+    path == "/services"
+        || path == "/ui"
+        || path.starts_with("/ui/")
+        || path.starts_with("/channels/")
+}
+
+/// `written` with a leading `/`, when it is a literal path the listener can match.
+fn literal_path(written: &str) -> Result<String, RouteProblem> {
+    let path = if written.starts_with('/') {
+        written.to_owned()
+    } else {
+        format!("/{written}")
+    };
+    let literal = path.len() <= MAX_PATH_BYTES
+        && path.bytes().all(|byte| byte.is_ascii_graphic())
+        && !path.contains(['?', '#', '\\', '{', '}', '*'])
+        && !path.split('/').any(|segment| matches!(segment, "." | ".."));
+    if literal {
+        return Ok(path);
+    }
+    Err(RouteProblem::Invalid(format!(
+        "The path {:?} is not a literal service path: at most {MAX_PATH_BYTES} printable ASCII characters without spaces, none of ? # \\ {{ }} *, and no . or .. segment",
+        shortened(written)
+    )))
+}
+
+/// The saved method in upper case, `None` when none is saved.
+fn saved_method(saved: Option<&Value>) -> Result<Option<String>, RouteProblem> {
+    let Some(saved) = saved.filter(|saved| !saved.is_null()) else {
+        return Ok(None);
+    };
+    saved
+        .as_str()
+        .map(str::to_ascii_uppercase)
+        .filter(|method| METHODS.contains(&method.as_str()))
+        .map(Some)
+        .ok_or_else(|| {
+            RouteProblem::Invalid(format!(
+                "The method {} is not one a device serves: {}",
+                shortened(&saved.to_string()),
+                METHODS.join(", ")
+            ))
+        })
+}
+
+/// The route rule of `http` and `api` events: `path`, else `path_suffix`, with a leading `/`
+/// added; a missing method is `POST`.
+fn config_route(config: &[u8]) -> Result<EventRoute, RouteProblem> {
+    let config: Value = serde_json::from_slice(config).unwrap_or(Value::Null);
+    let text = |key: &str| config.get(key).and_then(Value::as_str);
+    let written = text("path")
+        .or_else(|| text("path_suffix"))
+        .ok_or(RouteProblem::Missing)?;
+    let path = literal_path(written)?;
+    let method = saved_method(config.get("method"))?;
+    if reserved_path(&path) {
+        return Err(RouteProblem::Reserved(path));
+    }
+    Ok(EventRoute {
+        strict: method.is_some() && text("path").is_some_and(|path| path.starts_with('/')),
+        route: Route {
+            method: method.unwrap_or_else(|| "POST".into()),
+            path,
+        },
+    })
+}
+
+/// The route an `http` or `api` event without a default Page takes from its config; `None`
+/// for every other event.
+pub(crate) fn event_route(event: &Event) -> Result<Option<EventRoute>, RouteProblem> {
+    if event.default_page_id.is_some() || !crate::event_kind::serves_requests(&event.event_type) {
+        return Ok(None);
+    }
+    config_route(&event.config).map(Some)
+}
+
+/// What a route of the listener starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Door {
+    Endpoint,
+    Chat,
+    Page,
+    Run,
+}
+
+/// A route an event occupies on its service's listener.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RouteClaim {
+    pub(crate) event_id: String,
+    pub(crate) route: Route,
+    pub(crate) door: Door,
+}
+
+fn claim(event_id: &str, method: &str, path: String, door: Door) -> RouteClaim {
+    RouteClaim {
+        event_id: event_id.into(),
+        route: Route::new(method, path),
+        door,
+    }
+}
+
+/// The two endpoints of the Page of event `id`.
+fn page_claims(id: &str) -> [RouteClaim; 2] {
+    [
+        claim(id, "GET", format!("/pages/{id}/bootstrap"), Door::Page),
+        claim(id, "POST", format!("/pages/{id}/invoke"), Door::Page),
+    ]
+}
+
+/// The routes `event` occupies: its Endpoint route, its chat route, its Page's two endpoints,
+/// or the run route of a person-started event when the service has a web endpoint.
+pub(crate) fn route_claims(event: &Event, has_listener: bool) -> Result<Vec<RouteClaim>> {
+    let id = &event.id;
+    if event.default_page_id.is_some() {
+        return Ok(page_claims(id).into());
+    }
+    if let Some(EventRoute { route, .. }) =
+        event_route(event).with_context(|| format!("route of event {id}"))?
+    {
+        return Ok(vec![RouteClaim {
+            event_id: id.clone(),
+            route,
+            door: Door::Endpoint,
+        }]);
+    }
+    // Served without a Page and without a route of its own: a chat.
+    Ok(match EventKind::of(&event.event_type, false) {
+        Some(EventKind::Served) => vec![claim(id, "POST", format!("/chat/{id}"), Door::Chat)],
+        Some(EventKind::OnDemand) if has_listener => {
+            vec![claim(id, "POST", format!("/run/{id}"), Door::Run)]
+        }
+        _ => Vec::new(),
+    })
+}
+
+/// The door and route of each event a listener serves, once their claims passed the check.
+/// Run routes come with `PreparedHost::with_on_demand`.
+fn served_doors(events: Vec<PreparedInvocation>) -> Result<Vec<(PreparedInvocation, Door, Route)>> {
+    let mut claims = Vec::new();
+    let mut served = Vec::with_capacity(events.len());
+    for prepared in events {
+        let owned = route_claims(&prepared.event, true)?;
+        let (door, route) = owned
+            .first()
+            .filter(|claim| claim.door != Door::Run)
+            .map(|claim| (claim.door, claim.route.clone()))
+            .with_context(|| {
+                format!(
+                    "Event {} of type {} is not served by the service listener",
+                    prepared.event.id, prepared.event.event_type
+                )
+            })?;
+        claims.extend(owned);
+        served.push((prepared, door, route));
+    }
+    check_route_claims(&claims)?;
+    Ok(served)
+}
+
+/// Refuses a reserved path, and a method and path that two claims share.
+pub(crate) fn check_route_claims(claims: &[RouteClaim]) -> Result<()> {
+    let mut seen = HashMap::<&Route, &RouteClaim>::with_capacity(claims.len());
+    for claim in claims {
+        ensure!(
+            !reserved_path(&claim.route.path),
+            "HTTP event path is reserved by the service host: {} of event {}",
+            claim.route,
+            claim.event_id
+        );
+        let Some(first) = seen.insert(&claim.route, claim) else {
+            continue;
+        };
+        ensure!(
+            first.door != Door::Page && claim.door != Door::Page,
+            "HTTP route conflicts with a Page endpoint: {} of events {} and {}",
+            claim.route,
+            first.event_id,
+            claim.event_id
+        );
+        anyhow::bail!(
+            "Two events claim the same method and service path: {} of events {} and {}",
+            claim.route,
+            first.event_id,
+            claim.event_id
+        );
+    }
+    Ok(())
 }
 
 fn secret_path(config: &PlacementConfig, hosting: &HostingConfig) -> Result<PathBuf> {
@@ -135,8 +377,32 @@ fn authenticated(headers: &HeaderMap, path: &Path) -> Result<Option<blake3::Hash
     Ok(constant_time_eq(value.as_bytes(), &token).then(|| blake3::hash(&token)))
 }
 
+#[derive(Clone)]
+struct Hosted {
+    invocation: PreparedInvocation,
+    door: Door,
+}
+
+/// The service page's way into the service's quick actions and forms.
+#[cfg(feature = "on-demand")]
+struct RunDoor {
+    events: HashMap<String, crate::on_demand::OnDemandEvent>,
+    counters: crate::on_demand::Counters,
+}
+
+/// The run route of a person-started event.
+#[cfg(feature = "on-demand")]
+fn run_route(event: &crate::on_demand::OnDemandEvent) -> Result<RouteClaim> {
+    match route_claims(&event.invocation().event, true)?.as_slice() {
+        [claim] if claim.door == Door::Run => Ok(claim.clone()),
+        _ => anyhow::bail!("Event {} is not started by a person", event.id()),
+    }
+}
+
 struct HostState {
-    events: HashMap<(String, String), PreparedInvocation>,
+    events: HashMap<Route, Hosted>,
+    #[cfg(feature = "on-demand")]
+    run_door: Option<RunDoor>,
     pages: HashMap<String, pages::PreparedPage>,
     state: Arc<FlowLikeState>,
     profile: Profile,
@@ -155,6 +421,23 @@ struct HostState {
     #[cfg(feature = "frontend")]
     ui_policy: axum::http::HeaderValue,
 }
+
+#[cfg(feature = "on-demand")]
+impl HostState {
+    /// The routes this listener serves, as the claims of their events.
+    fn claims(&self) -> Vec<RouteClaim> {
+        self.events
+            .iter()
+            .map(|(route, hosted)| RouteClaim {
+                event_id: hosted.invocation.event.id.clone(),
+                route: route.clone(),
+                door: hosted.door,
+            })
+            .chain(self.pages.keys().flat_map(|id| page_claims(id)))
+            .collect()
+    }
+}
+
 pub(crate) struct PreparedHost {
     listener: TcpListener,
     state: Arc<HostState>,
@@ -286,9 +569,9 @@ impl PreparedHost {
         let secret = secret_path(config, hosting)?;
         let mut routes = HashMap::new();
         let mut pages = HashMap::new();
-        for prepared in events {
-            if prepared.event.default_page_id.is_some() {
-                let id = prepared.event.id.clone();
+        for (invocation, door, route) in served_doors(events)? {
+            if door == Door::Page {
+                let id = invocation.event.id.clone();
                 ensure!(
                     pages
                         .insert(
@@ -296,7 +579,7 @@ impl PreparedHost {
                             pages::PreparedPage::load(
                                 &config.id,
                                 &config.project_id,
-                                prepared,
+                                invocation,
                                 &state
                             )
                             .await?
@@ -304,32 +587,14 @@ impl PreparedHost {
                         .is_none(),
                     "Duplicate Page Event"
                 );
-                continue;
+            } else {
+                routes.insert(route, Hosted { invocation, door });
             }
-            let route = event_route(&prepared.event)?;
-            ensure!(
-                route.1 != "/services"
-                    && route.1 != "/ui"
-                    && !route.1.starts_with("/ui/")
-                    && !route.1.starts_with("/channels/"),
-                "HTTP event path is reserved by the service host"
-            );
-            ensure!(
-                routes.insert(route, prepared).is_none(),
-                "Two events claim the same method and service path"
-            );
         }
         ensure!(
             !routes.is_empty() || !pages.is_empty(),
             "Hosting requires an HTTP, chat or Page event"
         );
-        for id in pages.keys() {
-            ensure!(
-                !routes.contains_key(&("GET".into(), format!("/pages/{id}/bootstrap")))
-                    && !routes.contains_key(&("POST".into(), format!("/pages/{id}/invoke"))),
-                "HTTP route conflicts with a Page endpoint"
-            );
-        }
         let listener = match inherited_listener {
             Some(listener) => {
                 ensure!(
@@ -343,8 +608,15 @@ impl PreparedHost {
                 .context("Bind placement HTTP service")?,
         };
         let mut inventory = routes
-            .values()
-            .map(|entry| public_event(&entry.event))
+            .iter()
+            .map(|(route, entry)| {
+                let mut event = public_event(&entry.invocation.event);
+                if entry.door == Door::Endpoint {
+                    event["route"] =
+                        serde_json::json!({"method": route.method, "path": route.path});
+                }
+                event
+            })
             .chain(
                 pages
                     .values()
@@ -358,6 +630,8 @@ impl PreparedHost {
             reply_listener,
             state: Arc::new(HostState {
                 events: routes,
+                #[cfg(feature = "on-demand")]
+                run_door: None,
                 pages,
                 state,
                 profile,
@@ -383,6 +657,52 @@ impl PreparedHost {
         Arc::get_mut(&mut self.state)
             .context("Host identity must be configured before serving")?
             .execution_sub = Some(sub);
+        Ok(())
+    }
+
+    /// Offers the service's quick actions and forms at `POST /run/{event id}`, behind the
+    /// service token, and lists them in the inventory. Runs through this door are counted in
+    /// `counters` as runs of the service page. Call before serving.
+    #[cfg(feature = "on-demand")]
+    pub(crate) fn with_on_demand(
+        &mut self,
+        events: &[crate::on_demand::OnDemandEvent],
+        counters: crate::on_demand::Counters,
+    ) -> Result<()> {
+        let host = Arc::get_mut(&mut self.state)
+            .context("Person-started events must be offered before serving")?;
+        ensure!(
+            host.run_door.is_none(),
+            "Person-started events are offered once"
+        );
+        let runs = events.iter().map(run_route).collect::<Result<Vec<_>>>()?;
+        let mut claims = host.claims();
+        claims.extend(runs.iter().cloned());
+        check_route_claims(&claims)?;
+        let inventory = host
+            .inventory
+            .get_mut("events")
+            .and_then(Value::as_array_mut)
+            .context("Service inventory has no event list")?;
+        for (event, run) in events.iter().zip(runs) {
+            inventory.push(crate::on_demand::inventory_entry(event));
+            let invocation = event.invocation().clone();
+            host.events.insert(
+                run.route,
+                Hosted {
+                    invocation,
+                    door: Door::Run,
+                },
+            );
+        }
+        inventory.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        host.run_door = Some(RunDoor {
+            events: events
+                .iter()
+                .map(|event| (event.id().to_owned(), event.clone()))
+                .collect(),
+            counters,
+        });
         Ok(())
     }
 
@@ -477,12 +797,20 @@ async fn dispatch(State(host): State<Arc<HostState>>, request: Request) -> Respo
         request.method() == axum::http::Method::POST
             && page_route.is_some_and(|(_, suffix)| suffix == "invoke")
     });
-    let prepared = host
+    let hosted = host
         .events
-        .get(&(request.method().as_str().into(), path.clone()))
+        .get(&Route::new(request.method().as_str(), path.clone()))
         .cloned();
-    if prepared.is_none() && page.is_none() {
+    if hosted.is_none() && page.is_none() {
         return StatusCode::NOT_FOUND.into_response();
+    }
+    let body_kind = body_kind(request.headers());
+    if hosted.is_some() && body_kind == BodyKind::Multipart {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "Multipart bodies are not supported by a device service",
+        )
+            .into_response();
     }
     let Ok(permit) = host.capacity.clone().try_acquire_owned() else {
         crate::usage::concurrency_rejected();
@@ -494,107 +822,53 @@ async fn dispatch(State(host): State<Arc<HostState>>, request: Request) -> Respo
             .into_response();
     };
     let query = request.uri().query().map(str::to_owned);
-    let is_json = request
-        .headers()
-        .get("content-type")
-        .and_then(|h| h.to_str().ok())
-        .is_some_and(|s| {
-            s.split(';')
-                .next()
-                .is_some_and(|s| s.trim().eq_ignore_ascii_case("application/json"))
-        });
     let body = tokio::select! {_=host.cancel.cancelled()=>return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     result=tokio::time::timeout(host.timeout,to_bytes(request.into_body(),BODY_LIMIT))=>match result {Ok(Ok(body))=>body,Ok(Err(_))=>return StatusCode::PAYLOAD_TOO_LARGE.into_response(),Err(_)=>return StatusCode::REQUEST_TIMEOUT.into_response()}};
-    let is_page = page.is_some();
     let request_bytes = body.len() as u64 + query.as_ref().map_or(0, |value| value.len() as u64);
-    let (prepared, payload) = if let Some(page) = page {
-        if !is_json || query.is_some() {
+    let (prepared, payload, door) = if let Some(page) = page {
+        if body_kind != BodyKind::Json || query.is_some() {
             return (StatusCode::BAD_REQUEST, "Page actions require a JSON body").into_response();
         }
         match page.select(&host, &body, service_fingerprint).await {
-            Ok(selected) => selected,
+            Ok((prepared, payload)) => (prepared, payload, Door::Page),
             Err(_) => {
                 return (StatusCode::BAD_REQUEST, "Invalid or stale Page action").into_response();
             }
         }
     } else {
-        let prepared = prepared.expect("checked HTTP route");
-        let payload = match request_payload(
-            query.as_deref(),
-            &body,
-            is_json,
-            prepared.event.event_type == "simple_chat",
-        ) {
-            Ok(payload) => payload,
-            Err(_) => return (StatusCode::BAD_REQUEST, "Invalid event payload").into_response(),
-        };
-        (prepared, payload)
-    };
-    if is_page || prepared.event.event_type == "simple_chat" {
-        let (tx, rx) = mpsc::channel(32);
-        let (finished, completion) = tokio::sync::oneshot::channel();
-        let cancel = host.cancel.child_token();
-        let run_cancel = cancel.clone();
-        tokio::spawn(async move {
-            let _permit = permit;
-            let callback_cancel = run_cancel.clone();
-            let output = tx;
-            let callback: InterComCallback = Some(Arc::new(move |event: InterComEvent| {
-                let output = output.clone();
-                let cancel = callback_cancel.clone();
-                Box::pin(async move {
-                    if event.event_type == "run_initiated"
-                        || event.event_type.starts_with("chat_")
-                        || (is_page
-                            && matches!(event.event_type.as_str(), "a2ui" | "generic_result"))
-                    {
-                        let payload_bytes = serde_json::to_vec(&event.payload)?.len();
-                        ensure!(
-                            payload_bytes <= BODY_LIMIT,
-                            "Chat event exceeds the service response limit"
-                        );
-                        tokio::select! {_=cancel.cancelled()=>{},result=output.send(event)=>{if result.is_err() {cancel.cancel();} else {crate::usage::response_payload(payload_bytes);}}}
-                    }
-                    Ok(())
-                })
-            }));
-            let result = invoke(
-                &host,
-                &prepared,
-                payload,
-                callback,
-                run_cancel.clone(),
-                service_fingerprint,
-                request_bytes,
-            )
-            .await;
-            let _ = finished.send(result.is_ok());
-        });
-        // Completion has its own channel. Retained runtime callbacks may still
-        // own a sender, so closing their event channel cannot end the HTTP stream.
-        let stream = futures_util::stream::unfold(
-            (rx, completion, cancel.drop_guard(), false),
-            |(mut rx, mut completion, guard, ended)| async move {
-                if ended {
-                    return None;
+        let Hosted { invocation, door } = hosted.expect("checked HTTP route");
+        let payload = match door {
+            #[cfg(feature = "on-demand")]
+            Door::Run => {
+                match run_payload(
+                    &host,
+                    &invocation.event.id,
+                    query.is_some(),
+                    &body,
+                    body_kind,
+                ) {
+                    Ok(payload) => Some(payload),
+                    Err(refusal) => return refusal.into_response(),
                 }
-                let (event, ended) = tokio::select! {biased;
-                    event=rx.recv()=>match event {
-                        Some(event)=>(event,false),
-                        None=>{let ok=(&mut completion).await.unwrap_or(false);(InterComEvent::with_type(if ok {"done"} else {"error"},serde_json::json!({"completed":ok})),true)},
-                    },
-                    result=&mut completion=>{let ok=result.unwrap_or(false);(InterComEvent::with_type(if ok {"done"} else {"error"},serde_json::json!({"completed":ok})),true)}
-                };
-                let event = SseEvent::default()
-                    .event(&event.event_type)
-                    .json_data(&event.payload)
-                    .unwrap_or_else(|_| SseEvent::default().event("error").data("{}"));
-                Some((Ok::<_, Infallible>(event), (rx, completion, guard, ended)))
+            }
+            _ => match request_payload(query.as_deref(), &body, body_kind, door == Door::Chat) {
+                Ok(payload) => payload,
+                Err(_) => {
+                    return (StatusCode::BAD_REQUEST, "Invalid event payload").into_response();
+                }
             },
-        );
-        return Sse::new(stream)
-            .keep_alive(KeepAlive::default())
-            .into_response();
+        };
+        (invocation, payload, door)
+    };
+    if door != Door::Endpoint {
+        let run = Streamed {
+            prepared,
+            payload,
+            door,
+            service_fingerprint,
+            request_bytes,
+        };
+        return streamed_run(host, run, permit);
     }
     let _permit = permit;
     let response = Arc::new(Mutex::new(None));
@@ -614,7 +888,7 @@ async fn dispatch(State(host): State<Arc<HostState>>, request: Request) -> Respo
             Ok(())
         })
     }));
-    match invoke(
+    let end = invoke(
         &host,
         &prepared,
         payload,
@@ -623,22 +897,203 @@ async fn dispatch(State(host): State<Arc<HostState>>, request: Request) -> Respo
         service_fingerprint,
         request_bytes,
     )
-    .await
-    {
-        Ok(()) => axum::Json(
-            response
-                .lock()
-                .await
-                .clone()
-                .unwrap_or(serde_json::json!({"completed":true})),
-        )
-        .into_response(),
-        Err(_) => (
+    .await;
+    if end != RunEnd::Succeeded {
+        return (
             StatusCode::BAD_GATEWAY,
             "Workflow failed or exceeded its request deadline",
         )
-            .into_response(),
+            .into_response();
     }
+    axum::Json(
+        response
+            .lock()
+            .await
+            .clone()
+            .unwrap_or(serde_json::json!({"completed":true})),
+    )
+    .into_response()
+}
+
+/// A run whose events the answer streams: a chat, a Page action, or a run of the service page.
+struct Streamed {
+    prepared: PreparedInvocation,
+    payload: Option<Value>,
+    door: Door,
+    service_fingerprint: blake3::Hash,
+    request_bytes: u64,
+}
+
+/// Starts `run` and answers with its events, ending with `done` or `error`.
+fn streamed_run(
+    host: Arc<HostState>,
+    run: Streamed,
+    permit: tokio::sync::OwnedSemaphorePermit,
+) -> Response {
+    let Streamed {
+        prepared,
+        payload,
+        door,
+        service_fingerprint,
+        request_bytes,
+    } = run;
+    let (tx, rx) = mpsc::channel(32);
+    let (finished, completion) = tokio::sync::oneshot::channel();
+    let cancel = host.cancel.child_token();
+    let run_cancel = cancel.clone();
+    #[cfg(feature = "on-demand")]
+    let counted = host
+        .run_door
+        .as_ref()
+        .filter(|_| door == Door::Run)
+        .map(|run| {
+            run.counters
+                .begin(&prepared.event.id, crate::on_demand::Origin::ServicePage)
+        });
+    tokio::spawn(async move {
+        let _permit = permit;
+        let callback = stream_callback(door, tx, run_cancel.clone());
+        let end = invoke(
+            &host,
+            &prepared,
+            payload,
+            callback,
+            run_cancel.clone(),
+            service_fingerprint,
+            request_bytes,
+        )
+        .await;
+        #[cfg(feature = "on-demand")]
+        if let Some(counted) = counted {
+            counted.end(end);
+        }
+        let _ = finished.send(end == RunEnd::Succeeded);
+    });
+    event_answer(rx, completion, cancel.drop_guard())
+}
+
+/// Sends the run events the answer of `door` carries to `output`; a reader that went away
+/// cancels the run.
+fn stream_callback(
+    door: Door,
+    output: mpsc::Sender<InterComEvent>,
+    cancel: CancellationToken,
+) -> InterComCallback {
+    Some(Arc::new(move |event: InterComEvent| {
+        let output = output.clone();
+        let cancel = cancel.clone();
+        Box::pin(async move {
+            if streams(door, &event.event_type) {
+                let payload_bytes = serde_json::to_vec(&event.payload)?.len();
+                ensure!(
+                    payload_bytes <= BODY_LIMIT,
+                    "Chat event exceeds the service response limit"
+                );
+                tokio::select! {_=cancel.cancelled()=>{},result=output.send(event)=>{if result.is_err() {cancel.cancel();} else {crate::usage::response_payload(payload_bytes);}}}
+            }
+            Ok(())
+        })
+    }))
+}
+
+/// The answer to a streamed run: its events, then `done` or `error` once `completion` says
+/// how it ended. Dropping the answer cancels the run through `guard`.
+fn event_answer(
+    rx: mpsc::Receiver<InterComEvent>,
+    completion: oneshot::Receiver<bool>,
+    guard: tokio_util::sync::DropGuard,
+) -> Response {
+    // Completion has its own channel. Retained runtime callbacks may still
+    // own a sender, so closing their event channel cannot end the HTTP stream.
+    let stream = futures_util::stream::unfold(
+        (rx, completion, guard, false),
+        |(mut rx, mut completion, guard, ended)| async move {
+            if ended {
+                return None;
+            }
+            let (event, ended) = tokio::select! {biased;
+                event=rx.recv()=>match event {
+                    Some(event)=>(event,false),
+                    None=>{let ok=(&mut completion).await.unwrap_or(false);(InterComEvent::with_type(if ok {"done"} else {"error"},serde_json::json!({"completed":ok})),true)},
+                },
+                result=&mut completion=>{let ok=result.unwrap_or(false);(InterComEvent::with_type(if ok {"done"} else {"error"},serde_json::json!({"completed":ok})),true)}
+            };
+            let event = SseEvent::default()
+                .event(&event.event_type)
+                .json_data(&event.payload)
+                .unwrap_or_else(|_| SseEvent::default().event("error").data("{}"));
+            Some((Ok::<_, Infallible>(event), (rx, completion, guard, ended)))
+        },
+    );
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+/// Run events a streamed answer carries: a chat its messages; a Page also its renders and its
+/// result; the run route of a quick action or form also its text output.
+fn streams(door: Door, event_type: &str) -> bool {
+    event_type == "run_initiated"
+        || event_type.starts_with("chat_")
+        || (door != Door::Chat && matches!(event_type, "a2ui" | "generic_result"))
+        || (door == Door::Run && matches!(event_type, "text_output" | "stream_text"))
+}
+
+/// What a run through the service page sends: a JSON object, or no body for no fields.
+#[cfg(feature = "on-demand")]
+fn run_object(query: bool, body: &[u8], kind: BodyKind) -> Option<Value> {
+    if query {
+        return None;
+    }
+    if body.is_empty() {
+        return Some(Value::Object(Default::default()));
+    }
+    (kind == BodyKind::Json)
+        .then(|| serde_json::from_slice::<Value>(body).ok())
+        .flatten()
+        .filter(Value::is_object)
+}
+
+/// Why the run route does not start a run.
+#[cfg(feature = "on-demand")]
+enum RunRefusal {
+    NoEvent,
+    Body,
+    Fields(Vec<String>),
+}
+
+#[cfg(feature = "on-demand")]
+impl IntoResponse for RunRefusal {
+    fn into_response(self) -> Response {
+        match self {
+            Self::NoEvent => StatusCode::NOT_FOUND.into_response(),
+            Self::Body => (StatusCode::BAD_REQUEST, "Runs take a JSON object body").into_response(),
+            Self::Fields(fields) => {
+                let refusal = serde_json::json!({"code": "invalid_fields", "fields": fields});
+                (StatusCode::BAD_REQUEST, axum::Json(refusal)).into_response()
+            }
+        }
+    }
+}
+
+/// The fields of a run through the service page: a JSON object that passes the form's field
+/// check, or why it is refused, with the names of the refused fields.
+#[cfg(feature = "on-demand")]
+fn run_payload(
+    host: &HostState,
+    event_id: &str,
+    query: bool,
+    body: &[u8],
+    kind: BodyKind,
+) -> std::result::Result<Value, RunRefusal> {
+    let event = host
+        .run_door
+        .as_ref()
+        .and_then(|door| door.events.get(event_id))
+        .ok_or(RunRefusal::NoEvent)?;
+    let payload = run_object(query, body, kind).ok_or(RunRefusal::Body)?;
+    crate::on_demand::check_fields(event, &payload).map_err(RunRefusal::Fields)?;
+    Ok(payload)
 }
 
 fn public_event(event: &Event) -> Value {
@@ -654,27 +1109,81 @@ fn public_event(event: &Event) -> Value {
     serde_json::to_value(event).expect("Event metadata serializes")
 }
 
+/// How a request body is read, by its media type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BodyKind {
+    Json,
+    Form,
+    Multipart,
+    Text,
+}
+
+fn body_kind(headers: &HeaderMap) -> BodyKind {
+    let media = headers
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    match media.as_str() {
+        "application/json" => BodyKind::Json,
+        "application/x-www-form-urlencoded" => BodyKind::Form,
+        media if media.starts_with("multipart/") => BodyKind::Multipart,
+        _ => BodyKind::Text,
+    }
+}
+
+/// Query or form-encoded fields as the hub reads them: a repeated key becomes a list, `key[]`
+/// always makes one, and a key that is blank is `value`.
+fn form_fields(input: &str) -> serde_json::Map<String, Value> {
+    let mut fields = serde_json::Map::new();
+    for (key, value) in url::form_urlencoded::parse(input.as_bytes()) {
+        let key = key.trim();
+        let (key, list) = match key.strip_suffix("[]") {
+            Some(stripped) => (stripped.trim(), true),
+            None => (key, false),
+        };
+        let key = if key.is_empty() { "value" } else { key };
+        let value = Value::String(value.into_owned());
+        match fields.get_mut(key) {
+            Some(Value::Array(values)) => values.push(value),
+            Some(first) => *first = Value::Array(vec![first.take(), value]),
+            None => {
+                fields.insert(
+                    key.to_owned(),
+                    if list {
+                        Value::Array(vec![value])
+                    } else {
+                        value
+                    },
+                );
+            }
+        }
+    }
+    fields
+}
+
+/// A request body as a run reads it: JSON, form fields, or one text value.
+fn body_value(bytes: &[u8], kind: BodyKind) -> Result<Option<Value>> {
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(match kind {
+        BodyKind::Json => serde_json::from_slice::<Value>(bytes)?,
+        BodyKind::Form => Value::Object(form_fields(std::str::from_utf8(bytes)?)),
+        BodyKind::Text => Value::String(std::str::from_utf8(bytes)?.into()),
+        BodyKind::Multipart => anyhow::bail!("Multipart bodies are not supported"),
+    }))
+}
+
 fn request_payload(
     query: Option<&str>,
     bytes: &[u8],
-    is_json: bool,
+    kind: BodyKind,
     chat: bool,
 ) -> Result<Option<Value>> {
-    let mut values = serde_json::Map::new();
-    if let Some(query) = query {
-        for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
-            ensure!(!values.contains_key(key.as_ref()), "Duplicate query field");
-            values.insert(key.into_owned(), Value::String(value.into_owned()));
-        }
-    }
-    let body = if bytes.is_empty() {
-        None
-    } else if is_json {
-        Some(serde_json::from_slice::<Value>(bytes)?)
-    } else {
-        Some(Value::String(std::str::from_utf8(bytes)?.into()))
-    };
-    let payload = match body {
+    let mut values = query.map(form_fields).unwrap_or_default();
+    let payload = match body_value(bytes, kind)? {
         Some(Value::Object(body)) => {
             values.extend(body);
             Some(Value::Object(values))
@@ -706,24 +1215,29 @@ async fn invoke(
     cancel: CancellationToken,
     service_fingerprint: blake3::Hash,
     request_bytes: u64,
-) -> Result<()> {
+) -> RunEnd {
     let invocation = crate::usage::begin(request_bytes);
     let _cancel_on_drop = cancel.clone().drop_guard();
-    let result = tokio::select! {_=cancel.cancelled()=>Err(anyhow::anyhow!("Request cancelled")),
-    result=tokio::time::timeout(host.timeout,invoke_inner(host,prepared,payload,callback,cancel.clone(),service_fingerprint))=>result.context("Request deadline exceeded").and_then(|result|result)};
-    invocation.finish(if cancel.is_cancelled() {
-        crate::usage::Outcome::Cancelled
-    } else if result.is_ok() {
-        crate::usage::Outcome::Succeeded
-    } else {
-        crate::usage::Outcome::Failed
+    let ended = tokio::select! {_=cancel.cancelled()=>None,
+    result=tokio::time::timeout(host.timeout,invoke_inner(host,prepared,payload,callback,cancel.clone(),service_fingerprint))=>Some(result)};
+    let end = match ended {
+        _ if cancel.is_cancelled() => RunEnd::Cancelled,
+        None => RunEnd::Cancelled,
+        Some(Err(_)) => RunEnd::TimedOut,
+        Some(Ok(Ok(()))) => RunEnd::Succeeded,
+        Some(Ok(Err(_))) => RunEnd::Failed,
+    };
+    invocation.finish(match end {
+        RunEnd::Succeeded => crate::usage::Outcome::Succeeded,
+        RunEnd::Cancelled => crate::usage::Outcome::Cancelled,
+        RunEnd::Failed | RunEnd::TimedOut => crate::usage::Outcome::Failed,
     });
-    result
+    end
 }
 
 /// The process-wide in-process channel registry only forgets a run when it is closed, and a
 /// request can end on any await point, including its deadline.
-struct CloseChannelOnDrop(Arc<flow_like_types::channel::InProcessChannel>);
+pub(crate) struct CloseChannelOnDrop(pub(crate) Arc<flow_like_types::channel::InProcessChannel>);
 impl Drop for CloseChannelOnDrop {
     fn drop(&mut self) {
         use flow_like_types::channel::Channel;
@@ -939,6 +1453,577 @@ mod tests {
         }
     }
 
+    /// An event of the fixture's flow; a `null` config is an empty one.
+    fn hosted_event(id: &str, event_type: &str, config: Value) -> Event {
+        let now = SystemTime::now();
+        Event {
+            id: id.into(),
+            name: id.to_ascii_uppercase(),
+            description: String::new(),
+            board_id: "board".into(),
+            board_version: Some((1, 0, 0)),
+            node_id: "entry".into(),
+            variables: HashMap::new(),
+            config: if config.is_null() {
+                Vec::new()
+            } else {
+                serde_json::to_vec(&config).unwrap()
+            },
+            active: true,
+            canary: None,
+            variants: vec![],
+            priority: 0,
+            event_type: event_type.into(),
+            notes: None,
+            event_version: (1, 0, 0),
+            created_at: now,
+            updated_at: now,
+            default_page_id: None,
+            inputs: vec![],
+            route: None,
+            is_default: false,
+            execution_mode: EventExecutionMode::Local,
+            exposure: EventExposure::Public,
+            correlation_mappings: None,
+        }
+    }
+
+    fn routed(config: Value) -> Result<String, RouteProblem> {
+        config_route(&serde_json::to_vec(&config).unwrap()).map(|route| route.route.to_string())
+    }
+
+    fn claims_of(events: &[&Event], has_listener: bool) -> Vec<RouteClaim> {
+        events
+            .iter()
+            .flat_map(|event| route_claims(event, has_listener).unwrap())
+            .collect()
+    }
+
+    /// The literal table of design §1.2, which the client's route rule carries too.
+    #[test]
+    fn the_route_rule_reads_a_route_as_the_hub_does() {
+        use serde_json::json;
+        assert_eq!(
+            routed(json!({"path":"/orders","method":"get"})).unwrap(),
+            "GET /orders"
+        );
+        assert_eq!(routed(json!({"path":"orders"})).unwrap(), "POST /orders");
+        assert_eq!(
+            routed(json!({"path_suffix":"/a/b","method":"PUT"})).unwrap(),
+            "PUT /a/b"
+        );
+        assert_eq!(
+            routed(json!({"sink_type":"http","method":"GET","path":"/cm1abc","public_endpoint":true,"auth_token":"x"}))
+                .unwrap(),
+            "GET /cm1abc"
+        );
+        for path in ["/servicesx", "/runner", "/run/evt_a"] {
+            assert_eq!(
+                routed(json!({"path":path})).unwrap(),
+                format!("POST {path}")
+            );
+        }
+        let longest = format!("/{}", "a".repeat(MAX_PATH_BYTES - 1));
+        assert!(routed(json!({"path":longest})).is_ok());
+        let strict = |config: Value| {
+            config_route(&serde_json::to_vec(&config).unwrap())
+                .unwrap()
+                .strict
+        };
+        assert!(strict(json!({"path":"/orders","method":"get"})));
+        for config in [
+            json!({"path":"orders"}),
+            json!({"path":"/orders"}),
+            json!({"path_suffix":"/a/b","method":"PUT"}),
+        ] {
+            assert!(!strict(config.clone()), "{config}");
+        }
+    }
+
+    #[test]
+    fn the_route_rule_refuses_what_a_device_cannot_serve() {
+        use serde_json::json;
+        let refused = [
+            (json!({}), "route_missing"),
+            (json!({"path":7}), "route_missing"),
+            (json!([]), "route_missing"),
+            (json!({"path":"/a b"}), "route_invalid"),
+            (json!({"path":"/a?x=1"}), "route_invalid"),
+            (json!({"path":"/a/../b"}), "route_invalid"),
+            (json!({"path":"/ä"}), "route_invalid"),
+            (json!({"path":"/x","method":"TRACE"}), "route_invalid"),
+            (
+                json!({"path": format!("/{}", "a".repeat(MAX_PATH_BYTES))}),
+                "route_invalid",
+            ),
+            (json!({"path":"/services"}), "route_reserved"),
+            (json!({"path":"/ui/x"}), "route_reserved"),
+            (json!({"path":"/channels/1"}), "route_reserved"),
+        ];
+        for (config, code) in refused {
+            let problem = routed(config.clone()).unwrap_err();
+            assert_eq!(problem.code(), code, "{config}");
+            let sentence = problem.to_string();
+            assert!((20..=480).contains(&sentence.len()), "{sentence}");
+        }
+        assert_eq!(config_route(b"").unwrap_err().code(), "route_missing");
+    }
+
+    fn endpoint(config: Value) -> Event {
+        hosted_event("orders", "api", config)
+    }
+
+    #[test]
+    fn a_run_route_conflicts_only_with_its_own_method_and_path_in_its_own_service() {
+        use serde_json::json;
+        let form = hosted_event("evt_form", "generic_form", Value::Null);
+        let at_run = endpoint(json!({"path":"/run/evt_form","method":"POST"}));
+        assert_eq!(
+            route_claims(&form, true).unwrap(),
+            vec![RouteClaim {
+                event_id: "evt_form".into(),
+                route: Route::new("POST", "/run/evt_form".into()),
+                door: Door::Run,
+            }]
+        );
+        assert!(route_claims(&form, false).unwrap().is_empty());
+        let conflict = check_route_claims(&claims_of(&[&at_run, &form], true)).unwrap_err();
+        assert!(
+            conflict
+                .to_string()
+                .starts_with("Two events claim the same method and service path"),
+            "{conflict}"
+        );
+        assert!(conflict.to_string().contains("POST /run/evt_form"));
+        for (events, has_listener) in [(vec![&at_run], true), (vec![&at_run, &form], false)] {
+            check_route_claims(&claims_of(&events, has_listener)).unwrap();
+        }
+        let read = endpoint(json!({"path":"/run/evt_form","method":"GET"}));
+        check_route_claims(&claims_of(&[&read, &form], true)).unwrap();
+    }
+
+    #[test]
+    fn chats_pages_and_endpoints_of_one_service_never_share_a_route() {
+        use serde_json::json;
+        let chat = hosted_event("chat", "simple_chat", Value::Null);
+        let at_chat = endpoint(json!({"path":"/chat/chat","method":"POST"}));
+        assert!(
+            check_route_claims(&claims_of(&[&chat, &at_chat], true))
+                .unwrap_err()
+                .to_string()
+                .starts_with("Two events claim the same method and service path")
+        );
+        let mut page = hosted_event("page_event", "api", json!({"path":"/orders"}));
+        page.default_page_id = Some("page".into());
+        assert_eq!(
+            claims_of(&[&page], true)
+                .iter()
+                .map(|claim| (claim.route.to_string(), claim.door))
+                .collect::<Vec<_>>(),
+            [
+                ("GET /pages/page_event/bootstrap".to_owned(), Door::Page),
+                ("POST /pages/page_event/invoke".to_owned(), Door::Page),
+            ]
+        );
+        let at_page = endpoint(json!({"path":"/pages/page_event/bootstrap","method":"GET"}));
+        assert!(
+            check_route_claims(&claims_of(&[&page, &at_page], true))
+                .unwrap_err()
+                .to_string()
+                .starts_with("HTTP route conflicts with a Page endpoint")
+        );
+        let twin = hosted_event("twin", "http", json!({"path":"/orders","method":"POST"}));
+        assert!(
+            check_route_claims(&claims_of(
+                &[&endpoint(json!({"path":"orders"})), &twin],
+                true
+            ))
+            .is_err()
+        );
+        let reserved = route_claims(&endpoint(json!({"path":"/services"})), true).unwrap_err();
+        assert!(format!("{reserved:#}").contains("reserved"), "{reserved:#}");
+        for kind in ["daemon", "cron", "rest"] {
+            assert!(
+                route_claims(&hosted_event("other", kind, Value::Null), true)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    /// The service access token the fixture stores.
+    const SERVICE_TOKEN: &str = "tttttttttttttttttttttttttttttttt";
+    /// The token of an Endpoint's hub copy; a device never honours it.
+    const HUB_TOKEN: &str = "event-token-of-the-hub-copy-0000";
+
+    /// A listener of the fixture's project that serves until `stop`.
+    struct Served {
+        address: std::net::SocketAddr,
+        calls: Arc<AtomicUsize>,
+        cancel: CancellationToken,
+        server: tokio::task::JoinHandle<Result<()>>,
+        client: reqwest::Client,
+    }
+
+    impl Served {
+        fn start(host: PreparedHost, calls: Arc<AtomicUsize>, cancel: CancellationToken) -> Self {
+            Self {
+                address: host.listener.local_addr().unwrap(),
+                calls,
+                cancel,
+                server: tokio::spawn(host.serve()),
+                client: reqwest::Client::new(),
+            }
+        }
+
+        fn url(&self, path: &str) -> String {
+            format!("http://{}{path}", self.address)
+        }
+
+        /// What the service's inventory lists, by event id.
+        async fn inventory(&self) -> Vec<(String, Value)> {
+            let inventory: Value = self
+                .client
+                .get(self.url("/services"))
+                .bearer_auth(SERVICE_TOKEN)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert!(!inventory.to_string().contains(HUB_TOKEN));
+            inventory["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|event| (event["id"].as_str().unwrap().to_owned(), event.clone()))
+                .collect()
+        }
+
+        async fn stop(self) {
+            self.cancel.cancel();
+            tokio::time::timeout(Duration::from_secs(5), self.server)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    /// The fixture's service with an Endpoint of the editor's default config at
+    /// `GET /cm1abc`, and an `http` event at `POST /run/x` whose hub copy has a token.
+    async fn endpoints(root: &Path) -> Served {
+        let (config, state, mut events, calls, _) = fixture(root).await;
+        let template = events[0].template.clone();
+        events[0].event = hosted_event(
+            "endpoint",
+            "api",
+            serde_json::json!({"sink_type":"http","method":"GET","path":"/cm1abc","public_endpoint":false}),
+        );
+        events.push(PreparedInvocation {
+            event: hosted_event(
+                "run-path",
+                "http",
+                serde_json::json!({"path":"/run/x","method":"POST","auth_token":HUB_TOKEN}),
+            ),
+            template,
+            action_admission: None,
+        });
+        let cancel = CancellationToken::new();
+        let host = PreparedHost::bind(
+            &config,
+            events,
+            state,
+            Profile::default(),
+            AppVisibility::Offline,
+            cancel.clone(),
+        )
+        .await
+        .unwrap();
+        Served::start(host, calls, cancel)
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_with_the_editor_default_config_is_served_only_with_the_service_token() {
+        let directory = tempfile::tempdir().unwrap();
+        let served = endpoints(directory.path()).await;
+        let (client, endpoint, run_path) =
+            (&served.client, served.url("/cm1abc"), served.url("/run/x"));
+        for bearer in [None, Some(HUB_TOKEN)] {
+            for request in [client.get(&endpoint), client.post(&run_path)] {
+                let request = match bearer {
+                    Some(token) => request.bearer_auth(token),
+                    None => request,
+                };
+                let status = request.send().await.unwrap().status();
+                assert_eq!(status, StatusCode::UNAUTHORIZED);
+            }
+        }
+        let answer = client.get(&endpoint).bearer_auth(SERVICE_TOKEN).send();
+        let answer: Value = answer.await.unwrap().json().await.unwrap();
+        assert_eq!(answer["count"], 1);
+        let run = client.post(&run_path).bearer_auth(SERVICE_TOKEN);
+        let run = run.json(&serde_json::json!({"from":"run"})).send();
+        assert_eq!(run.await.unwrap().status(), StatusCode::OK);
+        let wrong_method = client.post(&endpoint).bearer_auth(SERVICE_TOKEN).send();
+        assert_eq!(wrong_method.await.unwrap().status(), StatusCode::NOT_FOUND);
+        assert_eq!(served.calls.load(Ordering::SeqCst), 2);
+        served.stop().await;
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_reads_form_bodies_and_refuses_multipart_bodies() {
+        let directory = tempfile::tempdir().unwrap();
+        let served = endpoints(directory.path()).await;
+        let post = |bearer: &str, content_type: &str, body: &str| {
+            served
+                .client
+                .post(served.url("/run/x"))
+                .bearer_auth(bearer)
+                .header("content-type", content_type)
+                .body(body.to_owned())
+                .send()
+        };
+        let form = post(
+            SERVICE_TOKEN,
+            "application/x-www-form-urlencoded",
+            "name=Ada&tags=a&tags=b",
+        );
+        let form: Value = form.await.unwrap().json().await.unwrap();
+        assert_eq!(
+            form["payload"],
+            serde_json::json!({"name":"Ada","tags":["a","b"]})
+        );
+        let multipart = "multipart/form-data; boundary=x";
+        let unauthorized = post("wrong-token", multipart, "--x--").await.unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let refused = post(SERVICE_TOKEN, multipart, "--x--").await.unwrap();
+        assert_eq!(refused.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(
+            refused.text().await.unwrap(),
+            "Multipart bodies are not supported by a device service"
+        );
+        assert_eq!(served.calls.load(Ordering::SeqCst), 1);
+        served.stop().await;
+    }
+
+    #[tokio::test]
+    async fn the_inventory_names_the_route_of_each_endpoint() {
+        let directory = tempfile::tempdir().unwrap();
+        let served = endpoints(directory.path()).await;
+        let routes = served
+            .inventory()
+            .await
+            .into_iter()
+            .map(|(id, event)| (id, event["route"].clone()))
+            .collect::<Vec<_>>();
+        let route = |method: &str, path: &str| serde_json::json!({"method":method,"path":path});
+        assert_eq!(
+            routes,
+            [
+                ("chat".to_owned(), Value::Null),
+                ("endpoint".to_owned(), route("GET", "/cm1abc")),
+                ("page_event".to_owned(), Value::Null),
+                ("run-path".to_owned(), route("POST", "/run/x")),
+            ]
+        );
+        served.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_listener_refuses_a_doubled_route_before_it_binds() {
+        let directory = tempfile::tempdir().unwrap();
+        let (config, state, mut events, _, _) = fixture(directory.path()).await;
+        let mut twin = events[0].clone();
+        twin.event.id = "twin".into();
+        events.push(twin);
+        let error = PreparedHost::bind(
+            &config,
+            events,
+            state,
+            Profile::default(),
+            AppVisibility::Offline,
+            CancellationToken::new(),
+        )
+        .await
+        .err()
+        .expect("a doubled route is refused");
+        assert!(
+            error
+                .to_string()
+                .starts_with("Two events claim the same method and service path"),
+            "{error}"
+        );
+        let port = config.hosting.as_ref().unwrap().port;
+        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok());
+    }
+
+    /// A quick action of the fixture's flow, and counters that write to `root`.
+    #[cfg(feature = "on-demand")]
+    fn quick_action(
+        root: &Path,
+        state: &Arc<FlowLikeState>,
+        template: Arc<CompiledRunTemplate>,
+    ) -> (
+        crate::on_demand::OnDemandEvent,
+        crate::on_demand::OnDemandContext,
+    ) {
+        let action = crate::on_demand::prepare(PreparedInvocation {
+            event: hosted_event("evt_action", "quick_action", Value::Null),
+            template,
+            action_admission: None,
+        })
+        .unwrap();
+        let run = Arc::new(crate::run_once::RunContext {
+            project_id: "project".into(),
+            state: state.clone(),
+            profile: Profile::default(),
+            visibility: AppVisibility::Offline,
+            execution_sub: None,
+        });
+        let context = crate::on_demand::OnDemandContext::new(
+            run,
+            None,
+            crate::on_demand::state_directory(root, "placement"),
+            "placement".into(),
+            0,
+            1,
+            1,
+            Duration::from_secs(5),
+        );
+        crate::on_demand::prepare_state(std::slice::from_ref(&action), &context).unwrap();
+        (action, context)
+    }
+
+    /// The fixture's service with the quick action `evt_action` on its service page.
+    #[cfg(feature = "on-demand")]
+    async fn service_page(root: &Path) -> Served {
+        let (config, state, events, calls, _) = fixture(root).await;
+        let (action, context) = quick_action(root, &state, events[0].template.clone());
+        let cancel = CancellationToken::new();
+        let mut host = PreparedHost::bind(
+            &config,
+            events,
+            state,
+            Profile::default(),
+            AppVisibility::Offline,
+            cancel.clone(),
+        )
+        .await
+        .unwrap();
+        host.with_on_demand(std::slice::from_ref(&action), context.counters())
+            .unwrap();
+        Served::start(host, calls, cancel)
+    }
+
+    #[cfg(feature = "on-demand")]
+    #[tokio::test]
+    async fn the_run_route_refuses_callers_without_the_token_and_fields_the_form_lacks() {
+        let directory = tempfile::tempdir().unwrap();
+        let served = service_page(directory.path()).await;
+        let run = |bearer: &str, path: &str, body: &str| {
+            served
+                .client
+                .post(served.url(path))
+                .bearer_auth(bearer)
+                .header("content-type", "application/json")
+                .body(body.to_owned())
+                .send()
+        };
+        let unauthorized = run("wrong-token", "/run/evt_action", "{}").await.unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let refused = run(
+            SERVICE_TOKEN,
+            "/run/evt_action",
+            r#"{"title":"no such field"}"#,
+        );
+        let refused = refused.await.unwrap();
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            refused.json::<Value>().await.unwrap(),
+            serde_json::json!({"code":"invalid_fields","fields":["title"]})
+        );
+        for (path, body) in [
+            ("/run/evt_action", "[1]"),
+            ("/run/evt_action", "not json"),
+            ("/run/evt_action?title=x", "{}"),
+        ] {
+            let status = run(SERVICE_TOKEN, path, body).await.unwrap().status();
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{path} {body}");
+        }
+        assert_eq!(served.calls.load(Ordering::SeqCst), 0);
+        served.stop().await;
+    }
+
+    #[cfg(feature = "on-demand")]
+    #[tokio::test]
+    async fn the_service_page_runs_a_quick_action_streams_it_and_counts_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let served = service_page(directory.path()).await;
+        let streamed = served
+            .client
+            .post(served.url("/run/evt_action"))
+            .bearer_auth(SERVICE_TOKEN)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(streamed.status(), StatusCode::OK);
+        let body = tokio::time::timeout(Duration::from_secs(5), streamed.text());
+        let body = body.await.unwrap().unwrap();
+        let frames: Vec<_> = body
+            .split("\n\n")
+            .filter_map(|frame| frame.lines().find_map(|line| line.strip_prefix("event: ")))
+            .collect();
+        assert_eq!(frames.first(), Some(&"run_initiated"));
+        assert!(frames.contains(&"generic_result"), "{frames:?}");
+        assert_eq!(frames.last(), Some(&"done"));
+        assert_eq!(served.calls.load(Ordering::SeqCst), 1);
+        let state = crate::on_demand::state_directory(directory.path(), "placement");
+        let counted: Value =
+            serde_json::from_slice(&std::fs::read(state.join("state.0.json")).unwrap()).unwrap();
+        let entry = &counted["events"]["evt_action"];
+        assert_eq!((&entry["runs"], &entry["running"]), (&1.into(), &0.into()));
+        assert_eq!(entry["last"]["origin"], "service_page");
+        assert_eq!(entry["last"]["outcome"], "succeeded");
+        let listed = served.inventory().await;
+        let ids = listed.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
+        assert_eq!(ids, ["chat", "evt_action", "http", "page_event"]);
+        served.stop().await;
+    }
+
+    #[cfg(feature = "on-demand")]
+    #[tokio::test]
+    async fn an_endpoint_at_the_run_route_of_a_quick_action_keeps_it_off_the_service_page() {
+        let directory = tempfile::tempdir().unwrap();
+        let (config, state, mut events, _, _) = fixture(directory.path()).await;
+        let (action, context) = quick_action(directory.path(), &state, events[0].template.clone());
+        events[0].event = hosted_event(
+            "orders",
+            "api",
+            serde_json::json!({"path":"/run/evt_action","method":"POST"}),
+        );
+        let mut host = PreparedHost::bind(
+            &config,
+            events,
+            state,
+            Profile::default(),
+            AppVisibility::Offline,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let error = host
+            .with_on_demand(std::slice::from_ref(&action), context.counters())
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("Two events claim the same method and service path"),
+            "{error}"
+        );
+    }
+
     async fn fixture(
         root: &Path,
     ) -> (
@@ -990,44 +2075,15 @@ mod tests {
             .resolve(&state, "project", "board", Some((1, 0, 0)), None, "")
             .await
             .unwrap();
-        let now = SystemTime::now();
-        let event = Event {
-            id: "http".into(),
-            name: "HTTP".into(),
-            description: String::new(),
-            board_id: "board".into(),
-            board_version: Some((1, 0, 0)),
-            node_id: "entry".into(),
-            variables: HashMap::new(),
-            config: serde_json::to_vec(&serde_json::json!({"path":"/echo","method":"POST"}))
-                .unwrap(),
-            active: true,
-            canary: None,
-            variants: vec![],
-            priority: 0,
-            event_type: "http".into(),
-            notes: None,
-            event_version: (1, 0, 0),
-            created_at: now,
-            updated_at: now,
-            default_page_id: None,
-            inputs: vec![],
-            route: None,
-            is_default: false,
-            execution_mode: EventExecutionMode::Local,
-            exposure: EventExposure::Public,
-            correlation_mappings: None,
-        };
-        let mut chat = event.clone();
-        chat.id = "chat".into();
-        chat.event_type = "simple_chat".into();
-        chat.config = Vec::new();
-        let mut page = event.clone();
-        page.id = "page_event".into();
-        page.event_type = "page".into();
+        let event = hosted_event(
+            "http",
+            "http",
+            serde_json::json!({"path":"/echo","method":"POST"}),
+        );
+        let chat = hosted_event("chat", "simple_chat", Value::Null);
+        let mut page = hosted_event("page_event", "page", Value::Null);
         page.default_page_id = Some("page".into());
         page.node_id.clear();
-        page.config.clear();
         let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = socket.local_addr().unwrap().port();
         drop(socket);
@@ -1333,13 +2389,67 @@ mod tests {
 
     #[test]
     fn payload_validation_rejects_ambiguous_or_invalid_requests() {
-        assert!(request_payload(Some("a=1&a=2"), b"", false, false).is_err());
-        assert!(request_payload(None, b"{bad", true, false).is_err());
-        assert!(request_payload(None, b"{}", true, true).is_err());
+        use BodyKind::{Json, Multipart, Text};
+        assert!(request_payload(None, b"{bad", Json, false).is_err());
+        assert!(request_payload(None, b"{}", Json, true).is_err());
+        assert!(request_payload(Some("a=1"), b"text", Text, false).is_err());
+        assert!(request_payload(None, b"--x", Multipart, false).is_err());
+        assert!(request_payload(None, &[0xff, 0xfe], Text, false).is_err());
         assert_eq!(
-            request_payload(Some("query=yes"), br#"{"body":1}"#, true, false).unwrap(),
+            request_payload(Some("query=yes"), br#"{"body":1}"#, Json, false).unwrap(),
             Some(serde_json::json!({"query":"yes","body":1}))
         );
+        assert_eq!(
+            request_payload(None, b"plain", Text, false).unwrap(),
+            Some(serde_json::json!("plain"))
+        );
+        assert_eq!(request_payload(None, b"", Text, false).unwrap(), None);
+    }
+
+    /// The hub's reading of query fields and form-encoded bodies.
+    #[test]
+    fn query_fields_and_form_bodies_are_read_as_the_hub_reads_them() {
+        use serde_json::json;
+        let query = |input: &str| {
+            request_payload(Some(input), b"", BodyKind::Text, false)
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(query("a=1&a=2"), json!({"a":["1","2"]}));
+        assert_eq!(query("a[]=1"), json!({"a":["1"]}));
+        assert_eq!(query("a=1&a[]=2&a=3"), json!({"a":["1","2","3"]}));
+        assert_eq!(query("a[]=1&a=2"), json!({"a":["1","2"]}));
+        assert_eq!(query("=x&[]=y"), json!({"value":["x","y"]}));
+        assert_eq!(
+            query("q=a+b%21&+key+=1&flag"),
+            json!({"q":"a b!","key":"1","flag":""})
+        );
+        assert_eq!(query("caf%C3%A9=%E2%9C%93&&"), json!({"café":"✓"}));
+        assert_eq!(
+            request_payload(None, b"name=Ada&tags=a&tags=b", BodyKind::Form, false).unwrap(),
+            Some(json!({"name":"Ada","tags":["a","b"]}))
+        );
+        assert_eq!(
+            request_payload(
+                Some("name=query&page=2"),
+                b"name=body",
+                BodyKind::Form,
+                false
+            )
+            .unwrap(),
+            Some(json!({"name":"body","page":"2"}))
+        );
+        let kind = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", value.parse().unwrap());
+            body_kind(&headers)
+        };
+        assert_eq!(kind("application/json; charset=utf-8"), BodyKind::Json);
+        assert_eq!(kind("Application/X-WWW-Form-Urlencoded"), BodyKind::Form);
+        assert_eq!(kind("multipart/form-data; boundary=x"), BodyKind::Multipart);
+        assert_eq!(kind("multipart/mixed"), BodyKind::Multipart);
+        assert_eq!(kind("text/plain"), BodyKind::Text);
+        assert_eq!(body_kind(&HeaderMap::new()), BodyKind::Text);
     }
 
     #[tokio::test]

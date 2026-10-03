@@ -16,7 +16,7 @@ describe("requestTimeoutMs mirrors the API deadline classes", () => {
 	test.each([
 		["POST", "apps/app-1/events/ev-1/prerun", WRITE_REQUEST_TIMEOUT_MS],
 		["GET", "apps/app-1/events/ev-1", WRITE_REQUEST_TIMEOUT_MS],
-		["DELETE", "apps/app-1/events/ev-1", WRITE_REQUEST_TIMEOUT_MS],
+		["GET", "apps/app-1/events/ev-1/teams/access", WRITE_REQUEST_TIMEOUT_MS],
 		["GET", "apps/app-1/events", WRITE_REQUEST_TIMEOUT_MS],
 		["GET", "apps/app-1/invoke/presign", WRITE_REQUEST_TIMEOUT_MS],
 		["GET", "apps/app-1/packages", WRITE_REQUEST_TIMEOUT_MS],
@@ -43,6 +43,11 @@ describe("requestTimeoutMs mirrors the API deadline classes", () => {
 		["GET", "audit/verify", DATA_REQUEST_TIMEOUT_MS],
 		["POST", "admin/cache/sweep", JOB_REQUEST_TIMEOUT_MS],
 		["POST", "maintenance/run", JOB_REQUEST_TIMEOUT_MS],
+		// Deleting an Event also disconnects its Teams bot, a Job on the API.
+		["DELETE", "apps/app-1/events/ev-1", JOB_REQUEST_TIMEOUT_MS],
+		["PUT", "apps/app-1/events/ev-1/teams", JOB_REQUEST_TIMEOUT_MS],
+		["DELETE", "apps/app-1/events/ev-1/teams", JOB_REQUEST_TIMEOUT_MS],
+		["POST", "apps/app-1/events/ev-1/teams/rotate", JOB_REQUEST_TIMEOUT_MS],
 		["PUT", "apps/app-1/events/ev-1", DISPATCH_REQUEST_TIMEOUT_MS],
 		["POST", "apps/app-1/events/ev-1/setup", DISPATCH_REQUEST_TIMEOUT_MS],
 		["POST", "apps/app-1/events/ev-1/restore", DISPATCH_REQUEST_TIMEOUT_MS],

@@ -5,6 +5,10 @@
 use super::*;
 use crate::{audit::AuditRecordInput, middleware::jwt::AppUser};
 
+pub(crate) const GRANT_CREATE: &str = "device.delegation.grant.create";
+pub(crate) const GRANT_REVOKE: &str = "device.delegation.grant.revoke";
+pub(crate) const BILLING_APPROVE: &str = "device.delegation.billing.approve";
+pub(crate) const BILLING_REVOKE: &str = "device.delegation.billing.revoke";
 const REGISTER_ACTION: &str = "instance.register";
 
 /// Instances act for their delegating user; their records name the instance as the actor.
@@ -28,7 +32,6 @@ pub(super) fn instance_record(
     input
 }
 
-#[allow(dead_code)]
 pub(crate) async fn audit_grant(
     state: &AppState,
     user: &AppUser,
@@ -50,7 +53,6 @@ pub(crate) async fn audit_grant(
     .await;
 }
 
-#[allow(dead_code)]
 pub(crate) async fn audit_billing(
     state: &AppState,
     user: &AppUser,
@@ -76,7 +78,6 @@ pub(crate) async fn audit_billing(
 }
 
 /// Opens the trail that the instance's storage leases and replayed writes continue.
-#[allow(dead_code)]
 pub(crate) async fn audit_registration(state: &AppState, receipt: &InstanceReceipt) {
     if !crate::audit::records(&state.platform_config.audit, REGISTER_ACTION) {
         return;
@@ -174,7 +175,32 @@ mod tests {
             expires_at: 1_900_000_000,
             status: "revoked".into(),
             online_access: app_id.map(|_| OnlineProjectAccess::ReadWrite),
+            effective_expires_at: None,
+            effective_limit: None,
+            online_write_blocked: None,
+            approved_by_user_id: Some("delegator".into()),
+            created_at: Some(1_800_000_000),
         }
+    }
+
+    #[test]
+    fn delegation_changes_are_security_evidence_at_every_audit_level() {
+        for action in [GRANT_CREATE, GRANT_REVOKE, BILLING_APPROVE, BILLING_REVOKE] {
+            assert_eq!(
+                crate::audit::required_level(action),
+                crate::audit::AuditLevel::Minimal,
+                "{action}"
+            );
+            assert_eq!(
+                crate::audit::RetentionClass::of(action),
+                crate::audit::RetentionClass::Evidence,
+                "{action}"
+            );
+        }
+        assert_eq!(
+            crate::audit::required_level(REGISTER_ACTION),
+            crate::audit::AuditLevel::Standard
+        );
     }
 
     #[test]
@@ -199,6 +225,8 @@ mod tests {
             reserved_micros: 0,
             expires_at: 1_800_000_000,
             status: "active".into(),
+            approved_by_user_id: Some("payer".into()),
+            created_at: Some(1_700_000_000),
         };
         let details = billing_details(&grant(None), &billing);
         assert_eq!(details["payer_id"], "payer");

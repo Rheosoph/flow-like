@@ -7,6 +7,7 @@ import {
 	controllerBackup,
 	encryptedControllerBackup,
 	pinDeviceIdentity,
+	readAccountRecoveryState,
 	readDeviceVault,
 	replaceRewrappedVault,
 } from "./storage";
@@ -466,4 +467,63 @@ test("the first verified device identity is pinned per account and enrollment", 
 	await expect(pinDeviceIdentity(scope, "other", receipt(1))).rejects.toThrow(
 		"cannot be pinned",
 	);
+});
+
+test("a key-session lease changes the password without a second lock and flags the account backup", async () => {
+	const previous = fixture();
+	await addDeviceVault(scope, previous);
+	const buffers: Uint8Array[] = [];
+	const crypto: Pick<DeviceCrypto, "rewrapControllerVaults"> = {
+		rewrapControllerVaults(_device, old, next) {
+			buffers.push(old, next);
+			return {
+				controller: {
+					public_bundle: previous.controllerPublic,
+					vault: Array(80).fill(3),
+				},
+				invitation: {
+					public_key: previous.controllerPublic.controller_key,
+					vault: Array(80).fill(4),
+				},
+			};
+		},
+	};
+	const replaced: LocalDeviceVault[] = [];
+	const lease = {
+		vault: previous,
+		replace: (next: LocalDeviceVault) => replaced.push(next),
+	};
+	lockHeld = true;
+	const next = await changeDevicePassword(
+		scope,
+		previous,
+		"previous password",
+		"replacement password",
+		crypto,
+		undefined,
+		lease,
+	);
+	expect(replaced).toEqual([next]);
+	expect(await readDeviceVault(scope, "device")).toEqual(next);
+	expect(
+		(await readAccountRecoveryState(scope, "device"))
+			.passwordChangedSinceBackup,
+	).toBe(true);
+	expect(buffers).toHaveLength(2);
+	expect(buffers.every((bytes) => bytes.every((byte) => byte === 0))).toBe(
+		true,
+	);
+	await expect(
+		changeDevicePassword(
+			scope,
+			next,
+			"replacement password",
+			"third password",
+			crypto,
+			undefined,
+			{ ...lease, vault: { ...previous, deviceId: "other" } },
+		),
+	).rejects.toThrow("cannot lend");
+	expect(replaced).toHaveLength(1);
+	expect(lockHeld).toBe(true);
 });

@@ -1,3 +1,4 @@
+/* global Buffer, TextDecoder, TextEncoder, URL */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
@@ -316,5 +317,81 @@ test("generated browser WASM validates unattended fleet readers against the pinn
   } finally {
     for(const handle of handles.reverse()){handle.close();handle.free();}
     password.fill(0);
+  }
+});
+
+test("generated browser WASM signs for the owner with a held invitation key until it is detached or closed", () => {
+  const password = new TextEncoder().encode("held signer browser password");
+  const wrong = new TextEncoder().encode("another browser password");
+  const device = "device-held";
+  const handles = [];
+  try {
+    const created = crypto.createControllerVault(device, password);
+    const invitation = crypto.createInvitationVault(device, password);
+    const foreign = crypto.createInvitationVault("other-device", password);
+    const controllerVault = Uint8Array.from(created.vault);
+    const invitationVault = Uint8Array.from(invitation.vault);
+    const controller = crypto.unlockControllerVault(device, password, controllerVault);
+    handles.push(controller);
+    const policy = {version:1,device_id:device,policy_version:1,previous_policy_digest:null,grants:[{grant_id:"reader",user_id:"colleague",controller_key:created.public_bundle.controller_key,scope:{kind:"device"},capabilities:["status"],expires_at:200,group_id:null,group_version:null}],issued_at:100,expires_at:200};
+    const telemetry = {version:1,device_id:device,scope:"device",policy_version:1,previous_policy_digest:null,management_policy_digest:null,publisher:created.public_bundle.telemetry_member,members:[created.public_bundle.telemetry_member],issued_at:100,expires_at:200};
+    const archive = {version:1,device_id:device,scope:"device",project_id:null,kind:"logs",policy_version:1,previous_policy_digest:null,management_policy_digest:null,recipients:[{recipient_id:"owner",user_id:"owner",public_key:created.public_bundle.archive_key}],issued_at:100,expires_at:200};
+    const held = () => [controller.signManagementPolicyHeld(policy), controller.signTelemetryRosterHeld(telemetry), controller.signArchiveRosterHeld(archive)];
+    const notHeld = (pattern) => {
+      assert.throws(() => controller.signManagementPolicyHeld(policy), pattern);
+      assert.throws(() => controller.signTelemetryRosterHeld(telemetry), pattern);
+      assert.throws(() => controller.signArchiveRosterHeld(archive), pattern);
+    };
+
+    notHeld(/not held/);
+    assert.throws(() => controller.attachInvitation(wrong, invitationVault));
+    assert.throws(() => controller.attachInvitation(password, controllerVault));
+    assert.throws(() => controller.attachInvitation(password, Uint8Array.from(foreign.vault)));
+    notHeld(/not held/);
+
+    controller.attachInvitation(password, invitationVault);
+    assert.equal(new TextDecoder().decode(password), "held signer browser password");
+    const signed = held();
+    assert.deepEqual(signed, [
+      crypto.signManagementPolicy(policy, password, invitationVault),
+      crypto.signTelemetryRoster(telemetry, password, invitationVault),
+      crypto.signArchiveRoster(archive, password, invitationVault),
+    ]);
+    assert.deepEqual(crypto.verifyManagementPolicy(signed[0], invitation.public_key), policy);
+    assert.deepEqual(crypto.verifyTelemetryRoster(signed[1], invitation.public_key, 100), telemetry);
+    assert.deepEqual(crypto.verifyArchiveRosterHead(signed[2], invitation.public_key), archive);
+    assert.throws(() => crypto.verifyManagementPolicy(signed[0], created.public_bundle.controller_key));
+
+    assert.throws(() => controller.signManagementPolicyHeld({...policy, device_id: "other-device"}), /other-device/);
+    assert.throws(() => controller.signTelemetryRosterHeld({...telemetry, device_id: "other-device"}));
+    assert.throws(() => controller.signArchiveRosterHeld({...archive, device_id: "other-device"}));
+
+    assert.throws(() => controller.attachInvitation(wrong, invitationVault));
+    assert.deepEqual(held(), signed);
+    controller.freshEndpointVault(password);
+    assert.deepEqual(held(), signed);
+
+    controller.detachInvitation();
+    controller.detachInvitation();
+    notHeld(/not held/);
+    controller.attachInvitation(password, invitationVault);
+    assert.deepEqual(held(), signed);
+
+    controller.close();
+    notHeld(/locked/);
+    assert.throws(() => controller.attachInvitation(password, invitationVault), /locked/);
+    controller.detachInvitation();
+
+    const onboarding = crypto.createOnboardingVaults(password);
+    const provisional = crypto.unlockControllerVault(onboarding.controller.public_bundle.device_id, password, Uint8Array.from(onboarding.controller.vault));
+    handles.push(provisional);
+    assert.throws(() => provisional.attachInvitation(password, Uint8Array.from(onboarding.invitation.vault)), /onboarding/);
+
+    assert.equal(crypto.signManagementPolicy(policy, password, invitationVault), signed[0]);
+    assert.throws(() => crypto.signManagementPolicy(policy, wrong, invitationVault));
+  } finally {
+    for (const handle of handles.reverse()) { handle.close(); handle.free(); }
+    password.fill(0);
+    wrong.fill(0);
   }
 });

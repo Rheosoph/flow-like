@@ -15,6 +15,7 @@ pub mod internal;
 pub mod ai_act;
 pub mod analytics;
 pub mod api;
+mod artifact_cache;
 pub mod audit;
 pub mod board;
 pub mod cache;
@@ -63,6 +64,15 @@ pub fn routes() -> Router<AppState> {
                 .delete(internal::delete_app::delete_app),
         )
         .route("/{app_id}/device-metadata", get(device_metadata::export))
+        .route(
+            "/{app_id}/device-placements",
+            get(crate::instances::app_placements::device_placements),
+        )
+        .route(
+            "/{app_id}/device-schedules/{event_id}",
+            axum::routing::put(crate::instances::schedules::release)
+                .delete(crate::instances::schedules::give_back),
+        )
         .route("/{app_id}/detail", get(internal::get_detail::get_detail))
         .route(
             "/{app_id}/visibility",

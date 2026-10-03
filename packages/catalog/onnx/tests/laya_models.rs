@@ -289,7 +289,7 @@ fn laya_choice_score_and_noul_match_reference_inference() {
             fixture.name
         );
         assert!(
-            (result.act_probability - 1.0).abs() < 0.001,
+            (result.act_probability.unwrap() - 1.0).abs() < 0.001,
             "{} action probability",
             fixture.name
         );

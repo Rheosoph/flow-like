@@ -31,6 +31,40 @@ fn open(state_dir: &Path) -> Result<StateStore> {
     StateStore::open(&state_dir.join("management.sqlite"))
 }
 
+/// A reboot or agent update that has not reached an outcome yet.
+pub(crate) struct ActiveOperation {
+    pub operation_id: String,
+    pub kind: &'static str,
+    pub state: String,
+    pub created_at: i64,
+    /// The journal principal that issued it.
+    pub principal: Option<String>,
+}
+
+/// At most one host operation is in progress: a new one is refused while another is.
+pub(crate) fn active_operation(store: &StateStore) -> Result<Option<ActiveOperation>> {
+    Ok(store
+        .connection
+        .query_row(
+            "SELECT h.operation_id,h.kind,h.state,h.created_at,m.principal FROM host_operations h LEFT JOIN management_operations m ON m.operation_id=h.operation_id WHERE h.state IN ('pending','staging','draining','requesting','requested','unknown') ORDER BY h.created_at DESC,h.operation_id LIMIT 1",
+            [],
+            |row| {
+                Ok(ActiveOperation {
+                    operation_id: row.get(0)?,
+                    kind: if row.get::<_, String>(1)? == "reboot" {
+                        "reboot"
+                    } else {
+                        "update_agent"
+                    },
+                    state: row.get(2)?,
+                    created_at: row.get(3)?,
+                    principal: row.get(4)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
 /// Move a host operation to `state`, optionally only from `expected`, and describe it to the caller.
 fn transition(
     store: &StateStore,
@@ -165,7 +199,8 @@ fn watch_backoff(failures: u32) -> Duration {
 
 /// Run `step` every second until it reports completion or `stop` is cancelled.
 /// Per-iteration failures are logged and retried with backoff so host operations keep expiring.
-async fn watch<F, Fut>(name: &str, stop: &CancellationToken, mut step: F)
+/// Each check is reported as the health of background task `task`.
+async fn watch<F, Fut>(name: &str, task: &str, stop: &CancellationToken, mut step: F)
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<bool>>,
@@ -175,7 +210,9 @@ where
     let mut failures = 0u32;
     loop {
         tokio::select! { _ = stop.cancelled() => return, _ = tick.tick() => () }
-        match step().await {
+        let checked = step().await;
+        crate::diagnostics::global().report_error(task, &checked);
+        match checked {
             Ok(true) => return,
             Ok(false) => failures = 0,
             Err(error) => {
@@ -195,9 +232,12 @@ where
 
 /// Stop the supervisor before asking the OS to reboot. A dispatched request is never retried.
 pub async fn watch_reboot(state_dir: &Path, boot_id: &str, stop: CancellationToken) {
-    watch("reboot", &stop, || async {
-        claim_reboot(state_dir, boot_id, &stop)
-    })
+    watch(
+        "reboot",
+        crate::diagnostics::REBOOT_WATCHER,
+        &stop,
+        || async { claim_reboot(state_dir, boot_id, &stop) },
+    )
     .await
 }
 
@@ -317,7 +357,7 @@ pub async fn watch_update(
     run_id: &str,
     stop: CancellationToken,
 ) {
-    watch("update", &stop, || {
+    watch("update", crate::diagnostics::UPDATE_WATCHER, &stop, || {
         stage_pending_update(state_dir, device_id, boot_id, run_id, &stop)
     })
     .await
@@ -509,18 +549,27 @@ mod tests {
 
     #[tokio::test]
     async fn watchers_survive_failed_checks_and_stop_only_on_completion_or_cancel() -> Result<()> {
+        use crate::diagnostics::{TaskFailure, TaskState, test_support::health};
         use std::sync::atomic::{AtomicU32, Ordering};
         let stop = CancellationToken::new();
         let calls = AtomicU32::new(0);
-        watch("test", &stop, || async {
+        let failing = Some((TaskState::Failing, Some(TaskFailure::Internal)));
+        watch("test", "recovering_test_watcher", &stop, || async {
             match calls.fetch_add(1, Ordering::SeqCst) {
                 0 => anyhow::bail!("database is locked"),
-                _ => Ok(true),
+                _ => {
+                    assert_eq!(health("recovering_test_watcher"), failing);
+                    Ok(true)
+                }
             }
         })
         .await;
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert!(!stop.is_cancelled());
+        assert_eq!(
+            health("recovering_test_watcher"),
+            Some((TaskState::Ok, None))
+        );
 
         let cancel = stop.clone();
         tokio::spawn(async move {
@@ -529,14 +578,41 @@ mod tests {
         });
         tokio::time::timeout(
             Duration::from_secs(1),
-            watch("test", &stop, || async {
+            watch("test", "failing_test_watcher", &stop, || async {
                 Err::<bool, _>(anyhow::anyhow!("disk is full"))
             }),
         )
         .await
         .context("A cancelled watcher must not wait out its backoff")?;
+        assert_eq!(health("failing_test_watcher"), failing);
         assert_eq!(watch_backoff(1), Duration::from_secs(2));
         assert_eq!(watch_backoff(40), MAX_WATCH_BACKOFF);
+        Ok(())
+    }
+
+    #[test]
+    fn the_active_operation_names_its_kind_and_issuer_until_it_has_an_outcome() -> Result<()> {
+        let (_directory, store) = store_with_operations(&[
+            ("finished", "reboot", "failed", 50),
+            ("update", "update", "staging", 100),
+        ])?;
+        store.connection.execute(
+            "INSERT INTO management_operations(operation_id,request_digest,principal,accepted_at,result_json) VALUES('update','digest','owner-user:owner',100,'{}')",
+            [],
+        )?;
+        let active = active_operation(&store)?.context("An update is staging")?;
+        assert_eq!(active.operation_id, "update");
+        assert_eq!(active.kind, "update_agent");
+        assert_eq!(active.state, "staging");
+        assert_eq!(active.created_at, 100);
+        assert_eq!(active.principal.as_deref(), Some("owner-user:owner"));
+        store.connection.execute(
+            "DELETE FROM management_operations WHERE operation_id='update'",
+            [],
+        )?;
+        assert!(active_operation(&store)?.unwrap().principal.is_none());
+        transition(&store, "update", "update", None, "completed", None)?;
+        assert!(active_operation(&store)?.is_none());
         Ok(())
     }
 

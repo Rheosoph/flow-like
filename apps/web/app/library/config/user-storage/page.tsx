@@ -2,6 +2,7 @@
 
 import {
 	type BulkUploadProgressCallback,
+	type IStorageListOptions,
 	type IStorageUploadOptions,
 	StorageSystem,
 	useBackend,
@@ -34,8 +35,12 @@ export default function Page() {
 
 	const operations = useMemo(
 		() => ({
-			listStorageItems: (appId: string, targetPrefix: string) =>
-				backend.storageState.listStorageItemsUser(appId, targetPrefix),
+			listStorageItems: (
+				appId: string,
+				targetPrefix: string,
+				options?: IStorageListOptions,
+			) =>
+				backend.storageState.listStorageItemsUser(appId, targetPrefix, options),
 			deleteStorageItems: (appId: string, prefixes: string[]) =>
 				backend.storageState.deleteStorageItemsUser(appId, prefixes),
 			downloadStorageItems: (appId: string, prefixes: string[]) =>

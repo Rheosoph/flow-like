@@ -88,7 +88,7 @@ impl ApiError {
     };
 
     pub fn internal_error(err: flow_like_types::Error) -> Self {
-        Self::from_board_format_error(&err).unwrap_or_else(|| Self::internal(err.to_string()))
+        Self::from_board_error(&err).unwrap_or_else(|| Self::internal(err.to_string()))
     }
 
     /// The client-safe message, for callers that need to record the same
@@ -132,6 +132,21 @@ impl ApiError {
         error
             .downcast_ref::<flow_like::flow::board::format::BoardFormatError>()
             .map(|error| Self::board_format_upgrade_required(error.required, error.supported))
+    }
+
+    fn from_board_error(error: &flow_like_types::Error) -> Option<Self> {
+        Self::from_board_format_error(error).or_else(|| {
+            let missing = error.downcast_ref::<flow_like::flow::board::BoardNotFound>()?;
+            // The full chain keeps the object path and the store's answer (NoSuchKey vs a
+            // misconfigured bucket) in the log; the client only sees which board is missing.
+            tracing::warn!("Not found: {error:#}");
+            Some(Self::new(
+                StatusCode::NOT_FOUND,
+                "NOT_FOUND",
+                Some(missing.to_string()),
+                ReportPolicy::Ignore,
+            ))
+        })
     }
 
     fn new(
@@ -462,7 +477,7 @@ impl IntoResponse for ApiError {
 // Implement From for flow_like_types::Error
 impl From<flow_like_types::Error> for ApiError {
     fn from(err: flow_like_types::Error) -> Self {
-        if let Some(error) = Self::from_board_format_error(&err) {
+        if let Some(error) = Self::from_board_error(&err) {
             return error;
         }
         tracing::error!("Internal error: {:?}", err);
@@ -721,3 +736,34 @@ macro_rules! forbidden {
 // Legacy type alias for backward compatibility during migration
 pub type InternalError = ApiError;
 pub type AuthorizationError = ApiError;
+
+#[cfg(test)]
+mod tests {
+    use super::{ApiError, ReportPolicy};
+    use axum::http::StatusCode;
+    use flow_like::flow::board::Board;
+    use flow_like_storage::object_store::{memory::InMemory, path::Path};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn missing_board_is_an_unreported_not_found() {
+        let error = Board::load_proto(
+            Arc::new(InMemory::new()),
+            &Path::from("apps/app"),
+            "gone",
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        let missing = ApiError::from(error.context("serving a board sync"));
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(missing.public_code(), "NOT_FOUND");
+        assert_eq!(missing.public_message(), Some("Board gone not found"));
+        assert_eq!(missing.report_policy, ReportPolicy::Ignore);
+
+        let unrelated = ApiError::from(flow_like_types::anyhow!("storage unavailable"));
+        assert_eq!(unrelated.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(unrelated.report_policy, ReportPolicy::Report);
+    }
+}

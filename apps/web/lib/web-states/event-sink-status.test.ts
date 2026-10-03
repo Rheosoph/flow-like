@@ -1,4 +1,5 @@
 import type { IEvent } from "@flow-like/flow-like-ui";
+import { withDeviceEventSource } from "@flow-like/flow-like-ui/lib/event-source";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ apiGet: vi.fn() }));
@@ -14,8 +15,40 @@ import { WebSinkState } from "./sink-state";
 
 const backend = { auth: { isAuthenticated: true } } as never;
 
+function eventFixture(eventType: string): IEvent {
+	return {
+		id: "event-1",
+		name: "Test event",
+		description: "",
+		active: true,
+		event_type: eventType,
+		board_id: "board-1",
+		node_id: "node-1",
+		config: [],
+		event_version: [0, 0, 0],
+		created_at: { secs_since_epoch: 0, nanos_since_epoch: 0 },
+		updated_at: { secs_since_epoch: 0, nanos_since_epoch: 0 },
+		priority: 0,
+		variables: {},
+	};
+}
+
 describe("web event trigger status", () => {
 	beforeEach(() => vi.resetAllMocks());
+
+	test.each(["rest", "mcp", "cron"])(
+		"reports a device-only %s definition inactive at its source",
+		async (type) => {
+			const event = withDeviceEventSource(eventFixture(type));
+			await expect(
+				new WebEventState(backend).isEventSinkActive("event-1", {
+					appId: "app-1",
+					event,
+				}),
+			).resolves.toBe(false);
+			expect(mocks.apiGet).not.toHaveBeenCalled();
+		},
+	);
 
 	test.each([WebEventState, WebSinkState])(
 		"reads status through the existing singular sink endpoint (%s)",
@@ -49,7 +82,7 @@ describe("web event trigger status", () => {
 		"uses the %s event enabled flag without requiring a worker sink",
 		async (type) => {
 			const state = new WebEventState(backend);
-			const event = { active: true, event_type: type } as IEvent;
+			const event = eventFixture(type);
 			await expect(
 				state.isEventSinkActive("event-1", { appId: "app-1", event }),
 			).resolves.toBe(true);

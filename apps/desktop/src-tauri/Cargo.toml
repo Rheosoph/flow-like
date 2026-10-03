@@ -80,6 +80,7 @@ tauri-plugin-opener = "2.5.3"
 rusqlite = { version = "0.32.0", features = ["bundled-full", "serde_json"] }
 serenity = { version = "0.12.4", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "cache"] }
 teloxide = { version = "0.17", default-features = false, features = ["macros", "rustls", "ctrlc_handler"] }
+flow-like-bots = { workspace = true, features = ["telegram", "discord"] }
 
 pulldown-cmark = "0.12"
 lazy_static = "1.5.0"

@@ -20,7 +20,8 @@ pub type BoardVersionList = Vec<(u32, u32, u32)>;
     ),
     responses(
         (status = 200, description = "List of board versions as (major, minor, patch) tuples", body = Vec<(u32, u32, u32)>),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Board not found")
     )
 )]
 #[tracing::instrument(

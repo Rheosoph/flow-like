@@ -140,7 +140,7 @@ pub(crate) async fn get(
     // does not prove that a newer migration was applied. Each read is separate
     // so one missing table cannot abort the other checks' transaction.
     let queries = [
-        r#"SELECT "authEpoch",receipt FROM "ManagedDevice" LIMIT 0"#,
+        r#"SELECT "authEpoch",receipt,"revokedAt","displayName" FROM "ManagedDevice" LIMIT 0"#,
         r#"SELECT "jwtId",manifest FROM "DeviceEnrollment" LIMIT 0"#,
         r#"SELECT "policyJws",version FROM "DeviceManagementPolicy" LIMIT 0"#,
         r#"SELECT ciphertext,revision FROM "DeviceControllerVault" LIMIT 0"#,
@@ -152,6 +152,9 @@ pub(crate) async fn get(
         r#"SELECT "limitMicros","payerId" FROM "PlacementBillingGrant" LIMIT 0"#,
         r#"SELECT purpose,"leaseExpiresAt" FROM "WorkloadInstance" LIMIT 0"#,
         r#"SELECT digest,result FROM "InstanceOfflineReceipt" LIMIT 0"#,
+        r#"SELECT code,"lastAt" FROM "DeviceAuthRejection" LIMIT 0"#,
+        r#"SELECT until FROM "DeviceCertificateNoticeMute" LIMIT 0"#,
+        r#"SELECT "grantId","placementId","seenAt","resumeAt" FROM "DeviceScheduleClaim" LIMIT 0"#,
     ];
     let schema_ready = futures::future::join_all(
         queries
@@ -161,7 +164,7 @@ pub(crate) async fn get(
     .await
     .into_iter()
     .all(|result| result.is_ok());
-    checks.push(check("database", schema_ready, "The device database schema is ready.", "The device database schema is incomplete or unavailable. Apply the device, resource, validation, offline-replay, inventory and fleet migrations."));
+    checks.push(check("database", schema_ready, "The device database schema is ready.", "The device database schema is incomplete or unavailable. Apply the device, resource, validation, offline-replay, inventory, fleet, device console and device schedules migrations."));
     Ok(Json(SetupReadiness {
         version: 1,
         ready: checks.iter().all(|check| check.ready),

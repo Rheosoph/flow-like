@@ -53,6 +53,7 @@ import {
 	validateMlxModelAssets,
 	validateGenerationAssets,
 } from "@flow-like/flow-like-ui";
+import { validateHostedEmbeddingParameters } from "@flow-like/flow-like-ui/components/bits/bit-editor-model";
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
@@ -1417,6 +1418,10 @@ export default function Page() {
 		}
 		setLoading(true);
 		try {
+			if (bit.type === IBitTypes.Embedding) {
+				const error = validateHostedEmbeddingParameters(bit.parameters);
+				if (error) throw new Error(error);
+			}
 			let dependencies: IBit[] = [];
 			if (isGenerationModelBit(bit)) await registerGenerationModel();
 			const isLocalSttBit =

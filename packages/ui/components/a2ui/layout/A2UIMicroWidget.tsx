@@ -82,6 +82,7 @@ import type {
 import {
 	type MicroWidgetGrantState,
 	microWidgetFrameSrc,
+	useMicroWidgetFrameAccess,
 	useMicroWidgetGrant,
 } from "../use-micro-widget-grant";
 import { WidgetInstanceProvider } from "./A2UIWidgetInstance";
@@ -437,9 +438,27 @@ function MicroWidgetFrame({
 		[],
 	);
 
-	// No document is fetched until the grant flow settles; the ready timer waits with it.
+	const frameAccess = useMicroWidgetFrameAccess(
+		frame,
+		appId,
+		!desktop,
+		grant.renewGrant,
+	);
+	const access = frameAccess.state;
+
+	// No document is fetched until the grant flow and the sandbox access settle; the ready timer waits with them.
 	const frameSource = useMemo((): { src: string | null; error?: string } => {
-		if (!frame) return { src: null };
+		if (!frame || access.status === "loading") return { src: null };
+		if (access.status === "error") {
+			return {
+				src: null,
+				error: t(
+					"widgetAccessFailed",
+					"The widget's package could not be opened: {{detail}}",
+					{ detail: access.detail },
+				),
+			};
+		}
 		try {
 			return {
 				src: microWidgetFrameSrc(frame, {
@@ -450,6 +469,7 @@ function MicroWidgetFrame({
 					apiUrl: profile.isLoading
 						? null
 						: (path) => getApiUrl(profile.data ?? null, path),
+					access: access.access,
 				}),
 			};
 		} catch (error) {
@@ -458,7 +478,7 @@ function MicroWidgetFrame({
 				error: error instanceof Error ? error.message : String(error),
 			};
 		}
-	}, [frame, desktop, profile.isLoading, profile.data]);
+	}, [frame, access, desktop, profile.isLoading, profile.data, t]);
 	const src = frameSource.src;
 
 	// The frame is the host-authored wrapper; it relays envelopes to the widget.
@@ -496,7 +516,7 @@ function MicroWidgetFrame({
 				instanceId,
 			),
 		);
-	}, [post, buildThemeState, instanceId, nonce, preview]);
+	}, [post, buildThemeState, instanceId, nonce]);
 
 	/**
 	 * A host move — the inline page runtime relocating its portal host between a card slot and
@@ -507,8 +527,11 @@ function MicroWidgetFrame({
 	 */
 	const onGrantFrameLoad = grant.onFrameLoad;
 	const onGrantFrameHello = grant.onFrameHello;
+	const { onFrameLoad: onAccessFrameLoad, onFrameFailed: onAccessFrameFailed } =
+		frameAccess;
 	const handleFrameLoad = useCallback(() => {
 		onGrantFrameLoad();
+		onAccessFrameLoad();
 		if (initSentRef.current) {
 			readyRef.current = false;
 			setPhase("loading");
@@ -517,7 +540,7 @@ function MicroWidgetFrame({
 			mediaRef.current?.stop();
 		}
 		sendInit();
-	}, [sendInit, onGrantFrameLoad]);
+	}, [sendInit, onGrantFrameLoad, onAccessFrameLoad]);
 
 	const handleContractEvent = useCallback(
 		async (payload: EventPayload) => {
@@ -609,6 +632,15 @@ function MicroWidgetFrame({
 		return () => window.removeEventListener("message", listener);
 	}, [instanceId, nonce]);
 
+	// A changed URL is a new document (a new grant, a replaced access token), and no URL means
+	// the next document is not fetched yet: either way the frame is loading again, so the
+	// skeleton shows and the document gets the ready timeout from the moment it is requested.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: every document starts loading
+	useEffect(() => {
+		readyRef.current = false;
+		setPhase((prev) => (prev === "error" ? prev : "loading"));
+	}, [src]);
+
 	// Ready timeout: once the document URL is known, the widget must complete
 	// the flw/1 handshake within the window or the surface shows an error card.
 	// Keyed on the phase as well as the URL so a reloaded sandbox is held to the
@@ -629,6 +661,10 @@ function MicroWidgetFrame({
 		return () => clearTimeout(timer);
 	}, [src, phase, t]);
 
+	useEffect(() => {
+		if (phase === "error") onAccessFrameFailed();
+	}, [phase, onAccessFrameFailed]);
+
 	// Query bridge registration (imperative host access via microWidgetQuery).
 	useEffect(() => {
 		const correlator = createQueryCorrelator((payload) => {
@@ -645,6 +681,7 @@ function MicroWidgetFrame({
 		};
 	}, [instanceId, nonce, post]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: every document gets its own microphone and media session
 	useEffect(() => {
 		const microphone = createMicroWidgetMicrophone({
 			enabled: () => capabilitiesRef.current.microphone === true,

@@ -16,6 +16,7 @@ import { PurchaseCard } from "./purchases-page";
 import {
 	type PaymentTerms,
 	type PurchaseOrder,
+	awaitingPayment,
 	paymentMoney,
 	pendingOrder,
 } from "./types";
@@ -36,6 +37,18 @@ type MarketplaceCheckoutDialogProps = MarketplaceCheckoutItem & {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onPurchased: () => void | Promise<void>;
+	/** Keeps following a created order after the dialog is closed, so `onPurchased` still fires. */
+	pollWhileClosed?: boolean;
+	/** Reports whether a created order is still waiting for its payment. */
+	onAwaitingPaymentChange?: (awaiting: boolean) => void;
+	/**
+	 * The caller already knows whether the hub sells through the marketplace.
+	 * Without it the dialog asks the hub itself and shows the unavailable
+	 * message until that answer arrives.
+	 */
+	marketplaceEnabled?: boolean;
+	/** Preparing the checkout failed, e.g. because the buyer already owns the item. */
+	onCheckoutFailed?: (error: unknown) => void;
 };
 
 export function marketplaceCheckoutPath(
@@ -54,12 +67,45 @@ function checkoutItem(item: MarketplaceCheckoutItem) {
 		: { kind: "APP" as const, id: item.appId, name: item.appName };
 }
 
+/** Reports what becomes of a created order: paid, or still waiting for its payment. */
+function useOrderOutcome(
+	order: PurchaseOrder | undefined,
+	onPurchased: () => void | Promise<void>,
+	onAwaitingPaymentChange?: (awaiting: boolean) => void,
+) {
+	const notified = useRef<string | null>(null);
+	useEffect(() => {
+		if (
+			order &&
+			["PAID", "COMPLETED", "FULFILLED"].includes(order.status) &&
+			notified.current !== order.orderId
+		) {
+			notified.current = order.orderId;
+			void onPurchased();
+		}
+	}, [order, onPurchased]);
+	const awaiting = !!order && awaitingPayment(order.status);
+	useEffect(() => {
+		onAwaitingPaymentChange?.(awaiting);
+	}, [awaiting, onAwaitingPaymentChange]);
+}
+
 function CheckoutDialogContent(props: MarketplaceCheckoutDialogProps) {
-	const { amount, open, onOpenChange, onPurchased } = props;
+	const {
+		amount,
+		open,
+		onOpenChange,
+		onPurchased,
+		pollWhileClosed = false,
+		onAwaitingPaymentChange,
+		onCheckoutFailed,
+	} = props;
 	const item = checkoutItem(props);
 	const { t, i18n } = useTranslation("payments");
 	const payments = usePayments();
 	const allowed = usePaymentDistribution();
+	const marketplaceEnabled =
+		props.marketplaceEnabled ?? payments.config?.marketplace_enabled === true;
 	const [terms, setTerms] = useState<PaymentTerms | null>(null);
 	const [created, setCreated] = useState<PurchaseOrder>();
 	const [busy, setBusy] = useState(false);
@@ -67,22 +113,14 @@ function CheckoutDialogContent(props: MarketplaceCheckoutDialogProps) {
 	const [poll, setPoll] = useState(true);
 	const order = usePaymentQuery<PurchaseOrder>(
 		`user/purchases/${encodeURIComponent(created?.orderId ?? "")}`,
-		open && !!created,
+		(open || pollWhileClosed) && !!created,
 		poll,
 	);
 	const current = order.data ?? created;
-	const notified = useRef<string | null>(null);
 	useEffect(() => {
 		setPoll(!current || pendingOrder(current.status));
-		if (
-			current &&
-			["PAID", "COMPLETED", "FULFILLED"].includes(current.status) &&
-			notified.current !== current.orderId
-		) {
-			notified.current = current.orderId;
-			void onPurchased();
-		}
-	}, [current, onPurchased]);
+	}, [current]);
+	useOrderOutcome(current, onPurchased, onAwaitingPaymentChange);
 	const create = async () => {
 		if (!terms || !allowed) return;
 		setBusy(true);
@@ -102,6 +140,7 @@ function CheckoutDialogContent(props: MarketplaceCheckoutDialogProps) {
 			);
 		} catch (error) {
 			setError(error);
+			onCheckoutFailed?.(error);
 		} finally {
 			setBusy(false);
 		}
@@ -128,7 +167,7 @@ function CheckoutDialogContent(props: MarketplaceCheckoutDialogProps) {
 				<PaymentError error={error || order.error} />
 				{current ? (
 					<PurchaseCard order={current} />
-				) : allowed && payments.config?.marketplace_enabled ? (
+				) : allowed && marketplaceEnabled ? (
 					<div className="space-y-5">
 						<p className="text-xl font-semibold tabular-nums">
 							{paymentMoney(amount, "eur", i18n.language)}

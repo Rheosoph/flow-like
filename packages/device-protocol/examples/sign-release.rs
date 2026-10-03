@@ -51,9 +51,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .open(&args[3])?;
     output.write_all(signed.as_bytes())?;
     output.sync_all()?;
-    println!(
-        "{}",
-        serde_json::json!({"signer_fingerprint":key.public_key().thumbprint()?,"public_key":key.public_key(),"release_version":manifest.release_version,"sequence":manifest.sequence})
-    );
+    println!("{}", report(&key, &manifest)?);
     Ok(())
+}
+
+fn report(
+    key: &SigningKey,
+    manifest: &StandaloneRelease,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    Ok(serde_json::json!({
+        "signer_fingerprint": key.public_key().thumbprint()?,
+        "public_key": key.public_key(),
+        "release_version": manifest.release_version,
+        "sequence": manifest.sequence,
+        "issued_at": manifest.issued_at,
+        "expires_at": manifest.expires_at,
+        "lifetime_days": (manifest.expires_at - manifest.issued_at) as f64 / 86_400.0,
+    }))
 }

@@ -152,17 +152,18 @@ async function download(
 }
 
 export async function prepareOnlineDependencies(
-	app: IApp,
+	requested: IApp,
 	backend: IBackendState,
 	profile: IProfile,
 	signal?: AbortSignal,
 	approved?: ApprovedOnlineMetadata,
 ) {
-	identifier(app.id);
+	identifier(requested.id);
 	const metadata =
-		approved ?? (await prepareOnlineMetadata(app.id, backend, profile, signal));
-	check(metadata.app.id === app.id, "Approved project identity differs.");
-	app = metadata.app;
+		approved ??
+		(await prepareOnlineMetadata(requested.id, backend, profile, signal));
+	check(metadata.app.id === requested.id, "Approved project identity differs.");
+	const app = metadata.app;
 	check(
 		app.bits.length <= 256 && Object.keys(app.packages ?? {}).length <= 64,
 		"Too many project dependencies.",

@@ -4,6 +4,15 @@
 //! Browser tests are ignored by default and panic when no browser can be found:
 //! `cargo test -p flow-like-catalog-automation --features execute --test browser_nodes_e2e -- --include-ignored`.
 //! The legacy pin errors of Open Browser and Attach to Browser need no browser and always run.
+//!
+//! Open Browser finds its browser as in the desktop app: installed Chrome or Chromium first, then
+//! Chrome for Testing in `FLOW_LIKE_BROWSER_CACHE_DIR` (or the user cache folder). With
+//! `FLOW_LIKE_BROWSER_E2E_PROVISION=stable` the suite first installs Chrome for Testing there with
+//! `cft::install(CftVersion::Stable, ..)`, the call behind Settings > Automation > Install, so it
+//! gets the newest Stable build users get; `download` installs the pinned `cft::CFT_PINNED` build
+//! instead, for a reproducible run. `node_discovery_uses_the_downloaded_browser` fails unless Open
+//! Browser then launches the installed build, so CI runs this suite with the runner's own browsers
+//! hidden.
 extern crate flow_like_runtime as flow_like;
 
 use ahash::AHashMap;
@@ -19,6 +28,10 @@ use flow_like::{
     profile::Profile,
     state::{FlowLikeConfig, FlowLikeState},
     utils::http::HTTPClient,
+};
+use flow_like_browser::launch::{
+    self, BrowserKind, Executable, ExecutableSource, Flavor,
+    cft::{self, CftVersion},
 };
 use flow_like_catalog_automation::{
     browser::{
@@ -120,8 +133,11 @@ const FRAME_PROBE_SCRIPT: &str = "return {width: window.innerWidth, agent: navig
 const AUTH_USER: &str = "ada";
 const AUTH_PASSWORD: &str = "lovelace";
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+const PROVISION_ENV: &str = "FLOW_LIKE_BROWSER_E2E_PROVISION";
+const CACHE_ENV: &str = "FLOW_LIKE_BROWSER_CACHE_DIR";
 
 static BROWSERS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static DISCOVERY: tokio::sync::OnceCell<Discovery> = tokio::sync::OnceCell::const_new();
 static WORKSPACES: AtomicU64 = AtomicU64::new(0);
 static RAN: std::sync::Mutex<BTreeSet<String>> = std::sync::Mutex::new(BTreeSet::new());
 
@@ -538,6 +554,46 @@ async fn cancelled_run_kills_the_browser_and_removes_its_profile() {
 #[ignore = "requires a Chromium browser; run with --include-ignored"]
 async fn dropped_run_kills_the_browser_and_removes_its_profile() {
     with_browser("dropped run", dropped_run_flow).await;
+}
+
+/// Every flow launches the executable discovery picks (see `LaunchedBrowser::running`), so this
+/// test passing in the same job proves the flows ran on the downloaded Chrome for Testing. It fails
+/// wherever an installed Chrome or Chromium comes first in discovery, and on Windows on Arm, which
+/// has no Chrome for Testing build.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires a cached Chrome for Testing and no installed Chrome; run with --include-ignored"]
+async fn node_discovery_uses_the_downloaded_browser() {
+    let Discovery { installed, found } = discovery().await;
+    let cache = launch::default_cache_dir();
+    let Some(cached) = cft::find_cached(&cache) else {
+        panic!(
+            "{} holds no complete Chrome for Testing {} or newer; set {PROVISION_ENV}=stable and {CACHE_ENV}, or install it in Settings > Automation",
+            cache.display(),
+            cft::CFT_PINNED
+        );
+    };
+    assert!(
+        found.source == ExecutableSource::CachedCft
+            && found.flavor == Flavor::ChromeForTesting
+            && found.path == cached.path,
+        "Open Browser with Browser Type Chrome launches {} ({:?}, {:?}) instead of the downloaded {}: an installed browser comes first in discovery, so hide it before this suite runs",
+        found.path.display(),
+        found.source,
+        found.flavor,
+        cached.path.display()
+    );
+    if let Some(installed) = installed {
+        assert!(
+            found.path == installed.path,
+            "Open Browser launches Chrome for Testing {} ({}), not the {} build {PROVISION_ENV} installed ({}): {} holds a newer one",
+            version_of(found),
+            found.path.display(),
+            version_of(installed),
+            installed.path.display(),
+            cache.display()
+        );
+    }
+    with_browser("downloaded browser", open_and_stop_once).await;
 }
 
 #[test]
@@ -1796,12 +1852,21 @@ async fn dropped_run_flow(site: Site) {
     browser.assert_gone("a dropped run").await;
 }
 
+async fn open_and_stop_once(site: Site) {
+    let mut flow = Flow::start().await;
+    let browser = flow.open(&site).await;
+    flow.goto(&site.local("/basic")).await;
+    flow.stop().await;
+    browser.assert_gone("Stop Session").await;
+    flow.end().await;
+}
+
 async fn with_browser<F, Fut>(name: &str, flow: F)
 where
     F: FnOnce(Site) -> Fut,
     Fut: Future<Output = ()>,
 {
-    require_browser();
+    discovery().await;
     let _turn = BROWSERS.lock().await;
     with_ran_nodes(BTreeSet::clear);
     if tokio::time::timeout(TEST_BUDGET, flow(Site::start()))
@@ -1850,13 +1915,83 @@ where
     assert!(created.is_empty(), "a rejected node created {created:?}");
 }
 
-fn require_browser() {
-    use flow_like_browser::launch::{BrowserKind, default_cache_dir, find};
-    if let Err(error) = find(BrowserKind::Chrome, &default_cache_dir()) {
+struct Discovery {
+    /// The build this run installed, when `FLOW_LIKE_BROWSER_E2E_PROVISION` is set.
+    installed: Option<Executable>,
+    /// The executable Open Browser launches for Browser Type Chrome, found the way the node finds it.
+    found: Executable,
+}
+
+async fn discovery() -> &'static Discovery {
+    DISCOVERY.get_or_init(discover).await
+}
+
+async fn discover() -> Discovery {
+    let cache = launch::default_cache_dir();
+    let installed = match provision_version() {
+        Some(version) => Some(install_cft(version, &cache).await),
+        None => None,
+    };
+    let found = launch::find(BrowserKind::Chrome, &cache).unwrap_or_else(|error| {
         panic!(
             "browser_nodes_e2e needs Chrome, Chromium or a cached Chrome for Testing and never skips: {error}"
-        );
+        )
+    });
+    eprintln!(
+        "browser_nodes_e2e: Open Browser launches {} ({:?}, {:?}, version {})",
+        found.path.display(),
+        found.source,
+        found.flavor,
+        version_of(&found)
+    );
+    Discovery { installed, found }
+}
+
+/// The Chrome for Testing build `FLOW_LIKE_BROWSER_E2E_PROVISION` installs: `stable` the newest
+/// Stable one, as Settings > Automation > Install does, or `download` the pinned one.
+fn provision_version() -> Option<CftVersion> {
+    let mode = std::env::var(PROVISION_ENV)
+        .ok()
+        .filter(|mode| !mode.is_empty())?;
+    match mode.as_str() {
+        "stable" => Some(CftVersion::Stable),
+        "download" => Some(CftVersion::Pinned),
+        _ => panic!("{PROVISION_ENV}={mode} is neither stable nor download"),
     }
+}
+
+/// Installs into the folder Open Browser searches, never into (and prunes) the user's own cache.
+async fn install_cft(version: CftVersion, cache: &Path) -> Executable {
+    assert!(
+        std::env::var_os(CACHE_ENV).is_some_and(|dir| !dir.is_empty()),
+        "{PROVISION_ENV} installs Chrome for Testing where Open Browser looks for it, so it needs {CACHE_ENV}; without it that is your own cache {}",
+        cache.display()
+    );
+    let installed = cft::install(version.clone(), cache, |_| {})
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "{PROVISION_ENV} could not install Chrome for Testing ({version:?}) into {}: {error}",
+                cache.display()
+            )
+        });
+    eprintln!(
+        "browser_nodes_e2e: {PROVISION_ENV} installed Chrome for Testing {} ({version:?}) at {}",
+        version_of(&installed),
+        installed.path.display()
+    );
+    installed
+}
+
+fn version_of(executable: &Executable) -> &str {
+    executable.version.as_deref().unwrap_or("unknown")
+}
+
+/// Installed browsers can start through wrapper scripts, so only a downloaded build has a known
+/// executable.
+async fn expected_program() -> Option<PathBuf> {
+    let found = &discovery().await.found;
+    (found.source == ExecutableSource::CachedCft).then(|| found.path.clone())
 }
 
 struct Run {
@@ -2031,7 +2166,7 @@ impl Flow {
     async fn open(&mut self, site: &Site) -> LaunchedBrowser {
         let before = owned_dirs();
         let address = self.launch(site, &[]).await;
-        LaunchedBrowser::temporary(before, address)
+        LaunchedBrowser::temporary(before, address, expected_program().await)
     }
 
     async fn open_persistent(&mut self, site: &Site, profile: (&str, Value)) -> LaunchedBrowser {
@@ -2052,7 +2187,7 @@ impl Flow {
             temporary.is_empty(),
             "a persistent profile needs no temporary one: {temporary:?}"
         );
-        LaunchedBrowser::running(before, directory, address)
+        LaunchedBrowser::running(before, directory, address, expected_program().await)
     }
 
     async fn launch(&mut self, site: &Site, extra: &[(&str, Value)]) -> String {
@@ -2268,7 +2403,11 @@ struct LaunchedBrowser {
 }
 
 impl LaunchedBrowser {
-    fn temporary(before: BTreeSet<PathBuf>, debugger_address: String) -> Self {
+    fn temporary(
+        before: BTreeSet<PathBuf>,
+        debugger_address: String,
+        program: Option<PathBuf>,
+    ) -> Self {
         let created: Vec<PathBuf> = owned_dirs()
             .difference(&before)
             .filter(|path| has_prefix(path, PROFILE_PREFIX))
@@ -2277,18 +2416,31 @@ impl LaunchedBrowser {
         let [profile] = created.as_slice() else {
             panic!("Open Browser should create one temporary profile, found {created:?}");
         };
-        Self::running(before, profile.clone(), debugger_address)
+        Self::running(before, profile.clone(), debugger_address, program)
     }
 
     /// The process checks below only mean something if the launched browser is found by its
-    /// profile path in the process list.
-    fn running(before: BTreeSet<PathBuf>, profile: PathBuf, debugger_address: String) -> Self {
+    /// profile path in the process list. With `program` set, that browser must run it.
+    fn running(
+        before: BTreeSet<PathBuf>,
+        profile: PathBuf,
+        debugger_address: String,
+        program: Option<PathBuf>,
+    ) -> Self {
         let processes = processes_using(&profile);
         assert!(
             !processes.is_empty(),
             "no running process names the profile {}",
             profile.display()
         );
+        if let Some(program) = program {
+            assert!(
+                runs_program(&processes, &program),
+                "Open Browser did not launch {}; the processes using {} are {processes:?}",
+                program.display(),
+                profile.display()
+            );
+        }
         Self {
             before,
             profile,
@@ -2399,12 +2551,24 @@ fn owned_dirs() -> BTreeSet<PathBuf> {
     ];
     scratch_roots()
         .iter()
-        .filter_map(|root| std::fs::read_dir(root).ok())
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path())
+        .flat_map(|root| entries(root))
         .filter(|path| prefixes.iter().any(|prefix| has_prefix(path, prefix)))
         .collect()
+}
+
+/// An unreadable folder fails the test instead of looking empty; only a missing one is empty.
+fn entries(root: &Path) -> Vec<PathBuf> {
+    match std::fs::read_dir(root) {
+        Ok(entries) => entries
+            .map(|entry| {
+                entry
+                    .unwrap_or_else(|error| panic!("listing {}: {error}", root.display()))
+                    .path()
+            })
+            .collect(),
+        Err(error) if error.kind() == ErrorKind::NotFound => Vec::new(),
+        Err(error) => panic!("listing {}: {error}", root.display()),
+    }
 }
 
 fn has_prefix(path: &Path, prefix: &str) -> bool {
@@ -2423,38 +2587,84 @@ fn scratch_roots() -> Vec<PathBuf> {
     roots
 }
 
+/// "pid command line" of every process naming `profile`. A listing that fails or misses this
+/// test process panics, so "no process left" can never come from a scan that saw nothing.
 fn processes_using(profile: &Path) -> Vec<String> {
+    let (tool, mut command) = process_lister();
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("{tool} lists the running processes: {error}"));
+    let listing = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{tool} failed to list the running processes ({}): {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let own = std::process::id().to_string();
+    assert!(
+        listing
+            .lines()
+            .any(|line| line.split_whitespace().next() == Some(own.as_str())),
+        "{tool} listed {} processes but not this test (pid {own})",
+        listing.lines().count()
+    );
     let needle = profile.to_string_lossy();
-    process_command_lines()
-        .into_iter()
+    listing
+        .lines()
         .filter(|line| line.contains(needle.as_ref()))
+        .map(str::to_owned)
         .collect()
 }
 
 #[cfg(unix)]
-fn process_command_lines() -> Vec<String> {
-    let output = std::process::Command::new("ps")
-        .args(["-A", "-ww", "-o", "pid=", "-o", "args="])
-        .output()
-        .expect("ps lists the running processes");
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::to_owned)
-        .collect()
+fn process_lister() -> (&'static str, std::process::Command) {
+    let mut command = std::process::Command::new("ps");
+    command.args(["-A", "-ww", "-o", "pid=", "-o", "args="]);
+    ("ps", command)
 }
 
 #[cfg(windows)]
-fn process_command_lines() -> Vec<String> {
-    let script =
-        "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }";
-    let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .output()
-        .expect("PowerShell lists the running processes");
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::to_owned)
-        .collect()
+fn process_lister() -> (&'static str, std::process::Command) {
+    let script = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }";
+    let mut command = std::process::Command::new("powershell");
+    command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+    ("PowerShell", command)
+}
+
+/// Chrome on Linux retitles itself with the resolved `/proc/self/exe`, so the executable of each
+/// listed process is read from `/proc` and compared with the resolved `program`.
+#[cfg(target_os = "linux")]
+fn runs_program(processes: &[String], program: &Path) -> bool {
+    let expected = std::fs::canonicalize(program)
+        .unwrap_or_else(|error| panic!("resolving {}: {error}", program.display()));
+    processes.iter().any(|line| {
+        line.split_whitespace()
+            .next()
+            .and_then(|pid| std::fs::read_link(format!("/proc/{pid}/exe")).ok())
+            .is_some_and(|executable| executable == expected)
+    })
+}
+
+/// The launcher starts `std::path::absolute(program)`, and Windows paths ignore case.
+#[cfg(windows)]
+fn runs_program(processes: &[String], program: &Path) -> bool {
+    let expected = std::path::absolute(program)
+        .unwrap_or_else(|error| panic!("resolving {}: {error}", program.display()))
+        .to_string_lossy()
+        .to_lowercase();
+    processes
+        .iter()
+        .any(|line| line.to_lowercase().contains(&expected))
+}
+
+/// macOS lists the path the launcher passed, unchanged.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn runs_program(processes: &[String], program: &Path) -> bool {
+    let expected = program.to_string_lossy();
+    processes
+        .iter()
+        .any(|line| line.contains(expected.as_ref()))
 }
 
 fn devtools_json(port: u16, path: &str) -> Value {

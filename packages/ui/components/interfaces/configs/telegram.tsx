@@ -12,6 +12,7 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { BotAnswersLine } from "../../settings/devices/copy/bot-answers-line";
 import {
 	Accordion,
 	AccordionContent,
@@ -78,7 +79,7 @@ export function TelegramConfig({
 	const chatBlacklist: string[] = (config?.chat_blacklist as string[]) ?? [];
 	const respondToMentions = (config?.respond_to_mentions as boolean) ?? true;
 	const respondToPrivate = (config?.respond_to_private as boolean) ?? true;
-	const commandPrefix = (config?.command_prefix as string) ?? "/";
+	const commandPrefix = (config?.command_prefix as string) ?? "";
 	const webhookSecret = (config?.webhook_secret as string) ?? "";
 
 	// Compute webhook URLs
@@ -766,7 +767,6 @@ export function TelegramConfig({
 										value={commandPrefix}
 										onChange={(e) => setValue("command_prefix", e.target.value)}
 										id="command_prefix"
-										placeholder="/"
 										className="w-20"
 									/>
 								) : (
@@ -780,6 +780,11 @@ export function TelegramConfig({
 										"Prefix for bot commands (default: /)",
 									)}
 								</p>
+								<BotAnswersLine
+									eventType="telegram"
+									config={config}
+									className="text-xs text-muted-foreground"
+								/>
 							</div>
 						</AccordionContent>
 					</AccordionItem>

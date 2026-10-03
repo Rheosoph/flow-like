@@ -3,8 +3,8 @@ use crate::{
     error::ApiError,
 };
 use flow_like_device_protocol::{
-    DeviceIdentity, DeviceReceipt, DeviceRegistrationStatus, DeviceStatus, OnboardingManifest,
-    compact_digest,
+    DeviceIdentity, DeviceReceipt, DeviceRegistrationStatus, DeviceStatus, Ed25519PublicKey,
+    OnboardingManifest, compact_digest,
 };
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction, QueryResult,
@@ -70,27 +70,88 @@ fn enrollment(row: QueryResult) -> Result<Enrollment, ApiError> {
     })
 }
 
-pub(crate) fn device(row: QueryResult) -> Result<Device, ApiError> {
+/// Why the hub last refused a device, stored in `"DeviceAuthRejection".code`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[schema(as = DeviceAuthRejectionCode)]
+pub(crate) enum AuthRejectionCode {
+    /// A proof signed by the registered key was outside its validity window.
+    ClockSkew,
+    /// A session issued by this hub no longer matches the registration.
+    RevokedCredential,
+}
+
+impl AuthRejectionCode {
+    pub(crate) fn as_str(&self) -> &str {
+        match self {
+            Self::ClockSkew => "clock_skew",
+            Self::RevokedCredential => "revoked_credential",
+        }
+    }
+
+    pub(crate) fn parse(code: &str) -> Option<Self> {
+        [Self::ClockSkew, Self::RevokedCredential]
+            .into_iter()
+            .find(|known| known.as_str() == code)
+    }
+}
+
+/// A pending or cancelled setup package. The manifest is read only for its name and
+/// controller key; the bootstrap key and the token id never leave the registry.
+pub(crate) struct EnrollmentRecord {
+    pub enrollment_id: String,
+    pub device_id: String,
+    pub name: String,
+    pub controller_key: Ed25519PublicKey,
+    pub cancelled: bool,
+    pub created_at: i64,
+    pub expires_at: i64,
+}
+
+#[derive(serde::Deserialize)]
+struct ManifestSummary {
+    name: String,
+    controller_key: Ed25519PublicKey,
+}
+
+pub(crate) const MAX_LISTED_ENROLLMENTS: usize = 200;
+
+fn enrollment_record(row: QueryResult) -> Result<EnrollmentRecord, ApiError> {
+    let manifest: ManifestSummary = serde_json::from_str(&row.try_get::<String>("", "manifest")?)?;
+    Ok(EnrollmentRecord {
+        enrollment_id: row.try_get("", "id")?,
+        device_id: row.try_get("", "deviceId")?,
+        name: manifest.name,
+        controller_key: manifest.controller_key,
+        cancelled: row.try_get::<String>("", "status")? == "cancelled",
+        created_at: row.try_get("", "createdAt")?,
+        expires_at: row.try_get("", "expiresAt")?,
+    })
+}
+
+pub(crate) fn status(row: &QueryResult) -> Result<DeviceStatus, ApiError> {
     let status: String = row.try_get("", "status")?;
     let epoch: i64 = row.try_get("", "authEpoch")?;
-    Ok(Device {
-        status: DeviceStatus {
-            device_id: row.try_get("", "id")?,
-            owner_id: row.try_get("", "ownerId")?,
-            name: row.try_get("", "name")?,
-            status: match status.as_str() {
-                "active" => DeviceRegistrationStatus::Active,
-                "revoked" => DeviceRegistrationStatus::Revoked,
-                _ => return Err(ApiError::internal("Invalid device registry status")),
-            },
-            identity: serde_json::from_str::<DeviceIdentity>(
-                &row.try_get::<String>("", "identity")?,
-            )?,
-            registered_at: row.try_get("", "registeredAt")?,
-            last_seen_at: row.try_get("", "lastSeenAt")?,
-            auth_epoch: u64::try_from(epoch)
-                .map_err(|_| ApiError::internal("Invalid device key epoch"))?,
+    Ok(DeviceStatus {
+        device_id: row.try_get("", "id")?,
+        owner_id: row.try_get("", "ownerId")?,
+        name: row.try_get("", "name")?,
+        status: match status.as_str() {
+            "active" => DeviceRegistrationStatus::Active,
+            "revoked" => DeviceRegistrationStatus::Revoked,
+            _ => return Err(ApiError::internal("Invalid device registry status")),
         },
+        identity: serde_json::from_str::<DeviceIdentity>(&row.try_get::<String>("", "identity")?)?,
+        registered_at: row.try_get("", "registeredAt")?,
+        last_seen_at: row.try_get("", "lastSeenAt")?,
+        auth_epoch: u64::try_from(epoch)
+            .map_err(|_| ApiError::internal("Invalid device key epoch"))?,
+    })
+}
+
+pub(crate) fn device(row: QueryResult) -> Result<Device, ApiError> {
+    Ok(Device {
+        status: status(&row)?,
         receipt: serde_json::from_str(&row.try_get::<String>("", "receipt")?)?,
     })
 }
@@ -148,6 +209,67 @@ pub(crate) async fn lock_active_device(
 const ABANDONED_ENROLLMENT_GRACE_SECONDS: i64 = 7 * 86_400;
 const ABANDONED_ENROLLMENT_BATCH: u64 = 128;
 const ENROLLMENT_CREATION_WINDOW_SECONDS: i64 = 86_400;
+pub(crate) const AUTH_REJECTION_THROTTLE_SECONDS: i64 = 10;
+
+pub(crate) fn count(row: &QueryResult, column: &str) -> Result<u64, ApiError> {
+    u64::try_from(row.try_get::<i64>("", column)?)
+        .map_err(|_| ApiError::internal(format!("Invalid device registry count {column}")))
+}
+
+/// What an owner uses of the enrollment limits. Creating a package enforces these
+/// numbers and the usage view reports them, so both read them here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EnrollmentCounts {
+    /// Setup packages that can still be started.
+    pub pending: u64,
+    pub active_devices: u64,
+    /// Packages created in the last 24 hours, whatever became of them.
+    pub last_day: u64,
+}
+
+pub(crate) async fn enrollment_counts<C: ConnectionTrait>(
+    db: &C,
+    owner: &str,
+    now: i64,
+) -> Result<EnrollmentCounts, ApiError> {
+    let row = db.query_one_raw(sql(r#"SELECT (SELECT COUNT(*) FROM "DeviceEnrollment" WHERE "ownerId" = $1 AND status = 'pending' AND "expiresAt" > $2) AS pending, (SELECT COUNT(*) FROM "ManagedDevice" WHERE "ownerId" = $1 AND status = 'active') AS devices, (SELECT COUNT(*) FROM "DeviceEnrollment" WHERE "ownerId" = $1 AND "createdAt" > $3) AS recent"#,
+        [owner.into(), now.into(), (now - ENROLLMENT_CREATION_WINDOW_SECONDS).into()])).await?
+        .ok_or_else(|| ApiError::internal(format!("Missing enrollment counts for owner {owner}")))?;
+    Ok(EnrollmentCounts {
+        pending: count(&row, "pending")?,
+        active_devices: count(&row, "devices")?,
+        last_day: count(&row, "recent")?,
+    })
+}
+
+/// Cancelled and lapsed packages are retained until pruning, so creation is bounded
+/// too: at most two full fleets' worth of packages per day.
+pub(crate) fn daily_enrollment_limit(max_devices: u32, max_pending: u32) -> u64 {
+    2 * (u64::from(max_devices) + u64::from(max_pending))
+}
+
+impl EnrollmentCounts {
+    /// Whether the owner may create one more setup package.
+    fn admit(&self, max_devices: u32, max_pending: u32) -> Result<(), ApiError> {
+        if self.pending >= u64::from(max_pending)
+            || self.active_devices + self.pending >= u64::from(max_devices)
+        {
+            return Err(ApiError::too_many_requests(
+                "Device enrollment limit reached",
+            ));
+        }
+        let (daily_limit, recent) = (
+            daily_enrollment_limit(max_devices, max_pending),
+            self.last_day,
+        );
+        if recent >= daily_limit {
+            return Err(ApiError::too_many_requests(format!(
+                "Device enrollment packages are limited to {daily_limit} per day; {recent} were created in the last 24 hours"
+            )));
+        }
+        Ok(())
+    }
+}
 
 /// Cancelled and expired enrollments never become devices, so they and their
 /// challenges are removed after a grace period. Consumed enrollments remain as
@@ -218,12 +340,57 @@ impl Repository<'_> {
         current_device(self.db, id).await
     }
 
-    pub async fn list(&self, owner: &str) -> Result<Vec<DeviceStatus>, ApiError> {
+    /// Setup packages that never became a device, newest first. Lapsed pending ones stay
+    /// listed until `prune_abandoned_enrollments` removes them.
+    pub async fn enrollments(
+        &self,
+        owner: &str,
+        with_cancelled: bool,
+    ) -> Result<Vec<EnrollmentRecord>, ApiError> {
+        let statuses = if with_cancelled {
+            "'pending','cancelled'"
+        } else {
+            "'pending'"
+        };
+        self.db.query_all_raw(sql(&format!(r#"SELECT id,"deviceId",manifest,status,"createdAt","expiresAt" FROM "DeviceEnrollment" WHERE "ownerId" = $1 AND status IN ({statuses}) ORDER BY "createdAt" DESC, id LIMIT {MAX_LISTED_ENROLLMENTS}"#), [owner.into()])).await?
+            .into_iter().map(enrollment_record).collect()
+    }
+
+    /// `None` clears the owner's label. The signed setup name is never touched.
+    pub async fn rename(
+        &self,
+        owner: &str,
+        id: &str,
+        display_name: Option<String>,
+    ) -> Result<(), ApiError> {
         active_account(self.db, owner).await?;
-        // Keep every active device visible even when revoked history exceeds
-        // the bounded inventory response. Active enrollment policy caps at 1000.
-        self.db.query_all_raw(sql(r#"SELECT * FROM "ManagedDevice" WHERE "ownerId" = $1 ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, "registeredAt" DESC LIMIT 1000"#, [owner.into()])).await?
-            .into_iter().map(|row| device(row).map(|device| device.status)).collect()
+        let changed=self.db.execute_raw(sql(r#"UPDATE "ManagedDevice" SET "displayName" = $1 WHERE id = $2 AND "ownerId" = $3 AND status = 'active'"#,[display_name.into(),id.into(),owner.into()])).await?.rows_affected();
+        if changed != 1 {
+            return Err(ApiError::NOT_FOUND);
+        }
+        Ok(())
+    }
+
+    /// One row per device, overwritten and throttled, so a retrying device cannot
+    /// amplify writes. `count` and `firstAt` restart when the reason changes or the
+    /// device has checked in since the previous rejection.
+    pub async fn record_auth_rejection(
+        &self,
+        id: &str,
+        code: AuthRejectionCode,
+        skew_seconds: Option<i64>,
+        last_seen_at: Option<i64>,
+        now: i64,
+    ) -> Result<(), ApiError> {
+        const CONTINUES: &str =
+            r#""DeviceAuthRejection".code = EXCLUDED.code AND "DeviceAuthRejection"."lastAt" > $5"#;
+        self.db.execute_raw(sql(&format!(r#"INSERT INTO "DeviceAuthRejection" ("deviceId",code,"skewSeconds",count,"firstAt","lastAt") VALUES ($1,$2,$3,1,$4,$4)
+            ON CONFLICT ("deviceId") DO UPDATE SET code = EXCLUDED.code, "skewSeconds" = EXCLUDED."skewSeconds", "lastAt" = EXCLUDED."lastAt",
+                count = CASE WHEN {CONTINUES} THEN "DeviceAuthRejection".count + 1 ELSE 1 END,
+                "firstAt" = CASE WHEN {CONTINUES} THEN "DeviceAuthRejection"."firstAt" ELSE EXCLUDED."firstAt" END
+            WHERE "DeviceAuthRejection"."lastAt" < EXCLUDED."lastAt" - {AUTH_REJECTION_THROTTLE_SECONDS}"#),
+            [id.into(),code.as_str().into(),skew_seconds.into(),now.into(),last_seen_at.unwrap_or_default().into()])).await?;
+        Ok(())
     }
 
     pub async fn create_enrollment(
@@ -245,21 +412,7 @@ impl Repository<'_> {
                 if updated != 1 { return Err(ApiError::forbidden("An active account is required")); }
                 require_live(template.expires_at)?;
                 let now = chrono::Utc::now().timestamp();
-                let pending = tx.query_one_raw(sql(r#"SELECT COUNT(*) AS count FROM "DeviceEnrollment" WHERE "ownerId" = $1 AND status = 'pending' AND "expiresAt" > $2"#,
-                    [template.owner_id.clone().into(), now.into()])).await?.ok_or_else(|| ApiError::internal("Missing enrollment count"))?.try_get::<i64>("", "count")?;
-                let devices = tx.query_one_raw(sql(r#"SELECT COUNT(*) AS count FROM "ManagedDevice" WHERE "ownerId" = $1 AND status = 'active'"#,
-                    [template.owner_id.clone().into()])).await?.ok_or_else(|| ApiError::internal("Missing device count"))?.try_get::<i64>("", "count")?;
-                if pending >= max_pending as i64 || devices + pending >= max_devices as i64 {
-                    return Err(ApiError::too_many_requests("Device enrollment limit reached"));
-                }
-                // Cancelled and lapsed packages are retained until pruning, so creation
-                // is bounded too: at most two full fleets' worth of packages per day.
-                let daily_limit = 2 * (i64::from(max_devices) + i64::from(max_pending));
-                let recent = tx.query_one_raw(sql(r#"SELECT COUNT(*) AS count FROM "DeviceEnrollment" WHERE "ownerId" = $1 AND "createdAt" > $2"#,
-                    [template.owner_id.clone().into(), (now - ENROLLMENT_CREATION_WINDOW_SECONDS).into()])).await?.ok_or_else(|| ApiError::internal("Missing recent enrollment count"))?.try_get::<i64>("", "count")?;
-                if recent >= daily_limit {
-                    return Err(ApiError::too_many_requests(format!("Device enrollment packages are limited to {daily_limit} per day; {recent} were created in the last 24 hours")));
-                }
+                enrollment_counts(tx, &template.owner_id, now).await?.admit(max_devices, max_pending)?;
                 tx.execute_raw(sql(r#"INSERT INTO "DeviceEnrollment" (id, "deviceId", "ownerId", "jwtId", manifest, status, "expiresAt", "createdAt") VALUES ($1,$2,$3,$4,$5,'pending',$6,$7)"#,
                     [template.enrollment_id.into(),template.device_id.into(),template.owner_id.into(),jwt_id.into(),json.into(),template.expires_at.into(),template.issued_at.into()])).await?;
                 require_live(template.expires_at)?;
@@ -401,7 +554,7 @@ impl Repository<'_> {
 
     pub async fn revoke(&self, owner: &str, id: &str) -> Result<(), ApiError> {
         active_account(self.db, owner).await?;
-        let changed=self.db.execute_raw(sql(r#"UPDATE "ManagedDevice" SET status = 'revoked', "authEpoch" = "authEpoch" + 1 WHERE id = $1 AND "ownerId" = $2 AND status = 'active'"#,[id.into(),owner.into()])).await?.rows_affected();
+        let changed=self.db.execute_raw(sql(r#"UPDATE "ManagedDevice" SET status = 'revoked', "authEpoch" = "authEpoch" + 1, "revokedAt" = $3 WHERE id = $1 AND "ownerId" = $2 AND status = 'active'"#,[id.into(),owner.into(),chrono::Utc::now().timestamp().into()])).await?.rows_affected();
         if changed != 1 {
             return Err(ApiError::NOT_FOUND);
         }

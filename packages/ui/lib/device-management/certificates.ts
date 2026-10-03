@@ -1,6 +1,4 @@
 import { z } from "zod";
-import type { IApiState } from "../../state/backend-state/api-state";
-import type { IProfile } from "../../types";
 import type { ManagementCall } from "./telemetry";
 
 export const CERTIFICATE_WARNING_SECONDS = 7 * 24 * 60 * 60;
@@ -35,23 +33,19 @@ const inventorySchema = z.object({
 	inventory_revision: revision,
 });
 const pageSchema = inventorySchema.extend({ next: certificateId.nullable() });
-const publicInventorySchema = z.object({
-	revision,
-	updated_at: timestamp.nullable(),
-	certificates: z
-		.array(
-			z.object({
-				certificate_id: certificateId,
-				revision: revision,
-				fingerprint_sha256: z.string().regex(/^[a-f0-9]{64}$/),
-				not_after: timestamp,
-			}),
-		)
-		.max(32),
-});
 export type DeviceCertificate = z.infer<typeof certificateMetadataSchema>;
 export type CertificateInventory = z.infer<typeof inventorySchema>;
-export type PublicCertificateInventory = z.infer<typeof publicInventorySchema>;
+/** What the hub knows without a device session; parsed in `hub/endpoints.ts`. */
+export interface PublicCertificateInventory {
+	revision: number;
+	updated_at: number | null;
+	certificates: {
+		certificate_id: string;
+		revision: number;
+		fingerprint_sha256: string;
+		not_after: number;
+	}[];
+}
 
 export function certificateStatus(
 	certificate: { not_after: number; not_before?: number },
@@ -120,23 +114,6 @@ export async function readCertificates(
 		throw new Error(
 			"Certificates could not be read. Check your device access and reconnect.",
 		);
-	}
-}
-
-export async function readPublicCertificates(
-	api: IApiState,
-	profile: IProfile,
-	deviceId: string,
-): Promise<PublicCertificateInventory> {
-	try {
-		return publicInventorySchema.parse(
-			await api.get(
-				profile,
-				`devices/${encodeURIComponent(deviceId)}/certificate-inventory`,
-			),
-		);
-	} catch {
-		throw new Error("Certificate expiry information is unavailable.");
 	}
 }
 

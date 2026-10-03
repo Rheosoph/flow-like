@@ -10,6 +10,7 @@ pub const PROJECT_ARTIFACT_MAX_FILES: usize = 8192;
 pub const PROJECT_ARTIFACT_MAX_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 pub const PROJECT_ARTIFACT_MAX_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 pub const PROJECT_ARTIFACT_TTL_SECONDS: i64 = 86_400;
+pub const PROJECT_ARTIFACT_PRUNE_REVISIONS: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -108,6 +109,18 @@ pub enum ArtifactRequest {
         event_id: Option<String>,
         after: Option<String>,
     },
+    /// Storage in use next to its budgets: the device's, and with a project also that
+    /// project's and its retained revisions after revision `after`.
+    Usage {
+        project_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<String>,
+    },
+    /// Removes exactly the listed revisions of one project.
+    Prune {
+        project_id: String,
+        revisions: Vec<String>,
+    },
 }
 impl std::fmt::Debug for ArtifactRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -118,15 +131,18 @@ impl std::fmt::Debug for ArtifactRequest {
     }
 }
 impl ArtifactRequest {
-    pub fn project_id(&self) -> &str {
+    /// The project a request acts on; none when it asks for the device's storage only.
+    pub fn project_id(&self) -> Option<&str> {
         match self {
-            Self::Begin { descriptor } => &descriptor.project_id,
+            Self::Begin { descriptor } => Some(&descriptor.project_id),
             Self::Chunk { project_id, .. }
             | Self::Status { project_id, .. }
             | Self::Commit { project_id, .. }
             | Self::Abort { project_id, .. }
             | Self::PrepareOnline { project_id }
-            | Self::Describe { project_id, .. } => project_id,
+            | Self::Describe { project_id, .. }
+            | Self::Prune { project_id, .. } => Some(project_id),
+            Self::Usage { project_id, .. } => project_id.as_deref(),
         }
     }
     pub fn journaled(&self) -> bool {
@@ -136,8 +152,24 @@ impl ArtifactRequest {
                 | Self::Commit { .. }
                 | Self::Abort { .. }
                 | Self::PrepareOnline { .. }
+                | Self::Prune { .. }
         )
     }
+}
+
+/// Revisions are named one by one: an empty list never stands for every revision.
+pub fn validate_artifact_prune(revisions: &[String]) -> Result<()> {
+    if revisions.is_empty() || revisions.len() > PROJECT_ARTIFACT_PRUNE_REVISIONS {
+        return Err(ProtocolError::Invalid("artifact revision selection"));
+    }
+    let mut selected = HashSet::new();
+    for revision in revisions {
+        validate_artifact_digest(revision)?;
+        if !selected.insert(revision) {
+            return Err(ProtocolError::Invalid("duplicate artifact revision"));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -438,6 +470,67 @@ mod tests {
             }],
         }
     }
+    #[test]
+    fn capacity_requests_round_trip_with_their_wire_names() {
+        let digest = artifact_sha256(b"revision");
+        for (wire, project, journaled) in [
+            (
+                serde_json::json!({"kind":"usage","project_id":null}),
+                None,
+                false,
+            ),
+            (
+                serde_json::json!({"kind":"usage","project_id":"project","after":digest}),
+                Some("project"),
+                false,
+            ),
+            (
+                serde_json::json!({"kind":"prune","project_id":"project","revisions":[digest]}),
+                Some("project"),
+                true,
+            ),
+        ] {
+            let request: ArtifactRequest = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(request.project_id(), project, "{wire}");
+            assert_eq!(request.journaled(), journaled, "{wire}");
+            assert_eq!(serde_json::to_value(&request).unwrap(), wire);
+        }
+        assert!(matches!(
+            serde_json::from_value::<ArtifactRequest>(serde_json::json!({"kind":"usage"})).unwrap(),
+            ArtifactRequest::Usage {
+                project_id: None,
+                after: None
+            }
+        ));
+        for wire in [
+            serde_json::json!({"kind":"prune","project_id":"project"}),
+            serde_json::json!({"kind":"prune","project_id":"project","revisions":[digest],"all":true}),
+            serde_json::json!({"kind":"usage","project_id":null,"limit":8}),
+        ] {
+            assert!(
+                serde_json::from_value::<ArtifactRequest>(wire.clone()).is_err(),
+                "{wire}"
+            );
+        }
+    }
+
+    #[test]
+    fn revisions_to_remove_are_named_one_by_one() {
+        let digest = |index: usize| artifact_sha256(index.to_string().as_bytes());
+        let listed = |count: usize| (0..count).map(digest).collect::<Vec<_>>();
+        assert!(validate_artifact_prune(&listed(1)).is_ok());
+        assert!(validate_artifact_prune(&listed(PROJECT_ARTIFACT_PRUNE_REVISIONS)).is_ok());
+        for refused in [
+            Vec::new(),
+            listed(PROJECT_ARTIFACT_PRUNE_REVISIONS + 1),
+            vec![digest(0), digest(0)],
+            vec!["*".into()],
+            vec![digest(0).to_uppercase()],
+        ] {
+            assert!(validate_artifact_prune(&refused).is_err(), "{refused:?}");
+        }
+    }
+
     #[test]
     fn online_dependencies_are_bound_to_the_source_kind() {
         let mut online = manifest();

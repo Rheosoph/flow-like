@@ -170,6 +170,7 @@ import type {
 } from "../interfaces/chat-default/chat-db";
 import type { IAttachment, IMessage } from "../interfaces/chat-default/chat-db";
 import { processChatEvents } from "../interfaces/chat-default/event-processor";
+import { purchasingAllowed } from "../payments/use-payments";
 import {
 	activePageEventCandidates,
 	classifyAppEventInterface,
@@ -205,6 +206,7 @@ import {
 	resolveFlowPilotWidgetTarget,
 	slugifyRoute,
 } from "./flowpilot-widget-target";
+import { leftOutPackagesResult } from "./fork-left-out-packages";
 import {
 	InlineAppPageRuntimeHost,
 	presentInlineAppPage,
@@ -3002,6 +3004,11 @@ export function GlobalToolBridge() {
 							skipped: (response.report?.skipped ?? []).slice(0, 20),
 							skipped_total: response.report?.skipped?.length ?? 0,
 							warnings: (response.report?.warnings ?? []).slice(0, 10),
+							...leftOutPackagesResult(
+								response.report?.skipped,
+								preview?.blocked_packages,
+								await purchasingAllowed(queryClient),
+							),
 						};
 					} catch (error) {
 						return {
@@ -3120,7 +3127,11 @@ export function GlobalToolBridge() {
 				case "get_template_preview":
 					return await scoutGetTemplatePreview(backend, args);
 				case "fork_preview":
-					return await scoutForkPreview(backend, args);
+					return await scoutForkPreview(
+						backend,
+						args,
+						await purchasingAllowed(queryClient),
+					);
 				case "inspect_app":
 					return await scoutInspectApp(backend, args, async (appId) =>
 						(await getProfileAppIds()).has(appId),

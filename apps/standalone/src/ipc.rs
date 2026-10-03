@@ -76,6 +76,26 @@ enum ChildRequest {
         method: String,
         url: String,
     },
+    /// The complete set of schedules this placement process wants to run.
+    Schedules {
+        event_ids: Vec<String>,
+    },
+    /// Person-started runs that ended here, and the question for new ones. A `closing`
+    /// process takes no new run.
+    Runs {
+        #[serde(default)]
+        finished: Vec<crate::management::run_queue::FinishedRun>,
+        #[serde(default)]
+        closing: bool,
+    },
+}
+
+/// A schedule another running service of the same project already runs.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HeldSchedule {
+    event_id: String,
+    placement_id: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -99,9 +119,148 @@ enum ParentResponse {
         dpop: String,
         expires_at: u64,
     },
+    Schedules {
+        held: Vec<HeldSchedule>,
+    },
+    Runs {
+        #[serde(default)]
+        start: Vec<crate::management::run_queue::StartRun>,
+        #[serde(default)]
+        cancel: Vec<String>,
+    },
     Error {
         code: String,
     },
+}
+
+/// Per state directory, project and event: the service that runs the schedule and the
+/// channel that said so. Memory only, so after an agent restart the first service to ask
+/// runs a schedule that two of them list.
+type ScheduleRegistry = std::collections::HashMap<(PathBuf, String, String), (String, u64)>;
+
+static SCHEDULES: std::sync::LazyLock<std::sync::Mutex<ScheduleRegistry>> =
+    std::sync::LazyLock::new(Default::default);
+static SCHEDULE_CHANNELS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn schedule_registry() -> std::sync::MutexGuard<'static, ScheduleRegistry> {
+    SCHEDULES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// One placement process's channel; its schedules are free again when the channel ends.
+struct ScheduleChannel(u64);
+
+impl ScheduleChannel {
+    fn open() -> Self {
+        Self(SCHEDULE_CHANNELS.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// Replaces what the service ran before with `event_ids`, and returns those another
+    /// service of the project runs.
+    fn replace(
+        &self,
+        state_dir: &std::path::Path,
+        config: &PlacementConfig,
+        event_ids: Vec<String>,
+    ) -> Vec<HeldSchedule> {
+        let mut registry = schedule_registry();
+        registry.retain(|(directory, project, _), (placement, _)| {
+            !(directory == state_dir && *project == config.project_id && *placement == config.id)
+        });
+        let mut held = Vec::new();
+        for event_id in event_ids {
+            let key = (state_dir.to_path_buf(), config.project_id.clone(), event_id);
+            match registry.get(&key) {
+                Some((placement, _)) => held.push(HeldSchedule {
+                    event_id: key.2,
+                    placement_id: placement.clone(),
+                }),
+                None => {
+                    registry.insert(key, (config.id.clone(), self.0));
+                }
+            }
+        }
+        held
+    }
+}
+
+impl Drop for ScheduleChannel {
+    fn drop(&mut self) {
+        schedule_registry().retain(|_, (_, channel)| *channel != self.0);
+    }
+}
+
+/// One placement process's channel for person-started runs. The runs it holds end as
+/// interrupted when the channel ends.
+struct RunChannel {
+    state_dir: PathBuf,
+    placement_id: String,
+    connection: u64,
+}
+
+impl RunChannel {
+    fn open(state_dir: &std::path::Path, placement_id: &str) -> Self {
+        Self {
+            state_dir: state_dir.to_path_buf(),
+            placement_id: placement_id.to_owned(),
+            connection: crate::management::run_queue::connection_id(),
+        }
+    }
+
+    /// Takes the reports of what ended. Hands out new runs only when `take` and the asking
+    /// process is the placement's current one; an empty question opens no database.
+    fn answer(
+        &self,
+        finished: Vec<crate::management::run_queue::FinishedRun>,
+        take: bool,
+        is_current: impl Fn() -> Result<bool>,
+    ) -> ParentResponse {
+        let current = || if take { is_current() } else { Ok(false) };
+        match crate::management::run_queue::exchange(
+            &self.state_dir,
+            &self.placement_id,
+            self.connection,
+            finished,
+            &current,
+        ) {
+            Ok(batch) => ParentResponse::Runs {
+                start: batch.start,
+                cancel: batch.cancel,
+            },
+            Err(error) => {
+                tracing::warn!(
+                    placement_id = %self.placement_id,
+                    "Person-started runs could not be exchanged; answering unavailable: {error:#}"
+                );
+                unavailable()
+            }
+        }
+    }
+}
+
+impl Drop for RunChannel {
+    fn drop(&mut self) {
+        let close = || {
+            crate::management::run_queue::connection_closed(
+                &self.state_dir,
+                &self.placement_id,
+                self.connection,
+            )
+        };
+        match tokio::runtime::Handle::try_current().map(|handle| handle.runtime_flavor()) {
+            Ok(tokio::runtime::RuntimeFlavor::MultiThread) => tokio::task::block_in_place(close),
+            _ => close(),
+        }
+    }
+}
+
+/// Each of `event_ids` once, and all of them events of the placement.
+fn names_own_events(config: &PlacementConfig, event_ids: &[String]) -> bool {
+    let mut named = std::collections::HashSet::new();
+    event_ids.iter().all(|id| {
+        named.insert(id.as_str()) && config.events.iter().any(|event| event.event_id == *id)
+    })
 }
 
 impl Drop for ParentResponse {
@@ -378,6 +537,7 @@ pub struct ChildBroker {
     identity: Option<crate::config::WorkloadIdentity>,
 }
 
+#[cfg(feature = "runtime")]
 pub(crate) enum TlsIdentityUpdate {
     Busy,
     Unchanged,
@@ -496,6 +656,7 @@ impl ChildBroker {
 
     /// A busy resource exchange must not interrupt a still-valid TLS identity.
     /// Busy is distinct from an explicit supervisor denial or a closed channel.
+    #[cfg(feature = "runtime")]
     pub(crate) async fn try_tls_identity(&self, known_revision: u64) -> Result<TlsIdentityUpdate> {
         let Ok(busy) = self.busy.clone().try_lock_owned() else {
             return Ok(TlsIdentityUpdate::Busy);
@@ -515,7 +676,7 @@ impl ChildBroker {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "runtime"))]
     pub(crate) async fn lock_channel_for_test(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.busy.lock().await
     }
@@ -637,6 +798,69 @@ fn authorization_failure(code: &str) -> AuthorizationError {
 }
 
 #[cfg(feature = "runtime")]
+#[async_trait::async_trait]
+impl crate::schedule::ScheduleArbiter for ChildBroker {
+    async fn hold(&self, ids: &[String]) -> Result<Vec<(String, String)>> {
+        let request = ChildRequest::Schedules {
+            event_ids: ids.to_vec(),
+        };
+        match &self.request(&request).await? {
+            ParentResponse::Schedules { held } => Ok(held
+                .iter()
+                .map(|held| (held.event_id.clone(), held.placement_id.clone()))
+                .collect()),
+            _ => anyhow::bail!("Supervisor did not decide the placement's schedules"),
+        }
+    }
+}
+
+#[cfg(any(test, all(feature = "runtime", feature = "on-demand")))]
+impl ChildBroker {
+    async fn runs(
+        &self,
+        finished: Vec<crate::management::run_queue::FinishedRun>,
+        closing: bool,
+        busy: OwnedMutexGuard<()>,
+    ) -> Result<crate::management::run_queue::RunBatch> {
+        let frame = encode_frame(&ChildRequest::Runs { finished, closing })?;
+        match &mut tokio::time::timeout(REQUEST_TIMEOUT, self.exchange(frame, busy))
+            .await
+            .context("Workload broker timed out")??
+        {
+            ParentResponse::Runs { start, cancel } => Ok(crate::management::run_queue::RunBatch {
+                start: std::mem::take(start),
+                cancel: std::mem::take(cancel),
+            }),
+            _ => anyhow::bail!("Supervisor did not answer the question for person-started runs"),
+        }
+    }
+}
+
+/// The periodic question skips a busy channel, as the TLS refresh does, so it never delays a
+/// credential request; the last report of a stopping process waits for it.
+#[cfg(all(feature = "runtime", feature = "on-demand"))]
+#[async_trait::async_trait]
+impl crate::on_demand::RunSource for ChildBroker {
+    async fn exchange(
+        &self,
+        finished: Vec<crate::management::run_queue::FinishedRun>,
+    ) -> Result<crate::management::run_queue::RunBatch> {
+        let Ok(busy) = self.busy.clone().try_lock_owned() else {
+            return Err(crate::on_demand::SourceBusy.into());
+        };
+        self.runs(finished, false, busy).await
+    }
+
+    async fn report(
+        &self,
+        finished: Vec<crate::management::run_queue::FinishedRun>,
+    ) -> Result<crate::management::run_queue::RunBatch> {
+        let busy = self.busy.clone().lock_owned().await;
+        self.runs(finished, true, busy).await
+    }
+}
+
+#[cfg(feature = "runtime")]
 fn outage_failure(response: &ParentResponse) -> Option<AuthorizationError> {
     match response {
         ParentResponse::Error { code }
@@ -738,6 +962,8 @@ pub(crate) async fn serve_with_drain(
     };
     let mut usage_guard = crate::operational::UsageProcessGuard::new(&state_dir, &process_run_id);
     let mut usage_registered = false;
+    let schedules = ScheduleChannel::open();
+    let runs = RunChannel::open(&state_dir, &bootstrap.config.id);
     let handshake = tokio::time::timeout(
         Duration::from_secs(15),
         write_frame(&mut stream, &bootstrap),
@@ -750,6 +976,30 @@ pub(crate) async fn serve_with_drain(
         let request: ChildRequest = tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             request = read_frame(&mut stream) => request?,
+        };
+        // Asked every 500 ms by a service with quick actions or forms, so it is answered
+        // before the store is opened. A draining process still reports what ended.
+        let request = match request {
+            ChildRequest::Runs { finished, closing } => {
+                let take = prepared && !closing && !drain.is_cancelled();
+                let response = runs.answer(finished, take, || {
+                    let store = StateStore::open(&state_dir.join("management.sqlite"))?;
+                    Ok(usage_binding.is_physically_bound(&store)?
+                        && store.replica_is_current(
+                            &bootstrap.config.id,
+                            bootstrap.replica_slot,
+                            bootstrap.config_revision,
+                            bootstrap.intent_revision,
+                            process_id,
+                        )?)
+                });
+                tokio::select! {
+                    _ = cancel.cancelled() => return Ok(()),
+                    result = write_frame(&mut stream, &response) => result?,
+                }
+                continue;
+            }
+            request => request,
         };
         let is_usage = matches!(&request, ChildRequest::Usage { .. });
         // Local state and telemetry failures answer this request as unavailable.
@@ -902,6 +1152,22 @@ pub(crate) async fn serve_with_drain(
                         prepared = true;
                         ParentResponse::Ready
                     }
+                    ChildRequest::Schedules { event_ids } => {
+                        drop(store);
+                        require(
+                            names_own_events(&bootstrap.config, &event_ids),
+                            "Workload named a schedule outside its placement",
+                        )?;
+                        // Schedules run only after the service was accepted as ready.
+                        if prepared {
+                            ParentResponse::Schedules {
+                                held: schedules.replace(&state_dir, &bootstrap.config, event_ids),
+                            }
+                        } else {
+                            unavailable()
+                        }
+                    }
+                    ChildRequest::Runs { .. } => unavailable(),
                     ChildRequest::Authorize {
                         ref method,
                         ref url,
@@ -1368,6 +1634,172 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), server).await???;
         Ok(())
     }
+
+    /// Records a placement with these events whose first replica is starting as
+    /// `process_id`, at revision 1.
+    #[cfg(feature = "runtime")]
+    fn starting_placement(
+        root: &std::path::Path,
+        placement: &str,
+        project: &str,
+        events: &[&str],
+        process_id: u32,
+    ) -> Result<PlacementConfig> {
+        let events: Vec<_> = events
+            .iter()
+            .map(|id| serde_json::json!({"event_id":id,"event_version":[1,0,0],"board_version":[1,0,0]}))
+            .collect();
+        let config: PlacementConfig = serde_json::from_value(serde_json::json!({"id":placement,
+            "project_id":project,"deployment_id":"deployment","revision":"one","source":"offline",
+            "project_path":root,"events":events}))?;
+        let stored = serde_json::to_value(&config)?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        store.upsert_placement(placement, &stored, crate::state::DesiredState::Running)?;
+        store.claim_replica(placement, 0, 1, 1)?;
+        let starting = crate::state::ObservedState::Starting;
+        store.record_replica(placement, 0, 1, 1, starting, Some(process_id), None)?;
+        Ok(config)
+    }
+
+    /// A placement process's end of its supervisor channel, and the parent's task for it.
+    #[cfg(feature = "runtime")]
+    struct Service {
+        broker: Arc<ChildBroker>,
+        server: tokio::task::JoinHandle<Result<()>>,
+        cancel: CancellationToken,
+    }
+
+    #[cfg(feature = "runtime")]
+    impl Service {
+        /// A process the supervisor has just started; it has not reported Ready.
+        async fn start(
+            root: &std::path::Path,
+            placement: &str,
+            project: &str,
+            events: &[&str],
+            process_id: u32,
+        ) -> Result<Self> {
+            let config = starting_placement(root, placement, project, events, process_id)?;
+            let bootstrap = ChildBootstrap {
+                config,
+                data_root: None,
+                replica_slot: 0,
+                inherited_listener: false,
+                config_revision: 1,
+                intent_revision: 1,
+                parent_pid: 1,
+                api_base_url: None,
+                workload_identity: None,
+            };
+            let (parent, child) = UnixStream::pair()?;
+            let cancel = CancellationToken::new();
+            let root = root.to_path_buf();
+            let server = tokio::spawn(serve(
+                parent,
+                bootstrap,
+                root,
+                process_id,
+                None,
+                cancel.clone(),
+            ));
+            let (_, broker) = ChildBroker::connect(child).await?;
+            Ok(Self {
+                broker,
+                server,
+                cancel,
+            })
+        }
+
+        /// The process as the supervisor accepted it: it may ask for its schedules.
+        async fn ready(
+            root: &std::path::Path,
+            placement: &str,
+            project: &str,
+            events: &[&str],
+            process_id: u32,
+        ) -> Self {
+            let service = Self::start(root, placement, project, events, process_id)
+                .await
+                .unwrap();
+            service.broker.ready().await.unwrap();
+            service
+        }
+
+        /// Which of `ids` the parent says another service runs, as `(event, service)`.
+        async fn refused(&self, ids: &[&str]) -> Result<Vec<(String, String)>> {
+            use crate::schedule::ScheduleArbiter;
+            let ids: Vec<String> = ids.iter().map(|id| (*id).to_owned()).collect();
+            self.broker.hold(&ids).await
+        }
+
+        async fn held(&self, ids: &[&str]) -> Vec<(String, String)> {
+            self.refused(ids).await.unwrap()
+        }
+    }
+
+    #[cfg(feature = "runtime")]
+    fn by(event: &str, placement: &str) -> (String, String) {
+        (event.to_owned(), placement.to_owned())
+    }
+
+    #[cfg(feature = "runtime")]
+    #[tokio::test]
+    async fn a_schedule_runs_in_one_service_of_a_project() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        let all = ["digest", "nightly", "weekly"];
+        let reports = Service::start(root, "reports", "project", &all[1..], 41).await?;
+        // Before the service is ready the parent decides nothing.
+        assert!(reports.refused(&["nightly"]).await.is_err());
+        reports.broker.ready().await?;
+        assert_eq!(reports.held(&["nightly", "weekly"]).await, []);
+
+        // A second service of the same project is held for what the first one runs.
+        let mail = Service::ready(root, "mail", "project", &all, 42).await;
+        assert_eq!(
+            mail.held(&all).await,
+            [by("nightly", "reports"), by("weekly", "reports")]
+        );
+        // The same service replaces its set: what it no longer lists is free.
+        assert_eq!(reports.held(&["nightly"]).await, []);
+        assert_eq!(mail.held(&all).await, [by("nightly", "reports")]);
+        // What the second service got stays its own.
+        assert_eq!(
+            reports.held(&["nightly", "weekly"]).await,
+            [by("weekly", "mail")]
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "runtime")]
+    #[tokio::test]
+    async fn schedules_are_free_when_a_channel_ends_and_projects_are_independent() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        let reports = Service::ready(root, "reports", "project", &["nightly"], 41).await;
+        assert_eq!(reports.held(&["nightly"]).await, []);
+        // Another project is independent, also with the same event IDs.
+        let other = Service::ready(root, "other", "other-project", &["nightly"], 43).await;
+        assert_eq!(other.held(&["nightly"]).await, []);
+        let mail = Service::ready(root, "mail", "project", &["nightly"], 42).await;
+        assert_eq!(mail.held(&["nightly"]).await, [by("nightly", "reports")]);
+
+        // Entries go when the channel of the process ends.
+        reports.cancel.cancel();
+        reports.server.await??;
+        assert_eq!(mail.held(&["nightly"]).await, []);
+
+        // A schedule outside the placement's own events is a protocol violation.
+        assert!(other.refused(&["weekly"]).await.is_err());
+        assert!(other.server.await?.is_err());
+        assert!(
+            schedule_registry()
+                .keys()
+                .all(|(directory, project, _)| directory != root || project != "other-project")
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn offline_ready_with_optional_hosted_grant_never_connects_to_cloud() -> Result<()> {
         let directory = tempfile::tempdir()?;
@@ -1940,5 +2372,267 @@ mod tests {
             }
         }
         peer.await.unwrap();
+    }
+
+    use crate::management::run_queue::{self, FinishedRun, RunBatch};
+
+    /// One process of a placement with two instances, accepted as ready.
+    struct Replica {
+        broker: Arc<ChildBroker>,
+        server: tokio::task::JoinHandle<Result<()>>,
+        cancel: CancellationToken,
+        drain: CancellationToken,
+    }
+
+    impl Replica {
+        async fn ask(&self, finished: Vec<FinishedRun>, closing: bool) -> Result<RunBatch> {
+            let busy = self.broker.busy.clone().lock_owned().await;
+            self.broker.runs(finished, closing, busy).await
+        }
+    }
+
+    /// `slots` ready instances of the placement `placement`, whose processes are 42, 43, ….
+    async fn ready_replicas(root: &std::path::Path, slots: u8) -> Result<Vec<Replica>> {
+        let config: PlacementConfig = serde_json::from_value(serde_json::json!({
+            "id":"placement","project_id":"project","deployment_id":"deployment",
+            "revision":"one","source":"offline","project_path":root,"max_replicas":2,
+            "hosting":{"host":"127.0.0.1","port":8080,"max_in_flight":4,"request_timeout_secs":30,"auth_secret":"service"},
+            "events":[{"event_id":"form","event_version":[1,0,0],"board_version":[1,0,0]}]
+        }))?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        store.upsert_placement(
+            &config.id,
+            &serde_json::to_value(&config)?,
+            crate::state::DesiredState::Running,
+        )?;
+        store.set_replica_count(&config.id, 1, 2)?;
+        let mut replicas = Vec::new();
+        for slot in 0..slots {
+            replicas.push(ready_replica(root, &store, &config, slot).await?);
+        }
+        Ok(replicas)
+    }
+
+    async fn ready_replica(
+        root: &std::path::Path,
+        store: &StateStore,
+        config: &PlacementConfig,
+        slot: u8,
+    ) -> Result<Replica> {
+        let pid = 42 + u32::from(slot);
+        assert!(store.claim_replica(&config.id, slot, 1, 1)?);
+        let starting = crate::state::ObservedState::Starting;
+        store.record_replica(&config.id, slot, 1, 1, starting, Some(pid), None)?;
+        let bootstrap = ChildBootstrap {
+            config: config.clone(),
+            data_root: None,
+            replica_slot: slot,
+            inherited_listener: false,
+            config_revision: 1,
+            intent_revision: 1,
+            parent_pid: 1,
+            api_base_url: None,
+            workload_identity: None,
+        };
+        let (parent, child) = UnixStream::pair()?;
+        let (cancel, drain) = (CancellationToken::new(), CancellationToken::new());
+        let server = tokio::spawn(serve_with_drain(
+            parent,
+            bootstrap,
+            root.into(),
+            pid,
+            None,
+            cancel.clone(),
+            drain.clone(),
+        ));
+        let (_, broker) = ChildBroker::connect(child).await?;
+        broker.ready().await?;
+        Ok(Replica {
+            broker,
+            server,
+            cancel,
+            drain,
+        })
+    }
+
+    /// A run of the form, journaled as `run_event` does it and queued for the placement.
+    fn queue_run(root: &std::path::Path, operation_id: &str) -> Result<()> {
+        let reservation =
+            run_queue::reserve(root, "placement").context("The queue has a free place")?;
+        let run_id = format!("run-{operation_id}");
+        let row = serde_json::json!({"operation_id":operation_id,"state":"accepted",
+            "result":{"command":"run_event","placement_id":"placement","event_id":"form","run_id":run_id,"run":"queued"}});
+        StateStore::open(&root.join("management.sqlite"))?.connection.execute(
+            "INSERT INTO management_operations (operation_id, request_digest, principal, project_id, placement_id, accepted_at, result_json)
+             VALUES (?1, 'digest', 'owner', 'project', 'placement', 0, ?2)",
+            rusqlite::params![operation_id, row.to_string()],
+        )?;
+        reservation.enqueue(run_queue::Admission {
+            operation_id: operation_id.into(),
+            run_id,
+            event_id: "form".into(),
+            principal: "owner".into(),
+            config_revision: 1,
+            time_limit_secs: 60,
+            payload: Some(serde_json::json!({"title": "Hello"})),
+        });
+        Ok(())
+    }
+
+    fn journal_row(root: &std::path::Path, operation_id: &str) -> Result<serde_json::Value> {
+        let row: String = StateStore::open(&root.join("management.sqlite"))?
+            .connection
+            .query_row(
+                "SELECT result_json FROM management_operations WHERE operation_id=?1",
+                [operation_id],
+                |row| row.get(0),
+            )?;
+        Ok(serde_json::from_str(&row)?)
+    }
+
+    fn succeeded(operation_id: &str) -> FinishedRun {
+        let now = crate::enrollment::unix_time().unwrap();
+        FinishedRun {
+            operation_id: operation_id.into(),
+            run: "succeeded".into(),
+            code: None,
+            fields: Vec::new(),
+            started_at: now,
+            finished_at: now,
+            output: Some(serde_json::json!({"json": {"id": 42}})),
+            output_bytes: 9,
+            truncated: false,
+            attachments: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_empty_question_for_runs_opens_no_database() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        let replicas = ready_replicas(root, 1).await?;
+        let database = root.join("management.sqlite");
+        std::fs::rename(&database, root.join("saved.sqlite"))?;
+        std::fs::create_dir(&database)?;
+        let replica = &replicas[0];
+        assert_eq!(replica.ask(Vec::new(), false).await?, RunBatch::default());
+        // A report of a run this process was never given is ignored, also without a database.
+        assert_eq!(
+            replica.ask(vec![succeeded("someone-elses")], false).await?,
+            RunBatch::default()
+        );
+        // Every other request of the channel needs the database.
+        assert!(matches!(
+            replica.broker.request(&ChildRequest::TlsIdentity { known_revision: None }).await?,
+            ParentResponse::Error { ref code } if code == "unavailable"
+        ));
+        std::fs::remove_dir(&database)?;
+        std::fs::rename(root.join("saved.sqlite"), &database)?;
+        replica.cancel.cancel();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_queued_run_goes_to_one_current_instance() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        let replicas = ready_replicas(root, 2).await?;
+        queue_run(root, "op-1")?;
+        // A stopping process takes nothing.
+        assert_eq!(
+            replicas[1].ask(Vec::new(), true).await?,
+            RunBatch::default()
+        );
+        let first = replicas[0].ask(Vec::new(), false).await?;
+        let second = replicas[1].ask(Vec::new(), false).await?;
+        assert_eq!(first.start.len(), 1);
+        assert_eq!(first.start[0].operation_id, "op-1");
+        assert_eq!(first.start[0].run_id, "run-op-1");
+        assert_eq!(first.start[0].event_id, "form");
+        assert_eq!(
+            first.start[0].payload,
+            Some(serde_json::json!({"title": "Hello"}))
+        );
+        assert_eq!(second, RunBatch::default());
+        for replica in &replicas {
+            assert!(replica.ask(Vec::new(), false).await?.start.is_empty());
+        }
+        // Stop this run: only the instance that runs it is told.
+        assert!(run_queue::cancel(root, "placement", "op-1"));
+        assert!(replicas[1].ask(Vec::new(), false).await?.cancel.is_empty());
+        assert_eq!(replicas[0].ask(Vec::new(), false).await?.cancel, ["op-1"]);
+        for replica in &replicas {
+            replica.cancel.cancel();
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_instance_that_is_not_current_gets_nothing() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        let replicas = ready_replicas(root, 1).await?;
+        queue_run(root, "op-1")?;
+        // The supervisor recorded another process for the slot.
+        StateStore::open(&root.join("management.sqlite"))?.record_replica(
+            "placement",
+            0,
+            1,
+            1,
+            crate::state::ObservedState::Running,
+            Some(99),
+            None,
+        )?;
+        assert_eq!(
+            replicas[0].ask(Vec::new(), false).await?,
+            RunBatch::default()
+        );
+        assert!(run_queue::is_open(root, "placement", "op-1"));
+        replicas[0].cancel.cancel();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_draining_process_still_reports_what_ended() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        let replicas = ready_replicas(root, 1).await?;
+        let replica = &replicas[0];
+        queue_run(root, "op-1")?;
+        assert_eq!(replica.ask(Vec::new(), false).await?.start.len(), 1);
+        queue_run(root, "op-2")?;
+        replica.drain.cancel();
+        let answer = replica.ask(vec![succeeded("op-1")], false).await?;
+        assert!(
+            answer.start.is_empty(),
+            "nothing is handed to a draining process"
+        );
+        assert!(!run_queue::is_open(root, "placement", "op-1"));
+        let row = journal_row(root, "op-1")?;
+        assert_eq!(row["state"], "completed");
+        assert_eq!(row["result"]["run"], "succeeded");
+        assert!(row["result"].get("output").is_none(), "{row}");
+        assert!(run_queue::is_open(root, "placement", "op-2"));
+        replica.cancel.cancel();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_run_ends_as_interrupted_when_its_channel_ends() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        let mut replicas = ready_replicas(root, 1).await?;
+        queue_run(root, "op-1")?;
+        assert_eq!(replicas[0].ask(Vec::new(), false).await?.start.len(), 1);
+        let replica = replicas.remove(0);
+        replica.cancel.cancel();
+        replica.server.await??;
+        assert!(!run_queue::is_open(root, "placement", "op-1"));
+        let row = journal_row(root, "op-1")?;
+        assert_eq!(
+            (&row["state"], &row["result"]["code"]),
+            (&"failed".into(), &"interrupted".into())
+        );
+        Ok(())
     }
 }

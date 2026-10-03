@@ -8,26 +8,38 @@ use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
 use axum::Extension;
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
-use serde::Serialize;
-use utoipa::ToSchema;
+use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct PackageQuery {
+    /// Project to read the package through: members see the version it pins,
+    /// even without access to the package itself.
+    #[serde(default)]
+    pub app_id: Option<String>,
+}
 
 /// GET /registry/package/{id}
 /// Returns full package entry details.
 /// - Public packages: accessible to anyone
 /// - PublicRequestAccess packages: metadata visible, download gated separately
-/// - Private packages: only accessible to users with a permission record
+/// - Private packages: only accessible to users with a permission record, or
+///   to members of the `app_id` project while it licenses the package
+/// - With `app_id` pinning the package, the manifest describes the pinned
+///   version, and a pinned version the viewer may not see is a 404
 #[utoipa::path(
     get,
     path = "/registry/package/{id}",
     tag = "registry",
-    description = "Get package details by ID.",
-    params(("id" = String, Path, description = "Package ID")),
+    description = "Get package details by ID. With a project, the details describe the version that project uses, and members of the project can read them even for a private package.",
+    params(("id" = String, Path, description = "Package ID"), PackageQuery),
     responses(
         (status = 200, description = "Package entry"),
         (status = 403, description = "No access"),
-        (status = 404, description = "Not found"),
+        (status = 404, description = "Not found, or the version the project uses is not available"),
         (status = 503, description = "WASM registry not configured")
     ),
     security(("bearer_auth" = []))
@@ -36,6 +48,7 @@ pub async fn get_package(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(id): Path<String>,
+    Query(query): Query<PackageQuery>,
 ) -> Result<Json<RegistryEntry>, ApiError> {
     let sub = user.sub().ok();
 
@@ -68,18 +81,23 @@ pub async fn get_package(
         }
     }
 
-    if package.visibility == WasmPackageVisibility::Private {
-        let uid = sub.clone().ok_or(ApiError::FORBIDDEN)?;
-        let access = crate::check_wasm_access!(state, &uid, &id);
-        if access.is_none() {
-            return Err(ApiError::FORBIDDEN);
-        }
-    }
-
     let access = match sub.as_ref() {
         Some(uid) => crate::check_wasm_access!(state, uid, &id),
         None => None,
     };
+    let pinned = match query.app_id.as_deref() {
+        Some(app_id) => {
+            crate::package_license::member_pinned_version(&state, &user, app_id, &id).await?
+        }
+        None => None,
+    };
+
+    let through_project_only =
+        package.visibility == WasmPackageVisibility::Private && access.is_none();
+    if through_project_only && pinned.is_none() {
+        return Err(ApiError::FORBIDDEN);
+    }
+
     let can_manage = access.is_some_and(|permission| {
         permission.has_permission(
             crate::permission::wasm_package_permission::WasmPackagePermission::Maintainer,
@@ -88,6 +106,33 @@ pub async fn get_package(
 
     // Access / visibility control is done above; build with correct version visibility.
     let mut entry = registry.entry_for_viewer(package, can_manage).await?;
+    if let Some(pinned) = pinned.as_deref() {
+        if entry.get_version(pinned).is_none() {
+            return Err(ApiError::not_found(format!(
+                "Version '{}' of package '{}', which this project uses, is not available",
+                pinned, id
+            )));
+        }
+        registry.pin_entry_to_version(&mut entry, pinned).await?;
+        // A member who cannot read the project's boards only loads the
+        // package's widgets: the node list, the node binary's hash and size
+        // and the other versions stay with the package's own users.
+        if through_project_only
+            && let Some(app_id) = query.app_id.as_deref()
+            && !crate::package_license::reads_project_boards(&state, &user, app_id).await
+        {
+            entry.nodes.clear();
+            entry.versions.retain(|listed| listed.version == pinned);
+            if super::server::manifest_has_wasm(&entry.manifest) {
+                entry.manifest.withhold_nodes();
+                for listed in &mut entry.versions {
+                    listed.wasm_hash.clear();
+                    listed.wasm_size = 0;
+                }
+            }
+        }
+    }
+    entry.pinned_version = pinned;
     entry.current_user_permission = access.map(|a| a.bits() as i32);
 
     Ok(Json(entry))

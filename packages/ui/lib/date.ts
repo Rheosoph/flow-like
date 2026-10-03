@@ -132,22 +132,30 @@ const RELATIVE_DIVISIONS: readonly {
  * Building an Intl formatter costs far more than using one (tens of µs each in
  * JavaScriptCore), and a page of rows formats hundreds of values per render.
  */
-const relativeTimeFormatters = new Map<
-	Intl.RelativeTimeFormatStyle,
-	Intl.RelativeTimeFormat
->();
-function relativeTimeFormatter(style: Intl.RelativeTimeFormatStyle) {
-	let formatter = relativeTimeFormatters.get(style);
+const relativeTimeFormatters = new Map<string, Intl.RelativeTimeFormat>();
+function relativeTimeFormatter(
+	style: Intl.RelativeTimeFormatStyle,
+	locale?: string,
+) {
+	const key = `${locale ?? ""}|${style}`;
+	let formatter = relativeTimeFormatters.get(key);
 	if (!formatter) {
-		formatter = new Intl.RelativeTimeFormat(undefined, {
+		formatter = new Intl.RelativeTimeFormat(locale, {
 			numeric: "auto",
 			style,
 		});
-		relativeTimeFormatters.set(style, formatter);
+		relativeTimeFormatters.set(key, formatter);
 	}
 	return formatter;
 }
 let absoluteDateTimeFormatter: Intl.DateTimeFormat | undefined;
+
+export interface RelativeTimeOptions {
+	/** Reference instant in epoch milliseconds (e.g. a hub-corrected clock). Defaults to `Date.now()`. */
+	now?: number;
+	/** BCP 47 locale, normally the active i18n language. Defaults to the runtime locale. */
+	locale?: string;
+}
 
 /**
  * "2 days ago" in the viewer's locale. Walks the whole unit ladder, so a value
@@ -157,6 +165,7 @@ export function formatRelativeTime(
 	dateInput: DateValue,
 	style: Intl.RelativeTimeFormatStyle = "long",
 	fallback = "Invalid date",
+	options: RelativeTimeOptions = {},
 ) {
 	const parsed = parseDateValue(dateInput);
 	const targetTimeMs = parsed?.getTime() ?? Number.NaN;
@@ -165,9 +174,9 @@ export function formatRelativeTime(
 		return fallback;
 	}
 
-	const formatter = relativeTimeFormatter(style);
+	const formatter = relativeTimeFormatter(style, options.locale);
 
-	let duration = (targetTimeMs - Date.now()) / 1000;
+	let duration = (targetTimeMs - (options.now ?? Date.now())) / 1000;
 	for (const division of RELATIVE_DIVISIONS) {
 		if (Math.abs(duration) < division.amount) {
 			return formatter.format(Math.round(duration), division.unit);
@@ -186,6 +195,159 @@ export function formatAbsoluteDateTime(dateInput: DateValue, fallback = "") {
 		timeStyle: "medium",
 	});
 	return absoluteDateTimeFormatter.format(parsed);
+}
+
+export interface ZonedDateTimeOptions {
+	/** Reference instant in epoch milliseconds; a value in the same year as `now` omits the year. */
+	now?: number;
+	/** BCP 47 locale, normally the active i18n language. Defaults to the runtime locale. */
+	locale?: string;
+	/** IANA zone. Defaults to the viewer's zone. */
+	timeZone?: string;
+}
+
+/**
+ * The zoned helpers below read 24-hour in every locale ("13:59:58", never
+ * "01:59:58 PM"): their callers set them in fixed-width time columns and in
+ * sentences written as "since 11:00".
+ */
+const CLOCK_24H = { hourCycle: "h23" } as const;
+
+const zonedDateTimeFormatters = new Map<string, Intl.DateTimeFormat>();
+function zonedDateTimeFormatter(
+	withYear: boolean,
+	locale?: string,
+	timeZone?: string,
+) {
+	const key = `${locale ?? ""}|${timeZone ?? ""}|${withYear}`;
+	let formatter = zonedDateTimeFormatters.get(key);
+	if (!formatter) {
+		formatter = new Intl.DateTimeFormat(locale, {
+			day: "numeric",
+			month: "short",
+			year: withYear ? "numeric" : undefined,
+			hour: "2-digit",
+			minute: "2-digit",
+			second: "2-digit",
+			...CLOCK_24H,
+			timeZoneName: "short",
+			timeZone,
+		});
+		zonedDateTimeFormatters.set(key, formatter);
+	}
+	return formatter;
+}
+
+const yearFormatters = new Map<string, Intl.DateTimeFormat>();
+function calendarYear(ms: number, timeZone?: string) {
+	const key = timeZone ?? "";
+	let formatter = yearFormatters.get(key);
+	if (!formatter) {
+		formatter = new Intl.DateTimeFormat("en-US", { year: "numeric", timeZone });
+		yearFormatters.set(key, formatter);
+	}
+	return formatter.format(ms);
+}
+
+const timeOfDayFormatters = new Map<string, Intl.DateTimeFormat>();
+
+/** "13:59:58": the wall-clock time of an instant, for "since …" and "data from …" phrases. */
+export function formatTimeOfDay(
+	dateInput: DateValue,
+	options: { locale?: string; timeZone?: string; seconds?: boolean } = {},
+	fallback = "",
+) {
+	const parsed = parseDateValue(dateInput);
+	if (!parsed) return fallback;
+	const seconds = options.seconds ?? true;
+	const key = `${options.locale ?? ""}|${options.timeZone ?? ""}|${seconds}`;
+	let formatter = timeOfDayFormatters.get(key);
+	if (!formatter) {
+		formatter = new Intl.DateTimeFormat(options.locale, {
+			hour: "2-digit",
+			minute: "2-digit",
+			second: seconds ? "2-digit" : undefined,
+			...CLOCK_24H,
+			timeZone: options.timeZone,
+		});
+		timeOfDayFormatters.set(key, formatter);
+	}
+	return formatter.format(parsed);
+}
+
+const calendarDayFormatters = new Map<string, Intl.DateTimeFormat>();
+function calendarDay(ms: number, timeZone?: string) {
+	const key = timeZone ?? "";
+	let formatter = calendarDayFormatters.get(key);
+	if (!formatter) {
+		formatter = new Intl.DateTimeFormat("en-CA", { timeZone });
+		calendarDayFormatters.set(key, formatter);
+	}
+	return formatter.format(ms);
+}
+
+const momentFormatters = new Map<string, Intl.DateTimeFormat>();
+
+/** "11:00" when the instant is on the same calendar day as `now`, else "29 Sept, 11:00" (year only when it differs). */
+export function formatMoment(
+	dateInput: DateValue,
+	options: ZonedDateTimeOptions = {},
+	fallback = "",
+) {
+	const parsed = parseDateValue(dateInput);
+	if (!parsed) return fallback;
+	const now = options.now ?? Date.now();
+	const ms = parsed.getTime();
+	if (
+		calendarDay(ms, options.timeZone) === calendarDay(now, options.timeZone)
+	) {
+		return formatTimeOfDay(parsed, { ...options, seconds: false });
+	}
+	const withYear =
+		calendarYear(ms, options.timeZone) !== calendarYear(now, options.timeZone);
+	const key = `${options.locale ?? ""}|${options.timeZone ?? ""}|${withYear}`;
+	let formatter = momentFormatters.get(key);
+	if (!formatter) {
+		formatter = new Intl.DateTimeFormat(options.locale, {
+			day: "numeric",
+			month: "short",
+			year: withYear ? "numeric" : undefined,
+			hour: "2-digit",
+			minute: "2-digit",
+			...CLOCK_24H,
+			timeZone: options.timeZone,
+		});
+		momentFormatters.set(key, formatter);
+	}
+	return formatter.format(parsed);
+}
+
+/** "4:04" / "1:02:09": a countdown of whole seconds; negative values read as "0:00". */
+export function formatCountdown(seconds: number) {
+	const total = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
+	const h = Math.floor(total / 3600);
+	const m = Math.floor((total % 3600) / 60);
+	const s = String(total % 60).padStart(2, "0");
+	return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+}
+
+/** "30 Sept 2026, 13:59:47 CEST": an absolute instant that always names its zone. */
+export function formatAbsoluteDateTimeZoned(
+	dateInput: DateValue,
+	options: ZonedDateTimeOptions = {},
+	fallback = "",
+) {
+	const parsed = parseDateValue(dateInput);
+	if (!parsed) return fallback;
+	const withYear =
+		options.now === undefined ||
+		calendarYear(parsed.getTime(), options.timeZone) !==
+			calendarYear(options.now, options.timeZone);
+	return zonedDateTimeFormatter(
+		withYear,
+		options.locale,
+		options.timeZone,
+	).format(parsed);
 }
 
 /** The epoch units Arrow ships instants in, plus Date32's day count. */

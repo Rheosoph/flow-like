@@ -219,6 +219,8 @@ export interface PackageSource {
 	path?: string;
 	registryUrl?: string;
 	downloadUrl?: string;
+	/** The registry a remote copy came from, under the field name the desktop registry and the hub send. */
+	registry_url?: string;
 }
 
 export interface PackageVersion {
@@ -254,6 +256,12 @@ export interface RegistryEntry {
 	avgRating?: number | null;
 	ratingCount?: number;
 	ratingSum?: number;
+	/**
+	 * The version the `app_id` project pins, when the entry was read through
+	 * that project by one of its signed-in members. Absent on older registries,
+	 * where `manifest.version` is not a reliable pin.
+	 */
+	pinnedVersion?: string;
 }
 
 export interface CachedPackage {
@@ -308,6 +316,13 @@ export interface SearchResults {
 	limit: number;
 }
 
+/** One version of a package the desktop registry keeps installed. */
+export interface InstalledPackageVersion {
+	version: string;
+	manifest: PackageManifest;
+	metadata?: MetaSummary;
+}
+
 export interface InstalledPackage {
 	id: string;
 	version: string;
@@ -317,6 +332,8 @@ export interface InstalledPackage {
 	manifest: PackageManifest;
 	metadata?: MetaSummary;
 	wasmHash?: string;
+	/** Desktop only: every installed version by its version, the active one included. */
+	versions?: Record<string, InstalledPackageVersion>;
 }
 
 export interface SearchFilters {

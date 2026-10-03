@@ -479,7 +479,7 @@ impl ExecutionContext {
                     run.id.clone(),
                     run.stream_state,
                     run.log_spill_threshold,
-                    super::DEFAULT_RUN_LOG_FLUSH_INTERVAL,
+                    run.log_flush_interval,
                     run.nodes_executed.clone(),
                     run.elements.clone(),
                     run.resources.clone(),
@@ -1127,14 +1127,11 @@ impl ExecutionContext {
     }
 
     fn spill_trace_if_needed(&mut self) {
-        if self.trace.logs.is_empty() {
-            return;
-        }
-
-        let spill_threshold = self.log_spill_threshold.max(1);
-        let spill_by_size = self.trace.logs.len() >= spill_threshold;
-        let spill_by_time = self.last_log_spill.elapsed() >= self.log_flush_interval;
-        if !spill_by_size && !spill_by_time {
+        let policy = super::log_flush_policy::LogFlushPolicy {
+            interval: self.log_flush_interval,
+            spill_threshold: self.log_spill_threshold,
+        };
+        if !policy.should_spill(self.trace.logs.len(), self.last_log_spill.elapsed()) {
             return;
         }
 

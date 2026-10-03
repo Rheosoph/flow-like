@@ -16,8 +16,8 @@ function appPackageWidgetsQuery(backend: IBackendState, appId: string) {
 			listAppPackageWidgets(
 				{
 					listPackages: backend.appState.listPackages?.bind(backend.appState),
-					getPackage: (packageId) =>
-						backend.registryState.getPackage(packageId),
+					getPackage: (packageId, packageAppId) =>
+						backend.registryState.getPackage(packageId, packageAppId),
 				},
 				appId,
 			),
@@ -25,7 +25,7 @@ function appPackageWidgetsQuery(backend: IBackendState, appId: string) {
 }
 
 /**
- * Widgets of the packages added to an app (§6.1), resolved from the installed
+ * Widgets of the packages added to an app (§6.1), resolved from the package
  * manifests; empty on hosts without the per-app package listing.
  */
 export function useAppPackageWidgets(

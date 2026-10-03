@@ -1,4 +1,5 @@
 use crate::{
+    diagnostics::RulesDiffer,
     enrollment::{DeviceSession, api_status, device_proof_rejected, unix_time},
     state::StateStore,
 };
@@ -59,7 +60,7 @@ fn current_audiences(
         ensure!(
             store.management_policy_head()?.map(|(_, digest)| digest)
                 == Some(compact_digest(compact)),
-            "Fleet publication waits for current locally accepted management policy"
+            RulesDiffer("Fleet publication waits for current locally accepted management policy")
         );
     } else {
         ensure!(
@@ -68,7 +69,7 @@ fn current_audiences(
                 .ok()
                 .flatten()
                 .is_none(),
-            "Fleet server omitted current management policy"
+            RulesDiffer("Fleet server omitted current management policy")
         );
     }
     let mut values = Vec::new();
@@ -247,7 +248,9 @@ pub async fn publish(
         };
         let jitter = u64::from(rand_core::OsRng.next_u32()) % 3;
         tokio::select! {_=cancel.cancelled()=>return Ok(()),_=tokio::time::sleep(Duration::from_secs(delay+jitter))=>()}
-        match publish_round(&root, &device, &boot_id, &mut recipients, &cancel).await {
+        let result = publish_round(&root, &device, &boot_id, &mut recipients, &cancel).await;
+        crate::diagnostics::global().report_error(crate::diagnostics::FLEET_PUBLISHER, &result);
+        match result {
             Ok(()) => failures = 0,
             Err(error) => {
                 failures = failures.saturating_add(1);
@@ -590,6 +593,22 @@ mod tests {
         assert!(due(&store, "stream", FleetKind::Status, &digest, 160)?);
         assert!(!due(&store, "stream", FleetKind::Metrics, "changed", 129)?);
         assert!(due(&store, "stream", FleetKind::Metrics, "changed", 130)?);
+
+        use crate::diagnostics::{Detail, Diagnostics, Rows, test_support};
+        let diagnostics = Diagnostics::default();
+        let rows = Rows::snapshot(&diagnostics, root.path());
+        let record = test_support::failing_record();
+        let digests = [5, 50]
+            .map(|retry_in| -> Result<String> {
+                diagnostics.insert_replica("api", 0, test_support::restarts(retry_in));
+                let snapshot = serde_json::json!({"observed_at":1000,"placements":[rows.placement(&record, true, Detail::Full)]});
+                assert!(!snapshot.to_string().contains("retry_in_seconds"));
+                assert!(!snapshot.to_string().contains("last_error"));
+                content_digest(&snapshot)
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(digests[0], digests[1]);
         Ok(())
     }
     #[tokio::test]

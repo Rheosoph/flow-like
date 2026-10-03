@@ -21,7 +21,7 @@ Use the desktop app's **Store → Packages** view to search the registry and ope
 Installing a package downloads the selected version into the local registry cache. Installed packages appear under **Packages › Library**, where you can check for updates, update a package, or uninstall it.
 
 :::note
-Only active versions that the current user can access are downloadable. Private and request-access packages apply their package membership rules before download.
+Only active versions that the current user can access are downloadable. Private and request-access packages apply their package membership rules before download. Members of an App that uses a package get the version that App pins, even without access to the package themselves: members who can open the App's flows download the whole package, and everyone else gets its widgets, while its nodes run in the App's cloud runs.
 :::
 
 ## Publish a package
@@ -39,6 +39,7 @@ The client uploads the binary and submits a versioned manifest to the registry. 
 ### Package identity
 
 - Use a stable reverse-domain ID such as `com.example.image-tools`.
+- An ID must differ from every existing package ID by more than letter case or a trailing dot. `Com.Example.Image-Tools` is refused while `com.example.image-tools` exists, because both would use the same folder on macOS and Windows.
 - Increment the semantic version for every published artifact.
 - A package ID and version pair is immutable.
 - Declare capabilities on the nodes, not in the manifest. The manifest authors only the memory and timeout tiers, `allowed_hosts`, and OAuth scopes.

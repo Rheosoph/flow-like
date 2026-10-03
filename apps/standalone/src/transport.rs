@@ -89,19 +89,29 @@ async fn renew_admission(
             }
             Err(error) => {
                 failures = failures.saturating_add(1);
-                if device_proof_rejected(&error) {
-                    tracing::warn!(
-                        "Device management admission proof was rejected, most likely because the device clock is skewed; enable time synchronization. Retrying: {error:#}"
-                    );
-                } else {
-                    tracing::warn!(
-                        "Device management admission renewal failed; current admission expires normally: {error:#}"
-                    );
-                }
+                renewal_failed(&error);
                 Duration::from_secs(2u64.saturating_pow(failures.min(5)))
             }
         };
         tokio::select! { _ = cancel.cancelled() => break, _ = tokio::time::sleep(delay) => {} }
+    }
+}
+
+/// Marks the transport task failing; only a confirmed signaling socket reports it healthy
+/// again.
+fn renewal_failed(error: &anyhow::Error) {
+    crate::diagnostics::global().report(
+        crate::diagnostics::MANAGEMENT_TRANSPORT,
+        Err(crate::diagnostics::TaskFailure::classify(error)),
+    );
+    if device_proof_rejected(error) {
+        tracing::warn!(
+            "Device management admission proof was rejected, most likely because the device clock is skewed; enable time synchronization. Retrying: {error:#}"
+        );
+    } else {
+        tracing::warn!(
+            "Device management admission renewal failed; current admission expires normally: {error:#}"
+        );
     }
 }
 

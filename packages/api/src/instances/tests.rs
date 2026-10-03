@@ -1,4 +1,5 @@
 use super::*;
+use crate::devices::view::DeviceRelationship;
 use axum::http::{HeaderValue, StatusCode};
 use flow_like::hub::{StandaloneConfig, UserTiers};
 use sea_orm::{ConnectOptions, Database, DatabaseConnection, TransactionTrait};
@@ -373,7 +374,7 @@ async fn validation_instances_are_metadata_only_and_bounded(
         StatusCode::UNAUTHORIZED,
     );
     assert!(
-        list_instances(db, &grant.device_id)
+        instances(state, &grant.delegating_user_id, &grant.device_id)
             .await
             .unwrap()
             .iter()
@@ -527,24 +528,75 @@ async fn seed_device(
     (device_id, controller, invitation)
 }
 
-#[flow_like_types::tokio::test]
-#[ignore = "requires FLOW_LIKE_DEVICE_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
-async fn signed_instances_enforce_consent_scope_leases_and_revocation() {
-    backend_jwt::init_for_tests();
-    let url =
-        std::env::var("FLOW_LIKE_DEVICE_TEST_DATABASE_URL").expect("Use disposable PostgreSQL");
-    let admin = Database::connect(&url).await.unwrap();
-    let schema = format!("instance_test_{}", uuid::Uuid::new_v4().simple());
-    admin
-        .execute_unprepared(&format!("CREATE SCHEMA {schema}"))
-        .await
-        .unwrap();
-    let mut options = ConnectOptions::new(url);
-    options
-        .set_schema_search_path(&schema)
-        .max_connections(8)
-        .min_connections(1);
-    let db = Database::connect(options).await.unwrap();
+/// A private schema with the device tables and the few platform tables the instance
+/// routes read, holding the accounts `owner` and `other` and the hosted model `model`.
+struct TestSchema {
+    admin: DatabaseConnection,
+    db: DatabaseConnection,
+    name: String,
+}
+
+impl TestSchema {
+    async fn create() -> Self {
+        backend_jwt::init_for_tests();
+        let url =
+            std::env::var("FLOW_LIKE_DEVICE_TEST_DATABASE_URL").expect("Use disposable PostgreSQL");
+        let admin = Database::connect(&url).await.unwrap();
+        let name = format!("instance_test_{}", uuid::Uuid::new_v4().simple());
+        admin
+            .execute_unprepared(&format!("CREATE SCHEMA {name}"))
+            .await
+            .unwrap();
+        let mut options = ConnectOptions::new(url);
+        options
+            .set_schema_search_path(&name)
+            .max_connections(8)
+            .min_connections(1);
+        let db = Database::connect(options).await.unwrap();
+        migrate(&db).await;
+        insert_model(&db, "model", "FREE").await;
+        Self { admin, db, name }
+    }
+
+    async fn drop(self) {
+        self.db.close().await.unwrap();
+        self.admin
+            .execute_unprepared(&format!("DROP SCHEMA {} CASCADE", self.name))
+            .await
+            .unwrap();
+        self.admin.close().await.unwrap();
+    }
+}
+
+fn standalone() -> StandaloneConfig {
+    StandaloneConfig {
+        enabled: true,
+        api_base_url: Some(API.into()),
+        ..Default::default()
+    }
+}
+
+fn context<'a>(db: &'a DatabaseConnection, config: &'a StandaloneConfig) -> DeviceContext<'a> {
+    DeviceContext {
+        db,
+        dialect: crate::db::DbDialect::Postgres,
+        config,
+        domain: "unused.example",
+        secure: true,
+    }
+}
+
+async fn insert_model(db: &DatabaseConnection, id: &str, tier: &str) {
+    let parameters = serde_json::json!({"context_length":32768,"model_classification":flow_like::bit::BitModelClassification::default(),"provider":{"provider_name":"hosted:openrouter","model_id":"upstream-model","params":{"tier":tier}}});
+    db.execute_raw(sql(
+        r#"INSERT INTO "Bit" (id,type,parameters) VALUES ($1,'LLM',$2)"#,
+        [id.into(), parameters.into()],
+    ))
+    .await
+    .unwrap();
+}
+
+async fn migrate(db: &DatabaseConnection) {
     for migration in [
         include_str!("../../prisma/migrations/20260921120000_standalone_devices/migration.sql"),
         include_str!("../../prisma/migrations/20260921140000_instance_resources/migration.sql"),
@@ -556,6 +608,8 @@ async fn signed_instances_enforce_consent_scope_leases_and_revocation() {
         include_str!(
             "../../prisma/migrations/20260923150000_instance_offline_replay/migration.sql"
         ),
+        include_str!("../../prisma/migrations/20261001120000_device_console/migration.sql"),
+        include_str!("../../prisma/migrations/20261002120000_device_schedules/migration.sql"),
     ] {
         for statement in migration.split(';').filter(|s| !s.trim().is_empty()) {
             db.execute_unprepared(statement).await.unwrap();
@@ -576,26 +630,15 @@ async fn signed_instances_enforce_consent_scope_leases_and_revocation() {
     ] {
         db.execute_unprepared(statement).await.unwrap();
     }
-    let bit_type = "LLM";
-    let parameters = serde_json::json!({"context_length":32768,"model_classification":flow_like::bit::BitModelClassification::default(),"provider":{"provider_name":"hosted:openrouter","model_id":"upstream-model","params":{"tier":"FREE"}}});
-    db.execute_raw(sql(
-        r#"INSERT INTO "Bit" (id,type,parameters) VALUES ('model',$1,$2)"#,
-        [bit_type.into(), parameters.into()],
-    ))
-    .await
-    .unwrap();
-    let policy = StandaloneConfig {
-        enabled: true,
-        api_base_url: Some(API.into()),
-        ..Default::default()
-    };
-    let state = DeviceContext {
-        db: &db,
-        dialect: crate::db::DbDialect::Postgres,
-        config: &policy,
-        domain: "unused.example",
-        secure: true,
-    };
+}
+
+#[flow_like_types::tokio::test]
+#[ignore = "requires FLOW_LIKE_DEVICE_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+async fn signed_instances_enforce_consent_scope_leases_and_revocation() {
+    let schema = TestSchema::create().await;
+    let db = schema.db.clone();
+    let policy = standalone();
+    let state = context(&db, &policy);
     let device_key = SigningKey::generate();
     let (device_id, controller_key, _) = seed_device(&db, &device_key).await;
     assert_status(
@@ -615,7 +658,11 @@ async fn signed_instances_enforce_consent_scope_leases_and_revocation() {
         get_grant(&state, "owner", &device_id, &grant.grant_id)
             .await
             .unwrap(),
-        grant
+        ResourceGrantResponse {
+            effective_expires_at: Some(grant.expires_at),
+            effective_limit: Some(EffectiveLimit::Approval),
+            ..grant.clone()
+        }
     );
     assert_status(
         create_grant(&state, "owner", &device_id, request("placement")).await,
@@ -1466,12 +1513,21 @@ async fn signed_instances_enforce_consent_scope_leases_and_revocation() {
 
     distinct_host_project_and_payer_consent(&state, &db).await;
 
-    db.close().await.unwrap();
-    admin
-        .execute_unprepared(&format!("DROP SCHEMA {schema} CASCADE"))
+    schema.drop().await;
+}
+
+/// How `user` finds the device in their device list, if at all.
+async fn relationship(
+    state: &DeviceContext<'_>,
+    user: &str,
+    device_id: &str,
+) -> Option<DeviceRelationship> {
+    devices::view::visible_devices(state, user)
         .await
-        .unwrap();
-    admin.close().await.unwrap();
+        .unwrap()
+        .into_iter()
+        .find(|device| device.device_id == device_id)
+        .map(|device| device.relationship)
 }
 
 async fn distinct_host_project_and_payer_consent(
@@ -1546,7 +1602,11 @@ async fn distinct_host_project_and_payer_consent(
     assert_eq!(grant.delegating_user_id, "other");
     assert_eq!(
         grants(state, "other", &device_id).await.unwrap(),
-        vec![grant.clone()]
+        vec![ResourceGrantResponse {
+            effective_expires_at: Some(deployment_deadline),
+            effective_limit: Some(EffectiveLimit::SharingGrant),
+            ..grant.clone()
+        }]
     );
     let billing = approve_billing(
         state,
@@ -1646,12 +1706,10 @@ async fn distinct_host_project_and_payer_consent(
     let signed = sign_management_policy(&policy, &invitation).unwrap();
     db.execute_raw(sql(r#"INSERT INTO "DeviceManagementPolicy"("deviceId",version,digest,"policyJws","expiresAt","createdAt") VALUES($1,2,$2,$3,$4,$5)"#, [device_id.clone().into(),compact_digest(&signed).into(),signed.clone().into(),policy.expires_at.into(),now().into()])).await.unwrap();
     assert_status(project::recheck(state, &auth).await, StatusCode::FORBIDDEN);
-    assert!(
-        consent_devices(state, "other")
-            .await
-            .unwrap()
-            .iter()
-            .any(|device| device.device_id == device_id)
+    assert_eq!(
+        relationship(state, "other", &device_id).await,
+        Some(DeviceRelationship::CloudApproval),
+        "consent stays reachable after sharing is withdrawn so the delegator can revoke it"
     );
     revoke_billing(state, "owner", &device_id, &billing.billing_grant_id)
         .await
@@ -1661,12 +1719,9 @@ async fn distinct_host_project_and_payer_consent(
         .unwrap();
     assert_eq!(revoked.status, "revoked");
     assert!(revoked.authz_version > grant.authz_version);
-    assert!(
-        !consent_devices(state, "other")
-            .await
-            .unwrap()
-            .iter()
-            .any(|device| device.device_id == device_id),
+    assert_eq!(
+        relationship(state, "other", &device_id).await,
+        None,
         "a former delegate with nothing left to revoke no longer sees the device"
     );
     policy.policy_version = 3;
@@ -1708,13 +1763,7 @@ async fn distinct_host_project_and_payer_consent(
         .await
         .unwrap();
     let device = device_id.as_str();
-    let sees_device = move || async move {
-        consent_devices(state, "other")
-            .await
-            .unwrap()
-            .iter()
-            .any(|status| status.device_id == device)
-    };
+    let sees_device = move || async move { relationship(state, "other", device).await.is_some() };
     assert!(
         sees_device().await,
         "a payer whose sponsorship is still active keeps seeing the device"
@@ -1739,4 +1788,2820 @@ async fn distinct_host_project_and_payer_consent(
         !sees_device().await,
         "a revoked sponsorship gives the payer no view"
     );
+}
+
+fn approval(delegator: &str, expires_at: i64) -> ResourceGrantResponse {
+    ResourceGrantResponse {
+        grant_id: "grant".into(),
+        device_id: "device".into(),
+        placement_id: "placement".into(),
+        deployment_id: "deployment".into(),
+        project_id: "project".into(),
+        app_id: None,
+        delegating_user_id: delegator.into(),
+        authz_version: 1,
+        model_ids: vec!["model".into()],
+        max_instances: 1,
+        expires_at,
+        status: "active".into(),
+        online_access: None,
+        effective_expires_at: None,
+        effective_limit: None,
+        online_write_blocked: None,
+        approved_by_user_id: Some(delegator.into()),
+        created_at: Some(1),
+    }
+}
+
+fn permission(
+    id: &str,
+    user: &str,
+    scope: ManagementScope,
+    capability: ManagementCapability,
+    expires_at: i64,
+) -> ManagementGrant {
+    ManagementGrant {
+        grant_id: id.into(),
+        user_id: user.into(),
+        controller_key: SigningKey::generate().public_key(),
+        scope,
+        capabilities: vec![capability],
+        expires_at,
+        group_id: None,
+        group_version: None,
+    }
+}
+
+fn deploy(id: &str, user: &str, scope: ManagementScope, expires_at: i64) -> ManagementGrant {
+    permission(id, user, scope, ManagementCapability::Deploy, expires_at)
+}
+
+fn placement_scope(project: &str, placement: &str) -> ManagementScope {
+    ManagementScope::Placement {
+        project_id: project.into(),
+        placement_id: placement.into(),
+    }
+}
+
+fn rules_for(
+    device_id: &str,
+    issued_at: i64,
+    expires_at: i64,
+    grants: Vec<ManagementGrant>,
+) -> ManagementPolicy {
+    ManagementPolicy {
+        version: 1,
+        device_id: device_id.into(),
+        policy_version: 1,
+        previous_policy_digest: None,
+        grants,
+        issued_at,
+        expires_at,
+    }
+}
+
+#[test]
+fn a_delegated_approval_ends_with_whichever_limit_comes_first() {
+    const NOW: i64 = 1_800_000_000;
+    let rules = |grants| rules_for("device", NOW - 100, NOW + 3_000, grants);
+    let here = || placement_scope("project", "placement");
+    let everywhere = || ManagementScope::Project {
+        project_id: "project".into(),
+    };
+    let long = approval("other", NOW + 5_000);
+    let end = |rules: &ManagementPolicy, grant: &ResourceGrantResponse| {
+        delegated_deadline(Some(rules), grant, NOW)
+    };
+
+    assert_eq!(
+        end(&rules(vec![deploy("a", "other", here(), NOW + 900)]), &long),
+        (NOW + 900, EffectiveLimit::SharingGrant)
+    );
+    // The widest permission that covers the placement counts, as it does at use.
+    assert_eq!(
+        end(
+            &rules(vec![
+                deploy("a", "other", here(), NOW + 900),
+                deploy("b", "other", everywhere(), NOW + 1_100),
+                deploy("c", "other", ManagementScope::Device, NOW + 1_000),
+            ]),
+            &long
+        ),
+        (NOW + 1_100, EffectiveLimit::SharingGrant)
+    );
+    // A permission that lasts as long as the rules is limited by the rules.
+    let to_the_end = rules(vec![deploy("a", "other", here(), NOW + 3_000)]);
+    assert_eq!(
+        end(&to_the_end, &long),
+        (NOW + 3_000, EffectiveLimit::AccessRules)
+    );
+    assert_eq!(
+        end(&to_the_end, &approval("other", NOW + 500)),
+        (NOW + 500, EffectiveLimit::Approval)
+    );
+    assert_eq!(
+        end(&to_the_end, &approval("other", NOW + 3_000)),
+        (NOW + 3_000, EffectiveLimit::Approval),
+        "the approval wins a tie"
+    );
+    // Rules that do not let the approver deploy this placement took that away when issued.
+    for grants in [
+        Vec::new(),
+        vec![deploy("a", "someone-else", here(), NOW + 900)],
+        vec![deploy(
+            "a",
+            "other",
+            placement_scope("project", "another-placement"),
+            NOW + 900,
+        )],
+        vec![deploy(
+            "a",
+            "other",
+            placement_scope("another-project", "placement"),
+            NOW + 900,
+        )],
+        vec![permission(
+            "a",
+            "other",
+            here(),
+            ManagementCapability::Status,
+            NOW + 900,
+        )],
+    ] {
+        assert_eq!(
+            end(&rules(grants), &long),
+            (NOW - 100, EffectiveLimit::SharingGrant)
+        );
+    }
+    assert_eq!(
+        end(&rules(vec![deploy("a", "other", here(), NOW - 10)]), &long),
+        (NOW - 10, EffectiveLimit::SharingGrant),
+        "an ended permission keeps its end"
+    );
+    assert_eq!(
+        delegated_deadline(
+            Some(&rules_for("device", NOW + 60, NOW + 3_000, Vec::new())),
+            &long,
+            NOW
+        ),
+        (NOW, EffectiveLimit::SharingGrant),
+        "a loss is never reported in the future"
+    );
+    assert_eq!(
+        end(
+            &rules_for(
+                "device",
+                NOW - 7_200,
+                NOW - 3_600,
+                vec![deploy("a", "other", here(), NOW - 3_600)]
+            ),
+            &long
+        ),
+        (NOW - 3_600, EffectiveLimit::AccessRules)
+    );
+    assert_eq!(
+        delegated_deadline(None, &long, NOW),
+        (NOW, EffectiveLimit::AccessRules)
+    );
+    assert_eq!(
+        delegated_deadline(None, &approval("other", NOW - 5), NOW),
+        (NOW - 5, EffectiveLimit::Approval)
+    );
+}
+
+#[test]
+fn bound_value_lists_are_numbered_from_their_first_position() {
+    assert_eq!(placeholders(1, 3), "$1,$2,$3");
+    assert_eq!(placeholders(2, 1), "$2");
+}
+
+async fn publish_rules(
+    db: &DatabaseConnection,
+    signer: &SigningKey,
+    previous: Option<&str>,
+    mut rules: ManagementPolicy,
+) -> String {
+    rules.policy_version = db
+        .query_one_raw(sql(
+            r#"SELECT COUNT(*) AS count FROM "DeviceManagementPolicy" WHERE "deviceId"=$1"#,
+            [rules.device_id.clone().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<i64>("", "count")
+        .unwrap() as u64
+        + 1;
+    rules.previous_policy_digest = previous.map(str::to_owned);
+    let signed = sign_management_policy(&rules, signer).unwrap();
+    let digest = compact_digest(&signed);
+    db.execute_raw(sql(r#"INSERT INTO "DeviceManagementPolicy"("deviceId",version,digest,"policyJws","expiresAt","createdAt") VALUES($1,$2,$3,$4,$5,$6)"#, [rules.device_id.clone().into(),(rules.policy_version as i64).into(),digest.clone().into(),signed.into(),rules.expires_at.into(),now().into()])).await.unwrap();
+    digest
+}
+
+fn rule_reads() -> usize {
+    ACCESS_RULE_READS.with(|reads| reads.replace(0))
+}
+
+fn effective(
+    grants: &[ResourceGrantResponse],
+    placement: &str,
+) -> (Option<i64>, Option<EffectiveLimit>) {
+    let grant = grants
+        .iter()
+        .find(|grant| grant.placement_id == placement)
+        .unwrap_or_else(|| panic!("approval for {placement} is listed"));
+    (grant.effective_expires_at, grant.effective_limit)
+}
+
+async fn approvals_report_when_they_really_end(state: &DeviceContext<'_>, db: &DatabaseConnection) {
+    let (device_id, _, invitation) = seed_device(db, &SigningKey::generate()).await;
+    let long = |placement: &str| CreateResourceGrantRequest {
+        expires_at: now() + 7_200,
+        ..request(placement)
+    };
+    let owned = create_grant(state, "owner", &device_id, long("owned"))
+        .await
+        .unwrap();
+    assert_eq!(owned.approved_by_user_id.as_deref(), Some("owner"));
+    assert!((now() - 5..=now()).contains(&owned.created_at.unwrap()));
+    assert_eq!(
+        (owned.effective_expires_at, owned.effective_limit),
+        (None, None)
+    );
+    rule_reads();
+    let own_end = (Some(owned.expires_at), Some(EffectiveLimit::Approval));
+    assert_eq!(
+        effective(&grants(state, "owner", &device_id).await.unwrap(), "owned"),
+        own_end
+    );
+    assert_eq!(rule_reads(), 0, "the owner's approvals depend on no rules");
+
+    let issued = now();
+    let everywhere = ManagementScope::Project {
+        project_id: "offline-project".into(),
+    };
+    let first = publish_rules(
+        db,
+        &invitation,
+        None,
+        rules_for(
+            &device_id,
+            issued,
+            issued + 3_600,
+            vec![
+                deploy("project", "other", everywhere.clone(), issued + 900),
+                deploy(
+                    "b",
+                    "other",
+                    placement_scope("offline-project", "b"),
+                    issued + 1_100,
+                ),
+                deploy(
+                    "c",
+                    "other",
+                    placement_scope("offline-project", "c"),
+                    issued + 3_600,
+                ),
+            ],
+        ),
+    )
+    .await;
+    for placement in ["a", "b", "c"] {
+        let created = create_grant(state, "other", &device_id, long(placement))
+            .await
+            .unwrap();
+        assert_eq!(created.approved_by_user_id.as_deref(), Some("other"));
+    }
+    rule_reads();
+    let listed = grants(state, "owner", &device_id).await.unwrap();
+    assert_eq!(rule_reads(), 1, "three approvals, one verification");
+    assert_eq!(listed.len(), 4);
+    let sharing = Some(EffectiveLimit::SharingGrant);
+    assert_eq!(effective(&listed, "owned"), own_end);
+    assert_eq!(effective(&listed, "a"), (Some(issued + 900), sharing));
+    assert_eq!(effective(&listed, "b"), (Some(issued + 1_100), sharing));
+    assert_eq!(
+        effective(&listed, "c"),
+        (Some(issued + 3_600), Some(EffectiveLimit::AccessRules))
+    );
+    let theirs = grants(state, "other", &device_id).await.unwrap();
+    assert_eq!(theirs.len(), 3);
+    assert!(
+        theirs
+            .iter()
+            .all(|grant| grant.delegating_user_id == "other")
+    );
+    assert_eq!(
+        theirs,
+        listed
+            .iter()
+            .filter(|grant| grant.delegating_user_id == "other")
+            .cloned()
+            .collect::<Vec<_>>()
+    );
+    assert!(grants(state, "third", &device_id).await.unwrap().is_empty());
+    let a = listed
+        .iter()
+        .find(|grant| grant.placement_id == "a")
+        .unwrap();
+    rule_reads();
+    assert_eq!(
+        &get_grant(state, "other", &device_id, &a.grant_id)
+            .await
+            .unwrap(),
+        a
+    );
+    assert_eq!(rule_reads(), 1);
+    assert_status(
+        get_grant(state, "third", &device_id, &a.grant_id).await,
+        StatusCode::NOT_FOUND,
+    );
+
+    // Newer rules without the approver: every approval of theirs ended when those were issued.
+    let reissued = now();
+    let second = publish_rules(
+        db,
+        &invitation,
+        Some(&first),
+        rules_for(&device_id, reissued, reissued + 3_600, Vec::new()),
+    )
+    .await;
+    let listed = grants(state, "owner", &device_id).await.unwrap();
+    for placement in ["a", "b", "c"] {
+        assert_eq!(effective(&listed, placement), (Some(reissued), sharing));
+    }
+    assert_eq!(effective(&listed, "owned"), own_end);
+    assert_status(
+        approve_billing(
+            state,
+            "other",
+            &device_id,
+            &a.grant_id,
+            ApproveBillingGrantRequest {
+                limit_micros: 100,
+                expires_at: now() + 600,
+            },
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+    );
+
+    // Ended rules keep their end time instead of failing the read.
+    let third = publish_rules(
+        db,
+        &invitation,
+        Some(&second),
+        rules_for(
+            &device_id,
+            reissued - 7_200,
+            reissued - 3_600,
+            vec![deploy("project", "other", everywhere, reissued - 3_600)],
+        ),
+    )
+    .await;
+    let listed = grants(state, "other", &device_id).await.unwrap();
+    for placement in ["a", "b", "c"] {
+        assert_eq!(
+            effective(&listed, placement),
+            (Some(reissued - 3_600), Some(EffectiveLimit::AccessRules))
+        );
+    }
+
+    // Rules nobody can verify end the approvals now; the read still answers.
+    publish_rules(
+        db,
+        &SigningKey::generate(),
+        Some(&third),
+        rules_for(&device_id, reissued, reissued + 3_600, Vec::new()),
+    )
+    .await;
+    let before = now();
+    let listed = grants(state, "owner", &device_id).await.unwrap();
+    for placement in ["a", "b", "c"] {
+        let (at, limit) = effective(&listed, placement);
+        assert!((before..=now()).contains(&at.unwrap()));
+        assert_eq!(limit, Some(EffectiveLimit::AccessRules));
+    }
+    assert_eq!(effective(&listed, "owned"), own_end);
+
+    revoke_grant(state, "other", &device_id, &a.grant_id)
+        .await
+        .unwrap();
+    let listed = grants(state, "other", &device_id).await.unwrap();
+    assert_eq!(effective(&listed, "a"), (None, None));
+    assert_eq!(
+        listed.last().map(|grant| grant.status.as_str()),
+        Some("revoked")
+    );
+}
+
+fn storage_full() -> ApiError {
+    ApiError::coded(
+        StatusCode::PAYMENT_REQUIRED,
+        "PLAN_LIMIT_EXCEEDED",
+        "Storage is full",
+    )
+}
+
+async fn blocked_writes_are_shown_only_to_the_approver_and_project_readers(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+) -> (String, ResourceGrantResponse) {
+    let (device_id, _, invitation) = seed_device(db, &SigningKey::generate()).await;
+    db.execute_unprepared(r#"INSERT INTO "App" VALUES ('quota-project','ACTIVE','quota-owner-role'); INSERT INTO "Role" VALUES ('quota-owner-role','quota-project',1),('quota-team-role','quota-project',4); INSERT INTO "Membership" VALUES ('other','quota-project','quota-owner-role')"#).await.unwrap();
+    let issued = now();
+    publish_rules(
+        db,
+        &invitation,
+        None,
+        rules_for(
+            &device_id,
+            issued,
+            issued + 3_600,
+            vec![deploy(
+                "device",
+                "other",
+                ManagementScope::Device,
+                issued + 3_600,
+            )],
+        ),
+    )
+    .await;
+    let online = |placement: &str, access| CreateResourceGrantRequest {
+        placement_id: placement.into(),
+        deployment_id: "deployment".into(),
+        project_id: "quota-project".into(),
+        app_id: Some("quota-project".into()),
+        online_access: Some(access),
+        model_ids: Vec::new(),
+        max_instances: 1,
+        expires_at: now() + 1_800,
+    };
+    for (placement, access) in [
+        ("write-one", OnlineProjectAccess::ReadWrite),
+        ("write-two", OnlineProjectAccess::ReadWrite),
+        ("read", OnlineProjectAccess::ReadOnly),
+    ] {
+        create_grant(state, "other", &device_id, online(placement, access))
+            .await
+            .unwrap();
+    }
+    create_grant(state, "owner", &device_id, request("offline"))
+        .await
+        .unwrap();
+
+    let asked = std::cell::RefCell::new(Vec::new());
+    let full = |project: String, payer: String| {
+        asked.borrow_mut().push((project, payer));
+        async { Err(storage_full()) }
+    };
+    let blocked = |grants: &[ResourceGrantResponse]| {
+        grants
+            .iter()
+            .filter(|grant| grant.online_write_blocked == Some(OnlineWriteBlock::StorageFull))
+            .map(|grant| grant.placement_id.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let both = ["write-one", "write-two"]
+        .map(str::to_owned)
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let mut theirs = grants(state, "other", &device_id).await.unwrap();
+    project::mark_blocked_writes_with(db, "other", &mut theirs, full)
+        .await
+        .unwrap();
+    assert_eq!(blocked(&theirs), both);
+    assert_eq!(
+        asked.take(),
+        vec![("quota-project".to_owned(), "other".to_owned())],
+        "one quota read per project"
+    );
+
+    // The device owner sees the approvals but is no member of the project.
+    let mut all = grants(state, "owner", &device_id).await.unwrap();
+    assert_eq!(all.len(), 4);
+    project::mark_blocked_writes_with(db, "owner", &mut all, full)
+        .await
+        .unwrap();
+    assert!(blocked(&all).is_empty());
+    assert!(asked.take().is_empty(), "the quota is not even read");
+
+    db.execute_unprepared(
+        r#"INSERT INTO "Membership" VALUES ('owner','quota-project','quota-team-role')"#,
+    )
+    .await
+    .unwrap();
+    project::mark_blocked_writes_with(db, "owner", &mut all, full)
+        .await
+        .unwrap();
+    assert!(
+        blocked(&all).is_empty(),
+        "a member who cannot read the project learns nothing either"
+    );
+    assert!(asked.take().is_empty());
+    db.execute_unprepared(r#"UPDATE "Role" SET permissions=256 WHERE id='quota-team-role'"#)
+        .await
+        .unwrap();
+    project::mark_blocked_writes_with(db, "owner", &mut all, full)
+        .await
+        .unwrap();
+    assert_eq!(blocked(&all), both);
+    assert_eq!(asked.take().len(), 1);
+
+    for quota in [Ok(()), Err(ApiError::internal("capacity lookup failed"))] {
+        let mut theirs = grants(state, "other", &device_id).await.unwrap();
+        let quota = std::cell::RefCell::new(Some(quota));
+        project::mark_blocked_writes_with(db, "other", &mut theirs, |_, _| {
+            let answer = quota.borrow_mut().take().expect("asked once");
+            async move { answer }
+        })
+        .await
+        .unwrap();
+        assert!(
+            blocked(&theirs).is_empty(),
+            "room or an unknown quota is no block"
+        );
+    }
+
+    let write_two = theirs
+        .iter()
+        .find(|grant| grant.placement_id == "write-two")
+        .unwrap();
+    revoke_grant(state, "other", &device_id, &write_two.grant_id)
+        .await
+        .unwrap();
+    db.execute_raw(sql(
+        r#"UPDATE "PlacementResourceGrant" SET "expiresAt"=$2 WHERE "deviceId"=$1 AND "placementId"='write-one'"#,
+        [device_id.clone().into(), (now() - 1).into()],
+    ))
+    .await
+    .unwrap();
+    let mut theirs = grants(state, "other", &device_id).await.unwrap();
+    project::mark_blocked_writes_with(db, "other", &mut theirs, full)
+        .await
+        .unwrap();
+    assert!(blocked(&theirs).is_empty());
+    assert!(asked.take().is_empty(), "ended approvals issue no leases");
+
+    let read = theirs
+        .into_iter()
+        .find(|grant| grant.placement_id == "read")
+        .unwrap();
+    (device_id, read)
+}
+
+async fn spend_is_listed_per_instance_for_those_who_see_the_limit(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+) {
+    let (device_id, _, invitation) = seed_device(db, &SigningKey::generate()).await;
+    let (elsewhere, _, _) = seed_device(db, &SigningKey::generate()).await;
+    let issued = now();
+    publish_rules(
+        db,
+        &invitation,
+        None,
+        rules_for(
+            &device_id,
+            issued,
+            issued + 3_600,
+            vec![deploy(
+                "device",
+                "other",
+                ManagementScope::Device,
+                issued + 3_600,
+            )],
+        ),
+    )
+    .await;
+    let limit = |limit_micros| ApproveBillingGrantRequest {
+        limit_micros,
+        expires_at: now() + 1_800,
+    };
+    let owned = create_grant(state, "owner", &device_id, request("owned"))
+        .await
+        .unwrap();
+    let paid = approve_billing(state, "owner", &device_id, &owned.grant_id, limit(1_000))
+        .await
+        .unwrap();
+    assert_eq!(paid.approved_by_user_id.as_deref(), Some("owner"));
+    assert!((now() - 5..=now()).contains(&paid.created_at.unwrap()));
+    let delegated = create_grant(state, "other", &device_id, request("delegated"))
+        .await
+        .unwrap();
+    let theirs = approve_billing(state, "other", &device_id, &delegated.grant_id, limit(500))
+        .await
+        .unwrap();
+    assert_eq!(
+        billing_grant(state, "owner", &device_id, &paid.billing_grant_id)
+            .await
+            .unwrap(),
+        paid
+    );
+
+    let ids = |billing: Vec<BillingGrantResponse>| {
+        billing
+            .into_iter()
+            .map(|billing| billing.billing_grant_id)
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    assert_eq!(
+        ids(billing_grants(state, "owner", &device_id).await.unwrap()),
+        [&paid, &theirs]
+            .map(|billing| billing.billing_grant_id.clone())
+            .into_iter()
+            .collect()
+    );
+    assert_eq!(
+        billing_grants(state, "other", &device_id).await.unwrap(),
+        vec![theirs.clone()]
+    );
+    assert!(
+        billing_grants(state, "third", &device_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let admit = |operation: &str,
+                 billing: &str,
+                 instance: &str,
+                 used: i64,
+                 reserved: i64,
+                 at: i64| {
+        db.execute_raw(sql(
+            r#"INSERT INTO "InstanceUsageAdmission" ("operationId","billingGrantId","instanceId","payerId",authority,"requiredModelTier","ceilingMicros","usedMicros","reservedMicros",status,"createdAt") VALUES ($1,$2,$3,'owner','{}','FREE',100,$4,$5,'settled',$6)"#,
+            [
+                operation.into(),
+                billing.into(),
+                instance.into(),
+                used.into(),
+                reserved.into(),
+                at.into(),
+            ],
+        ))
+    };
+    let paid_id = paid.billing_grant_id.as_str();
+    admit("one", paid_id, "replica-a", 10, 0, 1_000)
+        .await
+        .unwrap();
+    admit("two", paid_id, "replica-a", 15, 5, 2_000)
+        .await
+        .unwrap();
+    admit("three", paid_id, "replica-b", 7, 0, 1_500)
+        .await
+        .unwrap();
+    admit(
+        "other",
+        &theirs.billing_grant_id,
+        "replica-a",
+        400,
+        40,
+        9_000,
+    )
+    .await
+    .unwrap();
+    let usage = billing_usage(state, "owner", &device_id, paid_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        usage,
+        BillingGrantUsage {
+            billing_grant_id: paid_id.into(),
+            totals: BillingGrantUsageTotals {
+                used_micros: 32,
+                reserved_micros: 5,
+                operations: 3,
+            },
+            instances: vec![
+                BillingGrantInstanceUsage {
+                    instance_id: "replica-a".into(),
+                    used_micros: 25,
+                    reserved_micros: 5,
+                    operations: 2,
+                    first_at: 1_000,
+                    last_at: 2_000,
+                },
+                BillingGrantInstanceUsage {
+                    instance_id: "replica-b".into(),
+                    used_micros: 7,
+                    reserved_micros: 0,
+                    operations: 1,
+                    first_at: 1_500,
+                    last_at: 1_500,
+                },
+            ],
+        }
+    );
+    assert_eq!(
+        billing_usage(state, "other", &device_id, &theirs.billing_grant_id)
+            .await
+            .unwrap()
+            .totals,
+        BillingGrantUsageTotals {
+            used_micros: 400,
+            reserved_micros: 40,
+            operations: 1,
+        }
+    );
+    // Someone else's spending, an unknown limit and a limit of another device all read
+    // as missing.
+    for (viewer, device, billing) in [
+        ("other", device_id.as_str(), paid_id),
+        ("third", device_id.as_str(), paid_id),
+        (
+            "third",
+            device_id.as_str(),
+            theirs.billing_grant_id.as_str(),
+        ),
+        ("owner", device_id.as_str(), "no-such-limit"),
+        ("owner", elsewhere.as_str(), paid_id),
+        ("owner", "no-such-device", paid_id),
+    ] {
+        assert_status(
+            billing_usage(state, viewer, device, billing).await,
+            StatusCode::NOT_FOUND,
+        );
+    }
+
+    db.execute_raw(sql(
+        r#"INSERT INTO "InstanceUsageAdmission" ("operationId","billingGrantId","instanceId","payerId",authority,"requiredModelTier","ceilingMicros","usedMicros","reservedMicros",status,"createdAt") SELECT 'bulk-'||n,$1,'bulk-'||n,'owner','{}','FREE',1,1,0,'settled',3000+n FROM generate_series(1,120) n"#,
+        [paid_id.into()],
+    ))
+    .await
+    .unwrap();
+    let usage = billing_usage(state, "owner", &device_id, paid_id)
+        .await
+        .unwrap();
+    assert_eq!(usage.instances.len(), 100);
+    assert_eq!(usage.instances[0].instance_id, "bulk-120");
+    assert_eq!(
+        usage.totals,
+        BillingGrantUsageTotals {
+            used_micros: 152,
+            reserved_micros: 5,
+            operations: 123,
+        },
+        "totals cover the instances the list leaves out"
+    );
+}
+
+async fn eligibility_judges_every_model_against_the_callers_plan(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    storage_only: (String, ResourceGrantResponse),
+) {
+    let (device_id, _, _) = seed_device(db, &SigningKey::generate()).await;
+    insert_model(db, "premium-model", "PREMIUM").await;
+    insert_model(db, "gone-model", "FREE").await;
+    db.execute_raw(sql(
+        r#"INSERT INTO "Bit" (id,type,parameters) VALUES ('embedding-model','EMBEDDING',$1)"#,
+        [serde_json::json!({"languages":["en"],"vector_length":8,"input_length":8,"prefix":{"query":"","paragraph":""},"pooling":"Mean","provider":{"provider_name":"hosted:internal","model_id":"upstream-embedding"}}).into()],
+    ))
+    .await
+    .unwrap();
+    let models = |placement: &str, model_ids: &[&str]| CreateResourceGrantRequest {
+        model_ids: model_ids.iter().map(|id| (*id).to_owned()).collect(),
+        ..request(placement)
+    };
+    let mixed = create_grant(
+        state,
+        "owner",
+        &device_id,
+        models(
+            "mixed",
+            &["model", "premium-model", "gone-model", "embedding-model"],
+        ),
+    )
+    .await
+    .unwrap();
+    db.execute_unprepared(r#"DELETE FROM "Bit" WHERE id='gone-model'"#)
+        .await
+        .unwrap();
+    let model = |model_id: &str, tier: Option<&str>, allowed| budget::ModelEligibility {
+        model_id: model_id.into(),
+        tier: tier.map(str::to_owned),
+        allowed,
+    };
+    let tiers = tiers();
+    assert_eq!(
+        billing_eligibility(state, &tiers, "owner", &device_id, &mixed.grant_id)
+            .await
+            .unwrap(),
+        BillingEligibility {
+            payer_id: "owner".into(),
+            plan: "FREE".into(),
+            eligible: false,
+            models: vec![
+                model("embedding-model", None, true),
+                model("gone-model", None, false),
+                model("model", Some("FREE"), true),
+                model("premium-model", Some("PREMIUM"), false),
+            ],
+        }
+    );
+    let included = create_grant(
+        state,
+        "owner",
+        &device_id,
+        models("included", &["model", "embedding-model"]),
+    )
+    .await
+    .unwrap();
+    let covered = billing_eligibility(state, &tiers, "owner", &device_id, &included.grant_id)
+        .await
+        .unwrap();
+    assert!(covered.eligible);
+    assert_eq!(covered.models.len(), 2);
+    // Reading eligibility approves nothing.
+    assert_status(
+        get_billing(state, "owner", &device_id, &included.grant_id).await,
+        StatusCode::NOT_FOUND,
+    );
+    assert_status(
+        billing_eligibility(state, &tiers, "third", &device_id, &included.grant_id).await,
+        StatusCode::NOT_FOUND,
+    );
+    assert_status(
+        billing_eligibility(state, &tiers, "owner", &device_id, "no-such-approval").await,
+        StatusCode::NOT_FOUND,
+    );
+    let (storage_device, storage_grant) = storage_only;
+    let nothing_to_pay = billing_eligibility(
+        state,
+        &tiers,
+        "other",
+        &storage_device,
+        &storage_grant.grant_id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(nothing_to_pay.payer_id, "other");
+    assert!(!nothing_to_pay.eligible && nothing_to_pay.models.is_empty());
+}
+
+#[flow_like_types::tokio::test]
+#[ignore = "requires FLOW_LIKE_DEVICE_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+async fn approval_reads_report_limits_spend_and_plan_coverage() {
+    let schema = TestSchema::create().await;
+    let db = schema.db.clone();
+    let policy = standalone();
+    let state = context(&db, &policy);
+    db.execute_unprepared(r#"INSERT INTO "User" (id,status) VALUES ('third','ACTIVE')"#)
+        .await
+        .unwrap();
+    approvals_report_when_they_really_end(&state, &db).await;
+    let storage_only =
+        blocked_writes_are_shown_only_to_the_approver_and_project_readers(&state, &db).await;
+    spend_is_listed_per_instance_for_those_who_see_the_limit(&state, &db).await;
+    eligibility_judges_every_model_against_the_callers_plan(&state, &db, storage_only).await;
+    let disabled = StandaloneConfig::default();
+    assert_status(
+        billing_usage(&context(&db, &disabled), "owner", "device", "billing").await,
+        StatusCode::SERVICE_UNAVAILABLE,
+    );
+    assert_status(
+        billing_eligibility(
+            &context(&db, &disabled),
+            &tiers(),
+            "owner",
+            "device",
+            "grant",
+        )
+        .await,
+        StatusCode::SERVICE_UNAVAILABLE,
+    );
+    schema.drop().await;
+}
+
+#[test]
+fn fleet_reads_are_bounded_and_bind_exactly_what_they_reference() {
+    for (app, limit, bound) in [(None, 1000, 2), (Some("app"), 500, 4)] {
+        let statement = fleet_statement("viewer", app, 1_800_000_000);
+        let sql = statement.sql.as_str();
+        assert_eq!(
+            statement.values.as_ref().map_or(0, |values| values.0.len()),
+            bound,
+            "{sql}"
+        );
+        for position in 1..=bound {
+            assert!(sql.contains(&format!("${position}")), "{sql}");
+        }
+        assert!(!sql.contains(&format!("${}", bound + 1)), "{sql}");
+        assert!(
+            sql.contains(&format!(" LIMIT {limit}) g LEFT JOIN ")),
+            "{sql}"
+        );
+        // Every source of visible approvals is narrowed to the app, or none is.
+        assert_eq!(
+            sql.matches(r#" AND v."appId"=$3"#).count(),
+            if app.is_some() { 3 } else { 0 },
+            "{sql}"
+        );
+        assert_eq!(sql.contains("WorkloadInstance"), app.is_some());
+    }
+}
+
+/// A device registered by `owner`, and the key its access rules are signed with.
+async fn seed_device_of(db: &DatabaseConnection, owner: &str) -> (String, SigningKey) {
+    let (device_id, _, invitation) = seed_device(db, &SigningKey::generate()).await;
+    db.execute_raw(sql(
+        r#"UPDATE "ManagedDevice" SET "ownerId"=$2 WHERE id=$1"#,
+        [device_id.clone().into(), owner.into()],
+    ))
+    .await
+    .unwrap();
+    (device_id, invitation)
+}
+
+/// Access rules that let `other` deploy anywhere on the device for 900 seconds.
+async fn let_other_deploy(db: &DatabaseConnection, device_id: &str, signer: &SigningKey) -> String {
+    let issued = now();
+    publish_rules(
+        db,
+        signer,
+        None,
+        rules_for(
+            device_id,
+            issued,
+            issued + 3_600,
+            vec![deploy(
+                "device",
+                "other",
+                ManagementScope::Device,
+                issued + 900,
+            )],
+        ),
+    )
+    .await
+}
+
+/// A lease as a registration leaves it.
+async fn hold_lease(
+    db: &DatabaseConnection,
+    grant: &ResourceGrantResponse,
+    status: &str,
+    purpose: Option<&str>,
+    lease_expires_at: i64,
+) {
+    let key = serde_json::to_string(&SigningKey::generate().public_key()).unwrap();
+    db.execute_raw(sql(
+        r#"INSERT INTO "WorkloadInstance" (id,purpose,"deviceId","grantId","workloadKey","workloadKeyThumbprint","deviceAuthEpoch","grantAuthzVersion",status,"registeredAt","leaseExpiresAt","registrationJws") VALUES ($1,$2,$3,$4,$5,$1,1,1,$6,$7,$8,'registration')"#,
+        [
+            uuid::Uuid::new_v4().to_string().into(),
+            purpose.map(str::to_owned).into(),
+            grant.device_id.clone().into(),
+            grant.grant_id.clone().into(),
+            key.into(),
+            status.into(),
+            now().into(),
+            lease_expires_at.into(),
+        ],
+    ))
+    .await
+    .unwrap();
+}
+
+fn fleet_app(
+    placement: &str,
+    access: OnlineProjectAccess,
+    models: &[&str],
+) -> CreateResourceGrantRequest {
+    CreateResourceGrantRequest {
+        placement_id: placement.into(),
+        deployment_id: format!("deployment-{placement}"),
+        project_id: "fleet-app".into(),
+        app_id: Some("fleet-app".into()),
+        online_access: Some(access),
+        model_ids: models.iter().map(|model| (*model).to_owned()).collect(),
+        max_instances: 3,
+        expires_at: now() + 7_200,
+    }
+}
+
+fn spending(limit_micros: i64) -> ApproveBillingGrantRequest {
+    ApproveBillingGrantRequest {
+        limit_micros,
+        expires_at: now() + 1_800,
+    }
+}
+
+type Services = std::collections::BTreeSet<(String, String)>;
+
+fn services<'a>(pairs: impl IntoIterator<Item = (&'a String, &'a str)>) -> Services {
+    pairs
+        .into_iter()
+        .map(|(device, placement)| (device.clone(), placement.to_owned()))
+        .collect()
+}
+
+async fn summary_of(state: &DeviceContext<'_>, viewer: &str) -> resource_summary::ResourceSummary {
+    let (server_time, found) = resource_summary::visible_approvals(state, viewer)
+        .await
+        .unwrap();
+    resource_summary::summarize(server_time, found, viewer)
+}
+
+fn summarized(summary: &resource_summary::ResourceSummary) -> Services {
+    summary
+        .devices
+        .iter()
+        .flat_map(|device| {
+            device
+                .approvals
+                .iter()
+                .map(|approval| (device.device_id.clone(), approval.placement_id.clone()))
+        })
+        .collect()
+}
+
+fn summarized_approval<'a>(
+    summary: &'a resource_summary::ResourceSummary,
+    device_id: &str,
+    placement: &str,
+) -> &'a resource_summary::ApprovalSummary {
+    summary
+        .devices
+        .iter()
+        .filter(|device| device.device_id == device_id)
+        .flat_map(|device| &device.approvals)
+        .find(|approval| approval.placement_id == placement)
+        .unwrap_or_else(|| panic!("the approval of {placement} is summarized"))
+}
+
+/// The limits listed for a device as (limit, whether the viewer pays).
+fn summarized_limits(
+    summary: &resource_summary::ResourceSummary,
+    device_id: &str,
+) -> Vec<(i64, bool)> {
+    summary
+        .devices
+        .iter()
+        .filter(|device| device.device_id == device_id)
+        .flat_map(|device| &device.billing)
+        .map(|limit| (limit.limit_micros, limit.payer_is_me))
+        .collect()
+}
+
+struct Fleet {
+    /// The owner's, shared with nobody.
+    edge: String,
+    /// The owner's; `other` is a current recipient of its access rules.
+    lab: String,
+    lab_signer: SigningKey,
+    lab_rules: String,
+    /// The owner's; its rules let `other` deploy, who never accepted the share.
+    bench: String,
+    /// Registered by `other`.
+    theirs: String,
+    shared_until: i64,
+    lab_bot: ResourceGrantResponse,
+    lab_reports: ResourceGrantResponse,
+    bench_bot: ResourceGrantResponse,
+}
+
+async fn seed_fleet(state: &DeviceContext<'_>, db: &DatabaseConnection) -> Fleet {
+    db.execute_unprepared(r#"INSERT INTO "User" (id,status) VALUES ('third','ACTIVE'); INSERT INTO "App" VALUES ('fleet-app','ACTIVE','fleet-owner-role'); INSERT INTO "Role" VALUES ('fleet-owner-role','fleet-app',1); INSERT INTO "Membership" VALUES ('other','fleet-app','fleet-owner-role')"#).await.unwrap();
+    let (edge, _) = seed_device_of(db, "owner").await;
+    let (lab, lab_signer) = seed_device_of(db, "owner").await;
+    let (bench, bench_signer) = seed_device_of(db, "owner").await;
+    let (theirs, _) = seed_device_of(db, "other").await;
+    let shared_until = now() + 900;
+    let lab_rules = let_other_deploy(db, &lab, &lab_signer).await;
+    let_other_deploy(db, &bench, &bench_signer).await;
+    db.execute_raw(sql(
+        r#"INSERT INTO "DeviceManagementRecipient"("deviceId",version,"grantId","userId","expiresAt") VALUES($1,1,'device','other',$2)"#,
+        [lab.clone().into(), shared_until.into()],
+    ))
+    .await
+    .unwrap();
+
+    create_grant(state, "owner", &edge, request("own"))
+        .await
+        .unwrap();
+    create_grant(state, "owner", &lab, request("local"))
+        .await
+        .unwrap();
+    let read_write = fleet_app("bot", OnlineProjectAccess::ReadWrite, &["model"]);
+    let lab_bot = create_grant(state, "other", &lab, read_write)
+        .await
+        .unwrap();
+    let read_only = |placement| fleet_app(placement, OnlineProjectAccess::ReadOnly, &[]);
+    let lab_reports = create_grant(state, "other", &lab, read_only("reports"))
+        .await
+        .unwrap();
+    let bench_bot = create_grant(state, "other", &bench, read_only("bot"))
+        .await
+        .unwrap();
+    create_grant(state, "other", &theirs, read_only("bot"))
+        .await
+        .unwrap();
+    Fleet {
+        edge,
+        lab,
+        lab_signer,
+        lab_rules,
+        bench,
+        theirs,
+        shared_until,
+        lab_bot,
+        lab_reports,
+        bench_bot,
+    }
+}
+
+async fn the_summary_lists_each_viewers_approvals_and_limits(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    fleet: &Fleet,
+) {
+    let Fleet {
+        edge,
+        lab,
+        bench,
+        theirs,
+        ..
+    } = fleet;
+    let own = grants(state, "owner", edge).await.unwrap().remove(0);
+    let owners_limit = approve_billing(state, "owner", edge, &own.grant_id, spending(1_000))
+        .await
+        .unwrap();
+    let bot_limit = approve_billing(state, "other", lab, &fleet.lab_bot.grant_id, spending(500))
+        .await
+        .unwrap();
+
+    // The owner sees every approval on their devices and nothing on anyone else's.
+    rule_reads();
+    let before = now();
+    let summary = summary_of(state, "owner").await;
+    assert_eq!(
+        rule_reads(),
+        2,
+        "two devices carry approvals by someone else; each one's rules are verified once"
+    );
+    assert!((before..=now()).contains(&summary.server_time));
+    assert_eq!(
+        summarized(&summary),
+        services([
+            (edge, "own"),
+            (lab, "local"),
+            (lab, "bot"),
+            (lab, "reports"),
+            (bench, "bot"),
+        ])
+    );
+    let own_approval = summarized_approval(&summary, edge, "own");
+    assert_eq!(
+        (
+            own_approval.effective_expires_at,
+            own_approval.effective_limit,
+            own_approval.approver_is_me,
+            own_approval.payer_is_me,
+        ),
+        (
+            Some(own.expires_at),
+            Some(EffectiveLimit::Approval),
+            true,
+            true
+        )
+    );
+    for (device, placement) in [(lab, "bot"), (lab, "reports"), (bench, "bot")] {
+        let approval = summarized_approval(&summary, device, placement);
+        assert_eq!(approval.app_id.as_deref(), Some("fleet-app"));
+        assert_eq!(approval.status, "active");
+        assert!(!approval.approver_is_me && !approval.payer_is_me);
+        assert!(
+            (fleet.shared_until..=fleet.shared_until + 5)
+                .contains(&approval.effective_expires_at.unwrap()),
+            "it ends with the approver's Deploy permission"
+        );
+        assert_eq!(approval.effective_limit, Some(EffectiveLimit::SharingGrant));
+    }
+    assert_eq!(summarized_limits(&summary, edge), vec![(1_000, true)]);
+    assert_eq!(summarized_limits(&summary, lab), vec![(500, false)]);
+
+    // Everyone else sees only what they gave, wherever it is.
+    rule_reads();
+    let (server_time, mut found) = resource_summary::visible_approvals(state, "other")
+        .await
+        .unwrap();
+    assert_eq!(rule_reads(), 2, "their own device needs no rules");
+    let asked = std::cell::RefCell::new(Vec::new());
+    let full = |project: String, payer: String| {
+        asked.borrow_mut().push((project, payer));
+        async { Err(storage_full()) }
+    };
+    project::mark_blocked_writes_with(db, "other", &mut found.grants, full)
+        .await
+        .unwrap();
+    assert_eq!(
+        asked.take(),
+        vec![("fleet-app".to_owned(), "other".to_owned())],
+        "one quota read for the whole fleet"
+    );
+    let summary = resource_summary::summarize(server_time, found, "other");
+    assert_eq!(
+        summarized(&summary),
+        services([
+            (lab, "bot"),
+            (lab, "reports"),
+            (bench, "bot"),
+            (theirs, "bot"),
+        ])
+    );
+    let blocked: Services = summary
+        .devices
+        .iter()
+        .flat_map(|device| {
+            device
+                .approvals
+                .iter()
+                .filter(|approval| {
+                    approval.online_write_blocked == Some(OnlineWriteBlock::StorageFull)
+                })
+                .map(|approval| (device.device_id.clone(), approval.placement_id.clone()))
+        })
+        .collect();
+    assert_eq!(blocked, services([(lab, "bot")]));
+    let bot = summarized_approval(&summary, lab, "bot");
+    assert!(bot.approver_is_me && bot.payer_is_me);
+    assert_eq!(bot.online_access, Some(OnlineProjectAccess::ReadWrite));
+    let on_their_own = summarized_approval(&summary, theirs, "bot");
+    assert_eq!(
+        (
+            on_their_own.effective_expires_at,
+            on_their_own.effective_limit
+        ),
+        (
+            Some(on_their_own.expires_at),
+            Some(EffectiveLimit::Approval)
+        )
+    );
+    assert_eq!(summarized_limits(&summary, lab), vec![(500, true)]);
+
+    // The device owner is no member of the project: its storage state is not theirs to see.
+    let (_, mut found) = resource_summary::visible_approvals(state, "owner")
+        .await
+        .unwrap();
+    project::mark_blocked_writes_with(db, "owner", &mut found.grants, full)
+        .await
+        .unwrap();
+    assert!(asked.take().is_empty());
+    assert!(
+        found
+            .grants
+            .iter()
+            .all(|grant| grant.online_write_blocked.is_none())
+    );
+
+    rule_reads();
+    let nothing = summary_of(state, "third").await;
+    assert!(nothing.devices.is_empty());
+    assert_eq!(rule_reads(), 0);
+
+    // Paying for an approval shows it, and only it, until the limit is withdrawn.
+    let pay = |status: &'static str| {
+        sql(
+            r#"INSERT INTO "PlacementBillingGrant" (id,"grantId","payerId","approvedByUserId",status,"authzVersion","limitMicros","usedMicros","reservedMicros","expiresAt","createdAt") VALUES ('sponsored',$1,'third','third',$2,1,300,0,0,$3,$4) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status"#,
+            [
+                fleet.bench_bot.grant_id.clone().into(),
+                status.into(),
+                (now() + 600).into(),
+                now().into(),
+            ],
+        )
+    };
+    db.execute_raw(pay("active")).await.unwrap();
+    let sponsored = summary_of(state, "third").await;
+    assert_eq!(summarized(&sponsored), services([(bench, "bot")]));
+    let approval = summarized_approval(&sponsored, bench, "bot");
+    assert!(approval.payer_is_me && !approval.approver_is_me);
+    assert_eq!(summarized_limits(&sponsored, bench), vec![(300, true)]);
+    db.execute_raw(pay("revoked")).await.unwrap();
+    assert!(summary_of(state, "third").await.devices.is_empty());
+
+    // A withdrawn limit is not listed; one that ran out is, until a new one replaces it.
+    revoke_billing(state, "owner", edge, &owners_limit.billing_grant_id)
+        .await
+        .unwrap();
+    db.execute_raw(sql(
+        r#"UPDATE "PlacementBillingGrant" SET "createdAt"=$2,"expiresAt"=$3 WHERE id=$1"#,
+        [
+            bot_limit.billing_grant_id.clone().into(),
+            (now() - 100).into(),
+            (now() - 10).into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    let summary = summary_of(state, "owner").await;
+    assert!(summarized_limits(&summary, edge).is_empty());
+    assert!(!summarized_approval(&summary, edge, "own").payer_is_me);
+    let ran_out = &summary
+        .devices
+        .iter()
+        .find(|device| &device.device_id == lab)
+        .unwrap()
+        .billing;
+    assert_eq!(ran_out.len(), 1);
+    assert_eq!(ran_out[0].billing_grant_id, bot_limit.billing_grant_id);
+    assert!(ran_out[0].expires_at < summary.server_time);
+    approve_billing(state, "other", lab, &fleet.lab_bot.grant_id, spending(700))
+        .await
+        .unwrap();
+    assert_eq!(
+        summarized_limits(&summary_of(state, "other").await, lab),
+        vec![(700, true)]
+    );
+}
+
+/// Services by (device, placement) and how the viewer relates to the device.
+type Placed = std::collections::BTreeMap<(String, String), DeviceRelationship>;
+
+fn placed_on<'a>(
+    entries: impl IntoIterator<Item = (&'a String, &'a str, DeviceRelationship)>,
+) -> Placed {
+    entries
+        .into_iter()
+        .map(|(device, placement, relationship)| {
+            ((device.clone(), placement.to_owned()), relationship)
+        })
+        .collect()
+}
+
+async fn placed(state: &DeviceContext<'_>, viewer: &str) -> app_placements::AppDevicePlacements {
+    app_placements::placements(state, viewer, "fleet-app")
+        .await
+        .unwrap()
+}
+
+fn relationships(found: &app_placements::AppDevicePlacements) -> Placed {
+    let listed: Placed = found
+        .placements
+        .iter()
+        .map(|placement| {
+            (
+                (placement.device_id.clone(), placement.placement_id.clone()),
+                placement.relationship,
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed.len(),
+        found.placements.len(),
+        "one entry per service"
+    );
+    listed
+}
+
+fn placement<'a>(
+    found: &'a app_placements::AppDevicePlacements,
+    device_id: &str,
+    placement: &str,
+) -> &'a app_placements::AppDevicePlacement {
+    found
+        .placements
+        .iter()
+        .find(|entry| entry.device_id == device_id && entry.placement_id == placement)
+        .unwrap_or_else(|| panic!("{placement} is listed"))
+}
+
+async fn an_apps_placements_are_listed_once_per_service(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    fleet: &Fleet,
+) {
+    let Fleet {
+        lab, bench, theirs, ..
+    } = fleet;
+    let leased = now();
+    for (status, purpose, lease) in [
+        ("active", None, leased + 300),
+        ("active", Some("workload"), leased + 500),
+        ("validating", Some("rollout_validation"), leased + 100),
+        ("active", None, leased - 5),
+        ("retired", None, leased + 900),
+    ] {
+        hold_lease(db, &fleet.lab_bot, status, purpose, lease).await;
+    }
+
+    // The approver sees their approvals wherever the device is still in their list.
+    let theirs_view = placed(state, "other").await;
+    assert!((leased..=now()).contains(&theirs_view.server_time));
+    assert_eq!(
+        relationships(&theirs_view),
+        placed_on([
+            (lab, "bot", DeviceRelationship::Shared),
+            (lab, "reports", DeviceRelationship::Shared),
+            (bench, "bot", DeviceRelationship::CloudApproval),
+            (theirs, "bot", DeviceRelationship::Owner),
+        ])
+    );
+    let bot = placement(&theirs_view, lab, "bot");
+    assert_eq!(bot.deployment_id, "deployment-bot");
+    assert_eq!(bot.grant.grant_id, fleet.lab_bot.grant_id);
+    assert_eq!(bot.grant.status, "active");
+    assert_eq!(bot.grant.model_ids, vec!["model".to_owned()]);
+    assert_eq!(bot.grant.max_instances, 3);
+    assert_eq!(
+        bot.grant.online_access,
+        Some(OnlineProjectAccess::ReadWrite)
+    );
+    assert_eq!(bot.grant.approved_by_user_id.as_deref(), Some("other"));
+    assert_eq!(bot.grant.created_at, fleet.lab_bot.created_at);
+    assert_eq!(
+        bot.grant.effective_limit,
+        Some(EffectiveLimit::SharingGrant)
+    );
+    assert!(
+        (fleet.shared_until..=fleet.shared_until + 5)
+            .contains(&bot.grant.effective_expires_at.unwrap())
+    );
+    let limit = bot.billing.as_ref().expect("the limit in force");
+    assert_eq!((limit.limit_micros, limit.payer_is_me), (700, true));
+    let shown = instances(state, "other", lab)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|lease| lease.grant_id == fleet.lab_bot.grant_id)
+        .count();
+    assert_eq!(
+        (bot.instances.active, shown),
+        (3, 3),
+        "the leases the device's instance list shows"
+    );
+    assert_eq!(bot.instances.newest_lease_expires_at, Some(leased + 500));
+    let idle = placement(&theirs_view, lab, "reports");
+    assert!(idle.billing.is_none());
+    assert_eq!(
+        (
+            idle.instances.active,
+            idle.instances.newest_lease_expires_at
+        ),
+        (0, None)
+    );
+
+    // A device's owner sees every approval on it, and nothing on other people's devices.
+    let owners_view = placed(state, "owner").await;
+    assert_eq!(
+        relationships(&owners_view),
+        placed_on([
+            (lab, "bot", DeviceRelationship::Owner),
+            (lab, "reports", DeviceRelationship::Owner),
+            (bench, "bot", DeviceRelationship::Owner),
+        ])
+    );
+    let limit = placement(&owners_view, lab, "bot")
+        .billing
+        .as_ref()
+        .unwrap();
+    assert_eq!((limit.limit_micros, limit.payer_is_me), (700, false));
+    assert!(placed(state, "third").await.placements.is_empty());
+    assert!(
+        app_placements::placements(state, "other", "another-app")
+            .await
+            .unwrap()
+            .placements
+            .is_empty()
+    );
+
+    // A withdrawn limit leaves the service without one.
+    let in_force = get_billing(state, "other", lab, &fleet.lab_bot.grant_id)
+        .await
+        .unwrap();
+    revoke_billing(state, "other", lab, &in_force.billing_grant_id)
+        .await
+        .unwrap();
+    assert!(
+        placement(&placed(state, "other").await, lab, "bot")
+            .billing
+            .is_none()
+    );
+
+    // A replaced approval is listed once, as the one that runs.
+    revoke_grant(state, "other", lab, &fleet.lab_reports.grant_id)
+        .await
+        .unwrap();
+    let withdrawn = placed(state, "other").await;
+    let reports = placement(&withdrawn, lab, "reports");
+    assert_eq!(reports.grant.status, "revoked");
+    assert_eq!(
+        (
+            reports.grant.effective_expires_at,
+            reports.grant.effective_limit
+        ),
+        (None, None)
+    );
+    let replacement = create_grant(
+        state,
+        "other",
+        lab,
+        fleet_app("reports", OnlineProjectAccess::ReadOnly, &[]),
+    )
+    .await
+    .unwrap();
+    let replaced = placed(state, "other").await;
+    assert_eq!(replaced.placements.len(), 4);
+    let reports = placement(&replaced, lab, "reports");
+    assert_eq!(
+        (
+            reports.grant.grant_id.as_str(),
+            reports.grant.status.as_str()
+        ),
+        (replacement.grant_id.as_str(), "active")
+    );
+
+    // Sharing ended: the approvals stay reachable for as long as they are not withdrawn.
+    let reissued = now();
+    publish_rules(
+        db,
+        &fleet.lab_signer,
+        Some(&fleet.lab_rules),
+        rules_for(lab, reissued, reissued + 3_600, Vec::new()),
+    )
+    .await;
+    let unshared = placed(state, "other").await;
+    assert_eq!(
+        relationships(&unshared),
+        placed_on([
+            (lab, "bot", DeviceRelationship::CloudApproval),
+            (lab, "reports", DeviceRelationship::CloudApproval),
+            (bench, "bot", DeviceRelationship::CloudApproval),
+            (theirs, "bot", DeviceRelationship::Owner),
+        ])
+    );
+    let ended = &placement(&unshared, lab, "bot").grant;
+    assert_eq!(
+        (ended.effective_expires_at, ended.effective_limit),
+        (Some(reissued), Some(EffectiveLimit::SharingGrant))
+    );
+    for grant_id in [&fleet.lab_bot.grant_id, &replacement.grant_id] {
+        revoke_grant(state, "other", lab, grant_id).await.unwrap();
+    }
+    assert_eq!(
+        relationships(&placed(state, "other").await),
+        placed_on([
+            (bench, "bot", DeviceRelationship::CloudApproval),
+            (theirs, "bot", DeviceRelationship::Owner),
+        ]),
+        "a device that left their list shows nothing of what they once approved"
+    );
+    let history = placed(state, "owner").await;
+    assert_eq!(history.placements.len(), 3);
+    for service in ["bot", "reports"] {
+        assert_eq!(placement(&history, lab, service).grant.status, "revoked");
+    }
+}
+
+#[flow_like_types::tokio::test]
+#[ignore = "requires FLOW_LIKE_DEVICE_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+async fn fleet_reads_list_only_what_the_caller_may_see() {
+    let schema = TestSchema::create().await;
+    let db = schema.db.clone();
+    let policy = standalone();
+    let state = context(&db, &policy);
+    let fleet = seed_fleet(&state, &db).await;
+    the_summary_lists_each_viewers_approvals_and_limits(&state, &db, &fleet).await;
+    an_apps_placements_are_listed_once_per_service(&state, &db, &fleet).await;
+    let disabled = StandaloneConfig::default();
+    assert_status(
+        resource_summary::visible_approvals(&context(&db, &disabled), "owner").await,
+        StatusCode::SERVICE_UNAVAILABLE,
+    );
+    assert_status(
+        app_placements::placements(&context(&db, &disabled), "owner", "fleet-app").await,
+        StatusCode::SERVICE_UNAVAILABLE,
+    );
+    schema.drop().await;
+}
+
+const SCHEDULE_APP: &str = "schedule-app";
+const SCHEDULE_ROLE: &str = "schedule-owner-role";
+
+/// A running service of the schedule app: its cloud approval, one registered instance and
+/// that instance's project session.
+struct ScheduleService {
+    grant: ResourceGrantResponse,
+    key: SigningKey,
+    session: InstanceTokenResponse,
+}
+
+async fn schedule_service(
+    state: &DeviceContext<'_>,
+    device_id: &str,
+    device_key: &SigningKey,
+    placement: &str,
+) -> ScheduleService {
+    let grant = create_grant(
+        state,
+        "owner",
+        device_id,
+        CreateResourceGrantRequest {
+            placement_id: placement.into(),
+            deployment_id: format!("deployment-{placement}"),
+            project_id: SCHEDULE_APP.into(),
+            app_id: Some(SCHEDULE_APP.into()),
+            online_access: Some(OnlineProjectAccess::ReadOnly),
+            model_ids: Vec::new(),
+            max_instances: 2,
+            expires_at: now() + 3_600,
+        },
+    )
+    .await
+    .unwrap();
+    let key = SigningKey::generate();
+    let instance_id = format!("instance-{}", uuid::Uuid::new_v4().simple());
+    register(
+        state,
+        device_id,
+        registration_optional(&grant, None, &instance_id, device_key, &key),
+    )
+    .await
+    .unwrap();
+    let session = project::token(
+        state,
+        &instance_id,
+        InstanceTokenRequest {
+            client_assertion: assertion(
+                &instance_id,
+                &format!("/instances/{instance_id}/project-token"),
+                &key,
+            ),
+        },
+    )
+    .await
+    .unwrap();
+    ScheduleService {
+        grant,
+        key,
+        session,
+    }
+}
+
+/// The claim call of a service, as its device signs it.
+async fn claim_schedules(
+    state: &DeviceContext<'_>,
+    service: &ScheduleService,
+    event_ids: &[&str],
+) -> Result<serde_json::Value, ApiError> {
+    let headers = proof_headers(
+        &service.session,
+        &service.key,
+        Some(&service.session.dpop_nonce),
+        "POST",
+        schedules::CLAIM_PATH,
+    );
+    let authorization =
+        project::authenticate(state, &headers, "POST", schedules::CLAIM_PATH).await?;
+    let event_ids = event_ids.iter().map(|id| (*id).to_owned()).collect();
+    let (answer, _) = schedules::claim_for(state, &authorization, event_ids).await?;
+    Ok(serde_json::to_value(answer).unwrap())
+}
+
+fn held(event_id: &str, reason: &str) -> serde_json::Value {
+    serde_json::json!([{ "event_id": event_id, "reason": reason }])
+}
+
+async fn release_schedule(
+    state: &DeviceContext<'_>,
+    event_id: &str,
+    device_id: &str,
+    placement: &str,
+) -> Result<(serde_json::Value, bool), ApiError> {
+    let request = serde_json::from_value(
+        serde_json::json!({ "device_id": device_id, "placement_id": placement }),
+    )
+    .unwrap();
+    let (released, changed) =
+        schedules::release_to(state, "owner", SCHEDULE_APP, event_id, &request).await?;
+    Ok((serde_json::to_value(released).unwrap(), changed))
+}
+
+fn assert_schedule_refusal<T: std::fmt::Debug>(result: Result<T, ApiError>, code: &str) {
+    let error = result.expect_err("the release must be refused");
+    assert_eq!(error.status(), StatusCode::CONFLICT);
+    assert_eq!(error.public_code(), code);
+}
+
+/// When the hub runs it again, and whether a release ended.
+async fn give_back_schedule(state: &DeviceContext<'_>, event_id: &str) -> (Option<i64>, bool) {
+    let (given_back, changed) = schedules::give_back_from(state, SCHEDULE_APP, event_id)
+        .await
+        .unwrap();
+    let answer = serde_json::to_value(given_back).unwrap();
+    (answer["hub_resumes_at"].as_i64(), changed)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct StoredSchedule {
+    service: Option<(String, String)>,
+    grant_id: Option<String>,
+    claimed_at: Option<i64>,
+    seen_at: Option<i64>,
+    resume_at: Option<i64>,
+}
+
+async fn stored_schedule(db: &DatabaseConnection, event_id: &str) -> Option<StoredSchedule> {
+    let row = db
+        .query_one_raw(sql(
+            r#"SELECT "deviceId","placementId","grantId","claimedAt","seenAt","resumeAt" FROM "DeviceScheduleClaim" WHERE "appId"=$1 AND "eventId"=$2"#,
+            [SCHEDULE_APP.into(), event_id.into()],
+        ))
+        .await
+        .unwrap()?;
+    let device: Option<String> = row.try_get("", "deviceId").unwrap();
+    let placement: Option<String> = row.try_get("", "placementId").unwrap();
+    Some(StoredSchedule {
+        service: device.zip(placement),
+        grant_id: row.try_get("", "grantId").unwrap(),
+        claimed_at: row.try_get("", "claimedAt").unwrap(),
+        seen_at: row.try_get("", "seenAt").unwrap(),
+        resume_at: row.try_get("", "resumeAt").unwrap(),
+    })
+}
+
+/// `value` lies `offset` seconds after a moment between `from` and now.
+fn after(value: Option<i64>, from: i64, offset: i64) -> bool {
+    value.is_some_and(|value| (from + offset..=now() + offset).contains(&value))
+}
+
+async fn end_approval(db: &DatabaseConnection, service: &ScheduleService, ended_at: i64) {
+    db.execute_raw(sql(
+        r#"UPDATE "PlacementResourceGrant" SET "expiresAt"=$2 WHERE id=$1"#,
+        [service.grant.grant_id.clone().into(), ended_at.into()],
+    ))
+    .await
+    .unwrap();
+}
+
+async fn retire_processes(db: &DatabaseConnection, service: &ScheduleService) {
+    db.execute_raw(sql(
+        r#"UPDATE "WorkloadInstance" SET status='retired' WHERE "grantId"=$1"#,
+        [service.grant.grant_id.clone().into()],
+    ))
+    .await
+    .unwrap();
+}
+
+async fn skipped_by_the_hub(
+    state: &DeviceContext<'_>,
+    event_id: &str,
+    scheduled: Option<i64>,
+) -> bool {
+    let (db, dialect) = (state.db, state.dialect);
+    schedules::runs_on_device(db, dialect, SCHEDULE_APP, event_id, scheduled, now())
+        .await
+        .unwrap()
+}
+
+async fn a_device_claims_only_what_was_released_to_its_service(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    device_id: &str,
+    device_key: &SigningKey,
+) {
+    let reports = schedule_service(state, device_id, device_key, "claim-reports").await;
+    let other = schedule_service(state, device_id, device_key, "claim-other").await;
+    let approval = Some(reports.grant.grant_id.clone());
+
+    let answer = claim_schedules(state, &reports, &["claim-a"])
+        .await
+        .unwrap();
+    assert_eq!(answer["held"], held("claim-a", "not_released"));
+    assert_eq!(answer["claimed"], serde_json::json!([]));
+    assert_eq!(
+        stored_schedule(db, "claim-a").await,
+        None,
+        "a claim nobody released leaves nothing behind"
+    );
+
+    let started = now();
+    let (released, changed) = release_schedule(state, "claim-a", device_id, "claim-reports")
+        .await
+        .unwrap();
+    assert!(changed);
+    assert_eq!(released["state"], "released");
+    assert_eq!(
+        release_schedule(state, "claim-a", device_id, "claim-reports")
+            .await
+            .unwrap(),
+        (released, false),
+        "releasing to the same service again changes nothing"
+    );
+    for event_id in ["claim-b", "claim-c"] {
+        release_schedule(state, event_id, device_id, "claim-reports")
+            .await
+            .unwrap();
+    }
+
+    let answer = claim_schedules(state, &reports, &["claim-a", "claim-b"])
+        .await
+        .unwrap();
+    let since = answer["server_time"].as_i64().unwrap();
+    assert!((started..=now()).contains(&since));
+    assert_eq!(
+        answer,
+        serde_json::json!({
+            "server_time": since,
+            "claimed": [
+                { "event_id": "claim-a", "since": since },
+                { "event_id": "claim-b", "since": since }
+            ],
+            "held": []
+        })
+    );
+    assert_eq!(
+        stored_schedule(db, "claim-a").await.unwrap(),
+        StoredSchedule {
+            service: Some((device_id.to_owned(), "claim-reports".to_owned())),
+            grant_id: approval.clone(),
+            claimed_at: Some(since),
+            seen_at: Some(since),
+            resume_at: None,
+        }
+    );
+    assert_eq!(
+        release_schedule(state, "claim-a", device_id, "claim-reports")
+            .await
+            .unwrap(),
+        (
+            serde_json::json!({ "state": "device", "since": since }),
+            false
+        )
+    );
+
+    // A confirmation returns when the approval got the schedule and only moves `seenAt`.
+    let got_it = since - 5_000;
+    db.execute_raw(sql(
+        r#"UPDATE "DeviceScheduleClaim" SET "claimedAt"=$2,"seenAt"=$2 WHERE "appId"=$1 AND "grantId"=$3"#,
+        [
+            SCHEDULE_APP.into(),
+            got_it.into(),
+            reports.grant.grant_id.clone().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    let confirmed = claim_schedules(state, &reports, &["claim-a", "claim-b"])
+        .await
+        .unwrap();
+    assert_eq!(confirmed["claimed"][0]["since"], got_it);
+    assert_eq!(confirmed["claimed"][1]["since"], got_it);
+    let stored = stored_schedule(db, "claim-a").await.unwrap();
+    assert_eq!(stored.claimed_at, Some(got_it));
+    assert!(stored.seen_at.is_some_and(|seen_at| seen_at >= since));
+
+    let answer = claim_schedules(state, &other, &["claim-a", "claim-new"])
+        .await
+        .unwrap();
+    assert_eq!(
+        answer["held"],
+        serde_json::json!([
+            { "event_id": "claim-a", "reason": "runs_elsewhere" },
+            { "event_id": "claim-new", "reason": "not_released" }
+        ])
+    );
+    assert_eq!(
+        stored_schedule(db, "claim-a").await.unwrap().grant_id,
+        approval
+    );
+
+    // A set that no longer names a schedule hands it back, confirmed by the device.
+    let before = now();
+    let answer = claim_schedules(state, &reports, &["claim-a"])
+        .await
+        .unwrap();
+    assert_eq!(
+        answer["claimed"],
+        serde_json::json!([{ "event_id": "claim-a", "since": got_it }])
+    );
+    let handed_back = stored_schedule(db, "claim-b").await.unwrap();
+    assert_eq!(
+        (
+            &handed_back.service,
+            &handed_back.grant_id,
+            handed_back.claimed_at
+        ),
+        (&None, &None, None)
+    );
+    assert!(after(handed_back.resume_at, before, 300));
+    let answer = claim_schedules(state, &reports, &["claim-a", "claim-b"])
+        .await
+        .unwrap();
+    assert_eq!(
+        answer["held"],
+        held("claim-b", "not_released"),
+        "taking it again needs a new release"
+    );
+    let answer = claim_schedules(state, &reports, &[]).await.unwrap();
+    assert_eq!(
+        (&answer["claimed"], &answer["held"]),
+        (&serde_json::json!([]), &serde_json::json!([]))
+    );
+    let handed_back = stored_schedule(db, "claim-a").await.unwrap();
+    assert_eq!(
+        (&handed_back.service, &handed_back.grant_id),
+        (&None, &None)
+    );
+    assert!(after(handed_back.resume_at, before, 300));
+
+    // An approval that ended without a revocation keeps the row until the service's next
+    // approval takes it over; the old process is gone with the old approval.
+    let answer = claim_schedules(state, &reports, &["claim-c"])
+        .await
+        .unwrap();
+    assert_eq!(answer["claimed"][0]["event_id"], "claim-c");
+    end_approval(db, &reports, now() - 10).await;
+    assert_status(
+        claim_schedules(state, &reports, &["claim-c"]).await,
+        StatusCode::UNAUTHORIZED,
+    );
+    let renewed = schedule_service(state, device_id, device_key, "claim-reports").await;
+    let before = now();
+    let answer = claim_schedules(state, &renewed, &["claim-c"])
+        .await
+        .unwrap();
+    let taken_over = answer["claimed"][0]["since"].as_i64().unwrap();
+    assert!((before..=now()).contains(&taken_over));
+    assert_eq!(
+        stored_schedule(db, "claim-c").await.unwrap().grant_id,
+        Some(renewed.grant.grant_id.clone())
+    );
+
+    // A rollout check can read metadata; it never runs, or moves, a schedule.
+    let validation_key = SigningKey::generate();
+    register(
+        state,
+        device_id,
+        registration_for_purpose(
+            &renewed.grant,
+            None,
+            "claim-validation",
+            device_key,
+            &validation_key,
+            InstancePurpose::RolloutValidation,
+        ),
+    )
+    .await
+    .unwrap();
+    let validation = project::token(
+        state,
+        "claim-validation",
+        InstanceTokenRequest {
+            client_assertion: assertion(
+                "claim-validation",
+                "/instances/claim-validation/project-token",
+                &validation_key,
+            ),
+        },
+    )
+    .await
+    .unwrap();
+    assert_status(
+        project::authenticate(
+            state,
+            &proof_headers(
+                &validation,
+                &validation_key,
+                Some(&validation.dpop_nonce),
+                "POST",
+                schedules::CLAIM_PATH,
+            ),
+            "POST",
+            schedules::CLAIM_PATH,
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+    );
+}
+
+async fn a_release_moves_only_a_schedule_nobody_runs(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    device_id: &str,
+    device_key: &SigningKey,
+) {
+    let first = schedule_service(state, device_id, device_key, "move-first").await;
+    let second = schedule_service(state, device_id, device_key, "move-second").await;
+    let service = |placement: &str| Some((device_id.to_owned(), placement.to_owned()));
+
+    release_schedule(state, "move-a", device_id, "move-first")
+        .await
+        .unwrap();
+    let (moved, changed) = release_schedule(state, "move-a", device_id, "move-second")
+        .await
+        .unwrap();
+    assert!(changed, "a release nobody claimed is re-targeted");
+    assert_eq!(moved["state"], "released");
+    assert_eq!(
+        stored_schedule(db, "move-a").await.unwrap().service,
+        service("move-second")
+    );
+    let answer = claim_schedules(state, &first, &["move-a"]).await.unwrap();
+    assert_eq!(answer["held"], held("move-a", "runs_elsewhere"));
+
+    claim_schedules(state, &second, &["move-a"]).await.unwrap();
+    assert_schedule_refusal(
+        release_schedule(state, "move-a", device_id, "move-first").await,
+        "SCHEDULE_RUNS_ELSEWHERE",
+    );
+    assert_eq!(
+        stored_schedule(db, "move-a").await.unwrap().grant_id,
+        Some(second.grant.grant_id.clone())
+    );
+
+    // Its approval stopped working: the hub hands it back first, and the move still waits
+    // for the grace period, because the device may be running it.
+    let ended = now() - 10;
+    end_approval(db, &second, ended).await;
+    assert_schedule_refusal(
+        release_schedule(state, "move-a", device_id, "move-first").await,
+        "SCHEDULE_RETURNING",
+    );
+    let handed_back = stored_schedule(db, "move-a").await.unwrap();
+    assert_eq!(
+        handed_back,
+        StoredSchedule {
+            service: service("move-second"),
+            grant_id: None,
+            claimed_at: None,
+            seen_at: None,
+            resume_at: Some(ended + 3_900),
+        },
+        "the hand-back is committed although the release was refused"
+    );
+    assert_schedule_refusal(
+        release_schedule(state, "move-a", device_id, "move-first").await,
+        "SCHEDULE_RETURNING",
+    );
+
+    // The service that ran it last may take it again at once: its old process is gone.
+    let renewed = schedule_service(state, device_id, device_key, "move-second").await;
+    let (same, changed) = release_schedule(state, "move-a", device_id, "move-second")
+        .await
+        .unwrap();
+    assert!(!changed);
+    assert_eq!(same["state"], "released");
+    let answer = claim_schedules(state, &renewed, &["move-a"]).await.unwrap();
+    assert_eq!(answer["claimed"][0]["event_id"], "move-a");
+    assert_eq!(stored_schedule(db, "move-a").await.unwrap().resume_at, None);
+
+    // An approval that ended longer ago than the grace period protects nothing any more.
+    end_approval(db, &renewed, now() - 5_000).await;
+    let (moved, changed) = release_schedule(state, "move-a", device_id, "move-first")
+        .await
+        .unwrap();
+    assert!(changed);
+    assert_eq!(moved["state"], "released");
+    assert_eq!(
+        stored_schedule(db, "move-a").await.unwrap(),
+        StoredSchedule {
+            service: service("move-first"),
+            grant_id: None,
+            claimed_at: None,
+            seen_at: None,
+            resume_at: None,
+        }
+    );
+
+    // Two services racing for one schedule: one of them ends up running it.
+    let third = schedule_service(state, device_id, device_key, "move-third").await;
+    let (one, two) = flow_like_types::tokio::join!(
+        release_schedule(state, "move-race", device_id, "move-first"),
+        release_schedule(state, "move-race", device_id, "move-third")
+    );
+    one.unwrap();
+    two.unwrap();
+    let (one, two) = flow_like_types::tokio::join!(
+        claim_schedules(state, &first, &["move-race"]),
+        claim_schedules(state, &third, &["move-race"])
+    );
+    let answers = [one.unwrap(), two.unwrap()];
+    let claimed = answers
+        .iter()
+        .filter(|answer| answer["claimed"][0]["event_id"] == "move-race")
+        .count();
+    let elsewhere = answers
+        .iter()
+        .filter(|answer| answer["held"] == held("move-race", "runs_elsewhere"))
+        .count();
+    assert_eq!((claimed, elsewhere), (1, 1));
+}
+
+async fn a_schedule_returns_to_the_hub_after_a_grace_period(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    device_id: &str,
+    device_key: &SigningKey,
+) {
+    assert_eq!(give_back_schedule(state, "back-none").await, (None, false));
+    let reports = schedule_service(state, device_id, device_key, "back-reports").await;
+    let released_to = Some((device_id.to_owned(), "back-reports".to_owned()));
+
+    release_schedule(state, "back-a", device_id, "back-reports")
+        .await
+        .unwrap();
+    assert_eq!(
+        give_back_schedule(state, "back-a").await,
+        (None, true),
+        "the hub ran a schedule nobody claimed all along"
+    );
+    assert_eq!(stored_schedule(db, "back-a").await, None);
+
+    for event_id in ["back-a", "back-b", "back-c"] {
+        release_schedule(state, event_id, device_id, "back-reports")
+            .await
+            .unwrap();
+    }
+    claim_schedules(state, &reports, &["back-a", "back-b", "back-c"])
+        .await
+        .unwrap();
+
+    // While a process may still run it, the hub waits out a storage lease.
+    let before = now();
+    let (resumes_at, changed) = give_back_schedule(state, "back-a").await;
+    assert!(changed);
+    assert!(after(resumes_at, before, 3_900));
+    assert_eq!(
+        stored_schedule(db, "back-a").await.unwrap(),
+        StoredSchedule {
+            service: None,
+            grant_id: None,
+            claimed_at: None,
+            seen_at: None,
+            resume_at: resumes_at,
+        }
+    );
+    assert_eq!(
+        give_back_schedule(state, "back-a").await,
+        (resumes_at, false)
+    );
+    assert_schedule_refusal(
+        release_schedule(state, "back-a", device_id, "back-reports").await,
+        "SCHEDULE_RETURNING",
+    );
+    let answer = claim_schedules(state, &reports, &["back-a", "back-b", "back-c"])
+        .await
+        .unwrap();
+    assert_eq!(
+        answer["held"],
+        held("back-a", "not_released"),
+        "the device learns of a give-back at its next confirmation"
+    );
+    assert_eq!(answer["claimed"].as_array().unwrap().len(), 2);
+
+    // A revocation hands back what the approval ran. The release stays, and a schedule
+    // that was released but never claimed is left alone.
+    release_schedule(state, "back-d", device_id, "back-reports")
+        .await
+        .unwrap();
+    let before = now();
+    revoke_grant(state, "owner", device_id, &reports.grant.grant_id)
+        .await
+        .unwrap();
+    for event_id in ["back-b", "back-c"] {
+        let handed_back = stored_schedule(db, event_id).await.unwrap();
+        assert_eq!(
+            (
+                &handed_back.service,
+                &handed_back.grant_id,
+                handed_back.claimed_at
+            ),
+            (&released_to, &None, None),
+            "{event_id}"
+        );
+        assert!(after(handed_back.resume_at, before, 3_900), "{event_id}");
+    }
+    assert_eq!(
+        stored_schedule(db, "back-d").await.unwrap(),
+        StoredSchedule {
+            service: released_to.clone(),
+            grant_id: None,
+            claimed_at: None,
+            seen_at: None,
+            resume_at: None,
+        }
+    );
+
+    // A new approval of the same service claims again at once.
+    let renewed = schedule_service(state, device_id, device_key, "back-reports").await;
+    let answer = claim_schedules(state, &renewed, &["back-b"]).await.unwrap();
+    assert_eq!(answer["claimed"][0]["event_id"], "back-b");
+    assert_eq!(stored_schedule(db, "back-b").await.unwrap().resume_at, None);
+
+    // Once the device retired every process, a short grace is enough.
+    retire_processes(db, &renewed).await;
+    let before = now();
+    let (resumes_at, changed) = give_back_schedule(state, "back-b").await;
+    assert!(changed);
+    assert!(after(resumes_at, before, 300));
+
+    let retired = schedule_service(state, device_id, device_key, "back-retired").await;
+    release_schedule(state, "back-e", device_id, "back-retired")
+        .await
+        .unwrap();
+    claim_schedules(state, &retired, &["back-e"]).await.unwrap();
+    retire_processes(db, &retired).await;
+    let before = now();
+    revoke_grant(state, "owner", device_id, &retired.grant.grant_id)
+        .await
+        .unwrap();
+    assert!(after(
+        stored_schedule(db, "back-e").await.unwrap().resume_at,
+        before,
+        300
+    ));
+}
+
+async fn the_hub_skips_a_schedule_while_a_working_approval_holds_it(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    device_id: &str,
+    device_key: &SigningKey,
+) {
+    assert!(!skipped_by_the_hub(state, "skip-none", None).await);
+    let reports = schedule_service(state, device_id, device_key, "skip-reports").await;
+    let released_to = Some((device_id.to_owned(), "skip-reports".to_owned()));
+    for event_id in ["skip-a", "skip-b"] {
+        release_schedule(state, event_id, device_id, "skip-reports")
+            .await
+            .unwrap();
+    }
+    assert!(
+        !skipped_by_the_hub(state, "skip-a", None).await,
+        "a released schedule nobody claimed is the hub's to run"
+    );
+    claim_schedules(state, &reports, &["skip-a", "skip-b"])
+        .await
+        .unwrap();
+    assert!(skipped_by_the_hub(state, "skip-a", None).await);
+    let devices_off = StandaloneConfig::default();
+    assert!(
+        skipped_by_the_hub(&context(db, &devices_off), "skip-a", None).await,
+        "a hub that turned devices off still has devices running claimed schedules"
+    );
+
+    // Handed back: skipped until the resume time, judged by the scheduled time when the
+    // trigger names one.
+    let (resumes_at, _) = give_back_schedule(state, "skip-a").await;
+    let resumes_at = resumes_at.unwrap();
+    assert!(skipped_by_the_hub(state, "skip-a", None).await);
+    assert!(skipped_by_the_hub(state, "skip-a", Some(resumes_at)).await);
+    assert!(!skipped_by_the_hub(state, "skip-a", Some(resumes_at + 1)).await);
+    db.execute_raw(sql(
+        r#"UPDATE "DeviceScheduleClaim" SET "resumeAt"=$3 WHERE "appId"=$1 AND "eventId"=$2"#,
+        [SCHEDULE_APP.into(), "skip-a".into(), (now() - 60).into()],
+    ))
+    .await
+    .unwrap();
+    assert!(!skipped_by_the_hub(state, "skip-a", None).await);
+    assert!(
+        skipped_by_the_hub(state, "skip-a", Some(now() - 120)).await,
+        "a late replay of a time the device may have run stays skipped"
+    );
+
+    // The approval expired: the first scheduled time notices and hands it back from then.
+    let ended = now() - 100;
+    end_approval(db, &reports, ended).await;
+    assert!(skipped_by_the_hub(state, "skip-b", None).await);
+    let handed_back = StoredSchedule {
+        service: released_to.clone(),
+        grant_id: None,
+        claimed_at: None,
+        seen_at: None,
+        resume_at: Some(ended + 3_900),
+    };
+    assert_eq!(stored_schedule(db, "skip-b").await.unwrap(), handed_back);
+    assert!(skipped_by_the_hub(state, "skip-b", None).await);
+    assert_eq!(
+        stored_schedule(db, "skip-b").await.unwrap(),
+        handed_back,
+        "a second look does not move the resume time"
+    );
+    assert!(!skipped_by_the_hub(state, "skip-b", Some(ended + 3_901)).await);
+
+    // The approver lost the right in the app: nothing on the approval changed.
+    let lost = schedule_service(state, device_id, device_key, "skip-lost").await;
+    release_schedule(state, "skip-c", device_id, "skip-lost")
+        .await
+        .unwrap();
+    claim_schedules(state, &lost, &["skip-c"]).await.unwrap();
+    let set_role = |permissions: i64| {
+        sql(
+            r#"UPDATE "Role" SET permissions=$2 WHERE id=$1"#,
+            [SCHEDULE_ROLE.into(), permissions.into()],
+        )
+    };
+    db.execute_raw(set_role(0)).await.unwrap();
+    let before = now();
+    assert!(skipped_by_the_hub(state, "skip-c", None).await);
+    let handed_back = stored_schedule(db, "skip-c").await.unwrap();
+    assert_eq!(
+        (&handed_back.service, &handed_back.grant_id),
+        (&Some((device_id.to_owned(), "skip-lost".to_owned())), &None)
+    );
+    assert!(after(handed_back.resume_at, before, 3_900));
+    assert!(skipped_by_the_hub(state, "skip-c", None).await);
+    assert_eq!(stored_schedule(db, "skip-c").await.unwrap(), handed_back);
+    db.execute_raw(set_role(1)).await.unwrap();
+
+    // The device was removed from the hub: no row keeps pointing at it.
+    let gone_key = SigningKey::generate();
+    let (gone_id, _, _) = seed_device(db, &gone_key).await;
+    let gone = schedule_service(state, &gone_id, &gone_key, "skip-gone").await;
+    release_schedule(state, "skip-d", &gone_id, "skip-gone")
+        .await
+        .unwrap();
+    claim_schedules(state, &gone, &["skip-d"]).await.unwrap();
+    let removed_at = now() - 50;
+    db.execute_raw(sql(
+        r#"UPDATE "ManagedDevice" SET status='revoked',"authEpoch"="authEpoch"+1,"revokedAt"=$2 WHERE id=$1"#,
+        [gone_id.clone().into(), removed_at.into()],
+    ))
+    .await
+    .unwrap();
+    assert!(skipped_by_the_hub(state, "skip-d", None).await);
+    let handed_back = StoredSchedule {
+        service: None,
+        grant_id: None,
+        claimed_at: None,
+        seen_at: None,
+        resume_at: Some(removed_at + 3_900),
+    };
+    assert_eq!(stored_schedule(db, "skip-d").await.unwrap(), handed_back);
+    assert!(skipped_by_the_hub(state, "skip-d", None).await);
+    assert_eq!(stored_schedule(db, "skip-d").await.unwrap(), handed_back);
+}
+
+async fn where_an_apps_schedules_run_is_listed(
+    state: &DeviceContext<'_>,
+    device_id: &str,
+    device_key: &SigningKey,
+) {
+    let reports = schedule_service(state, device_id, device_key, "list-reports").await;
+    for event_id in ["list-device", "list-released", "list-returning"] {
+        release_schedule(state, event_id, device_id, "list-reports")
+            .await
+            .unwrap();
+    }
+    let answer = claim_schedules(state, &reports, &["list-device", "list-returning"])
+        .await
+        .unwrap();
+    let since = answer["server_time"].as_i64().unwrap();
+    let (resumes_at, _) = give_back_schedule(state, "list-returning").await;
+    let listed = |viewer: &'static str| async move {
+        let found = app_placements::placements(state, viewer, SCHEDULE_APP)
+            .await
+            .unwrap();
+        serde_json::to_value(found).unwrap()["schedules"]
+            .as_array()
+            .expect("a hub that manages devices always lists schedules")
+            .iter()
+            .filter(|entry| {
+                entry["event_id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("list-"))
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let released_at = listed("owner").await[1]["since"].clone();
+    assert_eq!(
+        listed("owner").await,
+        vec![
+            serde_json::json!({
+                "event_id": "list-device", "state": "device", "since": since, "seen_at": since,
+                "grant_id": reports.grant.grant_id, "device_id": device_id,
+                "placement_id": "list-reports"
+            }),
+            serde_json::json!({
+                "event_id": "list-released", "state": "released", "since": released_at,
+                "device_id": device_id, "placement_id": "list-reports"
+            }),
+            serde_json::json!({
+                "event_id": "list-returning", "state": "returning", "hub_resumes_at": resumes_at
+            }),
+        ]
+    );
+    assert_eq!(
+        listed("other").await,
+        vec![
+            serde_json::json!({
+                "event_id": "list-device", "state": "device", "since": since, "seen_at": since
+            }),
+            serde_json::json!({
+                "event_id": "list-released", "state": "released", "since": released_at
+            }),
+            serde_json::json!({
+                "event_id": "list-returning", "state": "returning", "hub_resumes_at": resumes_at
+            }),
+        ],
+        "a device outside the caller's device list is not named"
+    );
+}
+
+/// Sets the time the hub takes an event back, as if a grace period had run out.
+async fn grace_over(db: &DatabaseConnection, event_id: &str) {
+    db.execute_raw(sql(
+        r#"UPDATE "DeviceScheduleClaim" SET "resumeAt"=$3 WHERE "appId"=$1 AND "eventId"=$2"#,
+        [SCHEDULE_APP.into(), event_id.into(), (now() - 60).into()],
+    ))
+    .await
+    .unwrap();
+}
+
+/// A bot moves between the hub and a service as a schedule does: every row of the claim and of
+/// the release and give-back rules, with the doors' decision at each step. Nothing on the hub
+/// looks at the event's type.
+async fn a_bot_runs_in_one_place_like_a_schedule(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    device_id: &str,
+    device_key: &SigningKey,
+) {
+    let first = schedule_service(state, device_id, device_key, "bot-first").await;
+    let second = schedule_service(state, device_id, device_key, "bot-second").await;
+    let service = |placement: &str| Some((device_id.to_owned(), placement.to_owned()));
+
+    // Claim: nobody released it.
+    let answer = claim_schedules(state, &first, &["bot-tg"]).await.unwrap();
+    assert_eq!(answer["held"], held("bot-tg", "not_released"));
+    assert_eq!(stored_schedule(db, "bot-tg").await, None);
+    assert!(!skipped_by_the_hub(state, "bot-tg", None).await);
+
+    // Release to a service with nothing on the row; a claim by another service is held.
+    let (released, changed) = release_schedule(state, "bot-tg", device_id, "bot-second")
+        .await
+        .unwrap();
+    assert!(changed);
+    assert_eq!(released["state"], "released");
+    let answer = claim_schedules(state, &first, &["bot-tg"]).await.unwrap();
+    assert_eq!(answer["held"], held("bot-tg", "runs_elsewhere"));
+    assert!(
+        !skipped_by_the_hub(state, "bot-tg", None).await,
+        "a released bot nobody claimed is still the hub's"
+    );
+
+    // Re-targeted while nobody claimed it; the same service again changes nothing.
+    let (moved, changed) = release_schedule(state, "bot-tg", device_id, "bot-first")
+        .await
+        .unwrap();
+    assert!(changed);
+    assert_eq!(
+        stored_schedule(db, "bot-tg").await.unwrap().service,
+        service("bot-first")
+    );
+    assert_eq!(
+        release_schedule(state, "bot-tg", device_id, "bot-first")
+            .await
+            .unwrap(),
+        (moved, false)
+    );
+
+    // Claimed by the service it was released to; from now on the hub's doors step aside.
+    let started = now();
+    let answer = claim_schedules(state, &first, &["bot-tg"]).await.unwrap();
+    let since = answer["server_time"].as_i64().unwrap();
+    assert!((started..=now()).contains(&since));
+    assert_eq!(
+        answer,
+        serde_json::json!({
+            "server_time": since,
+            "claimed": [{ "event_id": "bot-tg", "since": since }],
+            "held": []
+        })
+    );
+    assert!(skipped_by_the_hub(state, "bot-tg", None).await);
+    assert_eq!(
+        release_schedule(state, "bot-tg", device_id, "bot-first")
+            .await
+            .unwrap(),
+        (
+            serde_json::json!({ "state": "device", "since": since }),
+            false
+        )
+    );
+
+    // A confirmation keeps when the approval got it and only moves `seenAt`.
+    let got_it = since - 5_000;
+    db.execute_raw(sql(
+        r#"UPDATE "DeviceScheduleClaim" SET "claimedAt"=$2,"seenAt"=$2 WHERE "appId"=$1 AND "eventId"=$3"#,
+        [SCHEDULE_APP.into(), got_it.into(), "bot-tg".into()],
+    ))
+    .await
+    .unwrap();
+    let confirmed = claim_schedules(state, &first, &["bot-tg"]).await.unwrap();
+    assert_eq!(confirmed["claimed"][0]["since"], got_it);
+    let stored = stored_schedule(db, "bot-tg").await.unwrap();
+    assert_eq!(stored.claimed_at, Some(got_it));
+    assert!(stored.seen_at.is_some_and(|seen_at| seen_at >= since));
+
+    // Another service cannot take it while the approval works.
+    assert_schedule_refusal(
+        release_schedule(state, "bot-tg", device_id, "bot-second").await,
+        "SCHEDULE_RUNS_ELSEWHERE",
+    );
+    let answer = claim_schedules(state, &second, &["bot-tg"]).await.unwrap();
+    assert_eq!(answer["held"], held("bot-tg", "runs_elsewhere"));
+
+    // The next approval of the same service takes it over at once.
+    end_approval(db, &first, now() - 10).await;
+    let renewed = schedule_service(state, device_id, device_key, "bot-first").await;
+    let before = now();
+    let answer = claim_schedules(state, &renewed, &["bot-tg"]).await.unwrap();
+    let taken_over = answer["claimed"][0]["since"].as_i64().unwrap();
+    assert!((before..=now()).contains(&taken_over));
+    assert_eq!(
+        stored_schedule(db, "bot-tg").await.unwrap().grant_id,
+        Some(renewed.grant.grant_id.clone())
+    );
+
+    // A set without it hands it back, confirmed by the device: release and claim end, and
+    // every service waits out the grace period, the last one too.
+    let before = now();
+    claim_schedules(state, &renewed, &[]).await.unwrap();
+    let handed_back = stored_schedule(db, "bot-tg").await.unwrap();
+    assert_eq!(
+        (
+            &handed_back.service,
+            &handed_back.grant_id,
+            handed_back.claimed_at
+        ),
+        (&None, &None, None)
+    );
+    assert!(after(handed_back.resume_at, before, 300));
+    assert!(skipped_by_the_hub(state, "bot-tg", None).await);
+    for placement in ["bot-first", "bot-second"] {
+        assert_schedule_refusal(
+            release_schedule(state, "bot-tg", device_id, placement).await,
+            "SCHEDULE_RETURNING",
+        );
+    }
+    grace_over(db, "bot-tg").await;
+    assert!(!skipped_by_the_hub(state, "bot-tg", None).await);
+    let (released, changed) = release_schedule(state, "bot-tg", device_id, "bot-second")
+        .await
+        .unwrap();
+    assert!(changed);
+    assert_eq!(released["state"], "released");
+
+    // Its approval stopped working: a release elsewhere hands it back first, and still waits
+    // for the long grace period, because the device may still answer as the bot.
+    release_schedule(state, "bot-dc", device_id, "bot-second")
+        .await
+        .unwrap();
+    claim_schedules(state, &second, &["bot-dc"]).await.unwrap();
+    let ended = now() - 10;
+    end_approval(db, &second, ended).await;
+    assert_schedule_refusal(
+        release_schedule(state, "bot-dc", device_id, "bot-first").await,
+        "SCHEDULE_RETURNING",
+    );
+    assert_eq!(
+        stored_schedule(db, "bot-dc").await.unwrap(),
+        StoredSchedule {
+            service: service("bot-second"),
+            grant_id: None,
+            claimed_at: None,
+            seen_at: None,
+            resume_at: Some(ended + 3_900),
+        }
+    );
+    assert!(skipped_by_the_hub(state, "bot-dc", None).await);
+
+    // Given back: never claimed, the hub had it all along; claimed, the hub waits out a
+    // storage lease, or less once the device retired every process.
+    assert_eq!(give_back_schedule(state, "bot-tg").await, (None, true));
+    assert_eq!(stored_schedule(db, "bot-tg").await, None);
+    for event_id in ["bot-gb", "bot-gb-retired"] {
+        release_schedule(state, event_id, device_id, "bot-first")
+            .await
+            .unwrap();
+    }
+    claim_schedules(state, &renewed, &["bot-gb", "bot-gb-retired"])
+        .await
+        .unwrap();
+    let before = now();
+    let (resumes_at, changed) = give_back_schedule(state, "bot-gb").await;
+    assert!(changed);
+    assert!(after(resumes_at, before, 3_900));
+    retire_processes(db, &renewed).await;
+    let before = now();
+    let (resumes_at, _) = give_back_schedule(state, "bot-gb-retired").await;
+    assert!(after(resumes_at, before, 300));
+
+    // The bot list asks once for every listed event and leaves out what a device runs or may
+    // still run; another app's event with the same id is another event.
+    let third = schedule_service(state, device_id, device_key, "bot-third").await;
+    for event_id in ["bot-held", "bot-released", "bot-over"] {
+        release_schedule(state, event_id, device_id, "bot-third")
+            .await
+            .unwrap();
+    }
+    claim_schedules(state, &third, &["bot-held", "bot-over"])
+        .await
+        .unwrap();
+    give_back_schedule(state, "bot-over").await;
+    grace_over(db, "bot-over").await;
+    let mut events = [
+        "bot-held",
+        "bot-dc",
+        "bot-gb",
+        "bot-released",
+        "bot-over",
+        "bot-none",
+    ]
+    .map(|id| (SCHEDULE_APP.to_owned(), id.to_owned()))
+    .to_vec();
+    events.push(("other-app".to_owned(), "bot-held".to_owned()));
+    let claimed = schedules::claimed_events(db, &events, now()).await.unwrap();
+    assert_eq!(
+        claimed,
+        ["bot-held", "bot-dc", "bot-gb"]
+            .map(|id| (SCHEDULE_APP.to_owned(), id.to_owned()))
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>()
+    );
+    let sinks = events
+        .iter()
+        .map(|(app_id, event_id)| {
+            (
+                event_id.clone(),
+                app_id.clone(),
+                "telegram".to_owned(),
+                true,
+            )
+        })
+        .collect::<Vec<_>>();
+    let listed = crate::routes::sink::trigger::without_device_bots(db, "telegram", sinks)
+        .await
+        .unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|(event_id, app_id, ..)| (app_id.as_str(), event_id.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (SCHEDULE_APP, "bot-released"),
+            (SCHEDULE_APP, "bot-over"),
+            (SCHEDULE_APP, "bot-none"),
+            ("other-app", "bot-held"),
+        ]
+    );
+
+    // The listing shows the bots as it shows schedules, beside the types this hub hands over.
+    let found = serde_json::to_value(
+        app_placements::placements(state, "owner", SCHEDULE_APP)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        found["event_types"],
+        serde_json::json!([
+            "http",
+            "simple_chat",
+            "rest",
+            "mcp",
+            "daemon",
+            "cron",
+            "api",
+            "quick_action",
+            "generic_form",
+            "telegram",
+            "discord"
+        ])
+    );
+    let states = found["schedules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| {
+            entry["event_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("bot-"))
+        })
+        .map(|entry| {
+            (
+                entry["event_id"].as_str().unwrap(),
+                entry["state"].as_str().unwrap(),
+                entry.get("hub_resumes_at").is_some(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        states,
+        [
+            ("bot-dc", "released", true),
+            ("bot-gb", "returning", true),
+            ("bot-gb-retired", "returning", true),
+            ("bot-held", "device", false),
+            ("bot-released", "released", false),
+        ]
+    );
+}
+
+/// Code can reach a hub before its migration: nothing was ever handed to a device then, so
+/// every schedule fires, revoking still works and the listing reads like an older hub's.
+async fn a_hub_without_the_schedules_table_runs_every_schedule_itself(
+    state: &DeviceContext<'_>,
+    db: &DatabaseConnection,
+    device_id: &str,
+    device_key: &SigningKey,
+) {
+    let service = schedule_service(state, device_id, device_key, "missing-table").await;
+    db.execute_unprepared(r#"DROP TABLE "DeviceScheduleClaim""#)
+        .await
+        .unwrap();
+    assert!(!schedules::table_exists(db).await.unwrap());
+    assert!(!skipped_by_the_hub(state, "skip-a", None).await);
+    assert!(
+        !skipped_by_the_hub(state, "bot-held", None).await,
+        "the bot doors behave as before"
+    );
+    let events = vec![(SCHEDULE_APP.to_owned(), "bot-held".to_owned())];
+    assert!(
+        schedules::claimed_events(db, &events, now())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let sinks = vec![(
+        "bot-held".to_owned(),
+        SCHEDULE_APP.to_owned(),
+        "discord".to_owned(),
+        true,
+    )];
+    assert_eq!(
+        crate::routes::sink::trigger::without_device_bots(db, "discord", sinks.clone())
+            .await
+            .unwrap(),
+        sinks
+    );
+    let found = serde_json::to_value(
+        app_placements::placements(state, "owner", SCHEDULE_APP)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(found.get("schedules").is_none());
+    assert_eq!(
+        found["event_types"],
+        serde_json::json!([
+            "http",
+            "simple_chat",
+            "rest",
+            "mcp",
+            "daemon",
+            "api",
+            "quick_action",
+            "generic_form"
+        ]),
+        "a hub that cannot record where a schedule or bot runs hands over neither"
+    );
+    let revoked = revoke_grant(state, "owner", device_id, &service.grant.grant_id)
+        .await
+        .unwrap();
+    assert_eq!(revoked.status, "revoked");
+}
+
+#[flow_like_types::tokio::test]
+#[ignore = "requires FLOW_LIKE_DEVICE_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+async fn a_schedule_runs_in_one_place_and_returns_to_the_hub() {
+    let schema = TestSchema::create().await;
+    let db = schema.db.clone();
+    let policy = standalone();
+    let state = context(&db, &policy);
+    db.execute_unprepared(&format!(
+        r#"INSERT INTO "App" VALUES ('{SCHEDULE_APP}','ACTIVE','{SCHEDULE_ROLE}'); INSERT INTO "Role" VALUES ('{SCHEDULE_ROLE}','{SCHEDULE_APP}',1); INSERT INTO "Membership" VALUES ('owner','{SCHEDULE_APP}','{SCHEDULE_ROLE}')"#
+    ))
+    .await
+    .unwrap();
+    let device_key = SigningKey::generate();
+    let (device_id, _, _) = seed_device(&db, &device_key).await;
+    assert!(schedules::table_exists(&db).await.unwrap());
+
+    a_device_claims_only_what_was_released_to_its_service(&state, &db, &device_id, &device_key)
+        .await;
+    a_release_moves_only_a_schedule_nobody_runs(&state, &db, &device_id, &device_key).await;
+    a_schedule_returns_to_the_hub_after_a_grace_period(&state, &db, &device_id, &device_key).await;
+    the_hub_skips_a_schedule_while_a_working_approval_holds_it(
+        &state,
+        &db,
+        &device_id,
+        &device_key,
+    )
+    .await;
+    where_an_apps_schedules_run_is_listed(&state, &device_id, &device_key).await;
+    a_bot_runs_in_one_place_like_a_schedule(&state, &db, &device_id, &device_key).await;
+    a_hub_without_the_schedules_table_runs_every_schedule_itself(
+        &state,
+        &db,
+        &device_id,
+        &device_key,
+    )
+    .await;
+    schema.drop().await;
 }

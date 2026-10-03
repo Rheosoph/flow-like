@@ -50,6 +50,23 @@ pub enum OnlineProjectAccess {
     ReadWrite,
 }
 
+/// What ends an approval first: the approval itself, the approver's Deploy permission on
+/// the device, or the device's access rules as a whole.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectiveLimit {
+    Approval,
+    SharingGrant,
+    AccessRules,
+}
+
+/// Why new leases of a read-and-write approval are issued read-only.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OnlineWriteBlock {
+    StorageFull,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CreateResourceGrantRequest {
@@ -89,6 +106,18 @@ pub struct ResourceGrantResponse {
     pub status: String,
     #[serde(default)]
     pub online_access: Option<OnlineProjectAccess>,
+    /// When the approval stops working; at or before now once it has ended. Reads only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_expires_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_limit: Option<EffectiveLimit>,
+    /// Reported only to the approver and to members who can read the project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online_write_blocked: Option<OnlineWriteBlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_by_user_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -103,6 +132,10 @@ pub struct BillingGrantResponse {
     pub reserved_micros: i64,
     pub expires_at: i64,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_by_user_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -570,6 +603,96 @@ mod tests {
         document.billing_grant_id = None;
         document.billing_authz_version = Some(1);
         assert!(sign_instance_registration(&document, &device).is_err());
+    }
+
+    fn approval() -> ResourceGrantResponse {
+        ResourceGrantResponse {
+            grant_id: "grant-1".into(),
+            device_id: "device-1".into(),
+            placement_id: "placement-1".into(),
+            deployment_id: "deployment-1".into(),
+            project_id: "project-1".into(),
+            app_id: Some("project-1".into()),
+            delegating_user_id: "delegator".into(),
+            authz_version: 1,
+            model_ids: vec!["model".into()],
+            max_instances: 1,
+            expires_at: NOW + 3600,
+            status: "active".into(),
+            online_access: Some(OnlineProjectAccess::ReadWrite),
+            effective_expires_at: None,
+            effective_limit: None,
+            online_write_blocked: None,
+            approved_by_user_id: None,
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn approval_read_fields_are_omitted_until_the_hub_knows_them() {
+        let grant = approval();
+        let billing = BillingGrantResponse {
+            billing_grant_id: "billing-1".into(),
+            grant_id: "grant-1".into(),
+            payer_id: "payer".into(),
+            authz_version: 1,
+            limit_micros: 100,
+            used_micros: 0,
+            reserved_micros: 0,
+            expires_at: NOW + 1800,
+            status: "active".into(),
+            approved_by_user_id: None,
+            created_at: None,
+        };
+        let older_grant = serde_json::to_value(&grant).unwrap();
+        let older_billing = serde_json::to_value(&billing).unwrap();
+        for key in [
+            "effective_expires_at",
+            "effective_limit",
+            "online_write_blocked",
+            "approved_by_user_id",
+            "created_at",
+        ] {
+            assert!(older_grant.get(key).is_none(), "{key}");
+            assert!(older_billing.get(key).is_none(), "{key}");
+        }
+        assert_eq!(
+            serde_json::from_value::<ResourceGrantResponse>(older_grant).unwrap(),
+            grant
+        );
+        assert_eq!(
+            serde_json::from_value::<BillingGrantResponse>(older_billing).unwrap(),
+            billing
+        );
+    }
+
+    #[test]
+    fn approval_read_fields_use_their_wire_names() {
+        let read = ResourceGrantResponse {
+            effective_expires_at: Some(NOW + 900),
+            effective_limit: Some(EffectiveLimit::SharingGrant),
+            online_write_blocked: Some(OnlineWriteBlock::StorageFull),
+            approved_by_user_id: Some("delegator".into()),
+            created_at: Some(NOW - 60),
+            ..approval()
+        };
+        let json = serde_json::to_value(&read).unwrap();
+        assert_eq!(json["effective_expires_at"], NOW + 900);
+        assert_eq!(json["effective_limit"], "sharing_grant");
+        assert_eq!(json["online_write_blocked"], "storage_full");
+        assert_eq!(json["approved_by_user_id"], "delegator");
+        assert_eq!(json["created_at"], NOW - 60);
+        assert_eq!(
+            serde_json::from_value::<ResourceGrantResponse>(json).unwrap(),
+            read
+        );
+        for (limit, wire) in [
+            (EffectiveLimit::Approval, "approval"),
+            (EffectiveLimit::SharingGrant, "sharing_grant"),
+            (EffectiveLimit::AccessRules, "access_rules"),
+        ] {
+            assert_eq!(serde_json::to_value(limit).unwrap(), wire);
+        }
     }
 
     #[test]

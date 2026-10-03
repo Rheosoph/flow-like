@@ -55,6 +55,10 @@ WORKDIR /app/apps/web
 RUN bun ../../scripts/sync-node-icons.ts
 COPY --from=device-crypto /app/apps/web/public/device-crypto /app/apps/web/public/device-crypto
 ARG TARGETARCH
+# TypeScript needs more than 4 GiB for the shared UI workspace. Keep the
+# limit configurable and reserve additional builder memory for native tooling.
+ARG NODE_MAX_OLD_SPACE_SIZE=8192
+ENV NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}"
 # Local/persistent builders retain compilation work across retries. The exported
 # /app/apps/web/out directory is outside the mount and remains in the image layer.
 RUN --mount=type=cache,id=flow-like-next-node24-next16-${TARGETARCH},target=/app/apps/web/.next,sharing=locked \

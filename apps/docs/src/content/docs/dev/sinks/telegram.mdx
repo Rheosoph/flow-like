@@ -12,6 +12,7 @@ The Telegram sink receives bot updates through long polling or a hosted webhook.
 | Style | Where it runs | Requirement |
 |---|---|---|
 | **Long polling** | Desktop adapter or Docker Compose sink service | Bot token and a continuously running process |
+| **Long polling on a device** | A service on a device you manage | Bot token entered when deploying; see [On a device](#on-a-device) |
 | **Webhook** | Hosted Flow-Like API | Public HTTPS URL and a registered Telegram webhook |
 
 Telegram permits one webhook configuration per bot. Delete the webhook before using the same bot token with long polling.
@@ -22,11 +23,11 @@ Telegram permits one webhook configuration per bot. Delete the webhook before us
 |---|---|
 | `bot_token` | Token issued by BotFather |
 | `webhook_secret` | Secret Telegram sends with each webhook request |
-| `chat_whitelist` | In desktop polling mode, allow only these chat IDs when non-empty |
-| `chat_blacklist` | In desktop polling mode, always ignore these chat IDs |
-| `respond_to_mentions` | Process group messages that mention the bot |
+| `chat_whitelist` | In polling mode on the desktop and on a device, allow only these chat IDs when non-empty |
+| `chat_blacklist` | In polling mode on the desktop and on a device, always ignore these chat IDs |
+| `respond_to_mentions` | In a group with a command prefix, also process messages that mention the bot or reply to one of its messages |
 | `respond_to_private` | Process private messages |
-| `command_prefix` | Prefix that targets the bot in a group; defaults to `/` |
+| `command_prefix` | Prefix that targets the bot in a group. The Events editor writes `/` for a new event; a config without the key, or with an empty value, has no prefix, and the bot then processes every group message. See [Message filtering](#message-filtering) |
 | `bot_name`, `bot_description` | Display information for the event configuration |
 
 ## Create and connect a bot
@@ -83,14 +84,44 @@ When a flow supports more than one delivery style, check the payload shape befor
 
 ## Message filtering
 
-Desktop polling applies filters in this order:
+In polling mode, the desktop app and a device apply the same filters in this order:
 
 1. Reject a chat excluded by the whitelist or blacklist.
-2. For a private chat, honor `respond_to_private`.
-3. For a group, accept the configured command prefix.
-4. Otherwise, accept a mention when `respond_to_mentions` is enabled.
+2. For a private chat, honor `respond_to_private`. A private chat needs no prefix and no mention.
+3. For a group without a command prefix, accept every message.
+4. For a group with a command prefix, accept a message whose text or caption starts with the prefix. A command addressed to another bot, such as `/start@otherbot`, does not match; one addressed to this bot does.
+5. Otherwise, accept a message that mentions the bot or replies to one of its messages when `respond_to_mentions` is enabled.
+
+No command prefix is set when `command_prefix` is missing, `null` or empty. `respond_to_mentions` changes nothing then, and a command for another bot is accepted like any other message. A prefix is compared exactly as saved: case counts and nothing is trimmed, so a single space is a prefix.
+
+Before these filters, both drop messages sent by bots. A device also drops a message without text, a caption or an image; see [On a device](#on-a-device).
+
+Telegram itself limits what a bot receives in a group. With [privacy mode](https://core.telegram.org/bots/features#privacy-mode) on, which is the default, Telegram delivers only commands, messages that mention the bot and replies to its messages. To receive every message, or messages with a prefix that does not start with `/`, turn privacy mode off with `/setprivacy` in BotFather and add the bot to the group again, or make the bot an admin of the group.
+
+A hosted webhook and the Docker Compose sink service apply none of these filters. Unless a device holds the bot, a webhook starts a run for every update Telegram delivers. The sink service starts one for every text message that a bot did not send, and reads `chat_id` and `command` instead: one chat ID, and a text the message must start with.
 
 Keep allowlists narrow for bots that can trigger privileged or costly workflows.
+
+## On a device
+
+A bot can be deployed to a device as part of a service. The service then reads the bot's messages by long polling: it connects out to Telegram and opens no port, so the device needs no public address and no webhook.
+
+Deploys strip the bot token from the event. The deploy wizard asks for it in its Settings step, or offers the token saved on the event, and keeps it as a secret of the service on the device. A run never receives the token: `local_session.bot_token` carries a handle of the form `device-bot:<event id>`, which the Telegram nodes of the same service turn back into the token. Every flow of that service can therefore act as the bot; none can read the token.
+
+A device applies these rules:
+
+- **One place.** Telegram lets one program read a bot's messages. For an online app, only someone who can edit the app's events can move a bot to a device; the deploy does it for them. The service connects once the hub has confirmed that it holds the bot, and a second device or service is refused. While a device holds the bot, the hub's webhook for it answers without starting a run. A bot that this computer's desktop app runs has to be stopped there before it can be deployed; the wizard does it in one click. Another computer's desktop app, another service or another program with the same token cannot be seen from here: Telegram tells the device, and the service's status reads "Another program uses this bot's token".
+- **The webhook.** At its first connect the service removes the bot's webhook, and it never does so again. When someone sets a webhook later, polling stops and the status says so. Taking the bot back from the device does not restore a webhook: set it again in the event editor.
+- **Which messages start a run.** A new message, so no edit, channel post, reaction or membership change, from a person, not a bot, with text, a caption or an image; a sticker or a location alone starts nothing on a device, while the desktop app considers such messages too. The message must then pass the filters of [Message filtering](#message-filtering), the same as on the desktop. The allow list (`chat_whitelist`) must be empty or contain the chat, and the deny list (`chat_blacklist`) must not contain it. A private chat needs `respond_to_private`. In a group without a `command_prefix` the bot answers every such message. With a prefix it answers when the text or caption starts with it, or when `respond_to_mentions` is on and it is mentioned or replied to; a command addressed to another bot, such as `/start@otherbot`, does not count as starting with the prefix, one addressed to this bot does. When two events of a service use the same bot, a message starts one run: of the first event in the service's list whose rules it passes.
+- **What the flow receives.** The `Chat` payload of the desktop adapter. `local_session` holds the handle, `bot_username`, `chat_id`, `chat_type` (`private`, `group`, `supergroup` or `channel`), `message_id`, `chat_title`, `reply_to_message_id` and `user`. `messages` holds the message it replies to, then the message itself, each as `{name}[id: {id}]: {text or caption}`. Images reach the flow as `data:` URLs: at most two per run (the message's and the replied-to message's), 2 MiB each and 256 MiB per bot and hour. An image beyond that is left out, the run starts without it, and the chat is told once a minute. Other files never reach the flow.
+- **Limits.** One run per chat at a time with four messages waiting, eight runs at once per service, ten runs a minute per chat and sixty per bot. A message over a limit is not answered, and its chat gets one notice a minute. A run is stopped after 30 minutes. A run that asks a question is cancelled, because nobody can answer it there.
+- **Answers.** The answer streams into one reply that is edited as the flow writes, then split into messages of at most 4,096 characters. Markdown becomes Telegram formatting, and files of the answer are sent as links.
+- **Restarts and updates.** Telegram keeps a bot's messages for a day. After a start the service answers the ones that are at most 15 minutes old by the device's clock and skips older ones. The service records which update it handled before it starts a run, so no message is answered twice across restarts and updates. A run that a stop cuts off is not started again, and messages still waiting behind it are not answered; their chats get one notice to send the message again. A device whose clock is ahead skips fresh messages for a while after a start.
+- **Waiting for a reply.** **Wait For Reply**, **Send and Wait**, **Wait For Callback** and **Confirmation Dialog** take their update from the service's own connection instead of polling Telegram themselves, and a message such a node takes starts no run. Their wait ends when the node's timeout passes; on the desktop and on a device alike, a node stops reading updates when its wait ends.
+- **Connection problems.** A refused token leaves the service running and stops the bot until the service restarts, and the status names the fix. Network errors are retried after a pause that grows from 1 second to a minute. While another program reads the bot, or a webhook is set, the service tries again once a minute.
+- **Settings.** The lists hold at most 256 chat IDs, the prefix at most 16 characters; a deploy refuses anything else. A missing, `null` or empty `command_prefix` means no prefix. The device runs the event version it was deployed with, so edits in Events take effect with the next update of the service. A token of another bot works too: the service starts over with that bot.
+
+Anyone who can message a bot with an empty allow list can start runs. Every run counts towards the service's usage, and hosted models spend from its spending limit. The run's input, images included, is part of the service's run records on the device. Runs use the service's cloud access and carry no personal access token and no signed-in provider tokens, so a flow that needs a signed-in provider works on the desktop and fails on a device. The token stays on the device when its cloud access ends: to cut a device off for certain, revoke the token with `/revoke` in BotFather.
 
 ## Troubleshooting
 
@@ -99,5 +130,8 @@ Keep allowlists narrow for bots that can trigger privileged or costly workflows.
 | Polling receives nothing | Remove the bot's webhook and keep the polling process running |
 | Webhook returns `401` | Secret configured on both Telegram and the event |
 | Webhook returns `403` | Proxy preserves the real client address and Telegram IP validation can see it |
-| Group messages are ignored | Prefix, mention setting, and chat filters |
+| Group messages are ignored | Chat filters, then the command prefix and `respond_to_mentions`, and Telegram's privacy mode; see [Message filtering](#message-filtering) |
 | Private messages are ignored | `respond_to_private` |
+| A device reports that Telegram refused the token | Enter a new token in the service's configuration |
+| A device reports that another program uses the token | Stop the bot in the other place: another computer's desktop app, another service, or a program outside Flow-Like |
+| A device reports that Telegram sends the messages to a webhook | Remove the webhook in the event editor, then restart the service |

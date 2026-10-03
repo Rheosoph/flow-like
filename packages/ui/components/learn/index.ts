@@ -10,6 +10,11 @@ export { LeaderboardTable } from "./leaderboard-table";
 export { LearningPathCard } from "./learning-path-card";
 export { LessonActionButton, buildLessonAction } from "./lesson-action-button";
 export type { LessonActionDispatcher } from "./lesson-action-button";
+export {
+	LessonAppPackages,
+	useLessonPackageCheckouts,
+} from "./lesson-app-packages";
+export type { LessonAppCopy } from "./lesson-app-packages";
 export { LessonContent } from "./lesson-content";
 export {
 	LESSON_MODE_LAYOUTS,

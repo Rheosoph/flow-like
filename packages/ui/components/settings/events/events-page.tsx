@@ -19,7 +19,6 @@ import {
 	CardHeader,
 	CardTitle,
 	Dialog,
-	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogHeader,
@@ -120,6 +119,10 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import {
+	eventTriggerConfig,
+	mergeEventTriggerConfig,
+} from "../../../lib/event-source";
 import { EventAttentionStrip } from "./event-attention-strip";
 import { EventCanary } from "./event-canary";
 import { EventEditorHeader } from "./event-editor-header";
@@ -142,6 +145,39 @@ function errorMessage(error: unknown): string {
 	if (error instanceof Error) return error.message;
 	if (typeof error === "string") return error;
 	return "Unexpected error";
+}
+
+function newEventDefinition(
+	draft: Partial<IEvent>,
+	priority: number,
+	id = createId(),
+): IEvent {
+	const now = {
+		secs_since_epoch: Math.floor(Date.now() / 1000),
+		nanos_since_epoch: 0,
+	};
+	return {
+		id,
+		name: draft.name?.trim() || "New Event",
+		description: draft.description ?? "",
+		active: true,
+		board_id: draft.board_id ?? "",
+		board_version: draft.board_version ?? undefined,
+		config: draft.config ?? [],
+		created_at: now,
+		updated_at: now,
+		event_version: [0, 0, 0],
+		node_id: draft.node_id ?? "",
+		variables: draft.variables ?? {},
+		event_type: draft.event_type ?? "default",
+		default_page_id: draft.default_page_id,
+		route: draft.route,
+		priority,
+		canary: null,
+		notes: null,
+		execution_mode: draft.execution_mode ?? IEventExecutionMode.Local,
+		exposure: draft.exposure ?? IEventExposure.Public,
+	};
 }
 
 // Helper function to check if an event requires a sink based on eventMapping
@@ -229,6 +265,14 @@ export default function EventsPage({
 		setIsCreateDialogOpen(true);
 	}, [newEventTemplate, newEventTemplateKey]);
 	const [isCreating, setIsCreating] = useState(false);
+	const [creationBusy, setCreationBusy] = useState(false);
+	const [deviceEventId, setDeviceEventId] = useState(createId);
+	useEffect(() => {
+		if (!isCreateDialogOpen) setDeviceEventId(createId());
+	}, [isCreateDialogOpen]);
+	const [pendingCreateOAuthTokens, setPendingCreateOAuthTokens] = useState<
+		Record<string, IOAuthToken> | undefined
+	>();
 	const [editingEvent, setEditingEvent] = useState<IEvent | null>(null);
 	const [showCreatePatDialog, setShowCreatePatDialog] = useState(false);
 	const [pendingEvent, setPendingEvent] = useState<IEvent | null>(null);
@@ -319,34 +363,7 @@ export default function EventsPage({
 					? selectedPatOrOAuthTokens
 					: undefined;
 
-			const event: IEvent = {
-				id: createId(),
-				name: newEvent.name ?? "New Event",
-				description: newEvent.description ?? "",
-				active: true,
-				board_id: newEvent.board_id ?? "",
-				board_version: newEvent.board_version ?? undefined,
-				config: newEvent.config ?? [],
-				created_at: {
-					secs_since_epoch: Math.floor(Date.now() / 1000),
-					nanos_since_epoch: 0,
-				},
-				updated_at: {
-					secs_since_epoch: Math.floor(Date.now() / 1000),
-					nanos_since_epoch: 0,
-				},
-				event_version: [0, 0, 0],
-				node_id: newEvent.node_id ?? "",
-				variables: newEvent.variables ?? {},
-				event_type: newEvent.event_type ?? "default",
-				default_page_id: (newEvent as any)?.default_page_id ?? undefined,
-				priority: events.data?.length ?? 0,
-				canary: null,
-				notes: null,
-				execution_mode:
-					(newEvent as any)?.execution_mode ?? IEventExecutionMode.Local,
-				exposure: (newEvent as any)?.exposure ?? IEventExposure.Public,
-			};
+			const event = newEventDefinition(newEvent, eventList.length);
 
 			let savedEvent: IEvent | null = null;
 			try {
@@ -369,7 +386,8 @@ export default function EventsPage({
 							if (requiresSink && !isOffline && !selectedPat) {
 								// Store the event and route path, then show PAT dialog
 								setPendingEvent(event);
-								setPendingRoutePath((newEvent as any)?.path ?? null);
+								setPendingCreateOAuthTokens(oauthTokens);
+								setPendingRoutePath(newEvent.path ?? null);
 								setShowCreatePatDialog(true);
 								return;
 							}
@@ -394,7 +412,7 @@ export default function EventsPage({
 					!!savedEvent.default_page_id
 				) {
 					try {
-						const path = normalizeRoutePath((newEvent as any)?.path);
+						const path = normalizeRoutePath(newEvent.path);
 						await backend.routeState.setRoute(id, path, savedEvent.id);
 						await invalidate(backend.routeState.getRoutes, [id]);
 					} catch (error) {
@@ -410,10 +428,12 @@ export default function EventsPage({
 				toast.error(`Failed to create event: ${errorMessage(error)}`);
 			} finally {
 				if (savedEvent) {
+					setCreationBusy(false);
 					setIsCreateDialogOpen(false);
 					setShowCreatePatDialog(false);
 					setPendingEvent(null);
 					setPendingRoutePath(null);
+					setPendingCreateOAuthTokens(undefined);
 				}
 				setIsCreating(false);
 			}
@@ -421,6 +441,7 @@ export default function EventsPage({
 		[
 			id,
 			events,
+			eventList.length,
 			backend.eventState,
 			backend.boardState,
 			backend.routeState,
@@ -431,6 +452,29 @@ export default function EventsPage({
 			invalidate,
 			isCreating,
 			writeDeniedMessage,
+		],
+	);
+
+	const handleCreateDeviceEvent = useCallback(
+		async (draft: Partial<IEvent>) => {
+			if (!id) throw new Error("App ID is required to create an event");
+			if (!canWriteEvents) throw new Error(writeDeniedMessage);
+			return backend.eventState.upsertEvent(
+				id,
+				newEventDefinition(draft, eventList.length, deviceEventId),
+				undefined,
+				undefined,
+				undefined,
+				{ source: "device" },
+			);
+		},
+		[
+			id,
+			canWriteEvents,
+			writeDeniedMessage,
+			backend.eventState,
+			eventList.length,
+			deviceEventId,
 		],
 	);
 
@@ -530,6 +574,7 @@ export default function EventsPage({
 						pendingEvent,
 						undefined,
 						selectedPat,
+						pendingCreateOAuthTokens,
 					);
 
 					// Create route for UI events - use savedEvent.id since backend may generate new ID
@@ -550,12 +595,15 @@ export default function EventsPage({
 					await events.refetch();
 				} catch (error) {
 					console.error("Failed to create event with PAT:", error);
+					toast.error(`Failed to create event: ${errorMessage(error)}`);
 				} finally {
 					if (savedEvent) {
+						setCreationBusy(false);
 						setIsCreateDialogOpen(false);
 						setShowCreatePatDialog(false);
 						setPendingEvent(null);
 						setPendingRoutePath(null);
+						setPendingCreateOAuthTokens(undefined);
 					}
 					setIsCreating(false);
 				}
@@ -563,6 +611,7 @@ export default function EventsPage({
 		},
 		[
 			pendingEvent,
+			pendingCreateOAuthTokens,
 			pendingRoutePath,
 			id,
 			backend.eventState,
@@ -681,32 +730,50 @@ export default function EventsPage({
 				</div>
 			</div>
 
-			<Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-				<DialogContent className="max-w-2xl">
-					<DialogHeader>
-						<DialogTitle>{t("createNewEvent", "Create New Event")}</DialogTitle>
+			<Dialog
+				open={isCreateDialogOpen}
+				onOpenChange={(open) => {
+					if (!creationBusy) setIsCreateDialogOpen(open);
+				}}
+			>
+				<DialogContent
+					className="w-[calc(100vw-2rem)] max-w-[1100px] gap-0 overflow-hidden p-0 sm:max-w-[1100px]"
+					showCloseButton={!creationBusy}
+				>
+					<DialogHeader className="border-b px-5 py-5 pr-12 sm:px-7">
+						<DialogTitle>{t("newEvent", "New event")}</DialogTitle>
 						<DialogDescription>
-							{`Configure a new event with its properties and settings`}
+							{t(
+								"chooseEventStartAndDestination",
+								"Choose what starts your flow and where it runs.",
+							)}
 						</DialogDescription>
 					</DialogHeader>
-					<DialogBody>
-						{id && (
-							<EventForm
-								eventConfig={eventMapping}
-								uiEventTypes={uiEventTypes}
-								appId={id}
-								event={newEventTemplate as IEvent | undefined}
-								onSubmit={handleCreateEvent}
-								onCancel={() => setIsCreateDialogOpen(false)}
-								isSubmitting={isCreating}
-								tokenStore={tokenStore}
-								consentStore={consentStore}
-								hub={hub}
-								onStartOAuth={onStartOAuth}
-								onRefreshToken={onRefreshToken}
-							/>
-						)}
-					</DialogBody>
+					{id && (
+						<EventForm
+							eventConfig={eventMapping}
+							uiEventTypes={uiEventTypes}
+							appId={id}
+							deviceEventId={deviceEventId}
+							event={newEventTemplate as IEvent | undefined}
+							onSubmit={handleCreateEvent}
+							onCreateDevice={handleCreateDeviceEvent}
+							onNavigateDeployment={(href) => router.push(href)}
+							onDeploymentComplete={() => {
+								setCreationBusy(false);
+								setIsCreateDialogOpen(false);
+								void events.refetch();
+							}}
+							onBusyChange={setCreationBusy}
+							onCancel={() => setIsCreateDialogOpen(false)}
+							isSubmitting={isCreating}
+							tokenStore={tokenStore}
+							consentStore={consentStore}
+							hub={hub}
+							onStartOAuth={onStartOAuth}
+							onRefreshToken={onRefreshToken}
+						/>
+					)}
 				</DialogContent>
 			</Dialog>
 
@@ -947,8 +1014,17 @@ function EventConfiguration({
 		pendingOAuthTokens,
 	]);
 
-	const handleInputChange = (field: keyof IEvent, value: any) => {
-		setFormData((prev) => ({ ...prev, [field]: value }));
+	const handleInputChange = <K extends keyof IEvent>(
+		field: K,
+		value: IEvent[K],
+	) => {
+		setFormData((prev) => ({
+			...prev,
+			[field]:
+				field === "config"
+					? mergeEventTriggerConfig(prev.config, value as number[])
+					: value,
+		}));
 	};
 
 	const checkRequiresSink = (): boolean => {
@@ -1448,7 +1524,8 @@ function EventConfiguration({
 	);
 
 	const parsedConfig = useMemo(
-		() => parseUint8ArrayToJson(formData.config ?? []) ?? {},
+		() =>
+			parseUint8ArrayToJson(eventTriggerConfig(formData.config ?? [])) ?? {},
 		[formData.config],
 	);
 
@@ -1792,7 +1869,7 @@ function EventConfiguration({
 										convertJsonToUint8Array({
 											...parsedConfig,
 											native_integration: settings,
-										}),
+										}) ?? formData.config,
 									);
 								}}
 							/>
@@ -2140,7 +2217,7 @@ function EventConfiguration({
 													onValueChange={(value) => {
 														handleInputChange("board_id", value);
 														handleInputChange("board_version", undefined);
-														handleInputChange("node_id", undefined);
+														handleInputChange("node_id", "");
 													}}
 												>
 													<SelectTrigger>
@@ -2175,7 +2252,7 @@ function EventConfiguration({
 																		value.split(".").map(Number),
 																	),
 														);
-														handleInputChange("node_id", undefined);
+														handleInputChange("node_id", "");
 													}}
 												>
 													<SelectTrigger>
@@ -2630,7 +2707,7 @@ function EventConfiguration({
 										convertJsonToUint8Array({
 											...parsedConfig,
 											frontend_hosting,
-										}),
+										}) ?? formData.config,
 									)
 								}
 								onEventChange={(change) =>
@@ -2683,7 +2760,7 @@ function EventConfiguration({
 																	parsedConfig.native_integration,
 															}
 														: {}),
-												}),
+												}) ?? formData.config,
 											);
 										}}
 									/>

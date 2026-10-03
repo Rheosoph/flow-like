@@ -10,6 +10,7 @@ import {
 } from "@flow-like/widget-sdk";
 import {
 	isDesktopWidgetGrant,
+	isWebWidgetAccess,
 	isWebWidgetGrant,
 	isWidgetRuntimeComponent,
 } from "./micro-widget-policy";
@@ -117,12 +118,16 @@ export interface WebMicroWidgetFrameParts {
 	grant: string | null;
 	/** Runtime component from the same mint; only ever next to a grant. */
 	runtime?: string | null;
+	/** Viewer access token of a package whose sandbox does not load anonymously. */
+	access?: string | null;
 }
 
 /**
  * API path (relative to the backend `/api/v1` base, see `getApiUrl`) of the
  * web wrapper: `frame/{wid}/{grant|0}`, or `frame/{wid}/{grant}~{runtime}`
- * when the grant carries runtime sources.
+ * when the grant carries runtime sources. An access token is its own `~{access}`
+ * segment after the version, so the wrapper's relative child and asset URLs
+ * carry it too.
  */
 export function buildWebMicroWidgetFramePath({
 	packageId,
@@ -130,6 +135,7 @@ export function buildWebMicroWidgetFramePath({
 	widgetId,
 	grant,
 	runtime,
+	access,
 }: WebMicroWidgetFrameParts): string {
 	const subject = `${packageId}@${packageVersion}/${widgetId}`;
 	let segment = grantSegment(grant, isWebWidgetGrant, subject);
@@ -141,11 +147,20 @@ export function buildWebMicroWidgetFramePath({
 		}
 		segment = `${segment}~${runtime}`;
 	}
+	let accessSegment = "";
+	if (access !== undefined && access !== null) {
+		if (!isWebWidgetAccess(access)) {
+			throw new Error(
+				`Refusing to build a frame URL for ${subject}: malformed access token`,
+			);
+		}
+		accessSegment = `/~${access}`;
+	}
 	return `registry/package/${encodeURIComponent(
 		packageId,
 	)}/widget-sandbox/${encodeURIComponent(
 		packageVersion,
-	)}/frame/${encodeURIComponent(widgetId)}/${segment}`;
+	)}${accessSegment}/frame/${encodeURIComponent(widgetId)}/${segment}`;
 }
 
 const WIDGET_SERVING_HOST = "flow-widget.localhost";

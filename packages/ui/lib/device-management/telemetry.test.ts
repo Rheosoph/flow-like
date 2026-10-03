@@ -1,11 +1,15 @@
 import { expect, test } from "bun:test";
 import { base64url } from "./crypto";
+import type { ArchiveRecordingStatus } from "./model/types";
 import {
 	type ManagementCall,
 	acknowledgeGroupTelemetryThrough,
 	applyTelemetryPolicy,
 	digestText,
+	parseArchiveRecordingStatus,
+	readArchiveRoster,
 	readTelemetryChunks,
+	readTelemetryRoster,
 	readerPosition,
 } from "./telemetry";
 import type { BrowserMlsEndpoint, ManagementResponse } from "./types";
@@ -264,4 +268,98 @@ test("a prefix-evicting agent clears the backlog with one acknowledgement", asyn
 	expect(
 		device.commands.filter((command) => command.type === "telemetry_read"),
 	).toHaveLength(0);
+});
+
+function rosterDevice(text: string, extras: Record<string, unknown>) {
+	const bytes = new TextEncoder().encode(text);
+	const commands: Record<string, unknown>[] = [];
+	const call: ManagementCall = async (command) => {
+		commands.push(command);
+		const offset = Number(command.offset);
+		return {
+			operation_id: "id",
+			state: "completed",
+			result: {
+				available: true,
+				offset,
+				total: bytes.length,
+				digest: await digestText(text),
+				chunk: base64url(bytes.slice(offset, offset + 4096)),
+				...(offset === 0 ? extras : {}),
+			},
+		};
+	};
+	return { call, commands };
+}
+
+test("roster reads keep the readers and owner bindings of the first chunk", async () => {
+	const text = JSON.stringify({ roster: "r".repeat(5000) });
+	const binding = {
+		endpoint_id: "browser-1",
+		controller_key_thumbprint: "t".repeat(43),
+	};
+	const { call, commands } = rosterDevice(text, {
+		confirmed_readers: ["browser-1"],
+		reader_bindings: [binding],
+	});
+	expect(await readTelemetryRoster(call, "device")).toEqual({
+		text,
+		confirmed_readers: ["browser-1"],
+		reader_bindings: [binding],
+	});
+	expect(commands.map((command) => command.offset)).toEqual([0, 4096]);
+	expect(commands[0]).toMatchObject({
+		type: "telemetry_roster_read",
+		scope: "device",
+	});
+	const older = rosterDevice(text, {});
+	const read = await readTelemetryRoster(older.call, "device");
+	expect(read.text).toBe(text);
+	expect(read.confirmed_readers).toBeUndefined();
+	expect(read.reader_bindings).toBeUndefined();
+	const malformed = rosterDevice(text, {
+		reader_bindings: [{ ...binding, controller_key_thumbprint: "short" }],
+	});
+	expect(
+		(await readTelemetryRoster(malformed.call, "device")).reader_bindings,
+	).toBeUndefined();
+});
+
+test("archive roster reads report whether the device is recording", async () => {
+	const status: ArchiveRecordingStatus = {
+		state: "paused",
+		reason: "quota_reached",
+		since: 1700,
+	};
+	const { call, commands } = rosterDevice("{}", { status });
+	expect(await readArchiveRoster(call, "device", "logs")).toEqual({
+		text: "{}",
+		status,
+	});
+	expect(commands[0]).toMatchObject({
+		type: "archive_roster_read",
+		scope: "device",
+		kind: "logs",
+	});
+	const empty: ManagementCall = async () => ({
+		operation_id: "id",
+		state: "completed",
+		result: {
+			available: false,
+			status: { state: "paused", reason: "tier_without_history", since: 5 },
+		},
+	});
+	expect(await readArchiveRoster(empty, "device", "metrics")).toEqual({
+		text: null,
+		status: { state: "paused", reason: "tier_without_history", since: 5 },
+	});
+	expect(
+		parseArchiveRecordingStatus({ status: { state: "stopped", since: 1 } }),
+	).toBeUndefined();
+	expect(parseArchiveRecordingStatus({})).toBeUndefined();
+	expect(
+		parseArchiveRecordingStatus({
+			status: { state: "recording", reason: null, since: 0 },
+		}),
+	).toEqual({ state: "recording", reason: null, since: 0 });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import { asArray } from "../lib/response-shape";
 import type { IStorageItem } from "../lib/schema/storage/storage-item";
@@ -14,14 +14,16 @@ import {
 	storageTreeEntry,
 } from "../lib/storage-tree";
 import { useBackend, useBackendReady } from "../state/backend-state";
-import { useInvalidateInvoke } from "./use-invoke";
+import type { IStorageListOptions } from "../state/backend-state/storage-state";
 
 const STORAGE_TREE_STALE_MS = 30 * 1000;
+const STORAGE_REFRESH_CONCURRENCY = 4;
 const NO_PREFIXES: ReadonlySet<string> = new Set<string>();
 
 type ListStorageItems = (
 	appId: string,
 	prefix: string,
+	options?: IStorageListOptions,
 ) => Promise<IStorageItem[]>;
 
 export interface IStorageDirectory {
@@ -74,7 +76,7 @@ export function useStorageTree({
 }: IStorageTreeOptions): IStorageTree {
 	const backend = useBackend();
 	const backendReady = useBackendReady();
-	const invalidate = useInvalidateInvoke();
+	const queryClient = useQueryClient();
 
 	const scopeKey = `${scope}:${appId}`;
 	const [expansion, setExpansion] = useState<{
@@ -205,14 +207,74 @@ export function useStorageTree({
 
 	const refetch = useCallback(
 		async (prefix?: string) => {
-			// Keyed on the app alone when no prefix is given: prefix matching then
-			// also reaches listings that are still cached under a folder the user
-			// has since collapsed, which would otherwise be replayed stale.
-			const args =
-				prefix === undefined ? [appId] : [appId, normalizePrefix(prefix)];
-			await invalidate<IStorageItem[], string[]>(listStorageItems, args);
+			const target = prefix === undefined ? undefined : normalizePrefix(prefix);
+			const queries = queryClient.getQueryCache().findAll({
+				predicate: ({ queryKey }) => {
+					if (
+						queryKey[1] !== appId ||
+						typeof queryKey[2] !== "string" ||
+						(target !== undefined && queryKey[2] !== target)
+					)
+						return false;
+					if (queryKey.length === 3) return queryKey[0] === queryName;
+					// StorageSystem wraps both APIs in a function named listStorageItems.
+					// Only its established shared/user scopes use this tree's API.
+					return (
+						queryKey.length === 4 &&
+						queryKey[0] === "listStorageItems" &&
+						queryKey[3] === (scope === "user" ? "user" : "shared")
+					);
+				},
+			});
+			const targets = queries.map(({ queryKey }) => queryKey);
+			if (target !== undefined && !targets.some((key) => key.length === 3)) {
+				targets.push([queryName, appId, target]);
+			}
+
+			// Refresh collapsed folders too. Supply the query function explicitly:
+			// another observer of this key may have a cacheable listing function.
+			for (
+				let offset = 0;
+				offset < targets.length;
+				offset += STORAGE_REFRESH_CONCURRENCY
+			) {
+				await Promise.allSettled(
+					targets
+						.slice(offset, offset + STORAGE_REFRESH_CONCURRENCY)
+						.map(async (queryKey) => {
+							await queryClient.cancelQueries({ queryKey, exact: true });
+							await queryClient.invalidateQueries({
+								queryKey,
+								exact: true,
+								refetchType: "none",
+							});
+							if (!canList) return;
+							await queryClient.fetchQuery({
+								queryKey,
+								queryFn: () =>
+									listStorageItems.call(
+										storageState,
+										appId,
+										queryKey[2] as string,
+										{
+											refresh: true,
+										},
+									),
+								staleTime: 0,
+							});
+						}),
+				);
+			}
 		},
-		[appId, invalidate, listStorageItems],
+		[
+			appId,
+			canList,
+			listStorageItems,
+			queryClient,
+			queryName,
+			scope,
+			storageState,
+		],
 	);
 
 	return useMemo(

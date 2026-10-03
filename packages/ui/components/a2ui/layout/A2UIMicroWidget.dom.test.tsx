@@ -1,10 +1,20 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	setDefaultTimeout,
+	spyOn,
+	test,
+} from "bun:test";
 import { Window } from "happy-dom";
 import { act, createElement } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import type { AppPackageWidget } from "../../../lib/package-widgets";
 import type { FlwEnvelope } from "../micro-widget-host";
 import {
+	type WidgetAccessRequest,
+	type WidgetAccessResponse,
 	type WidgetGrantRequest,
 	type WidgetGrantResponse,
 	WidgetPolicyChangedError,
@@ -26,6 +36,17 @@ let restoreBackend: (() => void) | undefined;
 let readyTimeout: (() => void) | undefined;
 const cleanup: (() => void)[] = [];
 
+interface ArmedTimer {
+	delay: number;
+	handle: unknown;
+	run: () => void;
+}
+/** Timers of a second or more that are neither fired nor cleared; tests fire them instead of waiting. */
+const armedTimers: ArmedTimer[] = [];
+
+// The first render imports the widget graph (about 5 s cold), past bun's 5 s default on a loaded machine.
+setDefaultTimeout(60_000);
+
 const SOURCE = "registry:hub.example.com";
 const BUNDLE_HASH = "b".repeat(64);
 const DIGEST_A = `sha256:${"a".repeat(64)}`;
@@ -39,14 +60,45 @@ beforeEach(async () => {
 	registryState = undefined;
 	restoreBackend = undefined;
 	readyTimeout = undefined;
+	armedTimers.length = 0;
 	const scheduleTimeout = globalThis.setTimeout;
+	const cancelTimeout = globalThis.clearTimeout;
+	const disarm = (timer: ArmedTimer | undefined) => {
+		const index = timer ? armedTimers.indexOf(timer) : -1;
+		if (index !== -1) armedTimers.splice(index, 1);
+	};
 	const timerSpy = spyOn(globalThis, "setTimeout");
 	timerSpy.mockImplementation(((...args: Parameters<typeof setTimeout>) => {
 		const [callback, delay, ...callbackArgs] = args;
 		if (delay === 10_000) readyTimeout = () => callback(...callbackArgs);
-		return scheduleTimeout(...args);
+		if (typeof delay !== "number" || delay < 1_000) {
+			return scheduleTimeout(...args);
+		}
+		const fire = () => {
+			disarm(timer);
+			callback(...callbackArgs);
+		};
+		const handle = scheduleTimeout(fire, delay);
+		const timer: ArmedTimer = {
+			delay,
+			handle,
+			run: () => {
+				cancelTimeout(handle);
+				fire();
+			},
+		};
+		armedTimers.push(timer);
+		return handle;
 	}) as typeof setTimeout);
-	restoreTimers = () => timerSpy.mockRestore();
+	const clearSpy = spyOn(globalThis, "clearTimeout");
+	clearSpy.mockImplementation(((...args: Parameters<typeof clearTimeout>) => {
+		disarm(armedTimers.find((timer) => timer.handle === args[0]));
+		cancelTimeout(...args);
+	}) as typeof clearTimeout);
+	restoreTimers = () => {
+		timerSpy.mockRestore();
+		clearSpy.mockRestore();
+	};
 	window = new Window({ url: "https://local/use" });
 	const globals = {
 		document: window.document,
@@ -271,6 +323,58 @@ async function renderWidget(
 
 const frame = () => host.querySelector("iframe");
 const frameSrc = () => frame()?.getAttribute("src") ?? null;
+
+/** The URL of every document a frame is given from now on, in order. */
+function recordDocuments(): string[] {
+	const urls: string[] = [];
+	const prototype = window.HTMLIFrameElement.prototype as unknown as {
+		setAttribute: (name: string, value: string) => void;
+	};
+	const setAttribute = prototype.setAttribute;
+	Object.defineProperty(prototype, "setAttribute", {
+		configurable: true,
+		writable: true,
+		value(this: unknown, name: string, value: string) {
+			if (name === "src") urls.push(value);
+			setAttribute.call(this, name, value);
+		},
+	});
+	cleanup.push(() => Reflect.deleteProperty(prototype, "setAttribute"));
+	return urls;
+}
+
+/**
+ * Completes the handshake for the mounted frame and returns how it speaks
+ * afterwards. The host only accepts messages whose source is its own iframe
+ * window (the wrapper, which relays for the widget).
+ */
+async function openFrameChannel() {
+	const { createEnvelope } = await import("../micro-widget-host");
+	const frameWindow = frame()?.contentWindow;
+	if (!frameWindow) throw new Error("The widget iframe has no window");
+	const posted = spyOn(frameWindow, "postMessage").mockImplementation(() => {});
+	cleanup.push(() => posted.mockRestore());
+	const fromFrame = (data: unknown) =>
+		act(async () => {
+			window.dispatchEvent(
+				new window.MessageEvent("message", {
+					data,
+					source: frameWindow as never,
+				}),
+			);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		});
+
+	await fromFrame(createEnvelope("hello", {}, "", "sales-chart"));
+	const init = posted.mock.calls
+		.map(([envelope]) => envelope as FlwEnvelope)
+		.find((envelope) => envelope.type === "init");
+	if (!init) throw new Error("The host did not send init to the iframe");
+	return (type: "event" | "ready", payload: unknown) =>
+		fromFrame(
+			createEnvelope(type, payload as never, init.nonce, "sales-chart"),
+		);
+}
 const grantStatus = () =>
 	host.querySelector("[data-widget-grant]")?.getAttribute("data-widget-grant");
 const bodyText = () => window.document.body.textContent ?? "";
@@ -291,6 +395,17 @@ async function sleep(ms: number) {
 	await act(async () => {
 		await new Promise((resolve) => setTimeout(resolve, ms));
 	});
+}
+
+const armed = (delay: number) =>
+	armedTimers.filter((timer) => timer.delay === delay);
+
+/** Fires the newest timer armed for `delay`, as if that time had passed. */
+async function runTimer(delay: number) {
+	const timer = armed(delay).at(-1);
+	if (!timer) throw new Error(`No ${delay} ms timer is armed`);
+	await act(async () => timer.run());
+	await settle();
 }
 
 /** Allow controls ignore activation for a moment after they appear (§14.5.3). */
@@ -562,12 +677,10 @@ describe("micro widget reload in the page builder", () => {
 describe("micro widget event dispatch", () => {
 	test("an iframe event payload cannot change the targets of the page actions it starts", async () => {
 		stubRegistry();
-		const [{ createEnvelope }, { appGlobalState, pageLocalState }, uiState] =
-			await Promise.all([
-				import("../micro-widget-host"),
-				import("../../../lib/idb-storage"),
-				import("../../../db/ui-state-db"),
-			]);
+		const [{ appGlobalState, pageLocalState }, uiState] = await Promise.all([
+			import("../../../lib/idb-storage"),
+			import("../../../db/ui-state-db"),
+		]);
 		const opened = spyOn(window, "open").mockImplementation(() => null);
 		const spies = [
 			spyOn(appGlobalState, "getAll").mockResolvedValue({}),
@@ -613,46 +726,15 @@ describe("micro widget event dispatch", () => {
 			{ router },
 		);
 
-		const frameWindow = frame()?.contentWindow;
-		if (!frameWindow) throw new Error("The widget iframe has no window");
-		const posted = spyOn(frameWindow, "postMessage").mockImplementation(
-			() => {},
-		);
-		cleanup.push(() => posted.mockRestore());
-		// The host only accepts messages whose source is its own iframe window
-		// (the wrapper, which relays for the widget).
-		const fromFrame = (data: unknown) =>
-			act(async () => {
-				window.dispatchEvent(
-					new window.MessageEvent("message", {
-						data,
-						source: frameWindow as never,
-					}),
-				);
-				await new Promise((resolve) => setTimeout(resolve, 0));
-			});
-
-		await fromFrame(createEnvelope("hello", {}, "", "sales-chart"));
-		const init = posted.mock.calls
-			.map(([envelope]) => envelope as FlwEnvelope)
-			.find((envelope) => envelope.type === "init");
-		if (!init) throw new Error("The host did not send init to the iframe");
-
-		await fromFrame(
-			createEnvelope(
-				"event",
-				{
-					name: "entityClicked",
-					payload: {
-						route: "/attacker",
-						queryParams: { steal: "1" },
-						url: "https://attacker.example/phish",
-					},
-				},
-				init.nonce,
-				"sales-chart",
-			),
-		);
+		const say = await openFrameChannel();
+		await say("event", {
+			name: "entityClicked",
+			payload: {
+				route: "/attacker",
+				queryParams: { steal: "1" },
+				url: "https://attacker.example/phish",
+			},
+		});
 
 		expect(navigations).toEqual(["/authored"]);
 		expect(opened.mock.calls).toEqual([
@@ -1079,6 +1161,772 @@ describe("micro widget consent and grants", () => {
 	});
 });
 
+const ACCESS = "eyJhbGciOiJFUzI1NiJ9.eyJwa2ciOiJ4In0.YWNjZXNz";
+const WEB_GRANT = "eyJhbGciOiJFUzI1NiJ9.eyJncmFudCI6IngifQ.Z3JhbnQ";
+const HOUR = 3_600_000;
+const sandboxPath = (access: string, grant = "0") =>
+	`/registry/package/com.example.sales/widget-sandbox/1.0.0/~${access}/frame/chart/${grant}`;
+
+/** The web API's grants: each mint answers a new one, `${WEB_GRANT}1`, `${WEB_GRANT}2`, …, living an hour unless `lifetime` says otherwise; mint number `failing` fails. */
+const webGrants =
+	({
+		lifetime = 3_600,
+		failing,
+	}: { lifetime?: number; failing?: number } = {}) =>
+	(request: WidgetGrantRequest, call: number): MintAnswer => {
+		if (call === failing) throw new TypeError("Failed to fetch");
+		return {
+			grant: `${WEB_GRANT}${call}`,
+			expiresIn: lifetime,
+			policyDigest: request.policyDigest,
+		};
+	};
+
+function onTheWeb(
+	access: (
+		request: WidgetAccessRequest,
+		call: number,
+	) => Promise<WidgetAccessResponse>,
+	registry: () => RegistryCalls = stubRegistry,
+) {
+	Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+	const calls = registry();
+	const accessCalls: WidgetAccessRequest[] = [];
+	(registryState as Record<string, unknown>).getWidgetAccess = (
+		request: WidgetAccessRequest,
+	) => {
+		accessCalls.push(request);
+		return access(request, accessCalls.length);
+	};
+	return { calls, accessCalls };
+}
+
+/** Each call answers a new token, `${ACCESS}1`, `${ACCESS}2`, …, living 12 h unless `expiresIn` says otherwise. */
+const numberedTokens = (
+	expiresIn: (call: number) => number = () => 43_200,
+	registry?: () => RegistryCalls,
+) =>
+	onTheWeb(
+		async (_request, call) => ({
+			access: `${ACCESS}${call}`,
+			expiresIn: expiresIn(call),
+		}),
+		registry,
+	);
+
+/** Moves `Date.now()` forward like a device asleep; the monotonic clock does not see it. */
+function shiftWallClock() {
+	const wallNow = Date.now.bind(Date);
+	let shift = 0;
+	const spy = spyOn(Date, "now").mockImplementation(() => wallNow() + shift);
+	cleanup.push(() => spy.mockRestore());
+	return (ms: number) => {
+		shift += ms;
+	};
+}
+
+/** Moves both clocks forward, like time passing on a device that stays awake. */
+function passTime() {
+	const sleep = shiftWallClock();
+	const monotonicNow = performance.now.bind(performance);
+	let passed = 0;
+	const spy = spyOn(performance, "now").mockImplementation(
+		() => monotonicNow() + passed,
+	);
+	cleanup.push(() => spy.mockRestore());
+	return (ms: number) => {
+		sleep(ms);
+		passed += ms;
+	};
+}
+
+/** Reports `state` as the page's visibility and announces the change, like a tab switch or a wake from sleep. */
+async function setVisibility(state: "visible" | "hidden") {
+	Object.defineProperty(window.document, "visibilityState", {
+		configurable: true,
+		get: () => state,
+	});
+	await act(async () => {
+		window.document.dispatchEvent(
+			new window.Event("visibilitychange") as never,
+		);
+	});
+	await settle();
+}
+
+describe("micro widget web sandbox access", () => {
+	/** A widget that declares a host, so its frame needs a real grant. */
+	const grantingRegistry = (grants = webGrants()) =>
+		stubRegistry(
+			() => ({ policy: { csp: { connectSrc: [MAP_HOST] } } }),
+			grants,
+		);
+
+	/** The inline page runtime moves its portal host between a card slot and its parking slot, which reloads the frame. */
+	async function moveHost() {
+		const slot = window.document.createElement("div");
+		window.document.body.appendChild(slot);
+		await act(async () => {
+			slot.appendChild(host as never);
+		});
+		await settle();
+	}
+
+	async function remount() {
+		await act(() => root.unmount());
+		root = createRoot(host);
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+	}
+
+	const RETRY_DELAYS = [2_000, 5_000, 15_000];
+	const CHECK_INTERVAL = 60_000;
+	const READY_TIMEOUT = 10_000;
+	const failure = (status: number, message: string) =>
+		Object.assign(new Error(message), { status });
+	const skeleton = () => host.querySelector('[data-slot="skeleton"]');
+	/** Document URLs from the registry on, as `sandboxPath` writes them. */
+	const paths = (urls: string[]) =>
+		urls.map((url) => url.slice(url.indexOf("/registry/")));
+
+	/** The replacement is refused, then the four attempts of the next check fail without a ruling. */
+	const refusalThenOutage = (afterwards: () => WidgetAccessResponse) =>
+		onTheWeb(async (_request, call) => {
+			if (call === 1) return { access: `${ACCESS}1`, expiresIn: 43_200 };
+			if (call === 2) throw failure(403, "Forbidden");
+			if (call <= 6) throw new TypeError("Failed to fetch");
+			return afterwards();
+		});
+
+	/** Iframes mounted from now on never fire `load`, like a document whose request stalls. */
+	function stallFrameLoads() {
+		const prototype = window.HTMLIFrameElement.prototype as unknown as {
+			dispatchEvent: (event: { type: string }) => boolean;
+		};
+		const dispatch = prototype.dispatchEvent;
+		Object.defineProperty(prototype, "dispatchEvent", {
+			configurable: true,
+			writable: true,
+			value(this: unknown, event: { type: string }) {
+				return event.type === "load" || dispatch.call(this, event);
+			},
+		});
+		cleanup.push(() => Reflect.deleteProperty(prototype, "dispatchEvent"));
+	}
+
+	test("the frame carries the viewer's access, asked for through the project", async () => {
+		const { calls, accessCalls } = onTheWeb(async () => ({
+			access: ACCESS,
+			expiresIn: 43_200,
+		}));
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+
+		expect(calls.describe[0]?.appId).toBe("app-1");
+		expect(accessCalls).toEqual([
+			{
+				packageId: "com.example.sales",
+				packageVersion: "1.0.0",
+				appId: "app-1",
+			},
+		]);
+		expect(frameSrc()).toEndWith(
+			`/registry/package/com.example.sales/widget-sandbox/1.0.0/~${ACCESS}/frame/chart/0`,
+		);
+	});
+
+	test("a public package loads anonymously", async () => {
+		onTheWeb(async () => ({ access: null, expiresIn: 43_200 }));
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		expect(frameSrc()).toEndWith(
+			"/registry/package/com.example.sales/widget-sandbox/1.0.0/frame/chart/0",
+		);
+	});
+
+	test("a viewer without access sees why instead of waiting for the ready timeout", async () => {
+		const { accessCalls } = onTheWeb(async () => {
+			throw failure(403, "You have no access to this package");
+		});
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		expect(frame()).toBeNull();
+		expect(bodyText()).toContain("could not be opened");
+		expect(bodyText()).toContain("You have no access to this package");
+		expect(accessCalls).toHaveLength(1);
+		expect(RETRY_DELAYS.flatMap(armed)).toEqual([]);
+	});
+
+	test("a request that failed without a refusal is asked again while the frame keeps loading", async () => {
+		const { accessCalls } = onTheWeb(async (_request, call) => {
+			if (call === 1) throw failure(503, "Service Unavailable");
+			return { access: ACCESS, expiresIn: 43_200 };
+		});
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		expect(accessCalls).toHaveLength(1);
+		expect(frame()).toBeNull();
+		expect(skeleton()).not.toBeNull();
+		expect(bodyText()).not.toContain("could not be opened");
+
+		await runTimer(RETRY_DELAYS[0]);
+		expect(accessCalls).toHaveLength(2);
+		expect(frameSrc()).toEndWith(sandboxPath(ACCESS));
+	});
+
+	test("one failed request does not end the other widgets of the package", async () => {
+		const { accessCalls } = onTheWeb(async (_request, call) => {
+			if (call === 1) throw new TypeError("Failed to fetch");
+			return { access: null, expiresIn: 43_200 };
+		});
+		await renderWidget(
+			[component(), component({ id: "second", instanceId: "second" })],
+			{ router: {}, appId: "app-1" },
+		);
+		expect(accessCalls).toHaveLength(1);
+		expect(host.querySelectorAll("iframe")).toHaveLength(0);
+
+		for (const timer of armed(RETRY_DELAYS[0])) {
+			await act(async () => timer.run());
+		}
+		await settle();
+		expect(accessCalls).toHaveLength(2);
+		expect(host.querySelectorAll("iframe")).toHaveLength(2);
+		expect(bodyText()).not.toContain("could not be opened");
+	});
+
+	test("the failure shows once every attempt failed", async () => {
+		const { accessCalls } = onTheWeb(async () => {
+			throw new TypeError("Failed to fetch");
+		});
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		for (const delay of RETRY_DELAYS) {
+			expect(frame()).toBeNull();
+			expect(bodyText()).not.toContain("could not be opened");
+			await runTimer(delay);
+		}
+		expect(accessCalls).toHaveLength(RETRY_DELAYS.length + 1);
+		expect(bodyText()).toContain("could not be opened");
+		expect(bodyText()).toContain("Failed to fetch");
+		expect(RETRY_DELAYS.flatMap(armed)).toEqual([]);
+	});
+
+	test("a token replacement that fails is asked again instead of ending the frame", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = onTheWeb(async (_request, call) => {
+			if (call === 2) throw failure(502, "Bad Gateway");
+			return { access: `${ACCESS}${call}`, expiresIn: 43_200 };
+		});
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		elapse(12 * HOUR);
+		await moveHost();
+		expect(accessCalls).toHaveLength(2);
+		expect(frame()).toBeNull();
+		expect(bodyText()).not.toContain("could not be opened");
+
+		await runTimer(RETRY_DELAYS[0]);
+		expect(accessCalls).toHaveLength(3);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}3`));
+	});
+
+	test("an unmounted frame stops asking and stops checking its token", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = onTheWeb(async (_request, call) => {
+			if (call !== 2) throw failure(503, "Service Unavailable");
+			return { access: `${ACCESS}${call}`, expiresIn: 43_200 };
+		});
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		expect(armed(RETRY_DELAYS[0])).toHaveLength(1);
+		await act(() => root.unmount());
+		expect(armed(RETRY_DELAYS[0])).toEqual([]);
+
+		const listened = spyOn(window.document, "addEventListener");
+		const unlistened = spyOn(window.document, "removeEventListener");
+		cleanup.push(() => {
+			listened.mockRestore();
+			unlistened.mockRestore();
+		});
+		const visibilityListeners = (spy: typeof listened) =>
+			spy.mock.calls
+				.filter(([type]) => type === "visibilitychange")
+				.map(([, listener]) => listener);
+		root = createRoot(host);
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`));
+		expect(armed(CHECK_INTERVAL)).toHaveLength(1);
+		expect(visibilityListeners(listened)).toHaveLength(1);
+
+		elapse(12 * HOUR);
+		await setVisibility("visible");
+		expect(accessCalls).toHaveLength(3);
+		expect(armed(RETRY_DELAYS[0])).toHaveLength(1);
+		await act(() => root.unmount());
+		expect(armed(RETRY_DELAYS[0])).toEqual([]);
+		expect(armed(CHECK_INTERVAL)).toEqual([]);
+		expect(visibilityListeners(unlistened)).toEqual(
+			visibilityListeners(listened),
+		);
+
+		root = createRoot(host);
+		elapse(60_000);
+		await setVisibility("visible");
+		expect(accessCalls).toHaveLength(3);
+	});
+
+	test("a baseline frame keeps a healthy token and gets a fresh one when it reloads past the deadline", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = numberedTokens();
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		const built = frame();
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}1`));
+
+		elapse(6 * HOUR);
+		await moveHost();
+		expect(frame()).toBe(built);
+		expect(accessCalls).toHaveLength(1);
+
+		elapse(6 * HOUR);
+		await moveHost();
+		expect(accessCalls).toHaveLength(2);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`));
+		expect(bodyText()).not.toContain("did not become ready");
+	});
+
+	test("an expired token is replaced on frame load at most once per minute", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = numberedTokens((call) =>
+			call === 1 ? 43_200 : 60,
+		);
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		elapse(12 * HOUR);
+		await moveHost();
+		expect(accessCalls).toHaveLength(2);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`));
+
+		await moveHost();
+		expect(accessCalls).toHaveLength(2);
+
+		elapse(60_000);
+		await moveHost();
+		expect(accessCalls).toHaveLength(3);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}3`));
+	});
+
+	test("a new frame reuses a token only while half its lifetime is left, counting time asleep", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = numberedTokens();
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+
+		elapse(5 * HOUR);
+		await remount();
+		expect(accessCalls).toHaveLength(1);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}1`));
+
+		elapse(2 * HOUR);
+		await remount();
+		expect(accessCalls).toHaveLength(2);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`));
+	});
+
+	test("a frame that failed with its token makes later mounts fetch a fresh one", async () => {
+		const { accessCalls } = numberedTokens();
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		await remount();
+		expect(accessCalls).toHaveLength(1);
+
+		await act(() => readyTimeout?.());
+		expect(bodyText()).toContain("did not become ready");
+
+		await remount();
+		expect(accessCalls).toHaveLength(2);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`));
+	});
+
+	test("a mounted frame replaces a token past its deadline without loading again", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = numberedTokens();
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		const built = frame();
+
+		elapse(11 * HOUR + 54 * 60_000);
+		await runTimer(CHECK_INTERVAL);
+		expect(frame()).toBe(built);
+		expect(accessCalls).toHaveLength(1);
+
+		elapse(60_000);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(2);
+		expect(frame()).not.toBe(built);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`));
+		expect(bodyText()).not.toContain("did not become ready");
+	});
+
+	test("a granted frame that slept past its grant gets a fresh grant with its new token", async () => {
+		const elapse = shiftWallClock();
+		const { calls, accessCalls } = numberedTokens(undefined, grantingRegistry);
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		await click("Allow this time");
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}1`, `${WEB_GRANT}1`));
+
+		elapse(14 * HOUR);
+		await setVisibility("visible");
+		expect(accessCalls).toHaveLength(2);
+		expect(calls.mint).toHaveLength(2);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`, `${WEB_GRANT}2`));
+		expect(bodyText()).not.toContain("could not be opened");
+	});
+
+	test("a running frame past both deadlines loads one new document, with its new token and a new grant", async () => {
+		const elapse = passTime();
+		const documents = recordDocuments();
+		const { calls, accessCalls } = numberedTokens(undefined, grantingRegistry);
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		await click("Allow this time");
+		const say = await openFrameChannel();
+		await say("ready", {});
+
+		elapse(12 * HOUR);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(2);
+		expect(calls.mint).toHaveLength(2);
+		expect(paths(documents)).toEqual([
+			sandboxPath(`${ACCESS}1`, `${WEB_GRANT}1`),
+			sandboxPath(`${ACCESS}2`, `${WEB_GRANT}2`),
+		]);
+	});
+
+	test("a running frame whose grant is within its deadline gets its new token in place", async () => {
+		const elapse = shiftWallClock();
+		const documents = recordDocuments();
+		const { calls } = numberedTokens(undefined, () =>
+			grantingRegistry(webGrants({ lifetime: 86_400 })),
+		);
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		await click("Allow this time");
+
+		elapse(12 * HOUR);
+		await runTimer(CHECK_INTERVAL);
+		expect(calls.mint).toHaveLength(1);
+		expect(paths(documents)).toEqual([
+			sandboxPath(`${ACCESS}1`, `${WEB_GRANT}1`),
+			sandboxPath(`${ACCESS}2`, `${WEB_GRANT}1`),
+		]);
+	});
+
+	test("a grant renewal that fails leaves the running frame, and the next check renews it", async () => {
+		const elapse = passTime();
+		const documents = recordDocuments();
+		const { calls, accessCalls } = numberedTokens(undefined, () =>
+			grantingRegistry(webGrants({ failing: 2 })),
+		);
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		await click("Allow this time");
+		const built = frame();
+		const say = await openFrameChannel();
+		await say("ready", {});
+
+		elapse(12 * HOUR);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(2);
+		expect(calls.mint).toHaveLength(2);
+		expect(frame()).toBe(built);
+		expect(skeleton()).toBeNull();
+		expect(bodyText()).not.toContain("could not be granted");
+
+		elapse(60_000);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(2);
+		expect(calls.mint).toHaveLength(3);
+		expect(paths(documents)).toEqual([
+			sandboxPath(`${ACCESS}1`, `${WEB_GRANT}1`),
+			sandboxPath(`${ACCESS}2`, `${WEB_GRANT}3`),
+		]);
+	});
+
+	test("a hidden page keeps its frame until it is visible again", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = numberedTokens();
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		const built = frame();
+
+		await setVisibility("hidden");
+		elapse(12 * HOUR);
+		await runTimer(CHECK_INTERVAL);
+		await setVisibility("hidden");
+		expect(frame()).toBe(built);
+		expect(accessCalls).toHaveLength(1);
+
+		await setVisibility("visible");
+		expect(accessCalls).toHaveLength(2);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`));
+	});
+
+	test("a healthy token survives the page becoming visible", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = numberedTokens();
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		const built = frame();
+
+		elapse(11 * HOUR);
+		await setVisibility("hidden");
+		await setVisibility("visible");
+		expect(frame()).toBe(built);
+		expect(accessCalls).toHaveLength(1);
+	});
+
+	test("a mounted frame replaces its token at most once per minute", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = numberedTokens((call) =>
+			call === 1 ? 43_200 : 60,
+		);
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		elapse(12 * HOUR);
+		await setVisibility("visible");
+		expect(accessCalls).toHaveLength(2);
+
+		await setVisibility("visible");
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(2);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`));
+
+		elapse(60_000);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(3);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}3`));
+	});
+
+	test("a running widget stays until its replacement token arrived", async () => {
+		const elapse = shiftWallClock();
+		let answer: (response: WidgetAccessResponse) => void = () => {};
+		const { accessCalls } = onTheWeb((_request, call) =>
+			call === 1
+				? Promise.resolve({ access: `${ACCESS}1`, expiresIn: 43_200 })
+				: new Promise((resolve) => {
+						answer = resolve;
+					}),
+		);
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		const built = frame();
+		const say = await openFrameChannel();
+		await say("ready", {});
+		expect(skeleton()).toBeNull();
+
+		elapse(12 * HOUR);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(2);
+		expect(frame()).toBe(built);
+		expect(skeleton()).toBeNull();
+
+		await act(async () => answer({ access: `${ACCESS}2`, expiresIn: 43_200 }));
+		await settle();
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`));
+		expect(accessCalls).toHaveLength(2);
+		expect(skeleton()).not.toBeNull();
+	});
+
+	test("a replacement document that never loads ends in the ready timeout", async () => {
+		const elapse = shiftWallClock();
+		numberedTokens();
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		const say = await openFrameChannel();
+		await say("ready", {});
+		expect(skeleton()).toBeNull();
+		expect(armed(READY_TIMEOUT)).toEqual([]);
+
+		stallFrameLoads();
+		elapse(12 * HOUR);
+		await runTimer(CHECK_INTERVAL);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`));
+		expect(skeleton()).not.toBeNull();
+		expect(frame()?.className).toContain("opacity-0");
+
+		await runTimer(READY_TIMEOUT);
+		expect(frame()).toBeNull();
+		expect(bodyText()).toContain("did not become ready");
+	});
+
+	test("a frame that failed stays failed when its token is replaced", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = numberedTokens();
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		await runTimer(READY_TIMEOUT);
+		expect(bodyText()).toContain("did not become ready");
+
+		elapse(12 * HOUR);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(2);
+		expect(frame()).toBeNull();
+		expect(bodyText()).toContain("did not become ready");
+	});
+
+	test("a replacement that fails leaves the running frame for the next check", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = onTheWeb(async (_request, call) => {
+			if (call > 1 && call <= 5) throw new TypeError("Failed to fetch");
+			return { access: `${ACCESS}${call}`, expiresIn: 43_200 };
+		});
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		const built = frame();
+
+		elapse(12 * HOUR);
+		await setVisibility("visible");
+		for (const delay of RETRY_DELAYS) await runTimer(delay);
+		expect(accessCalls).toHaveLength(5);
+		expect(frame()).toBe(built);
+		expect(bodyText()).not.toContain("could not be opened");
+
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(5);
+
+		elapse(60_000);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(6);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}6`));
+	});
+
+	test("a refused replacement keeps the running frame, and the next check asks again in place", async () => {
+		const elapse = shiftWallClock();
+		let answer: (response: WidgetAccessResponse) => void = () => {};
+		const { accessCalls } = onTheWeb((_request, call) => {
+			if (call === 1) {
+				return Promise.resolve({ access: `${ACCESS}1`, expiresIn: 43_200 });
+			}
+			if (call === 2) return Promise.reject(failure(403, "Forbidden"));
+			return new Promise((resolve) => {
+				answer = resolve;
+			});
+		});
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		const built = frame();
+		const say = await openFrameChannel();
+		await say("ready", {});
+
+		elapse(12 * HOUR);
+		await setVisibility("visible");
+		expect(accessCalls).toHaveLength(2);
+		expect(frame()).toBe(built);
+		expect(bodyText()).not.toContain("could not be opened");
+		expect(RETRY_DELAYS.flatMap(armed)).toEqual([]);
+
+		elapse(60_000);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(3);
+		expect(frame()).toBe(built);
+		expect(skeleton()).toBeNull();
+
+		await act(async () => answer({ access: `${ACCESS}3`, expiresIn: 43_200 }));
+		await settle();
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}3`));
+	});
+
+	test("an outage after a refusal leaves the running frame, which recovers once the backend answers", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = refusalThenOutage(() => ({
+			access: `${ACCESS}7`,
+			expiresIn: 43_200,
+		}));
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		const built = frame();
+
+		elapse(12 * HOUR);
+		await setVisibility("visible");
+		expect(accessCalls).toHaveLength(2);
+
+		elapse(60_000);
+		await runTimer(CHECK_INTERVAL);
+		for (const delay of RETRY_DELAYS) await runTimer(delay);
+		expect(accessCalls).toHaveLength(6);
+		expect(frame()).toBe(built);
+		expect(bodyText()).not.toContain("could not be opened");
+
+		elapse(60_000);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(7);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}7`));
+	});
+
+	test("a second refusal ends the frame even with an outage in between", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = refusalThenOutage(() => {
+			throw failure(403, "You have no access to this package");
+		});
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+
+		elapse(12 * HOUR);
+		await setVisibility("visible");
+		elapse(60_000);
+		await runTimer(CHECK_INTERVAL);
+		for (const delay of RETRY_DELAYS) await runTimer(delay);
+		expect(frame()).not.toBeNull();
+
+		elapse(60_000);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(7);
+		expect(frame()).toBeNull();
+		expect(bodyText()).toContain("You have no access to this package");
+	});
+
+	test("a refusal is a repeat only until a replacement arrived", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = onTheWeb(async (_request, call) => {
+			if (call === 2 || call >= 4) throw failure(403, "Forbidden");
+			return { access: `${ACCESS}${call}`, expiresIn: 43_200 };
+		});
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+
+		elapse(12 * HOUR);
+		await runTimer(CHECK_INTERVAL);
+		elapse(60_000);
+		await runTimer(CHECK_INTERVAL);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}3`));
+		const replaced = frame();
+
+		elapse(12 * HOUR);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(4);
+		expect(frame()).toBe(replaced);
+		expect(bodyText()).not.toContain("could not be opened");
+
+		elapse(60_000);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(5);
+		expect(frame()).toBeNull();
+		expect(bodyText()).toContain("could not be opened");
+	});
+
+	test("a viewer who lost access sees why once the refusal repeats", async () => {
+		const elapse = shiftWallClock();
+		const { accessCalls } = onTheWeb(async (_request, call) => {
+			if (call === 1) return { access: `${ACCESS}1`, expiresIn: 43_200 };
+			throw failure(403, "You have no access to this package");
+		});
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		const built = frame();
+
+		elapse(12 * HOUR);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(2);
+		expect(frame()).toBe(built);
+
+		elapse(60_000);
+		await runTimer(CHECK_INTERVAL);
+		expect(accessCalls).toHaveLength(3);
+		expect(frame()).toBeNull();
+		expect(bodyText()).toContain("could not be opened");
+		expect(bodyText()).toContain("You have no access to this package");
+		expect(armed(CHECK_INTERVAL)).toEqual([]);
+	});
+
+	test("frames that load anonymously never check for a token", async () => {
+		onTheWeb(async () => ({ access: null, expiresIn: 43_200 }));
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		expect(frame()).not.toBeNull();
+		expect(armed(CHECK_INTERVAL)).toEqual([]);
+
+		await act(() => root.unmount());
+		root = createRoot(host);
+		Object.assign(window, { __TAURI_INTERNALS__: {} });
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		expect(frame()).not.toBeNull();
+		expect(armed(CHECK_INTERVAL)).toEqual([]);
+	});
+});
+
 describe("micro widget runtime sources", () => {
 	const TILE_A = "https://a.tiles.example.org";
 	const TILE_B = "https://b.tiles.example.org";
@@ -1090,7 +1938,14 @@ describe("micro widget runtime sources", () => {
 		layers: hosts.map((host) => ({ url: `${host}/1/2/3.png?sig=secret` })),
 	});
 
-	function stubRuntimeRegistry(runtime: { level?: Level; kind?: string } = {}) {
+	function stubRuntimeRegistry(
+		runtime: { level?: Level; kind?: string } = {},
+		mint: Parameters<typeof stubRegistry>[1] = (request, call) => ({
+			grant: call === 1 ? GRANT_A : GRANT_B,
+			expiresIn: 86_400,
+			policyDigest: request.policyDigest,
+		}),
+	) {
 		const runtimeLevel = runtime.level ?? "external";
 		return stubRegistry(
 			(_call, request) => {
@@ -1161,11 +2016,7 @@ describe("micro widget runtime sources", () => {
 					},
 				};
 			},
-			(request, call) => ({
-				grant: call === 1 ? GRANT_A : GRANT_B,
-				expiresIn: 86_400,
-				policyDigest: request.policyDigest,
-			}),
+			(request, call) => mint(request, call),
 		);
 	}
 
@@ -1385,7 +2236,7 @@ describe("micro widget runtime sources", () => {
 		expect(isInert(findButton("Allow this time"))).toBe(true);
 	});
 
-	test("dismissing the banner keeps the frame and hides the request", async () => {
+	test("dismissing the banner keeps the frame and hides the request until its backoff timer fires", async () => {
 		stubRuntimeRegistry();
 		await renderWidget(component({ props: tiles(TILE_A) }), {
 			router: {},
@@ -1414,6 +2265,44 @@ describe("micro widget runtime sources", () => {
 		expect(host.querySelector("[data-widget-runtime-request]")).toBeNull();
 		expect(frame()).toBe(mounted);
 		expect(dialogs()).toBe(0);
+
+		await runTimer(30_000);
+		expect(
+			host.querySelector("[data-widget-runtime-request]")?.textContent,
+		).toContain("Wants to load from 1 new site");
+		expect(frame()).toBe(mounted);
+	});
+
+	test("a frame past its grant's deadline gets a new grant with its new token while a new address waits for review", async () => {
+		const elapse = shiftWallClock();
+		const documents = recordDocuments();
+		const { calls, accessCalls } = numberedTokens(undefined, () =>
+			stubRuntimeRegistry({}, webGrants()),
+		);
+		await renderWidget(component({ props: tiles(TILE_A) }), {
+			router: {},
+			appId: "app-1",
+		});
+		await click("Allow this time");
+		await renderWidget(component({ props: tiles(TILE_A, TILE_B) }), {
+			router: {},
+			appId: "app-1",
+		});
+		await waitForDebounce();
+		const banner = () => host.querySelector("[data-widget-runtime-request]");
+		expect(banner()?.textContent).toContain("Wants to load from 1 new site");
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}1`, `${WEB_GRANT}1`));
+
+		elapse(12 * HOUR);
+		await setVisibility("visible");
+		expect(accessCalls).toHaveLength(2);
+		expect(calls.mint).toHaveLength(2);
+		expect(calls.mint[1].runtimeSources).toEqual([
+			{ slot: SLOT.path, sources: [TILE_A] },
+		]);
+		expect(frameSrc()).toEndWith(sandboxPath(`${ACCESS}2`, `${WEB_GRANT}2`));
+		expect(documents).toHaveLength(2);
+		expect(banner()?.textContent).toContain("Wants to load from 1 new site");
 	});
 
 	test("skipped addresses list hosts and reasons, never URLs", async () => {

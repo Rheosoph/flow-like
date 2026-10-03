@@ -1390,6 +1390,7 @@ export function GenericEventFormInterface({
 	const outputData = useMemo(() => {
 		const returnEvents = runEvents.filter(
 			(ev) =>
+				ev.event_type === "generic_result" ||
 				ev.event_type === "return" ||
 				ev.event_type === "output" ||
 				(ev.event_type === "intercom" && ev.payload?.type === "return"),

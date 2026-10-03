@@ -5,17 +5,6 @@ const mocks = vi.hoisted(() => ({
 	stream: vi.fn(),
 	consent: vi.fn(),
 }));
-vi.mock("@flow-like/flow-like-ui", async (original) => ({
-	...(await original<typeof import("@flow-like/flow-like-ui")>()),
-	checkOAuthTokens: async () => ({
-		tokens: {},
-		requiredProviders: [],
-		missingProviders: [],
-	}),
-	extractOAuthRequirementsFromBoard: () => ({
-		requires_local_execution: false,
-	}),
-}));
 vi.mock("@flow-like/flow-like-ui/lib/device-bridge", () => ({
 	cancelDeviceCommands: vi.fn(),
 	withDeviceCommandBridge: (
@@ -52,8 +41,20 @@ function fixture() {
 		profile: { id: "profile-a" },
 		auth: { isAuthenticated: true, user: { access_token: "token-a" } },
 		isOffline: vi.fn(async () => true),
+		prepareExecutionAuth: vi.fn(async () => "https://hub.example"),
+		executionSessionId: "session-a",
+		// A local run is prepared from the host's pre-run facts of the board;
+		// without them the dispatch goes to the server.
 		boardState: {
-			getBoard: vi.fn(async () => ({ nodes: {}, layers: {}, variables: {} })),
+			getBoardRunRequirements: vi.fn(async () => ({
+				runtime_variables: [],
+				oauth_requirements: [],
+				requires_local_execution: false,
+				execution_mode: "Hybrid",
+				wasm_package_ids: [],
+				wasm_package_permissions: {},
+				instantiates_widgets: false,
+			})),
 		},
 	};
 	const state = new EventState(backend as never);

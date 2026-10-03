@@ -1047,11 +1047,16 @@ pub(crate) fn allowed_model_request(base: &str, method: &str, url: &str) -> bool
         .any(|path| endpoint_url(base, path).is_ok_and(|target| target == url))
 }
 
+/// Where a placement process tells the hub which schedules it runs. The process calls it
+/// and this broker signs it, so both name it through this one constant.
+pub(crate) const SCHEDULE_CLAIM_PATH: &str = "/instances/project/schedules";
+
 pub(crate) fn allowed_project_request(base: &str, method: &str, url: &str) -> bool {
     if method == "POST" {
         return [
             "/instances/project/storage",
             flow_like_device_protocol::OFFLINE_REPLAY_PATH,
+            SCHEDULE_CLAIM_PATH,
         ]
         .iter()
         .any(|path| endpoint_url(base, path).is_ok_and(|target| target == url));
@@ -2436,6 +2441,26 @@ mod tests {
             "POST",
             &format!("{base}/instances/project/storage")
         ));
+        // The one call a placement process makes for its schedules, and nothing next to it.
+        assert_eq!(SCHEDULE_CLAIM_PATH, "/instances/project/schedules");
+        let claim = format!("{base}{SCHEDULE_CLAIM_PATH}");
+        assert!(allowed_project_request(base, "POST", &claim));
+        for method in ["GET", "PUT", "DELETE", "PATCH"] {
+            assert!(!allowed_project_request(base, method, &claim), "{method}");
+        }
+        for path in [
+            "/instances/project/schedules/",
+            "/instances/project/schedules/evt_report",
+            "/instances/project/schedules?all=1",
+            "/instances/project/schedule",
+            "/instances/project/device-schedules",
+            "/instances/schedules",
+        ] {
+            assert!(
+                !allowed_project_request(base, "POST", &format!("{base}{path}")),
+                "{path}"
+            );
+        }
         for path in [
             "/instances/project/storage/user",
             "/instances/project/app?project=other",
@@ -2564,6 +2589,8 @@ mod tests {
                 "POST",
                 "/instances/project/storage/files",
             ),
+            // A candidate that is only validated never takes a schedule off the hub.
+            (ResourceAudience::ProjectApi, "POST", SCHEDULE_CLAIM_PATH),
         ] {
             assert_eq!(
                 broker

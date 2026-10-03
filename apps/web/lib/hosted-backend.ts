@@ -1,9 +1,17 @@
 import {
+	ANONYMOUS_WIDGET_ACCESS,
 	isWebWidgetGrant,
+	isWidgetAccessUnsupportedError,
+	parseWidgetAccessResponse,
 	parseWidgetGrantResponse,
 	parseWidgetPolicyDescriptor,
 } from "@flow-like/flow-like-ui/components/a2ui/micro-widget-policy";
 import { getApiOrigin, getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
+import {
+	HUB_REFRESH_TIMEOUT_MS,
+	requestTimeoutMs,
+	withRequestDeadline,
+} from "@flow-like/flow-like-ui/lib/request-deadline";
 import {
 	serializePageTrigger,
 	withCurrentManifestRevision,
@@ -67,6 +75,8 @@ export class HostedHttpError extends Error {
 	constructor(
 		public readonly status: number,
 		message: string,
+		/** The API's error code, on widget registry requests. Absent when something else answered: a proxy, or an API without the route. */
+		public readonly code?: string,
 	) {
 		super(message);
 	}
@@ -114,6 +124,16 @@ export function hostedErrorMessage(status: number, body: string): string {
 		: `Request failed (${status})`;
 }
 
+/** The `code` of the API's error envelope; undefined for a body the API did not write. */
+export function hostedErrorCode(body: string): string | undefined {
+	let code: unknown;
+	try {
+		const parsed = JSON.parse(body);
+		code = parsed?.error?.code ?? parsed?.code;
+	} catch {}
+	return typeof code === "string" && code.trim() ? code.trim() : undefined;
+}
+
 type HostedRequest = ReturnType<typeof createHostedRequest>;
 
 function scopedState<T extends object>(methods: Partial<T>): T {
@@ -129,21 +149,43 @@ function scopedState<T extends object>(methods: Partial<T>): T {
 	}) as T;
 }
 
-function publicWidgetRegistry(): IRegistryState {
-	const send = async (path: string, body: unknown) => {
-		const response = await fetch(getApiUrl(undefined, path), {
-			method: "POST",
-			credentials: "omit",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(body),
-		});
-		if (!response.ok)
-			throw new HostedHttpError(
-				response.status,
-				"The widget is not available for public hosting.",
-			);
-		return response.json();
-	};
+export type HostedAccessToken = () => string | undefined;
+
+const anonymous: HostedAccessToken = () => undefined;
+
+/** A sign-in interface sends its viewer's token, so project members reach the private packages the project pins. */
+function publicWidgetRegistry(accessToken: HostedAccessToken): IRegistryState {
+	// A request that never settles would hold the frame, and every later check of its token, for good.
+	const send = (
+		path: string,
+		body: unknown,
+		timeoutMs = requestTimeoutMs(path, "POST"),
+	) =>
+		withRequestDeadline(
+			path,
+			async ({ signal }) => {
+				const headers = new Headers({ "Content-Type": "application/json" });
+				const token = accessToken();
+				if (token) headers.set("Authorization", `Bearer ${token}`);
+				const response = await fetch(getApiUrl(undefined, path), {
+					method: "POST",
+					credentials: "omit",
+					headers,
+					body: JSON.stringify(body),
+					signal,
+				});
+				if (!response.ok)
+					throw new HostedHttpError(
+						response.status,
+						"The widget is not available for public hosting.",
+						hostedErrorCode(await response.text().catch(() => "")),
+					);
+				return response.json();
+			},
+			{ timeoutMs },
+		);
+	// An API that answered an access request has the route: a bare 404 or 405 after that is a proxy's.
+	let accessAnswered = false;
 	return scopedState<IRegistryState>({
 		describeWidgetPolicy: async (request) =>
 			parseWidgetPolicyDescriptor(
@@ -177,6 +219,25 @@ function publicWidgetRegistry(): IRegistryState {
 				),
 				isWebWidgetGrant,
 			),
+		getWidgetAccess: async (request) => {
+			try {
+				// Asked again when it fails, unlike describe and mint, so it gives up early.
+				const access = parseWidgetAccessResponse(
+					await send(
+						`registry/package/${encodeURIComponent(request.packageId)}/widget-access`,
+						{ version: request.packageVersion, appId: request.appId },
+						HUB_REFRESH_TIMEOUT_MS,
+					),
+				);
+				accessAnswered = true;
+				return access;
+			} catch (error) {
+				if (!accessAnswered && isWidgetAccessUnsupportedError(error)) {
+					return { ...ANONYMOUS_WIDGET_ACCESS };
+				}
+				throw error;
+			}
+		},
 	});
 }
 
@@ -359,6 +420,7 @@ class HostedUserState extends EmptyUserState {
 export function createHostedBackend(
 	data: HostedBootstrap,
 	request: HostedRequest,
+	accessToken: HostedAccessToken = anonymous,
 ): IBackendState {
 	return {
 		appState: new EmptyAppState(),
@@ -394,7 +456,9 @@ export function createHostedBackend(
 				).json();
 			},
 		}),
-		registryState: publicWidgetRegistry(),
+		registryState: publicWidgetRegistry(
+			data.auth_proxy ? accessToken : anonymous,
+		),
 		capabilities: () => ({
 			needsSignIn: false,
 			canExecuteLocally: false,

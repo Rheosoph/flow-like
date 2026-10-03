@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::IntoParams;
 
-use super::notifications::{NotificationOverview, notification_overview};
+use super::notifications::{NotificationOverview, notification_counts};
 
 #[derive(Debug, Clone, Deserialize, IntoParams)]
 pub struct BootstrapParams {
@@ -80,8 +80,7 @@ pub async fn bootstrap(
     let sub = user.sub()?;
 
     // 2. Notification counts
-    let notifications = notification_overview(&state.db, &sub).await?;
-    let invites_total = notifications.invites_count;
+    let (notifications, invites_total) = notification_counts(&state.db, &sub).await?;
 
     // 3. Apps and pending invites (paginated)
     let language = params.language.clone().unwrap_or_else(|| "en".to_string());

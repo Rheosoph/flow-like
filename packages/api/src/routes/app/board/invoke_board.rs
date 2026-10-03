@@ -122,7 +122,8 @@ fn get_credentials_access() -> crate::credentials::CredentialsAccess {
     responses(
         (status = 200, description = "Board invocation started, returns SSE stream or JSON", body = InvokeBoardResponse),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Board or requested board version not found")
     )
 )]
 #[tracing::instrument(

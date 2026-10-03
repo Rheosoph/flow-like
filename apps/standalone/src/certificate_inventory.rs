@@ -78,6 +78,8 @@ pub async fn publish(
         };
         let result =
             tokio::select! { _ = cancel.cancelled() => return Ok(()), result = result => result };
+        crate::diagnostics::global()
+            .report_error(crate::diagnostics::CERTIFICATE_INVENTORY_PUBLISHER, &result);
         match result {
             Ok(Some(revision)) => publication.success(revision, Instant::now()),
             Ok(None) => {}
@@ -253,6 +255,28 @@ mod tests {
         assert!(uploads[2].certificates.is_empty());
         assert_eq!(cloud.proofs.lock().unwrap().len(), 3);
         server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_failing_publication_pass_is_reported_as_task_health() -> Result<()> {
+        use crate::diagnostics::{
+            CERTIFICATE_INVENTORY_PUBLISHER, TaskFailure, TaskState, test_support,
+        };
+        let temp = tempfile::tempdir()?;
+        let device = Arc::new(DeviceSession::test_session(
+            "http://127.0.0.1:9/api/v1".into(),
+            "device".into(),
+            SigningKey::generate(),
+        ));
+        let cancel = CancellationToken::new();
+        let publisher = tokio::spawn(publish(temp.path().join("missing"), device, cancel.clone()));
+        assert_eq!(
+            test_support::reported(CERTIFICATE_INVENTORY_PUBLISHER).await,
+            (TaskState::Failing, Some(TaskFailure::Storage))
+        );
+        cancel.cancel();
+        publisher.await??;
         Ok(())
     }
 }

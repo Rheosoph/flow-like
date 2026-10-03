@@ -61,6 +61,8 @@ def target(cloud, workload, platform="linux/amd64", recipe=None, context=".", ar
         "context": context,
         "platform": platform,
         "runner": "ubuntu-24.04-arm" if platform == "linux/arm64" else "ubuntu-24.04",
+        # These AWS workloads compile the full API with the Lambda/server profile.
+        "cargo_build_jobs": 1 if cloud == "aws" and workload in {"api", "api-ecs", "audit-worker"} else 2,
         "image_suffix": image_suffix or f"flow-like-{cloud}-{workload}",
         "audit_features": audit_features or "",
         "layer_cache": layer_cache_enabled(dockerfile),

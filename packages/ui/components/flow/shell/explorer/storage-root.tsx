@@ -92,7 +92,6 @@ export function StorageRoot({
 				} else {
 					await backend.storageState.uploadStorageItems(appId, prefix, files);
 				}
-				await tree.refetch(prefix);
 				toast.success(
 					t("uploadedNFiles", "Uploaded {{count}} file(s)", {
 						count: files.length,
@@ -102,7 +101,12 @@ export function StorageRoot({
 				console.error("Storage upload failed", cause);
 				toast.error(t("uploadFailed", "Upload failed"));
 			} finally {
-				setBusy(false);
+				// A failed or cancelled batch can still have written some files.
+				try {
+					await tree.refetch(prefix);
+				} finally {
+					setBusy(false);
+				}
 			}
 		},
 		[appId, backend.storageState, scope, t, tree],
@@ -122,13 +126,16 @@ export function StorageRoot({
 				} else {
 					await backend.storageState.deleteStorageItems(appId, [entry.path]);
 				}
-				await tree.refetch();
 				toast.success(t("deleted", "Deleted"));
 			} catch (cause) {
 				console.error("Storage delete failed", cause);
 				toast.error(t("deleteFailed", "Delete failed"));
 			} finally {
-				setBusy(false);
+				try {
+					await tree.refetch();
+				} finally {
+					setBusy(false);
+				}
 			}
 		},
 		[appId, backend.storageState, scope, t, tree],
